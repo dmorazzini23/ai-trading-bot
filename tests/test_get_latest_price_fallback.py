@@ -6,6 +6,8 @@ from typing import Any, cast
 import sys
 import types
 
+import pytest
+
 try:  # pragma: no cover - optional dependency in test env
     import pandas as pd  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - provide minimal stub
@@ -330,6 +332,82 @@ def test_get_latest_price_handles_auth_failure(monkeypatch):
         "sip",
     }
     assert not is_alpaca_service_available()
+
+
+def test_get_latest_price_auth_failure_uses_sdk_quote_when_available(monkeypatch):
+    monkeypatch.setattr(alpaca_api, "_ALPACA_SERVICE_AVAILABLE", True)
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {}, raising=False)
+
+    def raise_auth(*_a, **_k):
+        raise AlpacaAuthenticationError("Unauthorized")
+
+    class StubQuoteClient:
+        def get_stock_latest_quote(self, _req):
+            return {"AAPL": {"ask_price": 123.4, "bid_price": 123.2}}
+
+    class StubQuoteRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    def fail_backup(*_a, **_k):  # pragma: no cover - defensive guard
+        raise AssertionError("Backup provider should not be queried when SDK quote succeeds")
+
+    monkeypatch.setattr(bot_engine, "_alpaca_symbols", lambda: (raise_auth, None))
+    monkeypatch.setattr(bot_engine, "data_client", StubQuoteClient(), raising=False)
+    monkeypatch.setattr(bot_engine, "StockLatestQuoteRequest", StubQuoteRequest, raising=False)
+    monkeypatch.setattr(data_fetcher, "_backup_get_bars", fail_backup)
+    monkeypatch.setattr(bot_engine, "get_bars_df", fail_backup)
+
+    price = bot_engine.get_latest_price("AAPL")
+
+    assert price == pytest.approx(123.4)
+    assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_ask"
+    assert is_alpaca_service_available()
+
+
+def test_get_latest_price_prefers_sdk_quote_before_http(monkeypatch):
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {}, raising=False)
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine.is_alpaca_service_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(bot_engine, "_sip_lockout_active", lambda: False, raising=False)
+    monkeypatch.setattr(bot_engine, "_get_intraday_feed", lambda: "iex", raising=False)
+    monkeypatch.setattr(bot_engine, "_prefer_feed_this_cycle", lambda: None, raising=False)
+    monkeypatch.setattr(
+        bot_engine,
+        "_prefer_feed_this_cycle_helper",
+        lambda _symbol: None,
+        raising=False,
+    )
+
+    class StubQuoteClient:
+        def get_stock_latest_quote(self, _req):
+            return {"AAPL": {"ask_price": 321.5, "bid_price": 321.4}}
+
+    class StubQuoteRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    def fail_http_symbols():
+        raise AssertionError("HTTP quote path should not run when SDK quote succeeds")
+
+    monkeypatch.setattr(bot_engine, "data_client", StubQuoteClient(), raising=False)
+    monkeypatch.setattr(
+        bot_engine, "StockLatestQuoteRequest", StubQuoteRequest, raising=False
+    )
+    monkeypatch.setattr(bot_engine, "_alpaca_symbols", fail_http_symbols)
+
+    price = bot_engine.get_latest_price("AAPL")
+
+    assert price == pytest.approx(321.5)
+    assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_ask"
 
 
 def test_get_latest_price_prefer_backup_skips_alpaca(monkeypatch):

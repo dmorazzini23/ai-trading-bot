@@ -1005,12 +1005,8 @@ def _incident_signature(snapshot: dict[str, Any], triggers: list[str]) -> str:
         "go_no_go_gate_passed": snapshot.get("go_no_go_gate_passed"),
         "go_no_go_failed_checks": sorted(set(snapshot.get("go_no_go_failed_checks") or [])),
         "health_status": snapshot.get("health_status"),
-        "health_reason": snapshot.get("health_reason"),
         "provider_status": snapshot.get("provider_status"),
-        "provider_reason": snapshot.get("provider_reason"),
-        "broker_status": snapshot.get("broker_status"),
         "using_backup": bool(snapshot.get("using_backup", False)),
-        "top_rejection_concentration_gate": snapshot.get("top_rejection_concentration_gate"),
     }
     encoded = json.dumps(material, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -1022,6 +1018,14 @@ def _incident_repeat_cooldown_minutes(args: dict[str, Any]) -> int:
         or os.getenv("AI_TRADING_SLACK_INCIDENT_REPEAT_COOLDOWN_MINUTES")
     )
     return max(0, _int_arg(raw, default=45))
+
+
+def _incident_min_interval_minutes(args: dict[str, Any]) -> int:
+    raw = (
+        args.get("min_interval_minutes")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_MIN_INTERVAL_MINUTES")
+    )
+    return max(0, _int_arg(raw, default=0))
 
 
 def _slack_webhook_url(args: dict[str, Any]) -> str:
@@ -1326,6 +1330,7 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
     force = _bool_arg(args.get("force"), default=False)
     on_change_only = _bool_arg(args.get("on_change_only"), default=True)
     repeat_cooldown_minutes = _incident_repeat_cooldown_minutes(args)
+    min_interval_minutes = _incident_min_interval_minutes(args)
     should_alert = bool(triggers) or force
     if not should_alert:
         return {
@@ -1344,8 +1349,44 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
         or prior.get("trigger_signature")
         or ""
     )
+    prior_triggers_raw = prior.get("triggers")
+    if isinstance(prior_triggers_raw, list):
+        prior_triggers = {
+            str(item).strip()
+            for item in prior_triggers_raw
+            if str(item).strip()
+        }
+    else:
+        prior_triggers = set()
+    current_triggers = {
+        str(item).strip()
+        for item in triggers
+        if str(item).strip()
+    }
+    trigger_set_changed = current_triggers != prior_triggers
     prior_sent_at = _parse_iso_ts(prior.get("sent_at"))
     now = datetime.now(UTC)
+    if (
+        min_interval_minutes > 0
+        and prior_sent_at is not None
+        and not force
+        and not trigger_set_changed
+    ):
+        elapsed = now - prior_sent_at
+        min_interval = timedelta(minutes=min_interval_minutes)
+        if elapsed < min_interval:
+            next_eligible_at = (prior_sent_at + min_interval).isoformat().replace("+00:00", "Z")
+            return {
+                "sent": False,
+                "reason": "min_interval_active",
+                "fingerprint": fingerprint,
+                "incident_signature": signature,
+                "state_path": str(state_path),
+                "triggers": triggers,
+                "snapshot": snapshot,
+                "next_eligible_at": next_eligible_at,
+                "min_interval_minutes": int(min_interval_minutes),
+            }
     if on_change_only and prior_signature and prior_signature == signature and not force:
         if repeat_cooldown_minutes > 0 and prior_sent_at is not None:
             elapsed = now - prior_sent_at

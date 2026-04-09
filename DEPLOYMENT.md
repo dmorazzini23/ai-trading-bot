@@ -509,6 +509,40 @@ echo "Deployment successful!"
 
 ### Environment Variables
 
+Recommended rollout overlay (minimal diff, conservative):
+
+```bash
+# Review overlay
+cat config/prod_recommended_rollout.env.overlay
+
+# Backup current env
+cp .env .env.bak.$(date +%Y%m%d-%H%M%S)
+
+# Merge overlay keys into .env (replace existing keys, append missing keys)
+while IFS='=' read -r k v; do
+  [[ -z "$k" || "$k" =~ ^# ]] && continue
+  if grep -q "^${k}=" .env; then
+    sed -i -E "s|^${k}=.*|${k}=${v}|" .env
+  else
+    printf '%s=%s\n' "$k" "$v" >> .env
+  fi
+done < config/prod_recommended_rollout.env.overlay
+
+# Validate + restart
+python3 -m ai_trading.tools.env_validate
+python3 scripts/runtime_env_sync.py --src .env --dst .env.runtime
+sudo systemctl restart ai-trading.service
+```
+
+Rollback:
+
+```bash
+cp .env.bak.<timestamp> .env
+python3 -m ai_trading.tools.env_validate
+python3 scripts/runtime_env_sync.py --src .env --dst .env.runtime
+sudo systemctl restart ai-trading.service
+```
+
 ```bash
 # .env.production
 # Trading Configuration

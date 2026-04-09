@@ -106,12 +106,47 @@ def test_submit_order_successful_execution():
             result = submit_order(mock_ctx, "AAPL", 10, "buy")
 
             assert result == mock_order
-            mock_exec_engine.execute_order.assert_called_once_with(
-                "AAPL", OrderSide.BUY, 10, price=101.0
-            )
+            mock_exec_engine.execute_order.assert_called_once()
+            args, kwargs = mock_exec_engine.execute_order.call_args
+            assert args == ("AAPL", OrderSide.BUY, 10)
+            assert kwargs.get("price") == 101.0
 
     finally:
         # Restore original state
+        bot_engine._exec_engine = original_exec_engine
+
+
+def test_submit_order_preserves_annotation_price_source(monkeypatch):
+    """Caller-supplied price source must not be overwritten by global state."""
+
+    from ai_trading.core import bot_engine
+    from ai_trading.core.bot_engine import BotContext, submit_order
+
+    mock_exec_engine = Mock()
+    mock_order = Mock()
+    mock_exec_engine.execute_order.return_value = mock_order
+
+    original_exec_engine = bot_engine._exec_engine
+    bot_engine._exec_engine = mock_exec_engine
+
+    try:
+        monkeypatch.setattr(bot_engine, "get_price_source", lambda _symbol: "last_trade")
+        with patch("ai_trading.core.bot_engine.market_is_open", return_value=True):
+            mock_ctx = Mock(spec=BotContext)
+            result = submit_order(
+                mock_ctx,
+                "AAPL",
+                10,
+                "buy",
+                price=101.0,
+                annotations={"price_source": "alpaca_ask"},
+            )
+        assert result == mock_order
+        _, kwargs = mock_exec_engine.execute_order.call_args
+        annotations = kwargs.get("annotations", {})
+        assert annotations.get("price_source") == "alpaca_ask"
+        assert kwargs.get("using_fallback_price") is not True
+    finally:
         bot_engine._exec_engine = original_exec_engine
 
 

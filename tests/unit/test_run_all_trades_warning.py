@@ -479,6 +479,118 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
     assert dummy_risk.last_price == pytest.approx(call["limit_price"])
 
 
+def test_run_multi_strategy_does_not_mark_fallback_when_active_quote_source_is_primary(monkeypatch):
+    """Primary quote source should win even when limit resolver reports fallback."""
+
+    expected_price = 222.11
+
+    class DummyExecutionEngine:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def execute_order(
+            self,
+            symbol,
+            side,
+            qty,
+            *,
+            price=None,
+            asset_class=None,
+            **kwargs,
+        ):
+            self.calls.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": qty,
+                    "price": price,
+                    "asset_class": asset_class,
+                    "extra": kwargs,
+                }
+            )
+
+    class DummyRiskEngine:
+        def position_exists(self, api, symbol):
+            return False
+
+        def position_size(self, sig, cash, price):
+            return 3
+
+        def register_fill(self, sig):
+            return None
+
+    class DummyStrategy:
+        name = "stub"
+
+        def generate(self, ctx):
+            return [
+                types.SimpleNamespace(
+                    symbol="AAPL",
+                    side="buy",
+                    confidence=0.9,
+                    strategy="stub",
+                    weight=1.0,
+                    asset_class="equity",
+                )
+            ]
+
+    class DummyAllocator:
+        def allocate(self, signals_by_strategy):
+            return [sig for signals in signals_by_strategy.values() for sig in signals]
+
+    class DummyAPI:
+        def list_positions(self):
+            return []
+
+        def get_account(self):
+            return types.SimpleNamespace(cash=10_000)
+
+        def cancel_order(self, *args, **kwargs):
+            return None
+
+    dummy_exec = DummyExecutionEngine()
+    ctx = types.SimpleNamespace(
+        strategies=[DummyStrategy()],
+        allocator=DummyAllocator(),
+        api=DummyAPI(),
+        data_client=object(),
+        execution_engine=dummy_exec,
+        risk_engine=DummyRiskEngine(),
+        data_fetcher=object(),
+    )
+
+    signals_mod = types.ModuleType("ai_trading.signals")
+    _set_module_attr(signals_mod, "enhance_signals_with_position_logic", (
+        lambda signals, _ctx, _hold: signals
+    ))
+    _set_module_attr(signals_mod, "generate_position_hold_signals", lambda _ctx, _pos: [])
+    monkeypatch.setitem(sys.modules, "ai_trading.signals", signals_mod)
+
+    monkeypatch.setattr(eng, "to_trade_signal", lambda sig: sig)
+    monkeypatch.setattr(eng, "get_latest_price", lambda *_a, **_k: expected_price)
+    monkeypatch.setattr(eng, "get_price_source", lambda _symbol: "alpaca_ask")
+    monkeypatch.setattr(
+        eng,
+        "_resolve_order_intent",
+        lambda *_a, **_k: types.SimpleNamespace(expected_sides=("buy",), order_side="buy"),
+    )
+    monkeypatch.setattr(
+        eng,
+        "_resolve_limit_price",
+        lambda *_a, **_k: (expected_price, "last_trade"),
+    )
+    monkeypatch.setattr(eng, "fetch_minute_df_safe", lambda *_a, **_k: None)
+
+    eng.run_multi_strategy(ctx)
+
+    assert dummy_exec.calls, "execute_order should be invoked"
+    submitted = dummy_exec.calls[0]
+    annotations = submitted["extra"].get("annotations", {})
+    assert annotations.get("price_source") == "alpaca_ask"
+    assert "using_fallback_price" not in submitted["extra"]
+    assert annotations.get("using_fallback_price") is not True
+
+
 def test_run_all_trades_worker_netting_invokes_execution_cycle_hooks(monkeypatch):
     runtime_state.reset_data_provider_state()
 

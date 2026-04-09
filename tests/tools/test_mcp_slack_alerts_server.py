@@ -495,6 +495,149 @@ def test_notify_incident_channel_dedupes_on_signature_drift(monkeypatch, tmp_pat
     assert len(posts) == 1
 
 
+def test_notify_incident_channel_dedupes_provider_reason_churn(
+    monkeypatch, tmp_path: Path
+) -> None:
+    snapshots = [
+        {
+            "go_no_go_gate_passed": True,
+            "go_no_go_failed_checks": [],
+            "execution_capture_ratio": 0.12,
+            "slippage_drag_bps": 7.0,
+            "execution_fill_ratio": 0.22,
+            "execution_fill_ratio_samples": 30,
+            "execution_fill_ratio_filled": 7,
+            "execution_window_minutes": 30,
+            "execution_skipped_count": 15,
+            "precheck_failure_count": 14,
+            "precheck_failure_ratio": 0.8,
+            "health_ok": True,
+            "health_status": "healthy",
+            "health_reason": "runtime_health_ok",
+            "provider_status": "healthy",
+            "provider_active": "alpaca",
+            "provider_reason": "execution_quote_ready",
+            "using_backup": False,
+            "broker_status": "connected",
+            "timestamp": "2026-03-28T20:00:00Z",
+        },
+        {
+            "go_no_go_gate_passed": True,
+            "go_no_go_failed_checks": [],
+            "execution_capture_ratio": 0.12,
+            "slippage_drag_bps": 7.0,
+            "execution_fill_ratio": 0.22,
+            "execution_fill_ratio_samples": 30,
+            "execution_fill_ratio_filled": 7,
+            "execution_window_minutes": 30,
+            "execution_skipped_count": 15,
+            "precheck_failure_count": 14,
+            "precheck_failure_ratio": 0.8,
+            "health_ok": True,
+            "health_status": "healthy",
+            "health_reason": "runtime_health_ok",
+            "provider_status": "healthy",
+            "provider_active": "alpaca",
+            "provider_reason": "data_available_netting",
+            "using_backup": False,
+            "broker_status": "reachable",
+            "timestamp": "2026-03-28T20:05:00Z",
+        },
+    ]
+
+    posts: list[dict[str, object]] = []
+
+    def _fake_collect(_args: dict[str, object]) -> dict[str, object]:
+        idx = min(len(posts), len(snapshots) - 1)
+        return snapshots[idx]
+
+    def _fake_post(webhook_url: str, payload: dict[str, object], timeout_s: float = 5.0) -> int:
+        posts.append({"webhook_url": webhook_url, "payload": payload, "timeout_s": timeout_s})
+        return 200
+
+    monkeypatch.setattr(slack_srv, "_collect_runtime_snapshot", _fake_collect)
+    monkeypatch.setattr(slack_srv, "_post_slack_message", _fake_post)
+
+    state_path = tmp_path / "slack_state.json"
+    args = {
+        "state_path": str(state_path),
+        "webhook_url": "https://hooks.slack.test/example",
+        "repeat_cooldown_minutes": 120,
+    }
+    first = slack_srv.tool_notify_incident_channel(args)
+    second = slack_srv.tool_notify_incident_channel(args)
+
+    assert first["sent"] is True
+    assert second["sent"] is False
+    assert second["reason"] == "repeat_cooldown_active"
+    assert len(posts) == 1
+
+
+def test_notify_incident_channel_honors_min_interval(
+    monkeypatch, tmp_path: Path
+) -> None:
+    snapshots = [
+        {
+            "go_no_go_gate_passed": False,
+            "go_no_go_failed_checks": ["win_rate"],
+            "execution_capture_ratio": 0.07,
+            "slippage_drag_bps": 7.0,
+            "health_ok": False,
+            "health_status": "degraded",
+            "health_reason": "runtime_gate_failed",
+            "provider_status": "degraded",
+            "provider_active": "alpaca",
+            "provider_reason": "runtime_gate_failed",
+            "using_backup": False,
+            "broker_status": "connected",
+            "timestamp": "2026-03-28T20:00:00Z",
+        },
+        {
+            "go_no_go_gate_passed": False,
+            "go_no_go_failed_checks": ["win_rate", "slippage_drag_bps"],
+            "execution_capture_ratio": 0.06,
+            "slippage_drag_bps": 8.0,
+            "health_ok": False,
+            "health_status": "degraded",
+            "health_reason": "runtime_gate_failed",
+            "provider_status": "degraded",
+            "provider_active": "alpaca",
+            "provider_reason": "runtime_gate_failed",
+            "using_backup": False,
+            "broker_status": "connected",
+            "timestamp": "2026-03-28T20:05:00Z",
+        },
+    ]
+
+    posts: list[dict[str, object]] = []
+
+    def _fake_collect(_args: dict[str, object]) -> dict[str, object]:
+        idx = min(len(posts), len(snapshots) - 1)
+        return snapshots[idx]
+
+    def _fake_post(webhook_url: str, payload: dict[str, object], timeout_s: float = 5.0) -> int:
+        posts.append({"webhook_url": webhook_url, "payload": payload, "timeout_s": timeout_s})
+        return 200
+
+    monkeypatch.setattr(slack_srv, "_collect_runtime_snapshot", _fake_collect)
+    monkeypatch.setattr(slack_srv, "_post_slack_message", _fake_post)
+
+    state_path = tmp_path / "slack_state.json"
+    args = {
+        "state_path": str(state_path),
+        "webhook_url": "https://hooks.slack.test/example",
+        "repeat_cooldown_minutes": 0,
+        "min_interval_minutes": 60,
+    }
+    first = slack_srv.tool_notify_incident_channel(args)
+    second = slack_srv.tool_notify_incident_channel(args)
+
+    assert first["sent"] is True
+    assert second["sent"] is False
+    assert second["reason"] == "min_interval_active"
+    assert len(posts) == 1
+
+
 def test_notify_eod_summary_sends_once_per_report_date(monkeypatch, tmp_path: Path) -> None:
     snapshot: dict[str, Any] = {
         "report_date": "2026-03-28",

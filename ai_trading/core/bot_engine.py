@@ -593,6 +593,108 @@ def _extract_order_fill_timestamp(order: Any) -> datetime | None:
     return None
 
 
+_QUOTE_SOURCE_EMPTY_TOKENS: frozenset[str] = frozenset(
+    {"", "unknown", "none", "null", "n/a", "na"}
+)
+
+
+def _normalize_quote_source_token(value: Any) -> str | None:
+    """Return normalized quote-source token or ``None`` when unavailable."""
+
+    if value in (None, ""):
+        return None
+    try:
+        token = str(value).strip().lower()
+    except COMMON_EXC:
+        return None
+    if token in _QUOTE_SOURCE_EMPTY_TOKENS:
+        return None
+    return token
+
+
+def _resolve_quote_proxy_source(
+    order: Any,
+    *,
+    symbol: str,
+    default_source: str,
+) -> str:
+    """Resolve TCA quote proxy source from order metadata with safe fallback."""
+
+    for field_name in (
+        "quote_proxy_source",
+        "price_source",
+        "quote_source",
+        "fallback_source",
+        "expected_price_source",
+    ):
+        token = _normalize_quote_source_token(_extract_order_value(order, field_name))
+        if token is not None:
+            return token
+
+    for container_field in ("metadata", "annotations"):
+        container = _extract_order_value(order, container_field)
+        if not isinstance(container, MappingABC):
+            continue
+        for field_name in (
+            "quote_proxy_source",
+            "price_source",
+            "quote_source",
+            "fallback_source",
+            "expected_price_source",
+        ):
+            token = _normalize_quote_source_token(container.get(field_name))
+            if token is not None:
+                return token
+
+    price_source = _normalize_quote_source_token(get_price_source(symbol))
+    if price_source is not None:
+        return price_source
+
+    default_token = _normalize_quote_source_token(default_source)
+    return default_token or "last_trade"
+
+
+def _resolve_order_quote_basis(
+    ctx: Any,
+    *,
+    symbol: str,
+    side: str,
+    fallback_price: float | None = None,
+) -> tuple[str, float | None, float | None, float | None, float | None]:
+    """Return quote-source and NBBO basis for order submit/TCA attribution."""
+
+    price_source = _normalize_quote_source_token(get_price_source(symbol))
+    quote_source = price_source or "unknown"
+    bid_at_arrival: float | None = None
+    ask_at_arrival: float | None = None
+    mid_at_arrival: float | None = None
+
+    quote_obj = _fetch_quote(ctx, symbol)
+    mid_candidate, bid_candidate, ask_candidate = _quote_to_mid(quote_obj)
+    if bid_candidate > 0:
+        bid_at_arrival = float(bid_candidate)
+    if ask_candidate > 0:
+        ask_at_arrival = float(ask_candidate)
+    if mid_candidate is not None and math.isfinite(float(mid_candidate)):
+        mid_at_arrival = float(mid_candidate)
+        quote_source = "broker_nbbo"
+
+    arrival_price: float | None = None
+    side_token = str(side or "").strip().lower()
+    is_buy_side = side_token in {"buy", "cover"}
+    if bid_at_arrival is not None and ask_at_arrival is not None:
+        arrival_price = ask_at_arrival if is_buy_side else bid_at_arrival
+    elif fallback_price is not None:
+        try:
+            fallback_value = float(fallback_price)
+        except (TypeError, ValueError):
+            fallback_value = 0.0
+        if math.isfinite(fallback_value) and fallback_value > 0.0:
+            arrival_price = fallback_value
+
+    return quote_source, bid_at_arrival, ask_at_arrival, mid_at_arrival, arrival_price
+
+
 def _has_persistable_fill(
     *,
     status_token: str,
@@ -1485,6 +1587,192 @@ def _bandit_ucb_score(
     return float(mean_reward_bps + bonus)
 
 
+def _mean_std(values: Sequence[float]) -> tuple[float, float, int]:
+    """Return mean/std/sample-count for finite numeric values."""
+
+    clean = [
+        float(value)
+        for value in values
+        if isinstance(value, (int, float)) and math.isfinite(float(value))
+    ]
+    count = int(len(clean))
+    if count <= 0:
+        return 0.0, 0.0, 0
+    mean = float(sum(clean) / float(count))
+    if count <= 1:
+        return mean, 0.0, count
+    variance = float(
+        sum((float(value) - float(mean)) ** 2 for value in clean) / float(count)
+    )
+    return mean, math.sqrt(max(variance, 0.0)), count
+
+
+def _percentile_linear(values: Sequence[float], q: float) -> float | None:
+    """Return linearly interpolated percentile over finite values."""
+
+    clean = sorted(
+        float(value)
+        for value in values
+        if isinstance(value, (int, float)) and math.isfinite(float(value))
+    )
+    if not clean:
+        return None
+    quantile = max(0.0, min(float(q), 1.0))
+    if len(clean) == 1:
+        return float(clean[0])
+    raw_index = quantile * float(len(clean) - 1)
+    lower_index = int(math.floor(raw_index))
+    upper_index = int(math.ceil(raw_index))
+    if lower_index == upper_index:
+        return float(clean[lower_index])
+    lower = float(clean[lower_index])
+    upper = float(clean[upper_index])
+    frac = float(raw_index - lower_index)
+    return float(lower + ((upper - lower) * frac))
+
+
+def _infer_tca_liquidity_role(row: Mapping[str, Any]) -> str:
+    raw_role = str(row.get("liquidity_role") or "").strip().lower()
+    if raw_role in {"maker", "taker", "mixed"}:
+        return raw_role
+    order_type = str(row.get("order_type") or "").strip().lower()
+    if order_type == "market":
+        return "taker"
+    spread_paid_bps = _safe_float(row.get("spread_paid_bps"))
+    if spread_paid_bps is not None:
+        if float(spread_paid_bps) <= 0.05:
+            return "maker"
+        if float(spread_paid_bps) >= 0.75:
+            return "taker"
+    if order_type in {"limit", "stop_limit"}:
+        return "maker"
+    return "mixed"
+
+
+def _extract_tca_fill_success_ratio(row: Mapping[str, Any]) -> float | None:
+    if bool(row.get("pending_event")):
+        return None
+    status = str(row.get("status") or row.get("order_status") or "").strip().lower()
+    if not status:
+        return None
+    if status in {
+        "rejected",
+        "canceled",
+        "cancelled",
+        "expired",
+        "done_for_day",
+        "no_fill",
+        "failed",
+    }:
+        return 0.0
+    if status not in {"filled", "partially_filled", "matched_fill_compacted"}:
+        return None
+    resolved_qty = _safe_float(row.get("resolved_fill_qty"))
+    if resolved_qty is None:
+        resolved_qty = _safe_float(row.get("qty"))
+    requested_qty = _safe_float(row.get("requested_qty"))
+    if requested_qty is None:
+        requested_qty = _safe_float(row.get("original_qty"))
+    if requested_qty is not None and float(requested_qty) > 0.0 and resolved_qty is not None:
+        ratio = float(resolved_qty) / float(requested_qty)
+        return max(0.0, min(1.0, ratio))
+    partial = bool(row.get("partial_fill"))
+    if partial:
+        return 0.5
+    return 1.0
+
+
+def _sequential_significance_gate(
+    *,
+    mean_reward_bps: float,
+    std_reward_bps: float,
+    samples: int,
+    min_samples: int,
+    target_mean_bps: float,
+    method: str,
+    posterior_prob_min: float,
+    sprt_alpha: float,
+    sprt_beta: float,
+    sprt_effect_bps: float,
+) -> dict[str, Any]:
+    """Evaluate sequential evidence that reward exceeds target."""
+
+    sample_count = max(0, int(samples))
+    min_required = max(1, int(min_samples))
+    if sample_count < min_required:
+        return {
+            "passed": False,
+            "reason": "insufficient_samples",
+            "samples": sample_count,
+            "min_samples": min_required,
+            "mean_reward_bps": float(mean_reward_bps),
+            "std_reward_bps": float(std_reward_bps),
+            "target_mean_bps": float(target_mean_bps),
+            "method": str(method),
+        }
+    sigma = max(float(std_reward_bps), 1e-6)
+    stderr = sigma / math.sqrt(float(max(sample_count, 1)))
+    delta = float(mean_reward_bps) - float(target_mean_bps)
+    z_score = float(delta / max(stderr, 1e-9))
+    posterior_prob = float(1.0 - NormalDist().cdf((0.0 - delta) / max(stderr, 1e-9)))
+    posterior_prob_min = max(0.5, min(float(posterior_prob_min), 0.999999))
+    bayesian_pass = bool(posterior_prob >= posterior_prob_min)
+
+    sprt_alpha = max(1e-6, min(float(sprt_alpha), 0.5))
+    sprt_beta = max(1e-6, min(float(sprt_beta), 0.5))
+    effect = max(float(sprt_effect_bps), 1e-6)
+    sigma_for_sprt = max(sigma, effect, 1e-6)
+    llr = float(
+        (
+            float(sample_count)
+            * ((float(delta) * float(effect)) - (0.5 * (float(effect) ** 2)))
+        )
+        / (float(sigma_for_sprt) ** 2)
+    )
+    llr_accept = float(math.log((1.0 - sprt_beta) / sprt_alpha))
+    llr_reject = float(math.log(sprt_beta / (1.0 - sprt_alpha)))
+    sprt_state = "continue"
+    if llr >= llr_accept:
+        sprt_state = "accept"
+    elif llr <= llr_reject:
+        sprt_state = "reject"
+    sprt_pass = sprt_state == "accept"
+
+    mode = str(method or "bayesian").strip().lower()
+    if mode not in {"bayesian", "sprt", "either", "both"}:
+        mode = "bayesian"
+    if mode == "sprt":
+        passed = sprt_pass
+    elif mode == "either":
+        passed = bool(bayesian_pass or sprt_pass)
+    elif mode == "both":
+        passed = bool(bayesian_pass and sprt_pass)
+    else:
+        passed = bayesian_pass
+
+    return {
+        "passed": bool(passed),
+        "reason": "ok" if passed else "sequential_significance_not_met",
+        "samples": sample_count,
+        "min_samples": min_required,
+        "mean_reward_bps": float(mean_reward_bps),
+        "std_reward_bps": float(std_reward_bps),
+        "target_mean_bps": float(target_mean_bps),
+        "stderr_bps": float(stderr),
+        "z_score": float(z_score),
+        "method": mode,
+        "bayesian_pass": bool(bayesian_pass),
+        "posterior_prob_gt_target": float(posterior_prob),
+        "posterior_prob_min": float(posterior_prob_min),
+        "sprt_pass": bool(sprt_pass),
+        "sprt_state": str(sprt_state),
+        "sprt_llr": float(llr),
+        "sprt_llr_accept": float(llr_accept),
+        "sprt_llr_reject": float(llr_reject),
+        "sprt_effect_bps": float(effect),
+    }
+
+
 def _geometric_growth_tiebreak_score(
     *,
     expected_edge_bps: float,
@@ -1797,6 +2085,39 @@ def _pre_rank_execution_candidates(
 
     weights: Mapping[str, Any] | None = None
     runtime_rank: Mapping[str, Any] | None = None
+    opportunity_quality: Mapping[str, Any] | None = None
+    try:
+        quality_filter_enabled = bool(
+            get_env("AI_TRADING_EXEC_OPPORTUNITY_QUALITY_ENABLED", True, cast=bool)
+        )
+    except TypeError:
+        quality_filter_enabled = bool(
+            get_env("AI_TRADING_EXEC_OPPORTUNITY_QUALITY_ENABLED", True)
+        )
+    except Exception:
+        quality_filter_enabled = True
+    try:
+        quality_top_quantile = float(
+            get_env("AI_TRADING_EXEC_OPPORTUNITY_TOP_QUANTILE", 0.80, cast=float)
+        )
+    except TypeError:
+        quality_top_quantile = float(
+            get_env("AI_TRADING_EXEC_OPPORTUNITY_TOP_QUANTILE", 0.80)
+        )
+    except Exception:
+        quality_top_quantile = 0.80
+    quality_top_quantile = max(0.05, min(quality_top_quantile, 0.99))
+    try:
+        quality_min_keep = int(
+            get_env("AI_TRADING_EXEC_OPPORTUNITY_MIN_KEEP", 6, cast=int)
+        )
+    except TypeError:
+        quality_min_keep = int(get_env("AI_TRADING_EXEC_OPPORTUNITY_MIN_KEEP", 6))
+    except Exception:
+        quality_min_keep = 6
+    quality_min_keep = max(1, quality_min_keep)
+    quality_threshold: float | None = None
+    quality_allowed_symbols: set[str] = set()
     prerank_cycle = 0
     last_selected_cycles: dict[str, int] = {}
     if runtime is not None:
@@ -1806,6 +2127,9 @@ def _pre_rank_execution_candidates(
         rank_candidate = getattr(runtime, "execution_candidate_rank", None)
         if isinstance(rank_candidate, Mapping):
             runtime_rank = rank_candidate
+        quality_candidate = getattr(runtime, "execution_opportunity_quality_by_symbol", None)
+        if isinstance(quality_candidate, Mapping):
+            opportunity_quality = quality_candidate
         cycle_candidate = getattr(runtime, "_execution_prerank_cycle_idx", 0)
         try:
             prerank_cycle = max(int(cycle_candidate), 0) + 1
@@ -1827,6 +2151,35 @@ def _pre_rank_execution_candidates(
                     continue
                 if parsed_cycle > 0:
                     last_selected_cycles[symbol] = parsed_cycle
+
+    if quality_filter_enabled and opportunity_quality and len(deduped) > quality_min_keep:
+        quality_pairs = []
+        for symbol in deduped:
+            score = _safe_float(opportunity_quality.get(symbol))
+            if score is None:
+                score = _safe_float(opportunity_quality.get(symbol.lower()))
+            if score is None:
+                continue
+            quality_pairs.append((symbol, float(max(0.0, min(score, 1.0)))))
+        if len(quality_pairs) >= quality_min_keep:
+            threshold = _percentile_linear(
+                [score for _symbol, score in quality_pairs],
+                quality_top_quantile,
+            )
+            if threshold is not None:
+                quality_threshold = float(threshold)
+                quality_pairs.sort(key=lambda item: (-item[1], item[0]))
+                quality_allowed_symbols = {
+                    symbol
+                    for symbol, score in quality_pairs
+                    if float(score) >= float(quality_threshold)
+                }
+                if len(quality_allowed_symbols) < int(quality_min_keep):
+                    for symbol, _score in quality_pairs[:quality_min_keep]:
+                        quality_allowed_symbols.add(str(symbol))
+                filtered = [symbol for symbol in deduped if symbol in quality_allowed_symbols]
+                if filtered:
+                    deduped = filtered
 
     def _weight(sym: str) -> float:
         if not weights:
@@ -1992,6 +2345,12 @@ def _pre_rank_execution_candidates(
             "exploration_sample": exploration_symbols[:10],
             "selected_sample": selected[:10],
             "dropped_sample": dropped[:10],
+            "opportunity_quality_filter_enabled": bool(quality_filter_enabled),
+            "opportunity_quality_threshold": (
+                float(quality_threshold) if quality_threshold is not None else None
+            ),
+            "opportunity_quality_allowed_count": int(len(quality_allowed_symbols)),
+            "opportunity_quality_allowed_sample": sorted(quality_allowed_symbols)[:10],
         },
     )
     _record_prerank_shadow_snapshot(
@@ -2894,6 +3253,8 @@ _PRIMARY_PRICE_SOURCES = frozenset(
         "alpaca_bid",
         "alpaca_last",
         "alpaca_midpoint",
+        "broker_nbbo",
+        "nbbo",
     }
 )
 _ALPACA_TERMINAL_PRICE_SOURCES = frozenset(
@@ -3094,6 +3455,20 @@ def _is_primary_price_source(source: str) -> bool:
     if normalized.startswith("alpaca"):
         return True
     return normalized in _PRIMARY_PRICE_SOURCES
+
+
+def _normalize_price_source_label(source: Any) -> str:
+    """Normalize a price-source token for fallback inference."""
+
+    if source in (None, ""):
+        return ""
+    try:
+        normalized = str(source).strip().lower()
+    except Exception:
+        return ""
+    if normalized in {"", "unknown", "none", "null", "n/a", "na"}:
+        return ""
+    return normalized
 
 
 def _load_execution_settings():
@@ -3790,6 +4165,49 @@ def _attempt_alpaca_quote(
         return cached_price, cached_source or 'alpaca_invalid'
     cache['quote_attempted'] = True
     sanitized_feed = _sanitize_alpaca_feed(feed)
+
+    def _attempt_sdk_quote() -> tuple[float | None, str] | None:
+        """Try fetching quotes through the SDK data client when HTTP auth fails."""
+
+        client = data_client
+        if client is None or not _stock_quote_request_ready():
+            return None
+        quote_obj = _fetch_quote(
+            types.SimpleNamespace(data_client=client),
+            symbol,
+            feed=sanitized_feed,
+        )
+        if quote_obj is None:
+            return None
+        if isinstance(quote_obj, Mapping):
+            payloads: list[dict[str, Any]] = [dict(quote_obj)]
+        else:
+            payloads = [
+                {
+                    "ask_price": getattr(quote_obj, "ask_price", None),
+                    "bid_price": getattr(quote_obj, "bid_price", None),
+                    "last_price": getattr(quote_obj, "last_price", None),
+                    "ap": getattr(quote_obj, "ap", None),
+                    "bp": getattr(quote_obj, "bp", None),
+                }
+            ]
+        price_sdk, source_sdk, pending_bid_sdk, ask_unusable_sdk, last_unusable_sdk, values_sdk = _extract_quote_price(payloads, symbol)
+        if price_sdk is None:
+            return None
+        cache['quote_price'] = price_sdk
+        cache['quote_source'] = source_sdk
+        cache['quote_pending_bid'] = pending_bid_sdk
+        cache['quote_ask_unusable'] = ask_unusable_sdk
+        cache['quote_last_unusable'] = last_unusable_sdk
+        cache['quote_values'] = values_sdk
+        if source_sdk.startswith('alpaca_bid'):
+            cache['quote_degraded_source'] = source_sdk
+            cache['quote_degraded_price'] = price_sdk
+        else:
+            cache.pop('quote_degraded_source', None)
+            cache.pop('quote_degraded_price', None)
+        return price_sdk, source_sdk
+
     if feed and sanitized_feed is None:
         logger.warning(
             'ALPACA_INVALID_FEED_SKIPPED',
@@ -3798,6 +4216,11 @@ def _attempt_alpaca_quote(
         cache['quote_source'] = 'alpaca_quote_invalid_feed'
         cache['quote_price'] = None
         return None, cache['quote_source']
+    # Prefer the SDK quote path when available; this avoids HTTP payload-shape
+    # drift and keeps quote extraction aligned with runtime data-client behavior.
+    sdk_quote = _attempt_sdk_quote()
+    if sdk_quote is not None:
+        return sdk_quote
     try:
         alpaca_get, _ = _alpaca_symbols()
     except COMMON_EXC as exc:  # pragma: no cover - defensive guard
@@ -3829,6 +4252,9 @@ def _attempt_alpaca_quote(
     try:
         data = alpaca_get(url, params=params)
     except AlpacaAuthenticationError as exc:
+        sdk_quote = _attempt_sdk_quote()
+        if sdk_quote is not None:
+            return sdk_quote
         logger.error(
             'ALPACA_AUTH_PREFLIGHT_FAILED',
             extra={'symbol': symbol, 'provider': 'alpaca_quote', 'detail': str(exc)},
@@ -3867,6 +4293,9 @@ def _attempt_alpaca_quote(
             except Exception:
                 logger.debug("QUOTE_HTTP_STATUS_NOT_FOUND_RECORD_FAILED", exc_info=True)
         elif status in {401, 403}:
+            sdk_quote = _attempt_sdk_quote()
+            if sdk_quote is not None:
+                return sdk_quote
             logger.error(
                 'ALPACA_AUTH_PREFLIGHT_FAILED',
                 extra={'symbol': symbol, 'provider': 'alpaca_quote', 'detail': str(exc)},
@@ -10647,6 +11076,8 @@ class BotState:
     last_replay_run_date: date | None = None
     last_walk_forward_run_date: date | None = None
     last_allocation_update_date: date | None = None
+    last_policy_ablation_run_date: date | None = None
+    policy_rollback_disabled_slices: list[str] = field(default_factory=list)
 
     # Operational telemetry
     degraded_providers: set[str] = field(default_factory=set)
@@ -10670,6 +11101,7 @@ class BotState:
     trade_history: list[tuple[str, datetime]] = field(
         default_factory=list
     )  # (symbol, timestamp)
+    exit_policy_state: dict[str, dict[str, Any]] = field(default_factory=dict)
     profitability_governor_cache_until_mono: float = 0.0
     profitability_governor_cache: dict[str, Any] = field(default_factory=dict)
     profitability_governor_symbol_block_until: dict[str, datetime] = field(default_factory=dict)
@@ -19765,22 +20197,29 @@ def submit_order(
         except Exception:
             annotations = {}
 
-    price_source_label = None
-    try:
-        price_source_label = get_price_source(symbol)
-    except Exception:
-        price_source_label = None
+    annotation_price_source = (
+        annotations.get("price_source")
+        or annotations.get("quote_source")
+        or annotations.get("fallback_source")
+    )
+    price_source_label = annotation_price_source
+    if price_source_label in (None, ""):
+        try:
+            price_source_label = get_price_source(symbol)
+        except Exception:
+            price_source_label = None
 
-    if price_source_label not in (None, ""):
+    if annotation_price_source in (None, "") and price_source_label not in (None, ""):
         annotations["price_source"] = price_source_label
 
     fallback_flag = bool(
         exec_kwargs.get("using_fallback_price")
         or annotations.get("using_fallback_price")
     )
-    if not fallback_flag and price_source_label not in (None, ""):
+    normalized_price_source = _normalize_quote_source_token(price_source_label)
+    if not fallback_flag and normalized_price_source is not None:
         try:
-            fallback_flag = not _is_primary_price_source(str(price_source_label))
+            fallback_flag = not _is_primary_price_source(normalized_price_source)
         except Exception:
             logger.debug("PRICE_SOURCE_FALLBACK_FLAG_PARSE_FAILED", exc_info=True)
     if fallback_flag:
@@ -21970,6 +22409,341 @@ def _record_expectancy_outcome(
         del bucket[:-window]
 
 
+def _exit_policy_bucket_key(
+    symbol: str,
+    *,
+    regime: str,
+    side: str,
+    session_bucket: str,
+) -> str:
+    return (
+        f"{str(symbol).upper()}|{_normalize_regime_name(regime)}|"
+        f"{_normalize_entry_side(side) or 'unknown'}|{str(session_bucket).strip().lower() or 'offhours'}"
+    )
+
+
+def _ensure_exit_policy_state(state: BotState) -> dict[str, dict[str, Any]]:
+    payload = getattr(state, "exit_policy_state", None)
+    if not isinstance(payload, dict):
+        payload = {}
+        setattr(state, "exit_policy_state", payload)
+    return cast(dict[str, dict[str, Any]], payload)
+
+
+def _exit_policy_state_path() -> Path:
+    configured = str(
+        get_env(
+            "AI_TRADING_EXIT_POLICY_STATE_PATH",
+            "runtime/exit_policy_state.json",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    return resolve_runtime_artifact_path(
+        configured or "runtime/exit_policy_state.json",
+        default_relative="runtime/exit_policy_state.json",
+    )
+
+
+def _load_exit_policy_state() -> dict[str, dict[str, Any]]:
+    path = _exit_policy_state_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.debug("EXIT_POLICY_STATE_READ_FAILED", exc_info=True)
+        return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    buckets_raw = payload.get("buckets")
+    if not isinstance(buckets_raw, Mapping):
+        return {}
+    loaded: dict[str, dict[str, Any]] = {}
+    for key, value in buckets_raw.items():
+        if not isinstance(value, Mapping):
+            continue
+        bucket_key = str(key or "").strip()
+        if not bucket_key:
+            continue
+        loaded[bucket_key] = dict(value)
+    return loaded
+
+
+def _restore_exit_policy_state(
+    state: BotState,
+    *,
+    force: bool = False,
+) -> bool:
+    already_loaded = bool(getattr(state, "_exit_policy_state_loaded", False))
+    if already_loaded and not force:
+        return False
+    history = _ensure_exit_policy_state(state)
+    if history and not force:
+        setattr(state, "_exit_policy_state_loaded", True)
+        return False
+    loaded = _load_exit_policy_state()
+    if not loaded:
+        setattr(state, "_exit_policy_state_loaded", True)
+        return False
+    history.clear()
+    history.update(loaded)
+    setattr(state, "_exit_policy_state_loaded", True)
+    return True
+
+
+def _persist_exit_policy_state(
+    state: BotState,
+    *,
+    now: datetime | None = None,
+    force: bool = False,
+) -> bool:
+    enabled = bool(get_env("AI_TRADING_EXIT_POLICY_STATE_PERSIST_ENABLED", True, cast=bool))
+    if not enabled:
+        return False
+    history = _ensure_exit_policy_state(state)
+    now_dt = now if isinstance(now, datetime) else datetime.now(UTC)
+    now_mono = float(monotonic_time())
+    min_interval_s = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXIT_POLICY_STATE_PERSIST_MIN_INTERVAL_SEC",
+                15.0,
+                cast=float,
+            )
+        ),
+    )
+    last_persist_mono = float(
+        getattr(state, "_exit_policy_state_last_persist_mono", 0.0) or 0.0
+    )
+    if (
+        not force
+        and last_persist_mono > 0.0
+        and (now_mono - last_persist_mono) < float(min_interval_s)
+    ):
+        return False
+    max_buckets = max(
+        100,
+        int(get_env("AI_TRADING_EXIT_POLICY_STATE_MAX_BUCKETS", 4000, cast=int)),
+    )
+    ranked = sorted(
+        (
+            (str(key), dict(value))
+            for key, value in history.items()
+            if isinstance(value, Mapping)
+        ),
+        key=lambda item: str(item[1].get("updated_at") or ""),
+        reverse=True,
+    )
+    persisted_buckets = (
+        {key: value for key, value in ranked[:max_buckets]}
+        if ranked
+        else {}
+    )
+    payload = {
+        "updated_at": now_dt.isoformat(),
+        "bucket_count": int(len(persisted_buckets)),
+        "buckets": persisted_buckets,
+    }
+    path = _exit_policy_state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, sort_keys=True, default=_json_dump_default) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning(
+            "EXIT_POLICY_STATE_WRITE_FAILED",
+            extra={"path": str(path), "error": str(exc)},
+        )
+        return False
+    setattr(state, "_exit_policy_state_last_persist_mono", now_mono)
+    return True
+
+
+def _update_exit_policy_learning(
+    state: BotState,
+    *,
+    symbol: str,
+    regime: str,
+    side: str,
+    holding_minutes: float | None,
+    outcome_pct: float,
+    now: datetime,
+) -> None:
+    if not bool(get_env("AI_TRADING_EXEC_EXIT_POLICY_LEARNER_ENABLED", True, cast=bool)):
+        return
+    if not math.isfinite(float(outcome_pct)):
+        return
+    normalized_side = _normalize_entry_side(side)
+    if normalized_side is None:
+        return
+    holding_value = None
+    if holding_minutes is not None and math.isfinite(float(holding_minutes)):
+        holding_value = max(0.0, min(float(holding_minutes), 7.0 * 24.0 * 60.0))
+    session_bucket = _session_bucket_from_ts(now)
+    history = _ensure_exit_policy_state(state)
+    key = _exit_policy_bucket_key(
+        symbol,
+        regime=regime,
+        side=normalized_side,
+        session_bucket=session_bucket,
+    )
+    entry = dict(history.get(key) or {})
+    events = int(entry.get("events", 0) or 0) + 1
+    negative = int(entry.get("negative_events", 0) or 0) + (1 if float(outcome_pct) < 0.0 else 0)
+    outcome_sum = float(entry.get("outcome_sum_pct", 0.0) or 0.0) + float(outcome_pct)
+    holding_sum = float(entry.get("holding_minutes_sum", 0.0) or 0.0)
+    holding_samples = int(entry.get("holding_samples", 0) or 0)
+    if holding_value is not None:
+        holding_sum += float(holding_value)
+        holding_samples += 1
+    short_negative = int(entry.get("short_negative_events", 0) or 0)
+    short_events = int(entry.get("short_events", 0) or 0)
+    mid_negative = int(entry.get("mid_negative_events", 0) or 0)
+    mid_events = int(entry.get("mid_events", 0) or 0)
+    long_negative = int(entry.get("long_negative_events", 0) or 0)
+    long_events = int(entry.get("long_events", 0) or 0)
+    if holding_value is not None:
+        if holding_value <= 30.0:
+            short_events += 1
+            if float(outcome_pct) < 0.0:
+                short_negative += 1
+        elif holding_value <= 120.0:
+            mid_events += 1
+            if float(outcome_pct) < 0.0:
+                mid_negative += 1
+        else:
+            long_events += 1
+            if float(outcome_pct) < 0.0:
+                long_negative += 1
+    history[key] = {
+        "events": int(events),
+        "negative_events": int(negative),
+        "negative_rate": float(negative) / float(max(1, events)),
+        "outcome_sum_pct": float(outcome_sum),
+        "mean_outcome_pct": float(outcome_sum) / float(max(1, events)),
+        "holding_minutes_sum": float(holding_sum),
+        "holding_samples": int(holding_samples),
+        "mean_holding_minutes": (
+            float(holding_sum) / float(max(1, holding_samples))
+            if holding_samples > 0
+            else None
+        ),
+        "short_events": int(short_events),
+        "short_negative_events": int(short_negative),
+        "short_negative_rate": float(short_negative) / float(max(1, short_events)),
+        "mid_events": int(mid_events),
+        "mid_negative_events": int(mid_negative),
+        "mid_negative_rate": float(mid_negative) / float(max(1, mid_events)),
+        "long_events": int(long_events),
+        "long_negative_events": int(long_negative),
+        "long_negative_rate": float(long_negative) / float(max(1, long_events)),
+        "updated_at": now.isoformat(),
+    }
+    _persist_exit_policy_state(state, now=now)
+
+
+def _exit_policy_pressure_context(
+    state: BotState,
+    *,
+    symbol: str,
+    regime: str,
+    side: str,
+    now: datetime,
+    position_age_seconds: float,
+    expected_edge_bps: float,
+) -> dict[str, Any]:
+    if not bool(get_env("AI_TRADING_EXEC_EXIT_POLICY_LEARNER_ENABLED", True, cast=bool)):
+        return {"enabled": False, "active": False, "reason": "disabled"}
+    normalized_side = _normalize_entry_side(side)
+    if normalized_side is None:
+        return {"enabled": True, "active": False, "reason": "invalid_side"}
+    history = _ensure_exit_policy_state(state)
+    key = _exit_policy_bucket_key(
+        symbol,
+        regime=regime,
+        side=normalized_side,
+        session_bucket=_session_bucket_from_ts(now),
+    )
+    bucket = history.get(key)
+    if not isinstance(bucket, Mapping):
+        return {"enabled": True, "active": False, "reason": "missing_bucket", "bucket_key": key}
+    min_samples = max(
+        5,
+        int(get_env("AI_TRADING_EXEC_EXIT_POLICY_MIN_SAMPLES", 20, cast=int)),
+    )
+    events = int(bucket.get("events", 0) or 0)
+    if events < min_samples:
+        return {
+            "enabled": True,
+            "active": False,
+            "reason": "insufficient_samples",
+            "bucket_key": key,
+            "events": int(events),
+            "min_samples": int(min_samples),
+        }
+    age_minutes = max(0.0, float(position_age_seconds) / 60.0)
+    if age_minutes <= 30.0:
+        hazard_rate = float(bucket.get("short_negative_rate", 0.0) or 0.0)
+        hazard_band = "short"
+    elif age_minutes <= 120.0:
+        hazard_rate = float(bucket.get("mid_negative_rate", 0.0) or 0.0)
+        hazard_band = "mid"
+    else:
+        hazard_rate = float(bucket.get("long_negative_rate", 0.0) or 0.0)
+        hazard_band = "long"
+    hazard_rate = max(0.0, min(hazard_rate, 1.0))
+    mean_holding_minutes = _safe_float(bucket.get("mean_holding_minutes"))
+    mean_holding_minutes = (
+        max(1.0, min(float(mean_holding_minutes), 7.0 * 24.0 * 60.0))
+        if mean_holding_minutes is not None
+        else None
+    )
+    decay_pressure = 0.0
+    if mean_holding_minutes is not None:
+        decay_pressure = min(max((age_minutes - mean_holding_minutes) / max(mean_holding_minutes, 1.0), 0.0), 1.0)
+    expected_edge_penalty = min(max((float(expected_edge_bps) - 2.0) / 20.0, 0.0), 1.0)
+    pressure_score = max(
+        0.0,
+        min(
+            1.0,
+            (0.65 * float(hazard_rate)) + (0.35 * float(decay_pressure)) - (0.20 * float(expected_edge_penalty)),
+        ),
+    )
+    stale_scale = max(
+        0.20,
+        min(
+            1.0,
+            float(get_env("AI_TRADING_EXEC_EXIT_POLICY_STALE_TIME_SCALE", 0.75, cast=float)),
+        ),
+    )
+    suggested_max_age_seconds = None
+    if mean_holding_minutes is not None:
+        suggested_max_age_seconds = float(mean_holding_minutes) * float(stale_scale) * 60.0
+    return {
+        "enabled": True,
+        "active": True,
+        "reason": "ok",
+        "bucket_key": key,
+        "events": int(events),
+        "hazard_band": hazard_band,
+        "hazard_rate": float(hazard_rate),
+        "mean_holding_minutes": float(mean_holding_minutes) if mean_holding_minutes is not None else None,
+        "position_age_minutes": float(age_minutes),
+        "expected_edge_bps": float(expected_edge_bps),
+        "decay_pressure": float(decay_pressure),
+        "pressure_score": float(pressure_score),
+        "suggested_max_age_seconds": (
+            float(suggested_max_age_seconds)
+            if suggested_max_age_seconds is not None
+            else None
+        ),
+    }
+
+
 def _entry_expectancy_allowed(
     state: BotState,
     *,
@@ -22603,6 +23377,7 @@ def _record_exit_expectancy(
 ) -> None:
     if current_qty == 0:
         return
+    now_utc = datetime.now(UTC)
     outcome_pct = _position_unrealized_pct(ctx, symbol, exit_price, current_qty)
     if outcome_pct is None or not math.isfinite(outcome_pct):
         return
@@ -22620,6 +23395,14 @@ def _record_exit_expectancy(
     if context_value is not None:
         side = _normalize_entry_side(context_value.get("side")) or side
         regime = _normalize_regime_name(context_value.get("regime"))
+    opened_at_value = None
+    if context_value is not None:
+        candidate = context_value.get("opened_at")
+        if isinstance(candidate, datetime):
+            opened_at_value = candidate
+    holding_minutes = None
+    if isinstance(opened_at_value, datetime):
+        holding_minutes = max(0.0, (now_utc - opened_at_value).total_seconds() / 60.0)
 
     _record_expectancy_outcome(
         state,
@@ -22627,6 +23410,15 @@ def _record_exit_expectancy(
         regime=regime,
         side=side,
         outcome_pct=float(outcome_pct),
+    )
+    _update_exit_policy_learning(
+        state,
+        symbol=symbol,
+        regime=regime,
+        side=side,
+        holding_minutes=holding_minutes,
+        outcome_pct=float(outcome_pct),
+        now=now_utc,
     )
 
     if full_exit and isinstance(context_map, dict):
@@ -29928,6 +30720,30 @@ def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | Non
     def _unwrap_quote_payload(payload: Any) -> Any:
         """Return the innermost quote object exposing bid/ask fields."""
 
+        def _has_bid_ask_fields(candidate: Any) -> bool:
+            for attr in ("bid_price", "bp", "bid", "ask_price", "ap", "ask"):
+                if getattr(candidate, attr, None) is not None:
+                    return True
+            if isinstance(candidate, Mapping):
+                for key in ("bid_price", "bp", "bid", "ask_price", "ap", "ask"):
+                    if candidate.get(key) is not None:
+                        return True
+            return False
+
+        def _resolve_symbol_mapping(candidate: Mapping[Any, Any]) -> Any | None:
+            if not candidate:
+                return None
+            symbol_keys = (symbol, symbol.upper(), symbol.lower())
+            for key in symbol_keys:
+                if key in candidate:
+                    return candidate.get(key)
+            if len(candidate) == 1:
+                try:
+                    return next(iter(candidate.values()))
+                except Exception:
+                    return None
+            return None
+
         current = payload
         seen: set[int] = set()
         while current is not None:
@@ -29935,9 +30751,39 @@ def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | Non
             if identifier in seen:
                 break
             seen.add(identifier)
-            next_level = getattr(current, "quote", None)
+
+            if _has_bid_ask_fields(current):
+                return current
+
+            next_level: Any | None = None
+            if isinstance(current, Mapping):
+                next_level = _resolve_symbol_mapping(current)
+                if next_level is None:
+                    for key in ("quote", "latest_quote", "quotes", "data"):
+                        mapped = current.get(key)
+                        if mapped is None:
+                            continue
+                        if isinstance(mapped, Mapping):
+                            next_level = _resolve_symbol_mapping(mapped)
+                            if next_level is None:
+                                next_level = mapped
+                        else:
+                            next_level = mapped
+                        if next_level is not None:
+                            break
             if next_level is None:
-                next_level = getattr(current, "latest_quote", None)
+                for attr in ("quote", "latest_quote", "quotes", "data"):
+                    nested = getattr(current, attr, None)
+                    if nested is None:
+                        continue
+                    if isinstance(nested, Mapping):
+                        next_level = _resolve_symbol_mapping(nested)
+                        if next_level is None:
+                            next_level = nested
+                    else:
+                        next_level = nested
+                    if next_level is not None:
+                        break
             if next_level is None or next_level is current:
                 break
             current = next_level
@@ -29950,15 +30796,29 @@ def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | Non
             req = StockLatestQuoteRequest(symbol_or_symbols=[symbol], feed=feed)
         else:
             req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
-        quote = ctx.data_client.get_stock_latest_quote(req)
-        if quote is None:
-            return None
-        # alpaca-py returns ``StockLatestQuoteResponse`` with the quote nested
-        # under ``quote`` or ``latest_quote``; unwrap so downstream helpers see
-        # ``bid_price``/``ask_price`` attributes directly. Some test doubles
-        # mimic the production response shape as ``quote.quote`` so walk the
-        # nesting chain until a leaf object is reached.
-        return _unwrap_quote_payload(quote)
+        clients: list[Any] = []
+        try:
+            context_client = getattr(ctx, "data_client", None)
+        except COMMON_EXC:
+            context_client = None
+        if context_client is not None:
+            clients.append(context_client)
+        global_client = data_client
+        if global_client is not None and all(global_client is not client for client in clients):
+            clients.append(global_client)
+        if not clients:
+            raise RuntimeError("No data_client available for quote fetch")
+        for client in clients:
+            quote = client.get_stock_latest_quote(req)
+            if quote is None:
+                continue
+            # alpaca-py returns ``StockLatestQuoteResponse`` with the quote nested
+            # under ``quote`` or ``latest_quote``; unwrap so downstream helpers see
+            # ``bid_price``/``ask_price`` attributes directly. Some test doubles
+            # mimic the production response shape as ``quote.quote`` so walk the
+            # nesting chain until a leaf object is reached.
+            return _unwrap_quote_payload(quote)
+        return None
     except COMMON_EXC as exc:  # pragma: no cover - best effort logging
         logger.debug(
             "QUOTE_FETCH_FAILED",
@@ -31578,16 +32438,17 @@ def run_multi_strategy(ctx) -> None:
                     price_source_label = None
             if price_source_label is not None:
                 annotations['price_source'] = price_source_label
-            # Mark fallback usage when the source is not Alpaca (e.g., yahoo/feature_close)
-            try:
-                ps_norm_all = [
-                    str(x).strip().lower()
-                    for x in (quote_source, _price_source)
-                    if x is not None
-                ]
-            except Exception:
-                ps_norm_all = []
-            using_fallback = any(ps and not ps.startswith("alpaca") for ps in ps_norm_all)
+            # Mark fallback usage from the active price source rather than any
+            # secondary candidate source to avoid stale false positives.
+            primary_source_label = _normalize_price_source_label(price_source_label)
+            if not primary_source_label:
+                primary_source_label = _normalize_price_source_label(quote_source)
+            if not primary_source_label:
+                primary_source_label = _normalize_price_source_label(_price_source)
+            using_fallback = bool(
+                primary_source_label
+                and not _is_primary_price_source(primary_source_label)
+            )
             if using_fallback:
                 annotations['using_fallback_price'] = True
                 # Also surface at top-level for execution hinting
@@ -32630,6 +33491,12 @@ def _process_symbols(
         state.entry_expectancy_context = {}
     if not hasattr(state, "expectancy_history"):
         state.expectancy_history = {}
+    if not hasattr(state, "exit_policy_state"):
+        state.exit_policy_state = {}
+    if not hasattr(state, "policy_rollback_disabled_slices"):
+        state.policy_rollback_disabled_slices = []
+    if not hasattr(state, "last_policy_ablation_run_date"):
+        state.last_policy_ablation_run_date = None
 
     now = datetime.now(UTC)
 
@@ -35791,6 +36658,62 @@ def _gate_name_is_halt_noise(gate_name: str) -> bool:
     return "HALT" in gate
 
 
+_GATE_ROOT_EXACT: dict[str, str] = {
+    "ENTRY_CONSTRAINED_MIN_NOTIONAL_PRECHECK": "ENTRY_CONSTRAINED",
+    "ENTRY_CONSTRAINED_SYMBOL_REENTRY_COOLDOWN_PRECHECK": "ENTRY_CONSTRAINED",
+    "PRE_EXECUTION_ORDER_CHECKS_FAILED": "PRE_EXECUTION_CHECKS",
+    "PRE_EXECUTION_CHECKS_FAILED": "PRE_EXECUTION_CHECKS",
+    "PRE_SUBMIT_INSUFFICIENT_POSITION_AVAILABLE": "PRE_SUBMIT_POSITION",
+    "PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION": "PRE_SUBMIT_POSITION",
+    "LIQ_THIN_MAX_ORDER_BLOCK": "LIQUIDITY_THIN_MAX_ORDER",
+    "LIQ_THIN_MAX_ORDER_BLOCK_BYPASSED": "LIQUIDITY_THIN_MAX_ORDER",
+    "LIQ_PARTICIPATION_BLOCK": "LIQUIDITY_PARTICIPATION",
+    "LIQ_PARTICIPATION_BLOCK_BYPASSED": "LIQUIDITY_PARTICIPATION",
+    "COST_AWARE_ENTRY_GUARD": "COST_AWARE_ENTRY",
+}
+_GATE_ROOT_PREFIX: tuple[tuple[str, str], ...] = (
+    ("ENTRY_CONSTRAINED_", "ENTRY_CONSTRAINED"),
+    ("PRE_SUBMIT_", "PRE_SUBMIT"),
+    ("LIQ_", "LIQUIDITY"),
+    ("ALPHA_TIME_STOP_", "ALPHA_TIME_STOP"),
+    ("ALPHA_DECAY_", "ALPHA_DECAY"),
+    ("DERISK_", "DERISK"),
+    ("PORTFOLIO_OPTIMIZER_", "PORTFOLIO_OPTIMIZER"),
+    ("BANDIT_", "RANKER_BANDIT"),
+    ("COUNTERFACTUAL_", "RANKER_COUNTERFACTUAL"),
+    ("GEOMETRIC_", "RANKER_GEOMETRIC"),
+    ("PORTFOLIO_LOG_GROWTH", "RANKER_PORTFOLIO_LOG_GROWTH"),
+)
+
+
+def _gate_root_cause(gate_name: str) -> str:
+    gate = str(gate_name or "").strip().upper()
+    if not gate:
+        return ""
+    exact = _GATE_ROOT_EXACT.get(gate)
+    if exact:
+        return exact
+    for prefix, root in _GATE_ROOT_PREFIX:
+        if gate.startswith(prefix):
+            return root
+    return gate
+
+
+def _dedupe_gate_root_causes(gates: Sequence[str]) -> list[str]:
+    deduped: list[str] = []
+    seen_roots: set[str] = set()
+    for raw_gate in gates:
+        gate = str(raw_gate or "").strip()
+        if not gate:
+            continue
+        root = _gate_root_cause(gate)
+        if root in seen_roots:
+            continue
+        seen_roots.add(root)
+        deduped.append(gate)
+    return deduped
+
+
 def _analytics_counter_map(raw: Any) -> dict[str, int]:
     out: dict[str, int] = {}
     if not isinstance(raw, Mapping):
@@ -35905,7 +36828,9 @@ def _update_gate_effectiveness_analytics(
     }
     excluded_records = 0
     excluded_gate_counts: Counter[str] = Counter()
+    gate_root_counts: Counter[str] = Counter()
     gate_attribution_cycle: dict[str, dict[str, float]] = {}
+    gate_root_attribution_cycle: dict[str, dict[str, float]] = {}
     symbol_attribution_cycle: dict[str, dict[str, float]] = {}
     regime_attribution_cycle: dict[str, dict[str, float]] = {}
     total_expected_net_edge_bps = 0.0
@@ -35915,6 +36840,7 @@ def _update_gate_effectiveness_analytics(
         accepted_records = 0
         rejected_records = 0
         gate_counts = {}
+        gate_root_counts = Counter()
         for raw_item in decision_observations:
             if not isinstance(raw_item, Mapping):
                 continue
@@ -35989,6 +36915,24 @@ def _update_gate_effectiveness_analytics(
                         expected_net_edge_bps=expected_net_edge_bps,
                         edge_proxy_bps=edge_proxy_bps,
                     )
+            gate_roots = {
+                _gate_root_cause(str(gate))
+                for gate in gates
+                if str(gate).strip()
+            }
+            for gate_root in sorted(gate_roots):
+                gate_root_counts[str(gate_root)] += 1
+                if include_attribution:
+                    _bump_analytics_stats(
+                        gate_root_attribution_cycle,
+                        str(gate_root),
+                        accepted=accepted,
+                        expected_net_edge_bps=expected_net_edge_bps,
+                        edge_proxy_bps=edge_proxy_bps,
+                    )
+    elif gate_counts:
+        for gate, count in gate_counts.items():
+            gate_root_counts[_gate_root_cause(str(gate))] += int(count)
     cycle_payload: dict[str, Any] = {
         "ts": datetime.now(UTC).isoformat(),
         "records_total": int(max(0, records_total)),
@@ -36005,9 +36949,15 @@ def _update_gate_effectiveness_analytics(
             for gate, count in gate_counts.items()
             if str(gate).strip() and int(count) > 0
         },
+        "gate_root_counts": {
+            str(gate): int(count)
+            for gate, count in sorted(gate_root_counts.items(), key=lambda item: (-item[1], item[0]))
+            if str(gate).strip() and int(count) > 0
+        },
         "total_expected_net_edge_bps": float(total_expected_net_edge_bps),
         "total_edge_proxy_bps": float(total_edge_proxy_bps),
         "gate_attribution": gate_attribution_cycle if include_attribution else {},
+        "gate_root_attribution": gate_root_attribution_cycle if include_attribution else {},
         "symbol_attribution": symbol_attribution_cycle if include_attribution else {},
         "regime_attribution": regime_attribution_cycle if include_attribution else {},
     }
@@ -36028,10 +36978,12 @@ def _update_gate_effectiveness_analytics(
         "total_rejected_records": 0,
         "excluded_records_total": 0,
         "gate_totals": {},
+        "gate_root_totals": {},
         "excluded_gate_totals": {},
         "total_expected_net_edge_bps": 0.0,
         "total_edge_proxy_bps": 0.0,
         "gate_attribution": {},
+        "gate_root_attribution": {},
         "symbol_attribution": {},
         "regime_attribution": {},
     }
@@ -36043,8 +36995,10 @@ def _update_gate_effectiveness_analytics(
     except Exception:
         logger.debug("GATE_EFFECTIVENESS_SUMMARY_READ_FAILED", exc_info=True)
     gate_totals = _analytics_counter_map(summary.get("gate_totals"))
+    gate_root_totals = _analytics_counter_map(summary.get("gate_root_totals"))
     excluded_gate_totals = _analytics_counter_map(summary.get("excluded_gate_totals"))
     gate_attribution = _analytics_stats_map(summary.get("gate_attribution"))
+    gate_root_attribution = _analytics_stats_map(summary.get("gate_root_attribution"))
     symbol_attribution = _analytics_stats_map(summary.get("symbol_attribution"))
     regime_attribution = _analytics_stats_map(summary.get("regime_attribution"))
     summary["total_records"] = int(summary.get("total_records", 0) or 0) + int(
@@ -36067,13 +37021,19 @@ def _update_gate_effectiveness_analytics(
     )
     for gate, count in cycle_payload["gate_counts"].items():
         gate_totals[str(gate)] = int(gate_totals.get(str(gate), 0)) + int(count)
+    for gate_root, count in cycle_payload["gate_root_counts"].items():
+        gate_root_totals[str(gate_root)] = int(
+            gate_root_totals.get(str(gate_root), 0)
+        ) + int(count)
     for gate, count in cycle_payload["excluded_gate_counts"].items():
         excluded_gate_totals[str(gate)] = int(excluded_gate_totals.get(str(gate), 0)) + int(count)
     if include_attribution:
         _merge_analytics_stats(gate_attribution, cycle_payload["gate_attribution"])
+        _merge_analytics_stats(gate_root_attribution, cycle_payload["gate_root_attribution"])
         _merge_analytics_stats(symbol_attribution, cycle_payload["symbol_attribution"])
         _merge_analytics_stats(regime_attribution, cycle_payload["regime_attribution"])
     summary["gate_totals"] = gate_totals
+    summary["gate_root_totals"] = gate_root_totals
     summary["excluded_gate_totals"] = excluded_gate_totals
     total_records = max(1, int(summary["total_records"]))
     gate_effectiveness = {
@@ -36084,7 +37044,18 @@ def _update_gate_effectiveness_analytics(
         for gate, count in sorted(gate_totals.items(), key=lambda item: (-item[1], item[0]))
     }
     summary["gate_effectiveness"] = gate_effectiveness
+    summary["gate_root_effectiveness"] = {
+        gate: {
+            "count": int(count),
+            "per_record_rate": float(count) / float(total_records),
+        }
+        for gate, count in sorted(
+            gate_root_totals.items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+    }
     summary["gate_attribution"] = gate_attribution
+    summary["gate_root_attribution"] = gate_root_attribution
     summary["symbol_attribution"] = symbol_attribution
     summary["regime_attribution"] = regime_attribution
     summary["updated_at"] = cycle_payload["ts"]
@@ -36098,6 +37069,1738 @@ def _update_gate_effectiveness_analytics(
         logger.warning(
             "GATE_EFFECTIVENESS_SUMMARY_WRITE_FAILED",
             extra={"path": str(summary_path), "error": str(exc)},
+        )
+
+
+def _counterfactual_learning_enabled() -> bool:
+    short_toggle = get_env("COUNTERFACTUAL", None, cast=bool)
+    if short_toggle is not None:
+        return bool(short_toggle)
+    exec_toggle = get_env("AI_TRADING_EXEC_COUNTERFACTUAL_LEARNING_ENABLED", None, cast=bool)
+    if exec_toggle is not None:
+        return bool(exec_toggle)
+    return bool(
+        get_env("AI_TRADING_COUNTERFACTUAL_LEARNING_ENABLED", False, cast=bool)
+    )
+
+
+def _ensure_counterfactual_learning_artifacts(
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Best-effort bootstrap for counterfactual artifacts to avoid silent no-op state."""
+
+    ts = (now or datetime.now(UTC)).isoformat()
+    state_path = _counterfactual_learning_state_path()
+    events_path = _counterfactual_learning_events_path()
+    context: dict[str, Any] = {
+        "state_path": str(state_path),
+        "events_path": str(events_path),
+        "state_ready": bool(state_path.exists()),
+        "events_ready": bool(events_path.exists()),
+        "state_created": False,
+        "events_created": False,
+    }
+
+    default_state = {
+        "updated_at": None,
+        "global": {
+            "events": 0,
+            "accepted": 0,
+            "rejected": 0,
+            "accept_rate": 0.0,
+            "ips_mean_bps": 0.0,
+            "dr_mean_bps": 0.0,
+            "missed_dr_mean_bps": 0.0,
+            "missed_dr_sum_bps": 0.0,
+            "cycle_records": 0,
+            "cycle_rejected": 0,
+            "cycle_missed_dr_bps": 0.0,
+            "cycle_accepted": 0,
+            "cycle_accepted_reward_mean_bps": 0.0,
+        },
+        "buckets": {},
+    }
+
+    if not state_path.exists():
+        try:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(default_state, sort_keys=True, default=_json_dump_default)
+                + "\n",
+                encoding="utf-8",
+            )
+            context["state_created"] = True
+            context["state_ready"] = True
+            logger.info(
+                "COUNTERFACTUAL_STATE_BOOTSTRAPPED",
+                extra={"path": str(state_path), "ts": ts},
+            )
+        except Exception as exc:
+            context["state_error"] = str(exc)
+            logger.warning(
+                "COUNTERFACTUAL_STATE_BOOTSTRAP_FAILED",
+                extra={"path": str(state_path), "error": str(exc)},
+            )
+
+    if not events_path.exists():
+        try:
+            events_path.parent.mkdir(parents=True, exist_ok=True)
+            events_path.touch(exist_ok=True)
+            context["events_created"] = True
+            context["events_ready"] = True
+            logger.info(
+                "COUNTERFACTUAL_EVENTS_BOOTSTRAPPED",
+                extra={"path": str(events_path), "ts": ts},
+            )
+        except Exception as exc:
+            context["events_error"] = str(exc)
+            logger.warning(
+                "COUNTERFACTUAL_EVENTS_BOOTSTRAP_FAILED",
+                extra={"path": str(events_path), "error": str(exc)},
+            )
+
+    return context
+
+
+def _counterfactual_learning_state_path() -> Path:
+    configured = str(
+        get_env(
+            "AI_TRADING_COUNTERFACTUAL_STATE_PATH",
+            "runtime/counterfactual_learning_state.json",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    return resolve_runtime_artifact_path(
+        configured or "runtime/counterfactual_learning_state.json",
+        default_relative="runtime/counterfactual_learning_state.json",
+    )
+
+
+def _counterfactual_learning_events_path() -> Path:
+    configured = str(
+        get_env(
+            "AI_TRADING_COUNTERFACTUAL_EVENTS_PATH",
+            "runtime/counterfactual_learning_events.jsonl",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    return resolve_runtime_artifact_path(
+        configured or "runtime/counterfactual_learning_events.jsonl",
+        default_relative="runtime/counterfactual_learning_events.jsonl",
+    )
+
+
+def _load_counterfactual_learning_state() -> dict[str, Any]:
+    path = _counterfactual_learning_state_path()
+    if not path.exists():
+        return {"updated_at": None, "global": {}, "buckets": {}}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.debug("COUNTERFACTUAL_STATE_READ_FAILED", exc_info=True)
+        return {"updated_at": None, "global": {}, "buckets": {}}
+    if not isinstance(payload, Mapping):
+        return {"updated_at": None, "global": {}, "buckets": {}}
+    global_raw = payload.get("global")
+    buckets_raw = payload.get("buckets")
+    return {
+        "updated_at": payload.get("updated_at"),
+        "global": dict(global_raw) if isinstance(global_raw, Mapping) else {},
+        "buckets": dict(buckets_raw) if isinstance(buckets_raw, Mapping) else {},
+    }
+
+
+def _counterfactual_bucket_key_from_observation(observation: Mapping[str, Any]) -> str:
+    symbol = str(observation.get("symbol", "") or "").strip().upper() or "UNKNOWN"
+    session_bucket = (
+        str(observation.get("session_bucket", "") or "").strip().lower() or "offhours"
+    )
+    return f"{symbol}:{session_bucket}"
+
+
+def _update_counterfactual_learning_analytics(
+    *,
+    observations: Sequence[Mapping[str, Any]],
+    now: datetime,
+) -> dict[str, Any]:
+    if not _counterfactual_learning_enabled():
+        return {"enabled": False}
+    bootstrap_context = _ensure_counterfactual_learning_artifacts(now=now)
+    if not observations:
+        return {
+            "enabled": True,
+            "updated": False,
+            "records": 0,
+            "state_ready": bool(bootstrap_context.get("state_ready")),
+            "events_ready": bool(bootstrap_context.get("events_ready")),
+            "state_path": str(bootstrap_context.get("state_path") or ""),
+            "events_path": str(bootstrap_context.get("events_path") or ""),
+        }
+
+    prior = _load_counterfactual_learning_state()
+    prior_global = dict(prior.get("global") or {})
+    prior_buckets_raw = prior.get("buckets")
+    prior_buckets = dict(prior_buckets_raw) if isinstance(prior_buckets_raw, Mapping) else {}
+    alpha_prior = max(
+        0.1,
+        float(get_env("AI_TRADING_COUNTERFACTUAL_PROPENSITY_ALPHA", 2.0, cast=float)),
+    )
+    beta_prior = max(
+        0.1,
+        float(get_env("AI_TRADING_COUNTERFACTUAL_PROPENSITY_BETA", 2.0, cast=float)),
+    )
+    min_propensity = max(
+        0.01,
+        min(
+            0.5,
+            float(
+                get_env(
+                    "AI_TRADING_COUNTERFACTUAL_MIN_PROPENSITY",
+                    0.05,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    max_records = max(
+        100,
+        int(get_env("AI_TRADING_COUNTERFACTUAL_MAX_BUCKETS", 4000, cast=int)),
+    )
+
+    cycle_records = 0
+    cycle_rejected = 0
+    cycle_missed_dr_bps = 0.0
+    cycle_accepted = 0
+    cycle_accepted_reward_sum_bps = 0.0
+
+    def _bucket_defaults() -> dict[str, Any]:
+        return {
+            "events": 0,
+            "accepted": 0,
+            "rejected": 0,
+            "accepted_reward_sum_bps": 0.0,
+            "accepted_reward_samples": 0,
+            "expected_edge_sum_bps": 0.0,
+            "ips_sum_bps": 0.0,
+            "dr_sum_bps": 0.0,
+            "missed_dr_sum_bps": 0.0,
+            "updated_at": None,
+        }
+
+    updated_buckets: dict[str, dict[str, Any]] = {}
+    for key, raw_value in prior_buckets.items():
+        if isinstance(raw_value, Mapping):
+            item = _bucket_defaults()
+            item.update(dict(raw_value))
+            updated_buckets[str(key)] = item
+
+    for observation in observations:
+        if not isinstance(observation, Mapping):
+            continue
+        expected_edge_bps = _safe_float(observation.get("expected_net_edge_bps"))
+        if expected_edge_bps is None or not math.isfinite(float(expected_edge_bps)):
+            expected_edge_bps = 0.0
+        accepted = bool(observation.get("accepted", False))
+        observed_reward_bps = _safe_float(observation.get("edge_proxy_bps"))
+        if (
+            observed_reward_bps is not None
+            and not math.isfinite(float(observed_reward_bps))
+        ):
+            observed_reward_bps = None
+        key = _counterfactual_bucket_key_from_observation(observation)
+        bucket = updated_buckets.setdefault(key, _bucket_defaults())
+        try:
+            prior_events = int(bucket.get("events", 0) or 0)
+        except (TypeError, ValueError):
+            prior_events = 0
+        try:
+            prior_accepted = int(bucket.get("accepted", 0) or 0)
+        except (TypeError, ValueError):
+            prior_accepted = 0
+        propensity = float(prior_accepted + alpha_prior) / float(
+            max(1.0, float(prior_events) + alpha_prior + beta_prior)
+        )
+        propensity = max(min_propensity, min(1.0 - min_propensity, propensity))
+        accepted_samples_prior = int(bucket.get("accepted_reward_samples", 0) or 0)
+        accepted_sum_prior = float(bucket.get("accepted_reward_sum_bps", 0.0) or 0.0)
+        reward_model_bps = (
+            float(accepted_sum_prior) / float(accepted_samples_prior)
+            if accepted_samples_prior > 0
+            else float(expected_edge_bps)
+        )
+        if accepted and observed_reward_bps is not None:
+            ips_estimate = float(observed_reward_bps) / float(propensity)
+            dr_estimate = float(reward_model_bps) + (
+                float(observed_reward_bps) - float(reward_model_bps)
+            ) / float(propensity)
+        else:
+            ips_estimate = float(reward_model_bps)
+            dr_estimate = float(reward_model_bps)
+
+        bucket["events"] = prior_events + 1
+        bucket["accepted"] = prior_accepted + (1 if accepted else 0)
+        bucket["rejected"] = int(bucket.get("rejected", 0) or 0) + (0 if accepted else 1)
+        bucket["expected_edge_sum_bps"] = float(
+            bucket.get("expected_edge_sum_bps", 0.0) or 0.0
+        ) + float(expected_edge_bps)
+        bucket["ips_sum_bps"] = float(bucket.get("ips_sum_bps", 0.0) or 0.0) + float(
+            ips_estimate
+        )
+        bucket["dr_sum_bps"] = float(bucket.get("dr_sum_bps", 0.0) or 0.0) + float(dr_estimate)
+        if accepted and observed_reward_bps is not None:
+            bucket["accepted_reward_sum_bps"] = float(
+                bucket.get("accepted_reward_sum_bps", 0.0) or 0.0
+            ) + float(observed_reward_bps)
+            bucket["accepted_reward_samples"] = int(
+                bucket.get("accepted_reward_samples", 0) or 0
+            ) + 1
+            cycle_accepted += 1
+            cycle_accepted_reward_sum_bps += float(observed_reward_bps)
+        elif not accepted and dr_estimate > 0.0:
+            bucket["missed_dr_sum_bps"] = float(
+                bucket.get("missed_dr_sum_bps", 0.0) or 0.0
+            ) + float(dr_estimate)
+            cycle_rejected += 1
+            cycle_missed_dr_bps += float(dr_estimate)
+        bucket["updated_at"] = now.isoformat()
+        cycle_records += 1
+
+    ranked_keys = sorted(
+        updated_buckets.keys(),
+        key=lambda item: str(updated_buckets[item].get("updated_at") or ""),
+        reverse=True,
+    )
+    if len(ranked_keys) > max_records:
+        drop_keys = ranked_keys[max_records:]
+        for key in drop_keys:
+            updated_buckets.pop(key, None)
+
+    total_events = 0
+    total_accepted = 0
+    total_rejected = 0
+    total_ips_sum_bps = 0.0
+    total_dr_sum_bps = 0.0
+    total_missed_dr_sum_bps = 0.0
+    for item in updated_buckets.values():
+        events = int(item.get("events", 0) or 0)
+        accepted_count = int(item.get("accepted", 0) or 0)
+        rejected_count = int(item.get("rejected", 0) or 0)
+        total_events += events
+        total_accepted += accepted_count
+        total_rejected += rejected_count
+        total_ips_sum_bps += float(item.get("ips_sum_bps", 0.0) or 0.0)
+        total_dr_sum_bps += float(item.get("dr_sum_bps", 0.0) or 0.0)
+        total_missed_dr_sum_bps += float(item.get("missed_dr_sum_bps", 0.0) or 0.0)
+        item["accept_rate"] = float(accepted_count) / float(max(1, events))
+        item["ips_mean_bps"] = float(item.get("ips_sum_bps", 0.0) or 0.0) / float(
+            max(1, events)
+        )
+        item["dr_mean_bps"] = float(item.get("dr_sum_bps", 0.0) or 0.0) / float(
+            max(1, events)
+        )
+        accepted_samples = int(item.get("accepted_reward_samples", 0) or 0)
+        if accepted_samples > 0:
+            item["observed_reward_mean_bps"] = float(
+                float(item.get("accepted_reward_sum_bps", 0.0) or 0.0)
+                / float(accepted_samples)
+            )
+        else:
+            item["observed_reward_mean_bps"] = 0.0
+
+    next_state: dict[str, Any] = {
+        "updated_at": now.isoformat(),
+        "global": {
+            "events": int(total_events),
+            "accepted": int(total_accepted),
+            "rejected": int(total_rejected),
+            "accept_rate": float(total_accepted) / float(max(1, total_events)),
+            "ips_mean_bps": float(total_ips_sum_bps) / float(max(1, total_events)),
+            "dr_mean_bps": float(total_dr_sum_bps) / float(max(1, total_events)),
+            "missed_dr_mean_bps": float(total_missed_dr_sum_bps)
+            / float(max(1, total_events)),
+            "missed_dr_sum_bps": float(total_missed_dr_sum_bps),
+            "propensity_alpha": float(alpha_prior),
+            "propensity_beta": float(beta_prior),
+            "min_propensity": float(min_propensity),
+            "cycle_records": int(cycle_records),
+            "cycle_rejected": int(cycle_rejected),
+            "cycle_missed_dr_bps": float(cycle_missed_dr_bps),
+            "cycle_accepted": int(cycle_accepted),
+            "cycle_accepted_reward_mean_bps": (
+                float(cycle_accepted_reward_sum_bps) / float(max(1, cycle_accepted))
+                if cycle_accepted > 0
+                else 0.0
+            ),
+        },
+        "buckets": updated_buckets,
+    }
+    path = _counterfactual_learning_state_path()
+    events_path = _counterfactual_learning_events_path()
+    state_persisted = True
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(next_state, sort_keys=True, default=_json_dump_default) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        state_persisted = False
+        logger.warning(
+            "COUNTERFACTUAL_STATE_WRITE_FAILED",
+            extra={"path": str(path), "error": str(exc)},
+        )
+    event_payload = {
+        "ts": now.isoformat(),
+        "records": int(cycle_records),
+        "accepted": int(cycle_accepted),
+        "rejected": int(cycle_rejected),
+        "cycle_missed_dr_bps": float(cycle_missed_dr_bps),
+        "global_events": int(next_state["global"]["events"]),
+        "global_dr_mean_bps": float(next_state["global"]["dr_mean_bps"]),
+        "global_accept_rate": float(next_state["global"]["accept_rate"]),
+    }
+    events_persisted = True
+    try:
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        with events_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event_payload, sort_keys=True))
+            handle.write("\n")
+    except Exception as exc:
+        events_persisted = False
+        logger.warning(
+            "COUNTERFACTUAL_EVENTS_WRITE_FAILED",
+            extra={"path": str(events_path), "error": str(exc)},
+        )
+    if not state_persisted or not events_persisted:
+        logger.warning(
+            "COUNTERFACTUAL_LEARNING_PERSIST_DEGRADED",
+            extra={
+                "state_persisted": bool(state_persisted),
+                "events_persisted": bool(events_persisted),
+                "state_path": str(path),
+                "events_path": str(events_path),
+            },
+        )
+
+    logger.info(
+        "COUNTERFACTUAL_LEARNING_UPDATED",
+        extra={
+            "records": int(cycle_records),
+            "accepted": int(cycle_accepted),
+            "rejected": int(cycle_rejected),
+            "cycle_missed_dr_bps": float(cycle_missed_dr_bps),
+            "global_events": int(next_state["global"]["events"]),
+            "global_dr_mean_bps": float(next_state["global"]["dr_mean_bps"]),
+        },
+    )
+    return {
+        "enabled": True,
+        "updated": True,
+        "records": int(cycle_records),
+        "accepted": int(cycle_accepted),
+        "rejected": int(cycle_rejected),
+        "cycle_missed_dr_bps": float(cycle_missed_dr_bps),
+        "global_events": int(next_state["global"]["events"]),
+        "global_dr_mean_bps": float(next_state["global"]["dr_mean_bps"]),
+        "global_accept_rate": float(next_state["global"]["accept_rate"]),
+        "prior_global_events": int(prior_global.get("events", 0) or 0),
+        "state_persisted": bool(state_persisted),
+        "events_persisted": bool(events_persisted),
+        "state_path": str(path),
+        "events_path": str(events_path),
+    }
+
+
+def _policy_ablation_enabled() -> bool:
+    return bool(
+        get_env("AI_TRADING_POLICY_ABLATION_ROLLBACK_ENABLED", True, cast=bool)
+    )
+
+
+def _policy_ablation_state_path() -> Path:
+    configured = str(
+        get_env(
+            "AI_TRADING_POLICY_ABLATION_STATE_PATH",
+            "runtime/policy_ablation_state.json",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    return resolve_runtime_artifact_path(
+        configured or "runtime/policy_ablation_state.json",
+        default_relative="runtime/policy_ablation_state.json",
+    )
+
+
+def _policy_ablation_events_path() -> Path:
+    configured = str(
+        get_env(
+            "AI_TRADING_POLICY_ABLATION_EVENTS_PATH",
+            "runtime/policy_ablation_events.jsonl",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    return resolve_runtime_artifact_path(
+        configured or "runtime/policy_ablation_events.jsonl",
+        default_relative="runtime/policy_ablation_events.jsonl",
+    )
+
+
+def _policy_rollback_state_path() -> Path:
+    configured = str(
+        get_env(
+            "AI_TRADING_POLICY_ROLLBACK_STATE_PATH",
+            "runtime/policy_rollback_state.json",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    return resolve_runtime_artifact_path(
+        configured or "runtime/policy_rollback_state.json",
+        default_relative="runtime/policy_rollback_state.json",
+    )
+
+
+def _policy_runtime_toggles_path() -> Path:
+    configured = str(
+        get_env(
+            "AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH",
+            "runtime/policy_runtime_toggles.json",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    return resolve_runtime_artifact_path(
+        configured or "runtime/policy_runtime_toggles.json",
+        default_relative="runtime/policy_runtime_toggles.json",
+    )
+
+
+def _ensure_policy_learning_artifacts(
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Best-effort bootstrap for policy learning artifacts used by runtime readiness."""
+
+    ts = (now or datetime.now(UTC)).isoformat()
+    state_path = _policy_ablation_state_path()
+    events_path = _policy_ablation_events_path()
+    runtime_toggles_path = _policy_runtime_toggles_path()
+    context: dict[str, Any] = {
+        "state_path": str(state_path),
+        "events_path": str(events_path),
+        "runtime_toggles_path": str(runtime_toggles_path),
+        "state_ready": bool(state_path.exists()),
+        "events_ready": bool(events_path.exists()),
+        "runtime_toggles_ready": bool(runtime_toggles_path.exists()),
+        "state_created": False,
+        "events_created": False,
+        "runtime_toggles_created": False,
+    }
+
+    if not state_path.exists():
+        try:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps({"updated_at": None, "slices": {}}, sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
+            context["state_created"] = True
+            context["state_ready"] = True
+            logger.info(
+                "POLICY_ABLATION_STATE_BOOTSTRAPPED",
+                extra={"path": str(state_path), "ts": ts},
+            )
+        except Exception as exc:
+            context["state_error"] = str(exc)
+            logger.warning(
+                "POLICY_ABLATION_STATE_BOOTSTRAP_FAILED",
+                extra={"path": str(state_path), "error": str(exc)},
+            )
+
+    if not events_path.exists():
+        try:
+            events_path.parent.mkdir(parents=True, exist_ok=True)
+            events_path.touch(exist_ok=True)
+            context["events_created"] = True
+            context["events_ready"] = True
+            logger.info(
+                "POLICY_ABLATION_EVENTS_BOOTSTRAPPED",
+                extra={"path": str(events_path), "ts": ts},
+            )
+        except Exception as exc:
+            context["events_error"] = str(exc)
+            logger.warning(
+                "POLICY_ABLATION_EVENTS_BOOTSTRAP_FAILED",
+                extra={"path": str(events_path), "error": str(exc)},
+            )
+
+    if not runtime_toggles_path.exists():
+        rollback_payload = _load_policy_rollback_state()
+        toggles_payload = _build_policy_runtime_toggles_payload(
+            disabled_slices=cast(
+                Sequence[str],
+                rollback_payload.get("disabled_slices", []),
+            ),
+            diagnostics=cast(Mapping[str, Any], rollback_payload.get("diagnostics", {})),
+            updated_at=cast(str | None, rollback_payload.get("updated_at")),
+            source_updated_at=cast(
+                str | None,
+                rollback_payload.get("source_updated_at"),
+            ),
+        )
+        try:
+            runtime_toggles_path.parent.mkdir(parents=True, exist_ok=True)
+            runtime_toggles_path.write_text(
+                json.dumps(toggles_payload, sort_keys=True, default=_json_dump_default)
+                + "\n",
+                encoding="utf-8",
+            )
+            context["runtime_toggles_created"] = True
+            context["runtime_toggles_ready"] = True
+            logger.info(
+                "POLICY_RUNTIME_TOGGLES_BOOTSTRAPPED",
+                extra={"path": str(runtime_toggles_path), "ts": ts},
+            )
+        except Exception as exc:
+            context["runtime_toggles_error"] = str(exc)
+            logger.warning(
+                "POLICY_RUNTIME_TOGGLES_BOOTSTRAP_FAILED",
+                extra={"path": str(runtime_toggles_path), "error": str(exc)},
+            )
+
+    return context
+
+
+def _build_policy_runtime_toggles_payload(
+    *,
+    disabled_slices: Sequence[str],
+    diagnostics: Mapping[str, Any] | None = None,
+    updated_at: str | None = None,
+    source_updated_at: str | None = None,
+) -> dict[str, Any]:
+    disabled = sorted(
+        {
+            str(item).strip().upper()
+            for item in disabled_slices
+            if str(item).strip()
+        }
+    )
+    disabled_set = set(disabled)
+    disabled_gate_roots = sorted(
+        {
+            str(item).split(":", 1)[1].strip().upper()
+            for item in disabled
+            if str(item).startswith("GATE:") and ":" in str(item)
+        }
+    )
+    disabled_sleeves = sorted(
+        {
+            str(item).split(":", 1)[1].strip().lower()
+            for item in disabled
+            if str(item).startswith("SLEEVE:") and ":" in str(item)
+        }
+    )
+    ranker_toggles = {
+        "bandit_enabled": "RANKER:BANDIT" not in disabled_set,
+        "counterfactual_enabled": "RANKER:COUNTERFACTUAL" not in disabled_set,
+        "geometric_enabled": "RANKER:GEOMETRIC" not in disabled_set,
+        "portfolio_log_growth_enabled": "RANKER:PORTFOLIO_LOG_GROWTH" not in disabled_set,
+    }
+    toggles = {
+        "rankers": ranker_toggles,
+        "disabled_gate_roots": disabled_gate_roots,
+        "disabled_sleeves": disabled_sleeves,
+    }
+    return {
+        "updated_at": updated_at or datetime.now(UTC).isoformat(),
+        "source_updated_at": source_updated_at,
+        "disabled_slices": disabled,
+        "toggles": toggles,
+        "diagnostics": dict(diagnostics) if isinstance(diagnostics, Mapping) else {},
+    }
+
+
+def _load_policy_runtime_toggles() -> dict[str, Any]:
+    path = _policy_runtime_toggles_path()
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.debug("POLICY_RUNTIME_TOGGLES_READ_FAILED", exc_info=True)
+        else:
+            if isinstance(payload, Mapping):
+                disabled_raw = payload.get("disabled_slices")
+                disabled = (
+                    [
+                        str(item).strip().upper()
+                        for item in disabled_raw
+                        if str(item).strip()
+                    ]
+                    if isinstance(disabled_raw, Sequence)
+                    and not isinstance(disabled_raw, (str, bytes, bytearray))
+                    else []
+                )
+                toggles_raw = payload.get("toggles")
+                toggles = dict(toggles_raw) if isinstance(toggles_raw, Mapping) else {}
+                diagnostics_raw = payload.get("diagnostics")
+                diagnostics = (
+                    dict(diagnostics_raw)
+                    if isinstance(diagnostics_raw, Mapping)
+                    else {}
+                )
+                return {
+                    "updated_at": payload.get("updated_at"),
+                    "source_updated_at": payload.get("source_updated_at"),
+                    "disabled_slices": sorted(set(disabled)),
+                    "toggles": toggles,
+                    "diagnostics": diagnostics,
+                }
+    rollback_payload = _load_policy_rollback_state()
+    fallback = _build_policy_runtime_toggles_payload(
+        disabled_slices=cast(
+            Sequence[str],
+            rollback_payload.get("disabled_slices", []),
+        ),
+        diagnostics=cast(Mapping[str, Any], rollback_payload.get("diagnostics", {})),
+        updated_at=cast(str | None, rollback_payload.get("updated_at")),
+        source_updated_at=cast(str | None, rollback_payload.get("source_updated_at")),
+    )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(fallback, sort_keys=True, default=_json_dump_default) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning(
+            "POLICY_RUNTIME_TOGGLES_WRITE_FAILED",
+            extra={"path": str(path), "error": str(exc)},
+        )
+    return fallback
+
+
+def _uncertainty_capital_state_path() -> Path:
+    configured = str(
+        get_env(
+            "AI_TRADING_UNCERTAINTY_CAPITAL_STATE_PATH",
+            "runtime/uncertainty_capital_state.json",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    return resolve_runtime_artifact_path(
+        configured or "runtime/uncertainty_capital_state.json",
+        default_relative="runtime/uncertainty_capital_state.json",
+    )
+
+
+def _uncertainty_capital_events_path() -> Path:
+    configured = str(
+        get_env(
+            "AI_TRADING_UNCERTAINTY_CAPITAL_EVENTS_PATH",
+            "runtime/uncertainty_capital_events.jsonl",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    return resolve_runtime_artifact_path(
+        configured or "runtime/uncertainty_capital_events.jsonl",
+        default_relative="runtime/uncertainty_capital_events.jsonl",
+    )
+
+
+def _load_uncertainty_capital_state() -> dict[str, Any]:
+    path = _uncertainty_capital_state_path()
+    if not path.exists():
+        return {
+            "updated_at": None,
+            "total_events": 0,
+            "scaled_events": 0,
+            "blocked_events": 0,
+            "score_history": [],
+            "scale_history": [],
+            "bayesian_high_score_posterior": None,
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.debug("UNCERTAINTY_CAPITAL_STATE_READ_FAILED", exc_info=True)
+        return {
+            "updated_at": None,
+            "total_events": 0,
+            "scaled_events": 0,
+            "blocked_events": 0,
+            "score_history": [],
+            "scale_history": [],
+            "bayesian_high_score_posterior": None,
+        }
+    if not isinstance(payload, Mapping):
+        return {
+            "updated_at": None,
+            "total_events": 0,
+            "scaled_events": 0,
+            "blocked_events": 0,
+            "score_history": [],
+            "scale_history": [],
+            "bayesian_high_score_posterior": None,
+        }
+    score_history_raw = payload.get("score_history")
+    scale_history_raw = payload.get("scale_history")
+    return {
+        "updated_at": payload.get("updated_at"),
+        "total_events": int(payload.get("total_events", 0) or 0),
+        "scaled_events": int(payload.get("scaled_events", 0) or 0),
+        "blocked_events": int(payload.get("blocked_events", 0) or 0),
+        "score_history": (
+            list(score_history_raw)
+            if isinstance(score_history_raw, Sequence)
+            and not isinstance(score_history_raw, (str, bytes, bytearray))
+            else []
+        ),
+        "scale_history": (
+            list(scale_history_raw)
+            if isinstance(scale_history_raw, Sequence)
+            and not isinstance(scale_history_raw, (str, bytes, bytearray))
+            else []
+        ),
+        "quantiles": (
+            dict(payload.get("quantiles"))
+            if isinstance(payload.get("quantiles"), Mapping)
+            else {}
+        ),
+        "bayesian_high_score_posterior": _safe_float(
+            payload.get("bayesian_high_score_posterior")
+        ),
+        "high_score_threshold": _safe_float(payload.get("high_score_threshold")),
+    }
+
+
+def _resolve_uncertainty_capital_auto_controls(
+    *,
+    base_weight: float,
+    base_min_scale: float,
+    raw_score: float,
+    state_payload: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    auto_enabled = bool(
+        get_env("AI_TRADING_UNCERTAINTY_CAPITAL_AUTO_TUNE_ENABLED", True, cast=bool)
+    )
+    context: dict[str, Any] = {
+        "enabled": auto_enabled,
+        "auto_tuned": False,
+        "weight": float(max(0.0, min(1.0, base_weight))),
+        "min_scale": float(max(0.05, min(1.0, base_min_scale))),
+        "effective_score": float(max(0.0, min(1.0, raw_score))),
+        "posterior_high_score_prob": None,
+        "soft_threshold": None,
+        "hard_threshold": None,
+        "samples": 0,
+    }
+    if not auto_enabled or not isinstance(state_payload, Mapping):
+        return context
+    score_history_raw = state_payload.get("score_history")
+    score_history = [
+        float(value)
+        for value in (
+            list(score_history_raw)
+            if isinstance(score_history_raw, Sequence)
+            and not isinstance(score_history_raw, (str, bytes, bytearray))
+            else []
+        )
+        if isinstance(value, (int, float)) and math.isfinite(float(value))
+    ]
+    min_samples = max(
+        20,
+        int(get_env("AI_TRADING_UNCERTAINTY_CAPITAL_AUTO_TUNE_MIN_SAMPLES", 60, cast=int)),
+    )
+    context["samples"] = int(len(score_history))
+    if len(score_history) < min_samples:
+        return context
+    soft_q = max(
+        0.50,
+        min(
+            0.95,
+            float(
+                get_env(
+                    "AI_TRADING_UNCERTAINTY_CAPITAL_AUTO_SOFT_QUANTILE",
+                    0.70,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    hard_q = max(
+        soft_q + 0.01,
+        min(
+            0.995,
+            float(
+                get_env(
+                    "AI_TRADING_UNCERTAINTY_CAPITAL_AUTO_HARD_QUANTILE",
+                    0.92,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    soft_threshold = _percentile_linear(score_history, soft_q)
+    hard_threshold = _percentile_linear(score_history, hard_q)
+    if soft_threshold is None or hard_threshold is None:
+        return context
+    if hard_threshold <= soft_threshold:
+        hard_threshold = float(soft_threshold) + 1e-6
+    normalized = max(
+        0.0,
+        min(
+            1.0,
+            (float(raw_score) - float(soft_threshold))
+            / float(max(hard_threshold - soft_threshold, 1e-6)),
+        ),
+    )
+    bayes_alpha = max(
+        0.1,
+        float(get_env("AI_TRADING_UNCERTAINTY_CAPITAL_AUTO_BAYES_ALPHA", 2.0, cast=float)),
+    )
+    bayes_beta = max(
+        0.1,
+        float(get_env("AI_TRADING_UNCERTAINTY_CAPITAL_AUTO_BAYES_BETA", 18.0, cast=float)),
+    )
+    high_score_events = sum(1 for value in score_history if float(value) >= float(hard_threshold))
+    posterior = float(bayes_alpha + float(high_score_events)) / float(
+        bayes_alpha + bayes_beta + float(len(score_history))
+    )
+    posterior = max(0.0, min(1.0, posterior))
+    tuned_weight = max(
+        0.0,
+        min(
+            1.0,
+            float(base_weight)
+            * (0.75 + (0.45 * float(normalized)) + (0.35 * float(posterior))),
+        ),
+    )
+    tuned_min_scale_floor = max(
+        0.05,
+        min(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_UNCERTAINTY_CAPITAL_AUTO_MIN_SCALE_FLOOR",
+                    0.12,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    tuned_min_scale = max(
+        tuned_min_scale_floor,
+        min(
+            1.0,
+            float(base_min_scale) - (0.25 * float(normalized) * float(posterior)),
+        ),
+    )
+    context.update(
+        {
+            "auto_tuned": True,
+            "weight": float(tuned_weight),
+            "min_scale": float(tuned_min_scale),
+            "effective_score": float(normalized),
+            "posterior_high_score_prob": float(posterior),
+            "soft_threshold": float(soft_threshold),
+            "hard_threshold": float(hard_threshold),
+        }
+    )
+    return context
+
+
+def _update_uncertainty_capital_analytics(
+    *,
+    events: Sequence[Mapping[str, Any]],
+    now: datetime,
+) -> dict[str, Any]:
+    if not events:
+        return {"updated": False, "records": 0}
+    prior = _load_uncertainty_capital_state()
+    score_history = [
+        float(value)
+        for value in prior.get("score_history", [])
+        if isinstance(value, (int, float)) and math.isfinite(float(value))
+    ]
+    scale_history = [
+        float(value)
+        for value in prior.get("scale_history", [])
+        if isinstance(value, (int, float)) and math.isfinite(float(value))
+    ]
+    total_events = int(prior.get("total_events", 0) or 0)
+    scaled_events = int(prior.get("scaled_events", 0) or 0)
+    blocked_events = int(prior.get("blocked_events", 0) or 0)
+    cycle_records = 0
+    cycle_scaled = 0
+    cycle_blocked = 0
+    for event in events:
+        if not isinstance(event, Mapping):
+            continue
+        score = _safe_float(event.get("score"))
+        if score is not None and math.isfinite(float(score)):
+            score_history.append(max(0.0, min(1.0, float(score))))
+        scale = _safe_float(event.get("scale"))
+        if scale is not None and math.isfinite(float(scale)):
+            scale_history.append(max(0.0, min(1.0, float(scale))))
+        if bool(event.get("scaled", False)):
+            cycle_scaled += 1
+        if bool(event.get("blocked", False)):
+            cycle_blocked += 1
+        cycle_records += 1
+    max_history = max(
+        200,
+        int(get_env("AI_TRADING_UNCERTAINTY_CAPITAL_MAX_HISTORY", 4000, cast=int)),
+    )
+    if len(score_history) > max_history:
+        score_history = score_history[-max_history:]
+    if len(scale_history) > max_history:
+        scale_history = scale_history[-max_history:]
+    total_events += int(cycle_records)
+    scaled_events += int(cycle_scaled)
+    blocked_events += int(cycle_blocked)
+    score_mean = float(sum(score_history) / float(max(1, len(score_history)))) if score_history else None
+    scale_mean = float(sum(scale_history) / float(max(1, len(scale_history)))) if scale_history else None
+    score_q50 = _percentile_linear(score_history, 0.50)
+    score_q80 = _percentile_linear(score_history, 0.80)
+    score_q95 = _percentile_linear(score_history, 0.95)
+    high_score_threshold = (
+        float(score_q80)
+        if score_q80 is not None
+        else float(
+            max(
+                0.0,
+                min(
+                    1.0,
+                    float(
+                        get_env(
+                            "AI_TRADING_UNCERTAINTY_CAPITAL_HIGH_SCORE_THRESHOLD",
+                            0.80,
+                            cast=float,
+                        )
+                    ),
+                ),
+            )
+        )
+    )
+    high_score_events = sum(1 for value in score_history if float(value) >= float(high_score_threshold))
+    bayes_alpha = max(
+        0.1,
+        float(get_env("AI_TRADING_UNCERTAINTY_CAPITAL_AUTO_BAYES_ALPHA", 2.0, cast=float)),
+    )
+    bayes_beta = max(
+        0.1,
+        float(get_env("AI_TRADING_UNCERTAINTY_CAPITAL_AUTO_BAYES_BETA", 18.0, cast=float)),
+    )
+    posterior = float(bayes_alpha + float(high_score_events)) / float(
+        bayes_alpha + bayes_beta + float(max(1, len(score_history)))
+    )
+    posterior = max(0.0, min(1.0, posterior))
+    payload = {
+        "updated_at": now.isoformat(),
+        "total_events": int(total_events),
+        "scaled_events": int(scaled_events),
+        "blocked_events": int(blocked_events),
+        "cycle_records": int(cycle_records),
+        "cycle_scaled": int(cycle_scaled),
+        "cycle_blocked": int(cycle_blocked),
+        "score_mean": score_mean,
+        "scale_mean": scale_mean,
+        "quantiles": {
+            "score_p50": score_q50,
+            "score_p80": score_q80,
+            "score_p95": score_q95,
+        },
+        "high_score_threshold": float(high_score_threshold),
+        "bayesian_high_score_posterior": float(posterior),
+        "score_history": score_history,
+        "scale_history": scale_history,
+    }
+    path = _uncertainty_capital_state_path()
+    events_path = _uncertainty_capital_events_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, sort_keys=True, default=_json_dump_default) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning(
+            "UNCERTAINTY_CAPITAL_STATE_WRITE_FAILED",
+            extra={"path": str(path), "error": str(exc)},
+        )
+    event_payload = {
+        "ts": now.isoformat(),
+        "records": int(cycle_records),
+        "scaled": int(cycle_scaled),
+        "blocked": int(cycle_blocked),
+        "score_mean": score_mean,
+        "scale_mean": scale_mean,
+        "posterior_high_score_prob": float(posterior),
+    }
+    try:
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        with events_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event_payload, sort_keys=True, default=_json_dump_default))
+            handle.write("\n")
+    except Exception as exc:
+        logger.warning(
+            "UNCERTAINTY_CAPITAL_EVENTS_WRITE_FAILED",
+            extra={"path": str(events_path), "error": str(exc)},
+        )
+    return {
+        "updated": True,
+        "records": int(cycle_records),
+        "state_path": str(path),
+    }
+
+
+def _load_policy_ablation_state() -> dict[str, Any]:
+    path = _policy_ablation_state_path()
+    if not path.exists():
+        return {"updated_at": None, "slices": {}}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.debug("POLICY_ABLATION_STATE_READ_FAILED", exc_info=True)
+        return {"updated_at": None, "slices": {}}
+    if not isinstance(payload, Mapping):
+        return {"updated_at": None, "slices": {}}
+    slices_raw = payload.get("slices")
+    return {
+        "updated_at": payload.get("updated_at"),
+        "slices": dict(slices_raw) if isinstance(slices_raw, Mapping) else {},
+    }
+
+
+def _load_policy_rollback_state() -> dict[str, Any]:
+    path = _policy_rollback_state_path()
+    if not path.exists():
+        return {"updated_at": None, "disabled_slices": [], "diagnostics": {}}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.debug("POLICY_ROLLBACK_STATE_READ_FAILED", exc_info=True)
+        return {"updated_at": None, "disabled_slices": [], "diagnostics": {}}
+    if not isinstance(payload, Mapping):
+        return {"updated_at": None, "disabled_slices": [], "diagnostics": {}}
+    disabled_raw = payload.get("disabled_slices")
+    disabled = (
+        [
+            str(item).strip().upper()
+            for item in disabled_raw
+            if str(item).strip()
+        ]
+        if isinstance(disabled_raw, Sequence)
+        and not isinstance(disabled_raw, (str, bytes, bytearray))
+        else []
+    )
+    diagnostics_raw = payload.get("diagnostics")
+    diagnostics = (
+        dict(diagnostics_raw) if isinstance(diagnostics_raw, Mapping) else {}
+    )
+    return {
+        "updated_at": payload.get("updated_at"),
+        "disabled_slices": sorted(set(disabled)),
+        "diagnostics": diagnostics,
+    }
+
+
+def _policy_slices_from_observation(observation: Mapping[str, Any]) -> set[str]:
+    slices: set[str] = set()
+    gates_raw = observation.get("gates")
+    if isinstance(gates_raw, (str, bytes, bytearray)):
+        gates_iterable: list[Any] = [gates_raw]
+    elif isinstance(gates_raw, Sequence):
+        gates_iterable = list(gates_raw)
+    else:
+        gates_iterable = []
+    gates = [str(gate).strip().upper() for gate in gates_iterable if str(gate).strip()]
+    for gate in gates:
+        if gate == "OK_TRADE":
+            continue
+        slices.add(f"GATE:{_gate_root_cause(gate)}")
+        if gate.startswith("BANDIT_"):
+            slices.add("RANKER:BANDIT")
+        if gate.startswith("COUNTERFACTUAL_"):
+            slices.add("RANKER:COUNTERFACTUAL")
+        if gate.startswith("GEOMETRIC_"):
+            slices.add("RANKER:GEOMETRIC")
+        if gate.startswith("PORTFOLIO_LOG_GROWTH"):
+            slices.add("RANKER:PORTFOLIO_LOG_GROWTH")
+    sleeves_raw = observation.get("sleeves")
+    if isinstance(sleeves_raw, Sequence) and not isinstance(
+        sleeves_raw,
+        (str, bytes, bytearray),
+    ):
+        for sleeve in sleeves_raw:
+            sleeve_name = str(sleeve or "").strip().lower()
+            if sleeve_name:
+                slices.add(f"SLEEVE:{sleeve_name.upper()}")
+    return slices
+
+
+def _update_policy_ablation_analytics(
+    *,
+    observations: Sequence[Mapping[str, Any]],
+    now: datetime,
+) -> dict[str, Any]:
+    bootstrap_context = _ensure_policy_learning_artifacts(now=now)
+    if not _policy_ablation_enabled():
+        return {
+            "enabled": False,
+            "state_ready": bool(bootstrap_context.get("state_ready")),
+            "events_ready": bool(bootstrap_context.get("events_ready")),
+            "runtime_toggles_ready": bool(
+                bootstrap_context.get("runtime_toggles_ready")
+            ),
+        }
+    if not observations:
+        return {
+            "enabled": True,
+            "updated": False,
+            "records": 0,
+            "state_ready": bool(bootstrap_context.get("state_ready")),
+            "events_ready": bool(bootstrap_context.get("events_ready")),
+            "runtime_toggles_ready": bool(
+                bootstrap_context.get("runtime_toggles_ready")
+            ),
+            "state_path": str(bootstrap_context.get("state_path") or ""),
+            "events_path": str(bootstrap_context.get("events_path") or ""),
+            "runtime_toggles_path": str(
+                bootstrap_context.get("runtime_toggles_path") or ""
+            ),
+        }
+
+    prior = _load_policy_ablation_state()
+    slices_raw = prior.get("slices")
+    slice_state: dict[str, dict[str, Any]] = (
+        {str(key): dict(value) for key, value in slices_raw.items() if isinstance(value, Mapping)}
+        if isinstance(slices_raw, Mapping)
+        else {}
+    )
+    cycle_records = 0
+    touched_slices: set[str] = set()
+    rolling_decay = max(
+        0.50,
+        min(
+            0.999,
+            float(
+                get_env(
+                    "AI_TRADING_POLICY_ABLATION_ROLLING_DECAY",
+                    0.97,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    rolling_weight = max(1e-6, 1.0 - float(rolling_decay))
+    for observation in observations:
+        if not isinstance(observation, Mapping):
+            continue
+        accepted = bool(observation.get("accepted", False))
+        edge_proxy_bps = _safe_float(observation.get("edge_proxy_bps"))
+        if edge_proxy_bps is None or not math.isfinite(float(edge_proxy_bps)):
+            edge_proxy_bps = _safe_float(observation.get("expected_net_edge_bps")) or 0.0
+        slices = _policy_slices_from_observation(observation)
+        if not slices:
+            continue
+        cycle_records += 1
+        for slice_name in slices:
+            item = dict(slice_state.get(slice_name) or {})
+            events = int(item.get("events", 0) or 0) + 1
+            accepted_count = int(item.get("accepted", 0) or 0) + (1 if accepted else 0)
+            rejected_count = int(item.get("rejected", 0) or 0) + (0 if accepted else 1)
+            edge_sum = float(item.get("edge_proxy_sum_bps", 0.0) or 0.0) + float(edge_proxy_bps)
+            prev_rolling_mean = _safe_float(item.get("rolling_mean_edge_proxy_bps"))
+            if prev_rolling_mean is None:
+                prev_rolling_mean = float(edge_proxy_bps)
+            rolling_mean = (
+                (float(rolling_decay) * float(prev_rolling_mean))
+                + (float(rolling_weight) * float(edge_proxy_bps))
+            )
+            prev_rolling_var = _safe_float(item.get("rolling_var_edge_proxy_bps2"))
+            if prev_rolling_var is None:
+                prev_rolling_var = 0.0
+            rolling_var = (
+                (float(rolling_decay) * float(prev_rolling_var))
+                + (
+                    float(rolling_weight)
+                    * (float(edge_proxy_bps) - float(rolling_mean)) ** 2
+                )
+            )
+            prev_effective_n = _safe_float(item.get("rolling_effective_samples"))
+            if prev_effective_n is None:
+                prev_effective_n = 1.0
+            rolling_effective_n = max(
+                1.0,
+                (float(rolling_decay) * float(prev_effective_n)) + 1.0,
+            )
+            item.update(
+                {
+                    "events": int(events),
+                    "accepted": int(accepted_count),
+                    "rejected": int(rejected_count),
+                    "edge_proxy_sum_bps": float(edge_sum),
+                    "mean_edge_proxy_bps": float(edge_sum) / float(max(1, events)),
+                    "rolling_mean_edge_proxy_bps": float(rolling_mean),
+                    "rolling_var_edge_proxy_bps2": max(0.0, float(rolling_var)),
+                    "rolling_effective_samples": float(rolling_effective_n),
+                    "updated_at": now.isoformat(),
+                }
+            )
+            slice_state[slice_name] = item
+            touched_slices.add(slice_name)
+    if cycle_records <= 0:
+        return {"enabled": True, "updated": False, "records": 0}
+
+    max_slices = max(
+        200,
+        int(get_env("AI_TRADING_POLICY_ABLATION_MAX_SLICES", 5000, cast=int)),
+    )
+    ranked_slices = sorted(
+        slice_state.items(),
+        key=lambda item: str(item[1].get("updated_at") or ""),
+        reverse=True,
+    )
+    if len(ranked_slices) > max_slices:
+        slice_state = {key: value for key, value in ranked_slices[:max_slices]}
+
+    state_payload = {
+        "updated_at": now.isoformat(),
+        "slices": slice_state,
+    }
+    path = _policy_ablation_state_path()
+    events_path = _policy_ablation_events_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(state_payload, sort_keys=True, default=_json_dump_default) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning(
+            "POLICY_ABLATION_STATE_WRITE_FAILED",
+            extra={"path": str(path), "error": str(exc)},
+        )
+    event_payload = {
+        "ts": now.isoformat(),
+        "records": int(cycle_records),
+        "touched_slices": int(len(touched_slices)),
+        "top_negative_slices": [
+            {
+                "slice": key,
+                "mean_edge_proxy_bps": float(value.get("mean_edge_proxy_bps", 0.0) or 0.0),
+                "events": int(value.get("events", 0) or 0),
+            }
+            for key, value in sorted(
+                (
+                    (name, payload)
+                    for name, payload in slice_state.items()
+                    if isinstance(payload, Mapping)
+                ),
+                key=lambda item: (
+                    float(item[1].get("mean_edge_proxy_bps", 0.0) or 0.0),
+                    -int(item[1].get("events", 0) or 0),
+                ),
+            )[:10]
+        ],
+    }
+    try:
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        with events_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event_payload, sort_keys=True, default=_json_dump_default))
+            handle.write("\n")
+    except Exception as exc:
+        logger.warning(
+            "POLICY_ABLATION_EVENTS_WRITE_FAILED",
+            extra={"path": str(events_path), "error": str(exc)},
+        )
+    return {
+        "enabled": True,
+        "updated": True,
+        "records": int(cycle_records),
+        "touched_slices": int(len(touched_slices)),
+        "state_path": str(path),
+    }
+
+
+def _policy_ablation_schedule_due(
+    state: BotState,
+    *,
+    now: datetime,
+    market_open_now: bool,
+) -> bool:
+    if not _policy_ablation_enabled():
+        return False
+    schedule = str(
+        get_env("AI_TRADING_POLICY_ABLATION_SCHEDULE", "market_close", cast=str)
+        or "market_close"
+    ).strip().lower()
+    if schedule == "manual":
+        return False
+    last_run = getattr(state, "last_policy_ablation_run_date", None)
+    if schedule == "market_close":
+        return (not market_open_now) and (last_run != now.date())
+    if schedule == "daily_first_run":
+        return market_open_now and (last_run != now.date())
+    return False
+
+
+def _run_policy_ablation_rollback(
+    state: BotState,
+    *,
+    now: datetime,
+    market_open_now: bool,
+) -> None:
+    if not _policy_ablation_schedule_due(state, now=now, market_open_now=market_open_now):
+        return
+    payload = _load_policy_ablation_state()
+    slices_raw = payload.get("slices")
+    if not isinstance(slices_raw, Mapping):
+        state.last_policy_ablation_run_date = now.date()
+        return
+    min_events = max(
+        20,
+        int(get_env("AI_TRADING_POLICY_ABLATION_MIN_EVENTS", 300, cast=int)),
+    )
+    min_negative_confidence = max(
+        0.50,
+        min(
+            0.999,
+            float(
+                get_env(
+                    "AI_TRADING_POLICY_ABLATION_NEGATIVE_CONFIDENCE",
+                    0.90,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    min_mean_edge_bps = float(
+        get_env("AI_TRADING_POLICY_ABLATION_MIN_MEAN_EDGE_BPS", 0.0, cast=float)
+    )
+    std_proxy_bps = max(
+        1.0,
+        float(get_env("AI_TRADING_POLICY_ABLATION_STD_PROXY_BPS", 12.0, cast=float)),
+    )
+    adaptive_threshold_enabled = bool(
+        get_env("AI_TRADING_POLICY_ABLATION_ADAPTIVE_THRESHOLD_ENABLED", True, cast=bool)
+    )
+    adaptive_threshold_quantile = max(
+        0.01,
+        min(
+            0.99,
+            float(
+                get_env(
+                    "AI_TRADING_POLICY_ABLATION_ADAPTIVE_THRESHOLD_QUANTILE",
+                    0.35,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    toggle_significance_enabled = bool(
+        get_env(
+            "AI_TRADING_POLICY_TOGGLE_SIGNIFICANCE_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    toggle_significance_method = str(
+        get_env(
+            "AI_TRADING_POLICY_TOGGLE_SIGNIFICANCE_METHOD",
+            "both",
+            cast=str,
+        )
+        or "both"
+    ).strip().lower()
+    toggle_significance_posterior_prob_min = max(
+        0.50,
+        min(
+            0.999999,
+            float(
+                get_env(
+                    "AI_TRADING_POLICY_TOGGLE_BAYES_POSTERIOR_MIN",
+                    0.92,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    toggle_significance_sprt_alpha = max(
+        1e-4,
+        min(
+            0.50,
+            float(
+                get_env(
+                    "AI_TRADING_POLICY_TOGGLE_SPRT_ALPHA",
+                    0.05,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    toggle_significance_sprt_beta = max(
+        1e-4,
+        min(
+            0.50,
+            float(
+                get_env(
+                    "AI_TRADING_POLICY_TOGGLE_SPRT_BETA",
+                    0.10,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    toggle_significance_sprt_effect_bps = max(
+        0.1,
+        float(
+            get_env(
+                "AI_TRADING_POLICY_TOGGLE_SPRT_EFFECT_BPS",
+                0.40,
+                cast=float,
+            )
+        ),
+    )
+    watchdog_enabled = bool(
+        get_env("AI_TRADING_MARGINAL_CONTRIBUTION_WATCHDOG_ENABLED", True, cast=bool)
+    )
+    watchdog_min_events = max(
+        min_events,
+        int(
+            get_env(
+                "AI_TRADING_MARGINAL_CONTRIBUTION_WATCHDOG_MIN_EVENTS",
+                max(min_events, 400),
+                cast=int,
+            )
+        ),
+    )
+    watchdog_min_relative_contribution_bps = float(
+        get_env(
+            "AI_TRADING_MARGINAL_CONTRIBUTION_WATCHDOG_MIN_RELATIVE_BPS",
+            0.0,
+            cast=float,
+        )
+    )
+    z_value = float(NormalDist().inv_cdf(min_negative_confidence))
+    prior_runtime_toggles = _load_policy_runtime_toggles()
+    prior_disabled_set = {
+        str(item).strip().upper()
+        for item in prior_runtime_toggles.get("disabled_slices", [])
+        if str(item).strip()
+    }
+    disabled_slices_set: set[str] = set(prior_disabled_set)
+    diagnostics: dict[str, dict[str, Any]] = {}
+    toggle_changes: list[dict[str, Any]] = []
+    slice_center_values: list[float] = []
+    for raw_slice in slices_raw.values():
+        if not isinstance(raw_slice, Mapping):
+            continue
+        center_value = _safe_float(raw_slice.get("rolling_mean_edge_proxy_bps"))
+        if center_value is None:
+            center_value = _safe_float(raw_slice.get("mean_edge_proxy_bps"))
+        if center_value is not None and math.isfinite(float(center_value)):
+            slice_center_values.append(float(center_value))
+    adaptive_threshold_bps = (
+        _percentile_linear(slice_center_values, adaptive_threshold_quantile)
+        if adaptive_threshold_enabled
+        else None
+    )
+    if adaptive_threshold_bps is None:
+        adaptive_threshold_bps = float(min_mean_edge_bps)
+    threshold_bps_effective = max(float(min_mean_edge_bps), float(adaptive_threshold_bps))
+    baseline_median_bps = _percentile_linear(slice_center_values, 0.50)
+    if baseline_median_bps is None:
+        baseline_median_bps = float(threshold_bps_effective)
+    for raw_name, raw_slice in slices_raw.items():
+        if not isinstance(raw_slice, Mapping):
+            continue
+        slice_name = str(raw_name or "").strip().upper()
+        if not slice_name:
+            continue
+        events = int(raw_slice.get("events", 0) or 0)
+        if events < min_events:
+            continue
+        mean_edge = _safe_float(raw_slice.get("rolling_mean_edge_proxy_bps"))
+        if mean_edge is None:
+            mean_edge = _safe_float(raw_slice.get("mean_edge_proxy_bps")) or 0.0
+        rolling_var = max(
+            0.0,
+            float(_safe_float(raw_slice.get("rolling_var_edge_proxy_bps2")) or 0.0),
+        )
+        rolling_std_proxy = math.sqrt(float(rolling_var)) if rolling_var > 0.0 else float(std_proxy_bps)
+        effective_samples = max(
+            1.0,
+            float(
+                _safe_float(raw_slice.get("rolling_effective_samples"))
+                or float(events)
+            ),
+        )
+        stderr = float(rolling_std_proxy) / math.sqrt(float(effective_samples))
+        upper_bound = float(mean_edge) + (float(z_value) * float(stderr))
+        lower_bound = float(mean_edge) - (float(z_value) * float(stderr))
+        disable_significance = _sequential_significance_gate(
+            mean_reward_bps=float(-mean_edge),
+            std_reward_bps=float(rolling_std_proxy),
+            samples=int(max(events, int(round(effective_samples)))),
+            min_samples=int(min_events),
+            target_mean_bps=float(-threshold_bps_effective),
+            method=str(toggle_significance_method),
+            posterior_prob_min=float(toggle_significance_posterior_prob_min),
+            sprt_alpha=float(toggle_significance_sprt_alpha),
+            sprt_beta=float(toggle_significance_sprt_beta),
+            sprt_effect_bps=float(toggle_significance_sprt_effect_bps),
+        )
+        disable_significance_pass = (
+            bool(disable_significance.get("passed", False))
+            if toggle_significance_enabled
+            else True
+        )
+        enable_significance = _sequential_significance_gate(
+            mean_reward_bps=float(mean_edge),
+            std_reward_bps=float(rolling_std_proxy),
+            samples=int(max(events, int(round(effective_samples)))),
+            min_samples=int(min_events),
+            target_mean_bps=float(threshold_bps_effective),
+            method=str(toggle_significance_method),
+            posterior_prob_min=float(toggle_significance_posterior_prob_min),
+            sprt_alpha=float(toggle_significance_sprt_alpha),
+            sprt_beta=float(toggle_significance_sprt_beta),
+            sprt_effect_bps=float(toggle_significance_sprt_effect_bps),
+        )
+        enable_significance_pass = (
+            bool(enable_significance.get("passed", False))
+            if toggle_significance_enabled
+            else True
+        )
+        disable_candidate = bool(
+            float(upper_bound) < float(threshold_bps_effective)
+            and disable_significance_pass
+        )
+        marginal_contribution_bps = float(mean_edge) - float(baseline_median_bps)
+        watchdog_candidate = bool(
+            watchdog_enabled
+            and int(events) >= int(watchdog_min_events)
+            and float(marginal_contribution_bps)
+            < float(watchdog_min_relative_contribution_bps)
+            and disable_significance_pass
+        )
+        desired_disabled = bool(disable_candidate or watchdog_candidate)
+        was_disabled = slice_name in disabled_slices_set
+        change_reason = ""
+        if was_disabled and enable_significance_pass and float(lower_bound) >= float(
+            threshold_bps_effective
+        ):
+            desired_disabled = False
+            change_reason = "re_enabled_significant_recovery"
+        elif (not was_disabled) and disable_candidate:
+            change_reason = "disabled_negative_evidence"
+        elif (not was_disabled) and watchdog_candidate:
+            change_reason = "disabled_watchdog_negative_contribution"
+        if desired_disabled:
+            disabled_slices_set.add(slice_name)
+        else:
+            disabled_slices_set.discard(slice_name)
+        diagnostics[slice_name] = {
+            "events": float(events),
+            "mean_edge_proxy_bps": float(mean_edge),
+            "rolling_std_proxy_bps": float(rolling_std_proxy),
+            "rolling_effective_samples": float(effective_samples),
+            "upper_conf_bps": float(upper_bound),
+            "lower_conf_bps": float(lower_bound),
+            "threshold_bps": float(threshold_bps_effective),
+            "baseline_median_bps": float(baseline_median_bps),
+            "marginal_contribution_bps": float(marginal_contribution_bps),
+            "disable_significance": dict(disable_significance),
+            "enable_significance": dict(enable_significance),
+            "watchdog_candidate": bool(watchdog_candidate),
+            "desired_disabled": bool(desired_disabled),
+            "was_disabled": bool(was_disabled),
+        }
+        if change_reason:
+            toggle_changes.append(
+                {
+                    "slice": str(slice_name),
+                    "from_disabled": bool(was_disabled),
+                    "to_disabled": bool(desired_disabled),
+                    "reason": str(change_reason),
+                }
+            )
+    rollback_payload = {
+        "updated_at": now.isoformat(),
+        "disabled_slices": sorted(disabled_slices_set),
+        "diagnostics": diagnostics,
+        "source_updated_at": payload.get("updated_at"),
+        "toggle_changes": toggle_changes,
+        "adaptive_threshold_bps": float(threshold_bps_effective),
+        "adaptive_threshold_quantile": float(adaptive_threshold_quantile),
+        "adaptive_threshold_enabled": bool(adaptive_threshold_enabled),
+        "watchdog_enabled": bool(watchdog_enabled),
+        "watchdog_min_events": int(watchdog_min_events),
+        "watchdog_min_relative_contribution_bps": float(
+            watchdog_min_relative_contribution_bps
+        ),
+        "toggle_significance_enabled": bool(toggle_significance_enabled),
+        "toggle_significance_method": str(toggle_significance_method),
+    }
+    rollback_path = _policy_rollback_state_path()
+    try:
+        rollback_path.parent.mkdir(parents=True, exist_ok=True)
+        rollback_path.write_text(
+            json.dumps(rollback_payload, sort_keys=True, default=_json_dump_default) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning(
+            "POLICY_ROLLBACK_STATE_WRITE_FAILED",
+            extra={"path": str(rollback_path), "error": str(exc)},
+        )
+    runtime_toggles_payload = _build_policy_runtime_toggles_payload(
+        disabled_slices=cast(Sequence[str], rollback_payload.get("disabled_slices", [])),
+        diagnostics=cast(Mapping[str, Any], rollback_payload.get("diagnostics", {})),
+        updated_at=cast(str | None, rollback_payload.get("updated_at")),
+        source_updated_at=cast(str | None, rollback_payload.get("source_updated_at")),
+    )
+    runtime_toggles_path = _policy_runtime_toggles_path()
+    try:
+        runtime_toggles_path.parent.mkdir(parents=True, exist_ok=True)
+        runtime_toggles_path.write_text(
+            json.dumps(runtime_toggles_payload, sort_keys=True, default=_json_dump_default)
+            + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning(
+            "POLICY_RUNTIME_TOGGLES_WRITE_FAILED",
+            extra={"path": str(runtime_toggles_path), "error": str(exc)},
+        )
+    state.last_policy_ablation_run_date = now.date()
+    state.policy_rollback_disabled_slices = list(sorted(disabled_slices_set))
+    if toggle_changes:
+        logger.info(
+            "POLICY_RUNTIME_TOGGLE_CHANGES_APPLIED",
+            extra={
+                "changes": list(toggle_changes),
+                "adaptive_threshold_bps": float(threshold_bps_effective),
+            },
+        )
+    if disabled_slices_set:
+        logger.warning(
+            "POLICY_ABLATION_ROLLBACK_APPLIED",
+            extra={
+                "disabled_slices": sorted(disabled_slices_set),
+                "state_path": str(rollback_path),
+                "runtime_toggles_path": str(runtime_toggles_path),
+            },
         )
 
 
@@ -36656,6 +39359,25 @@ def _parse_iso_timestamp(raw: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def _session_bucket_from_ts(ts_value: datetime | None) -> str:
+    if ts_value is None:
+        return "offhours"
+    try:
+        eastern = ts_value.astimezone(ZoneInfo("America/New_York"))
+    except Exception:
+        eastern = ts_value
+    hour = int(getattr(eastern, "hour", 0))
+    minute = int(getattr(eastern, "minute", 0))
+    minutes_since_midnight = hour * 60 + minute
+    if 570 <= minutes_since_midnight < 630:
+        return "opening"
+    if 930 <= minutes_since_midnight <= 960:
+        return "closing"
+    if 630 <= minutes_since_midnight < 930:
+        return "midday"
+    return "offhours"
 
 
 def _read_jsonl_records(path: str, *, max_records: int = 10000) -> list[dict[str, Any]]:
@@ -37686,6 +40408,30 @@ def _runtime_truth_report_thresholds() -> dict[str, Any]:
         "min_profit_factor": float(
             get_env("AI_TRADING_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", 1.1, cast=float)
         ),
+        "profit_factor_min_losses": int(
+            max(
+                0,
+                int(
+                    get_env(
+                        "AI_TRADING_RUNTIME_GONOGO_PROFIT_FACTOR_MIN_LOSSES",
+                        0,
+                        cast=int,
+                    )
+                ),
+            )
+        ),
+        "profit_factor_min_gross_loss_pnl": float(
+            max(
+                0.0,
+                float(
+                    get_env(
+                        "AI_TRADING_RUNTIME_GONOGO_PROFIT_FACTOR_MIN_GROSS_LOSS_PNL",
+                        0.0,
+                        cast=float,
+                    )
+                ),
+            )
+        ),
         "min_win_rate": float(
             get_env("AI_TRADING_RUNTIME_GONOGO_MIN_WIN_RATE", 0.5, cast=float)
         ),
@@ -38533,6 +41279,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     market_open_now = market_is_open(now)
     _run_post_trade_learning_update(state, now=now, market_open_now=market_open_now)
     _run_tca_cost_calibration(state, now=now, market_open_now=market_open_now)
+    _run_policy_ablation_rollback(state, now=now, market_open_now=market_open_now)
     try:
         _run_replay_governance(state, now=now, market_open_now=market_open_now)
         _run_walk_forward_governance(state, now=now, market_open_now=market_open_now)
@@ -38555,8 +41302,14 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             for gate in gates_raw:
                 gate_text = str(gate or "").strip()
                 if gate_text:
-                    decision_gate_counts[gate_text] += 1
                     gates.append(gate_text)
+        gates = _dedupe_gate_root_causes(gates)
+        try:
+            setattr(record, "gates", list(gates))
+        except Exception:
+            pass
+        for gate_text in gates:
+            decision_gate_counts[gate_text] += 1
         symbol_value = str(getattr(record, "symbol", "") or "").strip().upper() or "UNKNOWN"
         config_snapshot_raw = getattr(record, "config_snapshot", None)
         config_snapshot = (
@@ -38571,28 +41324,62 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         metrics = dict(metrics_raw) if isinstance(metrics_raw, Mapping) else {}
         tca_raw = getattr(record, "tca", None)
         tca = dict(tca_raw) if isinstance(tca_raw, Mapping) else {}
-        try:
-            expected_net_edge_bps = float(metrics.get("expected_net_edge_bps", 0.0) or 0.0)
-        except (TypeError, ValueError):
+        expected_net_edge_bps = _safe_float(metrics.get("expected_net_edge_bps"))
+        if expected_net_edge_bps is None:
+            expected_net_edge_bps = _safe_float(tca.get("expected_net_edge_bps"))
+        if expected_net_edge_bps is None:
+            candidate_rank_raw = getattr(runtime, "execution_candidate_rank_expected_edge_bps", {})
+            candidate_rank = (
+                dict(candidate_rank_raw)
+                if isinstance(candidate_rank_raw, Mapping)
+                else {}
+            )
+            expected_net_edge_bps = _safe_float(candidate_rank.get(symbol_value))
+        if expected_net_edge_bps is None:
             expected_net_edge_bps = 0.0
         try:
             realized_is_bps = float(tca.get("is_bps", 0.0) or 0.0)
         except (TypeError, ValueError):
             realized_is_bps = 0.0
         accepted = "OK_TRADE" in gates
+        realized_net_edge_bps = _safe_float(tca.get("realized_net_edge_bps"))
+        if realized_net_edge_bps is None and accepted:
+            realized_net_edge_bps = float(expected_net_edge_bps - abs(realized_is_bps))
         edge_proxy_bps = (
-            float(expected_net_edge_bps - abs(realized_is_bps))
-            if accepted
+            float(realized_net_edge_bps)
+            if accepted and realized_net_edge_bps is not None
             else float(expected_net_edge_bps)
         )
+        bar_ts_value = getattr(record, "bar_ts", None)
+        session_bucket = (
+            _session_bucket_from_ts(bar_ts_value)
+            if isinstance(bar_ts_value, datetime)
+            else "offhours"
+        )
+        sleeves_raw = getattr(record, "sleeves", None)
+        sleeves: list[str] = []
+        if isinstance(sleeves_raw, Sequence):
+            for sleeve in sleeves_raw:
+                sleeve_name = str(getattr(sleeve, "sleeve", "") or "").strip().lower()
+                if not sleeve_name:
+                    sleeve_name = str(getattr(sleeve, "name", "") or "").strip().lower()
+                if sleeve_name:
+                    sleeves.append(sleeve_name)
         decision_observations.append(
             {
                 "symbol": symbol_value,
                 "gates": list(gates),
+                "sleeves": list(sorted(set(sleeves))),
                 "accepted": bool(accepted),
                 "regime": regime_value,
+                "session_bucket": session_bucket,
                 "expected_net_edge_bps": float(expected_net_edge_bps),
                 "realized_is_bps": float(realized_is_bps),
+                "realized_net_edge_bps": (
+                    float(realized_net_edge_bps)
+                    if realized_net_edge_bps is not None
+                    else None
+                ),
                 "edge_proxy_bps": float(edge_proxy_bps),
             }
         )
@@ -38858,17 +41645,50 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             logger.warning("NETTING_NO_SYMBOLS")
         return
     canary_raw = str(get_env("AI_TRADING_CANARY_SYMBOLS", "") or "").strip()
-    if canary_raw:
-        canary_symbols = {
-            token.strip().upper()
-            for token in canary_raw.split(",")
-            if token and token.strip()
-        }
-        symbols = [symbol for symbol in symbols if str(symbol).upper() in canary_symbols]
+    canary_percent = max(
+        0.0,
+        min(
+            1.0,
+            float(get_env("AI_TRADING_CANARY_PERCENT", 0.0, cast=float)),
+        ),
+    )
+    if canary_raw or (0.0 < canary_percent < 1.0):
+        selected_symbols = list(symbols)
+        if canary_raw:
+            canary_symbols = {
+                token.strip().upper()
+                for token in canary_raw.split(",")
+                if token and token.strip()
+            }
+            selected_symbols = [
+                symbol for symbol in selected_symbols if str(symbol).upper() in canary_symbols
+            ]
+        if 0.0 < canary_percent < 1.0:
+            selected_symbols = [
+                symbol
+                for symbol in selected_symbols
+                if (
+                    int.from_bytes(
+                        hashlib.blake2b(
+                            str(symbol).upper().encode("utf-8"),
+                            digest_size=8,
+                        ).digest(),
+                        byteorder="big",
+                        signed=False,
+                    )
+                    / float(2**64)
+                )
+                < canary_percent
+            ]
+        symbols = selected_symbols
         if not state.canary_mode_logged:
             logger.warning(
                 "CANARY_MODE_ACTIVE",
-                extra={"symbols": sorted(canary_symbols)},
+                extra={
+                    "symbols": sorted(str(symbol).upper() for symbol in symbols),
+                    "canary_percent": float(canary_percent),
+                    "explicit_canary_symbols": bool(canary_raw),
+                },
             )
             state.canary_mode_logged = True
         if not symbols:
@@ -39486,24 +42306,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             float(getattr(cfg, "disagree_ratio_threshold", 0.35)),
         )
 
-    def _session_bucket(ts_value: datetime | None) -> str:
-        if ts_value is None:
-            return "offhours"
-        try:
-            eastern = ts_value.astimezone(ZoneInfo("America/New_York"))
-        except Exception:
-            eastern = ts_value
-        hour = int(getattr(eastern, "hour", 0))
-        minute = int(getattr(eastern, "minute", 0))
-        minutes_since_midnight = hour * 60 + minute
-        if 570 <= minutes_since_midnight < 630:
-            return "opening"
-        if 930 <= minutes_since_midnight <= 960:
-            return "closing"
-        if 630 <= minutes_since_midnight < 930:
-            return "midday"
-        return "offhours"
-
     clip_expected_edge_enabled = bool(
         get_env("AI_TRADING_ALLOC_EXPECTED_EDGE_CLIP_ENABLED", True, cast=bool)
     )
@@ -39553,7 +42355,34 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         float(dynamic_cap_bps) if clip_expected_edge_enabled else float(clip_max_cap_bps)
     )
 
-    bandit_enabled = bool(get_env("AI_TRADING_EXEC_BANDIT_ROUTING_ENABLED", False, cast=bool))
+    deprecated_short_knobs: list[str] = []
+    for short_name in (
+        "BANDIT",
+        "GEOMETRIC",
+        "META_LABEL",
+        "PORTFOLIO_OPTIMIZER",
+        "COUNTERFACTUAL",
+        "PORTFOLIO_LOG_GROWTH",
+    ):
+        short_raw = get_env(short_name, "", cast=str)
+        if str(short_raw or "").strip():
+            deprecated_short_knobs.append(str(short_name))
+    if deprecated_short_knobs:
+        logger.info(
+            "LEGACY_SHORT_ROLLOUT_KNOBS_IGNORED",
+            extra={"knobs": sorted(deprecated_short_knobs)},
+        )
+
+    def _rollout_toggle(primary_env: str, default: bool = False) -> bool:
+        primary_value = get_env(primary_env, None, cast=bool)
+        if primary_value is not None:
+            return bool(primary_value)
+        return bool(default)
+
+    bandit_enabled = _rollout_toggle(
+        "AI_TRADING_EXEC_BANDIT_ROUTING_ENABLED",
+        False,
+    )
     bandit_method = str(get_env("AI_TRADING_EXEC_BANDIT_METHOD", "ucb", cast=str) or "ucb").strip().lower()
     if bandit_method not in {"ucb", "thompson"}:
         bandit_method = "ucb"
@@ -39579,8 +42408,36 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     bandit_session_bucket_enabled = bool(
         get_env("AI_TRADING_EXEC_BANDIT_SESSION_BUCKET_ENABLED", True, cast=bool)
     )
-    geometric_tiebreak_enabled = bool(
-        get_env("AI_TRADING_EXEC_GEOMETRIC_TIEBREAK_ENABLED", False, cast=bool)
+    bandit_regime_bucket_enabled = bool(
+        get_env("AI_TRADING_EXEC_BANDIT_REGIME_BUCKET_ENABLED", True, cast=bool)
+    )
+    bandit_shadow_only = bool(
+        get_env("AI_TRADING_EXEC_BANDIT_SHADOW_ONLY", True, cast=bool)
+    )
+    bandit_auto_promote = bool(
+        get_env("AI_TRADING_EXEC_BANDIT_AUTO_PROMOTE", False, cast=bool)
+    )
+    bandit_promote_min_samples = max(
+        bandit_min_samples,
+        int(get_env("AI_TRADING_EXEC_BANDIT_PROMOTE_MIN_SAMPLES", 120, cast=int)),
+    )
+    bandit_promote_min_mean_reward_bps = float(
+        get_env("AI_TRADING_EXEC_BANDIT_PROMOTE_MIN_MEAN_REWARD_BPS", 0.0, cast=float)
+    )
+    bandit_max_rank_uplift_abs = max(
+        0.0,
+        float(get_env("AI_TRADING_EXEC_BANDIT_MAX_RANK_UPLIFT_ABS", 25.0, cast=float)),
+    )
+    bandit_max_rank_uplift_frac = max(
+        0.0,
+        min(
+            1.0,
+            float(get_env("AI_TRADING_EXEC_BANDIT_MAX_RANK_UPLIFT_FRAC", 0.30, cast=float)),
+        ),
+    )
+    geometric_tiebreak_enabled = _rollout_toggle(
+        "AI_TRADING_EXEC_GEOMETRIC_TIEBREAK_ENABLED",
+        False,
     )
     geometric_tiebreak_weight = max(
         0.0,
@@ -39678,14 +42535,736 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             cast=bool,
         )
     )
+    counterfactual_enabled = _rollout_toggle(
+        "AI_TRADING_EXEC_COUNTERFACTUAL_LEARNING_ENABLED",
+        False,
+    )
+    counterfactual_shadow_only = bool(
+        get_env("AI_TRADING_EXEC_COUNTERFACTUAL_SHADOW_ONLY", True, cast=bool)
+    )
+    counterfactual_auto_promote = bool(
+        get_env("AI_TRADING_EXEC_COUNTERFACTUAL_AUTO_PROMOTE", False, cast=bool)
+    )
+    counterfactual_min_samples = max(
+        1,
+        int(get_env("AI_TRADING_EXEC_COUNTERFACTUAL_MIN_SAMPLES", 40, cast=int)),
+    )
+    counterfactual_weight = max(
+        0.0,
+        min(
+            5.0,
+            float(get_env("AI_TRADING_EXEC_COUNTERFACTUAL_SCORE_WEIGHT", 0.5, cast=float)),
+        ),
+    )
+    counterfactual_clip_bps = max(
+        1.0,
+        float(get_env("AI_TRADING_EXEC_COUNTERFACTUAL_CLIP_BPS", 50.0, cast=float)),
+    )
+    counterfactual_max_rank_uplift_abs = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_COUNTERFACTUAL_MAX_RANK_UPLIFT_ABS",
+                20.0,
+                cast=float,
+            )
+        ),
+    )
+    counterfactual_max_rank_uplift_frac = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_COUNTERFACTUAL_MAX_RANK_UPLIFT_FRAC",
+                    0.25,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    counterfactual_promote_min_events = max(
+        counterfactual_min_samples,
+        int(
+            get_env(
+                "AI_TRADING_EXEC_COUNTERFACTUAL_PROMOTE_MIN_EVENTS",
+                500,
+                cast=int,
+            )
+        ),
+    )
+    counterfactual_promote_min_dr_mean_bps = float(
+        get_env(
+            "AI_TRADING_EXEC_COUNTERFACTUAL_PROMOTE_MIN_DR_MEAN_BPS",
+            0.0,
+            cast=float,
+        )
+    )
+    realized_edge_rank_enabled = bool(
+        get_env("AI_TRADING_EXEC_REALIZED_EDGE_RANK_ENABLED", True, cast=bool)
+    )
+    realized_edge_rank_weight = max(
+        0.0,
+        min(
+            5.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_REALIZED_EDGE_SCORE_WEIGHT",
+                    0.35,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    realized_edge_rank_min_samples = max(
+        2,
+        int(get_env("AI_TRADING_EXEC_REALIZED_EDGE_MIN_SAMPLES", 12, cast=int)),
+    )
+    realized_edge_rank_uncertainty_z = max(
+        0.0,
+        min(
+            4.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_REALIZED_EDGE_UNCERTAINTY_Z",
+                    0.75,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    realized_edge_rank_clip_bps = max(
+        1.0,
+        float(get_env("AI_TRADING_EXEC_REALIZED_EDGE_CLIP_BPS", 60.0, cast=float)),
+    )
+    realized_edge_rank_max_rank_uplift_abs = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_REALIZED_EDGE_MAX_RANK_UPLIFT_ABS",
+                18.0,
+                cast=float,
+            )
+        ),
+    )
+    realized_edge_rank_max_rank_uplift_frac = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_REALIZED_EDGE_MAX_RANK_UPLIFT_FRAC",
+                    0.25,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    realized_edge_rank_session_bucket_enabled = bool(
+        get_env(
+            "AI_TRADING_EXEC_REALIZED_EDGE_SESSION_BUCKET_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    realized_edge_rank_regime_bucket_enabled = bool(
+        get_env(
+            "AI_TRADING_EXEC_REALIZED_EDGE_REGIME_BUCKET_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    promotion_significance_enabled = bool(
+        get_env(
+            "AI_TRADING_EXEC_PROMOTION_SEQUENTIAL_SIGNIFICANCE_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    promotion_significance_method = str(
+        get_env(
+            "AI_TRADING_EXEC_PROMOTION_SEQUENTIAL_METHOD",
+            "either",
+            cast=str,
+        )
+        or "either"
+    ).strip().lower()
+    promotion_significance_posterior_prob_min = max(
+        0.5,
+        min(
+            0.999999,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_PROMOTION_BAYES_POSTERIOR_MIN",
+                    0.90,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    promotion_significance_sprt_alpha = max(
+        1e-4,
+        min(
+            0.50,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_PROMOTION_SPRT_ALPHA",
+                    0.05,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    promotion_significance_sprt_beta = max(
+        1e-4,
+        min(
+            0.50,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_PROMOTION_SPRT_BETA",
+                    0.10,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    promotion_significance_sprt_effect_bps = max(
+        0.1,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_PROMOTION_SPRT_EFFECT_BPS",
+                0.40,
+                cast=float,
+            )
+        ),
+    )
+    opportunity_quality_enabled = bool(
+        get_env("AI_TRADING_EXEC_OPPORTUNITY_QUALITY_ENABLED", True, cast=bool)
+    )
+    opportunity_top_quantile = max(
+        0.05,
+        min(
+            0.99,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_OPPORTUNITY_TOP_QUANTILE",
+                    0.80,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    opportunity_min_symbols = max(
+        1,
+        int(get_env("AI_TRADING_EXEC_OPPORTUNITY_MIN_SYMBOLS", 8, cast=int)),
+    )
+    opportunity_openings_only = bool(
+        get_env("AI_TRADING_EXEC_OPPORTUNITY_OPENINGS_ONLY", True, cast=bool)
+    )
+    alpha_time_decay_enabled = bool(
+        get_env("AI_TRADING_EXEC_ALPHA_TIME_DECAY_ENABLED", True, cast=bool)
+    )
+    alpha_time_decay_half_life_sec = max(
+        1.0,
+        float(get_env("AI_TRADING_EXEC_ALPHA_HALF_LIFE_SEC", 900.0, cast=float)),
+    )
+    alpha_time_decay_floor = max(
+        0.01,
+        min(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_ALPHA_TIME_DECAY_FLOOR",
+                    0.10,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    alpha_stale_signal_sec = max(
+        0.0,
+        float(get_env("AI_TRADING_EXEC_ALPHA_STALE_SIGNAL_SEC", 3600.0, cast=float)),
+    )
+    alpha_time_stop_enabled = bool(
+        get_env("AI_TRADING_EXEC_ALPHA_TIME_STOP_ENABLED", True, cast=bool)
+    )
+    alpha_time_stop_sec = max(
+        0.0,
+        float(get_env("AI_TRADING_EXEC_ALPHA_TIME_STOP_SEC", 14_400.0, cast=float)),
+    )
+    alpha_time_stop_max_expected_edge_bps = float(
+        get_env(
+            "AI_TRADING_EXEC_ALPHA_TIME_STOP_MAX_EXPECTED_EDGE_BPS",
+            1.0,
+            cast=float,
+        )
+    )
+    portfolio_log_growth_rank_enabled = _rollout_toggle(
+        "AI_TRADING_EXEC_PORTFOLIO_LOG_GROWTH_RANK_ENABLED",
+        False,
+    )
+    portfolio_log_growth_rank_weight = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_PORTFOLIO_LOG_GROWTH_RANK_WEIGHT",
+                    0.10,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    portfolio_log_growth_variance_penalty = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_PORTFOLIO_LOG_GROWTH_VARIANCE_PENALTY",
+                1.0,
+                cast=float,
+            )
+        ),
+    )
+    portfolio_log_growth_corr_penalty_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_PORTFOLIO_LOG_GROWTH_CORR_PENALTY_BPS",
+                8.0,
+                cast=float,
+            )
+        ),
+    )
+    portfolio_log_growth_exposure_penalty_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_PORTFOLIO_LOG_GROWTH_EXPOSURE_PENALTY_BPS",
+                6.0,
+                cast=float,
+            )
+        ),
+    )
+    portfolio_log_growth_turnover_penalty_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_PORTFOLIO_LOG_GROWTH_TURNOVER_PENALTY_BPS",
+                4.0,
+                cast=float,
+            )
+        ),
+    )
+    portfolio_log_growth_liquidity_penalty_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_PORTFOLIO_LOG_GROWTH_LIQUIDITY_IMPACT_PENALTY_BPS",
+                6.0,
+                cast=float,
+            )
+        ),
+    )
+    portfolio_log_growth_max_participation = max(
+        0.005,
+        min(
+            0.5,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_PORTFOLIO_LOG_GROWTH_MAX_PARTICIPATION",
+                    0.05,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    portfolio_log_growth_max_adjust_abs = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_PORTFOLIO_LOG_GROWTH_MAX_ADJUST_ABS",
+                20.0,
+                cast=float,
+            )
+        ),
+    )
+    expected_capture_rank_enabled = bool(
+        get_env("AI_TRADING_EXEC_EXPECTED_CAPTURE_RANK_ENABLED", True, cast=bool)
+    )
+    expected_capture_rank_weight = max(
+        0.0,
+        min(
+            5.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_EXPECTED_CAPTURE_RANK_WEIGHT",
+                    0.45,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    expected_capture_spread_penalty_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_SPREAD_PENALTY_BPS",
+                0.40,
+                cast=float,
+            )
+        ),
+    )
+    expected_capture_participation_penalty_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_PARTICIPATION_PENALTY_BPS",
+                12.0,
+                cast=float,
+            )
+        ),
+    )
+    expected_capture_age_half_life_sec = max(
+        10.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_SIGNAL_HALF_LIFE_SEC",
+                900.0,
+                cast=float,
+            )
+        ),
+    )
+    expected_capture_fill_prob_floor = max(
+        0.01,
+        min(
+            0.95,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_EXPECTED_CAPTURE_FILL_PROB_FLOOR",
+                    0.10,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    expected_capture_fill_prob_cap = max(
+        expected_capture_fill_prob_floor,
+        min(
+            0.99,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_EXPECTED_CAPTURE_FILL_PROB_CAP",
+                    0.95,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    expected_capture_max_adjust_abs = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_MAX_ADJUST_ABS",
+                18.0,
+                cast=float,
+            )
+        ),
+    )
+    expected_capture_floor_bps = float(
+        get_env(
+            "AI_TRADING_EXEC_EXPECTED_CAPTURE_FLOOR_BPS",
+            -3.0,
+            cast=float,
+        )
+    )
+    expected_capture_constraint_weight = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_CONSTRAINT_WEIGHT",
+                0.80,
+                cast=float,
+            )
+        ),
+    )
+    expected_capture_constraint_max_adjust_abs = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_CONSTRAINT_MAX_ADJUST_ABS",
+                12.0,
+                cast=float,
+            )
+        ),
+    )
+    rank_downside_overlap_cap_enabled = bool(
+        get_env("AI_TRADING_EXEC_RANK_DOWNSIDE_OVERLAP_CAP_ENABLED", True, cast=bool)
+    )
+    rank_downside_overlap_cap_frac = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_RANK_DOWNSIDE_OVERLAP_CAP_FRAC",
+                    0.55,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    rank_downside_overlap_cap_abs = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_RANK_DOWNSIDE_OVERLAP_CAP_ABS",
+                18.0,
+                cast=float,
+            )
+        ),
+    )
+    expected_capture_learned_fill_model_enabled = bool(
+        get_env(
+            "AI_TRADING_EXEC_EXPECTED_CAPTURE_LEARNED_FILL_MODEL_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    expected_capture_learned_fill_min_samples = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_LEARNED_FILL_MIN_SAMPLES",
+                20,
+                cast=int,
+            )
+        ),
+    )
+    expected_capture_learned_fill_prior_alpha = max(
+        0.01,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_LEARNED_FILL_PRIOR_ALPHA",
+                2.0,
+                cast=float,
+            )
+        ),
+    )
+    expected_capture_learned_fill_prior_beta = max(
+        0.01,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_LEARNED_FILL_PRIOR_BETA",
+                2.0,
+                cast=float,
+            )
+        ),
+    )
+    expected_capture_liquidity_role_default = str(
+        get_env(
+            "AI_TRADING_EXEC_EXPECTED_CAPTURE_LIQUIDITY_ROLE_DEFAULT",
+            "maker",
+            cast=str,
+        )
+        or "maker"
+    ).strip().lower()
+    if expected_capture_liquidity_role_default not in {"maker", "taker", "mixed"}:
+        expected_capture_liquidity_role_default = "maker"
+    expected_capture_venue_default = str(
+        get_env(
+            "AI_TRADING_EXEC_EXPECTED_CAPTURE_VENUE_DEFAULT",
+            "ALPACA",
+            cast=str,
+        )
+        or "ALPACA"
+    ).strip().upper() or "ALPACA"
+    expected_capture_cost_model_enabled = bool(
+        get_env(
+            "AI_TRADING_EXEC_EXPECTED_CAPTURE_COST_MODEL_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    expected_capture_cost_model_min_samples = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_COST_MODEL_MIN_SAMPLES",
+                20,
+                cast=int,
+            )
+        ),
+    )
+    expected_capture_cost_spread_weight = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_COST_SPREAD_WEIGHT",
+                1.0,
+                cast=float,
+            )
+        ),
+    )
+    expected_capture_cost_impact_weight = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_COST_IMPACT_WEIGHT",
+                1.0,
+                cast=float,
+            )
+        ),
+    )
+    expected_capture_cost_latency_weight = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_COST_LATENCY_WEIGHT",
+                1.0,
+                cast=float,
+            )
+        ),
+    )
+    expected_capture_latency_bps_per_sec = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_LATENCY_BPS_PER_SEC",
+                0.02,
+                cast=float,
+            )
+        ),
+    )
+    expected_capture_floor_adaptive_enabled = bool(
+        get_env(
+            "AI_TRADING_EXEC_EXPECTED_CAPTURE_FLOOR_ADAPTIVE_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    expected_capture_floor_adaptive_quantile = max(
+        0.01,
+        min(
+            0.99,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_EXPECTED_CAPTURE_FLOOR_ADAPTIVE_QUANTILE",
+                    0.20,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    policy_runtime_payload = _load_policy_runtime_toggles()
+    policy_rollback_disabled_slices = {
+        str(item).strip().upper()
+        for item in policy_runtime_payload.get("disabled_slices", [])
+        if str(item).strip()
+    }
+    toggles_raw = policy_runtime_payload.get("toggles")
+    toggles = dict(toggles_raw) if isinstance(toggles_raw, Mapping) else {}
+    ranker_toggles_raw = toggles.get("rankers")
+    ranker_toggles = (
+        dict(ranker_toggles_raw) if isinstance(ranker_toggles_raw, Mapping) else {}
+    )
+    if policy_rollback_disabled_slices:
+        state.policy_rollback_disabled_slices = sorted(policy_rollback_disabled_slices)
+    else:
+        state.policy_rollback_disabled_slices = []
+    if "RANKER:BANDIT" in policy_rollback_disabled_slices or not bool(
+        ranker_toggles.get("bandit_enabled", True)
+    ):
+        bandit_enabled = False
+    if "RANKER:COUNTERFACTUAL" in policy_rollback_disabled_slices or not bool(
+        ranker_toggles.get("counterfactual_enabled", True)
+    ):
+        counterfactual_enabled = False
+    if "RANKER:GEOMETRIC" in policy_rollback_disabled_slices or not bool(
+        ranker_toggles.get("geometric_enabled", True)
+    ):
+        geometric_tiebreak_enabled = False
+    if "RANKER:PORTFOLIO_LOG_GROWTH" in policy_rollback_disabled_slices or not bool(
+        ranker_toggles.get("portfolio_log_growth_enabled", True)
+    ):
+        portfolio_log_growth_rank_enabled = False
+    disabled_gate_roots_raw = toggles.get("disabled_gate_roots")
+    if isinstance(disabled_gate_roots_raw, Sequence) and not isinstance(
+        disabled_gate_roots_raw, (str, bytes, bytearray)
+    ):
+        policy_disabled_gate_roots = {
+            str(item).strip().upper()
+            for item in disabled_gate_roots_raw
+            if str(item).strip()
+        }
+    else:
+        policy_disabled_gate_roots = {
+            str(item).split(":", 1)[1].strip().upper()
+            for item in policy_rollback_disabled_slices
+            if str(item).startswith("GATE:") and ":" in str(item)
+        }
+    disabled_sleeves_raw = toggles.get("disabled_sleeves")
+    if isinstance(disabled_sleeves_raw, Sequence) and not isinstance(
+        disabled_sleeves_raw, (str, bytes, bytearray)
+    ):
+        policy_disabled_sleeves = {
+            str(item).strip().lower()
+            for item in disabled_sleeves_raw
+            if str(item).strip()
+        }
+    else:
+        policy_disabled_sleeves = {
+            str(item).split(":", 1)[1].strip().lower()
+            for item in policy_rollback_disabled_slices
+            if str(item).startswith("SLEEVE:") and ":" in str(item)
+        }
 
     bandit_rewards_by_symbol: dict[str, list[float]] = {}
     bandit_rewards_by_symbol_session: dict[str, list[float]] = {}
+    bandit_rewards_by_symbol_session_regime: dict[str, list[float]] = {}
+    realized_edge_by_symbol: dict[str, list[float]] = {}
+    realized_edge_by_symbol_session: dict[str, list[float]] = {}
+    realized_edge_by_symbol_session_regime: dict[str, list[float]] = {}
     edge_realism_ratio_by_symbol: dict[str, list[float]] = {}
     edge_realism_ratio_by_symbol_session: dict[str, list[float]] = {}
     edge_realism_rank_factor_by_symbol: dict[str, float] = {}
-    bandit_active_session = _session_bucket(now)
-    if (bandit_enabled or edge_realism_rank_calibration_enabled) and targets:
+    counterfactual_signal_by_symbol: dict[str, dict[str, Any]] = {}
+    opportunity_quality_by_symbol: dict[str, float] = {}
+    learned_fill_trials_by_bucket: dict[str, float] = {}
+    learned_fill_success_by_bucket: dict[str, float] = {}
+    learned_exec_cost_stats_by_bucket: dict[str, dict[str, float]] = {}
+    expected_capture_observed_values: list[float] = []
+    opportunity_quality_gate: dict[str, Any] = {
+        "enabled": bool(opportunity_quality_enabled),
+        "top_quantile": float(opportunity_top_quantile),
+        "min_symbols": int(opportunity_min_symbols),
+        "openings_only": bool(opportunity_openings_only),
+        "threshold": None,
+        "allowed_symbols": [],
+    }
+    bandit_active_session = _session_bucket_from_ts(now)
+    bandit_active_regime = str(get_regime_signal_profile() or "").strip().lower() or "unknown"
+    counterfactual_state = (
+        _load_counterfactual_learning_state() if counterfactual_enabled else {"global": {}, "buckets": {}}
+    )
+    counterfactual_global_raw = counterfactual_state.get("global")
+    counterfactual_global = (
+        dict(counterfactual_global_raw)
+        if isinstance(counterfactual_global_raw, Mapping)
+        else {}
+    )
+    counterfactual_buckets_raw = counterfactual_state.get("buckets")
+    counterfactual_buckets = (
+        dict(counterfactual_buckets_raw)
+        if isinstance(counterfactual_buckets_raw, Mapping)
+        else {}
+    )
+    if (
+        bandit_enabled
+        or edge_realism_rank_calibration_enabled
+        or realized_edge_rank_enabled
+        or expected_capture_rank_enabled
+    ) and targets:
         bandit_rows = _read_jsonl_records(
             str(_resolved_tca_path()),
             max_records=max(
@@ -39704,22 +43283,136 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             if not symbol or symbol not in targets:
                 continue
             status = str(row.get("status", "")).strip().lower()
-            if status in {"rejected", "canceled", "cancelled"}:
-                continue
             session_token = str(row.get("session_regime", "")).strip().lower()
             if session_token not in {"opening", "midday", "closing", "offhours"}:
                 ts = _parse_iso_timestamp(row.get("ts"))
-                session_token = _session_bucket(ts)
+                session_token = _session_bucket_from_ts(ts)
             bucket_key = f"{symbol}:{session_token}"
-            reward_bps: float | None = None
+            regime_token = str(
+                row.get("regime_profile")
+                or row.get("regime")
+                or row.get("session_profile")
+                or ""
+            ).strip().lower() or "unknown"
+            bucket_regime_key = f"{symbol}:{session_token}:{regime_token}"
+            liquidity_role = _infer_tca_liquidity_role(row)
+            venue_session_token = str(row.get("venue_session") or "").strip()
+            if not venue_session_token:
+                venue_token = str(
+                    row.get("venue")
+                    or row.get("provider")
+                    or expected_capture_venue_default
+                ).strip().upper() or expected_capture_venue_default
+                venue_session_token = f"{venue_token}:{session_token}"
+            if expected_capture_rank_enabled and expected_capture_learned_fill_model_enabled:
+                fill_success_ratio = _extract_tca_fill_success_ratio(row)
+                if fill_success_ratio is not None:
+                    fill_bucket_keys = (
+                        f"{symbol}:{session_token}:{regime_token}:{liquidity_role}:{venue_session_token}",
+                        f"{symbol}:{session_token}:{regime_token}:{liquidity_role}",
+                        f"{symbol}:{session_token}:{regime_token}",
+                        f"{symbol}:{session_token}",
+                        f"{symbol}",
+                        "__global__",
+                    )
+                    for key in fill_bucket_keys:
+                        learned_fill_trials_by_bucket[str(key)] = float(
+                            learned_fill_trials_by_bucket.get(str(key), 0.0)
+                        ) + 1.0
+                        learned_fill_success_by_bucket[str(key)] = float(
+                            learned_fill_success_by_bucket.get(str(key), 0.0)
+                        ) + float(max(0.0, min(1.0, fill_success_ratio)))
+                spread_cost_bps = max(
+                    0.0,
+                    float(_safe_float(row.get("spread_paid_bps")) or 0.0),
+                )
+                total_cost_bps = max(
+                    0.0,
+                    float(_safe_float(row.get("is_bps")) or spread_cost_bps),
+                )
+                impact_cost_bps = max(
+                    0.0,
+                    float(total_cost_bps) - float(spread_cost_bps),
+                )
+                latency_ms = max(
+                    0.0,
+                    float(_safe_float(row.get("fill_latency_ms")) or 0.0),
+                )
+                observed_latency_drift = max(
+                    0.0,
+                    abs(float(_safe_float(row.get("execution_drift_bps")) or 0.0)),
+                )
+                latency_drift_cost_bps = max(
+                    float(observed_latency_drift),
+                    (float(latency_ms) / 1000.0) * float(expected_capture_latency_bps_per_sec),
+                )
+                expected_edge_for_capture = _safe_float(row.get("expected_net_edge_bps"))
+                if expected_edge_for_capture is None:
+                    expected_edge_for_capture = _safe_float(row.get("edge_bps"))
+                if expected_edge_for_capture is not None and fill_success_ratio is not None:
+                    observed_capture = (
+                        float(expected_edge_for_capture) * float(fill_success_ratio)
+                    ) - (
+                        float(spread_cost_bps)
+                        + float(impact_cost_bps)
+                        + float(latency_drift_cost_bps)
+                    )
+                    if math.isfinite(float(observed_capture)):
+                        expected_capture_observed_values.append(float(observed_capture))
+                cost_bucket_keys = (
+                    f"{symbol}:{session_token}:{regime_token}:{liquidity_role}:{venue_session_token}",
+                    f"{symbol}:{session_token}:{regime_token}:{liquidity_role}",
+                    f"{symbol}:{session_token}:{regime_token}",
+                    f"{symbol}:{session_token}",
+                    f"{symbol}",
+                    "__global__",
+                )
+                for key in cost_bucket_keys:
+                    stats_item = learned_exec_cost_stats_by_bucket.setdefault(
+                        str(key),
+                        {
+                            "samples": 0.0,
+                            "spread_sum_bps": 0.0,
+                            "impact_sum_bps": 0.0,
+                            "latency_sum_bps": 0.0,
+                        },
+                    )
+                    stats_item["samples"] = float(stats_item.get("samples", 0.0) or 0.0) + 1.0
+                    stats_item["spread_sum_bps"] = float(
+                        stats_item.get("spread_sum_bps", 0.0) or 0.0
+                    ) + float(spread_cost_bps)
+                    stats_item["impact_sum_bps"] = float(
+                        stats_item.get("impact_sum_bps", 0.0) or 0.0
+                    ) + float(impact_cost_bps)
+                    stats_item["latency_sum_bps"] = float(
+                        stats_item.get("latency_sum_bps", 0.0) or 0.0
+                    ) + float(latency_drift_cost_bps)
+            if status in {"rejected", "canceled", "cancelled"}:
+                continue
+            realized_edge_bps: float | None = None
             for key in ("realized_net_edge_bps", "net_edge_bps", "realized_edge_bps"):
                 try:
                     candidate = float(row.get(key))
                 except (TypeError, ValueError):
                     continue
                 if math.isfinite(candidate):
-                    reward_bps = float(candidate)
+                    realized_edge_bps = float(candidate)
                     break
+            if realized_edge_bps is not None and realized_edge_rank_enabled:
+                bounded_realized_edge = max(-200.0, min(float(realized_edge_bps), 200.0))
+                realized_edge_by_symbol.setdefault(symbol, []).append(
+                    float(bounded_realized_edge)
+                )
+                realized_edge_by_symbol_session.setdefault(bucket_key, []).append(
+                    float(bounded_realized_edge)
+                )
+                realized_edge_by_symbol_session_regime.setdefault(
+                    bucket_regime_key,
+                    [],
+                ).append(float(bounded_realized_edge))
+            reward_bps: float | None = None
+            if realized_edge_bps is not None:
+                reward_bps = float(realized_edge_bps)
             if reward_bps is None:
                 try:
                     is_bps = float(row.get("is_bps"))
@@ -39758,12 +43451,28 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 bandit_rewards_by_symbol_session.setdefault(bucket_key, []).append(
                     float(reward_bps)
                 )
+                bandit_rewards_by_symbol_session_regime.setdefault(
+                    bucket_regime_key,
+                    [],
+                ).append(float(reward_bps))
         for symbol, values in list(bandit_rewards_by_symbol.items()):
             if len(values) > bandit_window_trades:
                 bandit_rewards_by_symbol[symbol] = values[-bandit_window_trades:]
         for key, values in list(bandit_rewards_by_symbol_session.items()):
             if len(values) > bandit_window_trades:
                 bandit_rewards_by_symbol_session[key] = values[-bandit_window_trades:]
+        for key, values in list(bandit_rewards_by_symbol_session_regime.items()):
+            if len(values) > bandit_window_trades:
+                bandit_rewards_by_symbol_session_regime[key] = values[-bandit_window_trades:]
+        for symbol, values in list(realized_edge_by_symbol.items()):
+            if len(values) > bandit_window_trades:
+                realized_edge_by_symbol[symbol] = values[-bandit_window_trades:]
+        for key, values in list(realized_edge_by_symbol_session.items()):
+            if len(values) > bandit_window_trades:
+                realized_edge_by_symbol_session[key] = values[-bandit_window_trades:]
+        for key, values in list(realized_edge_by_symbol_session_regime.items()):
+            if len(values) > bandit_window_trades:
+                realized_edge_by_symbol_session_regime[key] = values[-bandit_window_trades:]
         for symbol, values in list(edge_realism_ratio_by_symbol.items()):
             if len(values) > edge_realism_rank_calibration_window_trades:
                 edge_realism_ratio_by_symbol[symbol] = values[
@@ -39774,6 +43483,17 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 edge_realism_ratio_by_symbol_session[key] = values[
                     -edge_realism_rank_calibration_window_trades:
                 ]
+    expected_capture_floor_bps_effective = float(expected_capture_floor_bps)
+    if expected_capture_floor_adaptive_enabled and expected_capture_observed_values:
+        adaptive_capture_floor = _percentile_linear(
+            expected_capture_observed_values,
+            expected_capture_floor_adaptive_quantile,
+        )
+        if adaptive_capture_floor is not None:
+            expected_capture_floor_bps_effective = min(
+                float(expected_capture_floor_bps_effective),
+                float(adaptive_capture_floor),
+            )
 
     if edge_realism_rank_calibration_enabled and targets:
         all_ratios = [
@@ -39827,7 +43547,222 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 )
             )
 
+    bandit_global_samples = int(sum(len(values) for values in bandit_rewards_by_symbol.values()))
+    bandit_global_mean_reward_bps = (
+        float(sum(sum(values) for values in bandit_rewards_by_symbol.values()))
+        / float(max(1, bandit_global_samples))
+        if bandit_global_samples > 0
+        else 0.0
+    )
+    bandit_global_series = [
+        float(value)
+        for values in bandit_rewards_by_symbol.values()
+        for value in values
+        if isinstance(value, (int, float)) and math.isfinite(float(value))
+    ]
+    bandit_mean_for_significance, bandit_std_for_significance, bandit_samples_for_significance = _mean_std(
+        bandit_global_series
+    )
+    bandit_significance_context = _sequential_significance_gate(
+        mean_reward_bps=float(bandit_mean_for_significance),
+        std_reward_bps=float(bandit_std_for_significance),
+        samples=int(bandit_samples_for_significance),
+        min_samples=int(max(bandit_promote_min_samples, bandit_min_samples)),
+        target_mean_bps=float(bandit_promote_min_mean_reward_bps),
+        method=str(promotion_significance_method),
+        posterior_prob_min=float(promotion_significance_posterior_prob_min),
+        sprt_alpha=float(promotion_significance_sprt_alpha),
+        sprt_beta=float(promotion_significance_sprt_beta),
+        sprt_effect_bps=float(promotion_significance_sprt_effect_bps),
+    )
+    bandit_significance_pass = (
+        bool(bandit_significance_context.get("passed", False))
+        if promotion_significance_enabled
+        else True
+    )
+    bandit_live_promoted = bool(
+        bandit_enabled
+        and (
+            not bandit_shadow_only
+            or (
+                bandit_auto_promote
+                and bandit_global_samples >= bandit_promote_min_samples
+                and bandit_global_mean_reward_bps >= bandit_promote_min_mean_reward_bps
+                and bandit_significance_pass
+            )
+        )
+    )
+    counterfactual_global_events = int(counterfactual_global.get("events", 0) or 0)
+    counterfactual_global_dr_mean_bps = float(
+        counterfactual_global.get("dr_mean_bps", 0.0) or 0.0
+    )
+    counterfactual_bucket_dr_means = [
+        float(_safe_float(item.get("dr_mean_bps")) or 0.0)
+        for item in counterfactual_buckets.values()
+        if isinstance(item, Mapping)
+        and _safe_float(item.get("dr_mean_bps")) is not None
+    ]
+    _cf_bucket_mean, counterfactual_std_proxy, _cf_bucket_samples = _mean_std(
+        counterfactual_bucket_dr_means
+    )
+    counterfactual_std_proxy = max(
+        float(counterfactual_std_proxy),
+        float(
+            get_env(
+                "AI_TRADING_EXEC_COUNTERFACTUAL_PROMOTION_STD_PROXY_BPS",
+                15.0,
+                cast=float,
+            )
+        ),
+    )
+    counterfactual_significance_context = _sequential_significance_gate(
+        mean_reward_bps=float(counterfactual_global_dr_mean_bps),
+        std_reward_bps=float(counterfactual_std_proxy),
+        samples=int(counterfactual_global_events),
+        min_samples=int(counterfactual_promote_min_events),
+        target_mean_bps=float(counterfactual_promote_min_dr_mean_bps),
+        method=str(promotion_significance_method),
+        posterior_prob_min=float(promotion_significance_posterior_prob_min),
+        sprt_alpha=float(promotion_significance_sprt_alpha),
+        sprt_beta=float(promotion_significance_sprt_beta),
+        sprt_effect_bps=float(promotion_significance_sprt_effect_bps),
+    )
+    counterfactual_significance_pass = (
+        bool(counterfactual_significance_context.get("passed", False))
+        if promotion_significance_enabled
+        else True
+    )
+    counterfactual_live_promoted = bool(
+        counterfactual_enabled
+        and (
+            not counterfactual_shadow_only
+            or (
+                counterfactual_auto_promote
+                and counterfactual_global_events >= counterfactual_promote_min_events
+                and counterfactual_global_dr_mean_bps
+                >= counterfactual_promote_min_dr_mean_bps
+                and counterfactual_significance_pass
+            )
+        )
+    )
+    portfolio_rank_correlation: dict[str, dict[str, float]] = (
+        _build_symbol_return_correlation_matrix(symbol_returns)
+        if portfolio_log_growth_rank_enabled
+        else {}
+    )
+    portfolio_current_gross_for_rank = 0.0
+    held_notional_weights: dict[str, float] = {}
+    if portfolio_log_growth_rank_enabled:
+        for held_symbol, held_qty in positions.items():
+            held_price = _safe_float(latest_price.get(held_symbol))
+            if held_price is None or held_price <= 0.0:
+                continue
+            held_notional = abs(float(held_qty) * float(held_price))
+            if held_notional <= 0.0:
+                continue
+            portfolio_current_gross_for_rank += held_notional
+            held_notional_weights[str(held_symbol)] = held_notional
+        if portfolio_current_gross_for_rank > 0.0:
+            held_notional_weights = {
+                symbol: float(notional) / float(portfolio_current_gross_for_rank)
+                for symbol, notional in held_notional_weights.items()
+            }
+        else:
+            held_notional_weights = {}
+
+    def _expected_capture_bucket_keys(
+        *,
+        symbol: str,
+        session_token: str,
+        regime_token: str,
+        liquidity_role: str,
+        venue_session: str,
+    ) -> tuple[str, ...]:
+        return (
+            f"{symbol}:{session_token}:{regime_token}:{liquidity_role}:{venue_session}",
+            f"{symbol}:{session_token}:{regime_token}:{liquidity_role}",
+            f"{symbol}:{session_token}:{regime_token}",
+            f"{symbol}:{session_token}",
+            f"{symbol}",
+            "__global__",
+        )
+
+    def _lookup_learned_fill_probability(
+        *,
+        symbol: str,
+        session_token: str,
+        regime_token: str,
+        liquidity_role: str,
+        venue_session: str,
+    ) -> tuple[float | None, int, str | None]:
+        for key in _expected_capture_bucket_keys(
+            symbol=symbol,
+            session_token=session_token,
+            regime_token=regime_token,
+            liquidity_role=liquidity_role,
+            venue_session=venue_session,
+        ):
+            trials = float(learned_fill_trials_by_bucket.get(str(key), 0.0) or 0.0)
+            if trials < float(expected_capture_learned_fill_min_samples):
+                continue
+            successes = float(
+                learned_fill_success_by_bucket.get(str(key), 0.0) or 0.0
+            )
+            posterior_prob = (
+                float(successes) + float(expected_capture_learned_fill_prior_alpha)
+            ) / (
+                float(trials)
+                + float(expected_capture_learned_fill_prior_alpha)
+                + float(expected_capture_learned_fill_prior_beta)
+            )
+            return (
+                max(0.0, min(1.0, float(posterior_prob))),
+                int(round(trials)),
+                str(key),
+            )
+        return (None, 0, None)
+
+    def _lookup_learned_execution_cost_components(
+        *,
+        symbol: str,
+        session_token: str,
+        regime_token: str,
+        liquidity_role: str,
+        venue_session: str,
+    ) -> tuple[float | None, float | None, float | None, int, str | None]:
+        for key in _expected_capture_bucket_keys(
+            symbol=symbol,
+            session_token=session_token,
+            regime_token=regime_token,
+            liquidity_role=liquidity_role,
+            venue_session=venue_session,
+        ):
+            stats_item = learned_exec_cost_stats_by_bucket.get(str(key))
+            if not isinstance(stats_item, Mapping):
+                continue
+            samples = float(_safe_float(stats_item.get("samples")) or 0.0)
+            if samples < float(expected_capture_cost_model_min_samples):
+                continue
+            spread_mean = float(
+                (_safe_float(stats_item.get("spread_sum_bps")) or 0.0) / float(samples)
+            )
+            impact_mean = float(
+                (_safe_float(stats_item.get("impact_sum_bps")) or 0.0) / float(samples)
+            )
+            latency_mean = float(
+                (_safe_float(stats_item.get("latency_sum_bps")) or 0.0) / float(samples)
+            )
+            return (
+                max(0.0, spread_mean),
+                max(0.0, impact_mean),
+                max(0.0, latency_mean),
+                int(round(samples)),
+                str(key),
+            )
+        return (None, None, None, 0, None)
+
     candidate_expected_net_edge: dict[str, float] = {}
+    candidate_expected_capture: dict[str, float] = {}
     candidate_rank: dict[str, float] = {}
     for symbol, target in targets.items():
         raw_net_edge_total = float(net_edge_raw_by_symbol.get(symbol, 0.0) or 0.0)
@@ -39858,9 +43793,300 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             * max(max_conf, 0.05)
             * disagreement
         )
+        signal_age_seconds = max(
+            0.0,
+            (now - target.bar_ts).total_seconds() if isinstance(target.bar_ts, datetime) else 0.0,
+        )
+        time_decay_multiplier = 1.0
+        if alpha_time_decay_enabled and alpha_time_decay_half_life_sec > 0.0:
+            try:
+                decay = math.exp(
+                    -math.log(2.0)
+                    * (float(signal_age_seconds) / float(alpha_time_decay_half_life_sec))
+                )
+            except (ValueError, OverflowError):
+                decay = 1.0
+            time_decay_multiplier = max(
+                float(alpha_time_decay_floor),
+                min(1.0, float(decay)),
+            )
+            rank_score *= float(time_decay_multiplier)
+        rank_score_baseline = float(rank_score)
+        expected_capture_bps = float(clipped_net_edge_total)
+        expected_capture_fill_probability = 0.5
+        expected_capture_spread_bps = 0.0
+        expected_capture_participation = 0.0
+        expected_capture_impact_cost_bps = 0.0
+        expected_capture_latency_drift_bps = 0.0
+        expected_capture_fill_model_source = "heuristic"
+        expected_capture_fill_model_samples = 0
+        expected_capture_cost_model_source = "heuristic"
+        expected_capture_cost_model_samples = 0
+        if expected_capture_rank_enabled:
+            liq_features = latest_liquidity.get(symbol)
+            spread_bps_value = max(
+                0.0,
+                _safe_float(getattr(liq_features, "spread_bps", 0.0)) or 0.0,
+            )
+            rolling_volume = max(
+                0.0,
+                _safe_float(getattr(liq_features, "rolling_volume", 0.0)) or 0.0,
+            )
+            px_for_qty = _safe_float(latest_price.get(symbol))
+            trade_qty = 0.0
+            if px_for_qty is not None and px_for_qty > 0.0:
+                trade_qty = abs(float(target.target_dollars)) / float(px_for_qty)
+            participation = 0.0
+            if rolling_volume > 0.0 and trade_qty > 0.0:
+                participation = min(2.0, float(trade_qty) / float(max(rolling_volume, 1.0)))
+            fill_prob_proxy = 0.65
+            fill_prob_proxy -= min(float(spread_bps_value) / 35.0, 0.50)
+            fill_prob_proxy -= min(float(participation) / 0.08, 0.55)
+            if expected_capture_age_half_life_sec > 0.0:
+                try:
+                    age_decay = math.exp(
+                        -math.log(2.0)
+                        * (float(signal_age_seconds) / float(expected_capture_age_half_life_sec))
+                    )
+                except (ValueError, OverflowError):
+                    age_decay = 1.0
+                fill_prob_proxy *= max(0.20, min(1.0, float(age_decay)))
+            assumed_liquidity_role = str(expected_capture_liquidity_role_default)
+            venue_session = f"{expected_capture_venue_default}:{bandit_active_session}"
+            if expected_capture_learned_fill_model_enabled:
+                learned_fill_prob, learned_fill_samples, learned_fill_key = (
+                    _lookup_learned_fill_probability(
+                        symbol=str(symbol),
+                        session_token=str(bandit_active_session),
+                        regime_token=str(bandit_active_regime),
+                        liquidity_role=str(assumed_liquidity_role),
+                        venue_session=str(venue_session),
+                    )
+                )
+                if learned_fill_prob is not None:
+                    fill_prob_proxy = float(learned_fill_prob)
+                    expected_capture_fill_model_source = str(
+                        learned_fill_key or "learned"
+                    )
+                    expected_capture_fill_model_samples = int(learned_fill_samples)
+            expected_capture_fill_probability = max(
+                float(expected_capture_fill_prob_floor),
+                min(float(expected_capture_fill_prob_cap), float(fill_prob_proxy)),
+            )
+            spread_cost_bps = float(expected_capture_spread_penalty_bps) * float(
+                spread_bps_value
+            )
+            impact_cost_bps = float(
+                expected_capture_participation_penalty_bps
+            ) * float(participation)
+            latency_drift_cost_bps = (
+                max(
+                    0.0,
+                    float(signal_age_seconds) / max(float(expected_capture_age_half_life_sec), 1.0),
+                )
+                * float(expected_capture_latency_bps_per_sec)
+            )
+            if expected_capture_cost_model_enabled:
+                (
+                    learned_spread_cost,
+                    learned_impact_cost,
+                    learned_latency_cost,
+                    learned_cost_samples,
+                    learned_cost_key,
+                ) = _lookup_learned_execution_cost_components(
+                    symbol=str(symbol),
+                    session_token=str(bandit_active_session),
+                    regime_token=str(bandit_active_regime),
+                    liquidity_role=str(assumed_liquidity_role),
+                    venue_session=str(venue_session),
+                )
+                if learned_cost_samples > 0:
+                    blend = min(
+                        1.0,
+                        float(learned_cost_samples)
+                        / float(max(1, 2 * expected_capture_cost_model_min_samples)),
+                    )
+                    if learned_spread_cost is not None:
+                        spread_cost_bps = (
+                            (1.0 - float(blend)) * float(spread_cost_bps)
+                        ) + (float(blend) * float(learned_spread_cost))
+                    if learned_impact_cost is not None:
+                        impact_cost_bps = (
+                            (1.0 - float(blend)) * float(impact_cost_bps)
+                        ) + (float(blend) * float(learned_impact_cost))
+                    if learned_latency_cost is not None:
+                        latency_drift_cost_bps = (
+                            (1.0 - float(blend)) * float(latency_drift_cost_bps)
+                        ) + (float(blend) * float(learned_latency_cost))
+                    expected_capture_cost_model_source = str(
+                        learned_cost_key or "learned"
+                    )
+                    expected_capture_cost_model_samples = int(learned_cost_samples)
+            modeled_execution_cost_bps = (
+                (float(expected_capture_cost_spread_weight) * float(spread_cost_bps))
+                + (float(expected_capture_cost_impact_weight) * float(impact_cost_bps))
+                + (
+                    float(expected_capture_cost_latency_weight)
+                    * float(latency_drift_cost_bps)
+                )
+            )
+            expected_capture_bps = (
+                float(clipped_net_edge_total) * float(expected_capture_fill_probability)
+            ) - float(modeled_execution_cost_bps)
+            capture_bonus = (
+                float(expected_capture_rank_weight)
+                * float(expected_capture_bps)
+                * max(max_conf, 0.05)
+                * disagreement
+            )
+            if expected_capture_max_adjust_abs > 0.0:
+                capture_bonus = max(
+                    -float(expected_capture_max_adjust_abs),
+                    min(float(expected_capture_max_adjust_abs), float(capture_bonus)),
+                )
+            rank_score += float(capture_bonus)
+            capture_constraint_penalty = max(
+                0.0,
+                float(expected_capture_floor_bps_effective) - float(expected_capture_bps),
+            )
+            if capture_constraint_penalty > 0.0 and expected_capture_constraint_weight > 0.0:
+                constraint_adjust = (
+                    float(capture_constraint_penalty)
+                    * float(expected_capture_constraint_weight)
+                    * max(max_conf, 0.05)
+                    * disagreement
+                )
+                if expected_capture_constraint_max_adjust_abs > 0.0:
+                    constraint_adjust = min(
+                        float(expected_capture_constraint_max_adjust_abs),
+                        float(constraint_adjust),
+                    )
+                rank_score -= float(constraint_adjust)
+            target.reasons.append("EXPECTED_CAPTURE_OPTIMIZER")
+            if (
+                expected_capture_fill_model_source != "heuristic"
+                or expected_capture_cost_model_source != "heuristic"
+            ):
+                target.reasons.append("EXPECTED_CAPTURE_MODEL_LEARNED")
+            expected_capture_spread_bps = float(spread_bps_value)
+            expected_capture_participation = float(participation)
+            expected_capture_impact_cost_bps = float(impact_cost_bps)
+            expected_capture_latency_drift_bps = float(latency_drift_cost_bps)
+            counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
+                {
+                    "expected_capture_bps": float(expected_capture_bps),
+                    "expected_capture_fill_probability": float(
+                        expected_capture_fill_probability
+                    ),
+                    "expected_capture_spread_bps": float(expected_capture_spread_bps),
+                    "expected_capture_participation": float(
+                        expected_capture_participation
+                    ),
+                    "expected_capture_impact_cost_bps": float(
+                        expected_capture_impact_cost_bps
+                    ),
+                    "expected_capture_latency_drift_bps": float(
+                        expected_capture_latency_drift_bps
+                    ),
+                    "expected_capture_cost_model_source": str(
+                        expected_capture_cost_model_source
+                    ),
+                    "expected_capture_cost_model_samples": int(
+                        expected_capture_cost_model_samples
+                    ),
+                    "expected_capture_fill_model_source": str(
+                        expected_capture_fill_model_source
+                    ),
+                    "expected_capture_fill_model_samples": int(
+                        expected_capture_fill_model_samples
+                    ),
+                    "expected_capture_floor_bps": float(
+                        expected_capture_floor_bps_effective
+                    ),
+                }
+            )
+        candidate_expected_capture[symbol] = float(expected_capture_bps)
+        realized_rank_source = "none"
+        realized_rank_samples = 0
+        realized_rank_mean_bps = 0.0
+        realized_rank_uncertainty_penalty_bps = 0.0
+        realized_rank_target_bps = 0.0
+        if realized_edge_rank_enabled and realized_edge_rank_weight > 0.0:
+            realized_series = realized_edge_by_symbol.get(symbol, [])
+            realized_rank_source = "symbol"
+            if realized_edge_rank_regime_bucket_enabled:
+                regime_series = realized_edge_by_symbol_session_regime.get(
+                    f"{symbol}:{bandit_active_session}:{bandit_active_regime}",
+                    [],
+                )
+                if len(regime_series) >= realized_edge_rank_min_samples:
+                    realized_series = regime_series
+                    realized_rank_source = "symbol_session_regime"
+            if realized_edge_rank_session_bucket_enabled:
+                session_series = realized_edge_by_symbol_session.get(
+                    f"{symbol}:{bandit_active_session}",
+                    [],
+                )
+                if len(session_series) >= realized_edge_rank_min_samples:
+                    realized_series = session_series
+                    realized_rank_source = "symbol_session"
+            realized_mean, realized_std, realized_samples = _mean_std(realized_series)
+            if realized_samples >= realized_edge_rank_min_samples:
+                realized_rank_samples = int(realized_samples)
+                realized_rank_mean_bps = float(realized_mean)
+                realized_rank_uncertainty_penalty_bps = float(
+                    float(realized_edge_rank_uncertainty_z)
+                    * (float(realized_std) / math.sqrt(float(max(realized_samples, 1))))
+                )
+                realized_rank_target_bps = max(
+                    -float(realized_edge_rank_clip_bps),
+                    min(
+                        float(realized_edge_rank_clip_bps),
+                        float(realized_rank_mean_bps) - float(realized_rank_uncertainty_penalty_bps),
+                    ),
+                )
+                realized_bonus = (
+                    float(realized_edge_rank_weight)
+                    * float(realized_rank_target_bps)
+                    * max(max_conf, 0.05)
+                    * disagreement
+                )
+                realized_bonus_cap = float(realized_edge_rank_max_rank_uplift_abs)
+                if realized_edge_rank_max_rank_uplift_frac > 0.0:
+                    realized_bonus_cap = min(
+                        realized_bonus_cap,
+                        abs(float(rank_score)) * float(realized_edge_rank_max_rank_uplift_frac),
+                    )
+                if realized_bonus_cap > 0.0:
+                    realized_bonus = max(
+                        -realized_bonus_cap,
+                        min(realized_bonus_cap, float(realized_bonus)),
+                    )
+                rank_score += float(realized_bonus)
+                counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
+                    {
+                        "realized_rank_enabled": True,
+                        "realized_rank_source": str(realized_rank_source),
+                        "realized_rank_samples": int(realized_rank_samples),
+                        "realized_rank_mean_bps": float(realized_rank_mean_bps),
+                        "realized_rank_uncertainty_penalty_bps": float(
+                            realized_rank_uncertainty_penalty_bps
+                        ),
+                        "realized_rank_target_bps": float(realized_rank_target_bps),
+                        "realized_rank_weight": float(realized_edge_rank_weight),
+                    }
+                )
         if bandit_enabled:
             reward_series = bandit_rewards_by_symbol.get(symbol, [])
             bandit_source = "symbol"
+            if bandit_regime_bucket_enabled:
+                session_regime_series = bandit_rewards_by_symbol_session_regime.get(
+                    f"{symbol}:{bandit_active_session}:{bandit_active_regime}",
+                    [],
+                )
+                if len(session_regime_series) >= bandit_min_samples:
+                    reward_series = session_regime_series
+                    bandit_source = "symbol_session_regime"
             if bandit_session_bucket_enabled:
                 session_series = bandit_rewards_by_symbol_session.get(
                     f"{symbol}:{bandit_active_session}",
@@ -39909,15 +44135,85 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         total_samples=total_samples,
                         exploration=bandit_exploration,
                     )
-                rank_score += (
+                bandit_bonus = (
                     float(bandit_weight)
                     * float(bandit_score)
                     * max(max_conf, 0.05)
                     * disagreement
                 )
-                target.reasons.append(
-                    f"BANDIT_{bandit_method.upper()}_{bandit_source.upper()}"
+                bandit_bonus_cap = float(bandit_max_rank_uplift_abs)
+                if bandit_max_rank_uplift_frac > 0.0:
+                    bandit_bonus_cap = min(
+                        bandit_bonus_cap,
+                        abs(float(rank_score)) * float(bandit_max_rank_uplift_frac),
+                    )
+                if bandit_bonus_cap > 0.0:
+                    bandit_bonus = max(-bandit_bonus_cap, min(bandit_bonus_cap, bandit_bonus))
+                if bandit_live_promoted:
+                    rank_score += float(bandit_bonus)
+                    target.reasons.append(
+                        f"BANDIT_{bandit_method.upper()}_{bandit_source.upper()}"
+                    )
+                else:
+                    target.reasons.append(
+                        f"BANDIT_SHADOW_{bandit_method.upper()}_{bandit_source.upper()}"
+                    )
+                counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
+                    {
+                        "bandit_source": str(bandit_source),
+                        "bandit_samples": int(sample_count),
+                        "bandit_mean_reward_bps": float(mean_reward),
+                        "bandit_score_bps": float(bandit_score),
+                        "bandit_bonus": float(bandit_bonus),
+                        "bandit_live_promoted": bool(bandit_live_promoted),
+                    }
                 )
+        if counterfactual_enabled and counterfactual_weight > 0.0:
+            counterfactual_bucket_key = f"{symbol}:{bandit_active_session}"
+            counterfactual_bucket_raw = counterfactual_buckets.get(counterfactual_bucket_key)
+            if not isinstance(counterfactual_bucket_raw, Mapping):
+                counterfactual_bucket_raw = counterfactual_buckets.get(f"{symbol}:offhours")
+            if not isinstance(counterfactual_bucket_raw, Mapping):
+                counterfactual_bucket_raw = {}
+            cf_events = int(counterfactual_bucket_raw.get("events", 0) or 0)
+            cf_dr_mean_bps = _safe_float(counterfactual_bucket_raw.get("dr_mean_bps"))
+            if cf_dr_mean_bps is None:
+                cf_sum = _safe_float(counterfactual_bucket_raw.get("dr_sum_bps"))
+                if cf_sum is not None and cf_events > 0:
+                    cf_dr_mean_bps = float(cf_sum) / float(cf_events)
+            if cf_dr_mean_bps is not None and cf_events >= counterfactual_min_samples:
+                bounded_cf = max(
+                    -float(counterfactual_clip_bps),
+                    min(float(counterfactual_clip_bps), float(cf_dr_mean_bps)),
+                )
+                cf_bonus = (
+                    float(counterfactual_weight)
+                    * float(bounded_cf)
+                    * max(max_conf, 0.05)
+                    * disagreement
+                )
+                cf_bonus_cap = float(counterfactual_max_rank_uplift_abs)
+                if counterfactual_max_rank_uplift_frac > 0.0:
+                    cf_bonus_cap = min(
+                        cf_bonus_cap,
+                        abs(float(rank_score)) * float(counterfactual_max_rank_uplift_frac),
+                    )
+                if cf_bonus_cap > 0.0:
+                    cf_bonus = max(-cf_bonus_cap, min(cf_bonus_cap, cf_bonus))
+                counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
+                    {
+                        "counterfactual_bucket": str(counterfactual_bucket_key),
+                        "counterfactual_events": int(cf_events),
+                        "counterfactual_dr_mean_bps": float(cf_dr_mean_bps),
+                        "counterfactual_bonus": float(cf_bonus),
+                        "counterfactual_live_promoted": bool(counterfactual_live_promoted),
+                    }
+                )
+                if counterfactual_live_promoted:
+                    rank_score += float(cf_bonus)
+                    target.reasons.append("COUNTERFACTUAL_DR")
+                else:
+                    target.reasons.append("COUNTERFACTUAL_DR_SHADOW")
         if geometric_tiebreak_enabled and geometric_tiebreak_weight > 0.0:
             returns_window = symbol_returns.get(symbol, [])
             cumulative = 0.0
@@ -39941,7 +44237,232 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 * max(max_conf, 0.05)
                 * disagreement
             )
+        if portfolio_log_growth_rank_enabled and portfolio_log_growth_rank_weight > 0.0:
+            returns_window = symbol_returns.get(symbol, [])
+            if returns_window:
+                mean_return = float(sum(float(value) for value in returns_window)) / float(
+                    max(1, len(returns_window))
+                )
+                variance = float(
+                    sum((float(value) - mean_return) ** 2 for value in returns_window)
+                    / float(max(1, len(returns_window)))
+                )
+            else:
+                variance = 0.0
+            corr_penalty = 0.0
+            corr_row = portfolio_rank_correlation.get(symbol, {})
+            if isinstance(corr_row, Mapping) and held_notional_weights:
+                for held_symbol, held_weight in held_notional_weights.items():
+                    corr_value = _safe_float(corr_row.get(held_symbol))
+                    if corr_value is None:
+                        continue
+                    corr_penalty += abs(float(corr_value)) * float(held_weight)
+            exposure_penalty = 0.0
+            current_notional = abs(
+                float(positions.get(symbol, 0.0) or 0.0)
+                * float(latest_price.get(symbol, 0.0) or 0.0)
+            )
+            target_notional = abs(float(target.target_dollars))
+            if portfolio_current_gross_for_rank > 0.0:
+                post_notional = max(current_notional, target_notional)
+                exposure_penalty = post_notional / float(
+                    max(portfolio_current_gross_for_rank, 1.0)
+                )
+            turnover_penalty = 0.0
+            if portfolio_current_gross_for_rank > 0.0:
+                turnover_penalty = abs(float(target_notional) - float(current_notional)) / float(
+                    max(portfolio_current_gross_for_rank, 1.0)
+                )
+            liquidity_impact_penalty = 0.0
+            liq_features = latest_liquidity.get(symbol)
+            spread_bps_for_impact = max(
+                _safe_float(getattr(liq_features, "spread_bps", 0.0)) or 0.0,
+                0.0,
+            )
+            rolling_volume_for_impact = max(
+                _safe_float(getattr(liq_features, "rolling_volume", 0.0)) or 0.0,
+                0.0,
+            )
+            if rolling_volume_for_impact > 0.0:
+                trade_qty = abs(
+                    float(target.target_dollars)
+                    / max(float(latest_price.get(symbol, 0.0) or 0.0), 1e-9)
+                )
+                participation = float(trade_qty) / float(max(rolling_volume_for_impact, 1.0))
+                participation_ratio = min(
+                    2.0,
+                    float(participation) / float(portfolio_log_growth_max_participation),
+                )
+                liquidity_impact_penalty = (
+                    (float(spread_bps_for_impact) / 10.0) * float(participation_ratio)
+                )
+            marginal_log_growth_bps = float(clipped_net_edge_total) - (
+                float(portfolio_log_growth_variance_penalty) * float(variance) * 10_000.0
+            )
+            marginal_log_growth_bps -= (
+                float(portfolio_log_growth_corr_penalty_bps) * float(corr_penalty)
+            )
+            marginal_log_growth_bps -= (
+                float(portfolio_log_growth_exposure_penalty_bps) * float(exposure_penalty)
+            )
+            marginal_log_growth_bps -= (
+                float(portfolio_log_growth_turnover_penalty_bps) * float(turnover_penalty)
+            )
+            marginal_log_growth_bps -= (
+                float(portfolio_log_growth_liquidity_penalty_bps)
+                * float(liquidity_impact_penalty)
+            )
+            portfolio_bonus = (
+                float(portfolio_log_growth_rank_weight)
+                * float(marginal_log_growth_bps)
+                * max(max_conf, 0.05)
+                * disagreement
+            )
+            if portfolio_log_growth_max_adjust_abs > 0.0:
+                portfolio_bonus = max(
+                    -float(portfolio_log_growth_max_adjust_abs),
+                    min(float(portfolio_log_growth_max_adjust_abs), float(portfolio_bonus)),
+                )
+            rank_score += float(portfolio_bonus)
+            target.reasons.append("PORTFOLIO_LOG_GROWTH")
+            counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
+                {
+                    "portfolio_log_growth_bps": float(marginal_log_growth_bps),
+                    "portfolio_corr_penalty": float(corr_penalty),
+                    "portfolio_exposure_penalty": float(exposure_penalty),
+                    "portfolio_turnover_penalty": float(turnover_penalty),
+                    "portfolio_liquidity_impact_penalty": float(
+                        liquidity_impact_penalty
+                    ),
+                    "portfolio_rank_bonus": float(portfolio_bonus),
+                }
+            )
+        rank_downside_before_cap = 0.0
+        rank_downside_cap_applied = False
+        rank_downside_cap_limit: float | None = None
+        if bool(rank_downside_overlap_cap_enabled) and float(rank_score_baseline) > 0.0:
+            rank_downside_before_cap = max(
+                float(rank_score_baseline) - float(rank_score),
+                0.0,
+            )
+            cap_candidates: list[float] = []
+            if float(rank_downside_overlap_cap_abs) > 0.0:
+                cap_candidates.append(float(rank_downside_overlap_cap_abs))
+            if float(rank_downside_overlap_cap_frac) > 0.0:
+                cap_candidates.append(
+                    abs(float(rank_score_baseline)) * float(rank_downside_overlap_cap_frac)
+                )
+            if cap_candidates:
+                rank_downside_cap_limit = min(float(value) for value in cap_candidates)
+            if (
+                rank_downside_cap_limit is not None
+                and math.isfinite(float(rank_downside_cap_limit))
+                and float(rank_downside_cap_limit) > 0.0
+                and float(rank_downside_before_cap) > float(rank_downside_cap_limit)
+            ):
+                rank_score = float(rank_score_baseline) - float(rank_downside_cap_limit)
+                rank_downside_cap_applied = True
+                target.reasons.append("RANK_DOWNSIDE_OVERLAP_CAP")
+        counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
+            {
+                "rank_score_baseline": float(rank_score_baseline),
+                "rank_score_post_adjustments": float(rank_score),
+                "rank_downside_before_cap": float(rank_downside_before_cap),
+                "rank_downside_overlap_cap_applied": bool(rank_downside_cap_applied),
+                "rank_downside_overlap_cap_limit": (
+                    float(rank_downside_cap_limit)
+                    if rank_downside_cap_limit is not None
+                    else None
+                ),
+            }
+        )
+        quality_edge_denom = max(float(edge_clip_cap_bps), 1.0)
+        quality_realized_denom = max(float(realized_edge_rank_clip_bps), 1.0)
+        quality_edge = 0.5 + (
+            0.5 * math.tanh(float(clipped_net_edge_total) / float(quality_edge_denom))
+        )
+        quality_realized = 0.5 + (
+            0.5 * math.tanh(float(realized_rank_target_bps) / float(quality_realized_denom))
+        )
+        opportunity_quality = max(
+            0.0,
+            min(
+                1.0,
+                (
+                    (0.38 * float(quality_edge))
+                    + (0.24 * float(quality_realized))
+                    + (0.22 * float(max_conf))
+                    + (0.16 * float(disagreement))
+                ),
+            ),
+        )
+        opportunity_quality_by_symbol[symbol] = float(opportunity_quality)
+        counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
+            {
+                "opportunity_quality_score": float(opportunity_quality),
+                "signal_age_seconds": float(signal_age_seconds),
+                "time_decay_multiplier": float(time_decay_multiplier),
+            }
+        )
         candidate_rank[symbol] = rank_score
+
+    opportunity_allowed_symbols: set[str] = set()
+    if (
+        opportunity_quality_enabled
+        and len(opportunity_quality_by_symbol) >= max(2, opportunity_min_symbols)
+    ):
+        quality_values = list(opportunity_quality_by_symbol.values())
+        quality_threshold = _percentile_linear(
+            quality_values,
+            float(opportunity_top_quantile),
+        )
+        if quality_threshold is not None:
+            opportunity_allowed_symbols = {
+                symbol
+                for symbol, score in opportunity_quality_by_symbol.items()
+                if float(score) >= float(quality_threshold)
+            }
+            if len(opportunity_allowed_symbols) < int(opportunity_min_symbols):
+                ranked_quality = sorted(
+                    opportunity_quality_by_symbol.items(),
+                    key=lambda item: (-float(item[1]), item[0]),
+                )
+                for symbol, _score in ranked_quality[:opportunity_min_symbols]:
+                    opportunity_allowed_symbols.add(str(symbol))
+            demote_value = float(
+                get_env(
+                    "AI_TRADING_EXEC_OPPORTUNITY_DEMOTE_SCORE",
+                    1_000_000.0,
+                    cast=float,
+                )
+            )
+            for symbol in list(candidate_rank.keys()):
+                if symbol not in opportunity_allowed_symbols:
+                    candidate_rank[symbol] = float(candidate_rank[symbol]) - abs(
+                        float(demote_value)
+                    )
+            opportunity_quality_gate.update(
+                {
+                    "threshold": float(quality_threshold),
+                    "allowed_symbols": sorted(opportunity_allowed_symbols),
+                    "active": True,
+                    "demote_score": float(abs(float(demote_value))),
+                }
+            )
+    setattr(
+        runtime,
+        "execution_opportunity_quality_by_symbol",
+        {
+            str(symbol): float(score)
+            for symbol, score in opportunity_quality_by_symbol.items()
+        },
+    )
+    setattr(
+        runtime,
+        "execution_opportunity_quality_allowed_symbols",
+        sorted(opportunity_allowed_symbols),
+    )
+    setattr(runtime, "execution_opportunity_quality_gate", dict(opportunity_quality_gate))
     setattr(runtime, "execution_candidate_rank", candidate_rank)
     setattr(
         runtime,
@@ -39950,8 +44471,18 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     )
     setattr(
         runtime,
+        "execution_candidate_rank_expected_capture_bps",
+        candidate_expected_capture,
+    )
+    setattr(
+        runtime,
         "execution_candidate_rank_realism_factor",
         edge_realism_rank_factor_by_symbol,
+    )
+    setattr(
+        runtime,
+        "execution_candidate_rank_learning_signals",
+        counterfactual_signal_by_symbol,
     )
     setattr(
         runtime,
@@ -39963,6 +44494,103 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             "bandit_enabled": bool(bandit_enabled),
             "bandit_method": str(bandit_method),
             "bandit_active_session": str(bandit_active_session),
+            "bandit_active_regime": str(bandit_active_regime),
+            "bandit_session_bucket_enabled": bool(bandit_session_bucket_enabled),
+            "bandit_regime_bucket_enabled": bool(bandit_regime_bucket_enabled),
+            "bandit_shadow_only": bool(bandit_shadow_only),
+            "bandit_live_promoted": bool(bandit_live_promoted),
+            "bandit_promote_min_samples": int(bandit_promote_min_samples),
+            "bandit_promote_min_mean_reward_bps": float(
+                bandit_promote_min_mean_reward_bps
+            ),
+            "bandit_global_samples": int(bandit_global_samples),
+            "bandit_global_mean_reward_bps": float(bandit_global_mean_reward_bps),
+            "bandit_max_rank_uplift_abs": float(bandit_max_rank_uplift_abs),
+            "bandit_max_rank_uplift_frac": float(bandit_max_rank_uplift_frac),
+            "promotion_significance_enabled": bool(promotion_significance_enabled),
+            "promotion_significance_method": str(promotion_significance_method),
+            "bandit_promotion_significance": dict(bandit_significance_context),
+            "counterfactual_enabled": bool(counterfactual_enabled),
+            "counterfactual_shadow_only": bool(counterfactual_shadow_only),
+            "counterfactual_live_promoted": bool(counterfactual_live_promoted),
+            "counterfactual_weight": float(counterfactual_weight),
+            "counterfactual_min_samples": int(counterfactual_min_samples),
+            "counterfactual_clip_bps": float(counterfactual_clip_bps),
+            "counterfactual_global_events": int(counterfactual_global_events),
+            "counterfactual_global_dr_mean_bps": float(
+                counterfactual_global_dr_mean_bps
+            ),
+            "counterfactual_promotion_significance": dict(
+                counterfactual_significance_context
+            ),
+            "realized_edge_rank_enabled": bool(realized_edge_rank_enabled),
+            "realized_edge_rank_weight": float(realized_edge_rank_weight),
+            "realized_edge_rank_min_samples": int(realized_edge_rank_min_samples),
+            "realized_edge_rank_uncertainty_z": float(
+                realized_edge_rank_uncertainty_z
+            ),
+            "realized_edge_rank_clip_bps": float(realized_edge_rank_clip_bps),
+            "expected_capture_rank_enabled": bool(expected_capture_rank_enabled),
+            "expected_capture_rank_weight": float(expected_capture_rank_weight),
+            "expected_capture_floor_bps": float(expected_capture_floor_bps_effective),
+            "expected_capture_floor_bps_configured": float(expected_capture_floor_bps),
+            "expected_capture_learned_fill_model_enabled": bool(
+                expected_capture_learned_fill_model_enabled
+            ),
+            "expected_capture_learned_fill_min_samples": int(
+                expected_capture_learned_fill_min_samples
+            ),
+            "expected_capture_cost_model_enabled": bool(
+                expected_capture_cost_model_enabled
+            ),
+            "expected_capture_cost_model_min_samples": int(
+                expected_capture_cost_model_min_samples
+            ),
+            "expected_capture_fill_prob_floor": float(
+                expected_capture_fill_prob_floor
+            ),
+            "expected_capture_fill_prob_cap": float(
+                expected_capture_fill_prob_cap
+            ),
+            "expected_capture_spread_penalty_bps": float(
+                expected_capture_spread_penalty_bps
+            ),
+            "expected_capture_participation_penalty_bps": float(
+                expected_capture_participation_penalty_bps
+            ),
+            "expected_capture_age_half_life_sec": float(
+                expected_capture_age_half_life_sec
+            ),
+            "rank_downside_overlap_cap_enabled": bool(
+                rank_downside_overlap_cap_enabled
+            ),
+            "rank_downside_overlap_cap_frac": float(rank_downside_overlap_cap_frac),
+            "rank_downside_overlap_cap_abs": float(rank_downside_overlap_cap_abs),
+            "opportunity_quality_gate": dict(opportunity_quality_gate),
+            "alpha_time_decay_enabled": bool(alpha_time_decay_enabled),
+            "alpha_time_decay_half_life_sec": float(alpha_time_decay_half_life_sec),
+            "alpha_time_decay_floor": float(alpha_time_decay_floor),
+            "alpha_stale_signal_sec": float(alpha_stale_signal_sec),
+            "alpha_time_stop_enabled": bool(alpha_time_stop_enabled),
+            "alpha_time_stop_sec": float(alpha_time_stop_sec),
+            "alpha_time_stop_max_expected_edge_bps": float(
+                alpha_time_stop_max_expected_edge_bps
+            ),
+            "portfolio_log_growth_rank_enabled": bool(
+                portfolio_log_growth_rank_enabled
+            ),
+            "portfolio_log_growth_rank_weight": float(
+                portfolio_log_growth_rank_weight
+            ),
+            "portfolio_log_growth_turnover_penalty_bps": float(
+                portfolio_log_growth_turnover_penalty_bps
+            ),
+            "portfolio_log_growth_liquidity_penalty_bps": float(
+                portfolio_log_growth_liquidity_penalty_bps
+            ),
+            "portfolio_log_growth_max_participation": float(
+                portfolio_log_growth_max_participation
+            ),
             "geometric_tiebreak_enabled": bool(geometric_tiebreak_enabled),
             "geometric_tiebreak_weight": float(geometric_tiebreak_weight),
             "edge_realism_rank_calibration_enabled": bool(
@@ -39986,10 +44614,23 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             "edge_realism_apply_to_approval_enabled": bool(
                 edge_realism_apply_to_approval_enabled
             ),
+            "policy_rollback_disabled_slices": sorted(policy_rollback_disabled_slices),
+            "policy_disabled_gate_roots": sorted(policy_disabled_gate_roots),
+            "policy_disabled_sleeves": sorted(policy_disabled_sleeves),
+            "policy_runtime_toggles_updated_at": policy_runtime_payload.get(
+                "updated_at"
+            ),
+            "policy_runtime_toggles_source_updated_at": policy_runtime_payload.get(
+                "source_updated_at"
+            ),
+            "policy_runtime_toggles": (
+                dict(toggles) if isinstance(toggles, Mapping) else {}
+            ),
         },
     )
-    portfolio_optimizer_enabled = bool(
-        get_env("AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_ENABLED", False, cast=bool)
+    portfolio_optimizer_enabled = _rollout_toggle(
+        "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_ENABLED",
+        False,
     )
     portfolio_optimizer_openings_only = bool(
         get_env(
@@ -40307,6 +44948,49 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             pending_samples >= pending_min_samples
             and pending_oldest_age_sec >= max_pending_oldest_age_sec
         )
+        drift_calibration_guard_enabled = bool(
+            get_env("AI_TRADING_DRIFT_CALIBRATION_GUARD_ENABLED", True, cast=bool)
+        )
+        stale_required_cycles = max(
+            1,
+            int(
+                get_env(
+                    "AI_TRADING_DRIFT_CALIBRATION_STALE_CYCLES",
+                    3,
+                    cast=int,
+                )
+            ),
+        )
+        stale_derisk_scale = max(
+            0.05,
+            min(
+                1.0,
+                float(
+                    get_env(
+                        "AI_TRADING_DRIFT_CALIBRATION_STALE_DERISK_SCALE",
+                        0.50,
+                        cast=float,
+                    )
+                ),
+            ),
+        )
+        stale_detected = bool(
+            drift_samples < min_samples
+            or calibration_ece_samples < min_samples
+            or calibration_brier_samples < min_samples
+            or feature_drift_samples < min_samples
+            or label_drift_samples < min_samples
+            or residual_drift_samples < min_samples
+        )
+        stale_cycles = int(getattr(state, "_drift_calibration_stale_cycles", 0) or 0)
+        if drift_calibration_guard_enabled:
+            stale_cycles = stale_cycles + 1 if stale_detected else max(0, stale_cycles - 1)
+        else:
+            stale_cycles = 0
+        setattr(state, "_drift_calibration_stale_cycles", stale_cycles)
+        drift_calibration_stale_triggered = bool(
+            drift_calibration_guard_enabled and stale_cycles >= stale_required_cycles
+        )
         breached = bool(
             reject_breached
             or drift_breached
@@ -40352,6 +45036,12 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             "max_pacing_cap_hit_rate_pct": max_pacing_cap_hit_rate_pct,
             "max_pending_oldest_age_sec": max_pending_oldest_age_sec,
             "pending_min_samples": pending_min_samples,
+            "drift_calibration_guard_enabled": drift_calibration_guard_enabled,
+            "drift_calibration_stale_detected": stale_detected,
+            "drift_calibration_stale_cycles": int(stale_cycles),
+            "drift_calibration_stale_required_cycles": int(stale_required_cycles),
+            "drift_calibration_stale_derisk_scale": float(stale_derisk_scale),
+            "drift_calibration_stale_triggered": bool(drift_calibration_stale_triggered),
             "reject_breached": reject_breached,
             "drift_breached": drift_breached,
             "slippage_breached": slippage_breached,
@@ -40364,6 +45054,17 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             "pending_breached": pending_breached,
             "breached": breached,
         }
+        if drift_calibration_stale_triggered:
+            slo_derisk_scale = min(slo_derisk_scale, float(stale_derisk_scale))
+            slo_derisk_details["stale_scale_applied"] = float(stale_derisk_scale)
+            logger.warning(
+                "DRIFT_CALIBRATION_STALE_DERISK",
+                extra={
+                    "stale_cycles": int(stale_cycles),
+                    "required_cycles": int(stale_required_cycles),
+                    "scale": float(stale_derisk_scale),
+                },
+            )
         if breached:
             effective_mode, effective_scale_mult, mode_details = _resolve_slo_derisk_effective_mode(
                 configured_mode=mode,
@@ -40548,6 +45249,168 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         state,
         symbols=list(targets.keys()),
     )
+    gate_auto_disable_enabled = bool(
+        get_env(
+            "AI_TRADING_GATE_AUTO_DISABLE_NON_POSITIVE_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    gate_auto_disable_lookback_cycles = max(
+        10,
+        int(
+            get_env(
+                "AI_TRADING_GATE_AUTO_DISABLE_LOOKBACK_CYCLES",
+                240,
+                cast=int,
+            )
+        ),
+    )
+    gate_auto_disable_min_blocked = max(
+        10,
+        int(
+            get_env(
+                "AI_TRADING_GATE_AUTO_DISABLE_MIN_BLOCKED",
+                100,
+                cast=int,
+            )
+        ),
+    )
+    gate_auto_disable_min_contribution_bps = float(
+        get_env(
+            "AI_TRADING_GATE_AUTO_DISABLE_MIN_CONTRIBUTION_BPS",
+            0.0,
+            cast=float,
+        )
+    )
+    critical_gates = {
+        "KILL_SWITCH_BLOCK",
+        "AUTH_BROKER_HALT_FORBIDDEN_COOLDOWN",
+        "DERISK_PRIMARY_FEED_BLOCK",
+        "PAPER_BURN_IN_BLOCK",
+        "BURN_IN_POLICY_HASH_MISMATCH",
+        "BURN_IN_CONFIG_HASH_MISMATCH",
+        "RECON_MISMATCH_HALT",
+        "PRE_SUBMIT_INSUFFICIENT_POSITION_AVAILABLE",
+    }
+    ineffective_gate_blocklist: set[str] = set()
+    ineffective_gate_diagnostics: dict[str, dict[str, float]] = {}
+    if gate_auto_disable_enabled:
+        try:
+            gate_rows = _read_jsonl_records(
+                str(_gate_effectiveness_log_path()),
+                max_records=max(gate_auto_disable_lookback_cycles * 2, 200),
+            )
+            gate_agg: dict[str, dict[str, float]] = {}
+            for row in gate_rows[-gate_auto_disable_lookback_cycles:]:
+                raw_attr = row.get("gate_attribution")
+                if not isinstance(raw_attr, Mapping):
+                    continue
+                for gate_name_raw, payload in raw_attr.items():
+                    if not isinstance(payload, Mapping):
+                        continue
+                    gate_name = str(gate_name_raw or "").strip().upper()
+                    if not gate_name:
+                        continue
+                    blocked = _safe_float(payload.get("blocked_records")) or 0.0
+                    edge_sum = _safe_float(payload.get("edge_proxy_bps_sum")) or 0.0
+                    stats = gate_agg.setdefault(
+                        gate_name,
+                        {"blocked": 0.0, "edge_sum": 0.0},
+                    )
+                    stats["blocked"] = float(stats["blocked"]) + float(blocked)
+                    stats["edge_sum"] = float(stats["edge_sum"]) + float(edge_sum)
+            for gate_name, stats in gate_agg.items():
+                blocked_count = int(max(stats.get("blocked", 0.0), 0.0))
+                if blocked_count < gate_auto_disable_min_blocked:
+                    continue
+                if gate_name in critical_gates:
+                    continue
+                marginal_contribution_bps = float(
+                    -float(stats.get("edge_sum", 0.0)) / float(max(blocked_count, 1))
+                )
+                ineffective_gate_diagnostics[gate_name] = {
+                    "blocked_records": float(blocked_count),
+                    "marginal_contribution_bps": float(marginal_contribution_bps),
+                }
+                if marginal_contribution_bps < float(gate_auto_disable_min_contribution_bps):
+                    ineffective_gate_blocklist.add(str(gate_name))
+            if ineffective_gate_blocklist:
+                logger.warning(
+                    "GATE_AUTO_DISABLE_APPLIED",
+                    extra={
+                        "disabled_gates": sorted(ineffective_gate_blocklist),
+                        "diagnostics": {
+                            gate_name: ineffective_gate_diagnostics.get(gate_name, {})
+                            for gate_name in sorted(ineffective_gate_blocklist)[:20]
+                        },
+                        "min_blocked": int(gate_auto_disable_min_blocked),
+                        "min_contribution_bps": float(
+                            gate_auto_disable_min_contribution_bps
+                        ),
+                        "lookback_cycles": int(gate_auto_disable_lookback_cycles),
+                    },
+                )
+        except Exception:
+            logger.debug("GATE_AUTO_DISABLE_EVALUATION_FAILED", exc_info=True)
+    if policy_disabled_gate_roots:
+        for gate_root in sorted(policy_disabled_gate_roots):
+            ineffective_gate_blocklist.add(str(gate_root))
+            ineffective_gate_diagnostics.setdefault(
+                str(gate_root),
+                {
+                    "blocked_records": 0.0,
+                    "marginal_contribution_bps": 0.0,
+                },
+            )
+        logger.warning(
+            "POLICY_ROLLBACK_GATES_APPLIED",
+            extra={"disabled_gate_roots": sorted(policy_disabled_gate_roots)},
+        )
+
+    def _gate_blocks(candidate_gate: str) -> bool:
+        gate_name = str(candidate_gate or "").strip().upper()
+        if not gate_name:
+            return True
+        if gate_name in ineffective_gate_blocklist:
+            return False
+        return _gate_root_cause(gate_name) not in ineffective_gate_blocklist
+
+    uncertainty_capital_state = _load_uncertainty_capital_state()
+    uncertainty_cycle_events: list[dict[str, Any]] = []
+    penalty_overlap_coordination_enabled = bool(
+        get_env(
+            "AI_TRADING_MULTI_PENALTY_COORDINATION_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    penalty_overlap_weight_dampen = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_MULTI_PENALTY_COORDINATION_WEIGHT_DAMPEN",
+                    0.50,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    penalty_overlap_min_scale_floor = max(
+        0.05,
+        min(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_MULTI_PENALTY_COORDINATION_MIN_SCALE_FLOOR",
+                    0.55,
+                    cast=float,
+                )
+            ),
+        ),
+    )
 
     for symbol, net_target in targets.items():
         liq_features = latest_liquidity.get(
@@ -40594,12 +45457,37 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             continue
         net_target.target_shares = int(round(net_target.target_dollars / price))
         delta_shares = net_target.target_shares - current_shares
+        initial_requested_delta_shares = int(delta_shares)
         gates: list[str] = []
         gates.extend(skip_reasons.get(symbol, []))
         gates.extend(net_target.reasons)
         for proposal in net_target.proposals:
             if proposal.reason_code:
                 gates.append(proposal.reason_code)
+        if policy_disabled_sleeves:
+            disabled_for_symbol = sorted(
+                {
+                    str(proposal.sleeve).strip().lower()
+                    for proposal in net_target.proposals
+                    if str(proposal.sleeve).strip().lower() in policy_disabled_sleeves
+                }
+            )
+            if disabled_for_symbol:
+                gates.append("POLICY_ABLATION_SLEEVE_BLOCK")
+                symbol_snapshot["policy_rollback"] = {
+                    "disabled_sleeves_for_symbol": disabled_for_symbol,
+                    "disabled_slices": sorted(policy_rollback_disabled_slices),
+                }
+                record = DecisionRecord(
+                    symbol=symbol,
+                    bar_ts=net_target.bar_ts,
+                    sleeves=net_target.proposals,
+                    net_target=net_target,
+                    gates=gates,
+                    config_snapshot=symbol_snapshot,
+                )
+                _write_decision_record(record, decision_path)
+                continue
         symbol_snapshot["sleeve_configs"] = {
             proposal.sleeve: {
                 "thresholds": {
@@ -40621,8 +45509,148 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             }
             for proposal in net_target.proposals
         }
+        signal_age_seconds = max(
+            0.0,
+            (now - net_target.bar_ts).total_seconds()
+            if isinstance(net_target.bar_ts, datetime)
+            else 0.0,
+        )
+        symbol_snapshot["signal_age_seconds"] = float(signal_age_seconds)
+        if (
+            alpha_time_stop_enabled
+            and alpha_time_stop_sec > 0.0
+            and current_shares != 0
+        ):
+            opened_at = _position_opened_at(state, symbol)
+            if isinstance(opened_at, datetime):
+                position_age_seconds = max(
+                    0.0, (now - opened_at).total_seconds()
+                )
+                expected_edge_now = float(
+                    candidate_expected_net_edge.get(symbol, 0.0) or 0.0
+                )
+                side_for_exit_policy = "long" if current_shares > 0 else "short"
+                exit_policy_context = _exit_policy_pressure_context(
+                    state,
+                    symbol=symbol,
+                    regime=str(getattr(state, "current_regime", "sideways") or "sideways"),
+                    side=side_for_exit_policy,
+                    now=now,
+                    position_age_seconds=float(position_age_seconds),
+                    expected_edge_bps=float(expected_edge_now),
+                )
+                effective_time_stop_sec = float(alpha_time_stop_sec)
+                pressure_score = _safe_float(exit_policy_context.get("pressure_score")) or 0.0
+                pressure_min = max(
+                    0.0,
+                    min(
+                        1.0,
+                        float(
+                            get_env(
+                                "AI_TRADING_EXEC_EXIT_POLICY_PRESSURE_MIN",
+                                0.55,
+                                cast=float,
+                            )
+                        ),
+                    ),
+                )
+                suggested_age_seconds = _safe_float(
+                    exit_policy_context.get("suggested_max_age_seconds")
+                )
+                if (
+                    bool(exit_policy_context.get("active", False))
+                    and suggested_age_seconds is not None
+                    and pressure_score >= pressure_min
+                ):
+                    effective_time_stop_sec = min(
+                        float(effective_time_stop_sec),
+                        max(60.0, float(suggested_age_seconds)),
+                    )
+                exit_policy_edge_buffer_bps = max(
+                    0.0,
+                    float(
+                        get_env(
+                            "AI_TRADING_EXEC_EXIT_POLICY_EDGE_BUFFER_BPS",
+                            0.5,
+                            cast=float,
+                        )
+                    ),
+                )
+                if position_age_seconds >= float(effective_time_stop_sec):
+                    if expected_edge_now <= (
+                        float(alpha_time_stop_max_expected_edge_bps)
+                        + float(exit_policy_edge_buffer_bps)
+                    ):
+                        net_target.target_shares = 0
+                        net_target.target_dollars = 0.0
+                        delta_shares = -current_shares
+                        if (
+                            bool(exit_policy_context.get("active", False))
+                            and pressure_score >= pressure_min
+                        ):
+                            if "EXIT_POLICY_HAZARD_TIME_STOP" not in gates:
+                                gates.append("EXIT_POLICY_HAZARD_TIME_STOP")
+                        elif "ALPHA_TIME_STOP_EXIT" not in gates:
+                            gates.append("ALPHA_TIME_STOP_EXIT")
+                        symbol_snapshot["alpha_time_stop"] = {
+                            "enabled": True,
+                            "position_age_seconds": float(position_age_seconds),
+                            "time_stop_sec": float(alpha_time_stop_sec),
+                            "effective_time_stop_sec": float(effective_time_stop_sec),
+                            "expected_edge_bps": float(expected_edge_now),
+                            "max_expected_edge_bps": float(
+                                alpha_time_stop_max_expected_edge_bps
+                            ),
+                            "exit_policy": dict(exit_policy_context),
+                        }
         post_trade_shares = current_shares + delta_shares
         expanding_exposure = abs(post_trade_shares) > abs(current_shares)
+        if (
+            expanding_exposure
+            and opportunity_quality_enabled
+            and opportunity_allowed_symbols
+            and symbol not in opportunity_allowed_symbols
+            and (not opportunity_openings_only or current_shares == 0)
+        ):
+            gates.append("OPPORTUNITY_QUALITY_QUANTILE_BLOCK")
+            symbol_snapshot["opportunity_quality"] = {
+                "score": float(opportunity_quality_by_symbol.get(symbol, 0.0) or 0.0),
+                "threshold": opportunity_quality_gate.get("threshold"),
+                "top_quantile": float(opportunity_top_quantile),
+                "allowed_symbols_count": int(len(opportunity_allowed_symbols)),
+                "openings_only": bool(opportunity_openings_only),
+            }
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                config_snapshot=symbol_snapshot,
+            )
+            _write_decision_record(record, decision_path)
+            continue
+        if (
+            expanding_exposure
+            and alpha_time_decay_enabled
+            and alpha_stale_signal_sec > 0.0
+            and signal_age_seconds > float(alpha_stale_signal_sec)
+        ):
+            gates.append("STALE_SIGNAL_BLOCK")
+            symbol_snapshot["stale_signal"] = {
+                "signal_age_seconds": float(signal_age_seconds),
+                "stale_signal_sec": float(alpha_stale_signal_sec),
+            }
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                config_snapshot=symbol_snapshot,
+            )
+            _write_decision_record(record, decision_path)
+            continue
         if live_execution_mode and not burn_in_live_ready and expanding_exposure:
             gates.append(burn_in_live_reason or "PAPER_BURN_IN_BLOCK")
             symbol_snapshot["rollout"] = {
@@ -40819,25 +45847,41 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 mode=str(get_env("AI_TRADING_PARTICIPATION_BLOCK_MODE", "block")),
                 scale_min=float(get_env("AI_TRADING_PARTICIPATION_SCALE_MIN", 0.25, cast=float)),
             )
+            participation_block_bypassed = False
             if not allowed_participation:
-                gates.append(liq_reason or "LIQ_PARTICIPATION_BLOCK")
-                record = DecisionRecord(
-                    symbol=symbol,
-                    bar_ts=net_target.bar_ts,
-                    sleeves=net_target.proposals,
-                    net_target=net_target,
-                    gates=gates,
-                    config_snapshot=symbol_snapshot,
-                )
-                _write_decision_record(record, decision_path)
-                continue
-            adjusted_qty_int = int(round(adjusted_qty))
-            if adjusted_qty_int != delta_shares:
+                participation_gate = liq_reason or "LIQ_PARTICIPATION_BLOCK"
+                if _gate_blocks(str(participation_gate)):
+                    gates.append(str(participation_gate))
+                    record = DecisionRecord(
+                        symbol=symbol,
+                        bar_ts=net_target.bar_ts,
+                        sleeves=net_target.proposals,
+                        net_target=net_target,
+                        gates=gates,
+                        config_snapshot=symbol_snapshot,
+                    )
+                    _write_decision_record(record, decision_path)
+                    continue
+                adjusted_qty_int = int(round(float(adjusted_qty)))
+                if adjusted_qty_int == 0:
+                    adjusted_qty_int = 1 if delta_shares > 0 else -1
                 delta_shares = adjusted_qty_int
                 net_target.target_shares = current_shares + delta_shares
                 net_target.target_dollars = net_target.target_shares * price
-                if liq_reason:
-                    gates.append(liq_reason)
+                gates.append("LIQ_PARTICIPATION_BLOCK_BYPASSED")
+                participation_block_bypassed = True
+                symbol_snapshot["gate_auto_disable"] = {
+                    "gate": str(participation_gate),
+                    "reason": "non_positive_marginal_contribution",
+                }
+            if not participation_block_bypassed:
+                adjusted_qty_int = int(round(adjusted_qty))
+                if adjusted_qty_int != delta_shares:
+                    delta_shares = adjusted_qty_int
+                    net_target.target_shares = current_shares + delta_shares
+                    net_target.target_dollars = net_target.target_shares * price
+                    if liq_reason:
+                        gates.append(liq_reason)
             if liq_regime is LiquidityRegime.THIN and "LIQ_REGIME_THIN_SCALE" not in gates:
                 gates.append("LIQ_REGIME_THIN_SCALE")
 
@@ -40854,33 +45898,46 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 get_env("AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS", 5000, cast=float)
             )
             if thin_max_order_dollars > 0 and abs(delta_shares) * price > thin_max_order_dollars:
-                gates.append("LIQ_THIN_MAX_ORDER_BLOCK")
-                record = DecisionRecord(
-                    symbol=symbol,
-                    bar_ts=net_target.bar_ts,
-                    sleeves=net_target.proposals,
-                    net_target=net_target,
-                    gates=gates,
-                    config_snapshot=symbol_snapshot,
+                if _gate_blocks("LIQ_THIN_MAX_ORDER_BLOCK"):
+                    gates.append("LIQ_THIN_MAX_ORDER_BLOCK")
+                    record = DecisionRecord(
+                        symbol=symbol,
+                        bar_ts=net_target.bar_ts,
+                        sleeves=net_target.proposals,
+                        net_target=net_target,
+                        gates=gates,
+                        config_snapshot=symbol_snapshot,
+                    )
+                    _write_decision_record(record, decision_path)
+                    continue
+                thin_cap_qty = int(
+                    math.copysign(
+                        max(1, int(thin_max_order_dollars // max(price, 1e-9))),
+                        delta_shares,
+                    )
                 )
-                _write_decision_record(record, decision_path)
-                continue
+                delta_shares = thin_cap_qty
+                net_target.target_shares = current_shares + delta_shares
+                net_target.target_dollars = net_target.target_shares * price
+                gates.append("LIQ_THIN_MAX_ORDER_BLOCK_BYPASSED")
 
         if current_shares == 0 and alpha_decay_deweight_enabled:
             alpha_guard = _alpha_decay_entry_guard(state, symbol, now)
             if alpha_guard.get("blocked"):
-                gates.append("ALPHA_DECAY_BLOCK")
-                record = DecisionRecord(
-                    symbol=symbol,
-                    bar_ts=net_target.bar_ts,
-                    sleeves=net_target.proposals,
-                    net_target=net_target,
-                    gates=gates,
-                    metrics={"alpha_decay": alpha_guard},
-                    config_snapshot=symbol_snapshot,
-                )
-                _write_decision_record(record, decision_path)
-                continue
+                if _gate_blocks("ALPHA_DECAY_BLOCK"):
+                    gates.append("ALPHA_DECAY_BLOCK")
+                    record = DecisionRecord(
+                        symbol=symbol,
+                        bar_ts=net_target.bar_ts,
+                        sleeves=net_target.proposals,
+                        net_target=net_target,
+                        gates=gates,
+                        metrics={"alpha_decay": alpha_guard},
+                        config_snapshot=symbol_snapshot,
+                    )
+                    _write_decision_record(record, decision_path)
+                    continue
+                gates.append("ALPHA_DECAY_BLOCK_BYPASSED")
             trades_in_window = int(alpha_guard.get("trades_in_window", 0) or 0)
             start_trades = int(alpha_guard.get("start_trades", 0) or 0)
             over_start = max(0, trades_in_window - max(0, start_trades) + 1)
@@ -40889,18 +45946,20 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 multiplier = max(0.05, 1.0 - deweight)
                 scaled_qty = int(round(float(delta_shares) * multiplier))
                 if scaled_qty == 0:
-                    gates.append("ALPHA_DECAY_ZERO_QTY_BLOCK")
-                    record = DecisionRecord(
-                        symbol=symbol,
-                        bar_ts=net_target.bar_ts,
-                        sleeves=net_target.proposals,
-                        net_target=net_target,
-                        gates=gates,
-                        metrics={"alpha_decay": alpha_guard | {"multiplier": multiplier}},
-                        config_snapshot=symbol_snapshot,
-                    )
-                    _write_decision_record(record, decision_path)
-                    continue
+                    if _gate_blocks("ALPHA_DECAY_ZERO_QTY_BLOCK"):
+                        gates.append("ALPHA_DECAY_ZERO_QTY_BLOCK")
+                        record = DecisionRecord(
+                            symbol=symbol,
+                            bar_ts=net_target.bar_ts,
+                            sleeves=net_target.proposals,
+                            net_target=net_target,
+                            gates=gates,
+                            metrics={"alpha_decay": alpha_guard | {"multiplier": multiplier}},
+                            config_snapshot=symbol_snapshot,
+                        )
+                        _write_decision_record(record, decision_path)
+                        continue
+                    scaled_qty = 1 if delta_shares > 0 else -1
                 if scaled_qty != delta_shares:
                     delta_shares = scaled_qty
                     net_target.target_shares = current_shares + delta_shares
@@ -41002,6 +46061,207 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     net_target.target_dollars = net_target.target_shares * price
                     gates.append("SYMBOL_EXPECTANCY_SLIPPAGE_SCALE")
                     symbol_snapshot["symbol_adaptive_sizing"] = dict(adaptive_profile)
+
+        if (
+            delta_shares != 0
+            and expanding_exposure
+            and bool(get_env("AI_TRADING_UNCERTAINTY_CAPITAL_SCALING_ENABLED", True, cast=bool))
+        ):
+            ece_value = max(0.0, float(slo_derisk_details.get("calibration_ece", 0.0) or 0.0))
+            brier_value = max(
+                0.0, float(slo_derisk_details.get("calibration_brier", 0.0) or 0.0)
+            )
+            execution_drift_bps = max(
+                0.0, float(slo_derisk_details.get("execution_drift_bps", 0.0) or 0.0)
+            )
+            feature_drift_psi = max(
+                0.0, float(slo_derisk_details.get("drift_psi", 0.0) or 0.0)
+            )
+            label_drift_psi = max(
+                0.0, float(slo_derisk_details.get("label_drift_psi", 0.0) or 0.0)
+            )
+            residual_drift_psi = max(
+                0.0, float(slo_derisk_details.get("residual_drift_psi", 0.0) or 0.0)
+            )
+            min_samples_required = max(
+                1,
+                int(
+                    get_env(
+                        "AI_TRADING_UNCERTAINTY_CAPITAL_MIN_SAMPLES",
+                        10,
+                        cast=int,
+                    )
+                ),
+            )
+            sample_counts = [
+                int(slo_derisk_details.get("calibration_ece_samples", 0) or 0),
+                int(slo_derisk_details.get("calibration_brier_samples", 0) or 0),
+                int(slo_derisk_details.get("drift_samples", 0) or 0),
+            ]
+            sample_shortfall = max(
+                0.0,
+                float(min_samples_required - min(sample_counts or [0]))
+                / float(max(1, min_samples_required)),
+            )
+            data_quality_penalty = 0.0
+            if bool(primary_feed_derisk.get("triggered", False)):
+                data_quality_penalty += 0.4
+            degraded_count = len(getattr(state, "degraded_providers", set()) or set())
+            if degraded_count > 0:
+                data_quality_penalty += min(float(degraded_count) * 0.2, 0.6)
+            uncertainty_components = {
+                "epistemic": min(
+                    1.0,
+                    max(
+                        ece_value / max(1e-6, float(get_env("AI_TRADING_DERISK_SLO_MAX_CALIB_ECE", 0.15, cast=float))),
+                        brier_value / max(1e-6, float(get_env("AI_TRADING_DERISK_SLO_MAX_CALIB_BRIER", 0.35, cast=float))),
+                    ),
+                ),
+                "drift": min(
+                    1.0,
+                    max(
+                        execution_drift_bps / max(1e-6, float(get_env("AI_TRADING_DERISK_SLO_MAX_EXEC_DRIFT_BPS", 35.0, cast=float))),
+                        feature_drift_psi / max(1e-6, float(get_env("AI_TRADING_DERISK_SLO_MAX_FEATURE_DRIFT_PSI", 0.30, cast=float))),
+                        label_drift_psi / max(1e-6, float(get_env("AI_TRADING_DERISK_SLO_MAX_LABEL_DRIFT_PSI", 0.30, cast=float))),
+                        residual_drift_psi / max(1e-6, float(get_env("AI_TRADING_DERISK_SLO_MAX_RESIDUAL_DRIFT_PSI", 0.30, cast=float))),
+                    ),
+                ),
+                "data_quality": min(1.0, float(data_quality_penalty)),
+                "sample_shortfall": min(1.0, float(sample_shortfall)),
+            }
+            uncertainty_score = min(
+                1.0,
+                (0.40 * float(uncertainty_components["epistemic"]))
+                + (0.30 * float(uncertainty_components["drift"]))
+                + (0.20 * float(uncertainty_components["data_quality"]))
+                + (0.10 * float(uncertainty_components["sample_shortfall"])),
+            )
+            base_uncertainty_weight = max(
+                0.0,
+                min(
+                    1.0,
+                    float(
+                        get_env(
+                            "AI_TRADING_UNCERTAINTY_CAPITAL_SCALING_WEIGHT",
+                            0.60,
+                            cast=float,
+                        )
+                    ),
+                ),
+            )
+            base_uncertainty_min_scale = max(
+                0.05,
+                min(
+                    1.0,
+                    float(
+                        get_env(
+                            "AI_TRADING_UNCERTAINTY_CAPITAL_SCALING_MIN_SCALE",
+                            0.35,
+                            cast=float,
+                        )
+                    ),
+                ),
+            )
+            if penalty_overlap_coordination_enabled and initial_requested_delta_shares != 0:
+                prior_scale_ratio = min(
+                    1.0,
+                    abs(float(delta_shares))
+                    / float(max(1, abs(int(initial_requested_delta_shares)))),
+                )
+                if prior_scale_ratio < 0.999:
+                    prior_reduction = max(0.0, 1.0 - float(prior_scale_ratio))
+                    damp_mult = max(
+                        0.0,
+                        1.0
+                        - (
+                            float(penalty_overlap_weight_dampen)
+                            * float(prior_reduction)
+                        ),
+                    )
+                    base_uncertainty_weight = max(
+                        0.0,
+                        min(1.0, float(base_uncertainty_weight) * float(damp_mult)),
+                    )
+                    coordinated_floor = max(
+                        float(base_uncertainty_min_scale),
+                        float(penalty_overlap_min_scale_floor)
+                        - (0.25 * float(prior_reduction)),
+                    )
+                    base_uncertainty_min_scale = max(
+                        0.05,
+                        min(1.0, float(coordinated_floor)),
+                    )
+            uncertainty_auto_controls = _resolve_uncertainty_capital_auto_controls(
+                base_weight=float(base_uncertainty_weight),
+                base_min_scale=float(base_uncertainty_min_scale),
+                raw_score=float(uncertainty_score),
+                state_payload=uncertainty_capital_state,
+            )
+            uncertainty_weight = float(
+                _safe_float(uncertainty_auto_controls.get("weight"))
+                or base_uncertainty_weight
+            )
+            uncertainty_min_scale = float(
+                _safe_float(uncertainty_auto_controls.get("min_scale"))
+                or base_uncertainty_min_scale
+            )
+            effective_uncertainty_score = float(
+                _safe_float(uncertainty_auto_controls.get("effective_score"))
+                or uncertainty_score
+            )
+            uncertainty_scale = max(
+                float(uncertainty_min_scale),
+                1.0 - (float(uncertainty_weight) * float(effective_uncertainty_score)),
+            )
+            uncertainty_event = {
+                "symbol": str(symbol),
+                "score": float(uncertainty_score),
+                "effective_score": float(effective_uncertainty_score),
+                "scale": float(uncertainty_scale),
+                "components": dict(uncertainty_components),
+                "auto_tune": dict(uncertainty_auto_controls),
+                "scaled": False,
+                "blocked": False,
+            }
+            if uncertainty_scale < 0.999:
+                adjusted_qty = int(round(float(delta_shares) * float(uncertainty_scale)))
+                if adjusted_qty == 0:
+                    gates.append("UNCERTAINTY_CAPITAL_BLOCK")
+                    uncertainty_event["blocked"] = True
+                    uncertainty_cycle_events.append(dict(uncertainty_event))
+                    record = DecisionRecord(
+                        symbol=symbol,
+                        bar_ts=net_target.bar_ts,
+                        sleeves=net_target.proposals,
+                        net_target=net_target,
+                        gates=gates,
+                        metrics={
+                            "uncertainty_capital_scaling": {
+                                "scale": float(uncertainty_scale),
+                                "score": float(uncertainty_score),
+                                "effective_score": float(effective_uncertainty_score),
+                                "components": uncertainty_components,
+                                "auto_tune": dict(uncertainty_auto_controls),
+                            }
+                        },
+                        config_snapshot=symbol_snapshot,
+                    )
+                    _write_decision_record(record, decision_path)
+                    continue
+                if adjusted_qty != int(delta_shares):
+                    delta_shares = int(adjusted_qty)
+                    net_target.target_shares = current_shares + delta_shares
+                    net_target.target_dollars = net_target.target_shares * price
+                    gates.append("UNCERTAINTY_CAPITAL_SCALE")
+                    uncertainty_event["scaled"] = True
+                    symbol_snapshot["uncertainty_capital_scaling"] = {
+                        "scale": float(uncertainty_scale),
+                        "score": float(uncertainty_score),
+                        "effective_score": float(effective_uncertainty_score),
+                        "components": uncertainty_components,
+                        "auto_tune": dict(uncertainty_auto_controls),
+                    }
+            uncertainty_cycle_events.append(dict(uncertainty_event))
 
         requested_delta_shares = int(delta_shares)
         reversal_clamp_reason: str | None = None
@@ -41298,7 +46558,40 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 float(effective_cost_floor * min_edge_to_cost_ratio),
             )
             required_edge_bps += float(adaptive_cost_add_bps + opening_ramp_add_bps)
-            if float(expected_edge_total) < required_edge_bps:
+            adaptive_edge_floor_enabled = bool(
+                get_env(
+                    "AI_TRADING_EXECUTION_COST_AWARE_ADAPTIVE_EDGE_FLOOR_ENABLED",
+                    True,
+                    cast=bool,
+                )
+            )
+            adaptive_edge_floor_percentile = max(
+                0.05,
+                min(
+                    0.95,
+                    float(
+                        get_env(
+                            "AI_TRADING_EXECUTION_COST_AWARE_ADAPTIVE_EDGE_FLOOR_PERCENTILE",
+                            0.60,
+                            cast=float,
+                        )
+                    ),
+                ),
+            )
+            adaptive_edge_floor_value = None
+            if adaptive_edge_floor_enabled and candidate_expected_net_edge:
+                adaptive_edge_floor_value = _percentile_linear(
+                    list(candidate_expected_net_edge.values()),
+                    adaptive_edge_floor_percentile,
+                )
+                if adaptive_edge_floor_value is not None:
+                    required_edge_bps = max(
+                        float(required_edge_bps),
+                        float(adaptive_edge_floor_value),
+                    )
+            if float(expected_edge_total) < required_edge_bps and _gate_blocks(
+                "COST_AWARE_ENTRY_GUARD"
+            ):
                 gates.append("COST_AWARE_ENTRY_GUARD")
                 record = DecisionRecord(
                     symbol=symbol,
@@ -41328,6 +46621,17 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                             "adaptive_cost_add_bps": float(adaptive_cost_add_bps),
                             "opening_ramp_add_bps": float(opening_ramp_add_bps),
                             "required_edge_bps": float(required_edge_bps),
+                            "adaptive_edge_floor_enabled": bool(
+                                adaptive_edge_floor_enabled
+                            ),
+                            "adaptive_edge_floor_percentile": float(
+                                adaptive_edge_floor_percentile
+                            ),
+                            "adaptive_edge_floor_bps": (
+                                float(adaptive_edge_floor_value)
+                                if adaptive_edge_floor_value is not None
+                                else None
+                            ),
                             "adaptive_cost_context": adaptive_cost_context,
                             "opening_ramp_context": opening_ramp_context,
                         }
@@ -41595,6 +46899,54 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             _write_decision_record(record, decision_path)
             continue
 
+        try:
+            require_realtime_nbbo = bool(
+                getattr(cfg, "execution_require_realtime_nbbo", True)
+            )
+        except Exception:
+            require_realtime_nbbo = True
+        enforce_opening_nbbo = bool(
+            get_env("AI_TRADING_ENFORCE_NBBO_FOR_OPENINGS", True, cast=bool)
+        )
+        (
+            submit_quote_source,
+            submit_bid_at_arrival,
+            submit_ask_at_arrival,
+            submit_mid_at_arrival,
+            submit_arrival_price,
+        ) = _resolve_order_quote_basis(
+            runtime,
+            symbol=symbol,
+            side=side,
+            fallback_price=price,
+        )
+        if (
+            bool(opening_trade)
+            and require_realtime_nbbo
+            and enforce_opening_nbbo
+            and submit_mid_at_arrival is None
+        ):
+            gates.append("NBBO_REQUIRED_OPENING_SKIP")
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                metrics={
+                    "nbbo_guard": {
+                        "required": True,
+                        "opening_trade": True,
+                        "price_source": submit_quote_source,
+                        "bid_at_arrival": submit_bid_at_arrival,
+                        "ask_at_arrival": submit_ask_at_arrival,
+                    }
+                },
+                config_snapshot=symbol_snapshot,
+            )
+            _write_decision_record(record, decision_path)
+            continue
+
         order_lineage_metadata: dict[str, Any] = {}
         model_id_for_order = str(execution_model_lineage.get("model_id") or "").strip()
         model_version_for_order = str(execution_model_lineage.get("model_version") or "").strip()
@@ -41607,6 +46959,24 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             order_lineage_metadata["model_version"] = model_version_for_order
         if config_snapshot_hash_for_order:
             order_lineage_metadata["config_snapshot_hash"] = config_snapshot_hash_for_order
+        if submit_quote_source:
+            order_lineage_metadata["price_source"] = submit_quote_source
+        order_annotations: dict[str, Any] = {}
+        if submit_quote_source:
+            order_annotations["price_source"] = submit_quote_source
+        if (
+            submit_bid_at_arrival is not None
+            and submit_ask_at_arrival is not None
+            and submit_mid_at_arrival is not None
+        ):
+            order_annotations["quote_source"] = "broker_nbbo"
+            order_annotations["quote"] = {
+                "bid": float(submit_bid_at_arrival),
+                "ask": float(submit_ask_at_arrival),
+                "midpoint": float(submit_mid_at_arrival),
+                "source": "broker_nbbo",
+                "synthetic": False,
+            }
         try:
             order = submit_order(
                 runtime,
@@ -41619,6 +46989,12 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 model_id=model_id_for_order or None,
                 model_version=model_version_for_order or None,
                 config_snapshot_hash=config_snapshot_hash_for_order or None,
+                annotations=(order_annotations or None),
+                price_hint=(
+                    float(submit_arrival_price)
+                    if submit_arrival_price is not None
+                    else float(price)
+                ),
                 metadata=(order_lineage_metadata or None),
             )
             breakers.record_success("broker_submit")
@@ -41802,13 +47178,18 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
 
         metrics = {}
         tca_record: dict[str, Any] | None = None
+        arrival_price_for_metrics = (
+            float(submit_arrival_price)
+            if submit_arrival_price is not None
+            else float(price)
+        )
         try:
             metrics = compute_attribution_metrics(
-                arrival_price=price,
+                arrival_price=arrival_price_for_metrics,
                 fill_price=float(fill_price) if fill_price is not None else None,
                 side=side,
-                bid=None,
-                ask=None,
+                bid=submit_bid_at_arrival,
+                ask=submit_ask_at_arrival,
                 order_ts=now,
                 fill_ts=fill_timestamp if persistable_fill else None,
             )
@@ -41839,11 +47220,14 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             ):
                 partial_fill = True
             tca_qty = float(filled_qty) if persistable_fill and filled_qty > 0 else float(abs(delta_shares))
+            mid_at_arrival = submit_mid_at_arrival
+            if mid_at_arrival is None and allow_proxy_quotes:
+                mid_at_arrival = float(arrival_price_for_metrics)
             benchmark = ExecutionBenchmark(
-                arrival_price=float(price),
-                mid_at_arrival=float(price) if allow_proxy_quotes else None,
-                bid_at_arrival=None,
-                ask_at_arrival=None,
+                arrival_price=float(arrival_price_for_metrics),
+                mid_at_arrival=mid_at_arrival if allow_proxy_quotes else None,
+                bid_at_arrival=submit_bid_at_arrival,
+                ask_at_arrival=submit_ask_at_arrival,
                 bar_close_price=float(price),
                 decision_ts=arrival_ts,
                 submit_ts=now,
@@ -41868,6 +47252,29 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 order_type="limit",
                 quote_proxy=allow_proxy_quotes,
             )
+            session_regime_token = _session_bucket_from_ts(now)
+            spread_paid_for_role = _safe_float(tca_record.get("spread_paid_bps"))
+            liquidity_role_token = "maker"
+            if str(side).strip().lower() in {"buy", "sell"} and spread_paid_for_role is not None:
+                if float(spread_paid_for_role) >= 0.75:
+                    liquidity_role_token = "taker"
+                elif float(spread_paid_for_role) > 0.05:
+                    liquidity_role_token = "mixed"
+            venue_token = str(
+                getattr(order, "exchange", None)
+                or getattr(order, "venue", None)
+                or "ALPACA"
+            ).strip().upper() or "ALPACA"
+            tca_record["liquidity_role"] = str(liquidity_role_token)
+            tca_record["venue"] = str(venue_token)
+            tca_record["session_regime"] = str(session_regime_token)
+            tca_record["venue_session"] = f"{venue_token}:{session_regime_token}"
+            expected_edge_for_tca = _safe_float(candidate_expected_net_edge.get(symbol))
+            if expected_edge_for_tca is not None:
+                tca_record["expected_net_edge_bps"] = float(expected_edge_for_tca)
+            expected_capture_for_tca = _safe_float(candidate_expected_capture.get(symbol))
+            if expected_capture_for_tca is not None:
+                tca_record["expected_capture_bps"] = float(expected_capture_for_tca)
             if not persistable_fill:
                 tca_record["fill_price"] = None
                 tca_record["fill_vwap"] = None
@@ -41879,9 +47286,18 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 get_env("AI_TRADING_TCA_PENDING_WRITE_SEC", 60, cast=int)
             )
             if allow_proxy_quotes:
-                tca_record["quote_proxy_source"] = str(
-                    get_env("AI_TRADING_TCA_PROXY_MID_SOURCE", "last_trade")
-                )
+                resolved_proxy_source = _normalize_quote_source_token(submit_quote_source)
+                if resolved_proxy_source is not None:
+                    tca_record["quote_proxy_source"] = resolved_proxy_source
+                else:
+                    proxy_default = str(
+                        get_env("AI_TRADING_TCA_PROXY_MID_SOURCE", "last_trade")
+                    )
+                    tca_record["quote_proxy_source"] = _resolve_quote_proxy_source(
+                        order,
+                        symbol=symbol,
+                        default_source=proxy_default,
+                    )
             metrics["tca"] = {
                 "is_bps": tca_record.get("is_bps"),
                 "spread_paid_bps": tca_record.get("spread_paid_bps"),
@@ -41981,6 +47397,18 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         decision_records_total=int(decision_records_total),
         accepted_decisions=accepted_decisions,
         decision_observations=decision_observations,
+    )
+    _update_counterfactual_learning_analytics(
+        observations=decision_observations,
+        now=now,
+    )
+    _update_policy_ablation_analytics(
+        observations=decision_observations,
+        now=now,
+    )
+    _update_uncertainty_capital_analytics(
+        events=uncertainty_cycle_events,
+        now=now,
     )
     if reject_gate_counts:
         top_reasons = sorted(
@@ -42235,6 +47663,17 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             state.entry_expectancy_context = {}
         if not hasattr(state, "expectancy_history"):
             state.expectancy_history = {}
+        if not hasattr(state, "exit_policy_state"):
+            state.exit_policy_state = {}
+        if not hasattr(state, "policy_rollback_disabled_slices"):
+            state.policy_rollback_disabled_slices = []
+        if not hasattr(state, "last_policy_ablation_run_date"):
+            state.last_policy_ablation_run_date = None
+        if _restore_exit_policy_state(state):
+            logger.info(
+                "EXIT_POLICY_STATE_RESTORED",
+                extra={"bucket_count": len(_ensure_exit_policy_state(state))},
+            )
         if state.running:
             logger.warning(
                 "RUN_ALL_TRADES_SKIPPED_OVERLAP",
@@ -42538,6 +47977,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         except Exception:
                             provider_status_after = ""
                         provider_using_backup = bool(provider_state_after.get("using_backup"))
+                        timeframe_state_after = provider_state_after.get("timeframes")
+                        if isinstance(timeframe_state_after, Mapping):
+                            minute_backup = timeframe_state_after.get("1Min")
+                            if isinstance(minute_backup, bool):
+                                provider_using_backup = minute_backup
                     if provider_status_after not in {
                         "down",
                         "disabled",
@@ -43002,6 +48446,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 provider_state_post = {}
             if isinstance(provider_state_post, dict):
                 provider_using_backup = bool(provider_state_post.get("using_backup"))
+                timeframe_state_post = provider_state_post.get("timeframes")
+                if isinstance(timeframe_state_post, Mapping):
+                    minute_backup = timeframe_state_post.get("1Min")
+                    if isinstance(minute_backup, bool):
+                        provider_using_backup = minute_backup
             runtime_state.update_data_provider_state(
                 status="degraded" if provider_using_backup else "healthy",
                 data_status="ready",

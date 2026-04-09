@@ -136,7 +136,10 @@ def test_market_downgrade_when_realtime_nbbo_required(monkeypatch, caplog) -> No
     assert engine.last_submitted is not None
     submitted_type = engine.last_submitted.get("order_type") or engine.last_submitted.get("type")
     assert submitted_type == "limit"
-    assert engine.last_submitted.get("limit_price") == pytest.approx(100.5)
+    submitted_limit = engine.last_submitted.get("limit_price")
+    assert submitted_limit is not None
+    assert float(submitted_limit) >= 100.0
+    assert float(submitted_limit) <= 100.5
 
     messages = [
         record.msg

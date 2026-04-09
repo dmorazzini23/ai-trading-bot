@@ -43,6 +43,11 @@ def _engine_stub() -> Any:
     engine._last_order_ack_timeout_mono = 0.0
     engine._last_order_ack_timeout_order_id = None
     engine._last_order_ack_timeout_client_order_id = None
+    engine._reconciliation_mismatch_events = deque(maxlen=128)
+    engine._reconciliation_openings_block_until_mono = 0.0
+    engine._reconciliation_openings_block_context = {}
+    engine._reconciliation_auto_repair_last_mono = 0.0
+    engine._reconciliation_auto_repair_last_context = {}
     engine._symbol_loss_streak = {}
     engine._symbol_loss_cooldown_until = {}
     engine._symbol_loss_cooldown_reason = {}
@@ -82,6 +87,14 @@ def _engine_stub() -> Any:
         "state": "inactive",
         "order_cap_scale": 1.0,
         "required_edge_add_bps": 0.0,
+    }
+    engine._stop_bleed_last_context = {"enabled": False, "active": False, "reason": "uninitialized"}
+    engine._opening_recovery_pass_streak = 0
+    engine._opening_recovery_relaxed_until_mono = 0.0
+    engine._opening_recovery_last_context = {
+        "enabled": False,
+        "active": False,
+        "reason": "uninitialized",
     }
     engine._execution_learning_state = lt.ExecutionEngine._default_execution_learning_state()
     engine._execution_learning_last_persist_mono = 0.0
@@ -552,6 +565,29 @@ def test_opening_min_notional_relaxes_more_under_severe_precheck_pressure(
     assert min_notional >= 0.0
 
 
+def test_precheck_guardrail_relax_disables_when_edge_capture_degrades(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setattr(lt, "monotonic_time", lambda: 200.0)
+    engine._precheck_failure_pressure_context = {
+        "updated_at_mono": 190.0,
+        "precheck_failure_count": 60,
+        "precheck_detail_counts": {"symbol_reentry_cooldown": 54},
+        "filled_realized_edge_samples": 12,
+        "filled_edge_capture_ratio": 0.04,
+        "filled_realized_net_edge_bps": -0.2,
+    }
+
+    scale = engine._precheck_guardrail_relax_scale(
+        detail="symbol_reentry_cooldown",
+        default_scale=0.6,
+        severe_scale=0.3,
+    )
+
+    assert scale == pytest.approx(1.0)
+
+
 def test_cycle_intent_reservation_dedupes_symbol_side():
     engine = _engine_stub()
 
@@ -658,6 +694,36 @@ def test_opening_provider_guard_allows_openings_when_provider_healthy(monkeypatc
         lambda: {
             "status": "healthy",
             "active": "alpaca",
+            "using_backup": False,
+            "safe_mode": False,
+        },
+    )
+    monkeypatch.setattr(lt.provider_monitor, "is_disabled", lambda _provider: False)
+    monkeypatch.setattr(lt, "is_safe_mode_active", lambda: False)
+
+    allowed, detail = engine._execution_phase_allows_submits(closing_position=False)
+
+    assert allowed is True
+    assert detail is None
+
+
+def test_opening_provider_guard_treats_broker_nbbo_as_primary(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "active"})
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_PROVIDER_READY_MIN_SEC", "0")
+    monkeypatch.setattr(engine, "_opening_provider_guard_enabled", lambda: True)
+    monkeypatch.setattr(
+        engine,
+        "_opening_provider_guard_elapsed_seconds",
+        lambda: 120.0,
+    )
+    monkeypatch.setattr(
+        lt.runtime_state,
+        "observe_data_provider_state",
+        lambda: {
+            "status": "healthy",
+            "active": "broker_nbbo",
             "using_backup": False,
             "safe_mode": False,
         },
@@ -1091,6 +1157,10 @@ def test_runtime_gonogo_precheck_blocks_openings_when_gate_fails(monkeypatch, tm
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_CACHE_TTL_SEC", "1")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_CLOSED_TRADES", "1")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", "1.1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PROFIT_FACTOR_GATE",
+        "1",
+    )
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE", "0.5")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", "0.0")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", "0.05")
@@ -1192,6 +1262,10 @@ def test_runtime_gonogo_can_enforce_in_paper_when_enabled(monkeypatch, tmp_path)
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_CACHE_TTL_SEC", "1")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_CLOSED_TRADES", "1")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", "1.1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PROFIT_FACTOR_GATE",
+        "1",
+    )
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE", "0.5")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", "0.0")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", "0.05")
@@ -1389,6 +1463,167 @@ def test_runtime_gonogo_reconciliation_retry_can_recover_gate(monkeypatch):
     assert retry["attempted"] is True
     assert retry["gate_passed_after"] is True
     assert context["reason"] == "reconciliation_retry_passed"
+
+
+def test_runtime_gonogo_reconciliation_retry_runs_with_mixed_failed_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_ENABLED",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_REQUIRE_ONLY_RECON_FAILS",
+        "0",
+    )
+
+    from ai_trading.tools import runtime_performance_report as runtime_perf_report
+
+    eval_calls = {"count": 0}
+
+    monkeypatch.setattr(
+        runtime_perf_report,
+        "build_report",
+        lambda *args, **kwargs: {"trade_history": {}, "gate_effectiveness": {}},
+    )
+
+    def _evaluate_go_no_go(*_args, **_kwargs):
+        eval_calls["count"] += 1
+        if eval_calls["count"] == 1:
+            return {
+                "gate_passed": False,
+                "failed_checks": [
+                    "open_position_reconciliation_consistent",
+                    "win_rate",
+                ],
+                "thresholds": {
+                    "max_open_position_mismatch_count": 25,
+                    "max_open_position_abs_delta_qty": 50.0,
+                },
+                "observed": {
+                    "open_position_reconciliation_mismatch_count": 2,
+                    "open_position_reconciliation_max_abs_delta_qty": 4.0,
+                },
+            }
+        return {
+            "gate_passed": True,
+            "failed_checks": [],
+            "thresholds": {},
+            "observed": {},
+        }
+
+    monkeypatch.setattr(runtime_perf_report, "evaluate_go_no_go", _evaluate_go_no_go)
+    monkeypatch.setattr(
+        engine,
+        "synchronize_broker_state",
+        lambda: SimpleNamespace(open_orders=(), positions=()),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_backfill_pending_tca_from_fill_events",
+        lambda: {"enabled": True, "reason": "no_new_fill_events"},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_finalize_stale_pending_tca_events",
+        lambda: {"enabled": True, "reason": "interval_not_elapsed"},
+    )
+
+    allowed, context = engine._runtime_gonogo_openings_allowed()
+
+    assert allowed is True
+    assert eval_calls["count"] == 2
+    retry = context["reconciliation_retry"]
+    assert retry["eligible"] is True
+    assert retry["attempted"] is True
+    assert context["reason"] == "reconciliation_retry_passed"
+
+
+def test_reconciliation_mismatch_burst_arms_openings_freeze(monkeypatch):
+    engine = _engine_stub()
+    clock = {"mono": 100.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: clock["mono"])
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RECONCILIATION_FREEZE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RECONCILIATION_FREEZE_BURST_COUNT", "2")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RECONCILIATION_FREEZE_WINDOW_SEC", "600")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RECONCILIATION_FREEZE_COOLDOWN_SEC", "900")
+
+    engine._register_reconciliation_mismatch(symbol="AAPL", reconcile_summary={"status": "filled"})
+    clock["mono"] = 120.0
+    engine._register_reconciliation_mismatch(symbol="AAPL", reconcile_summary={"status": "filled"})
+
+    allowed, context = engine._reconciliation_openings_guard_allows_openings()
+
+    assert allowed is False
+    assert context["reason"] == "reconciliation_openings_freeze"
+    assert context["block_remaining_s"] > 0.0
+
+
+def test_reconciliation_mismatch_burst_triggers_guarded_auto_repair(monkeypatch):
+    engine = _engine_stub()
+    clock = {"mono": 500.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: clock["mono"])
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RECONCILIATION_FREEZE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RECONCILIATION_FREEZE_BURST_COUNT", "2")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RECONCILIATION_FREEZE_WINDOW_SEC", "600")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RECONCILIATION_FREEZE_COOLDOWN_SEC", "900")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RECONCILIATION_AUTO_REPAIR_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RECONCILIATION_AUTO_REPAIR_TRIGGER_COUNT",
+        "2",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RECONCILIATION_AUTO_REPAIR_COOLDOWN_SEC",
+        "60",
+    )
+
+    sync_calls = {"count": 0}
+    event_rows: list[dict[str, Any]] = []
+    def _sync_broker_state():
+        sync_calls["count"] += 1
+        return SimpleNamespace(open_orders=("ord-1",), positions=("pos-1",))
+
+    monkeypatch.setattr(engine, "synchronize_broker_state", _sync_broker_state)
+    monkeypatch.setattr(
+        engine,
+        "_backfill_pending_tca_from_fill_events",
+        lambda: {"enabled": True, "reconciled": 0},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_finalize_stale_pending_tca_events",
+        lambda: {"enabled": True, "finalized": 0},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_record_execution_quality_event",
+        lambda payload: event_rows.append(dict(payload)),
+    )
+
+    engine._register_reconciliation_mismatch(
+        symbol="AAPL",
+        reconcile_summary={"status": "filled"},
+    )
+    clock["mono"] = 520.0
+    engine._register_reconciliation_mismatch(
+        symbol="AAPL",
+        reconcile_summary={"status": "filled"},
+    )
+
+    context = dict(engine._reconciliation_openings_block_context)
+    auto_repair = dict(context.get("auto_repair") or {})
+    assert auto_repair["enabled"] is True
+    assert auto_repair["attempted"] is True
+    assert auto_repair["success"] is True
+    assert sync_calls["count"] == 1
+    assert any(
+        str(row.get("event") or "").strip().lower() == "reconciliation_auto_repair"
+        for row in event_rows
+    )
 
 
 def test_runtime_gonogo_capture_guard_hard_block(monkeypatch):
@@ -2034,6 +2269,191 @@ def test_symbol_intraday_slippage_budget_applies_tolerance_drag(
     assert context["today_symbol_slippage_drag"] > context["threshold_symbol_slippage_drag"]
 
 
+def test_symbol_intraday_slippage_budget_uses_notional_bps_floor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    engine = _engine_stub()
+    now = datetime.now(UTC)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    fill_events_path = runtime_dir / "fill_events.jsonl"
+    fill_events_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "fill_recorded",
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "fill_price": 200.0,
+                        "fill_qty": 10.0,
+                        "slippage_bps": 100.0,
+                        "entry_time": (now - timedelta(minutes=20)).isoformat(),
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "fill_recorded",
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "fill_price": 200.0,
+                        "fill_qty": 10.0,
+                        "slippage_bps": 100.0,
+                        "entry_time": (now - timedelta(minutes=10)).isoformat(),
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MAX_DRAG", "9")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MAX_DRAG_BPS",
+        "120",
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MIN_FILLS", "2")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_TZ", "UTC")
+
+    allowed, context = engine._symbol_intraday_slippage_budget_allows_opening(symbol="AAPL")
+
+    assert allowed is True
+    assert context["reason"] == "ok"
+    assert context["threshold_symbol_slippage_drag"] == pytest.approx(9.0)
+    assert context["threshold_symbol_slippage_drag_from_bps"] == pytest.approx(48.0)
+    assert context["today_symbol_slippage_drag"] == pytest.approx(40.0)
+    assert context["breach_ratio_vs_effective_threshold"] < 1.0
+
+
+def test_symbol_intraday_slippage_budget_lookback_minutes_ignores_older_fills(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    engine = _engine_stub()
+    now = datetime.now(UTC)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    fill_events_path = runtime_dir / "fill_events.jsonl"
+    fill_events_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "fill_recorded",
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "fill_price": 200.0,
+                        "fill_qty": 10.0,
+                        "slippage_bps": 250.0,
+                        "entry_time": (now - timedelta(hours=3)).isoformat(),
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "fill_recorded",
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "fill_price": 100.0,
+                        "fill_qty": 1.0,
+                        "slippage_bps": 50.0,
+                        "entry_time": (now - timedelta(minutes=5)).isoformat(),
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MAX_DRAG", "2")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MIN_FILLS", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_LOOKBACK_MINUTES",
+        "15",
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_TZ", "UTC")
+
+    allowed, context = engine._symbol_intraday_slippage_budget_allows_opening(symbol="AAPL")
+
+    assert allowed is True
+    assert context["reason"] == "ok"
+    assert context["symbol_fills"] == 1
+    assert context["today_symbol_slippage_drag"] == pytest.approx(0.5)
+    assert context["lookback_minutes"] == 15
+
+
+def test_symbol_intraday_slippage_budget_hard_blocks_on_capture_ratio_breach(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    engine = _engine_stub()
+    today = datetime.now(UTC).date().isoformat()
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    fill_events_path = runtime_dir / "fill_events.jsonl"
+    fill_events_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "fill_recorded",
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "fill_price": 200.0,
+                        "fill_qty": 10.0,
+                        "slippage_bps": 5.0,
+                        "expected_net_edge_bps": 20.0,
+                        "realized_net_edge_bps": 1.0,
+                        "entry_time": f"{today}T14:30:00+00:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "fill_recorded",
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "fill_price": 210.0,
+                        "fill_qty": 10.0,
+                        "slippage_bps": 5.0,
+                        "expected_net_edge_bps": 20.0,
+                        "realized_net_edge_bps": 1.0,
+                        "entry_time": f"{today}T15:00:00+00:00",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MAX_DRAG", "1000")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MIN_FILLS", "2")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_CAPTURE_RATIO_GUARD_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_CAPTURE_RATIO_MIN_FILLS", "2")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_CAPTURE_RATIO_SOFT_FLOOR", "0.20")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_CAPTURE_RATIO_HARD_FLOOR", "0.10")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_TZ", "UTC")
+
+    allowed, context = engine._symbol_intraday_slippage_budget_allows_opening(symbol="AAPL")
+
+    assert allowed is False
+    assert context["reason"] == "symbol_intraday_capture_ratio_hard_breach"
+    assert context["breach_severity"] == "hard"
+    assert context["symbol_edge_capture_ratio"] == pytest.approx(0.05)
+    assert context["capture_ratio_state"] == "hard_breach"
+
+
 def test_symbol_loss_cooldown_triggers_and_expires(monkeypatch):
     engine = _engine_stub()
     clock = {"value": 100.0}
@@ -2316,6 +2736,24 @@ def test_resolve_order_submit_cap_includes_opening_ramp(monkeypatch):
     assert cap is not None
     assert int(cap) < 10
     assert "opening_ramp" in source
+
+
+def test_resolve_order_submit_cap_applies_stop_bleed_scaling(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_MAX_NEW_ORDERS_PER_CYCLE", "10")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_STOP_BLEED_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_STOP_BLEED_CAP_SCALE", "0.4")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_STOP_BLEED_HARD_CAPTURE_RATIO_FLOOR", "0.01")
+    engine._runtime_gonogo_cache_context = {
+        "gate_passed": False,
+        "failed_checks": ["slippage_drag_bps"],
+        "observed": {"slippage_drag_bps": 14.0, "execution_capture_ratio": 0.06},
+    }
+
+    cap, source = engine._resolve_order_submit_cap()
+
+    assert cap == 4
+    assert "stop_bleed" in source
 
 
 def test_execution_quality_pause_blocks_openings(monkeypatch):
@@ -2658,6 +3096,36 @@ def test_skip_submit_records_execution_quality_event(monkeypatch):
     assert payload["side"] == "buy"
 
 
+def test_skip_submit_precheck_adds_failed_checks_field(monkeypatch):
+    engine = _engine_stub()
+    captured: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: True)
+    monkeypatch.setattr(
+        engine,
+        "_append_runtime_jsonl",
+        lambda **kwargs: captured.append(dict(kwargs)),
+    )
+
+    engine._skip_submit(
+        symbol="AAPL",
+        side="buy",
+        reason="pre_execution_order_checks_failed",
+        order_type="limit",
+        detail="symbol_intraday_slippage_budget",
+        context={"gate": "test"},
+    )
+
+    quality_rows = [
+        row
+        for row in captured
+        if row.get("env_key") == "AI_TRADING_EXEC_QUALITY_EVENTS_PATH"
+    ]
+    assert quality_rows
+    payload = quality_rows[-1]["payload"]
+    assert payload["failed_checks"] == ["symbol_intraday_slippage_budget"]
+
+
 def test_submit_failure_records_execution_quality_event(monkeypatch):
     engine = _engine_stub()
     captured: list[dict[str, Any]] = []
@@ -2779,6 +3247,46 @@ def test_record_cycle_outcome_treats_broker_reconcile_fill_source_as_live(monkey
     assert payload["expected_net_edge_bps"] == pytest.approx(10.0)
     assert payload["realized_net_edge_bps"] == pytest.approx(4.0)
     assert edge_updates
+
+
+def test_record_cycle_outcome_adds_liquidity_role_and_venue_session(monkeypatch):
+    engine = _engine_stub()
+    captured: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: True)
+    monkeypatch.setattr(
+        engine,
+        "_append_runtime_jsonl",
+        lambda **kwargs: captured.append(dict(kwargs)),
+    )
+    monkeypatch.setattr(engine, "_update_edge_realism_feedback", lambda **_kwargs: None)
+
+    engine._record_cycle_order_outcome(
+        symbol="AAPL",
+        side="buy",
+        status="filled",
+        fill_source="live",
+        expected_net_edge_bps=8.0,
+        realized_net_edge_bps=2.0,
+        fill_price=101.0,
+        bid=100.0,
+        ask=101.0,
+        order_type="limit",
+        time_in_force="day",
+        venue="XNYS",
+        session_regime="opening",
+    )
+
+    quality_rows = [
+        row
+        for row in captured
+        if row.get("env_key") == "AI_TRADING_EXEC_QUALITY_EVENTS_PATH"
+    ]
+    assert quality_rows
+    payload = quality_rows[-1]["payload"]
+    assert payload["liquidity_role"] in {"taker", "maker", "mixed"}
+    assert payload["venue"] == "XNYS"
+    assert payload["venue_session"] == "XNYS:opening"
 
 
 def test_execution_kpi_snapshot_and_alerts(monkeypatch, caplog):
@@ -3105,6 +3613,100 @@ def test_apply_execution_policy_router_uses_aggressive_mode_on_high_adverse_sele
     assert context["adverse_selection_risk_bps"] > context["max_adverse_bps_balanced"]
 
 
+def test_apply_execution_policy_router_blocks_ioc_when_ioc_guard_trips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_POLICY_ROUTER_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_POLICY_MAX_ADVERSE_BPS_PASSIVE", "1.5")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_POLICY_MAX_ADVERSE_BPS_BALANCED", "4.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_IOC_GUARD_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_IOC_GUARD_MIN_SAMPLES", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_IOC_GUARD_MEAN_SLIPPAGE_BPS", "2.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_IOC_GUARD_P90_SLIPPAGE_BPS", "3.0")
+    engine._slippage_feedback_bps = deque([12.0], maxlen=512)
+
+    order_type, tif, limit_price, context = engine._apply_execution_policy_router(
+        symbol="AAPL",
+        side="buy",
+        order_type="limit",
+        limit_price=100.5,
+        bid=100.4,
+        ask=100.9,
+        fill_probability=0.4,
+        markout_context={"mean_bps": -8.0, "toxic": True},
+    )
+
+    assert order_type == "limit"
+    assert tif == "day"
+    assert limit_price == pytest.approx(100.5)
+    assert context["policy"] == "balanced_limit"
+    assert context["reason"] == "elevated_adverse_selection_ioc_guard_blocked"
+    assert context["ioc_guard"]["allow_ioc"] is False
+
+
+def test_execution_ioc_guard_uses_autotune_thresholds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    engine = _engine_stub()
+    autotune_path = tmp_path / "execution_autotune.json"
+    monkeypatch.setenv("AI_TRADING_EXECUTION_AUTOTUNE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_AUTOTUNE_PATH", str(autotune_path))
+    monkeypatch.setenv("AI_TRADING_EXECUTION_IOC_GUARD_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_IOC_GUARD_MIN_SAMPLES", "1")
+    autotune_path.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-04-08T00:00:00+00:00",
+                "enabled": True,
+                "active": True,
+                "profile_bias": "protective",
+                "ioc_guard_mean_slippage_bps": 2.0,
+                "ioc_guard_p90_slippage_bps": 3.0,
+                "ioc_guard_quantile": 0.9,
+            }
+        ),
+        encoding="utf-8",
+    )
+    engine._slippage_feedback_bps = deque([8.0, 7.0, 6.0], maxlen=512)
+
+    context = engine._execution_ioc_guard_context()
+
+    assert context["autotune_override_active"] is True
+    assert context["autotune_profile_bias"] == "protective"
+    assert context["mean_slippage_ceiling_bps"] == pytest.approx(2.0)
+    assert context["p90_slippage_ceiling_bps"] == pytest.approx(3.0)
+    assert context["allow_ioc"] is False
+
+
+def test_apply_execution_policy_router_reduces_raw_expected_edge_when_capture_is_weak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_POLICY_ROUTER_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_POLICY_MIN_FILL_PROB_PASSIVE", "0.6")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_POLICY_MAX_ADVERSE_BPS_PASSIVE", "2.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_POLICY_MAX_ADVERSE_BPS_BALANCED", "5.0")
+
+    _order_type, _tif, _limit_price, context = engine._apply_execution_policy_router(
+        symbol="AAPL",
+        side="buy",
+        order_type="limit",
+        limit_price=100.5,
+        bid=100.0,
+        ask=101.4,
+        fill_probability=0.72,
+        expected_net_edge_bps=35.0,
+        quote_age_ms=4500.0,
+        markout_context={"mean_bps": -3.0, "toxic": True},
+    )
+
+    assert context["expected_net_edge_bps"] == pytest.approx(35.0)
+    assert context["expected_capture_bps"] < context["expected_net_edge_bps"]
+    assert context["policy"] != "passive_limit"
+
+
 def test_estimate_passive_fill_probability_penalizes_toxic_markout() -> None:
     engine = _engine_stub()
     baseline_prob, _ = engine._estimate_passive_fill_probability(
@@ -3230,6 +3832,36 @@ def test_update_execution_learning_feedback_updates_bucket_stats(
     assert bucket["fill_rate"] == pytest.approx(0.5)
 
 
+def test_update_execution_learning_feedback_tracks_realization_and_symbol_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_LEARNING_AUTO_WRITE", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_AUTOTUNE_AUTO_WRITE", "0")
+
+    engine._update_execution_learning_feedback(
+        symbol="AAPL",
+        side="buy",
+        status="filled",
+        fill_source="live",
+        expected_net_edge_bps=20.0,
+        realized_net_edge_bps=5.0,
+        realized_slippage_bps=2.0,
+        passive_fill_probability=0.4,
+        adverse_selection_risk_bps=3.0,
+        market_regime="trend",
+        execution_profile_context={"profile": "balanced", "session_regime": "opening"},
+    )
+
+    state = engine._execution_learning_state
+    symbol_bucket = state["symbol_buckets"]["AAPL:opening:trend:balanced:buy"]
+    assert symbol_bucket["samples"] == 1
+    assert symbol_bucket["realization_samples"] == 1
+    assert symbol_bucket["mean_realization_ratio"] == pytest.approx(0.25)
+    assert symbol_bucket["mean_fill_probability"] == pytest.approx(0.4)
+    assert symbol_bucket["mean_adverse_selection_risk_bps"] == pytest.approx(3.0)
+
+
 def test_execution_learning_route_adjustment_active_with_samples() -> None:
     engine = _engine_stub()
     engine._execution_learning_state = {
@@ -3256,6 +3888,65 @@ def test_execution_learning_route_adjustment_active_with_samples() -> None:
     assert adjustment["source"] == "global"
     assert adjustment["passive_fill_min_prob_add"] > 0.0
     assert adjustment["replace_max_per_cycle_scale"] < 1.0
+
+
+def test_execution_learning_route_adjustment_prefers_symbol_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_LEARNING_MIN_SAMPLES", "20")
+    engine._execution_learning_state = {
+        "version": 2,
+        "updated_at": "2026-04-08T00:00:00+00:00",
+        "global": {
+            "samples": 120,
+            "fills": 90,
+            "fill_rate": 0.75,
+            "slippage_samples": 120,
+            "mean_slippage_bps": 3.0,
+            "edge_samples": 120,
+            "mean_net_edge_bps": 6.0,
+            "realization_samples": 120,
+            "mean_realization_ratio": 1.0,
+            "fill_prob_samples": 120,
+            "mean_fill_probability": 0.75,
+            "adverse_samples": 120,
+            "mean_adverse_selection_risk_bps": 0.6,
+        },
+        "buckets": {},
+        "symbol_buckets": {
+            "AAPL:opening:trend:balanced:buy": {
+                "samples": 40,
+                "fills": 10,
+                "fill_rate": 0.25,
+                "slippage_samples": 40,
+                "mean_slippage_bps": 9.0,
+                "edge_samples": 40,
+                "mean_net_edge_bps": -1.5,
+                "realization_samples": 40,
+                "mean_realization_ratio": 0.25,
+                "fill_prob_samples": 40,
+                "mean_fill_probability": 0.30,
+                "adverse_samples": 40,
+                "mean_adverse_selection_risk_bps": 5.0,
+            }
+        },
+    }
+
+    adjustment = engine._execution_learning_route_adjustment(
+        symbol="AAPL",
+        side="buy",
+        expected_net_edge_bps=25.0,
+        passive_fill_probability=0.4,
+        adverse_selection_risk_bps=4.0,
+        market_regime="trend",
+        execution_profile_context={"profile": "balanced", "session_regime": "opening"},
+    )
+
+    assert adjustment["active"] is True
+    assert adjustment["source"] == "symbol_bucket"
+    assert adjustment["capture_gap_bps"] > 0.0
+    assert adjustment["passive_fill_min_prob_add"] > 0.0
 
 
 def test_execution_edge_realism_gate_blocks_unrealistic_expected_edge(
@@ -3418,6 +4109,130 @@ def test_execution_edge_realism_gate_relaxes_under_pressure_with_expected_edge_c
     assert context["edge_realism_score"] >= context["required_edge_realism_score"]
 
 
+def test_execution_edge_realism_provisional_guard_blocks_low_bucket_ratio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EDGE_REALISM_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SAMPLES", "40")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EDGE_REALISM_PROVISIONAL_GUARD_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EDGE_REALISM_PROVISIONAL_MIN_SAMPLES", "6")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EDGE_REALISM_PROVISIONAL_MIN_RATIO", "0.10")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EDGE_REALISM_PROVISIONAL_EXPECTED_EDGE_MIN_BPS",
+        "8.0",
+    )
+    monkeypatch.setattr(
+        engine,
+        "_execution_time_of_day_regime",
+        lambda: {"session_regime": "midday"},
+    )
+    engine._execution_learning_state = {
+        "version": 1,
+        "updated_at": "2026-03-30T00:00:00+00:00",
+        "global": {
+            "samples": 10,
+            "fills": 6,
+            "fill_rate": 0.6,
+            "slippage_samples": 10,
+            "mean_slippage_bps": 5.0,
+            "edge_samples": 10,
+            "mean_net_edge_bps": 1.0,
+        },
+        "buckets": {},
+    }
+    monkeypatch.setattr(
+        engine,
+        "_edge_realism_ratio_snapshot",
+        lambda **_kwargs: {
+            "source": "bucket",
+            "ratio": 0.06,
+            "samples": 8,
+            "bucket": {},
+            "bucket_samples": 8,
+            "global_samples": 100,
+            "mean_expected_net_edge_bps": 13.0,
+            "mean_realized_net_edge_bps": 0.8,
+        },
+    )
+
+    allowed, context = engine._execution_edge_realism_allows_opening(
+        order={"symbol": "AAPL", "side": "buy", "expected_net_edge_bps": 14.0}
+    )
+
+    assert allowed is False
+    assert context["reason"] == "edge_realism_provisional_gate"
+    assert context["provisional_ratio"] < context["provisional_min_ratio"]
+    assert context["provisional_ratio_source"] == "bucket"
+
+
+def test_expected_edge_calibration_severe_guard_caps_symbol_expectancy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_ENABLED",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_MIN_SAMPLES",
+        "6",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_RATIO_FLOOR",
+        "0.15",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_SEVERE_GUARD_ENABLED",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_SEVERE_MIN_SAMPLES",
+        "6",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_SEVERE_RATIO_THRESHOLD",
+        "0.10",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_SEVERE_RATIO_FLOOR",
+        "0.03",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_SEVERE_CAP_MULTIPLIER",
+        "1.25",
+    )
+    monkeypatch.setattr(
+        engine,
+        "_execution_time_of_day_regime",
+        lambda: {"session_regime": "midday"},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_edge_realism_ratio_snapshot",
+        lambda **_kwargs: {
+            "source": "bucket",
+            "ratio": 0.05,
+            "samples": 9,
+            "bucket": {},
+            "bucket_samples": 9,
+            "global_samples": 100,
+            "mean_expected_net_edge_bps": 24.0,
+            "mean_realized_net_edge_bps": 1.2,
+        },
+    )
+
+    calibrated = engine._calibrate_expected_edge_bps(
+        order={"symbol": "AAPL", "side": "buy"},
+        expected_edge_bps=40.0,
+    )
+    calibration_context = dict(getattr(engine, "_last_expected_edge_calibration", {}))
+
+    assert calibrated <= 6.0  # lower than base floor-only calibration (40 * 0.15)
+    assert calibration_context.get("severe_guard_triggered") is True
+    assert calibration_context.get("severe_cap_bps") == pytest.approx(1.5)
+
+
 def test_execution_expected_edge_confidence_gate_blocks_overstated_expectancy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3439,6 +4254,86 @@ def test_execution_expected_edge_confidence_gate_blocks_overstated_expectancy(
     assert allowed is False
     assert context["reason"] == "expected_edge_confidence_gate"
     assert context["expected_to_confidence_ratio"] > context["max_expected_to_confidence_ratio"]
+
+
+def test_calibrate_expected_edge_applies_slippage_and_symbol_multipliers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_RATIO_FLOOR", "1.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_RATIO_CAP", "1.0")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_SEVERE_GUARD_ENABLED",
+        "0",
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_SLIPPAGE_PENALTY_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_SLIPPAGE_PENALTY_MIN_SAMPLES",
+        "1",
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_SLIPPAGE_TARGET_BPS", "2.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_SLIPPAGE_PENALTY_SLOPE", "0.1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_SLIPPAGE_PENALTY_FLOOR", "0.2")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_SYMBOL_CALIBRATION_ENABLED",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_SYMBOL_CALIBRATION_MIN_SAMPLES",
+        "4",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_SYMBOL_CALIBRATION_REQUIRE_SESSION_MATCH",
+        "0",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_SYMBOL_CALIBRATION_RATIO_FLOOR",
+        "0.1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EXPECTED_EDGE_SYMBOL_CALIBRATION_RATIO_CAP",
+        "1.0",
+    )
+    monkeypatch.setattr(
+        engine,
+        "_edge_realism_ratio_snapshot",
+        lambda **_kwargs: {
+            "source": "global",
+            "ratio": 1.0,
+            "samples": 200,
+            "bucket": {},
+            "bucket_samples": 0,
+            "global_samples": 200,
+        },
+    )
+    engine._execution_learning_state = {
+        "version": 1,
+        "updated_at": None,
+        "global": {
+            "samples": 200,
+            "fills": 200,
+            "fill_rate": 1.0,
+            "slippage_samples": 200,
+            "mean_slippage_bps": 8.0,
+            "edge_samples": 200,
+            "mean_net_edge_bps": 1.0,
+        },
+        "buckets": {},
+    }
+    engine._symbol_live_edge_bps_history = {
+        "AAPL": deque([1.0, 1.2, 0.9, 1.1, 1.0], maxlen=256)
+    }
+
+    calibrated = engine._calibrate_expected_edge_bps(
+        order={"symbol": "AAPL", "side": "buy", "expected_net_edge_bps": 20.0},
+        expected_edge_bps=20.0,
+    )
+    calibration_context = dict(getattr(engine, "_last_expected_edge_calibration", {}))
+
+    assert calibrated == pytest.approx(0.8)
+    assert calibration_context["slippage_penalty_multiplier"] == pytest.approx(0.4)
+    assert calibration_context["symbol_expectancy_multiplier"] == pytest.approx(0.1)
 
 
 def test_execution_expected_edge_confidence_gate_allows_when_lcb_supports_expectancy(
@@ -3488,6 +4383,27 @@ def test_execution_prediction_uncertainty_gate_blocks_high_uncertainty(
     assert context["reason"] == "prediction_uncertainty_gate"
     assert "low_confidence" in context["violations"]
     assert "high_uncertainty" in context["violations"]
+
+
+def test_execution_prediction_uncertainty_requires_scores_in_live_strict_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_PREDICTION_UNCERTAINTY_GATE_ENABLED",
+        "1",
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_REQUIRE_CRITICAL_CONTEXT", "1")
+    monkeypatch.delenv("AI_TRADING_EXECUTION_PREDICTION_REQUIRE_SCORES", raising=False)
+
+    allowed, context = engine._execution_prediction_uncertainty_allows_opening(
+        order={"symbol": "AAPL", "metadata": {}}
+    )
+
+    assert allowed is False
+    assert context["reason"] == "prediction_scores_required_missing"
+    assert context["required"] is True
 
 
 def test_execution_meta_label_gate_blocks_low_score(
@@ -3695,6 +4611,38 @@ def test_execution_symbol_live_expectancy_gate_blocks_negative_symbol_session_ex
     assert context["reason"] == "symbol_live_expectancy_gate"
     assert context["source"] == "symbol_session"
     assert context["symbol_live_expectancy_bps"] < 0.0
+
+
+def test_execution_symbol_live_expectancy_gate_allows_with_tolerance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setattr(
+        lt,
+        "_config_get_env",
+        lambda name, default=None, **_kwargs: os.getenv(name, default),
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_MIN_SAMPLES", "3")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_MIN_BPS", "0.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_TOLERANCE_BPS", "1.0")
+    monkeypatch.setattr(
+        engine,
+        "_execution_time_of_day_regime",
+        lambda: {"session_regime": "midday"},
+    )
+    engine._symbol_session_live_edge_bps_history = {
+        "AAPL:midday": deque([0.2, -0.6, -0.4], maxlen=256)
+    }
+
+    allowed, context = engine._execution_symbol_live_expectancy_allows_opening(
+        order={"symbol": "AAPL", "side": "buy"}
+    )
+
+    assert allowed is True
+    assert context["reason"] == "within_tolerance_allow"
+    assert context["tolerance_expectancy_bps"] == pytest.approx(1.0)
+    assert context["effective_required_expectancy_bps"] == pytest.approx(-1.0)
 
 
 def test_execution_adverse_selection_gate_blocks_elevated_risk(
@@ -3983,8 +4931,18 @@ def test_refresh_execution_daily_autotune_writes_override(
     assert payload["enabled"] is True
     assert payload["sample_count"] == 100
     assert "passive_fill_min_prob_add" in payload
+    assert payload["ioc_guard_mean_slippage_bps"] >= 1.5
+    assert payload["ioc_guard_p90_slippage_bps"] >= payload["ioc_guard_mean_slippage_bps"]
+    assert payload["ioc_guard_fallback_action"] in {"none", "ioc"}
+    assert payload["passive_fill_low_prob_moderate_action"] in {"none", "ioc"}
+    assert payload["passive_fill_low_prob_severe_action"] == "none"
     override = engine._current_execution_autotune_override()
     assert override["active"] is True
+    assert override["ioc_guard_mean_slippage_bps"] == pytest.approx(
+        payload["ioc_guard_mean_slippage_bps"]
+    )
+    assert override["ioc_guard_fallback_action"] in {"none", "ioc"}
+    assert override["passive_fill_low_prob_moderate_action"] in {"none", "ioc"}
 
 
 def test_resolve_smart_order_route_includes_learning_and_queue_context(
@@ -4089,6 +5047,10 @@ def test_apply_runtime_execution_capture_derisk_scales_quantity(monkeypatch) -> 
 def test_apply_runtime_execution_capture_derisk_blocks_tca_symbol(monkeypatch) -> None:
     engine = _engine_stub()
     monkeypatch.setattr(engine, "_position_quantity", lambda _symbol: 0)
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_CAPTURE_GUARD_ALLOW_EXPLICIT_SYMBOL_BLOCKS",
+        "1",
+    )
     order = {"symbol": "MSFT", "side": "buy", "quantity": 8, "order_type": "limit"}
     allowed, context = engine._apply_runtime_execution_capture_derisk(
         order=order,
@@ -4108,6 +5070,59 @@ def test_apply_runtime_execution_capture_derisk_blocks_tca_symbol(monkeypatch) -
 
     assert allowed is False
     assert context["reason"] == "symbol_tca_guard_block"
+
+
+def test_pre_execution_order_checks_blocks_when_reconciliation_freeze_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setattr(lt, "monotonic_time", lambda: 100.0)
+    monkeypatch.setattr(
+        engine,
+        "_enforce_opposite_side_policy",
+        lambda *_args, **_kwargs: (True, None),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_evaluate_pdt_preflight",
+        lambda *_args, **_kwargs: (False, None, {}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_resolve_exposure_normalization_settings",
+        lambda: {"block_openings": False},
+    )
+    monkeypatch.setattr(engine, "_exposure_normalization_context", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        engine,
+        "_runtime_gonogo_openings_allowed",
+        lambda: (True, {"enabled": True, "reason": "ok"}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_reconciliation_openings_guard_allows_openings",
+        lambda: (False, {"enabled": True, "reason": "reconciliation_openings_freeze"}),
+    )
+
+    allowed = engine._pre_execution_order_checks(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 5,
+            "client_order_id": "cid-recon-freeze",
+            "closing_position": False,
+            "account_snapshot": {
+                "equity": 100000,
+                "buying_power": 20000,
+                "long_market_value": 20000,
+                "short_market_value": 0,
+            },
+        }
+    )
+
+    assert allowed is False
+    failure = dict(engine._last_pre_execution_order_check_failure)
+    assert failure["reason"] == "reconciliation_openings_freeze"
 
 
 def test_apply_symbol_slippage_budget_derisk_scales_quantity(monkeypatch) -> None:
@@ -4138,6 +5153,38 @@ def test_apply_symbol_slippage_budget_derisk_scales_quantity(monkeypatch) -> Non
     assert context["reason"] == "applied"
     assert order["quantity"] == 5
     assert order["qty"] == 5
+    assert order["order_type"] == "limit"
+
+
+def test_apply_symbol_slippage_budget_derisk_scales_elevated_breach(monkeypatch) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_SIZE_DOWN_ENABLED",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_SIZE_DOWN_ALLOW_ELEVATED",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_SIZE_DOWN_FACTOR_ELEVATED",
+        "0.75",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_SIZE_DOWN_PASSIVE_ONLY_ELEVATED",
+        "1",
+    )
+    order = {"symbol": "AAPL", "side": "buy", "quantity": 10, "order_type": "market"}
+    allowed, context = engine._apply_symbol_slippage_budget_derisk(
+        order=order,
+        slippage_context={"breach_severity": "elevated", "breach_ratio_vs_base": 1.2},
+    )
+
+    assert allowed is True
+    assert context["reason"] == "applied"
+    assert context["breach_severity"] == "elevated"
+    assert order["quantity"] == 7
+    assert order["qty"] == 7
     assert order["order_type"] == "limit"
 
 
@@ -4246,6 +5293,69 @@ def test_pre_execution_order_checks_derisks_hard_symbol_slippage_breach(
     assert engine.stats.get("capacity_skips", 0) == 0
 
 
+def test_opening_recovery_regime_blocks_on_criteria(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RECOVERY_REGIME_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RECOVERY_REGIME_FORCE", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RECOVERY_MAX_SPREAD_BPS", "10.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RECOVERY_MAX_QUOTE_AGE_MS", "500")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RECOVERY_MIN_EXPECTED_EDGE_BPS", "3.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RECOVERY_MIN_EDGE_TO_SPREAD_RATIO", "0.7")
+
+    allowed, context = engine._opening_recovery_regime_allows_opening(
+        order={
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 10,
+            "spread_bps": 16.0,
+            "quote_age_ms": 100.0,
+            "expected_net_edge_bps": 12.0,
+        },
+        gonogo_context={"gate_passed": False, "failed_checks": ["slippage_drag_bps"]},
+    )
+
+    assert allowed is False
+    assert context["reason"] == "opening_recovery_regime_gate"
+    assert context["block_reason"] == "spread_bps_too_wide"
+
+
+def test_opening_recovery_regime_auto_relaxes_after_pass_streak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    clock = {"mono": 100.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: clock["mono"])
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RECOVERY_REGIME_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RECOVERY_REGIME_FORCE", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RECOVERY_PASS_STREAK_TO_RELAX", "3")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RECOVERY_RELAX_SECONDS", "60")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RECOVERY_MAX_SPREAD_BPS", "15.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RECOVERY_MAX_QUOTE_AGE_MS", "1000")
+
+    order = {
+        "symbol": "AAPL",
+        "side": "buy",
+        "quantity": 10,
+        "spread_bps": 3.0,
+        "quote_age_ms": 100.0,
+        "expected_net_edge_bps": 12.0,
+    }
+    allowed1, context1 = engine._opening_recovery_regime_allows_opening(order=order)
+    allowed2, context2 = engine._opening_recovery_regime_allows_opening(order=order)
+    allowed3, context3 = engine._opening_recovery_regime_allows_opening(order=order)
+    clock["mono"] = 101.0
+    allowed4, context4 = engine._opening_recovery_regime_allows_opening(order=order)
+
+    assert allowed1 is True
+    assert context1["reason"] == "ok"
+    assert allowed2 is True
+    assert context2["reason"] == "ok"
+    assert allowed3 is True
+    assert context3["reason"] == "opening_recovery_regime_auto_relaxed"
+    assert allowed4 is True
+    assert context4["reason"] == "auto_relaxed"
+
+
 def test_runtime_preopen_readiness_blocks_when_broker_unready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4337,6 +5447,61 @@ def test_runtime_preopen_readiness_blocks_on_stale_runtime_artifacts(
     assert "artifact_freshness" in context["failed_checks"]
     freshness = context["artifact_freshness"]
     assert freshness["stale_labels"]
+
+
+def test_runtime_preopen_readiness_requires_learning_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_READINESS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_READINESS_ENFORCE_IN_TESTS", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_REQUIRE_LEARNING_ARTIFACTS", "1")
+    monkeypatch.setattr(
+        runtime_state,
+        "observe_data_provider_state",
+        lambda: {"status": "healthy", "using_backup": False, "data_status": "ready"},
+    )
+    monkeypatch.setattr(
+        runtime_state,
+        "observe_broker_status",
+        lambda: {"status": "connected", "connected": True},
+    )
+
+    trade_path = tmp_path / "trade_history.parquet"
+    gate_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_path.write_text("x", encoding="utf-8")
+    gate_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        engine,
+        "_runtime_preopen_artifact_write_readiness_context",
+        lambda: {"artifacts": [], "all_writable": True, "unwritable_labels": []},
+    )
+
+    class _OpenWindowDateTime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:
+            base = datetime(2026, 3, 30, 9, 20, tzinfo=ZoneInfo("America/New_York"))
+            if tz is None:
+                return base.astimezone(UTC).replace(tzinfo=None)
+            return base.astimezone(tz)
+
+    monkeypatch.setattr(lt, "datetime", _OpenWindowDateTime)
+    allowed, context = engine._runtime_preopen_readiness_allows_openings(
+        report={
+            "trade_history": {"path": str(trade_path)},
+            "gate_effectiveness": {"path": str(gate_path)},
+            "execution_vs_alpha": {"execution_capture_ratio": 0.2, "slippage_drag_bps": 5.0},
+        },
+        thresholds={"min_execution_capture_ratio": 0.08, "max_slippage_drag_bps": 18.0},
+    )
+
+    assert allowed is False
+    assert "learning_artifacts_missing" in context["failed_checks"]
+    assert "counterfactual_learning" in context["learning_missing_labels"]
+    assert "policy_ablation" in context["learning_missing_labels"]
+    assert "policy_runtime_toggles" in context["learning_missing_labels"]
 
 
 def test_duplicate_client_order_id_suppression(monkeypatch: pytest.MonkeyPatch) -> None:

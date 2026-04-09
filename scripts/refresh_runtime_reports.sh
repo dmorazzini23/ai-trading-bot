@@ -112,6 +112,42 @@ report = build_report(
         or (runtime_root / "edge_realism_state.json").exists()
     )
     else None,
+    policy_ablation_state_path=_prefer_runtime_root(
+        paths.get("policy_ablation_state"),
+        "policy_ablation_state.json",
+    )
+    if (
+        paths.get("policy_ablation_state")
+        or (runtime_root / "policy_ablation_state.json").exists()
+    )
+    else None,
+    policy_runtime_toggles_path=_prefer_runtime_root(
+        paths.get("policy_runtime_toggles"),
+        "policy_runtime_toggles.json",
+    )
+    if (
+        paths.get("policy_runtime_toggles")
+        or (runtime_root / "policy_runtime_toggles.json").exists()
+    )
+    else None,
+    counterfactual_state_path=_prefer_runtime_root(
+        paths.get("counterfactual_state"),
+        "counterfactual_learning_state.json",
+    )
+    if (
+        paths.get("counterfactual_state")
+        or (runtime_root / "counterfactual_learning_state.json").exists()
+    )
+    else None,
+    uncertainty_capital_state_path=_prefer_runtime_root(
+        paths.get("uncertainty_capital_state"),
+        "uncertainty_capital_state.json",
+    )
+    if (
+        paths.get("uncertainty_capital_state")
+        or (runtime_root / "uncertainty_capital_state.json").exists()
+    )
+    else None,
 )
 report["go_no_go"] = evaluate_go_no_go(
     report,

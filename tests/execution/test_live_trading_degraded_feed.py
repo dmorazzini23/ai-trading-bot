@@ -168,7 +168,7 @@ def test_degraded_feed_logs_basis(monkeypatch, caplog) -> None:
     assert result is not None
     assert engine.last_submitted is not None
     submitted_price = engine.last_submitted.get("price") or engine.last_submitted.get("limit_price")
-    assert submitted_price is not None and submitted_price > 100.0
+    assert submitted_price is not None and submitted_price >= 100.0
 
     limit_records = [rec for rec in caplog.records if rec.msg == "LIMIT_BASIS"]
     assert limit_records, "LIMIT_BASIS log not emitted"
@@ -177,6 +177,7 @@ def test_degraded_feed_logs_basis(monkeypatch, caplog) -> None:
     assert entry.mode == "widen"
     assert entry.widen_bps == 12
     assert entry.limit is not None
+    assert entry.limit > 100.0
 
 
 def test_degraded_feed_block_prevents_submission(monkeypatch, caplog) -> None:
@@ -314,6 +315,46 @@ def test_limit_basis_omits_negative_age_and_updates_runtime_state(monkeypatch, c
     assert provider_state["status"] != "unknown"
     assert provider_state["active"] == "alpaca"
     assert provider_state["using_backup"] is False
+
+
+def test_execute_order_clears_stale_fallback_flag_for_primary_quote(monkeypatch, caplog) -> None:
+    """Primary live quote metadata should override stale fallback annotations."""
+
+    engine = DummyLiveEngine()
+    config = SimpleNamespace(
+        min_quote_freshness_ms=1500,
+        degraded_feed_mode="widen",
+        degraded_feed_limit_widen_bps=12,
+        execution_require_realtime_nbbo=False,
+    )
+    _patch_config_getter(monkeypatch, config)
+    monkeypatch.setattr(live_trading.provider_monitor, "is_disabled", lambda *_a, **_k: False)
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
+
+    result = engine.execute_order(
+        "AAPL",
+        "buy",
+        2,
+        order_type="limit",
+        limit_price=100.0,
+        quote={
+            "bid": 99.9,
+            "ask": 100.1,
+            "ts": datetime.now(UTC),
+            "synthetic": False,
+            "provider": "broker_nbbo",
+        },
+        annotations={"price_source": "last_trade", "using_fallback_price": True},
+    )
+
+    assert result is not None
+    limit_record = next(rec for rec in caplog.records if rec.msg == "LIMIT_BASIS")
+    assert getattr(limit_record, "provider", None) == "alpaca"
+    assert getattr(limit_record, "type", None) == "nbbo"
+    quote_state = runtime_state.observe_quote_status()
+    assert quote_state["synthetic"] is False
 
 
 def test_broker_kwargs_preserve_degraded_hints() -> None:

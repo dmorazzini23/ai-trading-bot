@@ -13,6 +13,7 @@ from pathlib import Path
 from statistics import median
 import sys
 from typing import Any, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 from ai_trading.config.management import get_env, is_test_runtime
 from ai_trading.env import ensure_dotenv_loaded
@@ -24,6 +25,12 @@ _DEFAULT_GATE_LOG_PATH = "runtime/gate_effectiveness.jsonl"
 _DEFAULT_TCA_PATH = "runtime/tca_records.jsonl"
 _DEFAULT_FILL_EVENTS_PATH = "runtime/fill_events.jsonl"
 _DEFAULT_EDGE_REALISM_STATE_PATH = "runtime/edge_realism_state.json"
+_DEFAULT_POLICY_ABLATION_STATE_PATH = "runtime/policy_ablation_state.json"
+_DEFAULT_POLICY_RUNTIME_TOGGLES_PATH = "runtime/policy_runtime_toggles.json"
+_DEFAULT_UNCERTAINTY_CAPITAL_STATE_PATH = "runtime/uncertainty_capital_state.json"
+_DEFAULT_COUNTERFACTUAL_STATE_PATH = "runtime/counterfactual_learning_state.json"
+
+_NY_TZ = ZoneInfo("America/New_York")
 
 
 def _as_float(value: Any) -> float | None:
@@ -224,6 +231,10 @@ def resolve_runtime_report_paths(
     tca_path: str | None = None,
     fill_events_path: str | None = None,
     edge_realism_state_path: str | None = None,
+    policy_ablation_state_path: str | None = None,
+    policy_runtime_toggles_path: str | None = None,
+    uncertainty_capital_state_path: str | None = None,
+    counterfactual_state_path: str | None = None,
 ) -> dict[str, Path | None]:
     """Resolve runtime report paths with env/runtime-root parity."""
 
@@ -257,6 +268,34 @@ def resolve_runtime_report_paths(
             _DEFAULT_EDGE_REALISM_STATE_PATH,
         ),
     )
+    configured_policy_ablation_state = _env_text(
+        "AI_TRADING_RUNTIME_PERF_POLICY_ABLATION_STATE_PATH",
+        _env_text(
+            "AI_TRADING_POLICY_ABLATION_STATE_PATH",
+            _DEFAULT_POLICY_ABLATION_STATE_PATH,
+        ),
+    )
+    configured_policy_runtime_toggles = _env_text(
+        "AI_TRADING_RUNTIME_PERF_POLICY_RUNTIME_TOGGLES_PATH",
+        _env_text(
+            "AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH",
+            _DEFAULT_POLICY_RUNTIME_TOGGLES_PATH,
+        ),
+    )
+    configured_uncertainty_capital_state = _env_text(
+        "AI_TRADING_RUNTIME_PERF_UNCERTAINTY_CAPITAL_STATE_PATH",
+        _env_text(
+            "AI_TRADING_UNCERTAINTY_CAPITAL_STATE_PATH",
+            _DEFAULT_UNCERTAINTY_CAPITAL_STATE_PATH,
+        ),
+    )
+    configured_counterfactual_state = _env_text(
+        "AI_TRADING_RUNTIME_PERF_COUNTERFACTUAL_STATE_PATH",
+        _env_text(
+            "AI_TRADING_COUNTERFACTUAL_STATE_PATH",
+            _DEFAULT_COUNTERFACTUAL_STATE_PATH,
+        ),
+    )
 
     trade_history_raw = (
         _normalise_cli_path(trade_history_path)
@@ -280,6 +319,20 @@ def resolve_runtime_report_paths(
     edge_realism_state_raw = _normalise_cli_path(edge_realism_state_path)
     if edge_realism_state_raw is None:
         edge_realism_state_raw = configured_edge_realism_state
+    policy_ablation_state_raw = _normalise_cli_path(policy_ablation_state_path)
+    if policy_ablation_state_raw is None:
+        policy_ablation_state_raw = configured_policy_ablation_state
+    policy_runtime_toggles_raw = _normalise_cli_path(policy_runtime_toggles_path)
+    if policy_runtime_toggles_raw is None:
+        policy_runtime_toggles_raw = configured_policy_runtime_toggles
+    uncertainty_capital_state_raw = _normalise_cli_path(
+        uncertainty_capital_state_path
+    )
+    if uncertainty_capital_state_raw is None:
+        uncertainty_capital_state_raw = configured_uncertainty_capital_state
+    counterfactual_state_raw = _normalise_cli_path(counterfactual_state_path)
+    if counterfactual_state_raw is None:
+        counterfactual_state_raw = configured_counterfactual_state
 
     resolved_gate_log: Path | None = None
     if gate_log_raw:
@@ -305,6 +358,30 @@ def resolve_runtime_report_paths(
             edge_realism_state_raw,
             default_relative=_DEFAULT_EDGE_REALISM_STATE_PATH,
         )
+    resolved_policy_ablation_state: Path | None = None
+    if policy_ablation_state_raw:
+        resolved_policy_ablation_state = resolve_runtime_artifact_path(
+            policy_ablation_state_raw,
+            default_relative=_DEFAULT_POLICY_ABLATION_STATE_PATH,
+        )
+    resolved_policy_runtime_toggles: Path | None = None
+    if policy_runtime_toggles_raw:
+        resolved_policy_runtime_toggles = resolve_runtime_artifact_path(
+            policy_runtime_toggles_raw,
+            default_relative=_DEFAULT_POLICY_RUNTIME_TOGGLES_PATH,
+        )
+    resolved_uncertainty_capital_state: Path | None = None
+    if uncertainty_capital_state_raw:
+        resolved_uncertainty_capital_state = resolve_runtime_artifact_path(
+            uncertainty_capital_state_raw,
+            default_relative=_DEFAULT_UNCERTAINTY_CAPITAL_STATE_PATH,
+        )
+    resolved_counterfactual_state: Path | None = None
+    if counterfactual_state_raw:
+        resolved_counterfactual_state = resolve_runtime_artifact_path(
+            counterfactual_state_raw,
+            default_relative=_DEFAULT_COUNTERFACTUAL_STATE_PATH,
+        )
 
     return {
         "trade_history": resolve_runtime_artifact_path(
@@ -319,6 +396,10 @@ def resolve_runtime_report_paths(
         "tca": resolved_tca,
         "fill_events": resolved_fill_events,
         "edge_realism_state": resolved_edge_realism_state,
+        "policy_ablation_state": resolved_policy_ablation_state,
+        "policy_runtime_toggles": resolved_policy_runtime_toggles,
+        "uncertainty_capital_state": resolved_uncertainty_capital_state,
+        "counterfactual_state": resolved_counterfactual_state,
     }
 
 
@@ -346,6 +427,36 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
     if min_profit_factor is None:
         min_profit_factor = _as_float(
             get_env("AI_TRADING_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", 1.0, cast=float)
+        )
+    profit_factor_min_losses = _as_int(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_PROFIT_FACTOR_MIN_LOSSES",
+            None,
+            cast=int,
+        )
+    )
+    if profit_factor_min_losses is None:
+        profit_factor_min_losses = _as_int(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_PROFIT_FACTOR_MIN_LOSSES",
+                0,
+                cast=int,
+            )
+        )
+    profit_factor_min_gross_loss_pnl = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_PROFIT_FACTOR_MIN_GROSS_LOSS_PNL",
+            None,
+            cast=float,
+        )
+    )
+    if profit_factor_min_gross_loss_pnl is None:
+        profit_factor_min_gross_loss_pnl = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_PROFIT_FACTOR_MIN_GROSS_LOSS_PNL",
+                0.0,
+                cast=float,
+            )
         )
     min_win_rate = _as_float(
         get_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE", None, cast=float)
@@ -474,6 +585,18 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 cast=bool,
             )
         )
+    require_profit_factor_gate = get_env(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PROFIT_FACTOR_GATE",
+        None,
+        cast=bool,
+    )
+    if require_profit_factor_gate is None:
+        require_profit_factor_gate = get_env(
+            "AI_TRADING_RUNTIME_GONOGO_REQUIRE_PROFIT_FACTOR_GATE",
+            False,
+            cast=bool,
+        )
+    require_profit_factor_gate = bool(require_profit_factor_gate)
     require_gate_valid = get_env(
         "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_GATE_VALID",
         None,
@@ -692,6 +815,10 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
     return {
         "min_closed_trades": int(max(0, min_closed_trades or 50)),
         "min_profit_factor": float(min_profit_factor if min_profit_factor is not None else 1.0),
+        "profit_factor_min_losses": int(max(0, profit_factor_min_losses or 0)),
+        "profit_factor_min_gross_loss_pnl": float(
+            max(0.0, profit_factor_min_gross_loss_pnl or 0.0)
+        ),
         "min_win_rate": float(max(0.0, min(1.0, min_win_rate if min_win_rate is not None else 0.52))),
         "min_win_rate_confidence_floor": float(
             max(
@@ -755,6 +882,7 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
             exclude_reconcile_backfill_from_metrics
         ),
         "require_pnl_available": bool(require_pnl_available),
+        "require_profit_factor_gate": bool(require_profit_factor_gate),
         "require_gate_valid": bool(require_gate_valid),
         "require_open_position_reconciliation": bool(require_open_position_reconciliation),
         "max_open_position_delta_ratio": float(
@@ -939,6 +1067,50 @@ def _normalise_fill_source(value: Any) -> str:
     return "live"
 
 
+def _normalise_token(value: Any, *, default: str = "unknown") -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return str(default)
+    return token
+
+
+def _session_bucket_from_timestamp(ts: datetime | None) -> str:
+    if ts is None:
+        return "unknown"
+    local_ts = ts.astimezone(_NY_TZ)
+    minutes = int(local_ts.hour * 60 + local_ts.minute)
+    market_open = (9 * 60) + 30
+    market_close = 16 * 60
+    if minutes < market_open or minutes >= market_close:
+        return "offhours"
+    if minutes < (11 * 60):
+        return "opening"
+    if minutes >= (15 * 60):
+        return "closing"
+    return "midday"
+
+
+def _trade_session_bucket(row: Mapping[str, Any]) -> str:
+    explicit = _normalise_token(row.get("session_regime"), default="")
+    if explicit:
+        return explicit
+    exit_ts = _parse_timestamp(row.get("exit_time"))
+    entry_ts = _parse_timestamp(row.get("entry_time"))
+    return _session_bucket_from_timestamp(exit_ts or entry_ts)
+
+
+def _trade_regime_bucket(row: Mapping[str, Any]) -> str:
+    market = _normalise_token(row.get("market_regime"), default="")
+    volatility = _normalise_token(row.get("volatility_regime"), default="")
+    if market and volatility:
+        return f"{market}:{volatility}"
+    if market:
+        return market
+    if volatility:
+        return volatility
+    return "unknown"
+
+
 def _fill_source_priority(value: Any) -> int:
     source = _normalise_fill_source(value)
     if source == "live":
@@ -978,6 +1150,9 @@ def _aggregate_trade_metric_rows(
 
     closed_trades = sum(max(0, _as_int(row.get("trades")) or 0) for row in rows)
     wins = sum(max(0, _as_int(row.get("wins")) or 0) for row in rows)
+    losses = sum(max(0, _as_int(row.get("losses")) or 0) for row in rows)
+    if losses <= 0 and closed_trades >= wins:
+        losses = int(closed_trades - wins)
     net_pnl = sum(_as_float(row.get("net_pnl")) or 0.0 for row in rows)
     gross_win_pnl = sum(
         max(0.0, _as_float(row.get("gross_win_pnl")) or 0.0)
@@ -990,6 +1165,8 @@ def _aggregate_trade_metric_rows(
     return {
         "closed_trades": int(closed_trades),
         "wins": int(wins),
+        "losses": int(losses),
+        "gross_loss_pnl": float(gross_loss_pnl),
         "net_pnl": float(net_pnl),
         "win_rate": (wins / closed_trades) if closed_trades > 0 else 0.0,
         "profit_factor": (
@@ -1184,6 +1361,10 @@ class _FillEvent:
     slippage_per_share: float
     order_id: str | None
     fill_source: str
+    session_regime: str
+    market_regime: str
+    volatility_regime: str
+    venue: str | None
 
 
 @dataclass(slots=True)
@@ -1197,6 +1378,10 @@ class _OpenLot:
     fee_per_share: float
     slippage_per_share: float
     fill_source: str
+    session_regime: str
+    market_regime: str
+    volatility_regime: str
+    venue: str | None
 
 
 @dataclass(slots=True)
@@ -1261,6 +1446,17 @@ def _as_fill_event(
         slippage_per_share=price * (slippage_bps / 10000.0),
         order_id=order_id,
         fill_source=fill_source,
+        session_regime=_normalise_token(row.get("session_regime"), default="unknown"),
+        market_regime=_normalise_token(row.get("market_regime"), default="unknown"),
+        volatility_regime=_normalise_token(
+            row.get("volatility_regime"),
+            default="unknown",
+        ),
+        venue=(
+            str(row.get("venue") or "").strip().upper() or None
+            if row.get("venue") not in (None, "")
+            else None
+        ),
     )
 
 
@@ -1295,6 +1491,10 @@ def _closed_trade_record(
     fee_cost: float,
     slippage_cost: float,
     fill_source: str | None = None,
+    session_regime: str | None = None,
+    market_regime: str | None = None,
+    volatility_regime: str | None = None,
+    venue: str | None = None,
 ) -> dict[str, Any]:
     entry_notional = abs(entry_price * qty)
     net_pnl = gross_pnl - fee_cost - slippage_cost
@@ -1320,6 +1520,17 @@ def _closed_trade_record(
         "net_edge_bps": net_edge_bps,
         "holding_seconds": holding_seconds,
         "fill_source": _normalise_fill_source(fill_source),
+        "session_regime": _normalise_token(session_regime, default="unknown"),
+        "market_regime": _normalise_token(market_regime, default="unknown"),
+        "volatility_regime": _normalise_token(
+            volatility_regime,
+            default="unknown",
+        ),
+        "venue": (
+            str(venue).strip().upper()
+            if venue not in (None, "")
+            else None
+        ),
     }
 
 
@@ -1373,6 +1584,14 @@ def _direct_closed_trades(
             fee_cost=fee_cost,
             slippage_cost=slippage_cost,
             fill_source=None if source_hint in (None, "") else str(source_hint),
+            session_regime=str(row.get("session_regime") or ""),
+            market_regime=str(row.get("market_regime") or ""),
+            volatility_regime=str(row.get("volatility_regime") or ""),
+            venue=(
+                str(row.get("venue")).strip().upper()
+                if row.get("venue") not in (None, "")
+                else None
+            ),
         )
         trade["_fee_source"] = fee_source
         trade["_slippage_source"] = slippage_source
@@ -1593,6 +1812,22 @@ def _reconstruct_closed_trades(
                     fee_cost=entry_fee + exit_fee,
                     slippage_cost=entry_slippage + exit_slippage,
                     fill_source=fill_source,
+                    session_regime=(
+                        lot.session_regime
+                        if lot.session_regime not in {"", "unknown"}
+                        else event.session_regime
+                    ),
+                    market_regime=(
+                        lot.market_regime
+                        if lot.market_regime not in {"", "unknown"}
+                        else event.market_regime
+                    ),
+                    volatility_regime=(
+                        lot.volatility_regime
+                        if lot.volatility_regime not in {"", "unknown"}
+                        else event.volatility_regime
+                    ),
+                    venue=(lot.venue or event.venue),
                 )
             )
             closed[-1]["_fee_source"] = "fifo_reconstructed"
@@ -1614,6 +1849,10 @@ def _reconstruct_closed_trades(
                     fee_per_share=event.fee_per_share,
                     slippage_per_share=event.slippage_per_share,
                     fill_source=event.fill_source,
+                    session_regime=event.session_regime,
+                    market_regime=event.market_regime,
+                    volatility_regime=event.volatility_regime,
+                    venue=event.venue,
                 )
             )
 
@@ -1787,6 +2026,33 @@ def _aggregate_closed_trades(
     fee_sources: dict[str, int] = defaultdict(int)
     slippage_sources: dict[str, int] = defaultdict(int)
     total_entry_notional = 0.0
+    slippage_by_symbol: dict[str, dict[str, Any]] = {}
+    slippage_by_session: dict[str, dict[str, Any]] = {}
+    slippage_by_regime: dict[str, dict[str, Any]] = {}
+    slippage_by_symbol_session: dict[str, dict[str, Any]] = {}
+
+    def _update_slippage_bucket(
+        container: dict[str, dict[str, Any]],
+        key: str,
+        *,
+        net_pnl: float,
+        slippage_cost: float,
+        entry_notional: float,
+    ) -> None:
+        bucket = container.setdefault(
+            key,
+            {
+                "trades": 0,
+                "net_pnl": 0.0,
+                "slippage_cost": 0.0,
+                "entry_notional": 0.0,
+            },
+        )
+        bucket["trades"] += 1
+        bucket["net_pnl"] += float(net_pnl)
+        bucket["slippage_cost"] += float(slippage_cost)
+        bucket["entry_notional"] += float(entry_notional)
+
     for row in closed_trades:
         side = str(row.get("side", "unknown") or "unknown").strip().lower()
         symbol = str(row.get("symbol", "UNKNOWN") or "UNKNOWN").strip().upper()
@@ -1821,6 +2087,37 @@ def _aggregate_closed_trades(
             nonzero_fee_trades += 1
         if abs(slippage_cost) > 0:
             nonzero_slippage_trades += 1
+        session_bucket = _trade_session_bucket(row)
+        regime_bucket = _trade_regime_bucket(row)
+        symbol_session_bucket = f"{symbol}:{session_bucket}"
+        _update_slippage_bucket(
+            slippage_by_symbol,
+            symbol,
+            net_pnl=net_pnl,
+            slippage_cost=slippage_cost,
+            entry_notional=notional,
+        )
+        _update_slippage_bucket(
+            slippage_by_session,
+            session_bucket,
+            net_pnl=net_pnl,
+            slippage_cost=slippage_cost,
+            entry_notional=notional,
+        )
+        _update_slippage_bucket(
+            slippage_by_regime,
+            regime_bucket,
+            net_pnl=net_pnl,
+            slippage_cost=slippage_cost,
+            entry_notional=notional,
+        )
+        _update_slippage_bucket(
+            slippage_by_symbol_session,
+            symbol_session_bucket,
+            net_pnl=net_pnl,
+            slippage_cost=slippage_cost,
+            entry_notional=notional,
+        )
 
         day = "unknown"
         exit_ts = _parse_timestamp(row.get("exit_time"))
@@ -1975,6 +2272,73 @@ def _aggregate_closed_trades(
             for name, total in ranked[:5]
         ]
 
+    def _rank_slippage_buckets(
+        buckets: Mapping[str, Mapping[str, Any]],
+        *,
+        key_name: str,
+        limit: int = 15,
+    ) -> list[dict[str, Any]]:
+        ranked_rows: list[dict[str, Any]] = []
+        for bucket_key, bucket in buckets.items():
+            trades = max(0, _as_int(bucket.get("trades")) or 0)
+            if trades <= 0:
+                continue
+            entry_notional = float(_as_float(bucket.get("entry_notional")) or 0.0)
+            slippage_cost = float(_as_float(bucket.get("slippage_cost")) or 0.0)
+            net_pnl = float(_as_float(bucket.get("net_pnl")) or 0.0)
+            slippage_drag_bps = (
+                float(abs(slippage_cost) / entry_notional * 10000.0)
+                if entry_notional > 0.0
+                else None
+            )
+            ranked_rows.append(
+                {
+                    key_name: str(bucket_key),
+                    "trades": int(trades),
+                    "net_pnl": float(net_pnl),
+                    "slippage_cost": float(slippage_cost),
+                    "entry_notional": float(entry_notional),
+                    "slippage_drag_bps": slippage_drag_bps,
+                }
+            )
+        ranked_rows.sort(
+            key=lambda row: (
+                -float(row.get("slippage_drag_bps") or 0.0),
+                -float(abs(row.get("slippage_cost") or 0.0)),
+                str(row.get(key_name) or ""),
+            )
+        )
+        return ranked_rows[: max(1, int(limit))]
+
+    slippage_root_cause_attribution = {
+        "available": bool(len(closed_trades) > 0),
+        "overall_slippage_drag_bps": (
+            float(abs(total_slippage_cost) / total_entry_notional * 10000.0)
+            if total_entry_notional > 0.0
+            else None
+        ),
+        "by_symbol_top": _rank_slippage_buckets(
+            slippage_by_symbol,
+            key_name="symbol",
+            limit=20,
+        ),
+        "by_session": _rank_slippage_buckets(
+            slippage_by_session,
+            key_name="session",
+            limit=10,
+        ),
+        "by_regime_top": _rank_slippage_buckets(
+            slippage_by_regime,
+            key_name="regime",
+            limit=15,
+        ),
+        "by_symbol_session_top": _rank_slippage_buckets(
+            slippage_by_symbol_session,
+            key_name="symbol_session",
+            limit=20,
+        ),
+    }
+
     summary.update(
         {
             "pnl_available": True,
@@ -2017,6 +2381,7 @@ def _aggregate_closed_trades(
                 "symbols": _top_losses(symbol_totals),
                 "strategies": _top_losses(strategy_totals),
             },
+            "slippage_root_cause_attribution": slippage_root_cause_attribution,
         }
     )
     return summary
@@ -2372,6 +2737,212 @@ def summarize_edge_realism_state(path: Path) -> dict[str, Any]:
     return summary
 
 
+def summarize_policy_ablation_state(path: Path) -> dict[str, Any]:
+    summary: dict[str, Any] = {"path": str(path), "exists": path.exists()}
+    if not path.exists():
+        return summary
+    payload = _load_json(path)
+    if not isinstance(payload, Mapping):
+        summary["valid"] = False
+        return summary
+    slices_raw = payload.get("slices")
+    slices = dict(slices_raw) if isinstance(slices_raw, Mapping) else {}
+    ranked: list[tuple[str, Mapping[str, Any]]] = []
+    for key, value in slices.items():
+        if isinstance(value, Mapping):
+            ranked.append((str(key), value))
+    ranked.sort(
+        key=lambda item: (
+            float(_as_float(item[1].get("mean_edge_proxy_bps")) or 0.0),
+            -int(_as_int(item[1].get("events")) or 0),
+            item[0],
+        )
+    )
+    summary.update(
+        {
+            "valid": True,
+            "updated_at": payload.get("updated_at"),
+            "slice_count": int(len(ranked)),
+            "worst_slices": [
+                {
+                    "slice": name,
+                    "events": int(_as_int(value.get("events")) or 0),
+                    "accepted": int(_as_int(value.get("accepted")) or 0),
+                    "rejected": int(_as_int(value.get("rejected")) or 0),
+                    "mean_edge_proxy_bps": _as_float(
+                        value.get("mean_edge_proxy_bps")
+                    ),
+                }
+                for name, value in ranked[:10]
+            ],
+        }
+    )
+    return summary
+
+
+def summarize_policy_runtime_toggles(path: Path) -> dict[str, Any]:
+    summary: dict[str, Any] = {"path": str(path), "exists": path.exists()}
+    if not path.exists():
+        return summary
+    payload = _load_json(path)
+    if not isinstance(payload, Mapping):
+        summary["valid"] = False
+        return summary
+    disabled_raw = payload.get("disabled_slices")
+    disabled = (
+        sorted(
+            {
+                str(item).strip().upper()
+                for item in disabled_raw
+                if str(item).strip()
+            }
+        )
+        if isinstance(disabled_raw, Sequence)
+        and not isinstance(disabled_raw, (str, bytes, bytearray))
+        else []
+    )
+    toggles_raw = payload.get("toggles")
+    toggles = dict(toggles_raw) if isinstance(toggles_raw, Mapping) else {}
+    rankers_raw = toggles.get("rankers")
+    rankers = dict(rankers_raw) if isinstance(rankers_raw, Mapping) else {}
+    summary.update(
+        {
+            "valid": True,
+            "updated_at": payload.get("updated_at"),
+            "source_updated_at": payload.get("source_updated_at"),
+            "disabled_slices": disabled,
+            "disabled_slice_count": int(len(disabled)),
+            "ranker_toggles": {
+                "bandit_enabled": bool(rankers.get("bandit_enabled", True)),
+                "counterfactual_enabled": bool(
+                    rankers.get("counterfactual_enabled", True)
+                ),
+                "geometric_enabled": bool(rankers.get("geometric_enabled", True)),
+                "portfolio_log_growth_enabled": bool(
+                    rankers.get("portfolio_log_growth_enabled", True)
+                ),
+            },
+            "disabled_gate_roots": (
+                sorted(
+                    {
+                        str(item).strip().upper()
+                        for item in toggles.get("disabled_gate_roots", [])
+                        if str(item).strip()
+                    }
+                )
+                if isinstance(toggles.get("disabled_gate_roots"), Sequence)
+                and not isinstance(
+                    toggles.get("disabled_gate_roots"),
+                    (str, bytes, bytearray),
+                )
+                else []
+            ),
+            "disabled_sleeves": (
+                sorted(
+                    {
+                        str(item).strip().lower()
+                        for item in toggles.get("disabled_sleeves", [])
+                        if str(item).strip()
+                    }
+                )
+                if isinstance(toggles.get("disabled_sleeves"), Sequence)
+                and not isinstance(
+                    toggles.get("disabled_sleeves"),
+                    (str, bytes, bytearray),
+                )
+                else []
+            ),
+        }
+    )
+    return summary
+
+
+def summarize_uncertainty_capital_state(path: Path) -> dict[str, Any]:
+    summary: dict[str, Any] = {"path": str(path), "exists": path.exists()}
+    if not path.exists():
+        return summary
+    payload = _load_json(path)
+    if not isinstance(payload, Mapping):
+        summary["valid"] = False
+        return summary
+    quantiles_raw = payload.get("quantiles")
+    quantiles = dict(quantiles_raw) if isinstance(quantiles_raw, Mapping) else {}
+    summary.update(
+        {
+            "valid": True,
+            "updated_at": payload.get("updated_at"),
+            "total_events": int(_as_int(payload.get("total_events")) or 0),
+            "scaled_events": int(_as_int(payload.get("scaled_events")) or 0),
+            "blocked_events": int(_as_int(payload.get("blocked_events")) or 0),
+            "cycle_records": int(_as_int(payload.get("cycle_records")) or 0),
+            "cycle_scaled": int(_as_int(payload.get("cycle_scaled")) or 0),
+            "cycle_blocked": int(_as_int(payload.get("cycle_blocked")) or 0),
+            "score_mean": _as_float(payload.get("score_mean")),
+            "scale_mean": _as_float(payload.get("scale_mean")),
+            "high_score_threshold": _as_float(payload.get("high_score_threshold")),
+            "bayesian_high_score_posterior": _as_float(
+                payload.get("bayesian_high_score_posterior")
+            ),
+            "score_p50": _as_float(quantiles.get("score_p50")),
+            "score_p80": _as_float(quantiles.get("score_p80")),
+            "score_p95": _as_float(quantiles.get("score_p95")),
+        }
+    )
+    return summary
+
+
+def summarize_counterfactual_learning_state(path: Path) -> dict[str, Any]:
+    summary: dict[str, Any] = {"path": str(path), "exists": path.exists()}
+    if not path.exists():
+        return summary
+    payload = _load_json(path)
+    if not isinstance(payload, Mapping):
+        summary["valid"] = False
+        return summary
+    global_raw = payload.get("global")
+    global_map = dict(global_raw) if isinstance(global_raw, Mapping) else {}
+    updated_at = payload.get("updated_at")
+    updated_ts = _parse_timestamp(updated_at)
+    stale_hours = None
+    if updated_ts is not None:
+        stale_hours = max(
+            (datetime.now(UTC) - updated_ts).total_seconds() / 3600.0,
+            0.0,
+        )
+    total_events = max(0, _as_int(global_map.get("events")) or 0)
+    accepted = max(0, _as_int(global_map.get("accepted")) or 0)
+    rejected = max(0, _as_int(global_map.get("rejected")) or 0)
+    bucket_raw = payload.get("buckets")
+    bucket_count = (
+        len(bucket_raw)
+        if isinstance(bucket_raw, Mapping)
+        else 0
+    )
+    summary.update(
+        {
+            "valid": True,
+            "updated_at": updated_at,
+            "stale_hours": float(stale_hours) if stale_hours is not None else None,
+            "total_events": int(total_events),
+            "accepted": int(accepted),
+            "rejected": int(rejected),
+            "accept_rate": _as_float(global_map.get("accept_rate")),
+            "dr_mean_bps": _as_float(global_map.get("dr_mean_bps")),
+            "ips_mean_bps": _as_float(global_map.get("ips_mean_bps")),
+            "missed_dr_sum_bps": _as_float(global_map.get("missed_dr_sum_bps")),
+            "bucket_count": int(bucket_count),
+            "active_learning": bool(total_events > 0),
+            "state_ready": True,
+            "warning": (
+                "no_counterfactual_events_recorded"
+                if total_events <= 0
+                else None
+            ),
+        }
+    )
+    return summary
+
+
 def _summarize_gate_effectiveness_daily(path: Path) -> list[dict[str, Any]]:
     rows = _load_json_lines(path)
     buckets: dict[str, dict[str, Any]] = {}
@@ -2461,12 +3032,28 @@ def summarize_gate_effectiveness(
     total_records = int(payload.get("total_records", 0) or 0)
     accepted_records = int(payload.get("total_accepted_records", 0) or 0)
     rejected_records = int(payload.get("total_rejected_records", 0) or 0)
-    gate_totals = payload.get("gate_totals", {})
-    gate_attribution = payload.get("gate_attribution", {})
+    gate_totals_root = payload.get("gate_root_totals")
+    gate_totals_raw = (
+        gate_totals_root
+        if isinstance(gate_totals_root, Mapping)
+        else payload.get("gate_totals", {})
+    )
+    gate_attribution_root = payload.get("gate_root_attribution")
+    gate_attribution = (
+        gate_attribution_root
+        if isinstance(gate_attribution_root, Mapping)
+        else payload.get("gate_attribution", {})
+    )
+    top_gates_source = (
+        "gate_root_totals" if isinstance(gate_totals_root, Mapping) else "gate_totals"
+    )
     top_gates: list[dict[str, Any]] = []
-    if isinstance(gate_totals, dict):
+    if isinstance(gate_totals_raw, Mapping):
         ranked = sorted(
-            ((str(name), int(count or 0)) for name, count in gate_totals.items()),
+            (
+                (str(name), int(count or 0))
+                for name, count in gate_totals_raw.items()
+            ),
             key=lambda item: (-item[1], item[0]),
         )
         top_gates = [{"gate": name, "count": count} for name, count in ranked[:10]]
@@ -2511,7 +3098,12 @@ def summarize_gate_effectiveness(
             "rejection_concentration": rejection_concentration,
             "top_rejection_concentration_ratio": top_rejection_concentration_ratio,
             "top_rejection_concentration_gate": top_rejection_concentration_gate,
+            "top_gates_source": top_gates_source,
             "top_negative_gates": _top_negative_attr(payload, "gate_attribution"),
+            "top_negative_gate_roots": _top_negative_attr(
+                payload,
+                "gate_root_attribution",
+            ),
             "top_negative_symbols": _top_negative_attr(payload, "symbol_attribution"),
             "top_negative_regimes": _top_negative_attr(payload, "regime_attribution"),
         }
@@ -2740,6 +3332,127 @@ def summarize_execution_vs_alpha(
     }
 
 
+def summarize_post_trade_attribution_ledger(
+    *,
+    trade_summary: Mapping[str, Any],
+    gate_summary: Mapping[str, Any],
+    execution_vs_alpha: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build daily attribution separating alpha error, execution error, and gate over-blocking."""
+
+    _ = trade_summary
+    realized_net_edge_bps = _as_float(execution_vs_alpha.get("realized_net_edge_bps"))
+    pre_execution_edge_bps = _as_float(execution_vs_alpha.get("pre_execution_edge_bps_est"))
+    expected_edge_bps = _as_float(execution_vs_alpha.get("expected_edge_for_realism_bps"))
+    accepted_records = max(0, _as_int(gate_summary.get("accepted_records")) or 0)
+    rejected_records = max(0, _as_int(gate_summary.get("rejected_records")) or 0)
+    total_records = max(0, _as_int(gate_summary.get("total_records")) or 0)
+
+    alpha_error_bps = None
+    if pre_execution_edge_bps is not None and expected_edge_bps is not None:
+        alpha_error_bps = float(pre_execution_edge_bps - expected_edge_bps)
+    execution_error_bps = None
+    if realized_net_edge_bps is not None and pre_execution_edge_bps is not None:
+        execution_error_bps = float(realized_net_edge_bps - pre_execution_edge_bps)
+    gate_overblocking_opportunity_bps = None
+    expected_per_accept = _as_float(execution_vs_alpha.get("expected_edge_per_accept_bps"))
+    if expected_per_accept is not None and accepted_records > 0 and rejected_records > 0:
+        gate_overblocking_opportunity_bps = float(
+            expected_per_accept * (float(rejected_records) / float(max(1, accepted_records)))
+        )
+    rejection_ratio = (
+        float(rejected_records) / float(max(1, total_records))
+        if total_records > 0
+        else None
+    )
+    decomposition_residual_bps = None
+    if (
+        alpha_error_bps is not None
+        and execution_error_bps is not None
+        and realized_net_edge_bps is not None
+        and expected_edge_bps is not None
+    ):
+        decomposition_residual_bps = float(
+            (realized_net_edge_bps - expected_edge_bps)
+            - (alpha_error_bps + execution_error_bps)
+        )
+
+    daily_exec = execution_vs_alpha.get("daily")
+    daily_rows_exec = (
+        [dict(row) for row in daily_exec if isinstance(row, Mapping)]
+        if isinstance(daily_exec, list)
+        else []
+    )
+    gate_daily_raw = gate_summary.get("daily_gate_stats")
+    gate_daily_rows = (
+        [dict(row) for row in gate_daily_raw if isinstance(row, Mapping)]
+        if isinstance(gate_daily_raw, list)
+        else []
+    )
+    gate_daily_by_date = {
+        str(row.get("date")): row
+        for row in gate_daily_rows
+        if str(row.get("date", "")).strip()
+    }
+    daily_scorecard: list[dict[str, Any]] = []
+    for row in daily_rows_exec:
+        day = str(row.get("date", "")).strip()
+        if not day:
+            continue
+        gate_row = gate_daily_by_date.get(day, {})
+        day_expected = _as_float(row.get("expected_edge_per_accept_bps"))
+        day_realized = _as_float(row.get("realized_net_edge_bps"))
+        day_pre_execution = None
+        day_slippage_drag = _as_float(execution_vs_alpha.get("slippage_drag_bps"))
+        if day_realized is not None and day_slippage_drag is not None:
+            day_pre_execution = float(day_realized + day_slippage_drag)
+        day_alpha_error = None
+        if day_pre_execution is not None and day_expected is not None:
+            day_alpha_error = float(day_pre_execution - day_expected)
+        day_execution_error = None
+        if day_realized is not None and day_pre_execution is not None:
+            day_execution_error = float(day_realized - day_pre_execution)
+        day_accepted = max(0, _as_int(gate_row.get("accepted_records")) or 0)
+        day_rejected = max(0, _as_int(gate_row.get("rejected_records")) or 0)
+        day_gate_overblocking = None
+        if day_expected is not None and day_accepted > 0 and day_rejected > 0:
+            day_gate_overblocking = float(
+                day_expected * (float(day_rejected) / float(max(1, day_accepted)))
+            )
+        daily_scorecard.append(
+            {
+                "date": day,
+                "realized_net_edge_bps": day_realized,
+                "expected_edge_bps": day_expected,
+                "pre_execution_edge_bps_est": day_pre_execution,
+                "alpha_error_bps": day_alpha_error,
+                "execution_error_bps": day_execution_error,
+                "gate_overblocking_opportunity_bps": day_gate_overblocking,
+                "accepted_records": day_accepted,
+                "rejected_records": day_rejected,
+            }
+        )
+
+    return {
+        "available": bool(
+            expected_edge_bps is not None
+            or realized_net_edge_bps is not None
+            or gate_overblocking_opportunity_bps is not None
+        ),
+        "alpha_error_bps": alpha_error_bps,
+        "execution_error_bps": execution_error_bps,
+        "gate_overblocking_opportunity_bps": gate_overblocking_opportunity_bps,
+        "realized_net_edge_bps": realized_net_edge_bps,
+        "expected_edge_bps": expected_edge_bps,
+        "pre_execution_edge_bps_est": pre_execution_edge_bps,
+        "accepted_records": int(accepted_records),
+        "rejected_records": int(rejected_records),
+        "rejection_ratio": rejection_ratio,
+        "decomposition_residual_bps": decomposition_residual_bps,
+        "daily_scorecard": daily_scorecard,
+    }
+
+
 def build_report(
     *,
     trade_history_path: Path,
@@ -2748,6 +3461,10 @@ def build_report(
     gate_log_path: Path | None = None,
     fill_events_path: Path | None = None,
     edge_realism_state_path: Path | None = None,
+    policy_ablation_state_path: Path | None = None,
+    policy_runtime_toggles_path: Path | None = None,
+    uncertainty_capital_state_path: Path | None = None,
+    counterfactual_state_path: Path | None = None,
 ) -> dict[str, Any]:
     trade_summary = summarize_trade_history(
         trade_history_path,
@@ -2769,9 +3486,70 @@ def build_report(
             default_relative=_DEFAULT_EDGE_REALISM_STATE_PATH,
         )
     )
+    resolved_policy_ablation_path = (
+        Path(policy_ablation_state_path)
+        if policy_ablation_state_path is not None
+        else resolve_runtime_artifact_path(
+            _env_text(
+                "AI_TRADING_RUNTIME_PERF_POLICY_ABLATION_STATE_PATH",
+                _env_text(
+                    "AI_TRADING_POLICY_ABLATION_STATE_PATH",
+                    _DEFAULT_POLICY_ABLATION_STATE_PATH,
+                ),
+            ),
+            default_relative=_DEFAULT_POLICY_ABLATION_STATE_PATH,
+        )
+    )
+    resolved_policy_runtime_toggles_path = (
+        Path(policy_runtime_toggles_path)
+        if policy_runtime_toggles_path is not None
+        else resolve_runtime_artifact_path(
+            _env_text(
+                "AI_TRADING_RUNTIME_PERF_POLICY_RUNTIME_TOGGLES_PATH",
+                _env_text(
+                    "AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH",
+                    _DEFAULT_POLICY_RUNTIME_TOGGLES_PATH,
+                ),
+            ),
+            default_relative=_DEFAULT_POLICY_RUNTIME_TOGGLES_PATH,
+        )
+    )
+    resolved_uncertainty_capital_path = (
+        Path(uncertainty_capital_state_path)
+        if uncertainty_capital_state_path is not None
+        else resolve_runtime_artifact_path(
+            _env_text(
+                "AI_TRADING_RUNTIME_PERF_UNCERTAINTY_CAPITAL_STATE_PATH",
+                _env_text(
+                    "AI_TRADING_UNCERTAINTY_CAPITAL_STATE_PATH",
+                    _DEFAULT_UNCERTAINTY_CAPITAL_STATE_PATH,
+                ),
+            ),
+            default_relative=_DEFAULT_UNCERTAINTY_CAPITAL_STATE_PATH,
+        )
+    )
+    resolved_counterfactual_path = (
+        Path(counterfactual_state_path)
+        if counterfactual_state_path is not None
+        else resolve_runtime_artifact_path(
+            _env_text(
+                "AI_TRADING_RUNTIME_PERF_COUNTERFACTUAL_STATE_PATH",
+                _env_text(
+                    "AI_TRADING_COUNTERFACTUAL_STATE_PATH",
+                    _DEFAULT_COUNTERFACTUAL_STATE_PATH,
+                ),
+            ),
+            default_relative=_DEFAULT_COUNTERFACTUAL_STATE_PATH,
+        )
+    )
     execution_vs_alpha = summarize_execution_vs_alpha(
         trade_summary=trade_summary,
         gate_summary=gate_summary,
+    )
+    post_trade_attribution_ledger = summarize_post_trade_attribution_ledger(
+        trade_summary=trade_summary,
+        gate_summary=gate_summary,
+        execution_vs_alpha=execution_vs_alpha,
     )
     expected_edge_clip_raw = execution_vs_alpha.get("expected_edge_clip")
     expected_edge_clip = (
@@ -2789,11 +3567,24 @@ def build_report(
         expected_edge_per_filled_trade_bps = expected_edge_for_realism_bps
     report_payload = {
         "generated_at": datetime.now(UTC).isoformat(),
-        "report_schema_version": 2,
+        "report_schema_version": 3,
         "trade_history": trade_summary,
         "gate_effectiveness": gate_summary,
         "execution_vs_alpha": execution_vs_alpha,
+        "post_trade_attribution_ledger": post_trade_attribution_ledger,
         "edge_realism": summarize_edge_realism_state(resolved_edge_realism_path),
+        "policy_ablation": summarize_policy_ablation_state(
+            resolved_policy_ablation_path
+        ),
+        "policy_runtime_toggles": summarize_policy_runtime_toggles(
+            resolved_policy_runtime_toggles_path
+        ),
+        "uncertainty_capital": summarize_uncertainty_capital_state(
+            resolved_uncertainty_capital_path
+        ),
+        "counterfactual_learning": summarize_counterfactual_learning_state(
+            resolved_counterfactual_path
+        ),
         # Flatten key execution-edge realism fields for compatibility with
         # runtime snapshots and Slack alert consumers.
         "expected_edge_for_realism_bps": expected_edge_for_realism_bps,
@@ -2831,6 +3622,16 @@ def evaluate_go_no_go(
     min_profit_factor = _as_float(threshold_map.get("min_profit_factor"))
     if min_profit_factor is None:
         min_profit_factor = 1.0
+    profit_factor_min_losses = _as_int(threshold_map.get("profit_factor_min_losses"))
+    if profit_factor_min_losses is None:
+        profit_factor_min_losses = 0
+    profit_factor_min_losses = max(0, int(profit_factor_min_losses))
+    profit_factor_min_gross_loss_pnl = _as_float(
+        threshold_map.get("profit_factor_min_gross_loss_pnl")
+    )
+    if profit_factor_min_gross_loss_pnl is None:
+        profit_factor_min_gross_loss_pnl = 0.0
+    profit_factor_min_gross_loss_pnl = max(0.0, float(profit_factor_min_gross_loss_pnl))
     min_win_rate = _as_float(threshold_map.get("min_win_rate"))
     if min_win_rate is None:
         min_win_rate = 0.52
@@ -2938,6 +3739,9 @@ def evaluate_go_no_go(
         exclude_reconcile_backfill_from_metrics = True
     require_pnl_available = bool(
         threshold_map.get("require_pnl_available", True)
+    )
+    require_profit_factor_gate = bool(
+        threshold_map.get("require_profit_factor_gate", False)
     )
     require_gate_valid = bool(threshold_map.get("require_gate_valid", True))
     require_open_position_reconciliation = bool(
@@ -3074,6 +3878,8 @@ def evaluate_go_no_go(
     if closed_trades is None:
         closed_trades = _as_int(trade.get("pnl_records")) or 0
     wins_count = _as_int(trade.get("wins"))
+    losses_count = _as_int(trade.get("losses"))
+    gross_loss_pnl = _as_float(trade.get("gross_loss_pnl"))
     profit_factor = _as_float(trade.get("profit_factor"))
     win_rate = _as_float(trade.get("win_rate")) or 0.0
     net_pnl = _as_float(trade.get("pnl_sum")) or 0.0
@@ -3102,6 +3908,8 @@ def evaluate_go_no_go(
             aggregated = _aggregate_trade_metric_rows(source_trade_rows)
             closed_trades = int(aggregated["closed_trades"])
             wins_count = int(aggregated["wins"])
+            losses_count = int(aggregated["losses"])
+            gross_loss_pnl = float(aggregated["gross_loss_pnl"])
             profit_factor = _as_float(aggregated["profit_factor"])
             win_rate = float(aggregated["win_rate"])
             net_pnl = float(aggregated["net_pnl"])
@@ -3131,6 +3939,8 @@ def evaluate_go_no_go(
                     or 0.0
                 )
             wins_count = None
+            losses_count = None
+            gross_loss_pnl = None
             win_rate = 0.0
             profit_factor = None
             pnl_available = bool(trade.get("pnl_available")) and int(closed_trades) > 0
@@ -3156,6 +3966,8 @@ def evaluate_go_no_go(
             aggregated = _aggregate_trade_metric_rows(source_trade_rows)
             closed_trades = int(aggregated["closed_trades"])
             wins_count = int(aggregated["wins"])
+            losses_count = int(aggregated["losses"])
+            gross_loss_pnl = float(aggregated["gross_loss_pnl"])
             profit_factor = _as_float(aggregated["profit_factor"])
             win_rate = float(aggregated["win_rate"])
             net_pnl = float(aggregated["net_pnl"])
@@ -3188,6 +4000,8 @@ def evaluate_go_no_go(
             aggregated = _aggregate_trade_metric_rows(recent_trade_rows)
             closed_trades = int(aggregated["closed_trades"])
             wins_count = int(aggregated["wins"])
+            losses_count = int(aggregated["losses"])
+            gross_loss_pnl = float(aggregated["gross_loss_pnl"])
             win_rate = float(aggregated["win_rate"])
             profit_factor = _as_float(aggregated["profit_factor"])
             net_pnl = float(aggregated["net_pnl"])
@@ -3378,6 +4192,27 @@ def evaluate_go_no_go(
             "ok" if win_rate_confidence_passes else "win_rate_confidence_gate"
         )
 
+    derived_losses = int(closed_trades) - int(wins_for_confidence)
+    if losses_count is None:
+        losses_count = max(0, int(derived_losses))
+    else:
+        losses_count = max(0, int(losses_count))
+    if gross_loss_pnl is None:
+        gross_loss_pnl = 0.0
+    gross_loss_pnl = max(0.0, float(gross_loss_pnl))
+    profit_factor_reliable = bool(
+        profit_factor is not None
+        and int(losses_count) >= int(profit_factor_min_losses)
+        and float(gross_loss_pnl) >= float(profit_factor_min_gross_loss_pnl)
+    )
+    profit_factor_reason = "ok"
+    if profit_factor is None:
+        profit_factor_reason = "missing"
+    elif not profit_factor_reliable:
+        profit_factor_reason = "unstable_denominator"
+    elif float(profit_factor) < float(min_profit_factor):
+        profit_factor_reason = "below_threshold"
+
     checks = {
         "pnl_available": (pnl_available if require_pnl_available else True),
         "trade_used_days": (
@@ -3392,8 +4227,15 @@ def evaluate_go_no_go(
         ),
         "closed_trades": int(closed_trades) >= int(min_closed_trades),
         "profit_factor": (
-            (profit_factor is not None and profit_factor >= float(min_profit_factor))
-            if require_pnl_available
+            (
+                True
+                if str(profit_factor_reason) == "unstable_denominator"
+                else (
+                    profit_factor is not None
+                    and float(profit_factor) >= float(min_profit_factor)
+                )
+            )
+            if (require_pnl_available and require_profit_factor_gate)
             else True
         ),
         "win_rate": (
@@ -3457,6 +4299,10 @@ def evaluate_go_no_go(
         "thresholds": {
             "min_closed_trades": int(min_closed_trades),
             "min_profit_factor": float(min_profit_factor),
+            "profit_factor_min_losses": int(profit_factor_min_losses),
+            "profit_factor_min_gross_loss_pnl": float(
+                profit_factor_min_gross_loss_pnl
+            ),
             "min_win_rate": float(min_win_rate),
             "min_win_rate_confidence_floor": float(min_win_rate_confidence_floor),
             "win_rate_confidence_z": float(win_rate_confidence_z),
@@ -3481,6 +4327,7 @@ def evaluate_go_no_go(
                 exclude_reconcile_backfill_from_metrics
             ),
             "require_pnl_available": bool(require_pnl_available),
+            "require_profit_factor_gate": bool(require_profit_factor_gate),
             "require_gate_valid": bool(require_gate_valid),
             "require_open_position_reconciliation": bool(
                 require_open_position_reconciliation
@@ -3500,7 +4347,12 @@ def evaluate_go_no_go(
             "gate_used_days": int(gate_used_days),
             "closed_trades": int(closed_trades),
             "wins": int(wins_for_confidence),
+            "losses": int(losses_count),
+            "gross_loss_pnl": float(gross_loss_pnl),
             "profit_factor": profit_factor,
+            "profit_factor_reliable": bool(profit_factor_reliable),
+            "profit_factor_reason": str(profit_factor_reason),
+            "profit_factor_gate_required": bool(require_profit_factor_gate),
             "win_rate": float(win_rate),
             "win_rate_confidence_enabled": bool(confidence_enabled),
             "win_rate_confidence_reason": str(win_rate_confidence_reason),
@@ -3537,6 +4389,9 @@ def evaluate_go_no_go(
             "open_position_reconciliation_mismatch_ok": bool(
                 reconciliation_mismatch_ok
             ),
+            "open_position_reconciliation_consistent": bool(
+                reconciliation_consistent
+            ),
             "trade_fill_source": trade_fill_source,
             "requested_trade_fill_source": requested_trade_fill_source,
             "auto_live_selection": auto_live_context,
@@ -3550,7 +4405,11 @@ def format_text_report(report: dict[str, Any]) -> str:
     trade = report.get("trade_history", {})
     gate = report.get("gate_effectiveness", {})
     attribution = report.get("execution_vs_alpha", {})
+    post_trade_ledger = report.get("post_trade_attribution_ledger", {})
     edge_realism = report.get("edge_realism", {})
+    policy_ablation = report.get("policy_ablation", {})
+    policy_runtime_toggles = report.get("policy_runtime_toggles", {})
+    uncertainty_capital = report.get("uncertainty_capital", {})
     lines = [
         "Runtime Performance Report",
         f"- Trade history file: {trade.get('path')} (exists={trade.get('exists')})",
@@ -3699,12 +4558,42 @@ def format_text_report(report: dict[str, Any]) -> str:
             f"capture_ratio={attribution.get('execution_capture_ratio')} "
             f"realism_ratio={attribution.get('edge_realism_gap_ratio')}"
         )
+    if isinstance(post_trade_ledger, Mapping) and post_trade_ledger.get("available"):
+        lines.append(
+            "- Post-trade attribution: "
+            f"alpha_error_bps={post_trade_ledger.get('alpha_error_bps')} "
+            f"execution_error_bps={post_trade_ledger.get('execution_error_bps')} "
+            f"gate_overblocking_opportunity_bps={post_trade_ledger.get('gate_overblocking_opportunity_bps')}"
+        )
     if isinstance(edge_realism, Mapping) and bool(edge_realism.get("valid")):
         lines.append(
             "- Edge realism calibration: "
             f"samples={edge_realism.get('global_samples')} "
             f"ratio={edge_realism.get('global_mean_realized_to_expected_ratio')} "
             f"updated_at={edge_realism.get('updated_at')}"
+        )
+    if isinstance(policy_ablation, Mapping) and bool(policy_ablation.get("valid")):
+        lines.append(
+            "- Policy ablation diagnostics: "
+            f"slices={policy_ablation.get('slice_count')} "
+            f"updated_at={policy_ablation.get('updated_at')}"
+        )
+    if isinstance(policy_runtime_toggles, Mapping) and bool(
+        policy_runtime_toggles.get("valid")
+    ):
+        lines.append(
+            "- Policy runtime toggles: "
+            f"disabled_slices={policy_runtime_toggles.get('disabled_slice_count')} "
+            f"updated_at={policy_runtime_toggles.get('updated_at')}"
+        )
+    if isinstance(uncertainty_capital, Mapping) and bool(
+        uncertainty_capital.get("valid")
+    ):
+        lines.append(
+            "- Uncertainty capital diagnostics: "
+            f"score_mean={uncertainty_capital.get('score_mean')} "
+            f"scale_mean={uncertainty_capital.get('scale_mean')} "
+            f"posterior={uncertainty_capital.get('bayesian_high_score_posterior')}"
         )
 
     return "\n".join(lines)
@@ -3743,6 +4632,26 @@ def main(argv: list[str] | None = None) -> int:
         "--edge-realism-state-path",
         default=None,
         help="Optional path to edge realism state json for calibration diagnostics.",
+    )
+    parser.add_argument(
+        "--policy-ablation-state-path",
+        default=None,
+        help="Optional path to policy ablation state json.",
+    )
+    parser.add_argument(
+        "--policy-runtime-toggles-path",
+        default=None,
+        help="Optional path to policy runtime toggles json.",
+    )
+    parser.add_argument(
+        "--uncertainty-capital-state-path",
+        default=None,
+        help="Optional path to uncertainty capital diagnostics json.",
+    )
+    parser.add_argument(
+        "--counterfactual-state-path",
+        default=None,
+        help="Optional path to counterfactual learning state json.",
     )
     parser.add_argument(
         "--json",
@@ -3812,6 +4721,10 @@ def main(argv: list[str] | None = None) -> int:
         tca_path=args.tca_path,
         fill_events_path=args.fill_events_path,
         edge_realism_state_path=args.edge_realism_state_path,
+        policy_ablation_state_path=args.policy_ablation_state_path,
+        policy_runtime_toggles_path=args.policy_runtime_toggles_path,
+        uncertainty_capital_state_path=args.uncertainty_capital_state_path,
+        counterfactual_state_path=args.counterfactual_state_path,
     )
 
     report = build_report(
@@ -3835,6 +4748,26 @@ def main(argv: list[str] | None = None) -> int:
         edge_realism_state_path=(
             Path(paths["edge_realism_state"])
             if isinstance(paths.get("edge_realism_state"), Path)
+            else None
+        ),
+        policy_ablation_state_path=(
+            Path(paths["policy_ablation_state"])
+            if isinstance(paths.get("policy_ablation_state"), Path)
+            else None
+        ),
+        policy_runtime_toggles_path=(
+            Path(paths["policy_runtime_toggles"])
+            if isinstance(paths.get("policy_runtime_toggles"), Path)
+            else None
+        ),
+        uncertainty_capital_state_path=(
+            Path(paths["uncertainty_capital_state"])
+            if isinstance(paths.get("uncertainty_capital_state"), Path)
+            else None
+        ),
+        counterfactual_state_path=(
+            Path(paths["counterfactual_state"])
+            if isinstance(paths.get("counterfactual_state"), Path)
             else None
         ),
     )

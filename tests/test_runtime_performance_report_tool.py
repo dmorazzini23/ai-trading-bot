@@ -243,6 +243,49 @@ def test_summarize_execution_vs_alpha_clips_outlier_expected_edge_and_uses_notio
     assert attribution["daily"][1]["expected_edge_per_accept_bps"] == pytest.approx(20.0)
 
 
+def test_summarize_post_trade_attribution_ledger_decomposes_error_components() -> None:
+    ledger = rpt.summarize_post_trade_attribution_ledger(
+        trade_summary={},
+        gate_summary={
+            "total_records": 60,
+            "accepted_records": 20,
+            "rejected_records": 40,
+            "daily_gate_stats": [
+                {
+                    "date": "2026-04-08",
+                    "accepted_records": 2,
+                    "rejected_records": 4,
+                }
+            ],
+        },
+        execution_vs_alpha={
+            "available": True,
+            "realized_net_edge_bps": 3.0,
+            "pre_execution_edge_bps_est": 5.0,
+            "expected_edge_for_realism_bps": 8.0,
+            "expected_edge_per_accept_bps": 8.0,
+            "slippage_drag_bps": 2.0,
+            "daily": [
+                {
+                    "date": "2026-04-08",
+                    "realized_net_edge_bps": 3.0,
+                    "expected_edge_per_accept_bps": 8.0,
+                }
+            ],
+        },
+    )
+
+    assert ledger["available"] is True
+    assert ledger["alpha_error_bps"] == pytest.approx(-3.0)
+    assert ledger["execution_error_bps"] == pytest.approx(-2.0)
+    assert ledger["gate_overblocking_opportunity_bps"] == pytest.approx(16.0)
+    assert ledger["decomposition_residual_bps"] == pytest.approx(0.0)
+    assert isinstance(ledger["daily_scorecard"], list)
+    assert ledger["daily_scorecard"][0]["gate_overblocking_opportunity_bps"] == pytest.approx(
+        16.0
+    )
+
+
 def test_build_report_includes_edge_realism_snapshot(tmp_path: Path) -> None:
     trade_history_path = tmp_path / "trade_history.json"
     gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
@@ -295,6 +338,194 @@ def test_build_report_includes_edge_realism_snapshot(tmp_path: Path) -> None:
     assert edge_realism["global_samples"] == 12
     assert edge_realism["global_mean_realized_to_expected_ratio"] == pytest.approx(0.71)
     assert edge_realism["bucket_count"] == 1
+
+
+def test_build_report_includes_policy_and_uncertainty_diagnostics(tmp_path: Path) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    policy_ablation_state_path = tmp_path / "policy_ablation_state.json"
+    policy_runtime_toggles_path = tmp_path / "policy_runtime_toggles.json"
+    uncertainty_capital_state_path = tmp_path / "uncertainty_capital_state.json"
+
+    trade_history_path.write_text("[]", encoding="utf-8")
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 10,
+                "total_accepted_records": 2,
+                "total_rejected_records": 8,
+                "gate_root_totals": {"LIQUIDITY_PARTICIPATION": 5},
+                "gate_root_attribution": {
+                    "LIQUIDITY_PARTICIPATION": {"count": 5, "blocked_records": 5}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    policy_ablation_state_path.write_text(
+        json.dumps(
+            {
+                "updated_at": "2026-04-08T20:00:00+00:00",
+                "slices": {
+                    "GATE:LIQUIDITY_PARTICIPATION": {
+                        "events": 40,
+                        "accepted": 2,
+                        "rejected": 38,
+                        "mean_edge_proxy_bps": -4.2,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    policy_runtime_toggles_path.write_text(
+        json.dumps(
+            {
+                "updated_at": "2026-04-08T20:01:00+00:00",
+                "disabled_slices": ["GATE:LIQUIDITY_PARTICIPATION"],
+                "toggles": {
+                    "rankers": {"bandit_enabled": False},
+                    "disabled_gate_roots": ["LIQUIDITY_PARTICIPATION"],
+                    "disabled_sleeves": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    uncertainty_capital_state_path.write_text(
+        json.dumps(
+            {
+                "updated_at": "2026-04-08T20:02:00+00:00",
+                "total_events": 100,
+                "scaled_events": 60,
+                "blocked_events": 8,
+                "score_mean": 0.44,
+                "scale_mean": 0.73,
+                "bayesian_high_score_posterior": 0.22,
+                "quantiles": {"score_p50": 0.4, "score_p80": 0.7, "score_p95": 0.9},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+        policy_ablation_state_path=policy_ablation_state_path,
+        policy_runtime_toggles_path=policy_runtime_toggles_path,
+        uncertainty_capital_state_path=uncertainty_capital_state_path,
+    )
+
+    assert report["policy_ablation"]["valid"] is True
+    assert report["policy_ablation"]["slice_count"] == 1
+    assert report["policy_runtime_toggles"]["valid"] is True
+    assert report["policy_runtime_toggles"]["disabled_slice_count"] == 1
+    assert report["uncertainty_capital"]["valid"] is True
+    assert report["uncertainty_capital"]["total_events"] == 100
+    assert report["gate_effectiveness"]["top_gates_source"] == "gate_root_totals"
+
+
+def test_build_report_includes_slippage_root_cause_attribution(tmp_path: Path) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "AAPL",
+                    "side": "buy",
+                    "qty": 10,
+                    "entry_price": 100.0,
+                    "exit_price": 101.0,
+                    "entry_time": "2026-04-08T13:40:00+00:00",
+                    "exit_time": "2026-04-08T13:55:00+00:00",
+                    "pnl": 8.0,
+                    "slippage_bps": 8.0,
+                    "session_regime": "opening",
+                    "market_regime": "trend",
+                    "volatility_regime": "high",
+                },
+                {
+                    "symbol": "MSFT",
+                    "side": "buy",
+                    "qty": 10,
+                    "entry_price": 100.0,
+                    "exit_price": 100.5,
+                    "entry_time": "2026-04-08T19:10:00+00:00",
+                    "exit_time": "2026-04-08T19:25:00+00:00",
+                    "pnl": 3.0,
+                    "slippage_bps": 2.0,
+                    "session_regime": "closing",
+                    "market_regime": "sideways",
+                    "volatility_regime": "low",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps({"total_records": 2, "total_accepted_records": 2, "total_rejected_records": 0}),
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+
+    root_cause = report["trade_history"]["slippage_root_cause_attribution"]
+    assert root_cause["available"] is True
+    assert root_cause["overall_slippage_drag_bps"] is not None
+    assert root_cause["by_symbol_top"][0]["symbol"] == "AAPL"
+    assert any(row["session"] == "opening" for row in root_cause["by_session"])
+    assert any(row["regime"] == "trend:high" for row in root_cause["by_regime_top"])
+
+
+def test_build_report_includes_counterfactual_learning_summary(tmp_path: Path) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    counterfactual_state_path = tmp_path / "counterfactual_learning_state.json"
+
+    trade_history_path.write_text("[]", encoding="utf-8")
+    gate_summary_path.write_text(
+        json.dumps({"total_records": 1, "total_accepted_records": 1, "total_rejected_records": 0}),
+        encoding="utf-8",
+    )
+    counterfactual_state_path.write_text(
+        json.dumps(
+            {
+                "updated_at": "2026-04-08T20:00:00+00:00",
+                "global": {
+                    "events": 12,
+                    "accepted": 5,
+                    "rejected": 7,
+                    "accept_rate": 5.0 / 12.0,
+                    "dr_mean_bps": 1.8,
+                    "ips_mean_bps": 1.3,
+                    "missed_dr_sum_bps": 14.2,
+                },
+                "buckets": {
+                    "AAPL:opening": {"events": 8},
+                    "MSFT:closing": {"events": 4},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+        counterfactual_state_path=counterfactual_state_path,
+    )
+
+    counterfactual = report["counterfactual_learning"]
+    assert counterfactual["valid"] is True
+    assert counterfactual["total_events"] == 12
+    assert counterfactual["accepted"] == 5
+    assert counterfactual["rejected"] == 7
+    assert counterfactual["bucket_count"] == 2
+    assert counterfactual["active_learning"] is True
 
 
 def test_format_text_report_handles_missing_inputs(tmp_path: Path) -> None:
@@ -1044,6 +1275,7 @@ def test_evaluate_go_no_go_uses_thresholds() -> None:
             "auto_live_fail_closed": False,
             "require_open_position_reconciliation": False,
             "require_pnl_available": True,
+            "require_profit_factor_gate": True,
             "require_gate_valid": True,
         },
     )
@@ -1087,6 +1319,7 @@ def test_evaluate_go_no_go_expected_edge_uses_per_fill_metric_when_available() -
             "auto_live_fail_closed": False,
             "require_open_position_reconciliation": False,
             "require_pnl_available": True,
+            "require_profit_factor_gate": True,
             "require_gate_valid": True,
         },
     )
@@ -1128,6 +1361,7 @@ def test_evaluate_go_no_go_expected_edge_falls_back_to_gate_per_accept() -> None
             "auto_live_fail_closed": False,
             "require_open_position_reconciliation": False,
             "require_pnl_available": True,
+            "require_profit_factor_gate": True,
             "require_gate_valid": True,
         },
     )
@@ -1138,6 +1372,113 @@ def test_evaluate_go_no_go_expected_edge_falls_back_to_gate_per_accept() -> None
     assert decision["observed"]["expected_net_edge_bps_source"] == "gate_per_accept"
     assert decision["observed"]["expected_net_edge_per_accept_bps"] == pytest.approx(5.0)
     assert decision["observed"]["expected_net_edge_bps_raw_sum"] == pytest.approx(250.0)
+
+
+def test_evaluate_go_no_go_profit_factor_ignored_when_denominator_unstable() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 40,
+            "wins": 39,
+            "losses": 1,
+            "gross_loss_pnl": 10.0,
+            "profit_factor": 0.40,
+            "win_rate": 0.70,
+            "pnl_sum": 245.0,
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.18,
+            "total_expected_net_edge_bps": 22.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 20,
+            "min_profit_factor": 1.1,
+            "profit_factor_min_losses": 3,
+            "profit_factor_min_gross_loss_pnl": 50.0,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.1,
+            "min_expected_net_edge_bps": 0.0,
+            "trade_fill_source": "all",
+            "auto_live_fail_closed": False,
+            "require_open_position_reconciliation": False,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["gate_passed"] is True
+    assert "profit_factor" not in decision["failed_checks"]
+    assert decision["observed"]["profit_factor_reliable"] is False
+    assert decision["observed"]["profit_factor_reason"] == "unstable_denominator"
+
+
+def test_evaluate_go_no_go_profit_factor_is_secondary_by_default() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 40,
+            "wins": 20,
+            "losses": 20,
+            "gross_loss_pnl": 300.0,
+            "profit_factor": 0.60,
+            "win_rate": 0.55,
+            "pnl_sum": 45.0,
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.18,
+            "total_expected_net_edge_bps": 22.0,
+        },
+    }
+
+    relaxed = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 20,
+            "min_profit_factor": 1.1,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.1,
+            "min_expected_net_edge_bps": 0.0,
+            "trade_fill_source": "all",
+            "auto_live_fail_closed": False,
+            "require_open_position_reconciliation": False,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+            "require_profit_factor_gate": False,
+        },
+    )
+    assert relaxed["gate_passed"] is True
+    assert "profit_factor" not in relaxed["failed_checks"]
+    assert relaxed["observed"]["profit_factor_reason"] == "below_threshold"
+    assert relaxed["observed"]["profit_factor_gate_required"] is False
+
+    strict = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 20,
+            "min_profit_factor": 1.1,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.1,
+            "min_expected_net_edge_bps": 0.0,
+            "trade_fill_source": "all",
+            "auto_live_fail_closed": False,
+            "require_open_position_reconciliation": False,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+            "require_profit_factor_gate": True,
+        },
+    )
+    assert strict["gate_passed"] is False
+    assert "profit_factor" in strict["failed_checks"]
+    assert strict["observed"]["profit_factor_gate_required"] is True
 
 
 def test_evaluate_go_no_go_fails_when_metrics_are_weak() -> None:
@@ -1167,6 +1508,7 @@ def test_evaluate_go_no_go_fails_when_metrics_are_weak() -> None:
             "min_expected_net_edge_bps": -10.0,
             "require_pnl_available": True,
             "require_gate_valid": True,
+            "require_profit_factor_gate": True,
         },
     )
 
@@ -1337,6 +1679,7 @@ def test_evaluate_go_no_go_lookback_days_uses_recent_window_metrics() -> None:
             "auto_live_fail_closed": False,
             "require_open_position_reconciliation": False,
             "require_pnl_available": True,
+            "require_profit_factor_gate": True,
             "require_gate_valid": True,
         },
     )
@@ -1490,6 +1833,7 @@ def test_evaluate_go_no_go_trade_fill_source_uses_source_specific_rows() -> None
             "min_acceptance_rate": 0.05,
             "min_expected_net_edge_bps": -50.0,
             "require_pnl_available": True,
+            "require_profit_factor_gate": True,
             "require_gate_valid": True,
         },
     )
@@ -1567,6 +1911,7 @@ def test_evaluate_go_no_go_all_excludes_reconcile_backfill_by_default() -> None:
             "min_expected_net_edge_bps": -50.0,
             "require_open_position_reconciliation": False,
             "require_pnl_available": True,
+            "require_profit_factor_gate": True,
             "require_gate_valid": True,
         },
     )
@@ -2000,6 +2345,7 @@ def test_evaluate_go_no_go_allows_ratio_soft_breach_when_abs_and_mismatch_are_sm
     assert decision["gate_passed"] is True
     assert "open_position_reconciliation_consistent" not in decision["failed_checks"]
     observed = decision["observed"]
+    assert observed["open_position_reconciliation_consistent"] is True
     assert observed["open_position_reconciliation_ratio_soft_ok"] is False
     assert observed["open_position_reconciliation_ratio_hard_ok"] is True
 
@@ -2049,6 +2395,7 @@ def test_evaluate_go_no_go_fails_when_open_position_ratio_breaches_hard_limit() 
     assert decision["gate_passed"] is False
     assert "open_position_reconciliation_consistent" in decision["failed_checks"]
     observed = decision["observed"]
+    assert observed["open_position_reconciliation_consistent"] is False
     assert observed["open_position_reconciliation_ratio_hard_ok"] is False
 
 

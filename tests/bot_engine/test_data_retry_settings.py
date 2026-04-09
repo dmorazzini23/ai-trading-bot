@@ -68,6 +68,42 @@ def test_bandit_ucb_score_rewards_uncertainty() -> None:
     assert low_samples > 2.0
 
 
+def test_sequential_significance_gate_requires_min_samples() -> None:
+    result = bot_engine._sequential_significance_gate(
+        mean_reward_bps=2.0,
+        std_reward_bps=5.0,
+        samples=9,
+        min_samples=10,
+        target_mean_bps=0.0,
+        method="either",
+        posterior_prob_min=0.9,
+        sprt_alpha=0.05,
+        sprt_beta=0.1,
+        sprt_effect_bps=0.4,
+    )
+
+    assert result["passed"] is False
+    assert result["reason"] == "insufficient_samples"
+
+
+def test_sequential_significance_gate_passes_with_strong_signal() -> None:
+    result = bot_engine._sequential_significance_gate(
+        mean_reward_bps=1.8,
+        std_reward_bps=2.0,
+        samples=200,
+        min_samples=20,
+        target_mean_bps=0.0,
+        method="either",
+        posterior_prob_min=0.9,
+        sprt_alpha=0.05,
+        sprt_beta=0.1,
+        sprt_effect_bps=0.4,
+    )
+
+    assert result["passed"] is True
+    assert result["reason"] == "ok"
+
+
 def test_geometric_growth_tiebreak_score_penalizes_risk() -> None:
     calm_score = bot_engine._geometric_growth_tiebreak_score(
         expected_edge_bps=8.0,
@@ -169,6 +205,34 @@ def test_pre_rank_execution_candidates_can_explore_unseen_symbols(monkeypatch):
     assert ranked[0] == "AAPL"
     assert "MSFT" in ranked
     assert len(ranked) == 2
+
+
+def test_pre_rank_execution_candidates_filters_by_opportunity_quality(monkeypatch):
+    monkeypatch.delenv("AI_TRADING_EXEC_CANDIDATE_TOP_N", raising=False)
+    monkeypatch.setenv("AI_TRADING_EXEC_OPPORTUNITY_QUALITY_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXEC_OPPORTUNITY_TOP_QUANTILE", "0.8")
+    monkeypatch.setenv("AI_TRADING_EXEC_OPPORTUNITY_MIN_KEEP", "2")
+
+    runtime = type(
+        "_Runtime",
+        (),
+        {
+            "execution_opportunity_quality_by_symbol": {
+                "MSFT": 0.96,
+                "AAPL": 0.92,
+                "GOOG": 0.30,
+                "AMZN": 0.20,
+                "NVDA": 0.10,
+            },
+        },
+    )()
+
+    ranked = bot_engine._pre_rank_execution_candidates(
+        ["MSFT", "AAPL", "GOOG", "AMZN", "NVDA"],
+        runtime=runtime,
+    )
+
+    assert ranked == ["MSFT", "AAPL"]
 
 
 def test_pre_rank_execution_candidates_records_shadow_snapshot_when_enabled(monkeypatch):
