@@ -646,12 +646,23 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert "candidate_metrics" in report_payload
     assert "sensitivity_sweep" in report_payload
     assert "manifest_metadata" in report_payload["model"]
+    assert "hard_negative_mining" in report_payload
+    assert "edge_model_v2" in report_payload
     assert isinstance(report_payload["candidate_metrics"], list)
     assert report_payload["candidate_metrics"]
     assert "candidate_metrics" in result
     assert isinstance(result["candidate_metrics"], list)
     assert result["candidate_metrics"]
     assert "sensitivity_sweep" in result
+    assert "hard_negative_mining" in result
+    assert "edge_model_v2" in result
+
+    import joblib
+
+    trained_model = joblib.load(result["model_path"])
+    assert hasattr(trained_model, "hard_negative_weighted_fit_")
+    assert hasattr(trained_model, "edge_model_v2_bundle_")
+    assert isinstance(getattr(trained_model, "edge_model_v2_bundle_"), dict)
 
     manifest_payload = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
     assert "metadata" in manifest_payload

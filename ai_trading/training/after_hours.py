@@ -846,6 +846,7 @@ def _evaluate_candidate(
     *,
     seed: int,
     threshold: float,
+    sample_weights: np.ndarray | None = None,
 ) -> CandidateMetrics | None:
     import pandas as pd
 
@@ -918,7 +919,15 @@ def _evaluate_candidate(
             continue
         model = _fit_candidate_model(name, seed=seed)
         try:
-            model.fit(X.iloc[train_idx_safe], y_train)
+            train_sample_weights = None
+            if sample_weights is not None:
+                train_sample_weights = np.asarray(sample_weights, dtype=float)[train_idx_safe]
+            _fit_model_with_optional_sample_weight(
+                model,
+                X.iloc[train_idx_safe],
+                y_train,
+                sample_weight=train_sample_weights,
+            )
         except Exception:
             continue
         probs = _predict_probabilities(model, X.iloc[test_idx])
@@ -3954,13 +3963,279 @@ def _training_feature_stats(dataset: Any) -> dict[str, dict[str, float]]:
     return stats
 
 
-def _fit_final_model(name: str, dataset: Any, *, seed: int):
+def _fit_model_with_optional_sample_weight(
+    model: Any,
+    X: Any,
+    y: Any,
+    *,
+    sample_weight: np.ndarray | None = None,
+) -> bool:
+    if sample_weight is not None:
+        try:
+            model.fit(X, y, sample_weight=np.asarray(sample_weight, dtype=float))
+            return True
+        except TypeError:
+            pass
+        except Exception:
+            logger.info(
+                "AFTER_HOURS_SAMPLE_WEIGHT_FIT_FAILED",
+                extra={"error": "sample_weight_fit_failed"},
+            )
+    model.fit(X, y)
+    return False
+
+
+def _build_hard_negative_sample_weights(dataset: Any) -> tuple[np.ndarray, dict[str, Any]]:
+    enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_HARD_NEGATIVE_MINING_ENABLED", True, cast=bool)
+    )
+    size = int(len(dataset))
+    weights = np.ones(size, dtype=float)
+    report: dict[str, Any] = {
+        "enabled": bool(enabled),
+        "applied": False,
+        "rows": int(size),
+        "hard_negative_count": 0,
+        "high_conf_negative_count": 0,
+        "weight_min": 1.0,
+        "weight_max": 1.0,
+    }
+    if not enabled or size <= 0:
+        return weights, report
+
+    label = np.asarray(dataset["label"].astype(int), dtype=int)
+    realized_edge = np.asarray(dataset["realized_edge_bps"].astype(float), dtype=float)
+    negative_label = label <= 0
+    edge_cutoff_bps = float(
+        get_env("AI_TRADING_AFTER_HOURS_HARD_NEGATIVE_EDGE_CUTOFF_BPS", -1.0, cast=float)
+    )
+    hard_negative_multiplier = max(
+        1.0,
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_HARD_NEGATIVE_MULTIPLIER",
+                3.0,
+                cast=float,
+            )
+        ),
+    )
+    hard_negative_mask = negative_label & (realized_edge <= float(edge_cutoff_bps))
+    if np.any(hard_negative_mask):
+        weights[hard_negative_mask] = np.maximum(
+            weights[hard_negative_mask],
+            float(hard_negative_multiplier),
+        )
+
+    prior_runtime_model_enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_HARD_NEGATIVE_PRIOR_MODEL_ENABLED", True, cast=bool)
+    )
+    high_conf_negative_mask = np.zeros(size, dtype=bool)
+    if prior_runtime_model_enabled:
+        runtime_model_path_raw = str(get_env("AI_TRADING_MODEL_PATH", "", cast=str) or "").strip()
+        if not runtime_model_path_raw:
+            runtime_model_path_raw = str(
+                get_env(
+                    "AI_TRADING_AFTER_HOURS_RUNTIME_MODEL_PATH",
+                    "models/runtime/ml_latest.joblib",
+                    cast=str,
+                )
+                or ""
+            ).strip()
+        runtime_model_path = _resolve_after_hours_output_path(
+            runtime_model_path_raw or "models/runtime/ml_latest.joblib",
+            default_relative="models/runtime/ml_latest.joblib",
+        )
+        if runtime_model_path.is_file():
+            try:
+                import joblib
+
+                prior_model = joblib.load(runtime_model_path)
+                prior_probs = _predict_probabilities(
+                    prior_model,
+                    dataset.loc[:, FEATURE_COLUMNS],
+                )
+                if prior_probs.shape[0] == size:
+                    high_conf_threshold = float(
+                        get_env(
+                            "AI_TRADING_AFTER_HOURS_HARD_NEGATIVE_PRIOR_PROB_THRESHOLD",
+                            0.62,
+                            cast=float,
+                        )
+                    )
+                    high_conf_multiplier = max(
+                        hard_negative_multiplier,
+                        float(
+                            get_env(
+                                "AI_TRADING_AFTER_HOURS_HARD_NEGATIVE_PRIOR_MULTIPLIER",
+                                4.0,
+                                cast=float,
+                            )
+                        ),
+                    )
+                    high_conf_negative_mask = (
+                        negative_label
+                        & (prior_probs >= float(high_conf_threshold))
+                        & (realized_edge <= float(edge_cutoff_bps))
+                    )
+                    if np.any(high_conf_negative_mask):
+                        weights[high_conf_negative_mask] = np.maximum(
+                            weights[high_conf_negative_mask],
+                            float(high_conf_multiplier),
+                        )
+                    report["prior_model_path"] = str(runtime_model_path)
+                    report["prior_prob_threshold"] = float(high_conf_threshold)
+                    report["prior_multiplier"] = float(high_conf_multiplier)
+            except Exception as exc:
+                report["prior_model_error"] = str(exc)
+
+    clip_max = max(
+        1.0,
+        float(get_env("AI_TRADING_AFTER_HOURS_HARD_NEGATIVE_MAX_WEIGHT", 8.0, cast=float)),
+    )
+    weights = np.clip(weights, 1.0, float(clip_max))
+    report.update(
+        {
+            "applied": bool(np.any(weights > 1.0)),
+            "hard_negative_count": int(np.sum(hard_negative_mask)),
+            "high_conf_negative_count": int(np.sum(high_conf_negative_mask)),
+            "weight_min": float(np.min(weights)) if size > 0 else 1.0,
+            "weight_max": float(np.max(weights)) if size > 0 else 1.0,
+            "edge_cutoff_bps": float(edge_cutoff_bps),
+            "base_multiplier": float(hard_negative_multiplier),
+            "clip_max": float(clip_max),
+        }
+    )
+    return weights, report
+
+
+def _fit_edge_model_v2_bundle(
+    dataset: Any,
+    *,
+    seed: int,
+    sample_weights: np.ndarray | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    enabled = bool(get_env("AI_TRADING_AFTER_HOURS_EDGE_MODEL_V2_ENABLED", True, cast=bool))
+    min_rows = max(
+        100,
+        int(get_env("AI_TRADING_AFTER_HOURS_EDGE_MODEL_V2_MIN_ROWS", 300, cast=int)),
+    )
+    report: dict[str, Any] = {
+        "enabled": bool(enabled),
+        "trained": False,
+        "rows": int(len(dataset) if dataset is not None else 0),
+    }
+    if not enabled or dataset is None or len(dataset) < min_rows:
+        report["reason"] = "disabled_or_insufficient_rows"
+        return {}, report
+    try:
+        from sklearn.ensemble import HistGradientBoostingRegressor
+    except Exception as exc:
+        report["reason"] = "missing_sklearn_regressor"
+        report["error"] = str(exc)
+        return {}, report
+
+    X = dataset.loc[:, FEATURE_COLUMNS]
+    y = dataset["realized_edge_bps"].astype(float)
+    mean_model = HistGradientBoostingRegressor(
+        loss="squared_error",
+        max_depth=6,
+        learning_rate=0.05,
+        max_iter=350,
+        min_samples_leaf=24,
+        l2_regularization=0.02,
+        random_state=seed,
+    )
+    q10_model = HistGradientBoostingRegressor(
+        loss="quantile",
+        quantile=0.10,
+        max_depth=6,
+        learning_rate=0.05,
+        max_iter=250,
+        min_samples_leaf=24,
+        random_state=seed + 11,
+    )
+    q50_model = HistGradientBoostingRegressor(
+        loss="quantile",
+        quantile=0.50,
+        max_depth=6,
+        learning_rate=0.05,
+        max_iter=250,
+        min_samples_leaf=24,
+        random_state=seed + 17,
+    )
+    q90_model = HistGradientBoostingRegressor(
+        loss="quantile",
+        quantile=0.90,
+        max_depth=6,
+        learning_rate=0.05,
+        max_iter=250,
+        min_samples_leaf=24,
+        random_state=seed + 23,
+    )
+    used_weighted_fit = False
+    try:
+        used_weighted_fit = _fit_model_with_optional_sample_weight(
+            mean_model, X, y, sample_weight=sample_weights
+        )
+        _fit_model_with_optional_sample_weight(q10_model, X, y, sample_weight=sample_weights)
+        _fit_model_with_optional_sample_weight(q50_model, X, y, sample_weight=sample_weights)
+        _fit_model_with_optional_sample_weight(q90_model, X, y, sample_weight=sample_weights)
+    except Exception as exc:
+        report["reason"] = "fit_failed"
+        report["error"] = str(exc)
+        return {}, report
+
+    mean_pred = np.asarray(mean_model.predict(X), dtype=float)
+    q10_pred = np.asarray(q10_model.predict(X), dtype=float)
+    q50_pred = np.asarray(q50_model.predict(X), dtype=float)
+    q90_pred = np.asarray(q90_model.predict(X), dtype=float)
+    mae = float(np.mean(np.abs(mean_pred - np.asarray(y, dtype=float))))
+    rmse = float(
+        np.sqrt(np.mean((mean_pred - np.asarray(y, dtype=float)) ** 2))
+    )
+    unc_width = np.clip(q90_pred - q10_pred, 0.0, np.inf)
+    report.update(
+        {
+            "trained": True,
+            "used_weighted_fit": bool(used_weighted_fit),
+            "train_mae_bps": float(mae),
+            "train_rmse_bps": float(rmse),
+            "train_mean_uncertainty_bps": float(np.mean(unc_width)) if unc_width.size else 0.0,
+        }
+    )
+    bundle = {
+        "version": "edge_model_v2_qreg",
+        "feature_columns": list(FEATURE_COLUMNS),
+        "models": {
+            "mean": mean_model,
+            "q10": q10_model,
+            "q50": q50_model,
+            "q90": q90_model,
+        },
+        "training_report": dict(report),
+    }
+    return bundle, report
+
+
+def _fit_final_model(
+    name: str,
+    dataset: Any,
+    *,
+    seed: int,
+    sample_weights: np.ndarray | None = None,
+):
     model = _fit_candidate_model(name, seed=seed)
     X = dataset.loc[:, FEATURE_COLUMNS]
     y = dataset["label"].astype(int)
-    model.fit(X, y)
+    weighted_fit_used = _fit_model_with_optional_sample_weight(
+        model,
+        X,
+        y,
+        sample_weight=sample_weights,
+    )
     setattr(model, "training_feature_stats_", _training_feature_stats(dataset))
     setattr(model, "training_feature_stats_version_", "1")
+    setattr(model, "hard_negative_weighted_fit_", bool(weighted_fit_used))
     return model
 
 
@@ -4611,6 +4886,13 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     default_threshold = float(
         get_env("AI_TRADING_AFTER_HOURS_DEFAULT_THRESHOLD", 0.5, cast=float)
     )
+    hard_negative_sample_weights, hard_negative_report = _build_hard_negative_sample_weights(
+        dataset
+    )
+    hard_negative_apply_to_cv = bool(
+        get_env("AI_TRADING_AFTER_HOURS_HARD_NEGATIVE_APPLY_TO_CV", False, cast=bool)
+    )
+    hard_negative_report["apply_to_cv"] = bool(hard_negative_apply_to_cv)
     candidate_results: list[CandidateMetrics] = []
     for name in _candidate_names():
         metrics = _evaluate_candidate(
@@ -4618,6 +4900,9 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             dataset,
             seed=seed,
             threshold=default_threshold,
+            sample_weights=(
+                hard_negative_sample_weights if hard_negative_apply_to_cv else None
+            ),
         )
         if metrics is not None:
             candidate_results.append(metrics)
@@ -4762,10 +5047,29 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         sensitivity_sweep=sensitivity_sweep,
     )
 
-    final_model = _fit_final_model(best.name, dataset, seed=seed)
+    final_model = _fit_final_model(
+        best.name,
+        dataset,
+        seed=seed,
+        sample_weights=hard_negative_sample_weights,
+    )
+    edge_model_v2_bundle, edge_model_v2_report = _fit_edge_model_v2_bundle(
+        dataset,
+        seed=seed,
+        sample_weights=hard_negative_sample_weights,
+    )
+    if edge_model_v2_bundle:
+        setattr(final_model, "edge_model_v2_bundle_", edge_model_v2_bundle)
+        setattr(
+            final_model,
+            "edge_model_v2_bundle_version_",
+            str(edge_model_v2_bundle.get("version", "")),
+        )
     setattr(final_model, "edge_thresholds_by_regime_", thresholds_by_regime)
     setattr(final_model, "edge_global_threshold_", float(default_threshold))
     setattr(final_model, "regime_calibration_", best.regime_calibration)
+    manifest_metadata["hard_negative_mining"] = dict(hard_negative_report)
+    manifest_metadata["edge_model_v2"] = dict(edge_model_v2_report)
     requested_model_dir = _resolve_after_hours_output_path(
         str(get_env("AI_TRADING_AFTER_HOURS_MODEL_DIR", "models/after_hours", cast=str) or ""),
         default_relative="models/after_hours",
@@ -4812,6 +5116,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "regime_threshold_adjustments": regime_threshold_adjustments,
             "selection_score": _candidate_selection_score(best, weights=selection_weights),
             "manifest_metadata": manifest_metadata,
+            "hard_negative_mining": hard_negative_report,
+            "edge_model_v2": edge_model_v2_report,
         },
         dataset_fingerprint=dataset_fp,
         tags=["after_hours", "cost_aware", "purged_walk_forward"],
@@ -4954,6 +5260,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "training_data_delta": training_data_delta,
         "rl_overlay": rl_overlay,
         "selection_weights": dict(selection_weights),
+        "hard_negative_mining": hard_negative_report,
+        "edge_model_v2": edge_model_v2_report,
         "runtime_promotion": {
             "model_path": promoted_model_path,
             "manifest_path": promoted_manifest_path,
@@ -5046,6 +5354,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "sensitivity_sweep": sensitivity_sweep,
         "prior_model_metrics": prior_model_metrics,
         "selection_weights": dict(selection_weights),
+        "hard_negative_mining": hard_negative_report,
+        "edge_model_v2": edge_model_v2_report,
         "model_selection_retune": model_selection_retune,
         "training_data_delta": training_data_delta,
         "promoted_model_path": promoted_model_path,

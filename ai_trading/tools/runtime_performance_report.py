@@ -2419,6 +2419,22 @@ def _position_delta_score(
     return float(total_abs_delta), int(mismatch_count), float(max_abs_delta)
 
 
+def _position_delta_ratio(
+    *,
+    total_abs_delta: float,
+    candidate_positions: Mapping[str, float],
+    broker_positions: Mapping[str, float],
+) -> float:
+    candidate_abs_total = float(
+        sum(abs(float(value)) for value in candidate_positions.values())
+    )
+    broker_abs_total = float(sum(abs(float(value)) for value in broker_positions.values()))
+    dominant_abs_total = max(candidate_abs_total, broker_abs_total, 0.0)
+    if dominant_abs_total <= 0.0:
+        return 0.0
+    return float(max(total_abs_delta, 0.0) / dominant_abs_total)
+
+
 def _choose_reconciliation_positions(
     *,
     trade_positions: Mapping[str, Any],
@@ -2440,7 +2456,61 @@ def _choose_reconciliation_positions(
 
     trade_score = _position_delta_score(trade_map, broker_map)
     fill_score = _position_delta_score(fill_map, broker_map)
+    selected_map: dict[str, float]
+    selected_source: str
+    selected_score: tuple[float, int, float]
     if fill_score < trade_score:
+        selected_map = fill_map
+        selected_source = "fill_events"
+        selected_score = fill_score
+    else:
+        selected_map = trade_map
+        selected_source = "trade_history"
+        selected_score = trade_score
+
+    fallback_to_broker_enabled = bool(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_RECONCILIATION_FALLBACK_TO_BROKER_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    fallback_ratio_threshold = max(
+        0.05,
+        min(
+            2.0,
+            float(
+                get_env(
+                    "AI_TRADING_RUNTIME_PERF_RECONCILIATION_FALLBACK_TO_BROKER_ABS_DELTA_RATIO",
+                    0.80,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    fallback_mismatch_threshold = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_RUNTIME_PERF_RECONCILIATION_FALLBACK_TO_BROKER_MISMATCH_COUNT",
+                6,
+                cast=int,
+            )
+        ),
+    )
+    selected_total_abs_delta, selected_mismatch_count, _selected_max_abs = selected_score
+    selected_ratio = _position_delta_ratio(
+        total_abs_delta=selected_total_abs_delta,
+        candidate_positions=selected_map,
+        broker_positions=broker_map,
+    )
+    if bool(fallback_to_broker_enabled) and (
+        float(selected_ratio) >= float(fallback_ratio_threshold)
+        or int(selected_mismatch_count) >= int(fallback_mismatch_threshold)
+    ):
+        return broker_map, "broker_open_positions"
+
+    if selected_source == "fill_events":
         return fill_map, "fill_events"
     return None, "trade_history"
 

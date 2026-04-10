@@ -1208,6 +1208,32 @@ def _is_missing_order_lookup_error(err: BaseException) -> bool:
     return any(token in detail for token in missing_tokens)
 
 
+def _is_duplicate_client_order_id_error(err: BaseException) -> bool:
+    """Return ``True`` when provider error indicates duplicate client order id."""
+
+    metadata = _extract_api_error_metadata(err)
+    status_value = metadata.get("status_code")
+    try:
+        status_int = int(status_value) if status_value is not None else None
+    except (TypeError, ValueError):
+        status_int = None
+    code_value = metadata.get("code")
+    code_text = str(code_value).strip().lower() if code_value not in (None, "") else ""
+    detail = str(metadata.get("detail") or metadata.get("error") or err).strip().lower()
+    duplicate_tokens = (
+        "client_order_id already",
+        "duplicate client order id",
+        "client order id is already",
+        "client_order_id must be unique",
+        "duplicate client_order_id",
+    )
+    if code_text in {"duplicate_client_order_id", "duplicate_order_id", "409"}:
+        return True
+    if status_int not in {409, 422}:
+        return False
+    return any(token in detail for token in duplicate_tokens)
+
+
 def _resolve_expected_order_price(*sources: Any) -> float | None:
     """Return best-effort benchmark price for slippage attribution."""
 
@@ -2301,6 +2327,7 @@ class ExecutionEngine:
         self._slippage_feedback_bps: deque[float] = deque(maxlen=512)
         self._symbol_live_edge_bps_history: dict[str, deque[float]] = {}
         self._symbol_session_live_edge_bps_history: dict[str, deque[float]] = {}
+        self._symbol_session_regime_live_edge_bps_history: dict[str, deque[float]] = {}
         self._session_spread_bps_history: dict[str, deque[float]] = {}
         self._session_quote_age_ms_history: dict[str, deque[float]] = {}
         self._regime_stability_observations: deque[dict[str, Any]] = deque(maxlen=512)
@@ -3203,7 +3230,15 @@ class ExecutionEngine:
         ) * float(severity)
         return max(float(severe_scale_value), min(float(blended_scale), float(default_scale_value)))
 
-    def _symbol_reentry_cooldown_seconds(self) -> float:
+    def _symbol_reentry_cooldown_seconds(
+        self,
+        *,
+        symbol: str | None = None,
+        side: str | None = None,
+        slippage_context: Mapping[str, Any] | None = None,
+        adverse_selection_context: Mapping[str, Any] | None = None,
+        uncertainty_context: Mapping[str, Any] | None = None,
+    ) -> float:
         """Return same-side symbol re-entry cooldown in seconds."""
 
         value = _config_float("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_SEC", None)
@@ -3233,8 +3268,6 @@ class ExecutionEngine:
             default_scale=float(relax_scale),
             severe_scale=float(severe_relax_scale),
         )
-        if adaptive_scale >= 1.0:
-            return cooldown_seconds
         min_cooldown_s = _config_float(
             "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_MIN_SEC",
             30.0,
@@ -3242,10 +3275,198 @@ class ExecutionEngine:
         if min_cooldown_s is None or not math.isfinite(float(min_cooldown_s)):
             min_cooldown_s = 30.0
         min_cooldown_s = max(0.0, min(float(min_cooldown_s), 3600.0))
-        adjusted = max(float(min_cooldown_s), float(cooldown_seconds) * float(adaptive_scale))
-        return max(0.0, min(float(adjusted), 3600.0))
+        if adaptive_scale >= 1.0:
+            adjusted = float(cooldown_seconds)
+        else:
+            adjusted = max(float(min_cooldown_s), float(cooldown_seconds) * float(adaptive_scale))
+        cooldown_effective = max(0.0, min(float(adjusted), 3600.0))
+        if cooldown_effective <= 0.0:
+            return cooldown_effective
 
-    def _opening_min_notional_dollars(self) -> float:
+        regime_adaptive_enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_ADAPTIVE_ENABLED"
+        )
+        if regime_adaptive_enabled is None:
+            regime_adaptive_enabled = True
+        if not bool(regime_adaptive_enabled):
+            return cooldown_effective
+
+        require_market_open = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_REQUIRE_MARKET_OPEN"
+        )
+        if require_market_open is None:
+            require_market_open = True
+        if bool(require_market_open) and not _market_is_open_now():
+            return cooldown_effective
+
+        symbol_token = str(symbol or "").strip().upper()
+        side_token = self._normalized_order_side(side)
+        if not symbol_token or side_token not in {"buy", "sell"}:
+            return cooldown_effective
+
+        context_slippage = dict(slippage_context) if isinstance(slippage_context, Mapping) else {}
+        context_adverse = (
+            dict(adverse_selection_context)
+            if isinstance(adverse_selection_context, Mapping)
+            else {}
+        )
+        context_uncertainty = dict(uncertainty_context) if isinstance(uncertainty_context, Mapping) else {}
+        min_samples = _config_int(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_MIN_SAMPLES",
+            6,
+        )
+        if min_samples is None:
+            min_samples = 6
+        min_samples = max(1, min(int(min_samples), 5000))
+        soft_tighten_mult = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_SOFT_TIGHTEN_MULT",
+            1.25,
+        )
+        if soft_tighten_mult is None or not math.isfinite(float(soft_tighten_mult)):
+            soft_tighten_mult = 1.25
+        soft_tighten_mult = max(1.0, min(float(soft_tighten_mult), 6.0))
+        hard_tighten_mult = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_HARD_TIGHTEN_MULT",
+            1.75,
+        )
+        if hard_tighten_mult is None or not math.isfinite(float(hard_tighten_mult)):
+            hard_tighten_mult = 1.75
+        hard_tighten_mult = max(float(soft_tighten_mult), min(float(hard_tighten_mult), 10.0))
+
+        adverse_soft_bps = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_ADVERSE_SOFT_BPS",
+            2.0,
+        )
+        if adverse_soft_bps is None or not math.isfinite(float(adverse_soft_bps)):
+            adverse_soft_bps = 2.0
+        adverse_soft_bps = max(0.0, min(float(adverse_soft_bps), 100.0))
+        adverse_hard_bps = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_ADVERSE_HARD_BPS",
+            4.0,
+        )
+        if adverse_hard_bps is None or not math.isfinite(float(adverse_hard_bps)):
+            adverse_hard_bps = 4.0
+        adverse_hard_bps = max(float(adverse_soft_bps), min(float(adverse_hard_bps), 200.0))
+
+        capture_low_floor = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_CAPTURE_LOW_FLOOR",
+            0.10,
+        )
+        if capture_low_floor is None or not math.isfinite(float(capture_low_floor)):
+            capture_low_floor = 0.10
+        capture_low_floor = max(-5.0, min(float(capture_low_floor), 5.0))
+        capture_good_floor = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_CAPTURE_GOOD_FLOOR",
+            0.35,
+        )
+        if capture_good_floor is None or not math.isfinite(float(capture_good_floor)):
+            capture_good_floor = 0.35
+        capture_good_floor = max(float(capture_low_floor), min(float(capture_good_floor), 5.0))
+
+        uncertainty_high = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_UNCERTAINTY_HIGH",
+            0.42,
+        )
+        if uncertainty_high is None or not math.isfinite(float(uncertainty_high)):
+            uncertainty_high = 0.42
+        uncertainty_high = max(0.0, min(float(uncertainty_high), 1.0))
+        uncertainty_low = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_UNCERTAINTY_LOW",
+            0.20,
+        )
+        if uncertainty_low is None or not math.isfinite(float(uncertainty_low)):
+            uncertainty_low = 0.20
+        uncertainty_low = max(0.0, min(float(uncertainty_low), float(uncertainty_high)))
+        uncertainty_tighten_mult = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_UNCERTAINTY_TIGHTEN_MULT",
+            1.20,
+        )
+        if uncertainty_tighten_mult is None or not math.isfinite(float(uncertainty_tighten_mult)):
+            uncertainty_tighten_mult = 1.20
+        uncertainty_tighten_mult = max(1.0, min(float(uncertainty_tighten_mult), 6.0))
+        good_relax_mult = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_GOOD_RELAX_MULT",
+            0.90,
+        )
+        if good_relax_mult is None or not math.isfinite(float(good_relax_mult)):
+            good_relax_mult = 0.90
+        good_relax_mult = max(0.50, min(float(good_relax_mult), 1.0))
+        low_uncertainty_relax_mult = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_LOW_UNCERTAINTY_RELAX_MULT",
+            0.92,
+        )
+        if low_uncertainty_relax_mult is None or not math.isfinite(float(low_uncertainty_relax_mult)):
+            low_uncertainty_relax_mult = 0.92
+        low_uncertainty_relax_mult = max(0.50, min(float(low_uncertainty_relax_mult), 1.0))
+
+        tighten_mult = 1.0
+        breach_severity = str(context_slippage.get("breach_severity") or "").strip().lower()
+        if breach_severity == "hard":
+            tighten_mult = max(float(tighten_mult), float(hard_tighten_mult))
+        elif breach_severity in {"elevated", "soft"}:
+            tighten_mult = max(float(tighten_mult), float(soft_tighten_mult))
+
+        adverse_selection_risk_bps = _safe_float(
+            context_adverse.get("adverse_selection_risk_bps")
+        )
+        if adverse_selection_risk_bps is not None:
+            if float(adverse_selection_risk_bps) >= float(adverse_hard_bps):
+                tighten_mult = max(float(tighten_mult), float(hard_tighten_mult))
+            elif float(adverse_selection_risk_bps) >= float(adverse_soft_bps):
+                tighten_mult = max(float(tighten_mult), float(soft_tighten_mult))
+
+        symbol_edge_capture_ratio = _safe_float(
+            context_slippage.get("symbol_edge_capture_ratio")
+        )
+        symbol_edge_samples = max(
+            0,
+            _safe_int(context_slippage.get("symbol_edge_samples"), 0),
+        )
+        if (
+            symbol_edge_capture_ratio is not None
+            and int(symbol_edge_samples) >= int(min_samples)
+            and float(symbol_edge_capture_ratio) <= float(capture_low_floor)
+        ):
+            tighten_mult = max(float(tighten_mult), float(soft_tighten_mult))
+
+        uncertainty_value = _safe_float(context_uncertainty.get("uncertainty"))
+        if uncertainty_value is not None and float(uncertainty_value) >= float(uncertainty_high):
+            tighten_mult = max(float(tighten_mult), float(uncertainty_tighten_mult))
+
+        relax_mult = 1.0
+        if float(tighten_mult) <= 1.0:
+            if (
+                symbol_edge_capture_ratio is not None
+                and int(symbol_edge_samples) >= int(min_samples)
+                and float(symbol_edge_capture_ratio) >= float(capture_good_floor)
+            ):
+                relax_mult *= float(good_relax_mult)
+            if uncertainty_value is not None and float(uncertainty_value) <= float(uncertainty_low):
+                relax_mult *= float(low_uncertainty_relax_mult)
+
+        effective_scale = float(tighten_mult) if float(tighten_mult) > 1.0 else float(relax_mult)
+        if not math.isfinite(effective_scale) or abs(float(effective_scale) - 1.0) <= 1e-6:
+            return cooldown_effective
+
+        max_cooldown_s = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_MAX_SEC",
+            240.0,
+        )
+        if max_cooldown_s is None or not math.isfinite(float(max_cooldown_s)):
+            max_cooldown_s = 240.0
+        max_cooldown_s = max(float(min_cooldown_s), min(float(max_cooldown_s), 3600.0))
+        scaled = float(cooldown_effective) * float(effective_scale)
+        if float(effective_scale) > 1.0:
+            scaled = min(float(scaled), float(max_cooldown_s))
+        return max(float(min_cooldown_s), min(float(scaled), 3600.0))
+
+    def _opening_min_notional_dollars(
+        self,
+        *,
+        symbol: str | None = None,
+        uncertainty_context: Mapping[str, Any] | None = None,
+        slippage_context: Mapping[str, Any] | None = None,
+    ) -> float:
         """Return minimum opening notional required before submitting an order."""
 
         value = _config_float("AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL", None)
@@ -3275,8 +3496,6 @@ class ExecutionEngine:
             default_scale=float(relax_scale),
             severe_scale=float(severe_relax_scale),
         )
-        if adaptive_scale >= 1.0:
-            return min_notional
         floor_notional = _config_float(
             "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_RELAX_FLOOR",
             0.0,
@@ -3284,14 +3503,161 @@ class ExecutionEngine:
         if floor_notional is None or not math.isfinite(float(floor_notional)):
             floor_notional = 0.0
         floor_notional = max(0.0, min(float(floor_notional), float(min_notional)))
-        adjusted = max(float(floor_notional), float(min_notional) * float(adaptive_scale))
-        return max(0.0, min(float(adjusted), float(min_notional)))
+        if adaptive_scale >= 1.0:
+            adjusted = float(min_notional)
+        else:
+            adjusted = max(float(floor_notional), float(min_notional) * float(adaptive_scale))
+        base_min_notional = max(0.0, min(float(adjusted), float(min_notional)))
+        if base_min_notional <= 0.0:
+            return 0.0
+
+        regime_adaptive_enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_REGIME_ADAPTIVE_ENABLED"
+        )
+        if regime_adaptive_enabled is None:
+            regime_adaptive_enabled = True
+        if not bool(regime_adaptive_enabled):
+            return base_min_notional
+
+        require_market_open = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_ADAPTIVE_REQUIRE_MARKET_OPEN"
+        )
+        if require_market_open is None:
+            require_market_open = True
+        if bool(require_market_open) and not _market_is_open_now():
+            return base_min_notional
+
+        symbol_token = str(symbol or "").strip().upper()
+        if not symbol_token:
+            return base_min_notional
+
+        context_uncertainty = dict(uncertainty_context) if isinstance(uncertainty_context, Mapping) else {}
+        context_slippage = dict(slippage_context) if isinstance(slippage_context, Mapping) else {}
+        uncertainty_value = _safe_float(context_uncertainty.get("uncertainty"))
+        max_uncertainty = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_ADAPTIVE_MAX_UNCERTAINTY",
+            0.30,
+        )
+        if max_uncertainty is None or not math.isfinite(float(max_uncertainty)):
+            max_uncertainty = 0.30
+        max_uncertainty = max(0.0, min(float(max_uncertainty), 1.0))
+        if uncertainty_value is None:
+            require_uncertainty_context = _resolve_bool_env(
+                "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_ADAPTIVE_REQUIRE_UNCERTAINTY_CONTEXT"
+            )
+            if require_uncertainty_context is None:
+                require_uncertainty_context = False
+            if bool(require_uncertainty_context):
+                return base_min_notional
+            fallback_uncertainty = _config_float(
+                "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_ADAPTIVE_FALLBACK_UNCERTAINTY",
+                float(max_uncertainty) * 0.66,
+            )
+            if fallback_uncertainty is None or not math.isfinite(float(fallback_uncertainty)):
+                fallback_uncertainty = float(max_uncertainty) * 0.66
+            uncertainty_value = max(0.0, min(float(fallback_uncertainty), 1.0))
+        if float(uncertainty_value) > float(max_uncertainty):
+            return base_min_notional
+
+        capture_min_samples = _config_int(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_ADAPTIVE_CAPTURE_MIN_SAMPLES",
+            6,
+        )
+        if capture_min_samples is None:
+            capture_min_samples = 6
+        capture_min_samples = max(1, min(int(capture_min_samples), 5000))
+        capture_min_ratio = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_ADAPTIVE_CAPTURE_MIN_RATIO",
+            0.18,
+        )
+        if capture_min_ratio is None or not math.isfinite(float(capture_min_ratio)):
+            capture_min_ratio = 0.18
+        capture_min_ratio = max(-5.0, min(float(capture_min_ratio), 5.0))
+        expected_edge_min_bps = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_ADAPTIVE_EXPECTED_EDGE_MIN_BPS",
+            0.20,
+        )
+        if expected_edge_min_bps is None or not math.isfinite(float(expected_edge_min_bps)):
+            expected_edge_min_bps = 0.20
+        expected_edge_min_bps = max(-50.0, min(float(expected_edge_min_bps), 200.0))
+
+        symbol_edge_capture_ratio = _safe_float(context_slippage.get("symbol_edge_capture_ratio"))
+        symbol_edge_samples = max(0, _safe_int(context_slippage.get("symbol_edge_samples"), 0))
+        symbol_expected_edge_sum_bps = _safe_float(
+            context_slippage.get("symbol_expected_edge_sum_bps")
+        ) or 0.0
+        symbol_expected_edge_mean_bps: float | None = None
+        if int(symbol_edge_samples) > 0:
+            symbol_expected_edge_mean_bps = (
+                float(symbol_expected_edge_sum_bps) / float(max(int(symbol_edge_samples), 1))
+            )
+        if (
+            symbol_edge_capture_ratio is None
+            or int(symbol_edge_samples) < int(capture_min_samples)
+            or float(symbol_edge_capture_ratio) < float(capture_min_ratio)
+            or symbol_expected_edge_mean_bps is None
+            or float(symbol_expected_edge_mean_bps) < float(expected_edge_min_bps)
+        ):
+            return base_min_notional
+
+        breach_severity = str(context_slippage.get("breach_severity") or "").strip().lower()
+        if breach_severity in {"hard", "elevated"}:
+            return base_min_notional
+
+        relax_scale = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_CAPTURE_RELAX_SCALE",
+            0.65,
+        )
+        if relax_scale is None or not math.isfinite(float(relax_scale)):
+            relax_scale = 0.65
+        relax_scale = max(0.10, min(float(relax_scale), 1.0))
+        very_low_uncertainty = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_ADAPTIVE_VERY_LOW_UNCERTAINTY",
+            0.18,
+        )
+        if very_low_uncertainty is None or not math.isfinite(float(very_low_uncertainty)):
+            very_low_uncertainty = 0.18
+        very_low_uncertainty = max(0.0, min(float(very_low_uncertainty), 1.0))
+        very_low_uncertainty_relax_mult = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_ADAPTIVE_VERY_LOW_UNCERTAINTY_RELAX_MULT",
+            0.90,
+        )
+        if (
+            very_low_uncertainty_relax_mult is None
+            or not math.isfinite(float(very_low_uncertainty_relax_mult))
+        ):
+            very_low_uncertainty_relax_mult = 0.90
+        very_low_uncertainty_relax_mult = max(
+            0.50,
+            min(float(very_low_uncertainty_relax_mult), 1.0),
+        )
+        relax_floor_ratio = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_ADAPTIVE_RELAX_FLOOR_RATIO",
+            0.25,
+        )
+        if relax_floor_ratio is None or not math.isfinite(float(relax_floor_ratio)):
+            relax_floor_ratio = 0.25
+        relax_floor_ratio = max(0.0, min(float(relax_floor_ratio), 1.0))
+
+        adaptive_relax_mult = float(relax_scale)
+        if float(uncertainty_value) <= float(very_low_uncertainty):
+            adaptive_relax_mult *= float(very_low_uncertainty_relax_mult)
+        adaptive_relax_mult = max(0.05, min(float(adaptive_relax_mult), 1.0))
+        adaptive_floor = max(float(floor_notional), float(min_notional) * float(relax_floor_ratio))
+        adapted_min_notional = max(
+            float(adaptive_floor),
+            float(base_min_notional) * float(adaptive_relax_mult),
+        )
+        return max(0.0, min(float(adapted_min_notional), float(base_min_notional)))
 
     def _symbol_reentry_cooldown_allows_opening(
         self,
         *,
         symbol: str,
         side: str,
+        slippage_context: Mapping[str, Any] | None = None,
+        adverse_selection_context: Mapping[str, Any] | None = None,
+        uncertainty_context: Mapping[str, Any] | None = None,
     ) -> tuple[bool, dict[str, Any]]:
         """Return whether same-side symbol re-entry cooldown currently allows opening."""
 
@@ -3306,7 +3672,13 @@ class ExecutionEngine:
         if not symbol_token or side_token not in {"buy", "sell"}:
             return True, {"enabled": True, "reason": "symbol_or_side_missing"}
 
-        cooldown_seconds = self._symbol_reentry_cooldown_seconds()
+        cooldown_seconds = self._symbol_reentry_cooldown_seconds(
+            symbol=symbol_token,
+            side=side_token,
+            slippage_context=slippage_context,
+            adverse_selection_context=adverse_selection_context,
+            uncertainty_context=uncertainty_context,
+        )
         if cooldown_seconds <= 0.0:
             return True, {
                 "enabled": True,
@@ -3392,15 +3764,22 @@ class ExecutionEngine:
     def _opening_min_notional_allows_order(
         self,
         order: Mapping[str, Any],
+        *,
+        uncertainty_context: Mapping[str, Any] | None = None,
+        slippage_context: Mapping[str, Any] | None = None,
     ) -> tuple[bool, dict[str, Any]]:
         """Return whether opening-order notional clears configured minimum."""
 
-        min_notional = self._opening_min_notional_dollars()
+        symbol_token = str(order.get("symbol") or "").strip().upper()
+        side_token = self._normalized_order_side(order.get("side"))
+        min_notional = self._opening_min_notional_dollars(
+            symbol=symbol_token or None,
+            uncertainty_context=uncertainty_context,
+            slippage_context=slippage_context,
+        )
         if min_notional <= 0.0:
             return True, {"enabled": False, "reason": "disabled"}
 
-        symbol_token = str(order.get("symbol") or "").strip().upper()
-        side_token = self._normalized_order_side(order.get("side"))
         qty = _safe_float(order.get("quantity"))
         if qty is None:
             qty = _safe_float(order.get("qty"))
@@ -3424,6 +3803,75 @@ class ExecutionEngine:
                 "min_notional": float(min_notional),
             }
 
+        near_tolerance_pct = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_NEAR_TOLERANCE_PCT",
+            0.0,
+        )
+        if near_tolerance_pct is None or not math.isfinite(float(near_tolerance_pct)):
+            near_tolerance_pct = 0.0
+        near_tolerance_pct = max(0.0, min(float(near_tolerance_pct), 0.25))
+        if near_tolerance_pct > 0.0:
+            near_notional_floor = max(0.0, float(min_notional) * (1.0 - float(near_tolerance_pct)))
+            if float(notional) >= float(near_notional_floor):
+                return True, {
+                    "enabled": True,
+                    "reason": "near_min_notional_tolerance",
+                    "symbol": symbol_token,
+                    "side": side_token,
+                    "order_notional": float(notional),
+                    "min_notional": float(min_notional),
+                    "near_tolerance_pct": float(near_tolerance_pct),
+                    "near_notional_floor": float(near_notional_floor),
+                }
+
+        autosize_enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_AUTOSIZE_ENABLED"
+        )
+        if autosize_enabled is None:
+            autosize_enabled = True
+        autosize_max_mult = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_AUTOSIZE_MAX_MULT",
+            3.0,
+        )
+        if autosize_max_mult is None or not math.isfinite(float(autosize_max_mult)):
+            autosize_max_mult = 3.0
+        autosize_max_mult = max(1.0, min(float(autosize_max_mult), 20.0))
+        autosize_max_qty = _config_int(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_AUTOSIZE_MAX_QTY",
+            10,
+        )
+        if autosize_max_qty is None:
+            autosize_max_qty = 10
+        autosize_max_qty = max(1, min(int(autosize_max_qty), 10000))
+        if bool(autosize_enabled) and isinstance(order, dict):
+            try:
+                required_qty = int(
+                    max(1, math.ceil(float(min_notional) / max(float(price_hint), 1e-9)))
+                )
+            except Exception:
+                required_qty = 0
+            current_qty = int(max(1, math.ceil(float(qty))))
+            if required_qty > current_qty:
+                required_mult = float(required_qty) / float(max(current_qty, 1))
+                if required_mult <= float(autosize_max_mult) and required_qty <= int(
+                    autosize_max_qty
+                ):
+                    order["quantity"] = int(required_qty)
+                    if "qty" in order:
+                        order["qty"] = int(required_qty)
+                    adjusted_notional = abs(float(required_qty) * float(price_hint))
+                    return True, {
+                        "enabled": True,
+                        "reason": "autosized_to_min_notional",
+                        "symbol": symbol_token,
+                        "side": side_token,
+                        "original_quantity": float(qty),
+                        "adjusted_quantity": int(required_qty),
+                        "order_notional": float(adjusted_notional),
+                        "min_notional": float(min_notional),
+                        "required_qty_multiplier": float(required_mult),
+                    }
+
         return False, {
             "enabled": True,
             "reason": "opening_min_notional",
@@ -3431,6 +3879,9 @@ class ExecutionEngine:
             "side": side_token,
             "order_notional": float(notional),
             "min_notional": float(min_notional),
+            "autosize_enabled": bool(autosize_enabled),
+            "autosize_max_mult": float(autosize_max_mult),
+            "autosize_max_qty": int(autosize_max_qty),
         }
 
     def _service_phase(self) -> str:
@@ -6814,19 +7265,71 @@ class ExecutionEngine:
         )
         if require_session is None:
             require_session = True
+        require_regime = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_REQUIRE_REGIME_MATCH"
+        )
+        if require_regime is None:
+            require_regime = True
         critical_context_required = self._execution_require_critical_context_for_openings(
             env_keys=(
                 "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_REQUIRE_CRITICAL_CONTEXT",
             )
         )
+        allow_session_fallback = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_ALLOW_SESSION_FALLBACK"
+        )
+        if allow_session_fallback is None:
+            allow_session_fallback = not bool(critical_context_required)
         allow_symbol_fallback = _resolve_bool_env(
             "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_ALLOW_SYMBOL_FALLBACK"
         )
         if allow_symbol_fallback is None:
             allow_symbol_fallback = not bool(critical_context_required)
+        confidence_method = str(
+            _config_get_env(
+                "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_METHOD",
+                default="lcb",
+            )
+            or "lcb"
+        ).strip().lower()
+        if confidence_method not in {"lcb", "bayesian", "both"}:
+            confidence_method = "lcb"
+        bayes_positive_prob_min = _config_float(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_BAYES_POSITIVE_PROB_MIN",
+            0.60,
+        )
+        if bayes_positive_prob_min is None:
+            bayes_positive_prob_min = 0.60
+        bayes_positive_prob_min = max(0.50, min(float(bayes_positive_prob_min), 0.999999))
+        bayes_prior_mean_bps = _config_float(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_BAYES_PRIOR_MEAN_BPS",
+            0.0,
+        )
+        if bayes_prior_mean_bps is None:
+            bayes_prior_mean_bps = 0.0
+        bayes_prior_mean_bps = max(-100.0, min(float(bayes_prior_mean_bps), 100.0))
+        bayes_prior_strength = _config_float(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_BAYES_PRIOR_STRENGTH",
+            6.0,
+        )
+        if bayes_prior_strength is None:
+            bayes_prior_strength = 6.0
+        bayes_prior_strength = max(0.0, min(float(bayes_prior_strength), 500.0))
+        bayes_std_proxy_bps = _config_float(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_BAYES_STD_PROXY_BPS",
+            8.0,
+        )
+        if bayes_std_proxy_bps is None:
+            bayes_std_proxy_bps = 8.0
+        bayes_std_proxy_bps = max(0.01, min(float(bayes_std_proxy_bps), 200.0))
         session_regime = str(
             self._execution_time_of_day_regime().get("session_regime") or "offhours"
         ).strip().lower() or "offhours"
+        metadata = order.get("metadata")
+        metadata_map = metadata if isinstance(metadata, Mapping) else {}
+        market_regime = str(
+            order.get("market_regime") or metadata_map.get("market_regime") or "unknown"
+        ).strip().lower() or "unknown"
 
         history_by_symbol_raw = getattr(self, "_symbol_live_edge_bps_history", None)
         history_by_symbol = (
@@ -6842,18 +7345,41 @@ class ExecutionEngine:
             if isinstance(history_by_symbol_session_raw, dict)
             else {}
         )
+        history_by_symbol_session_regime_raw = getattr(
+            self,
+            "_symbol_session_regime_live_edge_bps_history",
+            None,
+        )
+        history_by_symbol_session_regime = (
+            history_by_symbol_session_regime_raw
+            if isinstance(history_by_symbol_session_regime_raw, dict)
+            else {}
+        )
         history_values: list[float] = []
         source = "symbol"
         if bool(require_session):
-            session_key = f"{symbol}:{session_regime}"
-            session_history = history_by_symbol_session.get(session_key)
-            if isinstance(session_history, deque):
-                history_values = [
-                    float(v)
-                    for v in session_history
-                    if isinstance(v, (int, float)) and math.isfinite(float(v))
-                ]
-                source = "symbol_session"
+            if bool(require_regime):
+                session_regime_key = f"{symbol}:{session_regime}:{market_regime}"
+                session_regime_history = history_by_symbol_session_regime.get(session_regime_key)
+                if isinstance(session_regime_history, deque):
+                    history_values = [
+                        float(v)
+                        for v in session_regime_history
+                        if isinstance(v, (int, float)) and math.isfinite(float(v))
+                    ]
+                    source = "symbol_session_regime"
+            if (not history_values or len(history_values) < int(min_samples)) and bool(
+                allow_session_fallback
+            ):
+                session_key = f"{symbol}:{session_regime}"
+                session_history = history_by_symbol_session.get(session_key)
+                if isinstance(session_history, deque):
+                    history_values = [
+                        float(v)
+                        for v in session_history
+                        if isinstance(v, (int, float)) and math.isfinite(float(v))
+                    ]
+                    source = "symbol_session"
         if (
             (not history_values or len(history_values) < int(min_samples))
             and bool(allow_symbol_fallback)
@@ -6872,12 +7398,15 @@ class ExecutionEngine:
                 "reason": "insufficient_samples",
                 "symbol": symbol,
                 "session_regime": session_regime,
+                "market_regime": market_regime,
                 "source": source,
                 "samples": 0,
                 "min_samples": int(min_samples),
                 "window_fills": int(window_fills),
                 "expected_edge_bps": float(expected_edge_bps),
                 "critical_context_required": bool(critical_context_required),
+                "require_regime": bool(require_regime),
+                "allow_session_fallback": bool(allow_session_fallback),
                 "allow_symbol_fallback": bool(allow_symbol_fallback),
             }
         tail_values = history_values[-int(window_fills):]
@@ -6888,12 +7417,15 @@ class ExecutionEngine:
                 "reason": "insufficient_samples",
                 "symbol": symbol,
                 "session_regime": session_regime,
+                "market_regime": market_regime,
                 "source": source,
                 "samples": int(sample_count),
                 "min_samples": int(min_samples),
                 "window_fills": int(window_fills),
                 "expected_edge_bps": float(expected_edge_bps),
                 "critical_context_required": bool(critical_context_required),
+                "require_regime": bool(require_regime),
+                "allow_session_fallback": bool(allow_session_fallback),
                 "allow_symbol_fallback": bool(allow_symbol_fallback),
             }
         mean_edge_bps = float(statistics.mean(tail_values))
@@ -6913,12 +7445,41 @@ class ExecutionEngine:
         ratio = float(expected_edge_bps) / max(float(conservative_edge_bps), float(denominator_floor))
         lcb_passes = float(conservative_edge_bps) >= float(required_lcb_bps)
         ratio_passes = float(ratio) <= float(max_ratio)
-        allowed = bool(lcb_passes and ratio_passes)
+        posterior_mean_bps = float(
+            (
+                (float(mean_edge_bps) * float(sample_count))
+                + (float(bayes_prior_mean_bps) * float(bayes_prior_strength))
+            )
+            / float(max(1e-9, float(sample_count) + float(bayes_prior_strength)))
+        )
+        sigma_proxy_bps = max(float(edge_std_bps), float(bayes_std_proxy_bps))
+        posterior_std_error_bps = float(sigma_proxy_bps) / math.sqrt(
+            float(max(1.0, float(sample_count) + float(bayes_prior_strength)))
+        )
+        if posterior_std_error_bps <= 1e-9:
+            bayesian_positive_edge_prob = 1.0 if posterior_mean_bps > 0.0 else 0.0
+        else:
+            bayesian_positive_edge_prob = 1.0 - float(
+                statistics.NormalDist(
+                    mu=float(posterior_mean_bps),
+                    sigma=float(posterior_std_error_bps),
+                ).cdf(0.0)
+            )
+        bayesian_positive_edge_prob = max(0.0, min(1.0, float(bayesian_positive_edge_prob)))
+        bayesian_passes = float(bayesian_positive_edge_prob) >= float(bayes_positive_prob_min)
+        lcb_ratio_passes = bool(lcb_passes and ratio_passes)
+        if confidence_method == "bayesian":
+            allowed = bool(bayesian_passes)
+        elif confidence_method == "both":
+            allowed = bool(lcb_ratio_passes and bayesian_passes)
+        else:
+            allowed = bool(lcb_ratio_passes)
         return bool(allowed), {
             "enabled": True,
             "reason": "ok" if allowed else "expected_edge_confidence_gate",
             "symbol": symbol,
             "session_regime": session_regime,
+            "market_regime": market_regime,
             "source": source,
             "samples": int(sample_count),
             "window_fills": int(window_fills),
@@ -6939,7 +7500,15 @@ class ExecutionEngine:
             "ratio_denominator_floor_bps": float(denominator_floor),
             "lcb_passes": bool(lcb_passes),
             "ratio_passes": bool(ratio_passes),
+            "confidence_method": str(confidence_method),
+            "bayesian_positive_edge_prob": float(bayesian_positive_edge_prob),
+            "bayesian_positive_prob_min": float(bayes_positive_prob_min),
+            "bayesian_prior_mean_bps": float(bayes_prior_mean_bps),
+            "bayesian_prior_strength": float(bayes_prior_strength),
+            "bayesian_passes": bool(bayesian_passes),
             "critical_context_required": bool(critical_context_required),
+            "require_regime": bool(require_regime),
+            "allow_session_fallback": bool(allow_session_fallback),
             "allow_symbol_fallback": bool(allow_symbol_fallback),
         }
 
@@ -7643,6 +8212,52 @@ class ExecutionEngine:
         if min_expectancy_bps is None:
             min_expectancy_bps = 0.0
         min_expectancy_bps = max(-200.0, min(float(min_expectancy_bps), 200.0))
+        adaptive_floor_enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_ADAPTIVE_FLOOR_ENABLED"
+        )
+        if adaptive_floor_enabled is None:
+            adaptive_floor_enabled = True
+        adaptive_floor_min_global_samples = _config_int(
+            "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_ADAPTIVE_FLOOR_MIN_GLOBAL_SAMPLES",
+            20,
+        )
+        if adaptive_floor_min_global_samples is None:
+            adaptive_floor_min_global_samples = 20
+        adaptive_floor_min_global_samples = max(
+            1,
+            min(int(adaptive_floor_min_global_samples), 10_000),
+        )
+        adaptive_floor_min_symbol_samples = _config_int(
+            "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_ADAPTIVE_FLOOR_MIN_SYMBOL_SAMPLES",
+            8,
+        )
+        if adaptive_floor_min_symbol_samples is None:
+            adaptive_floor_min_symbol_samples = 8
+        adaptive_floor_min_symbol_samples = max(
+            1,
+            min(int(adaptive_floor_min_symbol_samples), 10_000),
+        )
+        adaptive_floor_global_weight = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_ADAPTIVE_FLOOR_GLOBAL_MARKOUT_WEIGHT",
+            0.75,
+        )
+        if adaptive_floor_global_weight is None:
+            adaptive_floor_global_weight = 0.75
+        adaptive_floor_global_weight = max(0.0, min(float(adaptive_floor_global_weight), 4.0))
+        adaptive_floor_symbol_weight = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_ADAPTIVE_FLOOR_SYMBOL_MARKOUT_WEIGHT",
+            0.50,
+        )
+        if adaptive_floor_symbol_weight is None:
+            adaptive_floor_symbol_weight = 0.50
+        adaptive_floor_symbol_weight = max(0.0, min(float(adaptive_floor_symbol_weight), 4.0))
+        adaptive_floor_max_add_bps = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_ADAPTIVE_FLOOR_MAX_ADD_BPS",
+            12.0,
+        )
+        if adaptive_floor_max_add_bps is None:
+            adaptive_floor_max_add_bps = 12.0
+        adaptive_floor_max_add_bps = max(0.0, min(float(adaptive_floor_max_add_bps), 100.0))
         tolerance_bps = _config_float(
             "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_TOLERANCE_BPS",
             0.0,
@@ -7655,11 +8270,21 @@ class ExecutionEngine:
         )
         if require_session is None:
             require_session = True
+        require_regime = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_REQUIRE_REGIME_MATCH"
+        )
+        if require_regime is None:
+            require_regime = True
         critical_context_required = self._execution_require_critical_context_for_openings(
             env_keys=(
                 "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_REQUIRE_CRITICAL_CONTEXT",
             )
         )
+        allow_session_fallback = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_ALLOW_SESSION_FALLBACK"
+        )
+        if allow_session_fallback is None:
+            allow_session_fallback = not bool(critical_context_required)
         allow_symbol_fallback = _resolve_bool_env(
             "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_ALLOW_SYMBOL_FALLBACK"
         )
@@ -7668,6 +8293,11 @@ class ExecutionEngine:
         session_regime = str(
             self._execution_time_of_day_regime().get("session_regime") or "offhours"
         ).strip().lower() or "offhours"
+        metadata = order.get("metadata")
+        metadata_map = metadata if isinstance(metadata, Mapping) else {}
+        market_regime = str(
+            order.get("market_regime") or metadata_map.get("market_regime") or "unknown"
+        ).strip().lower() or "unknown"
 
         history_by_symbol_raw = getattr(self, "_symbol_live_edge_bps_history", None)
         history_by_symbol = (
@@ -7679,18 +8309,41 @@ class ExecutionEngine:
             if isinstance(history_by_symbol_session_raw, dict)
             else {}
         )
+        history_by_symbol_session_regime_raw = getattr(
+            self, "_symbol_session_regime_live_edge_bps_history", None
+        )
+        history_by_symbol_session_regime = (
+            history_by_symbol_session_regime_raw
+            if isinstance(history_by_symbol_session_regime_raw, dict)
+            else {}
+        )
         history_values: list[float] = []
         source = "symbol"
         if bool(require_session):
-            session_key = f"{symbol}:{session_regime}"
-            session_history = history_by_symbol_session.get(session_key)
-            if isinstance(session_history, deque):
-                history_values = [
-                    float(v)
-                    for v in session_history
-                    if isinstance(v, (int, float)) and math.isfinite(float(v))
-                ]
-                source = "symbol_session"
+            if bool(require_regime):
+                session_regime_key = f"{symbol}:{session_regime}:{market_regime}"
+                session_regime_history = history_by_symbol_session_regime.get(
+                    session_regime_key
+                )
+                if isinstance(session_regime_history, deque):
+                    history_values = [
+                        float(v)
+                        for v in session_regime_history
+                        if isinstance(v, (int, float)) and math.isfinite(float(v))
+                    ]
+                    source = "symbol_session_regime"
+            if (not history_values or len(history_values) < int(min_samples)) and bool(
+                allow_session_fallback
+            ):
+                session_key = f"{symbol}:{session_regime}"
+                session_history = history_by_symbol_session.get(session_key)
+                if isinstance(session_history, deque):
+                    history_values = [
+                        float(v)
+                        for v in session_history
+                        if isinstance(v, (int, float)) and math.isfinite(float(v))
+                    ]
+                    source = "symbol_session"
         if (
             (not history_values or len(history_values) < int(min_samples))
             and bool(allow_symbol_fallback)
@@ -7705,39 +8358,110 @@ class ExecutionEngine:
                 source = "symbol"
 
         if not history_values:
+            markout_context = self._observe_markout_feedback()
             return True, {
                 "enabled": True,
                 "reason": "insufficient_samples",
                 "symbol": symbol,
                 "session_regime": session_regime,
+                "market_regime": market_regime,
                 "source": source,
                 "samples": 0,
                 "min_samples": int(min_samples),
                 "required_expectancy_bps": float(min_expectancy_bps),
+                "required_expectancy_bps_effective": float(min_expectancy_bps),
+                "adaptive_required_expectancy_add_bps": 0.0,
                 "critical_context_required": bool(critical_context_required),
+                "require_regime": bool(require_regime),
+                "allow_session_fallback": bool(allow_session_fallback),
                 "allow_symbol_fallback": bool(allow_symbol_fallback),
+                "adaptive_floor_enabled": bool(adaptive_floor_enabled),
+                "markout_mean_bps_global": float(
+                    self._coerce_finite_float(markout_context.get("mean_bps")) or 0.0
+                ),
+                "markout_samples_global": int(
+                    max(0, _safe_int(markout_context.get("sample_count"), 0))
+                ),
             }
 
         tail_values = history_values[-window_fills:]
         sample_count = int(len(tail_values))
         if sample_count < int(min_samples):
+            markout_context = self._observe_markout_feedback()
             return True, {
                 "enabled": True,
                 "reason": "insufficient_samples",
                 "symbol": symbol,
                 "session_regime": session_regime,
+                "market_regime": market_regime,
                 "source": source,
                 "samples": int(sample_count),
                 "min_samples": int(min_samples),
                 "window_fills": int(window_fills),
                 "required_expectancy_bps": float(min_expectancy_bps),
+                "required_expectancy_bps_effective": float(min_expectancy_bps),
+                "adaptive_required_expectancy_add_bps": 0.0,
                 "critical_context_required": bool(critical_context_required),
+                "require_regime": bool(require_regime),
+                "allow_session_fallback": bool(allow_session_fallback),
                 "allow_symbol_fallback": bool(allow_symbol_fallback),
+                "adaptive_floor_enabled": bool(adaptive_floor_enabled),
+                "markout_mean_bps_global": float(
+                    self._coerce_finite_float(markout_context.get("mean_bps")) or 0.0
+                ),
+                "markout_samples_global": int(
+                    max(0, _safe_int(markout_context.get("sample_count"), 0))
+                ),
             }
+        adaptive_required_add_bps = 0.0
+        markout_mean_global = 0.0
+        markout_samples_global = 0
+        markout_mean_symbol = 0.0
+        markout_samples_symbol = 0
+        if bool(adaptive_floor_enabled):
+            markout_context = self._observe_markout_feedback()
+            markout_samples_global = int(max(0, _safe_int(markout_context.get("sample_count"), 0)))
+            markout_mean_global = float(
+                self._coerce_finite_float(markout_context.get("mean_bps")) or 0.0
+            )
+            global_penalty_bps = 0.0
+            if markout_samples_global >= int(adaptive_floor_min_global_samples):
+                global_penalty_bps = max(0.0, -float(markout_mean_global)) * float(
+                    adaptive_floor_global_weight
+                )
+            symbol_markout_raw = getattr(self, "_symbol_markout_feedback_bps", None)
+            symbol_markout_map = (
+                symbol_markout_raw if isinstance(symbol_markout_raw, dict) else {}
+            )
+            symbol_markout_history = symbol_markout_map.get(symbol)
+            if isinstance(symbol_markout_history, deque):
+                symbol_markout_values = [
+                    float(value)
+                    for value in symbol_markout_history
+                    if isinstance(value, (int, float)) and math.isfinite(float(value))
+                ]
+            else:
+                symbol_markout_values = []
+            markout_samples_symbol = int(len(symbol_markout_values))
+            symbol_penalty_bps = 0.0
+            if markout_samples_symbol >= int(adaptive_floor_min_symbol_samples):
+                markout_mean_symbol = float(statistics.mean(symbol_markout_values))
+                symbol_penalty_bps = max(0.0, -float(markout_mean_symbol)) * float(
+                    adaptive_floor_symbol_weight
+                )
+            adaptive_required_add_bps = min(
+                float(adaptive_floor_max_add_bps),
+                max(0.0, float(global_penalty_bps) + float(symbol_penalty_bps)),
+            )
         expectancy_bps = float(statistics.mean(tail_values))
-        effective_floor = float(min_expectancy_bps) - float(tolerance_bps)
+        effective_required_expectancy_bps = float(min_expectancy_bps) + float(adaptive_required_add_bps)
+        effective_floor = float(effective_required_expectancy_bps) - float(tolerance_bps)
         allowed = float(expectancy_bps) >= float(effective_floor)
-        reason = "ok" if float(expectancy_bps) >= float(min_expectancy_bps) else "within_tolerance_allow"
+        reason = (
+            "ok"
+            if float(expectancy_bps) >= float(effective_required_expectancy_bps)
+            else "within_tolerance_allow"
+        )
         if not allowed:
             reason = "symbol_live_expectancy_gate"
         return bool(allowed), {
@@ -7745,15 +8469,32 @@ class ExecutionEngine:
             "reason": reason,
             "symbol": symbol,
             "session_regime": session_regime,
+            "market_regime": market_regime,
             "source": source,
             "samples": int(sample_count),
             "window_fills": int(window_fills),
             "symbol_live_expectancy_bps": float(expectancy_bps),
             "required_expectancy_bps": float(min_expectancy_bps),
+            "required_expectancy_bps_effective": float(effective_required_expectancy_bps),
+            "adaptive_required_expectancy_add_bps": float(adaptive_required_add_bps),
             "tolerance_expectancy_bps": float(tolerance_bps),
             "effective_required_expectancy_bps": float(effective_floor),
             "critical_context_required": bool(critical_context_required),
+            "require_regime": bool(require_regime),
+            "allow_session_fallback": bool(allow_session_fallback),
             "allow_symbol_fallback": bool(allow_symbol_fallback),
+            "adaptive_floor_enabled": bool(adaptive_floor_enabled),
+            "adaptive_floor_min_global_samples": int(adaptive_floor_min_global_samples),
+            "adaptive_floor_min_symbol_samples": int(adaptive_floor_min_symbol_samples),
+            "adaptive_floor_global_markout_weight": float(adaptive_floor_global_weight),
+            "adaptive_floor_symbol_markout_weight": float(adaptive_floor_symbol_weight),
+            "adaptive_floor_max_add_bps": float(adaptive_floor_max_add_bps),
+            "markout_mean_bps_global": float(markout_mean_global),
+            "markout_samples_global": int(markout_samples_global),
+            "markout_mean_bps_symbol": (
+                float(markout_mean_symbol) if int(markout_samples_symbol) > 0 else None
+            ),
+            "markout_samples_symbol": int(markout_samples_symbol),
         }
 
     def _execution_adverse_selection_risk_allows_opening(
@@ -10321,6 +11062,39 @@ class ExecutionEngine:
                 session_history.append(float(parsed_edge))
                 session_map[session_key] = session_history
                 self._symbol_session_live_edge_bps_history = session_map
+                regime_token = str(bucket_context.get("market_regime") or "unknown").strip().lower()
+                if not regime_token:
+                    regime_token = "unknown"
+                session_regime_key = f"{symbol_token}:{session_token}:{regime_token}"
+                session_regime_map_raw = getattr(
+                    self,
+                    "_symbol_session_regime_live_edge_bps_history",
+                    None,
+                )
+                session_regime_map = (
+                    session_regime_map_raw
+                    if isinstance(session_regime_map_raw, dict)
+                    else {}
+                )
+                session_regime_history = session_regime_map.get(session_regime_key)
+                if (
+                    not isinstance(session_regime_history, deque)
+                    or session_regime_history.maxlen != int(history_maxlen)
+                ):
+                    existing_session_regime_values: list[float] = []
+                    if isinstance(session_regime_history, deque):
+                        existing_session_regime_values = [
+                            float(v)
+                            for v in session_regime_history
+                            if isinstance(v, (int, float)) and math.isfinite(float(v))
+                        ]
+                    session_regime_history = deque(
+                        existing_session_regime_values,
+                        maxlen=int(history_maxlen),
+                    )
+                session_regime_history.append(float(parsed_edge))
+                session_regime_map[session_regime_key] = session_regime_history
+                self._symbol_session_regime_live_edge_bps_history = session_regime_map
 
         state["updated_at"] = datetime.now(UTC).isoformat()
         self._execution_learning_state = state
@@ -12525,6 +13299,7 @@ class ExecutionEngine:
             "symbol": str(symbol) if symbol else None,
             "side": str(side) if side else None,
             "detail": str(detail) if detail else None,
+            "recorded_at_mono": float(monotonic_time()),
         }
         self._record_cycle_order_outcome(
             symbol=symbol,
@@ -12587,6 +13362,7 @@ class ExecutionEngine:
             "side": str(side) if side else None,
             "detail": str(detail) if detail else None,
             "status_code": int(status_code) if status_code is not None else None,
+            "recorded_at_mono": float(monotonic_time()),
         }
         self._record_cycle_order_outcome(
             symbol=symbol,
@@ -15585,16 +16361,57 @@ class ExecutionEngine:
         if not self._pre_execution_order_checks(precheck_order):
             return None
 
+        precheck_quantity_raw = precheck_order.get("quantity")
+        if precheck_quantity_raw in (None, ""):
+            precheck_quantity_raw = precheck_order.get("qty")
+        precheck_quantity = _safe_int(precheck_quantity_raw, int(quantity))
+        if precheck_quantity > 0:
+            quantity = int(precheck_quantity)
+        effective_order_type = str(precheck_order.get("order_type") or "market").strip().lower()
+        if effective_order_type not in {"market", "limit"}:
+            effective_order_type = "market"
+        effective_limit_price: float | None = None
+        if effective_order_type == "limit":
+            for limit_candidate in (
+                precheck_order.get("limit_price"),
+                precheck_order.get("price"),
+                precheck_order.get("price_hint"),
+                price_hint,
+            ):
+                parsed_limit = _safe_float(limit_candidate)
+                if parsed_limit is not None and parsed_limit > 0.0:
+                    effective_limit_price = float(parsed_limit)
+                    break
+            if effective_limit_price is None:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                self._skip_submit(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason="precheck_limit_price_missing",
+                    order_type="limit",
+                    context={
+                        "source": "pre_execution_order_checks",
+                        "order_type": str(precheck_order.get("order_type") or "limit"),
+                    },
+                    submit_started_at=submit_started_at,
+                )
+                return None
+
         if not self._pre_execution_checks():
             return None
         order_data = {
             "symbol": symbol,
             "side": side_lower,
             "quantity": quantity,
-            "type": "market",
+            "type": effective_order_type,
             "time_in_force": resolved_tif,
             "client_order_id": client_order_id,
         }
+        if effective_order_type == "limit":
+            order_data["limit_price"] = float(effective_limit_price)
         # Optional bracket fields (ATR-based levels should be passed in by caller)
         tp = kwargs.get("take_profit")
         sl = kwargs.get("stop_loss")
@@ -15675,7 +16492,7 @@ class ExecutionEngine:
                 "side": side_lower,
                 "quantity": quantity,
                 "client_order_id": client_order_id,
-                "order_type": "market",
+                "order_type": effective_order_type,
                 "reason": skip_reason,
             }
             logger.warning("ORDER_SKIPPED_NONRETRYABLE", extra=skipped_payload)
@@ -16069,6 +16886,14 @@ class ExecutionEngine:
                 detail_val or str(exc),
                 extra=detail_extra,
             )
+            self._skip_submit(
+                symbol=symbol,
+                side=side_lower,
+                reason="nonretryable_rejected",
+                order_type=str(order_data.get("type") or "market"),
+                detail=str(detail_val or exc),
+                submit_started_at=submit_started_at,
+            )
             return None
         except (APIError, TimeoutError, ConnectionError) as exc:
             failure_exc = exc
@@ -16104,8 +16929,32 @@ class ExecutionEngine:
                     }
                 )
                 logger.error("ORDER_SUBMIT_RETRIES_EXHAUSTED", extra=extra)
+                status_code_int: int | None = None
+                if failure_status is not None:
+                    try:
+                        status_code_int = int(failure_status)
+                    except (TypeError, ValueError):
+                        status_code_int = None
+                self._record_submit_failure(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason="submit_exception",
+                    order_type=str(order_data.get("type") or "market"),
+                    status_code=status_code_int,
+                    detail=str(failure_exc) or "submit_order failed",
+                    submit_started_at=submit_started_at,
+                )
             else:
                 logger.error("FAILED_MARKET_ORDER", extra=extra)
+                self._record_submit_failure(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason="submit_no_result_internal",
+                    order_type=str(order_data.get("type") or "market"),
+                    status_code=504,
+                    detail="submit helper returned no broker response",
+                    submit_started_at=submit_started_at,
+                )
         return cast(dict[Any, Any] | None, result)
 
     def submit_limit_order(self, symbol: str, side: str, quantity: int, limit_price: float, **kwargs) -> dict | None:
@@ -16270,6 +17119,19 @@ class ExecutionEngine:
             precheck_order["account_snapshot"] = getattr(self, "_cycle_account", None)
         if not self._pre_execution_order_checks(precheck_order):
             return None
+        precheck_quantity_raw = precheck_order.get("quantity")
+        if precheck_quantity_raw in (None, ""):
+            precheck_quantity_raw = precheck_order.get("qty")
+        precheck_quantity = _safe_int(precheck_quantity_raw, int(quantity))
+        if precheck_quantity > 0:
+            quantity = int(precheck_quantity)
+        precheck_limit_price = _safe_float(
+            precheck_order.get("limit_price")
+            or precheck_order.get("price")
+            or precheck_order.get("price_hint")
+        )
+        if precheck_limit_price is not None and precheck_limit_price > 0.0:
+            limit_price = float(precheck_limit_price)
 
         if not self.is_initialized and not self._ensure_initialized():
             return None
@@ -16718,6 +17580,14 @@ class ExecutionEngine:
                         "synthetic": True,
                     },
                 )
+                self._skip_submit(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason="broker_rejected_degraded_quote",
+                    order_type=order_type_initial,
+                    detail=str(detail_primary or exc),
+                    submit_started_at=submit_started_at,
+                )
                 return None
             else:
                 skipped_extra = dict(alpaca_extra)
@@ -16732,6 +17602,14 @@ class ExecutionEngine:
                 logger.warning(
                     "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
                     extra=detail_extra,
+                )
+                self._skip_submit(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason="nonretryable_rejected",
+                    order_type=order_type_initial,
+                    detail=str(detail_primary or exc),
+                    submit_started_at=submit_started_at,
                 )
                 return None
         except (APIError, TimeoutError, ConnectionError) as exc:
@@ -16771,8 +17649,36 @@ class ExecutionEngine:
                     }
                 )
                 logger.error("ORDER_SUBMIT_RETRIES_EXHAUSTED", extra=extra)
+                status_code_int: int | None = None
+                if status_for_log is not None:
+                    try:
+                        status_code_int = int(status_for_log)
+                    except (TypeError, ValueError):
+                        status_code_int = None
+                self._record_submit_failure(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason="submit_exception",
+                    order_type=order_type_initial,
+                    status_code=status_code_int,
+                    detail=(
+                        str(detail_val)
+                        if detail_val is not None
+                        else (str(failure_exc) or "submit_order failed")
+                    ),
+                    submit_started_at=submit_started_at,
+                )
             else:
                 logger.error("FAILED_LIMIT_ORDER", extra=extra)
+                self._record_submit_failure(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason="submit_no_result_internal",
+                    order_type=order_type_initial,
+                    status_code=504,
+                    detail="submit helper returned no broker response",
+                    submit_started_at=submit_started_at,
+                )
         return result
 
     def execute_order(
@@ -17135,6 +18041,37 @@ class ExecutionEngine:
                 submit_started_at=submit_started_at,
             )
             return None
+        precheck_quantity_raw = precheck_order.get("quantity")
+        if precheck_quantity_raw in (None, ""):
+            precheck_quantity_raw = precheck_order.get("qty")
+        precheck_quantity = _safe_int(precheck_quantity_raw, int(qty))
+        if precheck_quantity > 0:
+            qty = int(precheck_quantity)
+            quantity = int(precheck_quantity)
+        precheck_order_type = str(precheck_order.get("order_type") or "").strip().lower()
+        if precheck_order_type in {"market", "limit"}:
+            order_type_normalized = precheck_order_type
+        if order_type_normalized == "limit" and resolved_limit_price is None:
+            for limit_candidate in (
+                precheck_order.get("limit_price"),
+                precheck_order.get("price"),
+                precheck_order.get("price_hint"),
+                price_for_limit,
+                price_hint,
+            ):
+                try:
+                    parsed_limit = float(limit_candidate)
+                except (TypeError, ValueError):
+                    parsed_limit = None
+                if parsed_limit is None or not math.isfinite(float(parsed_limit)):
+                    continue
+                if parsed_limit > 0.0:
+                    resolved_limit_price = float(parsed_limit)
+                    price_for_limit = float(parsed_limit)
+                    kwargs["price"] = float(parsed_limit)
+                    if price_hint is None:
+                        price_hint = float(parsed_limit)
+                    break
 
         if not pytest_mode and not self._pre_execution_checks():
             self._skip_submit(
@@ -19073,12 +20010,48 @@ class ExecutionEngine:
                 _release_capacity_reservation("submit_skipped")
                 return None
         if order is None:
+            prior_outcome = getattr(self, "_last_submit_outcome", None)
+            if isinstance(prior_outcome, Mapping):
+                prior_status = _normalize_status(prior_outcome.get("status"))
+                prior_symbol = str(prior_outcome.get("symbol") or "").strip()
+                prior_side = str(prior_outcome.get("side") or "").strip().lower()
+                prior_recorded_at = _safe_float(prior_outcome.get("recorded_at_mono"))
+                prior_age_s = (
+                    max(0.0, float(monotonic_time()) - float(prior_recorded_at))
+                    if prior_recorded_at is not None
+                    else None
+                )
+                prior_recent = prior_age_s is not None and prior_age_s <= 5.0
+                same_symbol = bool(prior_symbol) and prior_symbol.upper() == str(symbol).upper()
+                same_side = bool(prior_side) and prior_side == str(mapped_side or "").lower()
+                if (
+                    prior_recent
+                    and same_symbol
+                    and same_side
+                    and prior_status in {"failed", "skipped"}
+                ):
+                    logger.info(
+                        "EXEC_ORDER_NO_RESULT_SUPPRESSED",
+                        extra={
+                            "symbol": symbol,
+                            "side": mapped_side,
+                            "prior_status": prior_status,
+                            "prior_reason": prior_outcome.get("reason"),
+                            "prior_age_s": round(float(prior_age_s), 3) if prior_age_s is not None else None,
+                        },
+                    )
+                    _release_capacity_reservation("submit_no_result_suppressed")
+                    return None
+            missing_client_id = (
+                str(order_data.get("client_order_id") or client_order_id or "").strip() or None
+            )
             logger.warning(
                 "EXEC_ORDER_NO_RESULT",
                 extra={
                     "symbol": symbol,
                     "side": mapped_side,
                     "type": order_type_normalized,
+                    "client_order_id": missing_client_id,
                 },
             )
             self._record_submit_failure(
@@ -19086,6 +20059,10 @@ class ExecutionEngine:
                 side=mapped_side,
                 reason="submit_no_result",
                 order_type=order_type_normalized,
+                status_code=504,
+                detail=(
+                    f"no_broker_response client_order_id={missing_client_id or 'unknown'}"
+                ),
                 submit_started_at=submit_started_at,
             )
             _release_capacity_reservation("submit_no_result")
@@ -25956,6 +26933,9 @@ class ExecutionEngine:
             reentry_allowed, reentry_context = self._symbol_reentry_cooldown_allows_opening(
                 symbol=str(order.get("symbol") or ""),
                 side=str(order.get("side") or ""),
+                slippage_context=symbol_slippage_context,
+                adverse_selection_context=adverse_selection_context,
+                uncertainty_context=uncertainty_context,
             )
             if not reentry_allowed:
                 self.stats.setdefault("capacity_skips", 0)
@@ -25984,7 +26964,22 @@ class ExecutionEngine:
                 )
                 _mark_precheck_failure("symbol_reentry_cooldown", reentry_context)
                 return False
-            opening_notional_allowed, opening_notional_context = self._opening_min_notional_allows_order(order)
+            opening_notional_allowed, opening_notional_context = self._opening_min_notional_allows_order(
+                order,
+                uncertainty_context=uncertainty_context,
+                slippage_context=symbol_slippage_context,
+            )
+            if opening_notional_allowed and isinstance(opening_notional_context, Mapping):
+                if str(opening_notional_context.get("reason") or "") == "autosized_to_min_notional":
+                    logger.info(
+                        "OPENING_MIN_NOTIONAL_AUTOSIZED",
+                        extra={
+                            "symbol": order.get("symbol"),
+                            "side": order.get("side"),
+                            "client_order_id": order.get("client_order_id"),
+                            "context": dict(opening_notional_context),
+                        },
+                    )
             if not opening_notional_allowed:
                 self.stats.setdefault("capacity_skips", 0)
                 self.stats.setdefault("skipped_orders", 0)
@@ -26387,6 +27382,67 @@ class ExecutionEngine:
             self.stats["circuit_breaker_trips"] += 1
             logger.critical(f"Circuit breaker opened after {self.circuit_breaker['max_failures']} failures")
 
+    def _lookup_order_by_client_order_id(
+        self,
+        client_order_id: str | None,
+        *,
+        symbol: str | None = None,
+        max_wait_seconds: float = 1.5,
+        poll_interval_seconds: float = 0.25,
+    ) -> Any | None:
+        """Best-effort broker lookup by client order id."""
+
+        token = str(client_order_id or "").strip()
+        if not token:
+            return None
+        client = getattr(self, "trading_client", None)
+        if client is None:
+            return None
+        get_by_client = getattr(client, "get_order_by_client_order_id", None)
+        if not callable(get_by_client):
+            get_by_client = getattr(client, "get_order_by_client_id", None)
+        if not callable(get_by_client):
+            return None
+
+        wait_seconds = max(0.0, float(max_wait_seconds))
+        poll_seconds = max(0.05, float(poll_interval_seconds))
+        deadline = time.monotonic() + wait_seconds
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                recovered = get_by_client(token)
+            except Exception as err:
+                if _is_missing_order_lookup_error(err):
+                    recovered = None
+                else:
+                    logger.debug(
+                        "ORDER_LOOKUP_BY_CLIENT_ID_FAILED",
+                        extra={
+                            "symbol": symbol,
+                            "client_order_id": token,
+                            "attempts": attempts,
+                        },
+                        exc_info=True,
+                    )
+                    return None
+            if recovered is not None:
+                logger.info(
+                    "ORDER_LOOKUP_BY_CLIENT_ID_RECOVERED",
+                    extra={
+                        "symbol": symbol,
+                        "client_order_id": token,
+                        "attempts": attempts,
+                    },
+                )
+                return recovered
+            if time.monotonic() >= deadline:
+                break
+            sleep_for = min(poll_seconds, max(deadline - time.monotonic(), 0.0))
+            if sleep_for > 0.0:
+                time.sleep(sleep_for)
+        return None
+
     def _is_circuit_breaker_open(self) -> bool:
         """Check if circuit breaker should reset."""
         if not self.circuit_breaker["is_open"]:
@@ -26574,6 +27630,35 @@ class ExecutionEngine:
                         else:
                             raise
                     resp = self.trading_client.submit_order(order_data=req)
+            if resp is None:
+                recovered = self._lookup_order_by_client_order_id(
+                    client_order_id_text,
+                    symbol=str(order_data.get("symbol") or ""),
+                    max_wait_seconds=1.5,
+                    poll_interval_seconds=0.25,
+                )
+                if recovered is not None:
+                    resp = recovered
+                    logger.warning(
+                        "ALPACA_ORDER_SUBMIT_EMPTY_RESPONSE_RECOVERED",
+                        extra={
+                            "symbol": order_data.get("symbol"),
+                            "side": order_data.get("side"),
+                            "client_order_id": client_order_id_text or None,
+                        },
+                    )
+                else:
+                    logger.error(
+                        "ALPACA_ORDER_SUBMIT_EMPTY_RESPONSE",
+                        extra={
+                            "symbol": order_data.get("symbol"),
+                            "side": order_data.get("side"),
+                            "client_order_id": client_order_id_text or None,
+                        },
+                    )
+                    raise TimeoutError(
+                        f"submit_order returned no response client_order_id={client_order_id_text or 'unknown'}"
+                    )
             if resp is not None:
                 ack_id = _extract_value(resp, "id", "order_id")
                 ack_client_id = _extract_value(resp, "client_order_id")
@@ -26659,6 +27744,23 @@ class ExecutionEngine:
                 )
             return resp
         except (APIError, TimeoutError, ConnectionError) as e:
+            if isinstance(e, APIError) and _is_duplicate_client_order_id_error(e):
+                recovered = self._lookup_order_by_client_order_id(
+                    client_order_id_text,
+                    symbol=str(order_data.get("symbol") or ""),
+                    max_wait_seconds=1.0,
+                    poll_interval_seconds=0.2,
+                )
+                if recovered is not None:
+                    logger.warning(
+                        "ALPACA_ORDER_SUBMIT_DUPLICATE_CLIENT_ID_RECOVERED",
+                        extra={
+                            "symbol": order_data.get("symbol"),
+                            "side": order_data.get("side"),
+                            "client_order_id": client_order_id_text or None,
+                        },
+                    )
+                    return cast(dict[str, Any], recovered)
             logger.error(
                 "ALPACA_ORDER_SUBMIT_ERROR status_code=%s code=%s message=%s",
                 getattr(e, "status_code", None),

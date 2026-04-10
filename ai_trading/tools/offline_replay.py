@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from dataclasses import replace
 from datetime import UTC, datetime
 import hashlib
 import json
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Mapping
@@ -13,6 +15,7 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
+from ai_trading.config.management import get_env, reload_env
 from ai_trading.logging import get_logger
 from ai_trading.replay.event_loop import ReplayEventLoop
 
@@ -33,6 +36,246 @@ class ReplayConfig:
     trailing_stop_bps: float
     fee_bps: float
     slippage_bps: float
+
+
+@dataclass(frozen=True)
+class PolicyReplayProfile:
+    opportunity_top_quantile: float
+    opportunity_min_symbols: int
+    opportunity_openings_only: bool
+    expected_capture_fill_prob_floor: float
+    expected_capture_floor_bps: float
+    expected_capture_constraint_weight: float
+    replay_quality_weight: float
+    replay_quality_max_rank_uplift_abs: float
+    replay_quality_max_rank_uplift_frac: float
+    replay_quality_max_age_hours: float
+    bandit_score_weight: float
+    bandit_min_samples: int
+    bandit_shadow_only: bool
+    bandit_auto_promote: bool
+
+
+def _clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, float(value)))
+
+
+def _load_policy_profile_from_env() -> PolicyReplayProfile:
+    return PolicyReplayProfile(
+        opportunity_top_quantile=_clamp(
+            float(get_env("AI_TRADING_EXEC_OPPORTUNITY_TOP_QUANTILE", 0.93, cast=float)),
+            0.05,
+            0.99,
+        ),
+        opportunity_min_symbols=max(
+            1,
+            int(get_env("AI_TRADING_EXEC_OPPORTUNITY_MIN_SYMBOLS", 5, cast=int)),
+        ),
+        opportunity_openings_only=bool(
+            get_env("AI_TRADING_EXEC_OPPORTUNITY_OPENINGS_ONLY", True, cast=bool)
+        ),
+        expected_capture_fill_prob_floor=_clamp(
+            float(
+                get_env("AI_TRADING_EXEC_EXPECTED_CAPTURE_FILL_PROB_FLOOR", 0.45, cast=float)
+            ),
+            0.01,
+            0.95,
+        ),
+        expected_capture_floor_bps=float(
+            get_env("AI_TRADING_EXEC_EXPECTED_CAPTURE_FLOOR_BPS", 1.0, cast=float)
+        ),
+        expected_capture_constraint_weight=max(
+            0.0,
+            float(
+                get_env("AI_TRADING_EXEC_EXPECTED_CAPTURE_CONSTRAINT_WEIGHT", 1.2, cast=float)
+            ),
+        ),
+        replay_quality_weight=max(
+            0.0,
+            float(get_env("AI_TRADING_EXEC_REPLAY_QUALITY_WEIGHT", 0.18, cast=float)),
+        ),
+        replay_quality_max_rank_uplift_abs=max(
+            0.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_REPLAY_QUALITY_MAX_RANK_UPLIFT_ABS",
+                    8.0,
+                    cast=float,
+                )
+            ),
+        ),
+        replay_quality_max_rank_uplift_frac=_clamp(
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_REPLAY_QUALITY_MAX_RANK_UPLIFT_FRAC",
+                    0.10,
+                    cast=float,
+                )
+            ),
+            0.0,
+            1.0,
+        ),
+        replay_quality_max_age_hours=max(
+            1.0,
+            float(get_env("AI_TRADING_EXEC_REPLAY_QUALITY_MAX_AGE_HOURS", 24.0, cast=float)),
+        ),
+        bandit_score_weight=max(
+            0.0,
+            float(get_env("AI_TRADING_EXEC_BANDIT_SCORE_WEIGHT", 0.25, cast=float)),
+        ),
+        bandit_min_samples=max(
+            1,
+            int(get_env("AI_TRADING_EXEC_BANDIT_MIN_SAMPLES", 40, cast=int)),
+        ),
+        bandit_shadow_only=bool(
+            get_env("AI_TRADING_EXEC_BANDIT_SHADOW_ONLY", True, cast=bool)
+        ),
+        bandit_auto_promote=bool(
+            get_env("AI_TRADING_EXEC_BANDIT_AUTO_PROMOTE", False, cast=bool)
+        ),
+    )
+
+
+def _policy_profile_payload(profile: PolicyReplayProfile) -> dict[str, Any]:
+    return {
+        "opportunity_top_quantile": float(profile.opportunity_top_quantile),
+        "opportunity_min_symbols": int(profile.opportunity_min_symbols),
+        "opportunity_openings_only": bool(profile.opportunity_openings_only),
+        "expected_capture_fill_prob_floor": float(profile.expected_capture_fill_prob_floor),
+        "expected_capture_floor_bps": float(profile.expected_capture_floor_bps),
+        "expected_capture_constraint_weight": float(profile.expected_capture_constraint_weight),
+        "replay_quality_weight": float(profile.replay_quality_weight),
+        "replay_quality_max_rank_uplift_abs": float(profile.replay_quality_max_rank_uplift_abs),
+        "replay_quality_max_rank_uplift_frac": float(profile.replay_quality_max_rank_uplift_frac),
+        "replay_quality_max_age_hours": float(profile.replay_quality_max_age_hours),
+        "bandit_score_weight": float(profile.bandit_score_weight),
+        "bandit_min_samples": int(profile.bandit_min_samples),
+        "bandit_shadow_only": bool(profile.bandit_shadow_only),
+        "bandit_auto_promote": bool(profile.bandit_auto_promote),
+    }
+
+
+def _policy_fill_probability_proxy(confidence: float) -> float:
+    return _clamp(0.15 + 0.85 * float(confidence), 0.01, 0.99)
+
+
+def _policy_expected_capture_proxy_bps(
+    *,
+    score: float,
+    confidence: float,
+    fill_prob_proxy: float,
+    ret_bps: float,
+) -> float:
+    alpha_component = (abs(float(score)) * 28.0) + (float(confidence) * 12.0)
+    execution_component = (1.0 - float(fill_prob_proxy)) * 16.0
+    volatility_drag = max(0.0, abs(float(ret_bps)) - 12.0) * 0.25
+    return float(alpha_component - execution_component - volatility_drag)
+
+
+def _policy_keep_count(group_size: int, top_quantile: float, min_symbols: int) -> int:
+    if group_size <= 0:
+        return 0
+    tail_keep = int(math.ceil((1.0 - float(top_quantile)) * float(group_size)))
+    return max(1, min(group_size, max(int(min_symbols), tail_keep)))
+
+
+def _policy_finalize_diagnostics(
+    counters: Counter[str],
+    *,
+    profile: PolicyReplayProfile,
+) -> dict[str, Any]:
+    candidates = int(counters.get("candidates", 0))
+    accepted = int(counters.get("accepted", 0))
+    accepted_rate = float(accepted / candidates) if candidates > 0 else 0.0
+    return {
+        "profile": _policy_profile_payload(profile),
+        "candidates": candidates,
+        "accepted": accepted,
+        "accepted_rate": accepted_rate,
+        "rejected_by_reason": {
+            key.replace("reject_", ""): int(value)
+            for key, value in sorted(counters.items())
+            if key.startswith("reject_")
+        },
+        "bandit_shadow_candidates": int(counters.get("bandit_shadow_candidates", 0)),
+        "bandit_applied": int(counters.get("bandit_applied", 0)),
+    }
+
+
+def _attach_policy_context(bars: list[dict[str, Any]]) -> None:
+    if not bars:
+        return
+    latest_ts = max(
+        pd.to_datetime(str(bar.get("ts", "")), errors="coerce", utc=True)
+        for bar in bars
+    )
+    if pd.isna(latest_ts):
+        latest_ts = pd.Timestamp("1970-01-01T00:00:00Z")
+    ordered = sorted(
+        bars,
+        key=lambda row: pd.to_datetime(str(row.get("ts", "")), errors="coerce", utc=True),
+    )
+    prev_close_by_symbol: dict[str, float] = {}
+    mean_ret_bps_by_symbol: dict[str, float] = {}
+    samples_by_symbol: Counter[str] = Counter()
+    for bar in ordered:
+        symbol = str(bar.get("symbol", "")).strip().upper()
+        close = float(bar.get("close", 0.0) or 0.0)
+        score = float(bar.get("score", 0.0) or 0.0)
+        confidence = float(bar.get("confidence", 0.0) or 0.0)
+        ts = pd.to_datetime(str(bar.get("ts", "")), errors="coerce", utc=True)
+        prev_close = prev_close_by_symbol.get(symbol)
+        ret_bps = 0.0
+        if prev_close is not None and prev_close > 0.0 and close > 0.0:
+            ret_bps = float(((close / prev_close) - 1.0) * 10000.0)
+        running_mean = float(mean_ret_bps_by_symbol.get(symbol, 0.0))
+        mean_ret_bps_by_symbol[symbol] = (0.9 * running_mean) + (0.1 * ret_bps)
+        samples_before = int(samples_by_symbol.get(symbol, 0))
+        samples_by_symbol[symbol] = samples_before + 1
+        prev_close_by_symbol[symbol] = close
+        score_sign = 1.0 if score >= 0.0 else -1.0
+        fill_prob_proxy = _policy_fill_probability_proxy(confidence)
+        expected_capture_proxy = _policy_expected_capture_proxy_bps(
+            score=score,
+            confidence=confidence,
+            fill_prob_proxy=fill_prob_proxy,
+            ret_bps=ret_bps,
+        )
+        replay_quality_proxy = float(
+            (0.35 * min(abs(ret_bps), 40.0) * (1.0 if (ret_bps * score_sign) > 0 else -1.0))
+            - (0.10 * abs(ret_bps))
+        )
+        bandit_proxy = float(mean_ret_bps_by_symbol[symbol] * score_sign)
+        if pd.isna(ts):
+            age_hours = 0.0
+        else:
+            age_hours = max(0.0, float((latest_ts - ts).total_seconds() / 3600.0))
+        bar["policy_fill_prob_proxy"] = fill_prob_proxy
+        bar["policy_expected_capture_proxy_bps"] = expected_capture_proxy
+        bar["policy_replay_quality_proxy_bps"] = replay_quality_proxy
+        bar["policy_bandit_proxy_bps"] = bandit_proxy
+        bar["policy_bandit_samples"] = samples_before
+        bar["policy_bar_age_hours"] = age_hours
+        bar["policy_opportunity_score_raw"] = expected_capture_proxy + replay_quality_proxy
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for bar in bars:
+        groups.setdefault(str(bar.get("ts", "")), []).append(bar)
+    for group in groups.values():
+        ranked = sorted(
+            group,
+            key=lambda row: float(row.get("policy_opportunity_score_raw", 0.0)),
+            reverse=True,
+        )
+        group_size = len(ranked)
+        for rank_idx, bar in enumerate(ranked):
+            bar["policy_rank_index"] = int(rank_idx)
+            bar["policy_group_size"] = int(group_size)
+            if group_size <= 1:
+                rank_quantile = 1.0
+            else:
+                rank_quantile = 1.0 - (float(rank_idx) / float(group_size - 1))
+            bar["policy_rank_quantile"] = float(rank_quantile)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -115,7 +358,25 @@ def _build_parser() -> argparse.ArgumentParser:
         default="replay",
         help="Prefix used for persisted replay intent IDs and idempotency keys.",
     )
+    parser.add_argument(
+        "--policy-sensitivity-mode",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Run policy sensitivity diagnostics (baseline + per-knob ablation variants) "
+            "for simulation mode."
+        ),
+    )
     parser.add_argument("--output-json", type=Path, default=None)
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=None,
+        help=(
+            "Optional dotenv file to load before replay config resolution. "
+            "Defaults to repository .env when omitted."
+        ),
+    )
     return parser
 
 
@@ -207,6 +468,91 @@ def _max_drawdown_bps(equity_curve: list[float]) -> float:
     with np.errstate(divide="ignore", invalid="ignore"):
         drawdowns = np.where(peaks > 0.0, values / peaks - 1.0, 0.0)
     return float(abs(drawdowns.min()) * 10000.0)
+
+
+def _summarize_markout_fill_metrics(
+    *,
+    fill_events: list[dict[str, Any]],
+    order_context_by_client_id: Mapping[str, Mapping[str, Any]],
+    fee_bps: float,
+) -> dict[str, Any]:
+    """Summarize replay fill quality using one-bar markout from submit context."""
+
+    net_edges: list[float] = []
+    edge_weights: list[float] = []
+    per_symbol_samples: Counter[str] = Counter()
+
+    for event in fill_events:
+        if str(event.get("event_type", "")).strip().lower() != "fill":
+            continue
+        client_order_id = str(event.get("client_order_id", "")).strip()
+        if not client_order_id:
+            continue
+        context = order_context_by_client_id.get(client_order_id)
+        if not isinstance(context, Mapping):
+            continue
+        markout_raw = context.get("markout_price")
+        if markout_raw in (None, ""):
+            continue
+        try:
+            markout_price = float(markout_raw)
+            fill_price = float(event.get("fill_price", 0.0) or 0.0)
+            fill_qty = float(event.get("fill_qty", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if markout_price <= 0.0 or fill_price <= 0.0 or fill_qty <= 0.0:
+            continue
+        side = str(event.get("side", context.get("side", "buy"))).strip().lower()
+        side_sign = 1.0 if side == "buy" else -1.0
+        gross_edge_bps = ((markout_price / fill_price) - 1.0) * 10000.0 * side_sign
+        # One-bar markout approximates a full roundtrip by charging both legs.
+        net_edge_bps = float(gross_edge_bps - (2.0 * max(0.0, fee_bps)))
+        weight = float(abs(fill_qty))
+        net_edges.append(net_edge_bps)
+        edge_weights.append(weight)
+        symbol = str(event.get("symbol", "")).strip().upper()
+        if symbol:
+            per_symbol_samples[symbol] += 1
+
+    if not net_edges:
+        return {
+            "samples": 0,
+            "win_rate": 0.0,
+            "avg_win_bps": 0.0,
+            "avg_loss_bps": 0.0,
+            "profit_factor": 0.0,
+            "expectancy_bps": 0.0,
+            "net_pnl_bps": 0.0,
+            "per_symbol_samples": dict(per_symbol_samples),
+        }
+
+    edges = np.asarray(net_edges, dtype=float)
+    weights = np.asarray(edge_weights, dtype=float)
+    total_weight = float(weights.sum())
+    weighted_edge_sum = float(np.dot(edges, weights))
+    wins = edges > 0.0
+    losses = edges < 0.0
+    win_weight = float(weights[wins].sum()) if np.any(wins) else 0.0
+    weighted_win_edge = float(np.dot(edges[wins], weights[wins])) if np.any(wins) else 0.0
+    weighted_loss_edge = float(np.dot(edges[losses], weights[losses])) if np.any(losses) else 0.0
+    avg_win = (weighted_win_edge / win_weight) if win_weight > 0.0 else 0.0
+    loss_weight = float(weights[losses].sum()) if np.any(losses) else 0.0
+    avg_loss = (abs(weighted_loss_edge) / loss_weight) if loss_weight > 0.0 else 0.0
+    if abs(weighted_loss_edge) <= 1e-12:
+        profit_factor: float | None
+        profit_factor = None if weighted_win_edge > 0.0 else 0.0
+    else:
+        profit_factor = float(weighted_win_edge / abs(weighted_loss_edge))
+    return {
+        "samples": int(edges.size),
+        "win_rate": float((win_weight / total_weight) if total_weight > 0.0 else 0.0),
+        "avg_win_bps": float(avg_win),
+        "avg_loss_bps": float(avg_loss),
+        "profit_factor": profit_factor,
+        "expectancy_bps": float((weighted_edge_sum / total_weight) if total_weight > 0.0 else 0.0),
+        "net_pnl_bps": float(weighted_edge_sum),
+        "per_symbol_samples": dict(per_symbol_samples),
+    }
 
 
 def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[str, Any]:
@@ -385,12 +731,14 @@ def _run_parity_simulation(
     args: argparse.Namespace,
     cfg: ReplayConfig,
     symbol_paths: dict[str, Path],
+    policy_profile: PolicyReplayProfile | None = None,
 ) -> dict[str, Any]:
     """Run deterministic replay parity simulation with async fill events."""
 
     bars: list[dict[str, Any]] = []
-    signal_lookup: dict[tuple[str, str], tuple[float, float]] = {}
     per_symbol: list[dict[str, Any]] = []
+    order_context_by_client_id: dict[str, dict[str, Any]] = {}
+    policy_counters: Counter[str] = Counter()
     synthetic_index = 0
     for symbol, csv_path in symbol_paths.items():
         frame = _load_frame(csv_path, args.timestamp_col)
@@ -401,23 +749,35 @@ def _run_parity_simulation(
             if not np.isfinite(close) or close <= 0.0:
                 continue
             ts_iso = _normalize_bar_ts(ts, synthetic_index)
+            next_close: float | None = None
+            if pos + 1 < len(frame):
+                candidate = float(frame["close"].iloc[pos + 1])
+                if np.isfinite(candidate) and candidate > 0.0:
+                    next_close = candidate
+            bar_seq = synthetic_index
             synthetic_index += 1
-            signal_lookup[(symbol, ts_iso)] = (
-                float(score.iloc[pos]),
-                float(confidence.iloc[pos]),
-            )
             bars.append(
                 {
                     "symbol": symbol,
                     "ts": ts_iso,
                     "close": close,
+                    "score": float(score.iloc[pos]),
+                    "confidence": float(confidence.iloc[pos]),
+                    "seq": int(bar_seq),
+                    "next_close": next_close,
                 }
             )
+    if policy_profile is not None:
+        _attach_policy_context(bars)
 
     def strategy(bar: Mapping[str, Any]) -> Mapping[str, Any] | None:
         symbol = str(bar.get("symbol", "")).upper()
         ts_iso = str(bar.get("ts", ""))
-        score, confidence = signal_lookup.get((symbol, ts_iso), (0.0, 0.0))
+        try:
+            score = float(bar.get("score", 0.0) or 0.0)
+            confidence = float(bar.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return None
         if confidence < cfg.confidence_threshold:
             return None
         side: str | None = None
@@ -430,7 +790,89 @@ def _run_parity_simulation(
         price = float(bar.get("close", 0.0) or 0.0)
         if not np.isfinite(price) or price <= 0.0:
             return None
-        intent_key = f"{symbol}|{ts_iso}|{side}"
+
+        fill_prob_proxy = float(bar.get("policy_fill_prob_proxy", confidence))
+        expected_capture_proxy = float(bar.get("policy_expected_capture_proxy_bps", 0.0))
+        replay_quality_proxy = float(bar.get("policy_replay_quality_proxy_bps", 0.0))
+        bandit_proxy = float(bar.get("policy_bandit_proxy_bps", 0.0))
+        bandit_samples = int(bar.get("policy_bandit_samples", 0) or 0)
+        bar_age_hours = float(bar.get("policy_bar_age_hours", 0.0) or 0.0)
+        rank_index = int(bar.get("policy_rank_index", 0) or 0)
+        group_size = int(bar.get("policy_group_size", 1) or 1)
+        adjusted_capture = float(expected_capture_proxy)
+        replay_adjustment = 0.0
+        bandit_adjustment = 0.0
+
+        if policy_profile is not None:
+            policy_counters["candidates"] += 1
+            keep_count = _policy_keep_count(
+                group_size=group_size,
+                top_quantile=policy_profile.opportunity_top_quantile,
+                min_symbols=policy_profile.opportunity_min_symbols,
+            )
+            if rank_index >= keep_count:
+                policy_counters["reject_opportunity_quantile"] += 1
+                return None
+            if fill_prob_proxy < policy_profile.expected_capture_fill_prob_floor:
+                policy_counters["reject_fill_prob_floor"] += 1
+                return None
+
+            if (
+                policy_profile.replay_quality_weight > 0.0
+                and bar_age_hours <= policy_profile.replay_quality_max_age_hours
+            ):
+                replay_raw = policy_profile.replay_quality_weight * replay_quality_proxy
+                replay_cap_abs = max(0.0, policy_profile.replay_quality_max_rank_uplift_abs)
+                replay_cap_frac = (
+                    abs(expected_capture_proxy) * policy_profile.replay_quality_max_rank_uplift_frac
+                )
+                replay_cap = max(0.0, min(replay_cap_abs, replay_cap_frac))
+                if replay_cap > 0.0:
+                    replay_adjustment = float(np.clip(replay_raw, -replay_cap, replay_cap))
+                    adjusted_capture += replay_adjustment
+
+            if (
+                policy_profile.bandit_score_weight > 0.0
+                and bandit_samples >= policy_profile.bandit_min_samples
+            ):
+                bandit_adjustment = policy_profile.bandit_score_weight * bandit_proxy
+                if policy_profile.bandit_shadow_only:
+                    policy_counters["bandit_shadow_candidates"] += 1
+                else:
+                    adjusted_capture += bandit_adjustment
+                    policy_counters["bandit_applied"] += 1
+
+            adjusted_capture -= max(0.0, policy_profile.expected_capture_constraint_weight - 1.0)
+            if adjusted_capture < policy_profile.expected_capture_floor_bps:
+                policy_counters["reject_expected_capture_floor"] += 1
+                return None
+            policy_counters["accepted"] += 1
+
+        bar_seq = int(bar.get("seq", 0) or 0)
+        intent_key = f"{symbol}|{ts_iso}|{side}|{bar_seq}"
+        next_close_raw = bar.get("next_close")
+        next_close = None
+        if next_close_raw not in (None, ""):
+            try:
+                parsed_next = float(next_close_raw)
+            except (TypeError, ValueError):
+                parsed_next = None
+            if parsed_next is not None and np.isfinite(parsed_next) and parsed_next > 0.0:
+                next_close = float(parsed_next)
+        order_context_by_client_id[intent_key] = {
+            "symbol": symbol,
+            "side": side,
+            "submit_ts": ts_iso,
+            "submit_price": float(price),
+            "markout_price": next_close,
+            "policy_fill_prob_proxy": float(fill_prob_proxy),
+            "policy_expected_capture_proxy_bps": float(expected_capture_proxy),
+            "policy_expected_capture_adjusted_bps": float(adjusted_capture),
+            "policy_replay_adjustment_bps": float(replay_adjustment),
+            "policy_bandit_adjustment_bps": float(bandit_adjustment),
+            "policy_rank_index": int(rank_index),
+            "policy_group_size": int(group_size),
+        }
         return {
             "symbol": symbol,
             "side": side,
@@ -451,11 +893,24 @@ def _run_parity_simulation(
 
     events = list(replay.get("events", []))
     fill_events = [event for event in events if event.get("event_type") == "fill"]
+    fill_count_by_symbol = Counter(
+        str(event.get("symbol", "")).strip().upper()
+        for event in fill_events
+        if str(event.get("symbol", "")).strip()
+    )
     violations = list(replay.get("violations", []))
     violation_counts = Counter(
         str(item.get("code", "unknown"))
         for item in violations
     )
+    markout_metrics = _summarize_markout_fill_metrics(
+        fill_events=fill_events,
+        order_context_by_client_id=order_context_by_client_id,
+        fee_bps=cfg.fee_bps,
+    )
+    markout_samples_by_symbol = markout_metrics.get("per_symbol_samples", {})
+    if not isinstance(markout_samples_by_symbol, dict):
+        markout_samples_by_symbol = {}
     total_bars = int(len(bars))
     total_trades = int(len(fill_events))
     aggregate: dict[str, Any] = {
@@ -464,18 +919,21 @@ def _run_parity_simulation(
         "symbols": len(per_symbol),
         "total_bars": total_bars,
         "total_trades": total_trades,
-        "win_rate": 0.0,
-        "avg_win_bps": 0.0,
-        "avg_loss_bps": 0.0,
-        "profit_factor": 0.0,
-        "expectancy_bps": 0.0,
-        "net_pnl_bps": 0.0,
-        "median_hold_bars": 0.0,
+        "win_rate": float(markout_metrics.get("win_rate", 0.0)),
+        "avg_win_bps": float(markout_metrics.get("avg_win_bps", 0.0)),
+        "avg_loss_bps": float(markout_metrics.get("avg_loss_bps", 0.0)),
+        "profit_factor": markout_metrics.get("profit_factor", 0.0),
+        "expectancy_bps": float(markout_metrics.get("expectancy_bps", 0.0)),
+        "net_pnl_bps": float(markout_metrics.get("net_pnl_bps", 0.0)),
+        "median_hold_bars": 1.0 if int(markout_metrics.get("samples", 0)) > 0 else 0.0,
         "churn_trades_per_100_bars": float((total_trades / max(total_bars, 1)) * 100.0),
         "exposure_ratio": 0.0,
         "orders_submitted": int(len(replay.get("orders", []))),
         "intents_created": int(len(replay.get("intents", []))),
         "fill_events": total_trades,
+        "markout_samples": int(markout_metrics.get("samples", 0)),
+        "metrics_mode": "one_bar_markout",
+        "markout_horizon_bars": 1,
         "violation_count": int(len(violations)),
         "violations_by_code": dict(sorted(violation_counts.items())),
         "config": {
@@ -487,11 +945,215 @@ def _run_parity_simulation(
             "max_gross_notional": args.max_gross_notional,
         },
     }
+    if policy_profile is not None:
+        aggregate["policy_mode"] = "ranker_sensitivity"
+        aggregate["policy_diagnostics"] = _policy_finalize_diagnostics(
+            policy_counters,
+            profile=policy_profile,
+        )
+    for item in per_symbol:
+        symbol = str(item.get("symbol", "")).strip().upper()
+        if not symbol:
+            continue
+        item["fills"] = int(fill_count_by_symbol.get(symbol, 0))
+        item["markout_samples"] = int(markout_samples_by_symbol.get(symbol, 0))
     return {
         "aggregate": aggregate,
         "symbols": per_symbol,
         "replay": replay,
     }
+
+
+def _policy_metric_projection(payload: Mapping[str, Any]) -> dict[str, Any]:
+    aggregate = payload.get("aggregate", {})
+    if not isinstance(aggregate, Mapping):
+        return {}
+    return {
+        "total_trades": int(aggregate.get("total_trades", 0) or 0),
+        "win_rate": float(aggregate.get("win_rate", 0.0) or 0.0),
+        "profit_factor": (
+            None
+            if aggregate.get("profit_factor") is None
+            else float(aggregate.get("profit_factor", 0.0) or 0.0)
+        ),
+        "expectancy_bps": float(aggregate.get("expectancy_bps", 0.0) or 0.0),
+        "markout_samples": int(aggregate.get("markout_samples", 0) or 0),
+    }
+
+
+def _profit_factor_delta(new: Any, old: Any) -> float | None:
+    if old is None or new is None:
+        return None
+    try:
+        return float(new) - float(old)
+    except (TypeError, ValueError):
+        return None
+
+
+def _policy_sensitivity_summary_table(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    ranked = sorted(
+        rows,
+        key=lambda item: float(item.get("delta_expectancy_bps", 0.0)),
+        reverse=True,
+    )
+    table: list[dict[str, Any]] = []
+    for idx, row in enumerate(ranked, start=1):
+        table.append(
+            {
+                "rank": int(idx),
+                "name": str(row.get("name", "")),
+                "description": str(row.get("description", "")),
+                "delta_expectancy_bps": float(row.get("delta_expectancy_bps", 0.0)),
+                "delta_total_trades": int(row.get("delta_total_trades", 0)),
+                "delta_profit_factor": row.get("delta_profit_factor"),
+                "delta_win_rate": float(row.get("delta_win_rate", 0.0)),
+                "delta_markout_samples": int(row.get("delta_markout_samples", 0)),
+            }
+        )
+    return table
+
+
+def _run_policy_sensitivity(
+    *,
+    args: argparse.Namespace,
+    cfg: ReplayConfig,
+    symbol_paths: dict[str, Path],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    baseline_profile = _load_policy_profile_from_env()
+    baseline_payload = _run_parity_simulation(
+        args=args,
+        cfg=cfg,
+        symbol_paths=symbol_paths,
+        policy_profile=baseline_profile,
+    )
+    baseline_metrics = _policy_metric_projection(baseline_payload)
+    baseline_diag = (
+        baseline_payload.get("aggregate", {}).get("policy_diagnostics", {})
+        if isinstance(baseline_payload.get("aggregate"), Mapping)
+        else {}
+    )
+
+    variants: list[tuple[str, str, PolicyReplayProfile]] = [
+        (
+            "opportunity_gate_disabled",
+            "Disable opportunity top-quantile gate (keep all symbols).",
+            replace(baseline_profile, opportunity_top_quantile=0.05, opportunity_min_symbols=1),
+        ),
+        (
+            "capture_floor_disabled",
+            "Disable expected-capture floors (fill prob + edge floor).",
+            replace(
+                baseline_profile,
+                expected_capture_fill_prob_floor=0.01,
+                expected_capture_floor_bps=-1_000_000.0,
+            ),
+        ),
+        (
+            "replay_quality_disabled",
+            "Disable replay-quality deweight/uplift adjustment.",
+            replace(baseline_profile, replay_quality_weight=0.0),
+        ),
+        (
+            "bandit_disabled",
+            "Disable bandit rank adjustment contribution.",
+            replace(baseline_profile, bandit_score_weight=0.0),
+        ),
+        (
+            "bandit_live_enabled",
+            "Enable live bandit rank adjustment (disable shadow-only mode).",
+            replace(baseline_profile, bandit_shadow_only=False),
+        ),
+        (
+            "replay_quality_weight_0_10",
+            "Replay-quality weight sweep variant: 0.10.",
+            replace(baseline_profile, replay_quality_weight=0.10),
+        ),
+        (
+            "replay_quality_weight_0_25",
+            "Replay-quality weight sweep variant: 0.25.",
+            replace(baseline_profile, replay_quality_weight=0.25),
+        ),
+        (
+            "replay_quality_weight_0_40",
+            "Replay-quality weight sweep variant: 0.40.",
+            replace(baseline_profile, replay_quality_weight=0.40),
+        ),
+    ]
+
+    variant_rows: list[dict[str, Any]] = []
+    for name, description, profile in variants:
+        variant_payload = _run_parity_simulation(
+            args=args,
+            cfg=cfg,
+            symbol_paths=symbol_paths,
+            policy_profile=profile,
+        )
+        variant_metrics = _policy_metric_projection(variant_payload)
+        variant_diag = (
+            variant_payload.get("aggregate", {}).get("policy_diagnostics", {})
+            if isinstance(variant_payload.get("aggregate"), Mapping)
+            else {}
+        )
+        row = {
+            "name": name,
+            "description": description,
+            "profile": _policy_profile_payload(profile),
+            "metrics": variant_metrics,
+            "policy_diagnostics": variant_diag,
+            "delta_vs_baseline": {
+                "total_trades": int(variant_metrics["total_trades"]) - int(baseline_metrics["total_trades"]),
+                "win_rate": float(variant_metrics["win_rate"]) - float(baseline_metrics["win_rate"]),
+                "profit_factor": _profit_factor_delta(
+                    variant_metrics.get("profit_factor"),
+                    baseline_metrics.get("profit_factor"),
+                ),
+                "expectancy_bps": float(variant_metrics["expectancy_bps"])
+                - float(baseline_metrics["expectancy_bps"]),
+                "markout_samples": int(variant_metrics["markout_samples"])
+                - int(baseline_metrics["markout_samples"]),
+            },
+        }
+        variant_rows.append(row)
+
+    contributions = sorted(
+        [
+            {
+                "name": row["name"],
+                "description": row["description"],
+                "delta_expectancy_bps": float(row["delta_vs_baseline"]["expectancy_bps"]),
+                "delta_total_trades": int(row["delta_vs_baseline"]["total_trades"]),
+                "delta_win_rate": float(row["delta_vs_baseline"]["win_rate"]),
+                "delta_profit_factor": row["delta_vs_baseline"]["profit_factor"],
+                "delta_markout_samples": int(row["delta_vs_baseline"]["markout_samples"]),
+            }
+            for row in variant_rows
+        ],
+        key=lambda item: abs(float(item["delta_expectancy_bps"])),
+        reverse=True,
+    )
+
+    report: dict[str, Any] = {
+        "enabled": True,
+        "baseline": {
+            "profile": _policy_profile_payload(baseline_profile),
+            "metrics": baseline_metrics,
+            "policy_diagnostics": baseline_diag,
+        },
+        "variants": variant_rows,
+        "per_knob_contribution": contributions,
+        "summary_table": _policy_sensitivity_summary_table(contributions),
+    }
+    logger.info(
+        "OFFLINE_REPLAY_POLICY_SENSITIVITY_COMPLETE",
+        extra={
+            "variant_count": len(variant_rows),
+            "baseline_trades": baseline_metrics.get("total_trades", 0),
+            "baseline_expectancy_bps": baseline_metrics.get("expectancy_bps", 0.0),
+        },
+    )
+    return baseline_payload, report
 
 
 def _persist_replay_to_oms(
@@ -682,7 +1344,21 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
 
     symbol_paths = _resolve_inputs(args)
     if bool(args.simulation_mode):
-        payload = _run_parity_simulation(args=args, cfg=cfg, symbol_paths=symbol_paths)
+        if bool(args.policy_sensitivity_mode) and bool(args.persist_intents):
+            raise ValueError("--policy-sensitivity-mode cannot be combined with --persist-intents")
+        if bool(args.policy_sensitivity_mode):
+            payload, sensitivity_report = _run_policy_sensitivity(
+                args=args,
+                cfg=cfg,
+                symbol_paths=symbol_paths,
+            )
+            payload["policy_sensitivity"] = sensitivity_report
+            payload["aggregate"]["policy_sensitivity_mode"] = True
+            payload["aggregate"]["policy_sensitivity_variant_count"] = int(
+                len(sensitivity_report.get("variants", []))
+            )
+        else:
+            payload = _run_parity_simulation(args=args, cfg=cfg, symbol_paths=symbol_paths)
         if bool(args.persist_intents):
             persist_summary = _persist_replay_to_oms(
                 replay=payload.get("replay", {}),
@@ -692,6 +1368,8 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
         return payload
     if bool(args.persist_intents):
         raise ValueError("--persist-intents requires --simulation-mode")
+    if bool(args.policy_sensitivity_mode):
+        raise ValueError("--policy-sensitivity-mode requires --simulation-mode")
 
     per_symbol: list[dict[str, Any]] = []
     for symbol, csv_path in symbol_paths.items():
@@ -740,15 +1418,25 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
     return {"aggregate": aggregate, "symbols": per_symbol}
 
 
+def _load_runtime_env_for_replay(args: argparse.Namespace) -> None:
+    env_file = args.env_file
+    if env_file is None:
+        reload_env(path=None, override=True)
+        return
+    reload_env(path=env_file, override=True)
+
+
 def run_replay(argv: list[str] | None = None) -> dict[str, Any]:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    _load_runtime_env_for_replay(args)
     return _run_replay(args)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    _load_runtime_env_for_replay(args)
 
     try:
         payload = _run_replay(args)

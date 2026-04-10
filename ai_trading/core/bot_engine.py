@@ -2098,14 +2098,14 @@ def _pre_rank_execution_candidates(
         quality_filter_enabled = True
     try:
         quality_top_quantile = float(
-            get_env("AI_TRADING_EXEC_OPPORTUNITY_TOP_QUANTILE", 0.80, cast=float)
+            get_env("AI_TRADING_EXEC_OPPORTUNITY_TOP_QUANTILE", 0.93, cast=float)
         )
     except TypeError:
         quality_top_quantile = float(
-            get_env("AI_TRADING_EXEC_OPPORTUNITY_TOP_QUANTILE", 0.80)
+            get_env("AI_TRADING_EXEC_OPPORTUNITY_TOP_QUANTILE", 0.93)
         )
     except Exception:
-        quality_top_quantile = 0.80
+        quality_top_quantile = 0.93
     quality_top_quantile = max(0.05, min(quality_top_quantile, 0.99))
     try:
         quality_min_keep = int(
@@ -34898,6 +34898,40 @@ def _pending_stale_sweep_age_seconds() -> float:
     return max(10.0, min(value, 7200.0))
 
 
+def _pending_stale_sweep_include_partially_filled() -> bool:
+    """Return ``True`` when stale sweep should include aged ``partially_filled`` orders."""
+
+    try:
+        return bool(
+            get_env(
+                "AI_TRADING_PENDING_STALE_SWEEP_INCLUDE_PARTIALLY_FILLED",
+                True,
+                cast=bool,
+            )
+        )
+    except COMMON_EXC:
+        return True
+
+
+def _pending_stale_sweep_partial_fill_age_seconds(stuck_age_s: float) -> float:
+    """Return minimum age for sweeping stale ``partially_filled`` orders."""
+
+    default_value = max(float(stuck_age_s) * 6.0, 900.0)
+    try:
+        value = float(
+            get_env(
+                "AI_TRADING_PENDING_STALE_SWEEP_PARTIALLY_FILLED_SEC",
+                default_value,
+                cast=float,
+            )
+        )
+    except COMMON_EXC:
+        value = default_value
+    if not math.isfinite(value):
+        value = default_value
+    return max(float(stuck_age_s), min(float(value), 86400.0))
+
+
 def _pending_stale_sweep_max_cancels() -> int:
     """Return max stale pending orders to cancel per sweep invocation."""
 
@@ -34978,13 +35012,23 @@ def _maybe_apply_pending_stale_sweep(
         return None
 
     stale_after_s = _pending_stale_sweep_age_seconds()
+    include_partial_fills = _pending_stale_sweep_include_partially_filled()
+    partial_fill_stale_after_s = _pending_stale_sweep_partial_fill_age_seconds(
+        stale_after_s
+    )
     stale_candidates: list[tuple[float, Any]] = []
     for order in pending_orders:
         status = _normalize_broker_order_status(getattr(order, "status", None))
-        if status not in _PENDING_ORDER_STUCK_STATUSES:
-            continue
         age_s = _pending_order_broker_age_seconds(order, now_dt)
-        if age_s is None or age_s < stale_after_s:
+        if age_s is None:
+            continue
+        if status in _PENDING_ORDER_STUCK_STATUSES:
+            if age_s < stale_after_s:
+                continue
+        elif bool(include_partial_fills) and status == "partially_filled":
+            if age_s < partial_fill_stale_after_s:
+                continue
+        else:
             continue
         stale_candidates.append((float(age_s), order))
     if not stale_candidates:
@@ -35005,6 +35049,8 @@ def _maybe_apply_pending_stale_sweep(
             selected_ids.append(order_id)
     return {
         "stale_after_s": int(stale_after_s),
+        "partial_fill_stale_after_s": int(partial_fill_stale_after_s),
+        "include_partial_fills": bool(include_partial_fills),
         "attempted": int(len(selected_orders)),
         "cancelled": int(cancel_result.cancelled),
         "failed": int(cancel_result.failed),
@@ -39958,6 +40004,170 @@ def _replay_summary_metrics(result: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _replay_metric_summary(
+    fill_bps_by_key: Mapping[str, Sequence[float]],
+) -> dict[str, dict[str, float]]:
+    """Aggregate replay fill bps series into summary metrics per key."""
+
+    summary: dict[str, dict[str, float]] = {}
+    for key, raw_values in fill_bps_by_key.items():
+        values = [float(value) for value in raw_values if math.isfinite(float(value))]
+        if not values:
+            continue
+        wins = [float(value) for value in values if float(value) > 0.0]
+        losses = [float(value) for value in values if float(value) < 0.0]
+        gross_win = float(sum(wins))
+        gross_loss = float(abs(sum(losses)))
+        profit_factor: float | None
+        if gross_loss <= 1e-12:
+            profit_factor = None if gross_win > 0.0 else 0.0
+        else:
+            profit_factor = float(gross_win / gross_loss)
+        summary[str(key)] = {
+            "sample_count": float(len(values)),
+            "net_edge_bps": float(sum(values) / max(len(values), 1)),
+            "win_rate": float(len(wins) / max(len(values), 1)),
+            "profit_factor": (
+                float(profit_factor)
+                if isinstance(profit_factor, (float, int))
+                and math.isfinite(float(profit_factor))
+                else 0.0
+            ),
+        }
+    return summary
+
+
+def _replay_symbol_summary_metrics(result: Mapping[str, Any]) -> dict[str, dict[str, float]]:
+    """Build per-symbol replay fill-quality metrics for ranking deweighting."""
+
+    orders = result.get("orders", [])
+    events = result.get("events", [])
+    order_map: dict[str, Mapping[str, Any]] = {}
+    if isinstance(orders, list):
+        for order in orders:
+            if not isinstance(order, Mapping):
+                continue
+            order_id = str(order.get("id", "")).strip()
+            if order_id:
+                order_map[order_id] = order
+    fill_bps_by_symbol: dict[str, list[float]] = {}
+    for event in events if isinstance(events, list) else []:
+        if not isinstance(event, Mapping):
+            continue
+        if str(event.get("event_type", "")).strip().lower() != "fill":
+            continue
+        order_id = str(event.get("order_id", "")).strip()
+        order = order_map.get(order_id, {})
+        symbol = str(
+            event.get("symbol")
+            or order.get("symbol")
+            or ""
+        ).strip().upper()
+        if not symbol:
+            continue
+        side = str(event.get("side", order.get("side", "buy"))).strip().lower()
+        try:
+            fill_price = float(event.get("fill_price"))
+        except (TypeError, ValueError):
+            continue
+        if fill_price <= 0:
+            continue
+        try:
+            ref_price = float(order.get("limit_price", order.get("price", fill_price)))
+        except (TypeError, ValueError):
+            ref_price = fill_price
+        if ref_price <= 0:
+            continue
+        if side == "sell":
+            bps = ((fill_price - ref_price) / ref_price) * 10_000.0
+        else:
+            bps = ((ref_price - fill_price) / ref_price) * 10_000.0
+        if not math.isfinite(float(bps)):
+            continue
+        fill_bps_by_symbol.setdefault(symbol, []).append(float(bps))
+
+    return _replay_metric_summary(fill_bps_by_symbol)
+
+
+def _replay_bucket_summary_metrics(
+    result: Mapping[str, Any],
+    *,
+    order_context_by_client_id: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, dict[str, float]]]:
+    """Build replay quality metrics by symbol/session/regime buckets."""
+
+    orders = result.get("orders", [])
+    events = result.get("events", [])
+    order_map: dict[str, Mapping[str, Any]] = {}
+    if isinstance(orders, list):
+        for order in orders:
+            if not isinstance(order, Mapping):
+                continue
+            order_id = str(order.get("id", "")).strip()
+            if order_id:
+                order_map[order_id] = order
+
+    fill_bps_by_symbol_session: dict[str, list[float]] = {}
+    fill_bps_by_symbol_session_regime: dict[str, list[float]] = {}
+    for event in events if isinstance(events, list) else []:
+        if not isinstance(event, Mapping):
+            continue
+        if str(event.get("event_type", "")).strip().lower() != "fill":
+            continue
+        order_id = str(event.get("order_id", "")).strip()
+        order = order_map.get(order_id, {})
+        symbol = str(event.get("symbol") or order.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        side = str(event.get("side", order.get("side", "buy"))).strip().lower()
+        try:
+            fill_price = float(event.get("fill_price"))
+        except (TypeError, ValueError):
+            continue
+        if fill_price <= 0:
+            continue
+        try:
+            ref_price = float(order.get("limit_price", order.get("price", fill_price)))
+        except (TypeError, ValueError):
+            ref_price = fill_price
+        if ref_price <= 0:
+            continue
+        if side == "sell":
+            bps = ((fill_price - ref_price) / ref_price) * 10_000.0
+        else:
+            bps = ((ref_price - fill_price) / ref_price) * 10_000.0
+        if not math.isfinite(float(bps)):
+            continue
+        client_order_id = str(event.get("client_order_id") or "").strip()
+        context = (
+            order_context_by_client_id.get(client_order_id)
+            if client_order_id
+            else {}
+        )
+        session_token = str(
+            (context or {}).get("session_token")
+            or _session_bucket_from_ts(_parse_iso_timestamp(event.get("ts")))
+        ).strip().lower() or "offhours"
+        regime_token = str(
+            (context or {}).get("regime_token")
+            or "unknown"
+        ).strip().lower() or "unknown"
+        bucket_session = f"{symbol}:{session_token}"
+        bucket_session_regime = f"{symbol}:{session_token}:{regime_token}"
+        fill_bps_by_symbol_session.setdefault(bucket_session, []).append(float(bps))
+        fill_bps_by_symbol_session_regime.setdefault(
+            bucket_session_regime,
+            [],
+        ).append(float(bps))
+
+    return {
+        "by_symbol_session": _replay_metric_summary(fill_bps_by_symbol_session),
+        "by_symbol_session_regime": _replay_metric_summary(
+            fill_bps_by_symbol_session_regime
+        ),
+    }
+
+
 def _load_latest_replay_summary(output_dir: Path, *, before_path: Path) -> dict[str, Any] | None:
     """Return latest replay summary payload for baseline non-regression comparison."""
 
@@ -39977,6 +40187,100 @@ def _load_latest_replay_summary(output_dir: Path, *, before_path: Path) -> dict[
                 "max_drawdown_pct": float(summary.get("max_drawdown_pct", 0.0) or 0.0),
             }
     return None
+
+
+def _load_latest_replay_symbol_summary(
+    output_dir: Path,
+    *,
+    max_age_hours: float,
+) -> tuple[dict[str, dict[str, float]], dict[str, Any]]:
+    """Load most recent replay per-symbol quality metrics with freshness guard."""
+
+    symbol_summary, _, _, context = _load_latest_replay_quality_summaries(
+        output_dir,
+        max_age_hours=max_age_hours,
+    )
+    return symbol_summary, context
+
+
+def _load_latest_replay_quality_summaries(
+    output_dir: Path,
+    *,
+    max_age_hours: float,
+) -> tuple[
+    dict[str, dict[str, float]],
+    dict[str, dict[str, float]],
+    dict[str, dict[str, float]],
+    dict[str, Any],
+]:
+    """Load most recent replay quality summaries with freshness guard."""
+
+    if float(max_age_hours) <= 0.0:
+        return {}, {}, {}, {"reason": "disabled"}
+    now_utc = datetime.now(UTC)
+    max_age_seconds = float(max_age_hours) * 3600.0
+    candidates = sorted(output_dir.glob("replay_hash_*.json"))
+
+    def _parse_metric_map(raw: Any) -> dict[str, dict[str, float]]:
+        if not isinstance(raw, Mapping):
+            return {}
+        parsed: dict[str, dict[str, float]] = {}
+        for raw_key, raw_metrics in raw.items():
+            key = str(raw_key or "").strip()
+            if not key or not isinstance(raw_metrics, Mapping):
+                continue
+            sample_count = int(_safe_float(raw_metrics.get("sample_count")) or 0.0)
+            net_edge_bps = _safe_float(raw_metrics.get("net_edge_bps"))
+            if sample_count <= 0 or net_edge_bps is None:
+                continue
+            parsed[key] = {
+                "sample_count": float(sample_count),
+                "net_edge_bps": float(net_edge_bps),
+                "win_rate": float(_safe_float(raw_metrics.get("win_rate")) or 0.0),
+                "profit_factor": float(_safe_float(raw_metrics.get("profit_factor")) or 0.0),
+            }
+        return parsed
+
+    for candidate in reversed(candidates):
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        ts = _parse_iso_timestamp(payload.get("ts"))
+        if ts is not None and (now_utc - ts).total_seconds() > max_age_seconds:
+            continue
+        symbol_summary = _parse_metric_map(payload.get("replay_symbol_summary"))
+        bucket_summary_raw = payload.get("replay_bucket_summary")
+        bucket_summary = (
+            dict(bucket_summary_raw)
+            if isinstance(bucket_summary_raw, Mapping)
+            else {}
+        )
+        symbol_session_summary = _parse_metric_map(
+            bucket_summary.get("by_symbol_session")
+        )
+        symbol_session_regime_summary = _parse_metric_map(
+            bucket_summary.get("by_symbol_session_regime")
+        )
+        if (
+            not symbol_summary
+            and not symbol_session_summary
+            and not symbol_session_regime_summary
+        ):
+            continue
+        return (
+            symbol_summary,
+            symbol_session_summary,
+            symbol_session_regime_summary,
+            {
+                "path": str(candidate),
+                "ts": ts.isoformat() if ts is not None else None,
+                "symbols": int(len(symbol_summary)),
+                "symbol_sessions": int(len(symbol_session_summary)),
+                "symbol_session_regimes": int(len(symbol_session_regime_summary)),
+            },
+        )
+    return {}, {}, {}, {"reason": "missing"}
 
 
 def _run_replay_governance(
@@ -40055,6 +40359,14 @@ def _run_replay_governance(
             close_price = 0.0
         if close_price <= 0.0:
             continue
+        ts_parsed = _parse_iso_timestamp(ts)
+        session_token = _session_bucket_from_ts(ts_parsed)
+        regime_token = str(
+            row.get("regime_profile")
+            or row.get("regime")
+            or row.get("session_profile")
+            or "unknown"
+        ).strip().lower() or "unknown"
         normalized_bars.append(
             {
                 "symbol": symbol,
@@ -40064,6 +40376,8 @@ def _run_replay_governance(
                 "qty": float(row.get("qty", 1.0) or 1.0),
                 "order_type": str(row.get("order_type", "limit")),
                 "client_order_id": str(row.get("client_order_id", "")),
+                "session_token": session_token,
+                "regime_token": regime_token,
             }
         )
     if not normalized_bars:
@@ -40091,6 +40405,8 @@ def _run_replay_governance(
                 + ",".join(non_flat_symbols[:10])
             )
 
+    order_context_by_client_id: dict[str, dict[str, str]] = {}
+
     def _strategy(bar: Mapping[str, Any]) -> Mapping[str, Any] | None:
         if not simulate_fills:
             return None
@@ -40110,6 +40426,12 @@ def _run_replay_governance(
             )
             or f"{symbol}|{ts}|{side}|{round(qty, 6)}"
         )
+        order_context_by_client_id[intent_key] = {
+            "session_token": str(bar.get("session_token", "offhours")).strip().lower()
+            or "offhours",
+            "regime_token": str(bar.get("regime_token", "unknown")).strip().lower()
+            or "unknown",
+        }
         return {
             "symbol": symbol,
             "side": side,
@@ -40154,6 +40476,11 @@ def _run_replay_governance(
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"replay_hash_{now.strftime('%Y%m%d')}.json"
     replay_summary = _replay_summary_metrics(first)
+    replay_symbol_summary = _replay_symbol_summary_metrics(first)
+    replay_bucket_summary = _replay_bucket_summary_metrics(
+        first,
+        order_context_by_client_id=order_context_by_client_id,
+    )
     replay_violations = list(first.get("violations", []))
     replay_cap_adjustments = list(first.get("cap_adjustments", []))
     violation_counts: Counter[str] = Counter(
@@ -40236,6 +40563,8 @@ def _run_replay_governance(
                     )
                 ),
                 "replay_summary": replay_summary,
+                "replay_symbol_summary": replay_symbol_summary,
+                "replay_bucket_summary": replay_bucket_summary,
                 "counterfactual": counterfactual,
             },
             sort_keys=True,
@@ -40255,9 +40584,33 @@ def _run_replay_governance(
             "cap_adjustments_count": int(len(replay_cap_adjustments)),
             "violations_by_code": dict(violation_counts),
             "replay_summary": replay_summary,
+            "replay_symbol_count": int(len(replay_symbol_summary)),
+            "replay_symbol_session_count": int(
+                len(
+                    (
+                        replay_bucket_summary.get("by_symbol_session")
+                        if isinstance(replay_bucket_summary, Mapping)
+                        else {}
+                    )
+                    or {}
+                )
+            ),
+            "replay_symbol_session_regime_count": int(
+                len(
+                    (
+                        replay_bucket_summary.get("by_symbol_session_regime")
+                        if isinstance(replay_bucket_summary, Mapping)
+                        else {}
+                    )
+                    or {}
+                )
+            ),
             "counterfactual_passed": bool((counterfactual or {}).get("passed", True)),
         },
     )
+    setattr(state, "replay_symbol_summary", dict(replay_symbol_summary))
+    setattr(state, "replay_bucket_summary", dict(replay_bucket_summary))
+    setattr(state, "replay_symbol_summary_updated_at", now.isoformat())
     state.last_replay_run_date = now.date()
 
 
@@ -42390,7 +42743,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         0.0,
         min(
             5.0,
-            float(get_env("AI_TRADING_EXEC_BANDIT_SCORE_WEIGHT", 1.0, cast=float)),
+            float(get_env("AI_TRADING_EXEC_BANDIT_SCORE_WEIGHT", 0.25, cast=float)),
         ),
     )
     bandit_exploration = max(
@@ -42399,7 +42752,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     )
     bandit_min_samples = max(
         1,
-        int(get_env("AI_TRADING_EXEC_BANDIT_MIN_SAMPLES", 8, cast=int)),
+        int(get_env("AI_TRADING_EXEC_BANDIT_MIN_SAMPLES", 40, cast=int)),
     )
     bandit_window_trades = max(
         bandit_min_samples,
@@ -42434,6 +42787,30 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             1.0,
             float(get_env("AI_TRADING_EXEC_BANDIT_MAX_RANK_UPLIFT_FRAC", 0.30, cast=float)),
         ),
+    )
+    bandit_bucket_promotion_enabled = bool(
+        get_env(
+            "AI_TRADING_EXEC_BANDIT_BUCKET_PROMOTION_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    bandit_bucket_promote_min_samples = max(
+        bandit_min_samples,
+        int(
+            get_env(
+                "AI_TRADING_EXEC_BANDIT_BUCKET_PROMOTE_MIN_SAMPLES",
+                60,
+                cast=int,
+            )
+        ),
+    )
+    bandit_bucket_promote_min_mean_reward_bps = float(
+        get_env(
+            "AI_TRADING_EXEC_BANDIT_BUCKET_PROMOTE_MIN_MEAN_REWARD_BPS",
+            0.0,
+            cast=float,
+        )
     )
     geometric_tiebreak_enabled = _rollout_toggle(
         "AI_TRADING_EXEC_GEOMETRIC_TIEBREAK_ENABLED",
@@ -42674,6 +43051,70 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             cast=bool,
         )
     )
+    edge_model_v2_enabled = bool(
+        get_env("AI_TRADING_EXEC_EDGE_MODEL_V2_ENABLED", True, cast=bool)
+    )
+    edge_model_v2_weight = max(
+        0.0,
+        min(
+            5.0,
+            float(get_env("AI_TRADING_EXEC_EDGE_MODEL_V2_WEIGHT", 0.45, cast=float)),
+        ),
+    )
+    edge_model_v2_min_samples = max(
+        2,
+        int(get_env("AI_TRADING_EXEC_EDGE_MODEL_V2_MIN_SAMPLES", 12, cast=int)),
+    )
+    edge_model_v2_uncertainty_z = max(
+        0.0,
+        min(
+            5.0,
+            float(get_env("AI_TRADING_EXEC_EDGE_MODEL_V2_UNCERTAINTY_Z", 1.0, cast=float)),
+        ),
+    )
+    edge_model_v2_regime_weight = max(
+        0.0,
+        float(get_env("AI_TRADING_EXEC_EDGE_MODEL_V2_REGIME_WEIGHT", 0.55, cast=float)),
+    )
+    edge_model_v2_session_weight = max(
+        0.0,
+        float(get_env("AI_TRADING_EXEC_EDGE_MODEL_V2_SESSION_WEIGHT", 0.30, cast=float)),
+    )
+    edge_model_v2_global_weight = max(
+        0.0,
+        float(get_env("AI_TRADING_EXEC_EDGE_MODEL_V2_GLOBAL_WEIGHT", 0.15, cast=float)),
+    )
+    edge_model_v2_cost_weight = max(
+        0.0,
+        float(get_env("AI_TRADING_EXEC_EDGE_MODEL_V2_COST_WEIGHT", 1.0, cast=float)),
+    )
+    edge_model_v2_clip_bps = max(
+        1.0,
+        float(get_env("AI_TRADING_EXEC_EDGE_MODEL_V2_CLIP_BPS", 80.0, cast=float)),
+    )
+    edge_model_v2_max_rank_uplift_abs = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_EDGE_MODEL_V2_MAX_RANK_UPLIFT_ABS",
+                22.0,
+                cast=float,
+            )
+        ),
+    )
+    edge_model_v2_max_rank_uplift_frac = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_EDGE_MODEL_V2_MAX_RANK_UPLIFT_FRAC",
+                    0.30,
+                    cast=float,
+                )
+            ),
+        ),
+    )
     promotion_significance_enabled = bool(
         get_env(
             "AI_TRADING_EXEC_PROMOTION_SEQUENTIAL_SIGNIFICANCE_ENABLED",
@@ -42748,7 +43189,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             float(
                 get_env(
                     "AI_TRADING_EXEC_OPPORTUNITY_TOP_QUANTILE",
-                    0.80,
+                    0.93,
                     cast=float,
                 )
             ),
@@ -42756,7 +43197,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     )
     opportunity_min_symbols = max(
         1,
-        int(get_env("AI_TRADING_EXEC_OPPORTUNITY_MIN_SYMBOLS", 8, cast=int)),
+        int(get_env("AI_TRADING_EXEC_OPPORTUNITY_MIN_SYMBOLS", 5, cast=int)),
     )
     opportunity_openings_only = bool(
         get_env("AI_TRADING_EXEC_OPPORTUNITY_OPENINGS_ONLY", True, cast=bool)
@@ -42798,6 +43239,32 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             1.0,
             cast=float,
         )
+    )
+    exit_policy_entry_penalty_enabled = bool(
+        get_env("AI_TRADING_EXEC_EXIT_POLICY_ENTRY_PENALTY_ENABLED", True, cast=bool)
+    )
+    exit_policy_entry_penalty_weight = max(
+        0.0,
+        float(get_env("AI_TRADING_EXEC_EXIT_POLICY_ENTRY_PENALTY_WEIGHT", 6.0, cast=float)),
+    )
+    exit_policy_entry_penalty_max_abs = max(
+        0.0,
+        float(
+            get_env("AI_TRADING_EXEC_EXIT_POLICY_ENTRY_PENALTY_MAX_ABS", 12.0, cast=float)
+        ),
+    )
+    exit_policy_entry_penalty_min_pressure = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_EXIT_POLICY_ENTRY_PENALTY_MIN_PRESSURE",
+                    0.20,
+                    cast=float,
+                )
+            ),
+        ),
     )
     portfolio_log_growth_rank_enabled = _rollout_toggle(
         "AI_TRADING_EXEC_PORTFOLIO_LOG_GROWTH_RANK_ENABLED",
@@ -42942,7 +43409,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             float(
                 get_env(
                     "AI_TRADING_EXEC_EXPECTED_CAPTURE_FILL_PROB_FLOOR",
-                    0.10,
+                    0.45,
                     cast=float,
                 )
             ),
@@ -42966,7 +43433,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         float(
             get_env(
                 "AI_TRADING_EXEC_EXPECTED_CAPTURE_MAX_ADJUST_ABS",
-                18.0,
+                10.0,
                 cast=float,
             )
         ),
@@ -42974,7 +43441,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     expected_capture_floor_bps = float(
         get_env(
             "AI_TRADING_EXEC_EXPECTED_CAPTURE_FLOOR_BPS",
-            -3.0,
+            1.0,
             cast=float,
         )
     )
@@ -42983,7 +43450,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         float(
             get_env(
                 "AI_TRADING_EXEC_EXPECTED_CAPTURE_CONSTRAINT_WEIGHT",
-                0.80,
+                1.2,
                 cast=float,
             )
         ),
@@ -43036,7 +43503,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         int(
             get_env(
                 "AI_TRADING_EXEC_EXPECTED_CAPTURE_LEARNED_FILL_MIN_SAMPLES",
-                20,
+                40,
                 cast=int,
             )
         ),
@@ -43091,7 +43558,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         int(
             get_env(
                 "AI_TRADING_EXEC_EXPECTED_CAPTURE_COST_MODEL_MIN_SAMPLES",
-                20,
+                40,
                 cast=int,
             )
         ),
@@ -43156,6 +43623,239 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             ),
         ),
     )
+    replay_quality_rank_enabled = bool(
+        get_env("AI_TRADING_EXEC_REPLAY_QUALITY_RANK_ENABLED", True, cast=bool)
+    )
+    replay_quality_session_bucket_enabled = bool(
+        get_env(
+            "AI_TRADING_EXEC_REPLAY_QUALITY_SESSION_BUCKET_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    replay_quality_regime_bucket_enabled = bool(
+        get_env(
+            "AI_TRADING_EXEC_REPLAY_QUALITY_REGIME_BUCKET_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    replay_quality_min_samples = max(
+        1,
+        int(get_env("AI_TRADING_EXEC_REPLAY_QUALITY_MIN_SAMPLES", 20, cast=int)),
+    )
+    replay_quality_weight = max(
+        0.0,
+        min(
+            5.0,
+            float(get_env("AI_TRADING_EXEC_REPLAY_QUALITY_WEIGHT", 0.18, cast=float)),
+        ),
+    )
+    replay_quality_clip_bps = max(
+        1.0,
+        float(get_env("AI_TRADING_EXEC_REPLAY_QUALITY_CLIP_BPS", 25.0, cast=float)),
+    )
+    replay_quality_max_rank_uplift_abs = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_REPLAY_QUALITY_MAX_RANK_UPLIFT_ABS",
+                8.0,
+                cast=float,
+            )
+        ),
+    )
+    replay_quality_max_rank_uplift_frac = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_REPLAY_QUALITY_MAX_RANK_UPLIFT_FRAC",
+                    0.10,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    replay_quality_max_age_hours = max(
+        1.0,
+        float(get_env("AI_TRADING_EXEC_REPLAY_QUALITY_MAX_AGE_HOURS", 24.0, cast=float)),
+    )
+    replay_quality_auto_disable_if_stale = bool(
+        get_env(
+            "AI_TRADING_EXEC_REPLAY_QUALITY_AUTO_DISABLE_IF_STALE",
+            True,
+            cast=bool,
+        )
+    )
+    replay_quality_fallback_to_edge_model_v2 = bool(
+        get_env(
+            "AI_TRADING_EXEC_REPLAY_QUALITY_FALLBACK_TO_EDGE_MODEL_V2",
+            True,
+            cast=bool,
+        )
+    )
+    replay_quality_by_symbol: dict[str, dict[str, float]] = {}
+    replay_quality_by_symbol_session: dict[str, dict[str, float]] = {}
+    replay_quality_by_symbol_session_regime: dict[str, dict[str, float]] = {}
+    replay_quality_context: dict[str, Any] = {"source": "none"}
+    if replay_quality_rank_enabled:
+        def _normalize_symbol_quality_map(raw: Any) -> dict[str, dict[str, float]]:
+            out: dict[str, dict[str, float]] = {}
+            if not isinstance(raw, Mapping):
+                return out
+            for raw_key, raw_metrics in raw.items():
+                symbol = str(raw_key or "").strip().upper()
+                if not symbol or not isinstance(raw_metrics, Mapping):
+                    continue
+                sample_count = int(_safe_float(raw_metrics.get("sample_count")) or 0.0)
+                net_edge_bps = _safe_float(raw_metrics.get("net_edge_bps"))
+                if sample_count <= 0 or net_edge_bps is None:
+                    continue
+                out[symbol] = {
+                    "sample_count": float(sample_count),
+                    "net_edge_bps": float(net_edge_bps),
+                    "win_rate": float(_safe_float(raw_metrics.get("win_rate")) or 0.0),
+                    "profit_factor": float(
+                        _safe_float(raw_metrics.get("profit_factor")) or 0.0
+                    ),
+                }
+            return out
+
+        def _normalize_bucket_quality_map(
+            raw: Any,
+            *,
+            with_regime: bool,
+        ) -> dict[str, dict[str, float]]:
+            out: dict[str, dict[str, float]] = {}
+            if not isinstance(raw, Mapping):
+                return out
+            expected_parts = 3 if with_regime else 2
+            for raw_key, raw_metrics in raw.items():
+                key = str(raw_key or "").strip()
+                if not key or not isinstance(raw_metrics, Mapping):
+                    continue
+                parts = key.split(":")
+                if len(parts) < expected_parts:
+                    continue
+                symbol = str(parts[0] or "").strip().upper()
+                session_token = str(parts[1] or "").strip().lower() or "offhours"
+                if with_regime:
+                    regime_token = str(parts[2] or "").strip().lower() or "unknown"
+                    normalized_key = f"{symbol}:{session_token}:{regime_token}"
+                else:
+                    normalized_key = f"{symbol}:{session_token}"
+                sample_count = int(_safe_float(raw_metrics.get("sample_count")) or 0.0)
+                net_edge_bps = _safe_float(raw_metrics.get("net_edge_bps"))
+                if sample_count <= 0 or net_edge_bps is None:
+                    continue
+                out[normalized_key] = {
+                    "sample_count": float(sample_count),
+                    "net_edge_bps": float(net_edge_bps),
+                    "win_rate": float(_safe_float(raw_metrics.get("win_rate")) or 0.0),
+                    "profit_factor": float(
+                        _safe_float(raw_metrics.get("profit_factor")) or 0.0
+                    ),
+                }
+            return out
+
+        state_replay_raw = getattr(state, "replay_symbol_summary", None)
+        state_replay_buckets_raw = getattr(state, "replay_bucket_summary", None)
+        state_replay_ts = _parse_iso_timestamp(
+            getattr(state, "replay_symbol_summary_updated_at", None)
+        )
+        if isinstance(state_replay_raw, Mapping) or isinstance(
+            state_replay_buckets_raw,
+            Mapping,
+        ):
+            age_seconds: float | None = None
+            if state_replay_ts is not None:
+                age_seconds = max(0.0, (now - state_replay_ts).total_seconds())
+            if age_seconds is None or age_seconds <= float(replay_quality_max_age_hours) * 3600.0:
+                replay_quality_by_symbol = _normalize_symbol_quality_map(
+                    state_replay_raw
+                )
+                buckets = (
+                    dict(state_replay_buckets_raw)
+                    if isinstance(state_replay_buckets_raw, Mapping)
+                    else {}
+                )
+                replay_quality_by_symbol_session = _normalize_bucket_quality_map(
+                    buckets.get("by_symbol_session"),
+                    with_regime=False,
+                )
+                replay_quality_by_symbol_session_regime = _normalize_bucket_quality_map(
+                    buckets.get("by_symbol_session_regime"),
+                    with_regime=True,
+                )
+                if (
+                    replay_quality_by_symbol
+                    or replay_quality_by_symbol_session
+                    or replay_quality_by_symbol_session_regime
+                ):
+                    replay_quality_context = {
+                        "source": "state",
+                        "updated_at": (
+                            state_replay_ts.isoformat() if state_replay_ts is not None else None
+                        ),
+                        "symbols": int(len(replay_quality_by_symbol)),
+                        "symbol_sessions": int(len(replay_quality_by_symbol_session)),
+                        "symbol_session_regimes": int(
+                            len(replay_quality_by_symbol_session_regime)
+                        ),
+                    }
+        if (
+            not replay_quality_by_symbol
+            and not replay_quality_by_symbol_session
+            and not replay_quality_by_symbol_session_regime
+        ):
+            replay_output_dir = resolve_runtime_artifact_path(
+                str(
+                    get_env(
+                        "AI_TRADING_REPLAY_OUTPUT_DIR",
+                        "runtime/replay_outputs",
+                        cast=str,
+                    )
+                    or ""
+                ).strip()
+                or "runtime/replay_outputs",
+                default_relative="runtime/replay_outputs",
+            )
+            (
+                replay_quality_by_symbol,
+                replay_quality_by_symbol_session,
+                replay_quality_by_symbol_session_regime,
+                replay_quality_context,
+            ) = _load_latest_replay_quality_summaries(
+                replay_output_dir,
+                max_age_hours=float(replay_quality_max_age_hours),
+            )
+            replay_quality_by_symbol = _normalize_symbol_quality_map(
+                replay_quality_by_symbol
+            )
+            replay_quality_by_symbol_session = _normalize_bucket_quality_map(
+                replay_quality_by_symbol_session,
+                with_regime=False,
+            )
+            replay_quality_by_symbol_session_regime = _normalize_bucket_quality_map(
+                replay_quality_by_symbol_session_regime,
+                with_regime=True,
+            )
+        if (
+            replay_quality_rank_enabled
+            and replay_quality_auto_disable_if_stale
+            and not replay_quality_by_symbol
+            and not replay_quality_by_symbol_session
+            and not replay_quality_by_symbol_session_regime
+        ):
+            replay_quality_weight = 0.0
+            replay_quality_context = {
+                **dict(replay_quality_context),
+                "source": "none",
+                "auto_disabled": True,
+                "auto_disabled_reason": "stale_or_missing_data",
+            }
     policy_runtime_payload = _load_policy_runtime_toggles()
     policy_rollback_disabled_slices = {
         str(item).strip().upper()
@@ -43414,12 +44114,27 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             if realized_edge_bps is not None:
                 reward_bps = float(realized_edge_bps)
             if reward_bps is None:
+                expected_net_edge_for_reward = _safe_float(row.get("expected_net_edge_bps"))
+                if expected_net_edge_for_reward is None:
+                    expected_net_edge_for_reward = _safe_float(row.get("expected_edge_bps"))
+                spread_paid_bps = abs(float(_safe_float(row.get("spread_paid_bps")) or 0.0))
+                exec_drift_bps = abs(float(_safe_float(row.get("execution_drift_bps")) or 0.0))
                 try:
                     is_bps = float(row.get("is_bps"))
                 except (TypeError, ValueError):
                     is_bps = None
                 if is_bps is not None and math.isfinite(float(is_bps)):
-                    reward_bps = float(-is_bps)
+                    if (
+                        expected_net_edge_for_reward is not None
+                        and math.isfinite(float(expected_net_edge_for_reward))
+                    ):
+                        reward_bps = float(expected_net_edge_for_reward) - (
+                            abs(float(is_bps))
+                            + float(spread_paid_bps)
+                            + float(exec_drift_bps)
+                        )
+                    else:
+                        reward_bps = float(-is_bps)
             if edge_realism_rank_calibration_enabled and reward_bps is not None:
                 expected_bps: float | None = None
                 for key in (
@@ -43592,6 +44307,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             )
         )
     )
+    bandit_bucket_significance_cache: dict[str, dict[str, Any]] = {}
     counterfactual_global_events = int(counterfactual_global.get("events", 0) or 0)
     counterfactual_global_dr_mean_bps = float(
         counterfactual_global.get("dr_mean_bps", 0.0) or 0.0
@@ -44006,11 +44722,135 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 }
             )
         candidate_expected_capture[symbol] = float(expected_capture_bps)
+        edge_model_v2_source = "none"
+        edge_model_v2_samples = 0
+        edge_model_v2_expected_bps = 0.0
+        edge_model_v2_uncertainty_bps = 0.0
+        edge_model_v2_cost_penalty_bps = 0.0
+        edge_model_v2_target_bps = 0.0
+        if edge_model_v2_enabled and edge_model_v2_weight > 0.0:
+            global_series = realized_edge_by_symbol.get(symbol, [])
+            session_series = realized_edge_by_symbol_session.get(
+                f"{symbol}:{bandit_active_session}",
+                [],
+            )
+            regime_series = realized_edge_by_symbol_session_regime.get(
+                f"{symbol}:{bandit_active_session}:{bandit_active_regime}",
+                [],
+            )
+            global_mean, global_std, global_n = _mean_std(global_series)
+            session_mean, session_std, session_n = _mean_std(session_series)
+            regime_mean, regime_std, regime_n = _mean_std(regime_series)
+            blend_terms: list[tuple[str, float, float, int, float]] = []
+            if regime_n >= edge_model_v2_min_samples:
+                blend_terms.append(
+                    (
+                        "regime",
+                        float(edge_model_v2_regime_weight),
+                        float(regime_mean),
+                        int(regime_n),
+                        float(regime_std),
+                    )
+                )
+            if session_n >= edge_model_v2_min_samples:
+                blend_terms.append(
+                    (
+                        "session",
+                        float(edge_model_v2_session_weight),
+                        float(session_mean),
+                        int(session_n),
+                        float(session_std),
+                    )
+                )
+            if global_n >= edge_model_v2_min_samples:
+                blend_terms.append(
+                    (
+                        "global",
+                        float(edge_model_v2_global_weight),
+                        float(global_mean),
+                        int(global_n),
+                        float(global_std),
+                    )
+                )
+            total_weight = float(sum(max(term[1], 0.0) for term in blend_terms))
+            if blend_terms and total_weight > 0.0:
+                blended_mean = float(
+                    sum((max(weight, 0.0) / total_weight) * mean for _, weight, mean, _n, _std in blend_terms)
+                )
+                blended_stderr = float(
+                    sum(
+                        (max(weight, 0.0) / total_weight)
+                        * (max(float(std), 0.0) / math.sqrt(float(max(samples, 1))))
+                        for _, weight, _mean, samples, std in blend_terms
+                    )
+                )
+                edge_model_v2_expected_bps = float(blended_mean)
+                edge_model_v2_uncertainty_bps = float(
+                    float(edge_model_v2_uncertainty_z) * float(blended_stderr)
+                )
+                edge_model_v2_cost_penalty_bps = float(
+                    float(edge_model_v2_cost_weight)
+                    * (
+                        max(0.0, float(expected_capture_impact_cost_bps))
+                        + max(0.0, float(expected_capture_latency_drift_bps))
+                        + (0.50 * max(0.0, float(expected_capture_spread_bps)))
+                    )
+                )
+                edge_model_v2_target_bps = max(
+                    -float(edge_model_v2_clip_bps),
+                    min(
+                        float(edge_model_v2_clip_bps),
+                        float(edge_model_v2_expected_bps)
+                        - float(edge_model_v2_uncertainty_bps)
+                        - float(edge_model_v2_cost_penalty_bps),
+                    ),
+                )
+                edge_model_v2_samples = int(max(regime_n, session_n, global_n))
+                edge_model_v2_source = "+".join(term[0] for term in blend_terms)
+                edge_model_v2_bonus = (
+                    float(edge_model_v2_weight)
+                    * float(edge_model_v2_target_bps)
+                    * max(max_conf, 0.05)
+                    * disagreement
+                )
+                edge_model_v2_bonus_cap = float(edge_model_v2_max_rank_uplift_abs)
+                if edge_model_v2_max_rank_uplift_frac > 0.0:
+                    edge_model_v2_bonus_cap = min(
+                        edge_model_v2_bonus_cap,
+                        abs(float(rank_score)) * float(edge_model_v2_max_rank_uplift_frac),
+                    )
+                if edge_model_v2_bonus_cap > 0.0:
+                    edge_model_v2_bonus = max(
+                        -float(edge_model_v2_bonus_cap),
+                        min(float(edge_model_v2_bonus_cap), float(edge_model_v2_bonus)),
+                    )
+                rank_score += float(edge_model_v2_bonus)
+                target.reasons.append("EDGE_MODEL_V2")
+                if "regime" in edge_model_v2_source or "session" in edge_model_v2_source:
+                    target.reasons.append("EDGE_MODEL_V2_REGIME_BLEND")
+                counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
+                    {
+                        "edge_model_v2_source": str(edge_model_v2_source),
+                        "edge_model_v2_samples": int(edge_model_v2_samples),
+                        "edge_model_v2_expected_bps": float(edge_model_v2_expected_bps),
+                        "edge_model_v2_uncertainty_bps": float(edge_model_v2_uncertainty_bps),
+                        "edge_model_v2_cost_penalty_bps": float(edge_model_v2_cost_penalty_bps),
+                        "edge_model_v2_target_bps": float(edge_model_v2_target_bps),
+                        "edge_model_v2_weight": float(edge_model_v2_weight),
+                    }
+                )
         realized_rank_source = "none"
         realized_rank_samples = 0
         realized_rank_mean_bps = 0.0
         realized_rank_uncertainty_penalty_bps = 0.0
         realized_rank_target_bps = 0.0
+        replay_quality_source = "none"
+        replay_quality_samples = 0
+        replay_quality_net_edge_bps = 0.0
+        replay_quality_target_bps = 0.0
+        replay_quality_bonus = 0.0
+        exit_policy_entry_penalty_bps = 0.0
+        exit_policy_entry_context: dict[str, Any] = {"enabled": False}
         if realized_edge_rank_enabled and realized_edge_rank_weight > 0.0:
             realized_series = realized_edge_by_symbol.get(symbol, [])
             realized_rank_source = "symbol"
@@ -44098,6 +44938,53 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             if len(reward_series) >= bandit_min_samples:
                 sample_count = int(len(reward_series))
                 mean_reward = float(sum(reward_series) / max(sample_count, 1))
+                bucket_gate_key = f"{symbol}:{bandit_source}:{bandit_active_session}:{bandit_active_regime}"
+                bucket_significance_context = bandit_bucket_significance_cache.get(
+                    bucket_gate_key
+                )
+                if bucket_significance_context is None:
+                    bucket_mean, bucket_std, bucket_samples = _mean_std(reward_series)
+                    bucket_significance_context = _sequential_significance_gate(
+                        mean_reward_bps=float(bucket_mean),
+                        std_reward_bps=float(bucket_std),
+                        samples=int(bucket_samples),
+                        min_samples=int(
+                            max(
+                                bandit_min_samples,
+                                bandit_bucket_promote_min_samples,
+                            )
+                        ),
+                        target_mean_bps=float(
+                            bandit_bucket_promote_min_mean_reward_bps
+                        ),
+                        method=str(promotion_significance_method),
+                        posterior_prob_min=float(
+                            promotion_significance_posterior_prob_min
+                        ),
+                        sprt_alpha=float(promotion_significance_sprt_alpha),
+                        sprt_beta=float(promotion_significance_sprt_beta),
+                        sprt_effect_bps=float(promotion_significance_sprt_effect_bps),
+                    )
+                    bandit_bucket_significance_cache[bucket_gate_key] = dict(
+                        bucket_significance_context
+                    )
+                bucket_significance_pass = (
+                    bool(bucket_significance_context.get("passed", False))
+                    if promotion_significance_enabled
+                    else True
+                )
+                bandit_bucket_live_promoted = bool(
+                    bandit_live_promoted
+                    and (
+                        not bandit_bucket_promotion_enabled
+                        or (
+                            sample_count >= bandit_bucket_promote_min_samples
+                            and mean_reward
+                            >= bandit_bucket_promote_min_mean_reward_bps
+                            and bucket_significance_pass
+                        )
+                    )
+                )
                 if bandit_method == "thompson":
                     variance = float(
                         sum((value - mean_reward) ** 2 for value in reward_series)
@@ -44149,7 +45036,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     )
                 if bandit_bonus_cap > 0.0:
                     bandit_bonus = max(-bandit_bonus_cap, min(bandit_bonus_cap, bandit_bonus))
-                if bandit_live_promoted:
+                if bandit_bucket_live_promoted:
                     rank_score += float(bandit_bonus)
                     target.reasons.append(
                         f"BANDIT_{bandit_method.upper()}_{bandit_source.upper()}"
@@ -44166,6 +45053,12 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         "bandit_score_bps": float(bandit_score),
                         "bandit_bonus": float(bandit_bonus),
                         "bandit_live_promoted": bool(bandit_live_promoted),
+                        "bandit_bucket_live_promoted": bool(
+                            bandit_bucket_live_promoted
+                        ),
+                        "bandit_bucket_significance": dict(
+                            bucket_significance_context
+                        ),
                     }
                 )
         if counterfactual_enabled and counterfactual_weight > 0.0:
@@ -44337,6 +45230,145 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     "portfolio_rank_bonus": float(portfolio_bonus),
                 }
             )
+        if replay_quality_rank_enabled and replay_quality_weight > 0.0:
+            replay_metrics = replay_quality_by_symbol.get(symbol)
+            replay_bucket_source = "symbol"
+            replay_session_key = f"{symbol}:{bandit_active_session}"
+            replay_regime_key = (
+                f"{symbol}:{bandit_active_session}:{bandit_active_regime}"
+            )
+            if replay_quality_regime_bucket_enabled:
+                replay_regime_metrics = replay_quality_by_symbol_session_regime.get(
+                    replay_regime_key
+                )
+                if isinstance(replay_regime_metrics, Mapping):
+                    replay_regime_samples = int(
+                        _safe_float(replay_regime_metrics.get("sample_count")) or 0.0
+                    )
+                    if replay_regime_samples >= replay_quality_min_samples:
+                        replay_metrics = replay_regime_metrics
+                        replay_bucket_source = "symbol_session_regime"
+            if (
+                replay_bucket_source == "symbol"
+                and replay_quality_session_bucket_enabled
+            ):
+                replay_session_metrics = replay_quality_by_symbol_session.get(
+                    replay_session_key
+                )
+                if isinstance(replay_session_metrics, Mapping):
+                    replay_session_samples = int(
+                        _safe_float(replay_session_metrics.get("sample_count")) or 0.0
+                    )
+                    if replay_session_samples >= replay_quality_min_samples:
+                        replay_metrics = replay_session_metrics
+                        replay_bucket_source = "symbol_session"
+            if (
+                not isinstance(replay_metrics, Mapping)
+                and replay_quality_fallback_to_edge_model_v2
+                and edge_model_v2_samples >= edge_model_v2_min_samples
+            ):
+                replay_metrics = {
+                    "sample_count": float(edge_model_v2_samples),
+                    "net_edge_bps": float(edge_model_v2_target_bps),
+                    "win_rate": 0.0,
+                    "profit_factor": 0.0,
+                }
+                replay_bucket_source = "edge_model_v2_fallback"
+            if isinstance(replay_metrics, Mapping):
+                replay_quality_samples = int(
+                    _safe_float(replay_metrics.get("sample_count")) or 0.0
+                )
+                replay_net_edge = _safe_float(replay_metrics.get("net_edge_bps"))
+                if (
+                    replay_quality_samples >= replay_quality_min_samples
+                    and replay_net_edge is not None
+                ):
+                    replay_quality_source = str(
+                        f"{replay_quality_context.get('source') or 'unknown'}:{replay_bucket_source}"
+                    )
+                    replay_quality_net_edge_bps = float(replay_net_edge)
+                    replay_quality_target_bps = max(
+                        -float(replay_quality_clip_bps),
+                        min(
+                            float(replay_quality_clip_bps),
+                            float(replay_quality_net_edge_bps),
+                        ),
+                    )
+                    replay_quality_bonus = (
+                        float(replay_quality_weight)
+                        * float(replay_quality_target_bps)
+                        * max(max_conf, 0.05)
+                        * disagreement
+                    )
+                    replay_quality_bonus_cap = float(replay_quality_max_rank_uplift_abs)
+                    if replay_quality_max_rank_uplift_frac > 0.0:
+                        replay_quality_bonus_cap = min(
+                            replay_quality_bonus_cap,
+                            abs(float(rank_score))
+                            * float(replay_quality_max_rank_uplift_frac),
+                        )
+                    if replay_quality_bonus_cap > 0.0:
+                        replay_quality_bonus = max(
+                            -float(replay_quality_bonus_cap),
+                            min(float(replay_quality_bonus_cap), float(replay_quality_bonus)),
+                        )
+                    rank_score += float(replay_quality_bonus)
+                    if replay_quality_bonus >= 0.0:
+                        target.reasons.append("REPLAY_QUALITY_UPLIFT")
+                    else:
+                        target.reasons.append("REPLAY_QUALITY_DEWEIGHT")
+                    counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
+                        {
+                            "replay_quality_source": str(replay_quality_source),
+                            "replay_quality_samples": int(replay_quality_samples),
+                            "replay_quality_net_edge_bps": float(
+                                replay_quality_net_edge_bps
+                            ),
+                            "replay_quality_target_bps": float(
+                                replay_quality_target_bps
+                            ),
+                            "replay_quality_bonus": float(replay_quality_bonus),
+                        }
+                    )
+        if exit_policy_entry_penalty_enabled and exit_policy_entry_penalty_weight > 0.0:
+            target_side = "long" if float(target.target_dollars) >= 0.0 else "short"
+            exit_policy_entry_context = _exit_policy_pressure_context(
+                state,
+                symbol=symbol,
+                regime=bandit_active_regime,
+                side=target_side,
+                now=now,
+                position_age_seconds=0.0,
+                expected_edge_bps=float(clipped_net_edge_total),
+            )
+            pressure_score = _safe_float(exit_policy_entry_context.get("pressure_score"))
+            if (
+                bool(exit_policy_entry_context.get("active", False))
+                and pressure_score is not None
+                and float(pressure_score) >= float(exit_policy_entry_penalty_min_pressure)
+            ):
+                exit_policy_entry_penalty_bps = (
+                    float(exit_policy_entry_penalty_weight)
+                    * float(pressure_score)
+                    * max(max_conf, 0.05)
+                    * disagreement
+                )
+                if exit_policy_entry_penalty_max_abs > 0.0:
+                    exit_policy_entry_penalty_bps = min(
+                        float(exit_policy_entry_penalty_max_abs),
+                        float(exit_policy_entry_penalty_bps),
+                    )
+                rank_score -= float(exit_policy_entry_penalty_bps)
+                target.reasons.append("EXIT_POLICY_ENTRY_PENALTY")
+                counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
+                    {
+                        "exit_policy_entry_penalty_bps": float(
+                            exit_policy_entry_penalty_bps
+                        ),
+                        "exit_policy_entry_pressure": float(pressure_score),
+                        "exit_policy_entry_context": dict(exit_policy_entry_context),
+                    }
+                )
         rank_downside_before_cap = 0.0
         rank_downside_cap_applied = False
         rank_downside_cap_limit: float | None = None
@@ -44499,6 +45531,15 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             "bandit_regime_bucket_enabled": bool(bandit_regime_bucket_enabled),
             "bandit_shadow_only": bool(bandit_shadow_only),
             "bandit_live_promoted": bool(bandit_live_promoted),
+            "bandit_bucket_promotion_enabled": bool(
+                bandit_bucket_promotion_enabled
+            ),
+            "bandit_bucket_promote_min_samples": int(
+                bandit_bucket_promote_min_samples
+            ),
+            "bandit_bucket_promote_min_mean_reward_bps": float(
+                bandit_bucket_promote_min_mean_reward_bps
+            ),
             "bandit_promote_min_samples": int(bandit_promote_min_samples),
             "bandit_promote_min_mean_reward_bps": float(
                 bandit_promote_min_mean_reward_bps
@@ -44530,6 +45571,44 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 realized_edge_rank_uncertainty_z
             ),
             "realized_edge_rank_clip_bps": float(realized_edge_rank_clip_bps),
+            "edge_model_v2_enabled": bool(edge_model_v2_enabled),
+            "edge_model_v2_weight": float(edge_model_v2_weight),
+            "edge_model_v2_min_samples": int(edge_model_v2_min_samples),
+            "edge_model_v2_uncertainty_z": float(edge_model_v2_uncertainty_z),
+            "edge_model_v2_regime_weight": float(edge_model_v2_regime_weight),
+            "edge_model_v2_session_weight": float(edge_model_v2_session_weight),
+            "edge_model_v2_global_weight": float(edge_model_v2_global_weight),
+            "edge_model_v2_cost_weight": float(edge_model_v2_cost_weight),
+            "edge_model_v2_clip_bps": float(edge_model_v2_clip_bps),
+            "replay_quality_rank_enabled": bool(replay_quality_rank_enabled),
+            "replay_quality_session_bucket_enabled": bool(
+                replay_quality_session_bucket_enabled
+            ),
+            "replay_quality_regime_bucket_enabled": bool(
+                replay_quality_regime_bucket_enabled
+            ),
+            "replay_quality_auto_disable_if_stale": bool(
+                replay_quality_auto_disable_if_stale
+            ),
+            "replay_quality_fallback_to_edge_model_v2": bool(
+                replay_quality_fallback_to_edge_model_v2
+            ),
+            "replay_quality_weight": float(replay_quality_weight),
+            "replay_quality_min_samples": int(replay_quality_min_samples),
+            "replay_quality_clip_bps": float(replay_quality_clip_bps),
+            "replay_quality_max_age_hours": float(replay_quality_max_age_hours),
+            "replay_quality_symbol_count": int(len(replay_quality_by_symbol)),
+            "replay_quality_symbol_session_count": int(
+                len(replay_quality_by_symbol_session)
+            ),
+            "replay_quality_symbol_session_regime_count": int(
+                len(replay_quality_by_symbol_session_regime)
+            ),
+            "replay_quality_context": (
+                dict(replay_quality_context)
+                if isinstance(replay_quality_context, Mapping)
+                else {}
+            ),
             "expected_capture_rank_enabled": bool(expected_capture_rank_enabled),
             "expected_capture_rank_weight": float(expected_capture_rank_weight),
             "expected_capture_floor_bps": float(expected_capture_floor_bps_effective),
@@ -44548,6 +45627,15 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             ),
             "expected_capture_fill_prob_floor": float(
                 expected_capture_fill_prob_floor
+            ),
+            "exit_policy_entry_penalty_enabled": bool(
+                exit_policy_entry_penalty_enabled
+            ),
+            "exit_policy_entry_penalty_weight": float(
+                exit_policy_entry_penalty_weight
+            ),
+            "exit_policy_entry_penalty_min_pressure": float(
+                exit_policy_entry_penalty_min_pressure
             ),
             "expected_capture_fill_prob_cap": float(
                 expected_capture_fill_prob_cap
@@ -46377,32 +47465,97 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         opening_trade = abs(current_shares + delta_shares) > abs(current_shares)
         if exec_engine is not None:
             if opening_trade:
-                min_notional_fn = getattr(exec_engine, "_opening_min_notional_dollars", None)
-                if callable(min_notional_fn):
+                min_notional_precheck_fn = getattr(
+                    exec_engine,
+                    "_opening_min_notional_allows_order",
+                    None,
+                )
+                if callable(min_notional_precheck_fn):
+                    precheck_order_payload: dict[str, Any] = {
+                        "symbol": symbol,
+                        "side": side,
+                        "quantity": abs(int(delta_shares)),
+                        "qty": abs(int(delta_shares)),
+                        "price_hint": float(price),
+                    }
                     try:
-                        opening_min_notional = float(min_notional_fn() or 0.0)
+                        opening_notional_allowed, opening_notional_context = (
+                            min_notional_precheck_fn(precheck_order_payload)
+                        )
                     except Exception:
-                        opening_min_notional = 0.0
-                    if opening_min_notional > 0.0:
-                        opening_notional = abs(float(delta_shares) * float(price))
-                        if opening_notional < opening_min_notional:
-                            gates.append("ENTRY_CONSTRAINED_MIN_NOTIONAL_PRECHECK")
-                            record = DecisionRecord(
-                                symbol=symbol,
-                                bar_ts=net_target.bar_ts,
-                                sleeves=net_target.proposals,
-                                net_target=net_target,
-                                gates=gates,
-                                metrics={
-                                    "opening_min_notional": {
-                                        "order_notional": float(opening_notional),
-                                        "min_notional": float(opening_min_notional),
-                                    }
-                                },
-                                config_snapshot=symbol_snapshot,
+                        opening_notional_allowed, opening_notional_context = True, {}
+                    opening_notional_context = (
+                        dict(opening_notional_context)
+                        if isinstance(opening_notional_context, Mapping)
+                        else {}
+                    )
+                    if not bool(opening_notional_allowed):
+                        gates.append("ENTRY_CONSTRAINED_MIN_NOTIONAL_PRECHECK")
+                        record = DecisionRecord(
+                            symbol=symbol,
+                            bar_ts=net_target.bar_ts,
+                            sleeves=net_target.proposals,
+                            net_target=net_target,
+                            gates=gates,
+                            metrics={"opening_min_notional": opening_notional_context},
+                            config_snapshot=symbol_snapshot,
+                        )
+                        _write_decision_record(record, decision_path)
+                        continue
+                    autosized_qty: int | None = None
+                    try:
+                        autosized_qty = int(precheck_order_payload.get("quantity"))  # type: ignore[arg-type]
+                    except (TypeError, ValueError):
+                        try:
+                            autosized_qty = int(precheck_order_payload.get("qty"))  # type: ignore[arg-type]
+                        except (TypeError, ValueError):
+                            autosized_qty = None
+                    if autosized_qty is not None and autosized_qty > 0:
+                        signed_autosized_qty = (
+                            int(autosized_qty)
+                            if int(delta_shares) > 0
+                            else -int(autosized_qty)
+                        )
+                        if signed_autosized_qty != int(delta_shares):
+                            delta_shares = int(signed_autosized_qty)
+                            net_target.target_shares = current_shares + delta_shares
+                            net_target.target_dollars = net_target.target_shares * price
+                            gates.append("ENTRY_CONSTRAINED_MIN_NOTIONAL_AUTOSIZE_PRECHECK")
+                            symbol_snapshot["opening_min_notional_precheck"] = {
+                                **opening_notional_context,
+                                "autosized_qty": int(abs(delta_shares)),
+                            }
+                else:
+                    min_notional_fn = getattr(exec_engine, "_opening_min_notional_dollars", None)
+                    if callable(min_notional_fn):
+                        try:
+                            opening_min_notional = float(
+                                min_notional_fn(symbol=symbol) or 0.0
                             )
-                            _write_decision_record(record, decision_path)
-                            continue
+                        except TypeError:
+                            opening_min_notional = float(min_notional_fn() or 0.0)
+                        except Exception:
+                            opening_min_notional = 0.0
+                        if opening_min_notional > 0.0:
+                            opening_notional = abs(float(delta_shares) * float(price))
+                            if opening_notional < opening_min_notional:
+                                gates.append("ENTRY_CONSTRAINED_MIN_NOTIONAL_PRECHECK")
+                                record = DecisionRecord(
+                                    symbol=symbol,
+                                    bar_ts=net_target.bar_ts,
+                                    sleeves=net_target.proposals,
+                                    net_target=net_target,
+                                    gates=gates,
+                                    metrics={
+                                        "opening_min_notional": {
+                                            "order_notional": float(opening_notional),
+                                            "min_notional": float(opening_min_notional),
+                                        }
+                                    },
+                                    config_snapshot=symbol_snapshot,
+                                )
+                                _write_decision_record(record, decision_path)
+                                continue
 
                 cooldown_fn = getattr(exec_engine, "_symbol_reentry_cooldown_allows_opening", None)
                 if callable(cooldown_fn):

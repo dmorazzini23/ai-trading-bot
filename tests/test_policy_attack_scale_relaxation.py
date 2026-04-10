@@ -130,3 +130,37 @@ def test_attack_scale_reason_not_emitted_when_hard_block_rejects_candidate() -> 
     assert "SAFETY_TIER_ATTACK_SCALE" not in approval.reasons
     assert "SAFETY_TIER_ATTACK_SCALE_RELAXED" not in approval.reasons
     assert "SAFETY_TIER_ATTACK_SCALE_DEGRADED" not in approval.reasons
+
+
+def test_compile_policy_accepts_ablation_and_toggle_env_keys_under_strict_governance() -> None:
+    policy = compile_effective_policy(
+        SimpleNamespace(trading_mode="balanced"),
+        env={
+            "AI_TRADING_POLICY_ABLATION_ROLLBACK_ENABLED": "1",
+            "AI_TRADING_POLICY_ABLATION_STATE_PATH": "runtime/policy_ablation_state.json",
+            "AI_TRADING_POLICY_ABLATION_EVENTS_PATH": "runtime/policy_ablation_events.jsonl",
+            "AI_TRADING_POLICY_ROLLBACK_STATE_PATH": "runtime/policy_rollback_state.json",
+            "AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH": "runtime/policy_runtime_toggles.json",
+            "AI_TRADING_POLICY_ABLATION_SCHEDULE": "market_close",
+            "AI_TRADING_POLICY_ABLATION_MIN_EVENTS": "300",
+            "AI_TRADING_POLICY_ABLATION_NEGATIVE_CONFIDENCE": "0.9",
+            "AI_TRADING_POLICY_ABLATION_MIN_MEAN_EDGE_BPS": "0.0",
+            "AI_TRADING_POLICY_ABLATION_STD_PROXY_BPS": "12.0",
+            "AI_TRADING_POLICY_ABLATION_MAX_SLICES": "5000",
+            "AI_TRADING_POLICY_ABLATION_ROLLING_DECAY": "0.97",
+            "AI_TRADING_POLICY_ABLATION_ADAPTIVE_THRESHOLD_ENABLED": "1",
+            "AI_TRADING_POLICY_ABLATION_ADAPTIVE_THRESHOLD_QUANTILE": "0.35",
+            "AI_TRADING_POLICY_TOGGLE_SIGNIFICANCE_ENABLED": "1",
+            "AI_TRADING_POLICY_TOGGLE_SIGNIFICANCE_METHOD": "both",
+            "AI_TRADING_POLICY_TOGGLE_BAYES_POSTERIOR_MIN": "0.92",
+            "AI_TRADING_POLICY_TOGGLE_SPRT_ALPHA": "0.05",
+            "AI_TRADING_POLICY_TOGGLE_SPRT_BETA": "0.10",
+            "AI_TRADING_POLICY_TOGGLE_SPRT_EFFECT_BPS": "0.4",
+        },
+    )
+
+    source_env = dict(policy.source_env)
+    assert (
+        source_env["AI_TRADING_POLICY_ABLATION_ADAPTIVE_THRESHOLD_ENABLED"] == "1"
+    )
+    assert source_env["AI_TRADING_POLICY_TOGGLE_SIGNIFICANCE_ENABLED"] == "1"
