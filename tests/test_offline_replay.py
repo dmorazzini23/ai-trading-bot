@@ -229,6 +229,37 @@ def test_offline_replay_policy_sensitivity_reports_per_knob_contributions(
     baseline = report.get("baseline", {})
     baseline_metrics = baseline.get("metrics", {})
     assert int(baseline_metrics.get("total_trades", 0)) >= 0
+    baseline_diag = cast(dict[str, Any], baseline.get("policy_diagnostics", {}))
+    rejected_by_reason = cast(dict[str, Any], baseline_diag.get("rejected_by_reason", {}))
+    gate_bind_rates = cast(dict[str, Any], baseline_diag.get("gate_bind_rates", {}))
+    gate_bind_ranked = cast(list[dict[str, Any]], baseline_diag.get("gate_bind_ranked", []))
+    assert int(baseline_diag.get("candidates", 0)) >= 0
+    assert int(baseline_diag.get("accepted", 0)) >= 0
+    assert int(baseline_diag.get("rejected_total", 0)) == sum(
+        int(value) for value in rejected_by_reason.values()
+    )
+    if int(baseline_diag.get("candidates", 0)) > 0:
+        assert float(baseline_diag.get("rejection_rate", 0.0)) == pytest.approx(
+            int(baseline_diag.get("rejected_total", 0))
+            / int(baseline_diag.get("candidates", 1)),
+            abs=1e-9,
+        )
+    for reason, count_any in rejected_by_reason.items():
+        count = int(count_any)
+        detail = cast(dict[str, Any], gate_bind_rates.get(str(reason), {}))
+        assert int(detail.get("count", -1)) == count
+        if int(baseline_diag.get("candidates", 0)) > 0:
+            assert float(detail.get("bind_rate_of_candidates", -1.0)) == pytest.approx(
+                count / int(baseline_diag.get("candidates", 1)),
+                abs=1e-9,
+            )
+        if int(baseline_diag.get("rejected_total", 0)) > 0:
+            assert float(detail.get("share_of_rejections", -1.0)) == pytest.approx(
+                count / int(baseline_diag.get("rejected_total", 1)),
+                abs=1e-9,
+            )
+    ranked_counts = [int(item.get("count", 0)) for item in gate_bind_ranked]
+    assert ranked_counts == sorted(ranked_counts, reverse=True)
     variants = cast(list[dict[str, Any]], report.get("variants", []))
     assert len(variants) >= 8
     contributions = cast(list[dict[str, Any]], report.get("per_knob_contribution", []))
@@ -305,6 +336,56 @@ def test_offline_replay_policy_sensitivity_honors_env_file(
     assert baseline_profile["opportunity_min_symbols"] == 3
     assert baseline_profile["expected_capture_fill_prob_floor"] == pytest.approx(0.31, abs=1e-9)
     assert baseline_profile["expected_capture_floor_bps"] == pytest.approx(4.5, abs=1e-9)
+
+
+def test_offline_replay_env_vars_take_precedence_over_env_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    csv_path = tmp_path / "OVR.csv"
+    out_path = tmp_path / "override.json"
+    env_file = tmp_path / "override.env"
+    _write_synthetic_bars(csv_path, periods=140)
+    env_file.write_text(
+        "\n".join(
+            [
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_FILL_PROB_FLOOR=0.95",
+                "AI_TRADING_EXEC_EXPECTED_CAPTURE_FLOOR_BPS=1000000.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    # Process env overrides should win over values in --env-file.
+    monkeypatch.setenv("AI_TRADING_EXEC_EXPECTED_CAPTURE_FILL_PROB_FLOOR", "0.05")
+    monkeypatch.setenv("AI_TRADING_EXEC_EXPECTED_CAPTURE_FLOOR_BPS", "-1000000.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MIN_DELAY_MS", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MAX_DELAY_MS", "0")
+
+    rc = main(
+        [
+            "--csv",
+            str(csv_path),
+            "--simulation-mode",
+            "--apply-policy-controls",
+            "--env-file",
+            str(env_file),
+            "--confidence-threshold",
+            "0.0",
+            "--entry-score-threshold",
+            "0.0",
+            "--output-json",
+            str(out_path),
+        ]
+    )
+    assert rc == 0
+    payload = _load_json(out_path)
+    policy_diag = cast(dict[str, Any], payload["aggregate"].get("policy_diagnostics", {}))
+    profile = cast(dict[str, Any], policy_diag.get("profile", {}))
+    assert profile["expected_capture_fill_prob_floor"] == pytest.approx(0.05, abs=1e-9)
+    assert profile["expected_capture_floor_bps"] == pytest.approx(-1000000.0, abs=1e-9)
 
 
 def test_offline_replay_simulation_mode_persists_intents_to_oms(
@@ -391,6 +472,80 @@ def test_offline_replay_simulation_mode_populates_markout_metrics(
     assert int(aggregate["markout_samples"]) > 0
     assert float(aggregate["expectancy_bps"]) != 0.0
     assert float(aggregate["net_pnl_bps"]) != 0.0
+
+
+def test_offline_replay_apply_policy_controls_changes_simulation_outcome(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    csv_path = tmp_path / "CTRL.csv"
+    plain_out = tmp_path / "plain.json"
+    policy_out = tmp_path / "policy.json"
+    _write_synthetic_bars(csv_path, periods=160)
+
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MIN_DELAY_MS", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MAX_DELAY_MS", "0")
+
+    # Force policy controls to reject nearly all candidate orders.
+    monkeypatch.setenv("AI_TRADING_EXEC_EXPECTED_CAPTURE_FLOOR_BPS", "1000000.0")
+    monkeypatch.setenv("AI_TRADING_EXEC_EXPECTED_CAPTURE_FILL_PROB_FLOOR", "0.95")
+    monkeypatch.setenv("AI_TRADING_EXEC_EXPECTED_CAPTURE_CONSTRAINT_WEIGHT", "1.2")
+
+    base_args = [
+        "--csv",
+        str(csv_path),
+        "--simulation-mode",
+        "--replay-seed",
+        "19",
+        "--confidence-threshold",
+        "0.0",
+        "--entry-score-threshold",
+        "0.0",
+        "--output-json",
+    ]
+    rc_plain = main(base_args + [str(plain_out)])
+    rc_policy = main(base_args + [str(policy_out), "--apply-policy-controls"])
+    assert rc_plain == 0
+    assert rc_policy == 0
+
+    plain_payload = _load_json(plain_out)
+    policy_payload = _load_json(policy_out)
+    plain_agg = plain_payload["aggregate"]
+    policy_agg = policy_payload["aggregate"]
+
+    assert plain_agg["simulation_mode"] is True
+    assert policy_agg["simulation_mode"] is True
+    assert plain_agg["policy_controls_applied"] is False
+    assert policy_agg["policy_controls_applied"] is True
+    assert policy_agg["policy_mode"] == "ranker_controls"
+    assert int(plain_agg["total_trades"]) > 0
+    assert int(policy_agg["total_trades"]) < int(plain_agg["total_trades"])
+
+    policy_diag = cast(dict[str, Any], policy_agg.get("policy_diagnostics", {}))
+    rejected = cast(dict[str, Any], policy_diag.get("rejected_by_reason", {}))
+    assert (
+        int(rejected.get("expected_capture_floor", 0))
+        + int(rejected.get("fill_prob_floor", 0))
+    ) > 0
+
+
+def test_offline_replay_apply_policy_controls_requires_simulation_mode(tmp_path: Path) -> None:
+    csv_path = tmp_path / "REQ.csv"
+    out_path = tmp_path / "req.json"
+    _write_synthetic_bars(csv_path, periods=80)
+
+    rc = main(
+        [
+            "--csv",
+            str(csv_path),
+            "--apply-policy-controls",
+            "--output-json",
+            str(out_path),
+        ]
+    )
+    assert rc == 1
 
 
 def test_offline_replay_duplicate_timestamps_do_not_raise_duplicate_intent_violation(

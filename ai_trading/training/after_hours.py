@@ -113,6 +113,13 @@ _MODEL_SELECTION_WEIGHT_SPECS: tuple[tuple[str, str, float, float, float], ...] 
         0.0,
         5.0,
     ),
+    (
+        "profitable_fold_shortfall_penalty",
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_PROFITABLE_FOLD_SHORTFALL_PENALTY",
+        8.0,
+        0.0,
+        40.0,
+    ),
 )
 def _resolve_after_hours_output_path(path_value: str, *, default_relative: str) -> Path:
     """Resolve output paths relative to writable runtime roots when possible."""
@@ -733,12 +740,39 @@ def _fit_candidate_model(name: str, seed: int):
     raise ValueError(f"Unsupported candidate model: {name}")
 
 
+def _positive_class_probability_index(classes: Any, *, column_count: int) -> int | None:
+    if int(column_count) <= 0:
+        return None
+    if classes is None:
+        return None
+    try:
+        labels = list(classes)
+    except TypeError:
+        return None
+    if len(labels) != int(column_count):
+        return None
+    for idx, label in enumerate(labels):
+        try:
+            if int(label) == 1:
+                return int(idx)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _predict_probabilities(model: Any, X: Any) -> np.ndarray:
     if hasattr(model, "predict_proba"):
         out = model.predict_proba(X)
         arr = np.asarray(out, dtype=float)
         if arr.ndim == 2 and arr.shape[1] >= 2:
-            return cast(np.ndarray, np.asarray(arr[:, 1], dtype=float))
+            positive_index = _positive_class_probability_index(
+                getattr(model, "classes_", None),
+                column_count=int(arr.shape[1]),
+            )
+            if positive_index is None:
+                positive_index = 1 if int(arr.shape[1]) > 1 else 0
+            positive_index = max(0, min(int(arr.shape[1]) - 1, int(positive_index)))
+            return cast(np.ndarray, np.asarray(arr[:, positive_index], dtype=float))
         if arr.ndim == 1:
             return cast(np.ndarray, np.asarray(arr, dtype=float))
     if hasattr(model, "decision_function"):
@@ -840,6 +874,184 @@ def _regime_calibration_summary(
     return out
 
 
+def _model_quality_diagnostics(
+    dataset: Any,
+    *,
+    oof_probabilities: np.ndarray,
+    selected_threshold: float,
+    deciles: int = 10,
+    top_n_symbols: int = 20,
+) -> dict[str, Any]:
+    if dataset is None or len(dataset) <= 0:
+        return {
+            "valid_oof_samples": 0,
+            "selected_support": 0,
+            "selected_threshold": float(selected_threshold),
+            "score_decile_expectancy": [],
+            "calibration_by_decile": {
+                "overall_ece": 1.0,
+                "weighted_abs_error": 1.0,
+                "worst_decile_abs_error": 1.0,
+                "deciles": [],
+            },
+            "negative_expectancy_contribution_by_symbol": {
+                "total_negative_net_bps": 0.0,
+                "contributors": [],
+            },
+        }
+
+    probs = np.asarray(oof_probabilities, dtype=float)
+    labels = np.asarray(dataset["label"], dtype=float)
+    edges = np.asarray(dataset["realized_edge_bps"], dtype=float)
+    symbols = np.asarray(dataset["symbol"]).astype(str)
+
+    if probs.size != labels.size or probs.size != edges.size or probs.size != symbols.size:
+        return {
+            "valid_oof_samples": 0,
+            "selected_support": 0,
+            "selected_threshold": float(selected_threshold),
+            "score_decile_expectancy": [],
+            "calibration_by_decile": {
+                "overall_ece": 1.0,
+                "weighted_abs_error": 1.0,
+                "worst_decile_abs_error": 1.0,
+                "deciles": [],
+            },
+            "negative_expectancy_contribution_by_symbol": {
+                "total_negative_net_bps": 0.0,
+                "contributors": [],
+            },
+        }
+
+    valid = np.isfinite(probs) & np.isfinite(labels) & np.isfinite(edges)
+    valid_idx = np.flatnonzero(valid)
+    if valid_idx.size <= 0:
+        return {
+            "valid_oof_samples": 0,
+            "selected_support": 0,
+            "selected_threshold": float(selected_threshold),
+            "score_decile_expectancy": [],
+            "calibration_by_decile": {
+                "overall_ece": 1.0,
+                "weighted_abs_error": 1.0,
+                "worst_decile_abs_error": 1.0,
+                "deciles": [],
+            },
+            "negative_expectancy_contribution_by_symbol": {
+                "total_negative_net_bps": 0.0,
+                "contributors": [],
+            },
+        }
+
+    ordered_idx = valid_idx[np.argsort(-probs[valid_idx], kind="mergesort")]
+    bucket_count = max(1, min(int(deciles), int(ordered_idx.size)))
+    decile_rows: list[dict[str, Any]] = []
+    split_indexes = np.array_split(ordered_idx, bucket_count)
+    for decile_rank, bucket_idx in enumerate(split_indexes, start=1):
+        if bucket_idx.size <= 0:
+            continue
+        bucket_probs = probs[bucket_idx]
+        bucket_labels = labels[bucket_idx]
+        bucket_edges = edges[bucket_idx]
+        mean_score = float(np.mean(bucket_probs))
+        hit_rate = float(np.mean(bucket_labels))
+        abs_error = float(abs(mean_score - hit_rate))
+        decile_rows.append(
+            {
+                "decile": int(decile_rank),
+                "support": int(bucket_idx.size),
+                "score_min": float(np.min(bucket_probs)),
+                "score_max": float(np.max(bucket_probs)),
+                "mean_score": mean_score,
+                "hit_rate": hit_rate,
+                "calibration_abs_error": abs_error,
+                "expectancy_bps": float(np.mean(bucket_edges)),
+                "net_bps": float(np.sum(bucket_edges)),
+            }
+        )
+
+    weighted_abs_error = 1.0
+    if decile_rows:
+        total_support = float(sum(int(item["support"]) for item in decile_rows))
+        if total_support > 0.0:
+            weighted_abs_error = float(
+                sum(
+                    float(item["calibration_abs_error"]) * float(int(item["support"]))
+                    for item in decile_rows
+                )
+                / total_support
+            )
+    worst_decile_abs_error = (
+        float(max(float(item["calibration_abs_error"]) for item in decile_rows))
+        if decile_rows
+        else 1.0
+    )
+    selected = valid & (probs >= float(selected_threshold))
+    selected_idx = np.flatnonzero(selected)
+    contributor_rows: list[dict[str, Any]] = []
+    total_negative_net_bps = 0.0
+    if selected_idx.size > 0:
+        selected_symbols = symbols[selected_idx]
+        selected_edges = edges[selected_idx]
+        selected_labels = labels[selected_idx]
+        selected_probs = probs[selected_idx]
+        for symbol in sorted({str(value) for value in selected_symbols}):
+            symbol_mask = selected_symbols == symbol
+            if not np.any(symbol_mask):
+                continue
+            symbol_edges = selected_edges[symbol_mask]
+            net_bps = float(np.sum(symbol_edges))
+            if net_bps < 0.0:
+                total_negative_net_bps += float(abs(net_bps))
+            contributor_rows.append(
+                {
+                    "symbol": str(symbol),
+                    "support": int(np.sum(symbol_mask)),
+                    "mean_score": float(np.mean(selected_probs[symbol_mask])),
+                    "hit_rate": float(np.mean(selected_labels[symbol_mask])),
+                    "expectancy_bps": float(np.mean(symbol_edges)),
+                    "net_bps": net_bps,
+                    "negative_contribution_share": 0.0,
+                }
+            )
+        if total_negative_net_bps > 0.0:
+            for row in contributor_rows:
+                net_bps = float(row["net_bps"])
+                if net_bps < 0.0:
+                    row["negative_contribution_share"] = float(abs(net_bps) / total_negative_net_bps)
+        contributor_rows = sorted(
+            contributor_rows,
+            key=lambda item: (float(item["net_bps"]), -int(item["support"])),
+        )
+
+    overall_ece = _expected_calibration_error(labels[valid], probs[valid], bins=10)
+    return {
+        "valid_oof_samples": int(valid_idx.size),
+        "selected_support": int(selected_idx.size),
+        "selected_threshold": float(selected_threshold),
+        "score_decile_expectancy": decile_rows,
+        "calibration_by_decile": {
+            "overall_ece": float(overall_ece),
+            "weighted_abs_error": float(weighted_abs_error),
+            "worst_decile_abs_error": float(worst_decile_abs_error),
+            "deciles": [
+                {
+                    "decile": int(item["decile"]),
+                    "support": int(item["support"]),
+                    "mean_score": float(item["mean_score"]),
+                    "hit_rate": float(item["hit_rate"]),
+                    "calibration_abs_error": float(item["calibration_abs_error"]),
+                }
+                for item in decile_rows
+            ],
+        },
+        "negative_expectancy_contribution_by_symbol": {
+            "total_negative_net_bps": float(total_negative_net_bps),
+            "contributors": contributor_rows[: max(1, int(top_n_symbols))],
+        },
+    }
+
+
 def _evaluate_candidate(
     name: str,
     dataset: Any,
@@ -884,7 +1096,7 @@ def _evaluate_candidate(
                 fallback_folds.append((train_idx, test_idx))
         folds = fallback_folds
     fold_predictions: list[tuple[np.ndarray, np.ndarray]] = []
-    oof_probs = np.full(len(dataset), np.nan, dtype=float)
+    oof_probs: np.ndarray = np.full(len(dataset), np.nan, dtype=float)
     valid_folds = 0
     for train_idx, test_idx in folds:
         if len(train_idx) < 60 or len(test_idx) < 20:
@@ -1099,6 +1311,24 @@ def _candidate_selection_score_from_snapshot(
     stability_weight = float(weights["stability_weight"])
     support_log_weight = float(weights["support_log_weight"])
     profitable_fold_weight = float(weights["profitable_fold_weight"])
+    profitable_fold_shortfall_penalty = float(weights["profitable_fold_shortfall_penalty"])
+    profitable_fold_target = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_PROFITABLE_FOLD_TARGET",
+                get_env(
+                    "AI_TRADING_AFTER_HOURS_MIN_PROFITABLE_FOLD_RATIO",
+                    0.6,
+                    cast=float,
+                ),
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=1.0,
+    )
+    profitable_fold_ratio = _clamp(float(metrics.profitable_fold_ratio), low=0.0, high=1.0)
+    profitable_fold_shortfall = max(0.0, profitable_fold_target - profitable_fold_ratio)
     return (
         float(metrics.mean_expectancy_bps)
         - (float(metrics.max_drawdown_bps) * drawdown_penalty)
@@ -1106,7 +1336,8 @@ def _candidate_selection_score_from_snapshot(
         - (float(metrics.brier_score) * brier_penalty)
         + (float(metrics.hit_rate_stability) * stability_weight)
         + (float(math.log1p(max(0, int(metrics.support)))) * support_log_weight)
-        + (float(metrics.profitable_fold_ratio) * profitable_fold_weight)
+        + (profitable_fold_ratio * profitable_fold_weight)
+        - (profitable_fold_shortfall * profitable_fold_shortfall_penalty)
     )
 
 
@@ -1163,8 +1394,105 @@ def _selection_eval_weights() -> dict[str, float]:
         "profitable_fold_weight": float(
             get_env("AI_TRADING_AFTER_HOURS_RETUNE_EVAL_PROFITABLE_FOLD_WEIGHT", 0.5, cast=float)
         ),
+        "profitable_fold_shortfall_penalty": float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_RETUNE_EVAL_PROFITABLE_FOLD_SHORTFALL_PENALTY",
+                8.0,
+                cast=float,
+            )
+        ),
     }
     return _normalize_model_selection_weights(defaults, defaults=defaults)
+
+
+def _selection_constraint_config() -> dict[str, Any]:
+    enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_CONSTRAINTS_ENABLED", True, cast=bool)
+    )
+    min_profitable_folds = max(
+        0,
+        int(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_MIN_PROFITABLE_FOLDS",
+                2,
+                cast=int,
+            )
+        ),
+    )
+    min_profitable_fold_ratio = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_MIN_PROFITABLE_FOLD_RATIO",
+                get_env(
+                    "AI_TRADING_AFTER_HOURS_MIN_PROFITABLE_FOLD_RATIO",
+                    0.6,
+                    cast=float,
+                ),
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=1.0,
+    )
+    min_expectancy_bps = float(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_MIN_EXPECTANCY_BPS",
+            -25.0,
+            cast=float,
+        )
+    )
+    return {
+        "enabled": bool(enabled),
+        "min_profitable_folds": int(min_profitable_folds),
+        "min_profitable_fold_ratio": float(min_profitable_fold_ratio),
+        "min_expectancy_bps": float(min_expectancy_bps),
+    }
+
+
+def _filter_candidates_for_selection(
+    candidates: Sequence[CandidateMetrics],
+) -> tuple[list[CandidateMetrics], dict[str, Any]]:
+    config = _selection_constraint_config()
+    diagnostics: dict[str, Any] = {
+        "enabled": bool(config["enabled"]),
+        "constraints": dict(config),
+        "input_count": int(len(candidates)),
+        "eligible_count": int(len(candidates)),
+        "fallback_to_unfiltered": False,
+        "rejected_by_reason": {},
+        "rejected_models": {},
+    }
+    if not bool(config["enabled"]) or len(candidates) <= 1:
+        return list(candidates), diagnostics
+
+    min_profitable_folds = int(config["min_profitable_folds"])
+    min_profitable_fold_ratio = float(config["min_profitable_fold_ratio"])
+    min_expectancy_bps = float(config["min_expectancy_bps"])
+    eligible: list[CandidateMetrics] = []
+    rejected_by_reason: dict[str, int] = {}
+    rejected_models: dict[str, list[str]] = {}
+    for candidate in candidates:
+        reasons: list[str] = []
+        if int(candidate.profitable_fold_count) < min_profitable_folds:
+            reasons.append("profitable_folds")
+        if float(candidate.profitable_fold_ratio) < min_profitable_fold_ratio:
+            reasons.append("profitable_fold_ratio")
+        if float(candidate.mean_expectancy_bps) < min_expectancy_bps:
+            reasons.append("expectancy")
+        if reasons:
+            rejected_models[str(candidate.name)] = list(reasons)
+            for reason in reasons:
+                rejected_by_reason[reason] = int(rejected_by_reason.get(reason, 0)) + 1
+            continue
+        eligible.append(candidate)
+
+    diagnostics["rejected_by_reason"] = dict(sorted(rejected_by_reason.items()))
+    diagnostics["rejected_models"] = dict(sorted(rejected_models.items()))
+    diagnostics["eligible_count"] = int(len(eligible))
+    if eligible:
+        return eligible, diagnostics
+    diagnostics["fallback_to_unfiltered"] = True
+    return list(candidates), diagnostics
 
 
 def _selection_utility(
@@ -1977,12 +2305,39 @@ def _fold_oof_threshold_metrics(
 def _candidate_threshold_selection_score(metrics: Mapping[str, Any]) -> float:
     expectancy_bps = float(metrics.get("mean_expectancy_bps", 0.0) or 0.0)
     max_drawdown_bps = float(metrics.get("max_drawdown_bps", 0.0) or 0.0)
+    turnover_ratio = float(metrics.get("turnover_ratio", 0.0) or 0.0)
     hit_rate = float(metrics.get("mean_hit_rate", 0.0) or 0.0)
     profitable_fold_ratio = float(metrics.get("profitable_fold_ratio", 0.0) or 0.0)
     hit_rate_stability = float(metrics.get("hit_rate_stability", 0.0) or 0.0)
     support = int(metrics.get("support", 0) or 0)
+    fold_expectancy_values = [
+        float(value)
+        for value in list(metrics.get("fold_expectancy_bps", []) or [])
+        if math.isfinite(float(value))
+    ]
+    worst_fold_expectancy_bps = (
+        float(min(fold_expectancy_values)) if fold_expectancy_values else float(expectancy_bps)
+    )
+    downside_semideviation_bps = 0.0
+    if fold_expectancy_values:
+        fold_mean = float(mean(fold_expectancy_values))
+        downside_sq = [
+            float((min(0.0, value - fold_mean)) ** 2) for value in fold_expectancy_values
+        ]
+        downside_semideviation_bps = float(math.sqrt(mean(downside_sq))) if downside_sq else 0.0
     drawdown_penalty = float(
         get_env("AI_TRADING_AFTER_HOURS_PROMOTION_DRAWDOWN_PENALTY", 0.003, cast=float)
+    )
+    turnover_penalty = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_TURNOVER_PENALTY",
+                0.75,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=10.0,
     )
     hit_rate_weight = _clamp(
         float(
@@ -2028,15 +2383,40 @@ def _candidate_threshold_selection_score(metrics: Mapping[str, Any]) -> float:
         low=0.0,
         high=5.0,
     )
+    worst_fold_weight = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_WORST_FOLD_WEIGHT",
+                0.15,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=5.0,
+    )
+    downside_semidev_penalty = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_DOWNSIDE_SEMIDEV_PENALTY",
+                0.1,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=5.0,
+    )
     return (
         _score_expectancy_with_drawdown_penalty(
             expectancy_bps=expectancy_bps,
             max_drawdown_bps=max_drawdown_bps,
             penalty_per_bps=drawdown_penalty,
         )
+        - (turnover_penalty * turnover_ratio)
         + (hit_rate_weight * hit_rate)
         + (profitable_fold_weight * profitable_fold_ratio)
         + (stability_weight * hit_rate_stability)
+        + (worst_fold_weight * worst_fold_expectancy_bps)
+        - (downside_semidev_penalty * downside_semideviation_bps)
         + (support_log_weight * float(math.log1p(max(0, support))))
     )
 
@@ -2562,6 +2942,23 @@ def _champion_challenger_ab_gate_bundle(
     required_for_promotion = bool(
         get_env("AI_TRADING_AFTER_HOURS_PROMOTION_AB_REQUIRE_SIGNIFICANCE", True, cast=bool)
     )
+    advisory_for_non_production_prior = bool(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_PROMOTION_AB_ADVISORY_FOR_NON_PRODUCTION_PRIOR",
+            True,
+            cast=bool,
+        )
+    )
+    prior_governance_status = ""
+    if isinstance(prior_metrics, Mapping):
+        prior_governance_status = str(prior_metrics.get("governance_status") or "").strip().lower()
+    prior_is_non_production = bool(
+        prior_governance_status and prior_governance_status not in {"production", "active", "live"}
+    )
+    required_for_promotion = bool(
+        required_for_promotion
+        and not (advisory_for_non_production_prior and prior_is_non_production)
+    )
     min_folds = max(
         2,
         int(get_env("AI_TRADING_AFTER_HOURS_PROMOTION_AB_MIN_FOLDS", 3, cast=int)),
@@ -2590,6 +2987,7 @@ def _champion_challenger_ab_gate_bundle(
         "max_p_value": float(max_p_value),
         "require_matching_runtime_assumptions": bool(require_matching_runtime_assumptions),
         "allow_missing_prior": bool(allow_missing_prior),
+        "advisory_for_non_production_prior": bool(advisory_for_non_production_prior),
     }
     if not enabled:
         return {
@@ -2607,6 +3005,8 @@ def _champion_challenger_ab_gate_bundle(
     observed: dict[str, Any] = {
         "challenger_fold_count": int(challenger_count),
         "challenger_mean_expectancy_bps": float(challenger_mean),
+        "prior_governance_status": prior_governance_status or None,
+        "prior_is_non_production": bool(prior_is_non_production),
     }
     if challenger_count < min_folds:
         return {
@@ -2809,8 +3209,25 @@ def _promotion_confidence_gate_bundle(
         100,
         int(get_env("AI_TRADING_PROMOTION_CAPTURE_BOOTSTRAP_ROUNDS", 800, cast=int)),
     )
+    min_capture_daily_samples = max(
+        0,
+        int(get_env("AI_TRADING_PROMOTION_CAPTURE_CONFIDENCE_MIN_DAILY_SAMPLES", 5, cast=int)),
+    )
+    require_capture_data = bool(
+        get_env("AI_TRADING_PROMOTION_CAPTURE_CONFIDENCE_REQUIRE_DATA", False, cast=bool)
+    )
     min_hit_rate = float(
         get_env("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", 0.52, cast=float)
+    )
+    min_hit_rate_no_runtime_data = float(
+        get_env("AI_TRADING_PROMOTION_MIN_HIT_RATE_NO_RUNTIME_DATA", 0.35, cast=float)
+    )
+    relax_when_runtime_data_unavailable = bool(
+        get_env(
+            "AI_TRADING_PROMOTION_CONFIDENCE_RELAX_WHEN_RUNTIME_DATA_UNAVAILABLE",
+            True,
+            cast=bool,
+        )
     )
     live_thresholds = (
         dict(live_execution_quality_gate.get("thresholds", {}))
@@ -2843,6 +3260,10 @@ def _promotion_confidence_gate_bundle(
         "max_slippage_drag_bps": float(max_slippage_drag_bps),
         "capture_confidence_z": float(capture_z),
         "capture_bootstrap_rounds": int(bootstrap_rounds),
+        "capture_confidence_min_daily_samples": int(min_capture_daily_samples),
+        "capture_confidence_require_data": bool(require_capture_data),
+        "min_hit_rate_no_runtime_data": float(min_hit_rate_no_runtime_data),
+        "relax_when_runtime_data_unavailable": bool(relax_when_runtime_data_unavailable),
     }
     if not enabled:
         return {
@@ -2867,6 +3288,13 @@ def _promotion_confidence_gate_bundle(
         if isinstance(runtime_performance_gate, Mapping)
         else {}
     )
+    runtime_data_unavailable = bool(
+        isinstance(runtime_performance_gate, Mapping)
+        and runtime_performance_gate.get("data_unavailable_fail_open_applied", False)
+    )
+    effective_min_hit_rate = float(min_hit_rate)
+    if relax_when_runtime_data_unavailable and runtime_data_unavailable:
+        effective_min_hit_rate = min(float(min_hit_rate), float(min_hit_rate_no_runtime_data))
     daily_rows_raw = runtime_exec.get("daily")
     daily_rows = (
         [dict(row) for row in daily_rows_raw if isinstance(row, Mapping)]
@@ -2896,15 +3324,27 @@ def _promotion_confidence_gate_bundle(
         z_score=float(capture_z),
         rounds=int(bootstrap_rounds),
     )
+    capture_data_sufficient = bool(
+        len(capture_daily) >= int(min_capture_daily_samples) and capture_ci_low is not None
+    )
+    slippage_data_sufficient = bool(
+        len(slippage_proxy_daily) >= int(min_capture_daily_samples)
+        and slippage_ci_high is not None
+    )
     capture_confidence_pass = (
-        capture_ci_low is not None
-        and float(capture_ci_low) >= float(min_capture_ratio)
+        bool(float(capture_ci_low) >= float(min_capture_ratio))
+        if capture_data_sufficient
+        else (not require_capture_data)
     )
     slippage_confidence_pass = (
-        slippage_ci_high is not None
-        and float(slippage_ci_high) <= float(max_slippage_drag_bps)
+        bool(float(slippage_ci_high) <= float(max_slippage_drag_bps))
+        if slippage_data_sufficient
+        else (not require_capture_data)
     )
     sample_gate_pass = int(effective_trades) >= int(min_effective_trades)
+    win_rate_confidence_pass = (
+        win_rate_lower is not None and float(win_rate_lower) >= float(effective_min_hit_rate)
+    )
 
     gate_passed = bool(
         sample_gate_pass
@@ -2917,8 +3357,12 @@ def _promotion_confidence_gate_bundle(
         reason = "insufficient_effective_trades"
     elif not win_rate_confidence_pass:
         reason = "win_rate_confidence_gate"
+    elif not capture_data_sufficient and require_capture_data:
+        reason = "capture_confidence_data_unavailable"
     elif not capture_confidence_pass:
         reason = "capture_confidence_gate"
+    elif not slippage_data_sufficient and require_capture_data:
+        reason = "slippage_confidence_data_unavailable"
     elif not slippage_confidence_pass:
         reason = "slippage_confidence_gate"
 
@@ -2926,6 +3370,8 @@ def _promotion_confidence_gate_bundle(
         "effective_trades": int(effective_trades),
         "wins": int(wins),
         "win_rate": float(best.mean_hit_rate),
+        "win_rate_confidence_floor_effective": float(effective_min_hit_rate),
+        "runtime_data_unavailable": bool(runtime_data_unavailable),
         "win_rate_confidence_lower_bound": (
             float(win_rate_lower) if win_rate_lower is not None else None
         ),
@@ -2933,6 +3379,7 @@ def _promotion_confidence_gate_bundle(
             runtime_exec.get("execution_capture_ratio")
         ),
         "capture_ratio_daily_samples": int(len(capture_daily)),
+        "capture_ratio_confidence_data_sufficient": bool(capture_data_sufficient),
         "capture_ratio_confidence_lower_bound": (
             float(capture_ci_low) if capture_ci_low is not None else None
         ),
@@ -2940,6 +3387,7 @@ def _promotion_confidence_gate_bundle(
             float(capture_ci_high) if capture_ci_high is not None else None
         ),
         "slippage_proxy_daily_samples": int(len(slippage_proxy_daily)),
+        "slippage_proxy_confidence_data_sufficient": bool(slippage_data_sufficient),
         "slippage_proxy_confidence_lower_bound_bps": (
             float(slippage_ci_low) if slippage_ci_low is not None else None
         ),
@@ -3388,6 +3836,102 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
             gate_log_path=gate_log_path,
         )
         decision = performance_report.evaluate_go_no_go(report, thresholds=thresholds)
+        decision_payload = dict(decision) if isinstance(decision, Mapping) else {}
+        checks_payload = decision_payload.get("checks")
+        checks = dict(checks_payload) if isinstance(checks_payload, Mapping) else {}
+        failed_checks = [
+            str(item)
+            for item in decision_payload.get("failed_checks", [])
+            if isinstance(item, str)
+        ]
+        observed_payload = decision_payload.get("observed")
+        observed = dict(observed_payload) if isinstance(observed_payload, Mapping) else {}
+        reason = str(decision_payload.get("reason") or "")
+
+        fail_on_data_unavailable = bool(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_FAIL_ON_DATA_UNAVAILABLE",
+                False,
+                cast=bool,
+            )
+        )
+        no_data_failed_checks = {
+            "pnl_available",
+            "trade_used_days",
+            "gate_used_days",
+            "closed_trades",
+            "profit_factor",
+            "win_rate",
+            "win_rate_confidence",
+            "net_pnl",
+            "acceptance_rate",
+            "expected_net_edge_bps",
+            "live_samples_sufficient",
+            "open_position_reconciliation_available",
+            "open_position_reconciliation_consistent",
+        }
+        only_no_data_checks_failed = bool(failed_checks) and set(failed_checks).issubset(
+            no_data_failed_checks
+        )
+        data_sufficiency_checks = {
+            "pnl_available",
+            "trade_used_days",
+            "closed_trades",
+            "live_samples_sufficient",
+        }
+        data_sufficiency_failed = bool(
+            set(failed_checks).intersection(data_sufficiency_checks)
+        )
+        def _observed_int(value: Any) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+
+        observed_closed_trades = _observed_int(observed.get("closed_trades"))
+        observed_trade_days = _observed_int(observed.get("trade_used_days"))
+        observed_gate_days = _observed_int(observed.get("gate_used_days"))
+        observed_accepted_records = _observed_int(observed.get("accepted_records"))
+        observed_pnl_available = bool(observed.get("pnl_available", False))
+        min_reliable_realized_trades = max(
+            1,
+            int(
+                get_env(
+                    "AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_MIN_REALIZED_TRADES_FOR_DATA",
+                    5,
+                    cast=int,
+                )
+            ),
+        )
+        has_data_availability_observations = any(
+            key in observed
+            for key in (
+                "closed_trades",
+                "accepted_records",
+                "trade_used_days",
+                "gate_used_days",
+                "pnl_available",
+            )
+        )
+        runtime_data_unavailable = bool(
+            has_data_availability_observations
+            and data_sufficiency_failed
+            and observed_closed_trades < min_reliable_realized_trades
+            and observed_trade_days <= 0
+            and not observed_pnl_available
+        )
+        data_unavailable_fail_open_applied = bool(
+            only_no_data_checks_failed
+            and runtime_data_unavailable
+            and not fail_on_data_unavailable
+        )
+        if data_unavailable_fail_open_applied:
+            checks = {**checks, **{key: True for key in failed_checks}}
+            reason = "insufficient_runtime_data_fail_open"
+            failed_checks = []
+        gate_passed = bool(decision_payload.get("gate_passed", False))
+        if data_unavailable_fail_open_applied:
+            gate_passed = True
         execution_vs_alpha = (
             dict(report.get("execution_vs_alpha", {}))
             if isinstance(report.get("execution_vs_alpha"), Mapping)
@@ -3415,11 +3959,18 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
 
     return {
         "enabled": True,
-        "gate_passed": bool(decision.get("gate_passed")),
-        "checks": dict(decision.get("checks", {})),
-        "failed_checks": list(decision.get("failed_checks", [])),
-        "thresholds": dict(decision.get("thresholds", {})),
-        "observed": dict(decision.get("observed", {})),
+        "gate_passed": bool(gate_passed),
+        "reason": reason or None,
+        "checks": checks,
+        "failed_checks": failed_checks,
+        "soft_failed_checks": (
+            list(decision_payload.get("failed_checks", []))
+            if data_unavailable_fail_open_applied
+            else []
+        ),
+        "data_unavailable_fail_open_applied": bool(data_unavailable_fail_open_applied),
+        "thresholds": dict(decision_payload.get("thresholds", {})),
+        "observed": observed,
         "paths": {
             "trade_history": str(trade_history_path),
             "gate_summary": str(gate_summary_path),
@@ -3990,7 +4541,7 @@ def _build_hard_negative_sample_weights(dataset: Any) -> tuple[np.ndarray, dict[
         get_env("AI_TRADING_AFTER_HOURS_HARD_NEGATIVE_MINING_ENABLED", True, cast=bool)
     )
     size = int(len(dataset))
-    weights = np.ones(size, dtype=float)
+    weights: np.ndarray = np.ones(size, dtype=float)
     report: dict[str, Any] = {
         "enabled": bool(enabled),
         "applied": False,
@@ -4029,7 +4580,7 @@ def _build_hard_negative_sample_weights(dataset: Any) -> tuple[np.ndarray, dict[
     prior_runtime_model_enabled = bool(
         get_env("AI_TRADING_AFTER_HOURS_HARD_NEGATIVE_PRIOR_MODEL_ENABLED", True, cast=bool)
     )
-    high_conf_negative_mask = np.zeros(size, dtype=bool)
+    high_conf_negative_mask: np.ndarray = np.zeros(size, dtype=bool)
     if prior_runtime_model_enabled:
         runtime_model_path_raw = str(get_env("AI_TRADING_MODEL_PATH", "", cast=str) or "").strip()
         if not runtime_model_path_raw:
@@ -4102,6 +4653,194 @@ def _build_hard_negative_sample_weights(dataset: Any) -> tuple[np.ndarray, dict[
             "weight_max": float(np.max(weights)) if size > 0 else 1.0,
             "edge_cutoff_bps": float(edge_cutoff_bps),
             "base_multiplier": float(hard_negative_multiplier),
+            "clip_max": float(clip_max),
+        }
+    )
+    return weights, report
+
+
+def _build_segment_reweight_sample_weights(
+    dataset: Any,
+    *,
+    oof_probabilities: np.ndarray,
+    selected_threshold: float,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_ENABLED", True, cast=bool)
+    )
+    size = int(len(dataset))
+    weights: np.ndarray = np.ones(size, dtype=float)
+    report: dict[str, Any] = {
+        "enabled": bool(enabled),
+        "applied": False,
+        "rows": int(size),
+        "high_conf_negative_count": 0,
+        "symbol_adjusted_rows": 0,
+        "symbol_adjustments": [],
+        "weight_min": 1.0,
+        "weight_max": 1.0,
+    }
+    if not enabled or size <= 0:
+        return weights, report
+
+    probs = np.asarray(oof_probabilities, dtype=float)
+    labels = np.asarray(dataset["label"].astype(int), dtype=int)
+    edges = np.asarray(dataset["realized_edge_bps"].astype(float), dtype=float)
+    symbols = np.asarray(dataset["symbol"]).astype(str)
+    if probs.size != size or labels.size != size or edges.size != size or symbols.size != size:
+        report["reason"] = "shape_mismatch"
+        return weights, report
+
+    valid = np.isfinite(probs) & np.isfinite(edges)
+    if not np.any(valid):
+        report["reason"] = "no_valid_probabilities"
+        return weights, report
+
+    high_conf_quantile = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_HIGH_CONF_QUANTILE",
+                0.85,
+                cast=float,
+            )
+        ),
+        low=0.5,
+        high=0.99,
+    )
+    high_conf_multiplier = max(
+        1.0,
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_HIGH_CONF_MULTIPLIER",
+                1.6,
+                cast=float,
+            )
+        ),
+    )
+    valid_probs = probs[valid]
+    high_conf_cutoff = float(np.quantile(valid_probs, high_conf_quantile))
+    high_conf_negative_mask = valid & (probs >= high_conf_cutoff) & (labels <= 0)
+    if np.any(high_conf_negative_mask):
+        weights[high_conf_negative_mask] = np.maximum(
+            weights[high_conf_negative_mask],
+            float(high_conf_multiplier),
+        )
+
+    selected = valid & (probs >= float(selected_threshold))
+    selected_idx = np.flatnonzero(selected)
+    min_symbol_support = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_MIN_SYMBOL_SUPPORT",
+                8,
+                cast=int,
+            )
+        ),
+    )
+    min_negative_share = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_MIN_NEGATIVE_SHARE",
+                0.03,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=1.0,
+    )
+    base_symbol_multiplier = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_SYMBOL_MULTIPLIER",
+                1.4,
+                cast=float,
+            )
+        ),
+    )
+    max_symbol_multiplier = max(
+        1.0,
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_SYMBOL_MULTIPLIER_MAX",
+                2.8,
+                cast=float,
+            )
+        ),
+    )
+    top_n_symbols = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_TOP_SYMBOLS",
+                20,
+                cast=int,
+            )
+        ),
+    )
+    symbol_adjustments: list[dict[str, Any]] = []
+    if selected_idx.size > 0:
+        selected_symbols = symbols[selected_idx]
+        selected_edges = edges[selected_idx]
+        negative_by_symbol: list[tuple[str, int, float]] = []
+        total_negative_abs = 0.0
+        for symbol in sorted({str(value) for value in selected_symbols}):
+            mask = selected_symbols == symbol
+            support = int(np.sum(mask))
+            if support < min_symbol_support:
+                continue
+            symbol_net = float(np.sum(selected_edges[mask]))
+            if symbol_net >= 0.0:
+                continue
+            negative_abs = float(abs(symbol_net))
+            total_negative_abs += negative_abs
+            negative_by_symbol.append((str(symbol), support, negative_abs))
+        if total_negative_abs > 0.0 and negative_by_symbol:
+            ranked = sorted(negative_by_symbol, key=lambda item: item[2], reverse=True)
+            for symbol, support, negative_abs in ranked[:top_n_symbols]:
+                negative_share = float(negative_abs / total_negative_abs)
+                if negative_share < min_negative_share:
+                    continue
+                multiplier = 1.0 + (float(base_symbol_multiplier) * math.sqrt(negative_share))
+                multiplier = _clamp(multiplier, low=1.0, high=float(max_symbol_multiplier))
+                symbol_mask = valid & (labels <= 0) & (symbols == symbol)
+                if not np.any(symbol_mask):
+                    continue
+                weights[symbol_mask] = np.maximum(weights[symbol_mask], float(multiplier))
+                symbol_adjustments.append(
+                    {
+                        "symbol": str(symbol),
+                        "support": int(support),
+                        "negative_share": float(negative_share),
+                        "multiplier": float(multiplier),
+                        "rows_adjusted": int(np.sum(symbol_mask)),
+                    }
+                )
+
+    clip_max = max(
+        1.0,
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_MAX_WEIGHT",
+                get_env("AI_TRADING_AFTER_HOURS_HARD_NEGATIVE_MAX_WEIGHT", 8.0, cast=float),
+                cast=float,
+            )
+        ),
+    )
+    weights = np.clip(weights, 1.0, float(clip_max))
+    report.update(
+        {
+            "applied": bool(np.any(weights > 1.0)),
+            "high_conf_negative_count": int(np.sum(high_conf_negative_mask)),
+            "high_conf_cutoff": float(high_conf_cutoff),
+            "high_conf_quantile": float(high_conf_quantile),
+            "high_conf_multiplier": float(high_conf_multiplier),
+            "symbol_adjusted_rows": int(sum(int(item["rows_adjusted"]) for item in symbol_adjustments)),
+            "symbol_adjustments": symbol_adjustments,
+            "selected_threshold": float(selected_threshold),
+            "weight_min": float(np.min(weights)) if size > 0 else 1.0,
+            "weight_max": float(np.max(weights)) if size > 0 else 1.0,
             "clip_max": float(clip_max),
         }
     )
@@ -4346,15 +5085,21 @@ def _sanitize_after_hours_training_state_payload(payload: Mapping[str, Any]) -> 
     return sanitized
 
 
-def _after_hours_training_state_path() -> Path:
-    raw = str(
+def _after_hours_training_state_path(*, preferred_path: Path | None = None) -> Path:
+    configured_raw = str(
         get_env(
             "AI_TRADING_AFTER_HOURS_TRAINING_STATE_PATH",
-            "runtime/after_hours_training_state.json",
+            None,
             cast=str,
         )
         or ""
     ).strip()
+    if configured_raw:
+        raw = configured_raw
+    elif preferred_path is not None:
+        return Path(preferred_path).expanduser().resolve()
+    else:
+        raw = "runtime/after_hours_training_state.json"
     if not raw:
         raw = "runtime/after_hours_training_state.json"
     return _resolve_after_hours_output_path(
@@ -4363,30 +5108,46 @@ def _after_hours_training_state_path() -> Path:
     )
 
 
-def _load_after_hours_training_state() -> Mapping[str, Any] | None:
-    path = _after_hours_training_state_path()
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError):
-        logger.warning(
-            "AFTER_HOURS_TRAINING_STATE_READ_FAILED",
-            extra={"path": str(path)},
-        )
-        return None
-    if isinstance(payload, Mapping):
-        return _sanitize_after_hours_training_state_payload(payload)
+def _load_after_hours_training_state(
+    *,
+    preferred_path: Path | None = None,
+) -> Mapping[str, Any] | None:
+    default_path = _after_hours_training_state_path()
+    paths_to_try: list[Path] = []
+    if preferred_path is not None:
+        preferred_resolved = _after_hours_training_state_path(preferred_path=preferred_path)
+        paths_to_try.append(preferred_resolved)
+    if default_path not in paths_to_try:
+        paths_to_try.append(default_path)
+    for path in paths_to_try:
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            logger.warning(
+                "AFTER_HOURS_TRAINING_STATE_READ_FAILED",
+                extra={"path": str(path)},
+            )
+            continue
+        if isinstance(payload, Mapping):
+            return _sanitize_after_hours_training_state_payload(payload)
     return None
 
 
-def _write_after_hours_training_state(payload: Mapping[str, Any]) -> Path | None:
-    path = _after_hours_training_state_path()
+def _write_after_hours_training_state(
+    payload: Mapping[str, Any],
+    *,
+    preferred_path: Path | None = None,
+) -> Path | None:
+    path = _after_hours_training_state_path(preferred_path=preferred_path)
+    default_path = _after_hours_training_state_path()
     fallback = (paths.DATA_DIR / "runtime/after_hours_training_state.json").resolve()
+    secondary_fallback_dir = default_path.parent if default_path.parent != path.parent else fallback.parent
     try:
         writable_dir = _resolve_writable_output_dir(
             requested=path.parent,
-            fallback=fallback.parent,
+            fallback=secondary_fallback_dir,
             event_name="AFTER_HOURS_TRAINING_STATE_PATH_FALLBACK",
         )
     except RuntimeError:
@@ -4395,7 +5156,7 @@ def _write_after_hours_training_state(payload: Mapping[str, Any]) -> Path | None
             extra={"path": str(path), "reason": "no_writable_directory"},
         )
         return None
-    target = path if writable_dir == path.parent else (fallback if writable_dir == fallback.parent else writable_dir / path.name)
+    target = writable_dir / path.name
     sanitized_payload = _sanitize_after_hours_training_state_payload(payload)
     try:
         return _write_json(target, sanitized_payload)
@@ -4811,8 +5572,20 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "required_rows": min_rows,
             "timestamp": now_utc.isoformat(),
         }
+    requested_report_dir = _resolve_after_hours_output_path(
+        str(get_env("AI_TRADING_AFTER_HOURS_REPORT_DIR", "runtime/research_reports", cast=str) or ""),
+        default_relative="runtime/research_reports",
+    )
+    report_dir = _resolve_writable_output_dir(
+        requested=requested_report_dir,
+        fallback=(paths.DATA_DIR / "runtime/research_reports").resolve(),
+        event_name="AFTER_HOURS_REPORT_DIR_FALLBACK",
+    )
+    training_state_path_hint = (report_dir.parent / "after_hours_training_state.json").resolve()
     dataset_fp = _dataset_fingerprint(dataset, symbols=symbols, cost_floor_bps=cost_floor_bps)
-    training_state = _load_after_hours_training_state()
+    training_state = _load_after_hours_training_state(
+        preferred_path=training_state_path_hint
+    )
     min_new_rows = max(
         1,
         int(get_env("AI_TRADING_AFTER_HOURS_MIN_NEW_ROWS_FOR_RETRAIN", 25, cast=int)),
@@ -4913,8 +5686,21 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "timestamp": now_utc.isoformat(),
         }
     selection_weights = _resolved_model_selection_weights()
+    candidate_pool, selection_constraints = _filter_candidates_for_selection(candidate_results)
+    logger.info(
+        "AFTER_HOURS_SELECTION_CONSTRAINTS",
+        extra={
+            "enabled": bool(selection_constraints.get("enabled", False)),
+            "input_count": int(selection_constraints.get("input_count", len(candidate_results))),
+            "eligible_count": int(selection_constraints.get("eligible_count", len(candidate_pool))),
+            "fallback_to_unfiltered": bool(
+                selection_constraints.get("fallback_to_unfiltered", False)
+            ),
+            "rejected_by_reason": dict(selection_constraints.get("rejected_by_reason", {})),
+        },
+    )
     best = max(
-        candidate_results,
+        candidate_pool,
         key=lambda item: (
             _candidate_selection_score(item, weights=selection_weights),
             item.mean_expectancy_bps,
@@ -4926,15 +5712,6 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         candidate_results,
         best_name=best.name,
         selection_weights=selection_weights,
-    )
-    requested_report_dir = _resolve_after_hours_output_path(
-        str(get_env("AI_TRADING_AFTER_HOURS_REPORT_DIR", "runtime/research_reports", cast=str) or ""),
-        default_relative="runtime/research_reports",
-    )
-    report_dir = _resolve_writable_output_dir(
-        requested=requested_report_dir,
-        fallback=(paths.DATA_DIR / "runtime/research_reports").resolve(),
-        event_name="AFTER_HOURS_REPORT_DIR_FALLBACK",
     )
     prior_model_metrics = _load_prior_model_metrics(report_dir=report_dir)
     raw_thresholds_by_regime = _threshold_by_regime(
@@ -4955,6 +5732,38 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     )
     gate_map = _meets_edge_targets(best, targets)
     gate_map["sensitivity"] = bool(sensitivity_sweep.get("gate", True))
+    model_quality = _model_quality_diagnostics(
+        dataset,
+        oof_probabilities=best.oof_probabilities,
+        selected_threshold=float(best.selected_threshold),
+    )
+    segment_sample_weights, segment_reweight_report = _build_segment_reweight_sample_weights(
+        dataset,
+        oof_probabilities=best.oof_probabilities,
+        selected_threshold=float(best.selected_threshold),
+    )
+    sample_weight_clip_max = max(
+        1.0,
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_SAMPLE_WEIGHT_MAX",
+                get_env("AI_TRADING_AFTER_HOURS_HARD_NEGATIVE_MAX_WEIGHT", 8.0, cast=float),
+                cast=float,
+            )
+        ),
+    )
+    combined_sample_weights = np.clip(
+        np.asarray(hard_negative_sample_weights, dtype=float)
+        * np.asarray(segment_sample_weights, dtype=float),
+        1.0,
+        float(sample_weight_clip_max),
+    )
+    sample_weighting_report = {
+        "clip_max": float(sample_weight_clip_max),
+        "weighted_rows": int(np.sum(combined_sample_weights > 1.0)),
+        "weight_min": float(np.min(combined_sample_weights)) if len(dataset) > 0 else 1.0,
+        "weight_max": float(np.max(combined_sample_weights)) if len(dataset) > 0 else 1.0,
+    }
     phase1_week1 = _phase1_week1_gate_bundle(
         best=best,
         rows=int(len(dataset)),
@@ -5051,12 +5860,12 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         best.name,
         dataset,
         seed=seed,
-        sample_weights=hard_negative_sample_weights,
+        sample_weights=combined_sample_weights,
     )
     edge_model_v2_bundle, edge_model_v2_report = _fit_edge_model_v2_bundle(
         dataset,
         seed=seed,
-        sample_weights=hard_negative_sample_weights,
+        sample_weights=combined_sample_weights,
     )
     if edge_model_v2_bundle:
         setattr(final_model, "edge_model_v2_bundle_", edge_model_v2_bundle)
@@ -5069,6 +5878,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     setattr(final_model, "edge_global_threshold_", float(default_threshold))
     setattr(final_model, "regime_calibration_", best.regime_calibration)
     manifest_metadata["hard_negative_mining"] = dict(hard_negative_report)
+    manifest_metadata["segment_reweighting"] = dict(segment_reweight_report)
+    manifest_metadata["sample_weighting"] = dict(sample_weighting_report)
     manifest_metadata["edge_model_v2"] = dict(edge_model_v2_report)
     requested_model_dir = _resolve_after_hours_output_path(
         str(get_env("AI_TRADING_AFTER_HOURS_MODEL_DIR", "models/after_hours", cast=str) or ""),
@@ -5115,9 +5926,13 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "regime_calibration": best.regime_calibration,
             "regime_threshold_adjustments": regime_threshold_adjustments,
             "selection_score": _candidate_selection_score(best, weights=selection_weights),
+            "selection_constraints": dict(selection_constraints),
             "manifest_metadata": manifest_metadata,
             "hard_negative_mining": hard_negative_report,
+            "segment_reweighting": segment_reweight_report,
+            "sample_weighting": sample_weighting_report,
             "edge_model_v2": edge_model_v2_report,
+            "model_quality": model_quality,
         },
         dataset_fingerprint=dataset_fp,
         tags=["after_hours", "cost_aware", "purged_walk_forward"],
@@ -5260,8 +6075,12 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "training_data_delta": training_data_delta,
         "rl_overlay": rl_overlay,
         "selection_weights": dict(selection_weights),
+        "selection_constraints": selection_constraints,
         "hard_negative_mining": hard_negative_report,
+        "segment_reweighting": segment_reweight_report,
+        "sample_weighting": sample_weighting_report,
         "edge_model_v2": edge_model_v2_report,
+        "model_quality": model_quality,
         "runtime_promotion": {
             "model_path": promoted_model_path,
             "manifest_path": promoted_manifest_path,
@@ -5318,7 +6137,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 promotion_confidence_gate.get("observed", {})
             ),
             "governance_status": str(status),
-        }
+        },
+        preferred_path=training_state_path_hint,
     )
     logger.info(
         "AFTER_HOURS_TRAINING_COMPLETE",
@@ -5330,6 +6150,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "brier_score": best.brier_score,
             "selected_threshold": best.selected_threshold,
             "selection_score": _candidate_selection_score(best, weights=selection_weights),
+            "selection_constraints": dict(selection_constraints),
             "report_path": str(report_path),
             "daily_report_path": str(daily_report_path),
             "governance_status": status,
@@ -5354,8 +6175,12 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "sensitivity_sweep": sensitivity_sweep,
         "prior_model_metrics": prior_model_metrics,
         "selection_weights": dict(selection_weights),
+        "selection_constraints": selection_constraints,
         "hard_negative_mining": hard_negative_report,
+        "segment_reweighting": segment_reweight_report,
+        "sample_weighting": sample_weighting_report,
         "edge_model_v2": edge_model_v2_report,
+        "model_quality": model_quality,
         "model_selection_retune": model_selection_retune,
         "training_data_delta": training_data_delta,
         "promoted_model_path": promoted_model_path,

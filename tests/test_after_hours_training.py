@@ -225,6 +225,216 @@ def test_candidate_selection_score_honors_runtime_weight_overrides(
     assert overridden_aggressive < overridden_calibrated
 
 
+def test_candidate_selection_score_penalizes_profitable_fold_shortfall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_OVERRIDES_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_PROFITABLE_FOLD_TARGET", "0.7")
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_PROFITABLE_FOLD_SHORTFALL_PENALTY",
+        "30.0",
+    )
+    weak_folds = after_hours.CandidateMetrics(
+        name="weak_folds",
+        fold_count=5,
+        profitable_fold_count=1,
+        profitable_fold_ratio=0.2,
+        support=160,
+        mean_expectancy_bps=4.0,
+        max_drawdown_bps=170.0,
+        turnover_ratio=0.22,
+        mean_hit_rate=0.51,
+        hit_rate_stability=0.58,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
+        brier_score=0.12,
+    )
+    healthy_folds = after_hours.CandidateMetrics(
+        name="healthy_folds",
+        fold_count=5,
+        profitable_fold_count=4,
+        profitable_fold_ratio=0.8,
+        support=160,
+        mean_expectancy_bps=2.0,
+        max_drawdown_bps=170.0,
+        turnover_ratio=0.22,
+        mean_hit_rate=0.51,
+        hit_rate_stability=0.58,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
+        brier_score=0.12,
+    )
+    assert after_hours._candidate_selection_score(healthy_folds) > after_hours._candidate_selection_score(
+        weak_folds
+    )
+
+
+def test_filter_candidates_for_selection_enforces_fold_quality(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_CONSTRAINTS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_MIN_PROFITABLE_FOLDS", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_MIN_PROFITABLE_FOLD_RATIO", "0.6")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_MIN_EXPECTANCY_BPS", "-50.0")
+    low_quality = after_hours.CandidateMetrics(
+        name="low_quality",
+        fold_count=5,
+        profitable_fold_count=2,
+        profitable_fold_ratio=0.4,
+        support=130,
+        mean_expectancy_bps=4.5,
+        max_drawdown_bps=210.0,
+        turnover_ratio=0.30,
+        mean_hit_rate=0.51,
+        hit_rate_stability=0.52,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
+        brier_score=0.14,
+    )
+    high_quality = after_hours.CandidateMetrics(
+        name="high_quality",
+        fold_count=5,
+        profitable_fold_count=4,
+        profitable_fold_ratio=0.8,
+        support=130,
+        mean_expectancy_bps=2.0,
+        max_drawdown_bps=210.0,
+        turnover_ratio=0.30,
+        mean_hit_rate=0.51,
+        hit_rate_stability=0.52,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
+        brier_score=0.14,
+    )
+    filtered, diagnostics = after_hours._filter_candidates_for_selection(
+        [low_quality, high_quality]
+    )
+    assert [item.name for item in filtered] == ["high_quality"]
+    assert diagnostics["eligible_count"] == 1
+    assert diagnostics["rejected_by_reason"]["profitable_folds"] == 1
+    assert diagnostics["rejected_by_reason"]["profitable_fold_ratio"] == 1
+
+
+def test_model_quality_diagnostics_reports_deciles_and_symbol_contributions() -> None:
+    dataset = pd.DataFrame(
+        {
+            "label": np.asarray([1, 0, 1, 0, 1, 0, 1, 0], dtype=int),
+            "realized_edge_bps": np.asarray([8.0, -6.0, 5.0, -4.0, 3.0, -2.5, 1.5, -1.0]),
+            "symbol": ["AAPL", "AAPL", "MSFT", "MSFT", "NVDA", "NVDA", "AMD", "AMD"],
+        }
+    )
+    probs = np.asarray([0.91, 0.87, 0.74, 0.62, 0.55, 0.44, 0.31, 0.22], dtype=float)
+
+    diagnostics = after_hours._model_quality_diagnostics(
+        dataset,
+        oof_probabilities=probs,
+        selected_threshold=0.5,
+        deciles=4,
+        top_n_symbols=10,
+    )
+
+    assert diagnostics["valid_oof_samples"] == 8
+    assert diagnostics["selected_support"] == 5
+    assert len(diagnostics["score_decile_expectancy"]) == 4
+    calibration = diagnostics["calibration_by_decile"]
+    assert 0.0 <= float(calibration["overall_ece"]) <= 1.0
+    assert len(calibration["deciles"]) == 4
+    symbol_contrib = diagnostics["negative_expectancy_contribution_by_symbol"]
+    assert float(symbol_contrib["total_negative_net_bps"]) >= 0.0
+    assert isinstance(symbol_contrib["contributors"], list)
+
+
+def test_predict_probabilities_respects_positive_class_column_order() -> None:
+    class _DummyModel:
+        classes_ = np.asarray([1, 0], dtype=int)
+
+        @staticmethod
+        def predict_proba(_X) -> np.ndarray:
+            return np.asarray(
+                [
+                    [0.91, 0.09],
+                    [0.73, 0.27],
+                    [0.52, 0.48],
+                ],
+                dtype=float,
+            )
+
+    probs = after_hours._predict_probabilities(_DummyModel(), np.asarray([[0.0], [1.0], [2.0]]))
+    assert np.allclose(probs, np.asarray([0.91, 0.73, 0.52], dtype=float))
+
+
+def test_segment_reweight_sample_weights_targets_high_conf_negative_symbols(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_HIGH_CONF_QUANTILE", "0.75")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_HIGH_CONF_MULTIPLIER", "1.8")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_MIN_SYMBOL_SUPPORT", "2")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_MIN_NEGATIVE_SHARE", "0.05")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_SYMBOL_MULTIPLIER", "1.6")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SEGMENT_REWEIGHT_SYMBOL_MULTIPLIER_MAX", "2.6")
+
+    dataset = pd.DataFrame(
+        {
+            "label": np.asarray([0, 0, 0, 1, 1, 0, 1, 0], dtype=int),
+            "realized_edge_bps": np.asarray([-80.0, -55.0, -30.0, 12.0, 8.0, -10.0, 5.0, -6.0]),
+            "symbol": ["ORCL", "ORCL", "AVGO", "AVGO", "AAPL", "AAPL", "MSFT", "MSFT"],
+        }
+    )
+    probs = np.asarray([0.94, 0.91, 0.88, 0.86, 0.62, 0.59, 0.54, 0.51], dtype=float)
+
+    weights, report = after_hours._build_segment_reweight_sample_weights(
+        dataset,
+        oof_probabilities=probs,
+        selected_threshold=0.5,
+    )
+
+    assert report["applied"] is True
+    assert report["high_conf_negative_count"] >= 2
+    assert report["symbol_adjusted_rows"] >= 2
+    assert report["symbol_adjustments"]
+    assert np.max(weights) > 1.0
+    # ORCL rows should be upweighted because they dominate negative contribution.
+    assert weights[0] > 1.0
+    assert weights[1] > 1.0
+
+
+def test_candidate_threshold_selection_score_penalizes_turnover_and_downside(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_TURNOVER_PENALTY", "1.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_WORST_FOLD_WEIGHT", "0.2")
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_DOWNSIDE_SEMIDEV_PENALTY",
+        "0.15",
+    )
+
+    stable_metrics = {
+        "mean_expectancy_bps": 2.0,
+        "max_drawdown_bps": 200.0,
+        "turnover_ratio": 0.20,
+        "mean_hit_rate": 0.56,
+        "profitable_fold_ratio": 0.75,
+        "hit_rate_stability": 0.68,
+        "support": 150,
+        "fold_expectancy_bps": [2.4, 2.1, 1.8, 1.6, 1.9],
+    }
+    unstable_metrics = {
+        "mean_expectancy_bps": 2.0,
+        "max_drawdown_bps": 200.0,
+        "turnover_ratio": 0.55,
+        "mean_hit_rate": 0.56,
+        "profitable_fold_ratio": 0.75,
+        "hit_rate_stability": 0.68,
+        "support": 150,
+        "fold_expectancy_bps": [6.0, 5.0, -8.5, 4.5, -4.0],
+    }
+
+    assert after_hours._candidate_threshold_selection_score(
+        stable_metrics
+    ) > after_hours._candidate_threshold_selection_score(unstable_metrics)
+
+
 def test_model_selection_retune_skips_without_drift_breach(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -645,8 +855,11 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert "thresholds_by_regime" in report_payload
     assert "candidate_metrics" in report_payload
     assert "sensitivity_sweep" in report_payload
+    assert "model_quality" in report_payload
     assert "manifest_metadata" in report_payload["model"]
     assert "hard_negative_mining" in report_payload
+    assert "segment_reweighting" in report_payload
+    assert "sample_weighting" in report_payload
     assert "edge_model_v2" in report_payload
     assert isinstance(report_payload["candidate_metrics"], list)
     assert report_payload["candidate_metrics"]
@@ -654,8 +867,14 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert isinstance(result["candidate_metrics"], list)
     assert result["candidate_metrics"]
     assert "sensitivity_sweep" in result
+    assert "model_quality" in result
     assert "hard_negative_mining" in result
+    assert "segment_reweighting" in result
+    assert "sample_weighting" in result
     assert "edge_model_v2" in result
+    assert "score_decile_expectancy" in report_payload["model_quality"]
+    assert "calibration_by_decile" in report_payload["model_quality"]
+    assert "negative_expectancy_contribution_by_symbol" in report_payload["model_quality"]
 
     import joblib
 
@@ -667,6 +886,8 @@ def test_after_hours_training_trains_and_writes_outputs(
     manifest_payload = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
     assert "metadata" in manifest_payload
     assert manifest_payload["metadata"]["strategy"] == "after_hours_ml_edge"
+    assert "segment_reweighting" in manifest_payload["metadata"]
+    assert "sample_weighting" in manifest_payload["metadata"]
 
 
 def test_after_hours_training_skips_when_no_new_signal_data(
@@ -739,6 +960,36 @@ def test_after_hours_training_state_strips_pytest_temp_report_paths(
     assert "report_path" not in payload
     assert "daily_report_path" not in payload
     assert payload["model_id"] == "ml-edge-001"
+
+
+def test_after_hours_training_state_prefers_report_root_state_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preferred_state_path = tmp_path / "report_runtime" / "after_hours_training_state.json"
+    monkeypatch.delenv("AI_TRADING_AFTER_HOURS_TRAINING_STATE_PATH", raising=False)
+
+    written = after_hours._write_after_hours_training_state(
+        {
+            "updated_at": "2026-01-06T21:10:00+00:00",
+            "rows": 560,
+            "dataset_fingerprint": "fp-001",
+            "max_label_ts": "2025-04-24T00:00:00+00:00",
+            "model_id": "ml-edge-001",
+            "model_name": "histgb",
+        },
+        preferred_path=preferred_state_path,
+    )
+
+    assert written is not None
+    assert Path(written) == preferred_state_path.resolve()
+    assert preferred_state_path.exists()
+
+    loaded = after_hours._load_after_hours_training_state(
+        preferred_path=preferred_state_path
+    )
+    assert loaded is not None
+    assert loaded["model_id"] == "ml-edge-001"
 
 
 def test_after_hours_training_falls_back_when_model_dir_read_only(
@@ -1265,6 +1516,131 @@ def test_promotion_confidence_gate_bundle_passes_with_strong_bounds(
     assert gate["observed"]["capture_ratio_confidence_lower_bound"] is not None
 
 
+def test_promotion_confidence_gate_bundle_allows_missing_capture_data_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="xgboost",
+        fold_count=5,
+        profitable_fold_count=5,
+        profitable_fold_ratio=1.0,
+        support=420,
+        mean_expectancy_bps=1.6,
+        max_drawdown_bps=180.0,
+        turnover_ratio=0.20,
+        mean_hit_rate=0.64,
+        hit_rate_stability=0.8,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.6, 0.7], dtype=float),
+    )
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CONFIDENCE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_MIN_EFFECTIVE_TRADES", "120")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_WINRATE_CONFIDENCE_Z", "1.28")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CAPTURE_CONFIDENCE_Z", "1.0")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CAPTURE_CONFIDENCE_MIN_DAILY_SAMPLES", "5")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CAPTURE_CONFIDENCE_REQUIRE_DATA", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", "0.52")
+
+    gate = after_hours._promotion_confidence_gate_bundle(
+        best=best,
+        runtime_performance_gate={"execution_vs_alpha": {"execution_capture_ratio": 0.62, "daily": []}},
+        live_execution_quality_gate={
+            "thresholds": {"min_capture_ratio": 0.35, "max_slippage_drag_bps": 4.5}
+        },
+    )
+
+    assert gate["enabled"] is True
+    assert gate["gate_passed"] is True
+    assert gate["reason"] == "pass"
+    assert gate["observed"]["capture_ratio_daily_samples"] == 0
+    assert gate["observed"]["capture_ratio_confidence_data_sufficient"] is False
+
+
+def test_promotion_confidence_gate_bundle_can_require_capture_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="xgboost",
+        fold_count=5,
+        profitable_fold_count=5,
+        profitable_fold_ratio=1.0,
+        support=420,
+        mean_expectancy_bps=1.6,
+        max_drawdown_bps=180.0,
+        turnover_ratio=0.20,
+        mean_hit_rate=0.64,
+        hit_rate_stability=0.8,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.6, 0.7], dtype=float),
+    )
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CONFIDENCE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_MIN_EFFECTIVE_TRADES", "120")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_WINRATE_CONFIDENCE_Z", "1.28")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CAPTURE_CONFIDENCE_Z", "1.0")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CAPTURE_CONFIDENCE_MIN_DAILY_SAMPLES", "5")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CAPTURE_CONFIDENCE_REQUIRE_DATA", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", "0.52")
+
+    gate = after_hours._promotion_confidence_gate_bundle(
+        best=best,
+        runtime_performance_gate={"execution_vs_alpha": {"execution_capture_ratio": 0.62, "daily": []}},
+        live_execution_quality_gate={
+            "thresholds": {"min_capture_ratio": 0.35, "max_slippage_drag_bps": 4.5}
+        },
+    )
+
+    assert gate["enabled"] is True
+    assert gate["gate_passed"] is False
+    assert gate["reason"] == "capture_confidence_data_unavailable"
+    assert gate["observed"]["capture_ratio_confidence_data_sufficient"] is False
+
+
+def test_promotion_confidence_gate_bundle_relaxes_hit_rate_when_runtime_data_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="xgboost",
+        fold_count=5,
+        profitable_fold_count=5,
+        profitable_fold_ratio=1.0,
+        support=940,
+        mean_expectancy_bps=1.4,
+        max_drawdown_bps=180.0,
+        turnover_ratio=0.20,
+        mean_hit_rate=(365.0 / 940.0),
+        hit_rate_stability=0.8,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.6, 0.7], dtype=float),
+    )
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CONFIDENCE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_MIN_EFFECTIVE_TRADES", "120")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_WINRATE_CONFIDENCE_Z", "1.28")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", "0.49")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_MIN_HIT_RATE_NO_RUNTIME_DATA", "0.35")
+    monkeypatch.setenv(
+        "AI_TRADING_PROMOTION_CONFIDENCE_RELAX_WHEN_RUNTIME_DATA_UNAVAILABLE",
+        "1",
+    )
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CAPTURE_CONFIDENCE_REQUIRE_DATA", "0")
+
+    gate = after_hours._promotion_confidence_gate_bundle(
+        best=best,
+        runtime_performance_gate={
+            "data_unavailable_fail_open_applied": True,
+            "execution_vs_alpha": {"daily": []},
+        },
+        live_execution_quality_gate={
+            "thresholds": {"min_capture_ratio": 0.10, "max_slippage_drag_bps": 9.0}
+        },
+    )
+
+    assert gate["enabled"] is True
+    assert gate["gate_passed"] is True
+    assert gate["reason"] == "pass"
+    assert gate["observed"]["runtime_data_unavailable"] is True
+    assert gate["observed"]["win_rate_confidence_floor_effective"] == pytest.approx(0.35)
+
+
 def test_threshold_by_regime_uses_drawdown_penalty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1741,6 +2117,55 @@ def test_champion_challenger_ab_gate_blocks_assumption_mismatch(
     assert bundle["reason"] == "runtime_assumptions_mismatch"
     assert bundle["observed"]["runtime_assumptions_match"] is False
     assert "trade_fill_source" in bundle["observed"]["runtime_assumptions_mismatch"]
+
+
+def test_champion_challenger_ab_gate_is_advisory_for_shadow_prior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="logreg",
+        fold_count=5,
+        profitable_fold_count=4,
+        profitable_fold_ratio=0.8,
+        support=120,
+        mean_expectancy_bps=1.4,
+        max_drawdown_bps=220.0,
+        turnover_ratio=0.25,
+        mean_hit_rate=0.55,
+        hit_rate_stability=0.7,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.5, 0.6], dtype=float),
+        fold_expectancy_bps=(1.6, 1.5, 1.4, 1.5, 1.6),
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_AB_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_AB_REQUIRE_SIGNIFICANCE", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_PROMOTION_AB_ADVISORY_FOR_NON_PRODUCTION_PRIOR",
+        "1",
+    )
+
+    bundle = after_hours._champion_challenger_ab_gate_bundle(
+        best=best,
+        prior_metrics={
+            "governance_status": "shadow",
+            "fold_expectancy_bps": [1.4, 1.4, 1.5, 1.5, 1.4],
+            "runtime_performance_thresholds": {
+                "trade_fill_source": "live",
+                "lookback_days": 5,
+            },
+        },
+        runtime_performance_gate={
+            "thresholds": {
+                "trade_fill_source": "live",
+                "lookback_days": 5,
+            }
+        },
+    )
+
+    assert bundle["enabled"] is True
+    assert bundle["required_for_promotion"] is False
+    assert bundle["gate_passed"] is False
+    assert bundle["reason"] == "stat_sig_not_met"
 
 
 def test_phase1_week1_gate_bundle_reports_blockers(

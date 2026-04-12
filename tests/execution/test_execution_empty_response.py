@@ -253,6 +253,139 @@ def test_execute_order_suppresses_submit_no_result_when_recent_outcome_exists(mo
     assert "submit_no_result" not in reasons
 
 
+def test_execute_order_recovers_submit_no_result_from_client_lookup(monkeypatch):
+    engine = _make_engine(monkeypatch, response={"status": "accepted"})
+    reasons: list[str] = []
+    recovered_order = {
+        "id": "recovered-exec-1",
+        "client_order_id": "recover-cid-exec-1",
+        "status": "filled",
+        "symbol": "AAPL",
+        "side": "buy",
+        "qty": 1,
+    }
+
+    class _RecoverClient:
+        def get_order_by_client_order_id(self, client_order_id):
+            assert client_order_id == "recover-cid-exec-1"
+            return recovered_order
+
+    engine.trading_client = _RecoverClient()
+    monkeypatch.setattr(
+        engine,
+        "submit_limit_order",
+        types.MethodType(lambda self, *_a, **_k: None, engine),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_record_submit_failure",
+        types.MethodType(
+            lambda self, **kwargs: reasons.append(str(kwargs.get("reason") or "")),
+            engine,
+        ),
+    )
+
+    result = engine.execute_order(
+        "AAPL",
+        "buy",
+        1,
+        order_type="limit",
+        limit_price=100.0,
+        client_order_id="recover-cid-exec-1",
+    )
+
+    assert result.order.id == "recovered-exec-1"
+    assert "submit_no_result" not in reasons
+
+
+def test_execute_order_recovers_submit_no_result_from_recent_orders_scan(monkeypatch):
+    engine = _make_engine(monkeypatch, response={"status": "accepted"})
+    reasons: list[str] = []
+    recovered_order = {
+        "id": "recovered-exec-2",
+        "client_order_id": "recover-cid-exec-2",
+        "status": "filled",
+        "symbol": "AAPL",
+        "side": "buy",
+        "qty": 1,
+    }
+
+    class _RecentScanClient:
+        def get_order_by_client_order_id(self, _client_order_id):
+            raise RuntimeError("order not found")
+
+        def list_orders(self, **kwargs):
+            status = str(kwargs.get("status") or "").strip().lower()
+            if status == "open":
+                return []
+            return [recovered_order]
+
+    engine.trading_client = _RecentScanClient()
+    monkeypatch.setattr(
+        engine,
+        "submit_limit_order",
+        types.MethodType(lambda self, *_a, **_k: None, engine),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_record_submit_failure",
+        types.MethodType(
+            lambda self, **kwargs: reasons.append(str(kwargs.get("reason") or "")),
+            engine,
+        ),
+    )
+
+    result = engine.execute_order(
+        "AAPL",
+        "buy",
+        1,
+        order_type="limit",
+        limit_price=100.0,
+        client_order_id="recover-cid-exec-2",
+    )
+
+    assert result.order.id == "recovered-exec-2"
+    assert "submit_no_result" not in reasons
+
+
+def test_execute_order_submit_no_result_records_client_order_id(monkeypatch):
+    engine = _make_engine(monkeypatch, response={"status": "accepted"})
+    captured: list[dict[str, object]] = []
+
+    class _NoResultClient:
+        def get_order_by_client_order_id(self, _client_order_id):
+            raise RuntimeError("order not found")
+
+        def list_orders(self, **_kwargs):
+            return []
+
+    engine.trading_client = _NoResultClient()
+    monkeypatch.setattr(
+        engine,
+        "submit_limit_order",
+        types.MethodType(lambda self, *_a, **_k: None, engine),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_record_submit_failure",
+        types.MethodType(lambda self, **kwargs: captured.append(dict(kwargs)), engine),
+    )
+
+    result = engine.execute_order(
+        "AAPL",
+        "buy",
+        1,
+        order_type="limit",
+        limit_price=100.0,
+        client_order_id="cid-no-result-1",
+    )
+
+    assert result is None
+    assert captured
+    assert captured[-1]["reason"] == "submit_no_result"
+    assert captured[-1]["client_order_id"] == "cid-no-result-1"
+
+
 def test_submit_limit_order_records_submit_exception(monkeypatch):
     engine = _make_engine(monkeypatch, response={"status": "accepted"})
     captured: list[dict[str, object]] = []

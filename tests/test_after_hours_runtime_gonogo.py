@@ -173,3 +173,109 @@ def test_runtime_performance_go_no_go_gate_defaults_enable_reconciliation(
     assert thresholds.get("trade_fill_source") == "auto_live"
     assert thresholds.get("auto_live_fail_closed") is True
     assert thresholds.get("require_open_position_reconciliation") is True
+
+
+def test_runtime_performance_go_no_go_gate_can_fail_open_on_missing_runtime_data(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_FAIL_ON_DATA_UNAVAILABLE",
+        "0",
+    )
+
+    monkeypatch.setattr(
+        rpt,
+        "build_report",
+        lambda **_kwargs: {
+            "trade_history": {"pnl_available": False},
+            "gate_effectiveness": {"valid": False},
+        },
+    )
+    monkeypatch.setattr(
+        rpt,
+        "evaluate_go_no_go",
+        lambda *_args, **_kwargs: {
+            "gate_passed": False,
+            "checks": {
+                "pnl_available": False,
+                "closed_trades": False,
+                "trade_used_days": False,
+                "live_samples_sufficient": False,
+            },
+            "failed_checks": [
+                "pnl_available",
+                "closed_trades",
+                "trade_used_days",
+                "live_samples_sufficient",
+            ],
+            "thresholds": {},
+            "observed": {
+                "pnl_available": False,
+                "closed_trades": 0,
+                "accepted_records": 0,
+                "trade_used_days": 0,
+                "gate_used_days": 0,
+            },
+        },
+    )
+
+    result = after_hours._runtime_performance_go_no_go_gate()
+
+    assert result["enabled"] is True
+    assert result["gate_passed"] is True
+    assert result["reason"] == "insufficient_runtime_data_fail_open"
+    assert result["failed_checks"] == []
+    assert set(result["soft_failed_checks"]) == {
+        "pnl_available",
+        "closed_trades",
+        "trade_used_days",
+        "live_samples_sufficient",
+    }
+    assert result["data_unavailable_fail_open_applied"] is True
+
+
+def test_runtime_performance_go_no_go_gate_respects_fail_closed_on_missing_runtime_data(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_FAIL_ON_DATA_UNAVAILABLE",
+        "1",
+    )
+
+    monkeypatch.setattr(
+        rpt,
+        "build_report",
+        lambda **_kwargs: {
+            "trade_history": {"pnl_available": False},
+            "gate_effectiveness": {"valid": False},
+        },
+    )
+    monkeypatch.setattr(
+        rpt,
+        "evaluate_go_no_go",
+        lambda *_args, **_kwargs: {
+            "gate_passed": False,
+            "checks": {
+                "pnl_available": False,
+                "closed_trades": False,
+            },
+            "failed_checks": ["pnl_available", "closed_trades"],
+            "thresholds": {},
+            "observed": {
+                "pnl_available": False,
+                "closed_trades": 0,
+                "accepted_records": 0,
+                "trade_used_days": 0,
+                "gate_used_days": 0,
+            },
+        },
+    )
+
+    result = after_hours._runtime_performance_go_no_go_gate()
+
+    assert result["enabled"] is True
+    assert result["gate_passed"] is False
+    assert result["data_unavailable_fail_open_applied"] is False
+    assert result["failed_checks"] == ["pnl_available", "closed_trades"]

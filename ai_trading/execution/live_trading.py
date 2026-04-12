@@ -2257,6 +2257,7 @@ class ExecutionEngine:
         self._order_signal_meta: dict[str, _SignalMeta] = {}
         self._last_submit_outcome: dict[str, Any] = {}
         self._last_pre_execution_order_check_failure: dict[str, Any] = {}
+        self._execution_skip_pressure_context: dict[str, Any] = {}
         self._last_initialize_attempt_mono: float = 0.0
         self._last_initialize_success_mono: float = 0.0
         self._last_broker_healthcheck_mono: float = 0.0
@@ -2311,6 +2312,11 @@ class ExecutionEngine:
         self._symbol_loss_streak: dict[str, int] = {}
         self._symbol_loss_cooldown_until: dict[str, float] = {}
         self._symbol_loss_cooldown_reason: dict[str, str] = {}
+        self._symbol_submit_no_result_failure_mono: dict[str, deque[float]] = {}
+        self._symbol_submit_no_result_backoff_until: dict[str, float] = {}
+        self._symbol_submit_no_result_backoff_reason: dict[str, str] = {}
+        self._symbol_submit_no_result_alert_last_mono: dict[str, float] = {}
+        self._symbol_submit_no_result_last_cluster_count: dict[str, int] = {}
         self._symbol_repeat_loss_streak: dict[str, int] = {}
         self._symbol_repeat_loss_blocklist_until: dict[str, float] = {}
         self._symbol_repeat_loss_blocklist_reason: dict[str, str] = {}
@@ -3229,6 +3235,190 @@ class ExecutionEngine:
             float(severe_scale_value) - float(default_scale_value)
         ) * float(severity)
         return max(float(severe_scale_value), min(float(blended_scale), float(default_scale_value)))
+
+    def _passive_fill_min_probability_relaxed(
+        self,
+        *,
+        base_threshold: float,
+        symbol: str | None = None,
+        side: str | None = None,
+    ) -> tuple[float, dict[str, Any]]:
+        """Return adaptive relaxed passive-fill threshold under persistent skip/failure pressure."""
+
+        threshold = max(0.01, min(float(base_threshold), 0.99))
+        context: dict[str, Any] = {
+            "enabled": False,
+            "applied": False,
+            "base_threshold": float(threshold),
+            "adjusted_threshold": float(threshold),
+        }
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_PASSIVE_FILL_DYNAMIC_RELAX_ENABLED")
+        if enabled is None:
+            enabled = True
+        context["enabled"] = bool(enabled)
+        if not bool(enabled):
+            context["reason"] = "disabled"
+            return threshold, context
+
+        require_market_open = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_PASSIVE_FILL_DYNAMIC_RELAX_REQUIRE_MARKET_OPEN"
+        )
+        if require_market_open is None:
+            require_market_open = True
+        if bool(require_market_open) and not _market_is_open_now():
+            context["reason"] = "market_closed"
+            return threshold, context
+
+        pressure_raw = getattr(self, "_execution_skip_pressure_context", None)
+        pressure = dict(pressure_raw) if isinstance(pressure_raw, Mapping) else {}
+        updated_at_mono = _safe_float(pressure.get("updated_at_mono"))
+        if updated_at_mono is None or updated_at_mono <= 0.0:
+            context["reason"] = "missing_pressure_context"
+            return threshold, context
+
+        max_age_s = _config_float(
+            "AI_TRADING_EXECUTION_PASSIVE_FILL_DYNAMIC_RELAX_MAX_AGE_SEC",
+            900.0,
+        )
+        if max_age_s is None or not math.isfinite(float(max_age_s)):
+            max_age_s = 900.0
+        max_age_s = max(30.0, min(float(max_age_s), 3600.0))
+        age_s = max(float(monotonic_time()) - float(updated_at_mono), 0.0)
+        context["pressure_age_s"] = round(float(age_s), 3)
+        if float(age_s) > float(max_age_s):
+            context["reason"] = "stale_pressure_context"
+            return threshold, context
+
+        skipped = max(0, _safe_int(pressure.get("skipped"), 0))
+        decision_count = max(0, _safe_int(pressure.get("decision_count"), 0))
+        passive_low_skip_count = max(
+            0,
+            _safe_int(pressure.get("passive_fill_probability_low_skip_count"), 0),
+        )
+        submit_no_result_count = max(
+            0,
+            _safe_int(pressure.get("submit_no_result_count"), 0),
+        )
+        skip_share = (
+            float(passive_low_skip_count) / float(skipped)
+            if skipped > 0
+            else 0.0
+        )
+        context.update(
+            {
+                "decision_count": int(decision_count),
+                "skipped": int(skipped),
+                "passive_fill_probability_low_skip_count": int(passive_low_skip_count),
+                "passive_fill_probability_low_skip_share": float(skip_share),
+                "submit_no_result_count": int(submit_no_result_count),
+                "symbol": str(symbol) if symbol else None,
+                "side": str(side) if side else None,
+            }
+        )
+
+        min_decisions = _config_int(
+            "AI_TRADING_EXECUTION_PASSIVE_FILL_DYNAMIC_RELAX_MIN_DECISIONS",
+            20,
+        )
+        if min_decisions is None:
+            min_decisions = 20
+        min_decisions = max(1, min(int(min_decisions), 2000))
+        min_skipped = _config_int(
+            "AI_TRADING_EXECUTION_PASSIVE_FILL_DYNAMIC_RELAX_MIN_SKIPPED",
+            10,
+        )
+        if min_skipped is None:
+            min_skipped = 10
+        min_skipped = max(1, min(int(min_skipped), 2000))
+        if decision_count < int(min_decisions) or skipped < int(min_skipped):
+            context["reason"] = "insufficient_samples"
+            return threshold, context
+
+        min_realized_edge_bps = _config_float(
+            "AI_TRADING_EXECUTION_PASSIVE_FILL_DYNAMIC_RELAX_MIN_REALIZED_EDGE_BPS",
+            -6.0,
+        )
+        if min_realized_edge_bps is None or not math.isfinite(float(min_realized_edge_bps)):
+            min_realized_edge_bps = -6.0
+        min_realized_edge_bps = max(-50.0, min(float(min_realized_edge_bps), 50.0))
+        realized_edge_bps = _safe_float(pressure.get("live_realized_net_edge_bps"))
+        context["live_realized_net_edge_bps"] = (
+            float(realized_edge_bps) if realized_edge_bps is not None else None
+        )
+        if realized_edge_bps is not None and float(realized_edge_bps) < float(min_realized_edge_bps):
+            context["reason"] = "realized_edge_guardrail"
+            return threshold, context
+
+        share_trigger = _config_float(
+            "AI_TRADING_EXECUTION_PASSIVE_FILL_DYNAMIC_RELAX_SKIP_SHARE_TRIGGER",
+            0.60,
+        )
+        if share_trigger is None or not math.isfinite(float(share_trigger)):
+            share_trigger = 0.60
+        share_trigger = max(0.05, min(float(share_trigger), 0.99))
+        share_slope = _config_float(
+            "AI_TRADING_EXECUTION_PASSIVE_FILL_DYNAMIC_RELAX_SKIP_SHARE_SLOPE",
+            0.30,
+        )
+        if share_slope is None or not math.isfinite(float(share_slope)):
+            share_slope = 0.30
+        share_slope = max(0.0, min(float(share_slope), 2.0))
+        share_over = max(float(skip_share) - float(share_trigger), 0.0)
+        relax_from_skip_share = float(share_over) * float(share_slope)
+
+        submit_trigger = _config_int(
+            "AI_TRADING_EXECUTION_PASSIVE_FILL_DYNAMIC_RELAX_SUBMIT_NO_RESULT_TRIGGER",
+            3,
+        )
+        if submit_trigger is None:
+            submit_trigger = 3
+        submit_trigger = max(0, min(int(submit_trigger), 1000))
+        submit_step = _config_float(
+            "AI_TRADING_EXECUTION_PASSIVE_FILL_DYNAMIC_RELAX_SUBMIT_NO_RESULT_STEP",
+            0.015,
+        )
+        if submit_step is None or not math.isfinite(float(submit_step)):
+            submit_step = 0.015
+        submit_step = max(0.0, min(float(submit_step), 0.25))
+        submit_over = max(int(submit_no_result_count) - int(submit_trigger) + 1, 0)
+        relax_from_submit = float(submit_over) * float(submit_step)
+
+        max_relax = _config_float(
+            "AI_TRADING_EXECUTION_PASSIVE_FILL_DYNAMIC_RELAX_MAX",
+            0.20,
+        )
+        if max_relax is None or not math.isfinite(float(max_relax)):
+            max_relax = 0.20
+        max_relax = max(0.0, min(float(max_relax), 0.6))
+        total_relax = min(float(max_relax), float(relax_from_skip_share) + float(relax_from_submit))
+
+        min_threshold_floor = _config_float(
+            "AI_TRADING_EXECUTION_PASSIVE_FILL_DYNAMIC_RELAX_THRESHOLD_FLOOR",
+            0.08,
+        )
+        if min_threshold_floor is None or not math.isfinite(float(min_threshold_floor)):
+            min_threshold_floor = 0.08
+        min_threshold_floor = max(0.01, min(float(min_threshold_floor), float(threshold)))
+        adjusted = max(float(min_threshold_floor), float(threshold) - float(total_relax))
+        adjusted = max(0.01, min(float(adjusted), 0.99))
+        applied = not math.isclose(float(adjusted), float(threshold), rel_tol=0.0, abs_tol=1e-9)
+        context.update(
+            {
+                "reason": "applied" if applied else "no_pressure",
+                "share_trigger": float(share_trigger),
+                "share_over": float(share_over),
+                "relax_from_skip_share": float(relax_from_skip_share),
+                "submit_trigger": int(submit_trigger),
+                "submit_over": int(submit_over),
+                "relax_from_submit_no_result": float(relax_from_submit),
+                "max_relax": float(max_relax),
+                "relax_applied": float(total_relax),
+                "threshold_floor": float(min_threshold_floor),
+                "adjusted_threshold": float(adjusted),
+                "applied": bool(applied),
+            }
+        )
+        return float(adjusted), context
 
     def _symbol_reentry_cooldown_seconds(
         self,
@@ -13334,36 +13524,68 @@ class ExecutionEngine:
         symbol: str | None,
         side: str | None,
         reason: str,
+        client_order_id: str | None = None,
         order_type: str | None = None,
         status_code: int | None = None,
+        error_code: str | int | None = None,
+        phase: str | None = None,
+        trace_id: str | None = None,
         detail: str | None = None,
         submit_started_at: float | None = None,
     ) -> None:
         """Record and log a failed submit path before returning ``None``."""
 
+        resolved_phase = str(phase or self._service_phase() or "unknown").strip().lower()
+        if not resolved_phase:
+            resolved_phase = "unknown"
+        resolved_trace_id = str(trace_id or client_order_id or "").strip() or None
+        resolved_error_code: str | int | None = error_code
+        if resolved_error_code in (None, ""):
+            resolved_error_code = int(status_code) if status_code is not None else None
+        if resolved_error_code in (None, ""):
+            reason_token = str(reason or "").strip().lower()
+            resolved_error_code = reason_token or None
+
         payload: dict[str, Any] = {
             "reason": str(reason),
+            "phase": resolved_phase,
         }
         if symbol:
             payload["symbol"] = str(symbol)
         if side:
             payload["side"] = str(side)
+        if resolved_trace_id:
+            payload["trace_id"] = resolved_trace_id
+        if client_order_id:
+            payload["client_order_id"] = str(client_order_id)
         if order_type:
             payload["order_type"] = str(order_type)
         if status_code is not None:
             payload["status_code"] = int(status_code)
+        if resolved_error_code not in (None, ""):
+            payload["error_code"] = resolved_error_code
         if detail:
             payload["detail"] = str(detail)
         logger.error("ORDER_SUBMIT_FAILED", extra=payload)
         self._last_submit_outcome = {
             "status": "failed",
             "reason": str(reason),
+            "phase": resolved_phase,
             "symbol": str(symbol) if symbol else None,
             "side": str(side) if side else None,
+            "trace_id": resolved_trace_id,
+            "client_order_id": str(client_order_id) if client_order_id else None,
             "detail": str(detail) if detail else None,
+            "error_code": resolved_error_code,
             "status_code": int(status_code) if status_code is not None else None,
             "recorded_at_mono": float(monotonic_time()),
         }
+        self._update_symbol_submit_no_result_backoff(
+            symbol=symbol,
+            reason=reason,
+            status_code=status_code,
+            client_order_id=client_order_id,
+        )
         self._record_cycle_order_outcome(
             symbol=symbol,
             side=side,
@@ -13376,15 +13598,22 @@ class ExecutionEngine:
             "event": "submit_failed",
             "status": "failed",
             "reason": str(reason),
+            "phase": resolved_phase,
         }
         if symbol:
             quality_payload["symbol"] = str(symbol)
         if side:
             quality_payload["side"] = str(side)
+        if resolved_trace_id:
+            quality_payload["trace_id"] = resolved_trace_id
+        if client_order_id:
+            quality_payload["client_order_id"] = str(client_order_id)
         if order_type:
             quality_payload["order_type"] = str(order_type)
         if status_code is not None:
             quality_payload["status_code"] = int(status_code)
+        if resolved_error_code not in (None, ""):
+            quality_payload["error_code"] = resolved_error_code
         if detail:
             quality_payload["detail"] = str(detail)
         self._record_execution_quality_event(quality_payload)
@@ -13421,8 +13650,20 @@ class ExecutionEngine:
             if status in {"canceled", "cancelled", "expired", "done_for_day"}
         )
         skip_reason_counts: dict[str, int] = {}
+        failed_reason_counts: dict[str, int] = {}
         precheck_detail_counts: dict[str, int] = {}
         for item, status in normalized_outcomes:
+            if status == "failed":
+                try:
+                    fail_reason = str(item.get("reason") or "").strip().lower()
+                except Exception:
+                    fail_reason = ""
+                if not fail_reason:
+                    fail_reason = "unspecified"
+                failed_reason_counts[fail_reason] = (
+                    failed_reason_counts.get(fail_reason, 0) + 1
+                )
+                continue
             if status != "skipped":
                 continue
             try:
@@ -13443,6 +13684,10 @@ class ExecutionEngine:
                 detail = "unspecified"
             precheck_detail_counts[detail] = precheck_detail_counts.get(detail, 0) + 1
         skip_reason_counts = {key: skip_reason_counts[key] for key in sorted(skip_reason_counts)}
+        failed_reason_counts = {
+            key: failed_reason_counts[key]
+            for key in sorted(failed_reason_counts)
+        }
         precheck_detail_counts = {
             key: precheck_detail_counts[key]
             for key in sorted(precheck_detail_counts)
@@ -13455,6 +13700,13 @@ class ExecutionEngine:
         precheck_failure_ratio = (
             (float(precheck_failure_count) / float(skipped)) if skipped > 0 else 0.0
         )
+        passive_low_skip_count = int(skip_reason_counts.get("passive_fill_probability_low", 0))
+        passive_low_skip_share = (
+            (float(passive_low_skip_count) / float(skipped))
+            if skipped > 0
+            else 0.0
+        )
+        submit_no_result_count = int(failed_reason_counts.get("submit_no_result", 0))
         self._precheck_failure_pressure_context = {
             "updated_at": datetime.now(UTC).isoformat(),
             "updated_at_mono": float(monotonic_time()),
@@ -13462,6 +13714,18 @@ class ExecutionEngine:
             "skipped": int(skipped),
             "precheck_failure_count": int(precheck_failure_count),
             "precheck_detail_counts": dict(precheck_detail_counts),
+        }
+        self._execution_skip_pressure_context = {
+            "updated_at": datetime.now(UTC).isoformat(),
+            "updated_at_mono": float(monotonic_time()),
+            "decision_count": int(decision_count),
+            "skipped": int(skipped),
+            "failed": int(failed),
+            "skip_reason_counts": dict(skip_reason_counts),
+            "failed_reason_counts": dict(failed_reason_counts),
+            "passive_fill_probability_low_skip_count": int(passive_low_skip_count),
+            "passive_fill_probability_low_skip_share": float(passive_low_skip_share),
+            "submit_no_result_count": int(submit_no_result_count),
         }
         pacing_cap_hit_rate_pct = (
             (float(pacing_cap_hits) / float(decision_count) * 100.0)
@@ -13532,6 +13796,28 @@ class ExecutionEngine:
             float(statistics.mean(live_edge_capture_ratio_values))
             if live_edge_capture_ratio_values
             else None
+        )
+        self._execution_skip_pressure_context.update(
+            {
+                "live_realized_net_edge_bps": (
+                    float(live_realized_net_edge_bps)
+                    if live_realized_net_edge_bps is not None
+                    else None
+                ),
+                "live_expected_net_edge_bps": (
+                    float(live_expected_net_edge_bps)
+                    if live_expected_net_edge_bps is not None
+                    else None
+                ),
+                "live_edge_capture_ratio": (
+                    float(live_edge_capture_ratio)
+                    if live_edge_capture_ratio is not None
+                    else None
+                ),
+                "live_realized_net_edge_samples": int(len(live_realized_net_edge_values)),
+                "live_expected_net_edge_samples": int(len(live_expected_net_edge_values)),
+                "live_edge_capture_ratio_samples": int(len(live_edge_capture_ratio_values)),
+            }
         )
         self._precheck_failure_pressure_context.update(
             {
@@ -14435,10 +14721,33 @@ class ExecutionEngine:
 
         if not self._runtime_exec_event_persistence_enabled():
             return
+        row = dict(payload)
+        phase_value = str(row.get("phase") or "").strip().lower()
+        if not phase_value:
+            phase_value = str(self._service_phase() or "unknown").strip().lower() or "unknown"
+        row["phase"] = phase_value
+        trace_value = str(row.get("trace_id") or "").strip()
+        if not trace_value:
+            for key in ("client_order_id", "order_id"):
+                candidate = str(row.get(key) or "").strip()
+                if candidate:
+                    trace_value = candidate
+                    break
+        if trace_value:
+            row["trace_id"] = trace_value
+        error_code = row.get("error_code")
+        if error_code in (None, ""):
+            status_value = row.get("status_code")
+            if status_value not in (None, ""):
+                row["error_code"] = status_value
+            else:
+                reason_token = str(row.get("reason") or "").strip().lower()
+                if reason_token:
+                    row["error_code"] = reason_token
         self._append_runtime_jsonl(
             env_key="AI_TRADING_EXEC_QUALITY_EVENTS_PATH",
             default_relative="runtime/execution_quality_events.jsonl",
-            payload=payload,
+            payload=row,
             failure_log="EXEC_QUALITY_EVENT_WRITE_FAILED",
         )
 
@@ -16939,6 +17248,11 @@ class ExecutionEngine:
                     symbol=symbol,
                     side=side_lower,
                     reason="submit_exception",
+                    client_order_id=(
+                        str(client_order_id)
+                        if client_order_id not in (None, "")
+                        else None
+                    ),
                     order_type=str(order_data.get("type") or "market"),
                     status_code=status_code_int,
                     detail=str(failure_exc) or "submit_order failed",
@@ -16950,6 +17264,11 @@ class ExecutionEngine:
                     symbol=symbol,
                     side=side_lower,
                     reason="submit_no_result_internal",
+                    client_order_id=(
+                        str(client_order_id)
+                        if client_order_id not in (None, "")
+                        else None
+                    ),
                     order_type=str(order_data.get("type") or "market"),
                     status_code=504,
                     detail="submit helper returned no broker response",
@@ -17659,6 +17978,11 @@ class ExecutionEngine:
                     symbol=symbol,
                     side=side_lower,
                     reason="submit_exception",
+                    client_order_id=(
+                        str(client_order_id)
+                        if client_order_id not in (None, "")
+                        else None
+                    ),
                     order_type=order_type_initial,
                     status_code=status_code_int,
                     detail=(
@@ -17674,6 +17998,11 @@ class ExecutionEngine:
                     symbol=symbol,
                     side=side_lower,
                     reason="submit_no_result_internal",
+                    client_order_id=(
+                        str(client_order_id)
+                        if client_order_id not in (None, "")
+                        else None
+                    ),
                     order_type=order_type_initial,
                     status_code=504,
                     detail="submit helper returned no broker response",
@@ -18010,6 +18339,11 @@ class ExecutionEngine:
                             symbol=symbol,
                             side=mapped_side,
                             reason="initialization_failed",
+                            client_order_id=(
+                                str(precheck_order.get("client_order_id"))
+                                if precheck_order.get("client_order_id") not in (None, "")
+                                else None
+                            ),
                             order_type=order_type_normalized,
                             submit_started_at=submit_started_at,
                         )
@@ -19085,6 +19419,14 @@ class ExecutionEngine:
             if bool(autotune_override.get("active")) and autotune_add is not None:
                 min_fill_probability = float(min_fill_probability) + float(autotune_add)
             min_fill_probability = max(0.01, min(float(min_fill_probability), 0.99))
+            (
+                min_fill_probability,
+                passive_fill_dynamic_relax_context,
+            ) = self._passive_fill_min_probability_relaxed(
+                base_threshold=float(min_fill_probability),
+                symbol=symbol,
+                side=mapped_side,
+            )
             if float(fill_probability) < float(min_fill_probability):
                 action_token = self._normalize_low_fill_probability_action(
                     _runtime_env(
@@ -19272,6 +19614,7 @@ class ExecutionEngine:
                             "threshold": float(min_fill_probability),
                             "action": action_token,
                             "components": fill_probability_context.get("components"),
+                            "dynamic_threshold_relax": passive_fill_dynamic_relax_context,
                             "adaptive_action": adaptive_action_context,
                         },
                         submit_started_at=submit_started_at,
@@ -19286,6 +19629,7 @@ class ExecutionEngine:
                             "action": action_token,
                             "fill_probability": round(float(fill_probability), 4),
                             "threshold": round(float(min_fill_probability), 4),
+                            "dynamic_threshold_relax": passive_fill_dynamic_relax_context,
                             "resolved_order_type": order_type_normalized,
                             "resolved_time_in_force": kwargs.get("time_in_force"),
                             "resolved_limit_price": (
@@ -19302,6 +19646,9 @@ class ExecutionEngine:
                 )
                 annotations["passive_fill_probability_context"] = (
                     fill_probability_context
+                )
+                annotations["passive_fill_dynamic_threshold_relax"] = (
+                    passive_fill_dynamic_relax_context
                 )
                 annotations["execution_profile_context"] = execution_profile_context
                 annotations["queue_pressure_context"] = queue_pressure_context
@@ -19981,6 +20328,11 @@ class ExecutionEngine:
                 symbol=symbol,
                 side=mapped_side,
                 reason="submit_exception",
+                client_order_id=(
+                    str(order_data.get("client_order_id") or client_order_id)
+                    if (order_data.get("client_order_id") or client_order_id) not in (None, "")
+                    else None
+                ),
                 order_type=order_type_normalized,
                 status_code=status_code_int,
                 detail=str(exc) or "order execution failed",
@@ -20045,28 +20397,48 @@ class ExecutionEngine:
             missing_client_id = (
                 str(order_data.get("client_order_id") or client_order_id or "").strip() or None
             )
-            logger.warning(
-                "EXEC_ORDER_NO_RESULT",
-                extra={
-                    "symbol": symbol,
-                    "side": mapped_side,
-                    "type": order_type_normalized,
-                    "client_order_id": missing_client_id,
-                },
-            )
-            self._record_submit_failure(
+            recovered_order, recovery_source = self._recover_order_after_submit_no_result(
+                client_order_id=missing_client_id,
                 symbol=symbol,
-                side=mapped_side,
-                reason="submit_no_result",
-                order_type=order_type_normalized,
-                status_code=504,
-                detail=(
-                    f"no_broker_response client_order_id={missing_client_id or 'unknown'}"
-                ),
-                submit_started_at=submit_started_at,
             )
-            _release_capacity_reservation("submit_no_result")
-            return None
+            if recovered_order is not None:
+                logger.warning(
+                    "EXEC_ORDER_NO_RESULT_RECOVERED",
+                    extra={
+                        "symbol": symbol,
+                        "side": mapped_side,
+                        "type": order_type_normalized,
+                        "client_order_id": missing_client_id,
+                        "recovery_source": recovery_source,
+                    },
+                )
+                self._record_client_order_id_submission(missing_client_id)
+                order = recovered_order
+            else:
+                logger.warning(
+                    "EXEC_ORDER_NO_RESULT",
+                    extra={
+                        "symbol": symbol,
+                        "side": mapped_side,
+                        "type": order_type_normalized,
+                        "client_order_id": missing_client_id,
+                        "recovery_source": recovery_source,
+                    },
+                )
+                self._record_submit_failure(
+                    symbol=symbol,
+                    side=mapped_side,
+                    reason="submit_no_result",
+                    client_order_id=missing_client_id,
+                    order_type=order_type_normalized,
+                    status_code=504,
+                    detail=(
+                        f"no_broker_response client_order_id={missing_client_id or 'unknown'}"
+                    ),
+                    submit_started_at=submit_started_at,
+                )
+                _release_capacity_reservation("submit_no_result")
+                return None
 
         final_order = order
         order_obj, status, filled_qty, requested_qty, order_id, client_order_id = _normalize_order_payload(
@@ -20351,6 +20723,11 @@ class ExecutionEngine:
                 symbol=symbol,
                 side=mapped_side,
                 reason="invalid_order_response",
+                client_order_id=(
+                    str(client_order_id)
+                    if client_order_id not in (None, "")
+                    else None
+                ),
                 order_type=order_type_normalized,
                 detail=str(status),
                 submit_started_at=submit_started_at,
@@ -25117,6 +25494,201 @@ class ExecutionEngine:
             "cooldown_reason": cooldown_reason,
         }
 
+    def _symbol_submit_no_result_backoff_allows_opening(
+        self,
+        *,
+        symbol: str,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Return whether submit-timeout backoff currently blocks a symbol."""
+
+        enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_ENABLED"
+        )
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+        symbol_token = str(symbol or "").strip().upper()
+        if not symbol_token:
+            return True, {"enabled": True, "reason": "symbol_missing"}
+
+        backoff_until_raw = (
+            getattr(self, "_symbol_submit_no_result_backoff_until", {}) or {}
+        )
+        backoff_until_map = (
+            backoff_until_raw if isinstance(backoff_until_raw, dict) else {}
+        )
+        backoff_reason_raw = (
+            getattr(self, "_symbol_submit_no_result_backoff_reason", {}) or {}
+        )
+        backoff_reason_map = (
+            backoff_reason_raw if isinstance(backoff_reason_raw, dict) else {}
+        )
+        cluster_count_raw = (
+            getattr(self, "_symbol_submit_no_result_last_cluster_count", {}) or {}
+        )
+        cluster_count_map = (
+            cluster_count_raw if isinstance(cluster_count_raw, dict) else {}
+        )
+        backoff_expiry = _safe_float(backoff_until_map.get(symbol_token)) or 0.0
+        now_mono = float(monotonic_time())
+        if backoff_expiry <= now_mono:
+            if backoff_expiry > 0.0 and isinstance(backoff_until_raw, dict):
+                backoff_until_raw.pop(symbol_token, None)
+            if isinstance(backoff_reason_map, dict):
+                backoff_reason_map.pop(symbol_token, None)
+            if isinstance(cluster_count_map, dict):
+                cluster_count_map.pop(symbol_token, None)
+            return True, {
+                "enabled": True,
+                "reason": "backoff_inactive",
+                "symbol": symbol_token,
+            }
+        remaining = max(backoff_expiry - now_mono, 0.0)
+        return False, {
+            "enabled": True,
+            "reason": "submit_no_result_symbol_backoff",
+            "symbol": symbol_token,
+            "remaining_seconds": round(float(remaining), 3),
+            "cluster_reason": str(
+                backoff_reason_map.get(symbol_token) or "submit_no_result_504_cluster"
+            ),
+            "cluster_count": int(_safe_int(cluster_count_map.get(symbol_token), 0)),
+        }
+
+    def _update_symbol_submit_no_result_backoff(
+        self,
+        *,
+        symbol: str | None,
+        reason: str | None,
+        status_code: int | None,
+        client_order_id: str | None,
+    ) -> None:
+        """Track submit timeout clusters and arm a temporary symbol backoff."""
+
+        enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_ENABLED"
+        )
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return
+        symbol_token = str(symbol or "").strip().upper()
+        if not symbol_token:
+            return
+        status_code_int = _safe_int(status_code, 0)
+        reason_token = str(reason or "").strip().lower()
+        if status_code_int != 504 or "submit_no_result" not in reason_token:
+            return
+
+        window_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_WINDOW_SEC",
+            1800.0,
+        )
+        if window_sec is None or not math.isfinite(float(window_sec)):
+            window_sec = 1800.0
+        window_sec = max(60.0, min(float(window_sec), 24.0 * 3600.0))
+        trigger_count = _config_int(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_TRIGGER_COUNT",
+            6,
+        )
+        if trigger_count is None:
+            trigger_count = 6
+        trigger_count = max(2, min(int(trigger_count), 1000))
+        cooldown_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_COOLDOWN_SEC",
+            900.0,
+        )
+        if cooldown_sec is None or not math.isfinite(float(cooldown_sec)):
+            cooldown_sec = 900.0
+        cooldown_sec = max(30.0, min(float(cooldown_sec), 6.0 * 3600.0))
+        alert_cooldown_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_ALERT_COOLDOWN_SEC",
+            120.0,
+        )
+        if alert_cooldown_sec is None or not math.isfinite(float(alert_cooldown_sec)):
+            alert_cooldown_sec = 120.0
+        alert_cooldown_sec = max(0.0, min(float(alert_cooldown_sec), 6.0 * 3600.0))
+
+        now_mono = float(monotonic_time())
+        history_raw = (
+            getattr(self, "_symbol_submit_no_result_failure_mono", {}) or {}
+        )
+        history_map = history_raw if isinstance(history_raw, dict) else {}
+        history_entry = history_map.get(symbol_token)
+        if isinstance(history_entry, deque):
+            history = history_entry
+        elif isinstance(history_entry, list):
+            history = deque((_safe_float(item) or 0.0) for item in history_entry)
+        else:
+            history = deque()
+        cutoff = now_mono - float(window_sec)
+        while history and float(history[0]) < cutoff:
+            history.popleft()
+        history.append(now_mono)
+        history_map[symbol_token] = history
+        self._symbol_submit_no_result_failure_mono = history_map
+
+        cluster_count = len(history)
+        if cluster_count < int(trigger_count):
+            return
+
+        backoff_until_raw = (
+            getattr(self, "_symbol_submit_no_result_backoff_until", {}) or {}
+        )
+        backoff_until_map = (
+            backoff_until_raw if isinstance(backoff_until_raw, dict) else {}
+        )
+        backoff_reason_raw = (
+            getattr(self, "_symbol_submit_no_result_backoff_reason", {}) or {}
+        )
+        backoff_reason_map = (
+            backoff_reason_raw if isinstance(backoff_reason_raw, dict) else {}
+        )
+        cluster_count_raw = (
+            getattr(self, "_symbol_submit_no_result_last_cluster_count", {}) or {}
+        )
+        cluster_count_map = (
+            cluster_count_raw if isinstance(cluster_count_raw, dict) else {}
+        )
+        previous_until = _safe_float(backoff_until_map.get(symbol_token)) or 0.0
+        next_until = max(previous_until, now_mono + float(cooldown_sec))
+        backoff_until_map[symbol_token] = next_until
+        backoff_reason_map[symbol_token] = "submit_no_result_504_cluster"
+        cluster_count_map[symbol_token] = int(cluster_count)
+        self._symbol_submit_no_result_backoff_until = backoff_until_map
+        self._symbol_submit_no_result_backoff_reason = backoff_reason_map
+        self._symbol_submit_no_result_last_cluster_count = cluster_count_map
+
+        alert_last_raw = (
+            getattr(self, "_symbol_submit_no_result_alert_last_mono", {}) or {}
+        )
+        alert_last_map = alert_last_raw if isinstance(alert_last_raw, dict) else {}
+        last_alert = _safe_float(alert_last_map.get(symbol_token)) or 0.0
+        if float(alert_cooldown_sec) > 0.0 and last_alert > 0.0 and (
+            now_mono - last_alert
+        ) < float(alert_cooldown_sec):
+            return
+        alert_last_map[symbol_token] = now_mono
+        self._symbol_submit_no_result_alert_last_mono = alert_last_map
+        logger.warning(
+            "SUBMIT_NO_RESULT_SYMBOL_BACKOFF_TRIGGERED",
+            extra={
+                "symbol": symbol_token,
+                "reason": str(reason_token),
+                "status_code": int(status_code_int),
+                "cluster_count": int(cluster_count),
+                "trigger_count": int(trigger_count),
+                "window_sec": float(window_sec),
+                "cooldown_sec": float(cooldown_sec),
+                "client_order_id": (
+                    str(client_order_id)
+                    if client_order_id not in (None, "")
+                    else None
+                ),
+            },
+        )
+
     def _symbol_repeat_loss_blocklist_allows_opening(
         self,
         *,
@@ -26811,6 +27383,45 @@ class ExecutionEngine:
                 )
                 _mark_precheck_failure("symbol_loss_cooldown", symbol_cooldown_context)
                 return False
+            submit_timeout_backoff_allowed, submit_timeout_backoff_context = (
+                self._symbol_submit_no_result_backoff_allows_opening(
+                    symbol=str(order.get("symbol") or ""),
+                )
+            )
+            if not submit_timeout_backoff_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "submit_no_result_symbol_backoff",
+                    "context": submit_timeout_backoff_context,
+                }
+                logger.warning(
+                    "ENTRY_CONSTRAINED_SUBMIT_NO_RESULT_SYMBOL_BACKOFF",
+                    extra=skip_payload,
+                )
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "submit_no_result_symbol_backoff",
+                    submit_timeout_backoff_context,
+                    extra=skip_payload
+                    | {"detail": "submit_no_result_symbol_backoff"},
+                )
+                _mark_precheck_failure(
+                    "submit_no_result_symbol_backoff",
+                    submit_timeout_backoff_context,
+                )
+                return False
             repeat_loss_block_allowed, repeat_loss_block_context = (
                 self._symbol_repeat_loss_blocklist_allows_opening(
                     symbol=str(order.get("symbol") or ""),
@@ -27407,6 +28018,8 @@ class ExecutionEngine:
         wait_seconds = max(0.0, float(max_wait_seconds))
         poll_seconds = max(0.05, float(poll_interval_seconds))
         deadline = time.monotonic() + wait_seconds
+        wall_deadline = time.time() + wait_seconds + max(poll_seconds, 0.05) * 2.0
+        max_attempts = max(3, int(math.ceil(wait_seconds / poll_seconds)) + 4)
         attempts = 0
         while True:
             attempts += 1
@@ -27436,12 +28049,140 @@ class ExecutionEngine:
                     },
                 )
                 return recovered
-            if time.monotonic() >= deadline:
+            if (
+                attempts >= max_attempts
+                or time.monotonic() >= deadline
+                or time.time() >= wall_deadline
+            ):
                 break
             sleep_for = min(poll_seconds, max(deadline - time.monotonic(), 0.0))
             if sleep_for > 0.0:
                 time.sleep(sleep_for)
         return None
+
+    def _find_order_in_broker_order_list_by_client_id(
+        self,
+        orders: Iterable[Any],
+        *,
+        client_order_id: str | None,
+    ) -> Any | None:
+        """Return first broker order whose id/client_order_id matches ``client_order_id``."""
+
+        token = str(client_order_id or "").strip()
+        if not token:
+            return None
+        for order in orders:
+            for candidate in (
+                _extract_value(order, "client_order_id"),
+                _extract_value(order, "id", "order_id"),
+            ):
+                if candidate in (None, ""):
+                    continue
+                if str(candidate).strip() == token:
+                    return order
+        return None
+
+    def _lookup_order_in_open_recent_orders_by_client_order_id(
+        self,
+        client_order_id: str | None,
+        *,
+        symbol: str | None = None,
+    ) -> Any | None:
+        """Best-effort order recovery by scanning open/recent broker order queries."""
+
+        token = str(client_order_id or "").strip()
+        if not token:
+            return None
+        client = getattr(self, "trading_client", None)
+        if client is None:
+            return None
+        lookback_minutes = _config_int(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_RECENT_LOOKBACK_MINUTES",
+            30,
+        )
+        if lookback_minutes is None:
+            lookback_minutes = 30
+        lookback_minutes = max(1, min(int(lookback_minutes), 240))
+        after_dt = datetime.now(UTC) - timedelta(minutes=int(lookback_minutes))
+        query_variants: tuple[dict[str, Any], ...] = (
+            {"status": "open"},
+            {"status": "all", "limit": 200, "after": after_dt},
+            {"status": "all", "limit": 200},
+            {"status": "closed", "limit": 200, "after": after_dt},
+            {"status": "closed", "limit": 200},
+            {},
+        )
+        for method_name in ("list_orders", "get_orders"):
+            method = getattr(client, method_name, None)
+            if not callable(method):
+                continue
+            for query_kwargs in query_variants:
+                try:
+                    orders_resp = method(**query_kwargs)  # type: ignore[misc]
+                except TypeError:
+                    continue
+                except Exception:
+                    logger.debug(
+                        "ORDER_LOOKUP_RECENT_QUERY_FAILED",
+                        extra={
+                            "symbol": symbol,
+                            "client_order_id": token,
+                            "lookup_method": method_name,
+                            "query": dict(query_kwargs),
+                        },
+                        exc_info=True,
+                    )
+                    break
+                matched = self._find_order_in_broker_order_list_by_client_id(
+                    orders_resp or [],
+                    client_order_id=token,
+                )
+                if matched is not None:
+                    logger.info(
+                        "ORDER_LOOKUP_RECENT_QUERY_RECOVERED",
+                        extra={
+                            "symbol": symbol,
+                            "client_order_id": token,
+                            "lookup_method": method_name,
+                            "query": dict(query_kwargs),
+                        },
+                    )
+                    return matched
+        return None
+
+    def _recover_order_after_submit_no_result(
+        self,
+        *,
+        client_order_id: str | None,
+        symbol: str | None = None,
+    ) -> tuple[Any | None, str]:
+        """Attempt broker-side reconciliation before finalizing submit-no-result failure."""
+
+        token = str(client_order_id or "").strip()
+        if not token:
+            return None, "missing_client_order_id"
+        wait_seconds = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_RECOVERY_WAIT_SECONDS",
+            1.5,
+        )
+        if wait_seconds is None or not math.isfinite(float(wait_seconds)):
+            wait_seconds = 1.5
+        wait_seconds = max(0.0, min(float(wait_seconds), 8.0))
+        recovered = self._lookup_order_by_client_order_id(
+            token,
+            symbol=symbol,
+            max_wait_seconds=float(wait_seconds),
+            poll_interval_seconds=0.25,
+        )
+        if recovered is not None:
+            return recovered, "direct_lookup"
+        recovered = self._lookup_order_in_open_recent_orders_by_client_order_id(
+            token,
+            symbol=symbol,
+        )
+        if recovered is not None:
+            return recovered, "open_recent_scan"
+        return None, "not_found"
 
     def _is_circuit_breaker_open(self) -> bool:
         """Check if circuit breaker should reset."""

@@ -187,16 +187,44 @@ def _policy_finalize_diagnostics(
     candidates = int(counters.get("candidates", 0))
     accepted = int(counters.get("accepted", 0))
     accepted_rate = float(accepted / candidates) if candidates > 0 else 0.0
+    rejected_by_reason = {
+        key.replace("reject_", ""): int(value)
+        for key, value in sorted(counters.items())
+        if key.startswith("reject_")
+    }
+    rejected_total = int(sum(rejected_by_reason.values()))
+    rejection_rate = float(rejected_total / candidates) if candidates > 0 else 0.0
+    gate_bind_rates: dict[str, dict[str, float | int]] = {}
+    gate_bind_ranked: list[dict[str, float | int | str]] = []
+    for reason, count in sorted(
+        rejected_by_reason.items(),
+        key=lambda item: (-int(item[1]), item[0]),
+    ):
+        bind_rate = float(count / candidates) if candidates > 0 else 0.0
+        share_of_rejections = float(count / rejected_total) if rejected_total > 0 else 0.0
+        gate_bind_rates[reason] = {
+            "count": int(count),
+            "bind_rate_of_candidates": bind_rate,
+            "share_of_rejections": share_of_rejections,
+        }
+        gate_bind_ranked.append(
+            {
+                "reason": reason,
+                "count": int(count),
+                "bind_rate_of_candidates": bind_rate,
+                "share_of_rejections": share_of_rejections,
+            }
+        )
     return {
         "profile": _policy_profile_payload(profile),
         "candidates": candidates,
         "accepted": accepted,
         "accepted_rate": accepted_rate,
-        "rejected_by_reason": {
-            key.replace("reject_", ""): int(value)
-            for key, value in sorted(counters.items())
-            if key.startswith("reject_")
-        },
+        "rejected_total": rejected_total,
+        "rejection_rate": rejection_rate,
+        "rejected_by_reason": rejected_by_reason,
+        "gate_bind_rates": gate_bind_rates,
+        "gate_bind_ranked": gate_bind_ranked,
         "bandit_shadow_candidates": int(counters.get("bandit_shadow_candidates", 0)),
         "bandit_applied": int(counters.get("bandit_applied", 0)),
     }
@@ -365,6 +393,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Run policy sensitivity diagnostics (baseline + per-knob ablation variants) "
             "for simulation mode."
+        ),
+    )
+    parser.add_argument(
+        "--apply-policy-controls",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Apply ranker policy controls (opportunity/capture/replay-quality/bandit) "
+            "during normal simulation replay mode."
         ),
     )
     parser.add_argument("--output-json", type=Path, default=None)
@@ -732,6 +769,7 @@ def _run_parity_simulation(
     cfg: ReplayConfig,
     symbol_paths: dict[str, Path],
     policy_profile: PolicyReplayProfile | None = None,
+    policy_mode_label: str = "ranker_sensitivity",
 ) -> dict[str, Any]:
     """Run deterministic replay parity simulation with async fill events."""
 
@@ -946,7 +984,7 @@ def _run_parity_simulation(
         },
     }
     if policy_profile is not None:
-        aggregate["policy_mode"] = "ranker_sensitivity"
+        aggregate["policy_mode"] = str(policy_mode_label or "ranker_sensitivity")
         aggregate["policy_diagnostics"] = _policy_finalize_diagnostics(
             policy_counters,
             profile=policy_profile,
@@ -1027,6 +1065,7 @@ def _run_policy_sensitivity(
         cfg=cfg,
         symbol_paths=symbol_paths,
         policy_profile=baseline_profile,
+        policy_mode_label="ranker_sensitivity",
     )
     baseline_metrics = _policy_metric_projection(baseline_payload)
     baseline_diag = (
@@ -1089,6 +1128,7 @@ def _run_policy_sensitivity(
             cfg=cfg,
             symbol_paths=symbol_paths,
             policy_profile=profile,
+            policy_mode_label="ranker_sensitivity",
         )
         variant_metrics = _policy_metric_projection(variant_payload)
         variant_diag = (
@@ -1358,7 +1398,17 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
                 len(sensitivity_report.get("variants", []))
             )
         else:
-            payload = _run_parity_simulation(args=args, cfg=cfg, symbol_paths=symbol_paths)
+            policy_profile: PolicyReplayProfile | None = None
+            if bool(args.apply_policy_controls):
+                policy_profile = _load_policy_profile_from_env()
+            payload = _run_parity_simulation(
+                args=args,
+                cfg=cfg,
+                symbol_paths=symbol_paths,
+                policy_profile=policy_profile,
+                policy_mode_label="ranker_controls",
+            )
+            payload["aggregate"]["policy_controls_applied"] = bool(policy_profile is not None)
         if bool(args.persist_intents):
             persist_summary = _persist_replay_to_oms(
                 replay=payload.get("replay", {}),
@@ -1370,6 +1420,8 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--persist-intents requires --simulation-mode")
     if bool(args.policy_sensitivity_mode):
         raise ValueError("--policy-sensitivity-mode requires --simulation-mode")
+    if bool(args.apply_policy_controls):
+        raise ValueError("--apply-policy-controls requires --simulation-mode")
 
     per_symbol: list[dict[str, Any]] = []
     for symbol, csv_path in symbol_paths.items():
@@ -1421,9 +1473,11 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
 def _load_runtime_env_for_replay(args: argparse.Namespace) -> None:
     env_file = args.env_file
     if env_file is None:
-        reload_env(path=None, override=True)
+        # Preserve explicit process env overrides for replay experiments while still
+        # loading defaults from .env when present.
+        reload_env(path=None, override=False)
         return
-    reload_env(path=env_file, override=True)
+    reload_env(path=env_file, override=False)
 
 
 def run_replay(argv: list[str] | None = None) -> dict[str, Any]:

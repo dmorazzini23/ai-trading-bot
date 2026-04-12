@@ -77,17 +77,42 @@ def main() -> int:
         default="runtime/research_reports/after_hours_sensitivity_sweep.json",
         help="Output JSON path",
     )
+    parser.add_argument(
+        "--dotenv-path",
+        default=".env.runtime",
+        help=(
+            "Optional dotenv file to load once before the sweep. "
+            "Use an empty string to skip dotenv loading."
+        ),
+    )
+    parser.add_argument(
+        "--daily-source",
+        default=None,
+        help="Optional DAILY_SOURCE override (e.g. yahoo, alpaca_iex).",
+    )
+    parser.add_argument(
+        "--minute-source",
+        default=None,
+        help="Optional MINUTE_SOURCE override (e.g. yahoo, alpaca_iex).",
+    )
     args = parser.parse_args()
 
     now_utc = _parse_now(args.now)
     thresholds = _parse_float_list(args.thresholds)
     min_support_values = _parse_int_list(args.min_support_values)
+    dotenv_path = str(args.dotenv_path or "").strip()
+    if dotenv_path:
+        reload_env(path=dotenv_path, override=False)
+    if args.daily_source:
+        os.environ["DAILY_SOURCE"] = str(args.daily_source).strip()
+    if args.minute_source:
+        os.environ["MINUTE_SOURCE"] = str(args.minute_source).strip()
+
     rows: list[dict[str, Any]] = []
     for threshold in thresholds:
         for min_support in min_support_values:
             os.environ["AI_TRADING_AFTER_HOURS_DEFAULT_THRESHOLD"] = str(threshold)
             os.environ["AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT"] = str(min_support)
-            reload_env()
             output = run_after_hours_training(now=now_utc)
             selected = _extract_selected_candidate(output)
             rows.append(
