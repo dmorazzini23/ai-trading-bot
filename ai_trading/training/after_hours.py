@@ -261,6 +261,8 @@ class CandidateMetrics:
     brier_score: float = 1.0
     regime_calibration: dict[str, dict[str, float]] = field(default_factory=dict)
     selected_threshold: float = 0.5
+    score_orientation: str = "direct"
+    score_orientation_report: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -782,6 +784,60 @@ def _predict_probabilities(model: Any, X: Any) -> np.ndarray:
     return cast(np.ndarray, np.clip(preds, 0.0, 1.0))
 
 
+def _orient_probabilities_for_edge(
+    probabilities: np.ndarray,
+    edge_bps: np.ndarray,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    probs = np.asarray(probabilities, dtype=float)
+    edges = np.asarray(edge_bps, dtype=float)
+    report: dict[str, Any] = {
+        "orientation": "direct",
+        "inverse_applied": False,
+        "valid_samples": 0,
+        "bucket_support": 0,
+        "high_score_expectancy_bps": 0.0,
+        "low_score_expectancy_bps": 0.0,
+        "expectancy_delta_bps": 0.0,
+    }
+    if probs.size <= 0 or edges.size <= 0 or probs.size != edges.size:
+        return probs, report
+    valid_idx = np.flatnonzero(np.isfinite(probs) & np.isfinite(edges))
+    report["valid_samples"] = int(valid_idx.size)
+    if valid_idx.size <= 0:
+        return probs, report
+    quantile = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_SCORE_ORIENTATION_QUANTILE",
+                0.20,
+                cast=float,
+            )
+        ),
+        low=0.05,
+        high=0.45,
+    )
+    bucket_support = max(1, int(valid_idx.size * quantile))
+    report["bucket_support"] = int(bucket_support)
+    sorted_idx = valid_idx[np.argsort(probs[valid_idx], kind="mergesort")]
+    low_idx = sorted_idx[:bucket_support]
+    high_idx = sorted_idx[-bucket_support:]
+    low_expectancy = float(np.mean(edges[low_idx])) if low_idx.size > 0 else 0.0
+    high_expectancy = float(np.mean(edges[high_idx])) if high_idx.size > 0 else 0.0
+    delta_expectancy = float(high_expectancy - low_expectancy)
+    report["high_score_expectancy_bps"] = float(high_expectancy)
+    report["low_score_expectancy_bps"] = float(low_expectancy)
+    report["expectancy_delta_bps"] = float(delta_expectancy)
+    min_delta = float(
+        get_env("AI_TRADING_AFTER_HOURS_SCORE_ORIENTATION_MIN_DELTA_BPS", 0.5, cast=float)
+    )
+    inverse_applied = delta_expectancy < -float(min_delta)
+    if inverse_applied:
+        report["orientation"] = "inverse"
+        report["inverse_applied"] = True
+        return np.asarray(1.0 - probs, dtype=float), report
+    return probs, report
+
+
 def _max_drawdown_bps(edge_bps: np.ndarray) -> float:
     if edge_bps.size == 0:
         return 0.0
@@ -879,6 +935,7 @@ def _model_quality_diagnostics(
     *,
     oof_probabilities: np.ndarray,
     selected_threshold: float,
+    score_orientation: str = "direct",
     deciles: int = 10,
     top_n_symbols: int = 20,
 ) -> dict[str, Any]:
@@ -887,6 +944,7 @@ def _model_quality_diagnostics(
             "valid_oof_samples": 0,
             "selected_support": 0,
             "selected_threshold": float(selected_threshold),
+            "score_orientation": str(score_orientation),
             "score_decile_expectancy": [],
             "calibration_by_decile": {
                 "overall_ece": 1.0,
@@ -910,6 +968,7 @@ def _model_quality_diagnostics(
             "valid_oof_samples": 0,
             "selected_support": 0,
             "selected_threshold": float(selected_threshold),
+            "score_orientation": str(score_orientation),
             "score_decile_expectancy": [],
             "calibration_by_decile": {
                 "overall_ece": 1.0,
@@ -930,6 +989,7 @@ def _model_quality_diagnostics(
             "valid_oof_samples": 0,
             "selected_support": 0,
             "selected_threshold": float(selected_threshold),
+            "score_orientation": str(score_orientation),
             "score_decile_expectancy": [],
             "calibration_by_decile": {
                 "overall_ece": 1.0,
@@ -1029,6 +1089,7 @@ def _model_quality_diagnostics(
         "valid_oof_samples": int(valid_idx.size),
         "selected_support": int(selected_idx.size),
         "selected_threshold": float(selected_threshold),
+        "score_orientation": str(score_orientation),
         "score_decile_expectancy": decile_rows,
         "calibration_by_decile": {
             "overall_ece": float(overall_ece),
@@ -1152,30 +1213,31 @@ def _evaluate_candidate(
         valid_folds += 1
     if valid_folds <= 0:
         return None
-    valid_probs_mask = np.isfinite(oof_probs)
+    oriented_probs, orientation_report = _orient_probabilities_for_edge(oof_probs, edge)
+    valid_probs_mask = np.isfinite(oriented_probs)
     selected_metrics = _select_candidate_threshold(
         dataset=dataset,
-        oof_probabilities=oof_probs,
+        oof_probabilities=oriented_probs,
         fold_predictions=fold_predictions,
         default_threshold=threshold,
     )
     if not selected_metrics:
         return None
     selected_threshold = float(selected_metrics.get("threshold", threshold) or threshold)
-    selected_all = valid_probs_mask & (oof_probs >= selected_threshold)
+    selected_all = valid_probs_mask & (oriented_probs >= selected_threshold)
     regime_metrics = dict(selected_metrics.get("regime_metrics", {}) or {})
     brier_score = 1.0
     y_values_all = y.to_numpy(dtype=float)
     regime_calibration: dict[str, dict[str, float]] = {}
     if np.any(valid_probs_mask):
         y_values = y_values_all[valid_probs_mask]
-        probs_values = np.clip(oof_probs[valid_probs_mask], 1e-6, 1.0 - 1e-6)
+        probs_values = np.clip(oriented_probs[valid_probs_mask], 1e-6, 1.0 - 1e-6)
         if y_values.size and probs_values.size == y_values.size:
             brier_score = float(np.mean((probs_values - y_values) ** 2))
         regime_calibration = _regime_calibration_summary(
             regimes,
             y_values_all,
-            oof_probs,
+            oriented_probs,
             min_support=int(
                 get_env("AI_TRADING_AFTER_HOURS_REGIME_CALIBRATION_MIN_SUPPORT", 25, cast=int)
             ),
@@ -1192,7 +1254,7 @@ def _evaluate_candidate(
         mean_hit_rate=float(selected_metrics.get("mean_hit_rate", 0.0) or 0.0),
         hit_rate_stability=float(selected_metrics.get("hit_rate_stability", 0.0) or 0.0),
         regime_metrics=regime_metrics,
-        oof_probabilities=oof_probs,
+        oof_probabilities=oriented_probs,
         fold_expectancy_bps=tuple(
             float(value)
             for value in list(selected_metrics.get("fold_expectancy_bps", []) or [])
@@ -1200,6 +1262,8 @@ def _evaluate_candidate(
         brier_score=float(brier_score),
         regime_calibration=regime_calibration,
         selected_threshold=float(selected_threshold),
+        score_orientation=str(orientation_report.get("orientation", "direct")),
+        score_orientation_report=dict(orientation_report),
     )
 
 
@@ -4847,6 +4911,103 @@ def _build_segment_reweight_sample_weights(
     return weights, report
 
 
+def _build_negative_symbol_penalty_map(model_quality: Mapping[str, Any]) -> dict[str, dict[str, float]]:
+    enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_NEGATIVE_SYMBOL_PENALTY_ENABLED", True, cast=bool)
+    )
+    if not enabled:
+        return {}
+    payload = model_quality.get("negative_expectancy_contribution_by_symbol")
+    if not isinstance(payload, Mapping):
+        return {}
+    contributors = payload.get("contributors")
+    if not isinstance(contributors, list):
+        return {}
+    min_support = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_NEGATIVE_SYMBOL_PENALTY_MIN_SUPPORT",
+                5,
+                cast=int,
+            )
+        ),
+    )
+    min_share = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_NEGATIVE_SYMBOL_PENALTY_MIN_SHARE",
+                0.03,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=1.0,
+    )
+    base_bump = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_NEGATIVE_SYMBOL_PENALTY_BASE_BUMP",
+                0.03,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=0.5,
+    )
+    max_bump = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_NEGATIVE_SYMBOL_PENALTY_MAX_BUMP",
+                0.18,
+                cast=float,
+            )
+        ),
+        low=base_bump,
+        high=0.5,
+    )
+    scale_floor = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_NEGATIVE_SYMBOL_PENALTY_CONFIDENCE_SCALE_FLOOR",
+                0.6,
+                cast=float,
+            )
+        ),
+        low=0.1,
+        high=1.0,
+    )
+    top_n = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_NEGATIVE_SYMBOL_PENALTY_TOP_N",
+                12,
+                cast=int,
+            )
+        ),
+    )
+    penalties: dict[str, dict[str, float]] = {}
+    for row in contributors[:top_n]:
+        if not isinstance(row, Mapping):
+            continue
+        symbol = str(row.get("symbol", "")).strip().upper()
+        support = int(_as_float(row.get("support")) or 0.0)
+        share = float(_as_float(row.get("negative_contribution_share")) or 0.0)
+        if not symbol or support < min_support or share < min_share:
+            continue
+        bump = _clamp(base_bump + (0.35 * share), low=0.0, high=max_bump)
+        confidence_scale = _clamp(1.0 - (1.1 * share), low=scale_floor, high=1.0)
+        penalties[symbol] = {
+            "threshold_bump": float(bump),
+            "confidence_scale": float(confidence_scale),
+            "negative_share": float(share),
+            "support": float(support),
+            "net_bps": float(_as_float(row.get("net_bps")) or 0.0),
+        }
+    return penalties
+
+
 def _fit_edge_model_v2_bundle(
     dataset: Any,
     *,
@@ -5736,7 +5897,9 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         dataset,
         oof_probabilities=best.oof_probabilities,
         selected_threshold=float(best.selected_threshold),
+        score_orientation=str(best.score_orientation),
     )
+    negative_symbol_penalties = _build_negative_symbol_penalty_map(model_quality)
     segment_sample_weights, segment_reweight_report = _build_segment_reweight_sample_weights(
         dataset,
         oof_probabilities=best.oof_probabilities,
@@ -5877,9 +6040,15 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     setattr(final_model, "edge_thresholds_by_regime_", thresholds_by_regime)
     setattr(final_model, "edge_global_threshold_", float(default_threshold))
     setattr(final_model, "regime_calibration_", best.regime_calibration)
+    setattr(final_model, "edge_score_orientation_", str(best.score_orientation))
+    setattr(final_model, "edge_score_orientation_report_", dict(best.score_orientation_report))
+    setattr(final_model, "edge_negative_symbol_penalties_", dict(negative_symbol_penalties))
     manifest_metadata["hard_negative_mining"] = dict(hard_negative_report)
     manifest_metadata["segment_reweighting"] = dict(segment_reweight_report)
     manifest_metadata["sample_weighting"] = dict(sample_weighting_report)
+    manifest_metadata["score_orientation"] = str(best.score_orientation)
+    manifest_metadata["score_orientation_report"] = dict(best.score_orientation_report)
+    manifest_metadata["negative_symbol_penalties"] = dict(negative_symbol_penalties)
     manifest_metadata["edge_model_v2"] = dict(edge_model_v2_report)
     requested_model_dir = _resolve_after_hours_output_path(
         str(get_env("AI_TRADING_AFTER_HOURS_MODEL_DIR", "models/after_hours", cast=str) or ""),
@@ -5925,12 +6094,15 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "sensitivity_sweep": sensitivity_sweep,
             "regime_calibration": best.regime_calibration,
             "regime_threshold_adjustments": regime_threshold_adjustments,
+            "score_orientation": str(best.score_orientation),
+            "score_orientation_report": dict(best.score_orientation_report),
             "selection_score": _candidate_selection_score(best, weights=selection_weights),
             "selection_constraints": dict(selection_constraints),
             "manifest_metadata": manifest_metadata,
             "hard_negative_mining": hard_negative_report,
             "segment_reweighting": segment_reweight_report,
             "sample_weighting": sample_weighting_report,
+            "negative_symbol_penalties": dict(negative_symbol_penalties),
             "edge_model_v2": edge_model_v2_report,
             "model_quality": model_quality,
         },
@@ -5958,6 +6130,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 "mean_hit_rate": best.mean_hit_rate,
                 "hit_rate_stability": best.hit_rate_stability,
                 "selected_threshold": best.selected_threshold,
+                "score_orientation": str(best.score_orientation),
                 "brier_score": best.brier_score,
                 "selection_score": _candidate_selection_score(best, weights=selection_weights),
                 "profitable_fold_count": best.profitable_fold_count,
@@ -6055,6 +6228,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "candidate_metrics": candidate_metrics_payload,
         "regime_metrics": best.regime_metrics,
         "regime_calibration": best.regime_calibration,
+        "score_orientation": str(best.score_orientation),
+        "score_orientation_report": dict(best.score_orientation_report),
         "thresholds_by_regime": thresholds_by_regime,
         "thresholds_by_regime_raw": raw_thresholds_by_regime,
         "regime_threshold_adjustments": regime_threshold_adjustments,
@@ -6079,6 +6254,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "hard_negative_mining": hard_negative_report,
         "segment_reweighting": segment_reweight_report,
         "sample_weighting": sample_weighting_report,
+        "negative_symbol_penalties": dict(negative_symbol_penalties),
         "edge_model_v2": edge_model_v2_report,
         "model_quality": model_quality,
         "runtime_promotion": {
@@ -6169,6 +6345,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "edge_gates": gate_map,
         "rows": int(len(dataset)),
         "selected_threshold": float(best.selected_threshold),
+        "score_orientation": str(best.score_orientation),
         "selection_score": _candidate_selection_score(best, weights=selection_weights),
         "brier_score": best.brier_score,
         "candidate_metrics": candidate_metrics_payload,
@@ -6179,6 +6356,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "hard_negative_mining": hard_negative_report,
         "segment_reweighting": segment_reweight_report,
         "sample_weighting": sample_weighting_report,
+        "negative_symbol_penalties": dict(negative_symbol_penalties),
         "edge_model_v2": edge_model_v2_report,
         "model_quality": model_quality,
         "model_selection_retune": model_selection_retune,

@@ -5741,25 +5741,36 @@ def _load_shadow_model() -> Any | None:
 
 
 def _predict_class_and_probability(model: Any, X: np.ndarray) -> tuple[Any, float]:
-    pred = model.predict(X)[0]
-    proba_row = model.predict_proba(X)[0]
-    pred_index: int | None = None
-    classes = getattr(model, "classes_", None)
-    if classes is not None:
-        try:
-            classes_list = list(classes)
-        except TypeError:
-            classes_list = []
-        if classes_list:
+    proba_row_raw = model.predict_proba(X)[0]
+    proba_row = np.asarray(proba_row_raw, dtype=float)
+    if proba_row.ndim == 0:
+        p_edge = float(np.clip(proba_row.item(), 0.0, 1.0))
+    else:
+        classes = getattr(model, "classes_", None)
+        positive_index: int | None = None
+        if classes is not None:
             try:
-                pred_index = classes_list.index(pred)
-            except ValueError:
-                pred_index = None
-    if pred_index is None:
-        pred_index = int(pred)
-    if pred_index < 0 or pred_index >= len(proba_row):
-        pred_index = max(0, min(len(proba_row) - 1, pred_index))
-    return pred, float(proba_row[pred_index])
+                classes_list = list(classes)
+            except TypeError:
+                classes_list = []
+            if len(classes_list) == int(proba_row.shape[0]):
+                for idx, label in enumerate(classes_list):
+                    try:
+                        if int(label) == 1:
+                            positive_index = int(idx)
+                            break
+                    except (TypeError, ValueError):
+                        continue
+        if positive_index is None:
+            positive_index = 1 if int(proba_row.shape[0]) > 1 else 0
+        positive_index = max(0, min(int(proba_row.shape[0]) - 1, int(positive_index)))
+        p_edge = float(np.clip(float(proba_row[positive_index]), 0.0, 1.0))
+    orientation_raw = str(getattr(model, "edge_score_orientation_", "direct") or "").strip().lower()
+    if orientation_raw in {"inverse", "inverted", "flip"}:
+        p_edge = float(np.clip(1.0 - p_edge, 0.0, 1.0))
+    pred = 1 if p_edge >= 0.5 else 0
+    confidence = p_edge if pred == 1 else (1.0 - p_edge)
+    return pred, float(np.clip(confidence, 0.0, 1.0))
 
 
 def _ml_shadow_log_path() -> Path:
@@ -15964,6 +15975,41 @@ class SignalManager:
                 if regime_threshold is not None:
                     effective_threshold = max(effective_threshold, float(regime_threshold))
 
+            symbol_penalty_details: dict[str, float] | None = None
+            if pred == 1 and symbol:
+                penalties_raw = getattr(model, "edge_negative_symbol_penalties_", None)
+                if isinstance(penalties_raw, Mapping):
+                    entry = penalties_raw.get(str(symbol).strip().upper())
+                    if isinstance(entry, Mapping):
+                        threshold_bump = float(
+                            np.clip(
+                                float(entry.get("threshold_bump", 0.0) or 0.0),
+                                0.0,
+                                0.95,
+                            )
+                        )
+                        confidence_scale = float(
+                            np.clip(
+                                float(entry.get("confidence_scale", 1.0) or 1.0),
+                                0.1,
+                                1.0,
+                            )
+                        )
+                        proba = float(np.clip(float(proba) * confidence_scale, 0.0, 1.0))
+                        effective_threshold = float(
+                            np.clip(float(effective_threshold) + threshold_bump, 0.0, 0.99)
+                        )
+                        threshold_source = (
+                            f"{threshold_source}+symbol_penalty"
+                            if threshold_source
+                            else "symbol_penalty"
+                        )
+                        symbol_penalty_details = {
+                            "threshold_bump": float(threshold_bump),
+                            "confidence_scale": float(confidence_scale),
+                            "negative_share": float(entry.get("negative_share", 0.0) or 0.0),
+                        }
+
             # Record that ML produced a decision payload even when filtered to no-trade.
             note_ml_signal()
             if effective_threshold > 0.0 and proba < effective_threshold:
@@ -15978,6 +16024,7 @@ class SignalManager:
                         "regime_threshold": regime_threshold,
                         "regime": regime_label,
                         "threshold_source": threshold_source,
+                        "symbol_penalty": symbol_penalty_details,
                         "shadow_enabled": bool(shadow_payload),
                     },
                 )
@@ -15988,6 +16035,8 @@ class SignalManager:
                 extra={
                     "prediction": prediction_for_log,
                     "probability": proba,
+                    "threshold_source": threshold_source,
+                    "symbol_penalty": symbol_penalty_details,
                     "shadow_enabled": bool(shadow_payload),
                     "skew_breached": bool(skew_payload and skew_payload.get("breached")),
                 },

@@ -399,6 +399,50 @@ def test_segment_reweight_sample_weights_targets_high_conf_negative_symbols(
     assert weights[1] > 1.0
 
 
+def test_orient_probabilities_for_edge_flips_when_high_scores_underperform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SCORE_ORIENTATION_QUANTILE", "0.25")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SCORE_ORIENTATION_MIN_DELTA_BPS", "0.1")
+    probs = np.asarray([0.90, 0.80, 0.70, 0.60, 0.40, 0.30, 0.20, 0.10], dtype=float)
+    edges = np.asarray([-12.0, -8.0, -5.0, -2.0, 2.0, 5.0, 8.0, 12.0], dtype=float)
+    oriented, report = after_hours._orient_probabilities_for_edge(probs, edges)
+    assert report["orientation"] == "inverse"
+    assert report["inverse_applied"] is True
+    assert np.allclose(oriented, 1.0 - probs)
+
+
+def test_build_negative_symbol_penalty_map_from_model_quality(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_NEGATIVE_SYMBOL_PENALTY_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_NEGATIVE_SYMBOL_PENALTY_MIN_SUPPORT", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_NEGATIVE_SYMBOL_PENALTY_MIN_SHARE", "0.05")
+    model_quality = {
+        "negative_expectancy_contribution_by_symbol": {
+            "contributors": [
+                {
+                    "symbol": "ORCL",
+                    "support": 29,
+                    "negative_contribution_share": 0.10,
+                    "net_bps": -1687.0,
+                },
+                {
+                    "symbol": "SMALL",
+                    "support": 2,
+                    "negative_contribution_share": 0.12,
+                    "net_bps": -50.0,
+                },
+            ]
+        }
+    }
+    penalties = after_hours._build_negative_symbol_penalty_map(model_quality)
+    assert "ORCL" in penalties
+    assert penalties["ORCL"]["threshold_bump"] > 0.0
+    assert penalties["ORCL"]["confidence_scale"] < 1.0
+    assert "SMALL" not in penalties
+
+
 def test_candidate_threshold_selection_score_penalizes_turnover_and_downside(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -856,10 +900,13 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert "candidate_metrics" in report_payload
     assert "sensitivity_sweep" in report_payload
     assert "model_quality" in report_payload
+    assert report_payload["model_quality"].get("score_orientation") in {"direct", "inverse"}
     assert "manifest_metadata" in report_payload["model"]
     assert "hard_negative_mining" in report_payload
     assert "segment_reweighting" in report_payload
     assert "sample_weighting" in report_payload
+    assert "negative_symbol_penalties" in report_payload
+    assert "score_orientation" in report_payload
     assert "edge_model_v2" in report_payload
     assert isinstance(report_payload["candidate_metrics"], list)
     assert report_payload["candidate_metrics"]
@@ -871,6 +918,8 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert "hard_negative_mining" in result
     assert "segment_reweighting" in result
     assert "sample_weighting" in result
+    assert "negative_symbol_penalties" in result
+    assert result.get("score_orientation") in {"direct", "inverse"}
     assert "edge_model_v2" in result
     assert "score_decile_expectancy" in report_payload["model_quality"]
     assert "calibration_by_decile" in report_payload["model_quality"]
@@ -888,6 +937,8 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert manifest_payload["metadata"]["strategy"] == "after_hours_ml_edge"
     assert "segment_reweighting" in manifest_payload["metadata"]
     assert "sample_weighting" in manifest_payload["metadata"]
+    assert "negative_symbol_penalties" in manifest_payload["metadata"]
+    assert "score_orientation" in manifest_payload["metadata"]
 
 
 def test_after_hours_training_skips_when_no_new_signal_data(

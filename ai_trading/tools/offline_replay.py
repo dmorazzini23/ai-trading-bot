@@ -2,20 +2,27 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 import hashlib
 import json
-from dataclasses import dataclass
 import math
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 import numpy as np
 import pandas as pd
 
 from ai_trading.config.management import get_env, reload_env
+from ai_trading.features.indicators import (
+    compute_atr,
+    compute_macd,
+    compute_macds,
+    compute_sma,
+    compute_vwap,
+)
+from ai_trading.indicators import rsi as rsi_indicator
 from ai_trading.logging import get_logger
 from ai_trading.replay.event_loop import ReplayEventLoop
 
@@ -54,6 +61,16 @@ class PolicyReplayProfile:
     bandit_min_samples: int
     bandit_shadow_only: bool
     bandit_auto_promote: bool
+
+
+@dataclass(frozen=True)
+class ReplayModelContext:
+    model: Any
+    model_path: str
+    feature_names: tuple[str, ...]
+    positive_class_index: int
+    orientation_inverse: bool
+    symbol_penalties: dict[str, dict[str, float]]
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -230,6 +247,157 @@ def _policy_finalize_diagnostics(
     }
 
 
+def _positive_class_probability_index(classes: Any, *, column_count: int) -> int:
+    if int(column_count) <= 1:
+        return 0
+    try:
+        labels = list(classes) if classes is not None else []
+    except TypeError:
+        labels = []
+    if len(labels) == int(column_count):
+        for idx, label in enumerate(labels):
+            try:
+                if int(label) == 1:
+                    return int(idx)
+            except (TypeError, ValueError):
+                continue
+    return 1
+
+
+def _resolve_replay_model_path(args: argparse.Namespace) -> Path | None:
+    explicit_path = getattr(args, "model_path", None)
+    if explicit_path is not None:
+        candidate = Path(explicit_path)
+    else:
+        path_raw = str(get_env("AI_TRADING_MODEL_PATH", "", cast=str) or "").strip()
+        if not path_raw:
+            return None
+        candidate = Path(path_raw)
+    return candidate.expanduser().resolve() if not candidate.is_absolute() else candidate
+
+
+def _extract_symbol_penalties(raw: Any) -> dict[str, dict[str, float]]:
+    if not isinstance(raw, Mapping):
+        return {}
+    penalties: dict[str, dict[str, float]] = {}
+    for symbol_raw, payload_raw in raw.items():
+        symbol = str(symbol_raw or "").strip().upper()
+        if not symbol or not isinstance(payload_raw, Mapping):
+            continue
+        threshold_bump = float(
+            np.clip(float(payload_raw.get("threshold_bump", 0.0) or 0.0), 0.0, 0.95)
+        )
+        confidence_scale = float(
+            np.clip(float(payload_raw.get("confidence_scale", 1.0) or 1.0), 0.1, 1.0)
+        )
+        penalties[symbol] = {
+            "threshold_bump": threshold_bump,
+            "confidence_scale": confidence_scale,
+            "negative_share": float(payload_raw.get("negative_share", 0.0) or 0.0),
+        }
+    return penalties
+
+
+def _load_replay_model_context(args: argparse.Namespace) -> ReplayModelContext | None:
+    if not bool(getattr(args, "use_model_score", False)):
+        return None
+    model_path = _resolve_replay_model_path(args)
+    if model_path is None or not model_path.is_file():
+        return None
+    try:
+        import joblib
+
+        model = joblib.load(model_path)
+    except Exception as exc:
+        logger.warning(
+            "OFFLINE_REPLAY_MODEL_LOAD_FAILED",
+            extra={"model_path": str(model_path), "error": str(exc)},
+        )
+        return None
+    if not hasattr(model, "predict_proba"):
+        logger.warning(
+            "OFFLINE_REPLAY_MODEL_SCORING_UNSUPPORTED",
+            extra={"model_path": str(model_path), "reason": "missing_predict_proba"},
+        )
+        return None
+    feature_names_raw = getattr(model, "feature_names_in_", None)
+    feature_names = tuple(str(name) for name in feature_names_raw) if feature_names_raw is not None else (
+        "rsi",
+        "macd",
+        "atr",
+        "vwap",
+        "sma_50",
+        "sma_200",
+        "signal",
+        "atr_pct",
+        "vwap_distance",
+        "sma_spread",
+        "macd_signal_gap",
+        "rsi_centered",
+    )
+    orientation_raw = str(getattr(model, "edge_score_orientation_", "direct") or "").strip().lower()
+    classes = getattr(model, "classes_", None)
+    try:
+        class_count = len(list(classes)) if classes is not None else 2
+    except TypeError:
+        class_count = 2
+    context = ReplayModelContext(
+        model=model,
+        model_path=str(model_path),
+        feature_names=feature_names,
+        positive_class_index=_positive_class_probability_index(
+            classes,
+            column_count=class_count,
+        ),
+        orientation_inverse=orientation_raw in {"inverse", "inverted", "flip"},
+        symbol_penalties=_extract_symbol_penalties(
+            getattr(model, "edge_negative_symbol_penalties_", None)
+        ),
+    )
+    logger.info(
+        "OFFLINE_REPLAY_MODEL_SCORING_ENABLED",
+        extra={
+            "model_path": context.model_path,
+            "feature_count": len(context.feature_names),
+            "orientation": "inverse" if context.orientation_inverse else "direct",
+            "symbol_penalty_count": len(context.symbol_penalties),
+        },
+    )
+    return context
+
+
+def _safe_rsi(close_values: np.ndarray) -> np.ndarray:
+    if close_values.size <= 0:
+        return cast(np.ndarray, np.asarray([], dtype=float))
+    try:
+        out = rsi_indicator(tuple(close_values.tolist()), 14)
+        arr = np.asarray(out, dtype=float)
+    except Exception:
+        return cast(np.ndarray, np.zeros_like(close_values, dtype=float))
+    if arr.size != close_values.size:
+        return cast(np.ndarray, np.zeros_like(close_values, dtype=float))
+    return cast(np.ndarray, arr)
+
+
+def _augment_model_features(frame: pd.DataFrame) -> pd.DataFrame:
+    close = pd.to_numeric(frame.get("close"), errors="coerce")
+    close_abs = close.abs().replace(0.0, np.nan)
+    atr = pd.to_numeric(frame.get("atr"), errors="coerce")
+    vwap = pd.to_numeric(frame.get("vwap"), errors="coerce").replace(0.0, np.nan)
+    sma_50 = pd.to_numeric(frame.get("sma_50"), errors="coerce")
+    sma_200 = pd.to_numeric(frame.get("sma_200"), errors="coerce")
+    macd = pd.to_numeric(frame.get("macd"), errors="coerce")
+    rsi = pd.to_numeric(frame.get("rsi"), errors="coerce")
+    signal = pd.to_numeric(frame.get("signal", frame.get("macds", frame.get("macd"))), errors="coerce")
+    frame["signal"] = signal
+    frame["atr_pct"] = (atr / close_abs) * 100.0
+    frame["vwap_distance"] = (close / vwap) - 1.0
+    frame["sma_spread"] = (sma_50 - sma_200) / close_abs
+    frame["macd_signal_gap"] = macd - signal
+    frame["rsi_centered"] = (rsi - 50.0) / 50.0
+    return frame
+
+
 def _attach_policy_context(bars: list[dict[str, Any]]) -> None:
     if not bars:
         return
@@ -404,6 +572,21 @@ def _build_parser() -> argparse.ArgumentParser:
             "during normal simulation replay mode."
         ),
     )
+    parser.add_argument(
+        "--use-model-score",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Use runtime ML model probabilities for replay scoring when a model path "
+            "is configured."
+        ),
+    )
+    parser.add_argument(
+        "--model-path",
+        type=Path,
+        default=None,
+        help="Optional explicit model artifact path for replay model scoring.",
+    )
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument(
         "--env-file",
@@ -473,6 +656,82 @@ def _compute_signal(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
     score = np.tanh(raw).clip(-1.0, 1.0)
     confidence = (trend.abs() * 10.0 + momentum.abs() * 30.0).clip(0.0, 1.0)
     return score.astype(float), confidence.astype(float)
+
+
+def _compute_model_signal(
+    df: pd.DataFrame,
+    *,
+    symbol: str,
+    model_context: ReplayModelContext,
+) -> tuple[pd.Series, pd.Series]:
+    frame = df.copy()
+    frame = compute_macd(frame)
+    frame = compute_macds(frame)
+    frame = compute_atr(frame)
+    frame = compute_vwap(frame)
+    frame = compute_sma(frame, windows=(50, 200))
+    close_arr = pd.to_numeric(frame.get("close"), errors="coerce").to_numpy(dtype=float)
+    frame["rsi"] = _safe_rsi(close_arr)
+    frame = _augment_model_features(frame)
+
+    feature_names = list(model_context.feature_names)
+    for name in feature_names:
+        if name not in frame.columns:
+            frame[name] = np.nan
+    feature_frame = frame[feature_names].apply(pd.to_numeric, errors="coerce")
+    feature_frame = feature_frame.replace([np.inf, -np.inf], np.nan).ffill().bfill().fillna(0.0)
+    probs: np.ndarray = np.full(len(frame), 0.5, dtype=float)
+    try:
+        arr = np.asarray(
+            model_context.model.predict_proba(feature_frame.to_numpy(dtype=float)),
+            dtype=float,
+        )
+        if arr.ndim == 1:
+            pred_probs = np.asarray(arr, dtype=float)
+        else:
+            positive_index = int(model_context.positive_class_index)
+            if positive_index < 0 or positive_index >= int(arr.shape[1]):
+                positive_index = _positive_class_probability_index(
+                    getattr(model_context.model, "classes_", None),
+                    column_count=int(arr.shape[1]),
+                )
+            pred_probs = np.asarray(arr[:, positive_index], dtype=float)
+        if pred_probs.size == probs.size:
+            probs = np.clip(pred_probs, 0.0, 1.0)
+        else:
+            logger.warning(
+                "OFFLINE_REPLAY_MODEL_SCORING_SIZE_MISMATCH",
+                extra={"symbol": symbol, "expected": int(probs.size), "actual": int(pred_probs.size)},
+            )
+    except Exception as exc:
+        logger.warning(
+            "OFFLINE_REPLAY_MODEL_SCORING_FAILED",
+            extra={"symbol": symbol, "error": str(exc)},
+        )
+        return _compute_signal(df)
+
+    if model_context.orientation_inverse:
+        probs = 1.0 - probs
+    penalty = model_context.symbol_penalties.get(symbol.strip().upper(), {})
+    if penalty:
+        confidence_scale = float(
+            np.clip(float(penalty.get("confidence_scale", 1.0) or 1.0), 0.1, 1.0)
+        )
+        threshold_bump = float(
+            np.clip(float(penalty.get("threshold_bump", 0.0) or 0.0), 0.0, 0.95)
+        )
+        long_mask = probs >= 0.5
+        probs = np.where(
+            long_mask,
+            np.clip((probs * confidence_scale) - threshold_bump, 0.0, 1.0),
+            probs,
+        )
+
+    score = np.clip((2.0 * probs) - 1.0, -1.0, 1.0)
+    confidence = np.maximum(probs, 1.0 - probs)
+    return pd.Series(score, index=df.index, dtype=float), pd.Series(
+        confidence, index=df.index, dtype=float
+    )
 
 
 def _entry_price(close: float, side: int, slippage_bps: float) -> float:
@@ -768,6 +1027,7 @@ def _run_parity_simulation(
     args: argparse.Namespace,
     cfg: ReplayConfig,
     symbol_paths: dict[str, Path],
+    model_context: ReplayModelContext | None = None,
     policy_profile: PolicyReplayProfile | None = None,
     policy_mode_label: str = "ranker_sensitivity",
 ) -> dict[str, Any]:
@@ -780,8 +1040,17 @@ def _run_parity_simulation(
     synthetic_index = 0
     for symbol, csv_path in symbol_paths.items():
         frame = _load_frame(csv_path, args.timestamp_col)
-        score, confidence = _compute_signal(frame)
-        per_symbol.append({"symbol": symbol, "bars": int(len(frame))})
+        score_source = "heuristic"
+        if model_context is not None:
+            score, confidence = _compute_model_signal(
+                frame,
+                symbol=symbol,
+                model_context=model_context,
+            )
+            score_source = "model"
+        else:
+            score, confidence = _compute_signal(frame)
+        per_symbol.append({"symbol": symbol, "bars": int(len(frame)), "score_source": score_source})
         for pos, (ts, row) in enumerate(frame.iterrows()):
             close = float(row["close"])
             if not np.isfinite(close) or close <= 0.0:
@@ -981,8 +1250,19 @@ def _run_parity_simulation(
             "replay_seed": int(args.replay_seed),
             "max_symbol_notional": args.max_symbol_notional,
             "max_gross_notional": args.max_gross_notional,
+            "use_model_score": bool(model_context is not None),
         },
     }
+    if model_context is not None:
+        aggregate["model_score"] = {
+            "enabled": True,
+            "model_path": model_context.model_path,
+            "orientation": "inverse" if model_context.orientation_inverse else "direct",
+            "symbol_penalty_count": len(model_context.symbol_penalties),
+            "feature_count": len(model_context.feature_names),
+        }
+    else:
+        aggregate["model_score"] = {"enabled": False}
     if policy_profile is not None:
         aggregate["policy_mode"] = str(policy_mode_label or "ranker_sensitivity")
         aggregate["policy_diagnostics"] = _policy_finalize_diagnostics(
@@ -1058,12 +1338,14 @@ def _run_policy_sensitivity(
     args: argparse.Namespace,
     cfg: ReplayConfig,
     symbol_paths: dict[str, Path],
+    model_context: ReplayModelContext | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     baseline_profile = _load_policy_profile_from_env()
     baseline_payload = _run_parity_simulation(
         args=args,
         cfg=cfg,
         symbol_paths=symbol_paths,
+        model_context=model_context,
         policy_profile=baseline_profile,
         policy_mode_label="ranker_sensitivity",
     )
@@ -1127,6 +1409,7 @@ def _run_policy_sensitivity(
             args=args,
             cfg=cfg,
             symbol_paths=symbol_paths,
+            model_context=model_context,
             policy_profile=profile,
             policy_mode_label="ranker_sensitivity",
         )
@@ -1384,6 +1667,7 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
 
     symbol_paths = _resolve_inputs(args)
     if bool(args.simulation_mode):
+        model_context = _load_replay_model_context(args)
         if bool(args.policy_sensitivity_mode) and bool(args.persist_intents):
             raise ValueError("--policy-sensitivity-mode cannot be combined with --persist-intents")
         if bool(args.policy_sensitivity_mode):
@@ -1391,6 +1675,7 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
                 args=args,
                 cfg=cfg,
                 symbol_paths=symbol_paths,
+                model_context=model_context,
             )
             payload["policy_sensitivity"] = sensitivity_report
             payload["aggregate"]["policy_sensitivity_mode"] = True
@@ -1405,6 +1690,7 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
                 args=args,
                 cfg=cfg,
                 symbol_paths=symbol_paths,
+                model_context=model_context,
                 policy_profile=policy_profile,
                 policy_mode_label="ranker_controls",
             )

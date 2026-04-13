@@ -120,10 +120,10 @@ def test_signal_ml_prediction_error_returns_none(caplog):
         feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
 
         def predict(self, _X):
-            raise ValueError("bad input")
+            return [1]
 
         def predict_proba(self, _X):
-            return [[0.5, 0.5]]
+            raise ValueError("bad input")
 
     manager = SignalManager()
     df = _minimal_df()

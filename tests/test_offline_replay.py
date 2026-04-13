@@ -12,6 +12,68 @@ import pytest
 from ai_trading.tools.offline_replay import main
 
 
+@pytest.fixture(autouse=True)
+def _disable_default_runtime_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", "")
+
+
+class _ConstantEdgeModel:
+    def __init__(
+        self,
+        *,
+        p_edge: float,
+        orientation: str = "direct",
+        penalties: dict[str, dict[str, float]] | None = None,
+    ) -> None:
+        self._p_edge = float(np.clip(p_edge, 0.0, 1.0))
+        self.classes_ = np.asarray([0, 1], dtype=int)
+        self.feature_names_in_ = np.asarray(
+            [
+                "rsi",
+                "macd",
+                "atr",
+                "vwap",
+                "sma_50",
+                "sma_200",
+                "signal",
+                "atr_pct",
+                "vwap_distance",
+                "sma_spread",
+                "macd_signal_gap",
+                "rsi_centered",
+            ],
+            dtype=object,
+        )
+        self.edge_score_orientation_ = str(orientation)
+        self.edge_negative_symbol_penalties_ = penalties or {}
+
+    def predict_proba(self, X: Any) -> np.ndarray:
+        rows = int(np.asarray(X).shape[0])
+        edge: np.ndarray = np.full(rows, self._p_edge, dtype=float)
+        return cast(np.ndarray, np.column_stack((1.0 - edge, edge)))
+
+    def predict(self, X: Any) -> np.ndarray:
+        probs = self.predict_proba(X)[:, 1]
+        return cast(np.ndarray, (probs >= 0.5).astype(int))
+
+
+def _write_model(
+    path: Path,
+    *,
+    p_edge: float,
+    orientation: str = "direct",
+    penalties: dict[str, dict[str, float]] | None = None,
+) -> None:
+    import joblib
+
+    model = _ConstantEdgeModel(
+        p_edge=p_edge,
+        orientation=orientation,
+        penalties=penalties,
+    )
+    joblib.dump(model, path)
+
+
 def _write_synthetic_bars(csv_path: Path, periods: int = 360) -> None:
     idx = pd.date_range("2026-01-02 14:30:00+00:00", periods=periods, freq="min")
     x = np.linspace(0.0, 28.0, periods)
@@ -646,3 +708,95 @@ def test_offline_replay_rejects_directory_csv_input(tmp_path: Path) -> None:
     )
     assert rc == 1
     assert not out_path.exists()
+
+
+def test_offline_replay_model_scoring_respects_inverse_orientation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    csv_path = tmp_path / "ORI.csv"
+    direct_model = tmp_path / "direct_model.joblib"
+    inverse_model = tmp_path / "inverse_model.joblib"
+    out_direct = tmp_path / "direct.json"
+    out_inverse = tmp_path / "inverse.json"
+    _write_synthetic_bars(csv_path, periods=120)
+    _write_model(direct_model, p_edge=0.9, orientation="direct")
+    _write_model(inverse_model, p_edge=0.9, orientation="inverse")
+
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MIN_DELAY_MS", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MAX_DELAY_MS", "0")
+
+    args = [
+        "--csv",
+        str(csv_path),
+        "--simulation-mode",
+        "--no-allow-shorts",
+        "--confidence-threshold",
+        "0.0",
+        "--entry-score-threshold",
+        "0.0",
+    ]
+    assert main(args + ["--model-path", str(direct_model), "--output-json", str(out_direct)]) == 0
+    assert main(args + ["--model-path", str(inverse_model), "--output-json", str(out_inverse)]) == 0
+
+    direct_payload = _load_json(out_direct)
+    inverse_payload = _load_json(out_inverse)
+    assert int(direct_payload["aggregate"]["total_trades"]) > 0
+    assert int(inverse_payload["aggregate"]["total_trades"]) == 0
+    assert direct_payload["aggregate"]["model_score"]["enabled"] is True
+    assert inverse_payload["aggregate"]["model_score"]["orientation"] == "inverse"
+
+
+def test_offline_replay_model_scoring_applies_negative_symbol_penalties(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    csv_path = tmp_path / "PEN.csv"
+    base_model = tmp_path / "base_model.joblib"
+    penalized_model = tmp_path / "penalized_model.joblib"
+    out_base = tmp_path / "base.json"
+    out_penalized = tmp_path / "penalized.json"
+    _write_synthetic_bars(csv_path, periods=120)
+    _write_model(base_model, p_edge=0.9, orientation="direct")
+    _write_model(
+        penalized_model,
+        p_edge=0.9,
+        orientation="direct",
+        penalties={
+            "PEN": {
+                "threshold_bump": 0.40,
+                "confidence_scale": 0.40,
+                "negative_share": 0.25,
+            }
+        },
+    )
+
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MIN_DELAY_MS", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MAX_DELAY_MS", "0")
+
+    args = [
+        "--csv",
+        str(csv_path),
+        "--simulation-mode",
+        "--no-allow-shorts",
+        "--confidence-threshold",
+        "0.0",
+        "--entry-score-threshold",
+        "0.0",
+    ]
+    assert main(args + ["--model-path", str(base_model), "--output-json", str(out_base)]) == 0
+    assert (
+        main(args + ["--model-path", str(penalized_model), "--output-json", str(out_penalized)])
+        == 0
+    )
+
+    base_payload = _load_json(out_base)
+    penalized_payload = _load_json(out_penalized)
+    assert int(base_payload["aggregate"]["total_trades"]) > int(
+        penalized_payload["aggregate"]["total_trades"]
+    )
+    assert penalized_payload["aggregate"]["model_score"]["symbol_penalty_count"] == 1
