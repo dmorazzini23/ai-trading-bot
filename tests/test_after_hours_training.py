@@ -1043,6 +1043,83 @@ def test_after_hours_training_state_prefers_report_root_state_path(
     assert loaded["model_id"] == "ml-edge-001"
 
 
+def test_sync_after_hours_latest_artifacts_writes_runtime_views(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / "after_hours_training_20260106_211000.json"
+    daily_report_path = report_dir / "after_hours_training_20260106.json"
+    report_payload = {
+        "model": {
+            "model_id": "ml-edge-001",
+            "name": "histgb",
+            "governance_status": "shadow",
+        },
+        "metrics": {"mean_expectancy_bps": 2.5},
+        "score_orientation": "direct",
+        "score_orientation_report": {"orientation": "direct", "valid_samples": 120},
+        "sensitivity_sweep": {"enabled": True, "gate": True, "summary": {"valid_scenarios": 4}},
+        "promotion": {"gate_passed": False},
+        "promotion_confidence_gate": {"gate_passed": False, "effective_trades": 204},
+        "rl_overlay": {
+            "enabled": True,
+            "trained": True,
+            "governance_status": "shadow",
+            "recommend_use_rl_agent": False,
+            "mean_reward": 0.4,
+            "baseline_expectancy_bps": 2.5,
+        },
+    }
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_REPORT_LATEST_PATH",
+        str(tmp_path / "runtime/research_reports/after_hours_training_latest.json"),
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_ORIENTATION_CHECK_PATH",
+        str(tmp_path / "runtime/research_reports/after_hours_orientation_check.json"),
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_SENSITIVITY_LATEST_PATH",
+        str(tmp_path / "runtime/research_reports/after_hours_sensitivity_sweep_latest.json"),
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_RL_MODEL_PATH",
+        str(tmp_path / "models/runtime/rl_agent.zip"),
+    )
+
+    sync = after_hours._sync_after_hours_latest_artifacts(
+        report_dir=report_dir,
+        now_utc=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),
+        report=report_payload,
+        report_path=report_path,
+        daily_report_path=daily_report_path,
+    )
+
+    assert sync["report_latest_path"] is not None
+    assert sync["orientation_latest_path"] is not None
+    assert sync["sensitivity_latest_path"] is not None
+    assert sync["rl_governance_sidecar_path"] is not None
+
+    orientation_payload = json.loads(
+        Path(sync["orientation_latest_path"] or "").read_text(encoding="utf-8")
+    )
+    assert orientation_payload["score_orientation"] == "direct"
+    assert orientation_payload["rl_overlay"]["governance_status"] == "shadow"
+
+    sensitivity_payload = json.loads(
+        Path(sync["sensitivity_latest_path"] or "").read_text(encoding="utf-8")
+    )
+    assert sensitivity_payload["sensitivity_sweep"]["gate"] is True
+
+    sidecar_payload = json.loads(
+        Path(sync["rl_governance_sidecar_path"] or "").read_text(encoding="utf-8")
+    )
+    assert sidecar_payload["governance_status"] == "shadow"
+    assert sidecar_payload["recommend_use_rl_agent"] is False
+
+
 def test_after_hours_training_falls_back_when_model_dir_read_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

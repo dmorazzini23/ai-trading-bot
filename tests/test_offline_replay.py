@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 import sqlite3
 from typing import Any, cast
@@ -643,6 +644,49 @@ def test_offline_replay_duplicate_timestamps_do_not_raise_duplicate_intent_viola
     payload = _load_json(out_path)
     violations = payload["aggregate"]["violations_by_code"]
     assert int(violations.get("duplicate_intent", 0)) == 0
+
+
+def test_offline_replay_model_scoring_sanitizes_duplicate_timestamps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    csv_path = tmp_path / "DUP_MODEL.csv"
+    model_path = tmp_path / "dup_model.joblib"
+    out_path = tmp_path / "dup_model_replay.json"
+    _write_duplicate_timestamp_bars(csv_path)
+    _write_model(model_path, p_edge=0.9, orientation="direct")
+
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MIN_DELAY_MS", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MAX_DELAY_MS", "0")
+
+    with caplog.at_level(logging.WARNING):
+        rc = main(
+            [
+                "--csv",
+                str(csv_path),
+                "--simulation-mode",
+                "--replay-seed",
+                "29",
+                "--confidence-threshold",
+                "0.0",
+                "--entry-score-threshold",
+                "0.0",
+                "--no-allow-shorts",
+                "--use-model-score",
+                "--model-path",
+                str(model_path),
+                "--output-json",
+                str(out_path),
+            ]
+        )
+    assert rc == 0
+    payload = _load_json(out_path)
+    assert payload["aggregate"]["model_score"]["enabled"] is True
+    assert int(payload["aggregate"]["total_trades"]) > 0
+    assert not any(record.msg == "OFFLINE_REPLAY_MODEL_SCORING_FAILED" for record in caplog.records)
 
 
 def test_offline_replay_persist_rerun_skips_terminal_existing_intents(

@@ -3142,6 +3142,214 @@ def _coerce_int_like(raw_value: Any, default: int) -> int:
         return int(default)
 
 
+def _resolve_interval_autotune_settings(*, base_interval: int) -> dict[str, Any]:
+    """Resolve scheduler interval autotune settings from managed env."""
+
+    enabled = bool(get_env("AI_TRADING_INTERVAL_AUTOTUNE_ENABLED", False, cast=bool))
+    only_when_open = bool(
+        get_env("AI_TRADING_INTERVAL_AUTOTUNE_ONLY_WHEN_OPEN", True, cast=bool)
+    )
+    min_interval_s = max(
+        1,
+        _coerce_int_like(
+            get_env("AI_TRADING_INTERVAL_AUTOTUNE_MIN_INTERVAL_S", base_interval, cast=int),
+            base_interval,
+        ),
+    )
+    max_interval_default = max(min_interval_s, max(base_interval, 120))
+    max_interval_s = max(
+        min_interval_s,
+        _coerce_int_like(
+            get_env(
+                "AI_TRADING_INTERVAL_AUTOTUNE_MAX_INTERVAL_S",
+                max_interval_default,
+                cast=int,
+            ),
+            max_interval_default,
+        ),
+    )
+    step_up_s = max(
+        1,
+        _coerce_int_like(
+            get_env("AI_TRADING_INTERVAL_AUTOTUNE_STEP_UP_S", 5, cast=int),
+            5,
+        ),
+    )
+    step_down_s = max(
+        1,
+        _coerce_int_like(
+            get_env("AI_TRADING_INTERVAL_AUTOTUNE_STEP_DOWN_S", 5, cast=int),
+            5,
+        ),
+    )
+    over_streak_cycles = max(
+        1,
+        _coerce_int_like(
+            get_env("AI_TRADING_INTERVAL_AUTOTUNE_OVER_STREAK_CYCLES", 2, cast=int),
+            2,
+        ),
+    )
+    under_streak_cycles = max(
+        1,
+        _coerce_int_like(
+            get_env("AI_TRADING_INTERVAL_AUTOTUNE_UNDER_STREAK_CYCLES", 6, cast=int),
+            6,
+        ),
+    )
+    cooldown_cycles = max(
+        0,
+        _coerce_int_like(
+            get_env("AI_TRADING_INTERVAL_AUTOTUNE_COOLDOWN_CYCLES", 2, cast=int),
+            2,
+        ),
+    )
+    try:
+        over_utilization = float(
+            get_env("AI_TRADING_INTERVAL_AUTOTUNE_OVER_UTILIZATION", 0.95, cast=float)
+        )
+    except Exception:
+        over_utilization = 0.95
+    try:
+        under_utilization = float(
+            get_env("AI_TRADING_INTERVAL_AUTOTUNE_UNDER_UTILIZATION", 0.65, cast=float)
+        )
+    except Exception:
+        under_utilization = 0.65
+    over_utilization = max(0.1, min(over_utilization, 2.0))
+    under_utilization = max(0.0, min(under_utilization, over_utilization))
+    return {
+        "enabled": bool(enabled),
+        "only_when_open": bool(only_when_open),
+        "min_interval_s": int(min_interval_s),
+        "max_interval_s": int(max_interval_s),
+        "step_up_s": int(step_up_s),
+        "step_down_s": int(step_down_s),
+        "over_streak_cycles": int(over_streak_cycles),
+        "under_streak_cycles": int(under_streak_cycles),
+        "cooldown_cycles": int(cooldown_cycles),
+        "over_utilization": float(over_utilization),
+        "under_utilization": float(under_utilization),
+    }
+
+
+def _init_interval_autotune_state(*, base_interval: int) -> dict[str, Any]:
+    """Initialize mutable state for scheduler interval autotune."""
+
+    return {
+        "active_interval_s": int(max(1, base_interval)),
+        "over_streak": 0,
+        "under_streak": 0,
+        "cooldown_cycles_remaining": 0,
+    }
+
+
+def _update_interval_autotune_state(
+    *,
+    settings: Mapping[str, Any],
+    state: dict[str, Any],
+    closed: bool,
+    elapsed_ms: float | None,
+    budget_ms: float | None,
+    over_budget: bool,
+    cycle_index: int,
+) -> tuple[int, dict[str, Any] | None]:
+    """Update interval autotune state and return (interval, optional event)."""
+
+    min_interval_s = max(1, _coerce_int_like(settings.get("min_interval_s"), 1))
+    max_interval_s = max(min_interval_s, _coerce_int_like(settings.get("max_interval_s"), min_interval_s))
+    current_interval_s = max(
+        min_interval_s,
+        min(
+            max_interval_s,
+            _coerce_int_like(state.get("active_interval_s"), min_interval_s),
+        ),
+    )
+    state["active_interval_s"] = int(current_interval_s)
+    if not bool(settings.get("enabled", False)):
+        return int(current_interval_s), None
+    if bool(settings.get("only_when_open", True)) and bool(closed):
+        return int(current_interval_s), None
+    if elapsed_ms is None or budget_ms is None or float(budget_ms) <= 0.0:
+        return int(current_interval_s), None
+
+    utilization = max(0.0, float(elapsed_ms) / max(float(budget_ms), 1.0))
+    over_utilization = max(0.1, float(settings.get("over_utilization", 0.95)))
+    under_utilization = max(
+        0.0,
+        min(float(settings.get("under_utilization", 0.65)), over_utilization),
+    )
+    is_over = bool(over_budget) or utilization >= over_utilization
+    is_under = (not bool(over_budget)) and utilization <= under_utilization
+
+    over_streak = max(0, _coerce_int_like(state.get("over_streak"), 0))
+    under_streak = max(0, _coerce_int_like(state.get("under_streak"), 0))
+    if is_over:
+        over_streak += 1
+        under_streak = 0
+    elif is_under:
+        under_streak += 1
+        over_streak = 0
+    else:
+        over_streak = 0
+        under_streak = 0
+
+    cooldown_remaining = max(
+        0,
+        _coerce_int_like(state.get("cooldown_cycles_remaining"), 0),
+    )
+    if cooldown_remaining > 0:
+        state["over_streak"] = int(over_streak)
+        state["under_streak"] = int(under_streak)
+        state["cooldown_cycles_remaining"] = int(cooldown_remaining - 1)
+        return int(current_interval_s), None
+
+    over_trigger = max(1, _coerce_int_like(settings.get("over_streak_cycles"), 2))
+    under_trigger = max(1, _coerce_int_like(settings.get("under_streak_cycles"), 6))
+    step_up_s = max(1, _coerce_int_like(settings.get("step_up_s"), 5))
+    step_down_s = max(1, _coerce_int_like(settings.get("step_down_s"), 5))
+    cooldown_cycles = max(0, _coerce_int_like(settings.get("cooldown_cycles"), 2))
+
+    action = "hold"
+    next_interval_s = int(current_interval_s)
+    trigger = None
+    if over_streak >= over_trigger and current_interval_s < max_interval_s:
+        next_interval_s = min(max_interval_s, current_interval_s + step_up_s)
+        action = "raise"
+        trigger = "over_budget_or_high_utilization"
+    elif under_streak >= under_trigger and current_interval_s > min_interval_s:
+        next_interval_s = max(min_interval_s, current_interval_s - step_down_s)
+        action = "lower"
+        trigger = "sustained_low_utilization"
+
+    state["active_interval_s"] = int(next_interval_s)
+    state["over_streak"] = int(0 if action != "hold" else over_streak)
+    state["under_streak"] = int(0 if action != "hold" else under_streak)
+    state["cooldown_cycles_remaining"] = int(cooldown_cycles if action != "hold" else 0)
+    if action == "hold":
+        return int(next_interval_s), None
+    return int(next_interval_s), {
+        "cycle_index": int(cycle_index),
+        "action": action,
+        "trigger": trigger,
+        "closed": bool(closed),
+        "over_budget": bool(over_budget),
+        "utilization": round(float(utilization), 4),
+        "elapsed_ms": round(float(elapsed_ms), 3),
+        "budget_ms": round(float(budget_ms), 3),
+        "previous_interval_s": int(current_interval_s),
+        "next_interval_s": int(next_interval_s),
+        "min_interval_s": int(min_interval_s),
+        "max_interval_s": int(max_interval_s),
+        "over_streak": int(over_streak),
+        "under_streak": int(under_streak),
+        "over_trigger": int(over_trigger),
+        "under_trigger": int(under_trigger),
+        "over_utilization": float(over_utilization),
+        "under_utilization": float(under_utilization),
+        "cooldown_cycles": int(cooldown_cycles),
+    }
+
+
 def main(argv: list[str] | None = None) -> None:
     """Start the API thread and repeatedly run trading cycles."""
     ensure_dotenv_loaded()
@@ -3436,8 +3644,12 @@ def main(argv: list[str] | None = None) -> None:
     raw_interval = args.interval if args.interval is not None else getattr(S, "interval", 60)
     interval = max(1, _coerce_int_like(raw_interval, 60))
     closed_interval = max(1, _coerce_int_like(getattr(S, "interval_when_closed", 300), 300))
+    interval_autotune_settings = _resolve_interval_autotune_settings(base_interval=interval)
+    interval_autotune_state = _init_interval_autotune_state(base_interval=interval)
     seed = get_seed_int()
     logger.info("Runtime defaults resolved", extra={"iterations": iterations, "interval": interval, "seed": seed})
+    if bool(interval_autotune_settings.get("enabled", False)):
+        logger.info("INTERVAL_AUTOTUNE_ENABLED", extra=dict(interval_autotune_settings))
     count = 0
     # Track HTTP profile to reduce retries when market is closed
     _http_closed_profile = None  # None=unknown, True=closed, False=open
@@ -3543,7 +3755,16 @@ def main(argv: list[str] | None = None) -> None:
             except (TypeError, ValueError):
                 fraction = 0.9
             # Dynamic interval: slow down when closed
-            effective_interval = int(closed_interval if closed else interval)
+            active_interval = int(
+                max(
+                    1,
+                    _coerce_int_like(
+                        interval_autotune_state.get("active_interval_s"),
+                        interval,
+                    ),
+                )
+            )
+            effective_interval = int(closed_interval if closed else active_interval)
             cycle_index = int(count + 1)
             _set_execution_phase("active", cycle_index=cycle_index)
             _emit_cycle_market_snapshot(
@@ -3553,6 +3774,9 @@ def main(argv: list[str] | None = None) -> None:
             )
             budget = None
             compute_elapsed_ms = 0.0
+            budget_elapsed_ms: float | None = None
+            budget_limit_ms: float | None = None
+            budget_overrun = False
             try:
                 interval_ms = max(0.0, float(effective_interval)) * 1000.0
                 fraction_clamped = max(0.0, min(1.0, float(fraction)))
@@ -3766,6 +3990,14 @@ def main(argv: list[str] | None = None) -> None:
             if budget is None:
                 continue
             count = cycle_index
+            try:
+                budget_elapsed_ms = float(max(0.0, budget.elapsed_ms()))
+                budget_limit_ms = float(max(0.0, budget.ms))
+                budget_overrun = bool(budget.over_budget())
+            except Exception:
+                budget_elapsed_ms = None
+                budget_limit_ms = None
+                budget_overrun = False
             closed_cycle_detail_ttl_s = _resolve_info_log_ttl_seconds(
                 "AI_TRADING_CLOSED_CYCLE_DETAIL_LOG_TTL_SEC",
                 300.0,
@@ -3827,6 +4059,22 @@ def main(argv: list[str] | None = None) -> None:
                         logger.info("POSITION_SIZING_REFRESHED", extra={**meta, "resolved": resolved_size})
             except (ValueError, KeyError, TypeError) as e:
                 logger.warning("RUNTIME_SIZING_UPDATE_FAILED", exc_info=e)
+            active_interval_s, interval_adjustment = _update_interval_autotune_state(
+                settings=interval_autotune_settings,
+                state=interval_autotune_state,
+                closed=closed,
+                elapsed_ms=budget_elapsed_ms,
+                budget_ms=budget_limit_ms,
+                over_budget=budget_overrun,
+                cycle_index=cycle_index,
+            )
+            if interval_adjustment is not None:
+                if str(interval_adjustment.get("action")) == "raise":
+                    logger.warning("INTERVAL_AUTOTUNE_ADJUSTED", extra=interval_adjustment)
+                else:
+                    logger.info("INTERVAL_AUTOTUNE_ADJUSTED", extra=interval_adjustment)
+            if not closed:
+                effective_interval = int(max(1, active_interval_s))
             _interruptible_sleep(int(max(1, effective_interval)))
             if should_stop():
                 logger.info("SERVICE_SHUTDOWN", extra={"reason": "signal"})

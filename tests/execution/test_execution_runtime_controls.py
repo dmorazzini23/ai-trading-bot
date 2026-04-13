@@ -56,6 +56,14 @@ def _engine_stub() -> Any:
     engine._symbol_submit_no_result_backoff_reason = {}
     engine._symbol_submit_no_result_alert_last_mono = {}
     engine._symbol_submit_no_result_last_cluster_count = {}
+    engine._symbol_submit_no_result_last_fingerprint = {}
+    engine._submit_no_result_fingerprint_failure_mono = {}
+    engine._submit_no_result_fingerprint_backoff_until = {}
+    engine._submit_no_result_fingerprint_last_cluster_count = {}
+    engine._submit_no_result_recent_events = deque(maxlen=512)
+    engine._submit_no_result_broker_health_backoff_until_mono = 0.0
+    engine._submit_no_result_broker_health_context = {}
+    engine._submit_no_result_broker_health_alert_last_mono = 0.0
     engine._symbol_repeat_loss_streak = {}
     engine._symbol_repeat_loss_blocklist_until = {}
     engine._symbol_repeat_loss_blocklist_reason = {}
@@ -88,6 +96,7 @@ def _engine_stub() -> Any:
     }
     engine._execution_quality_pause_until_mono = 0.0
     engine._execution_quality_recovery_streak = 0
+    engine._sample_formation_exploration_events = deque(maxlen=512)
     engine._opening_ramp_last_context = {
         "enabled": False,
         "state": "inactive",
@@ -3475,6 +3484,7 @@ def test_submit_failure_records_execution_quality_event(monkeypatch):
     assert payload["client_order_id"] == "cid-submit-fail-1"
     assert payload["error_code"] == 503
     assert payload["status_code"] == 503
+    assert payload["submit_no_result_failure"] is False
 
 
 def test_execution_quality_event_enriches_phase_trace_and_error_code(monkeypatch):
@@ -3508,6 +3518,8 @@ def test_execution_quality_event_enriches_phase_trace_and_error_code(monkeypatch
     assert payload["phase"] == "active"
     assert payload["trace_id"] == "cid-telemetry-1"
     assert payload["error_code"] == "submit_no_result"
+    assert payload["submit_no_result_failure"] is True
+    assert payload["submit_no_result_error_fingerprint"]
 
 
 def test_submit_no_result_symbol_backoff_triggers_after_cluster(monkeypatch):
@@ -3573,6 +3585,187 @@ def test_submit_no_result_symbol_backoff_expires(monkeypatch):
     )
     assert allowed_after is True
     assert context_after["reason"] == "backoff_inactive"
+
+
+def test_submit_no_result_fingerprint_backoff_triggers_without_symbol_backoff(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_TRIGGER_COUNT", "99"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_FINGERPRINT_BACKOFF_TRIGGER_COUNT", "2"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_FINGERPRINT_BACKOFF_BASE_COOLDOWN_SEC", "90"
+    )
+    now = {"value": 40_000.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: float(now["value"]))
+
+    for idx in range(2):
+        now["value"] = 40_000.0 + float(idx)
+        engine._record_submit_failure(
+            symbol="AAPL",
+            side="buy",
+            reason="submit_no_result",
+            client_order_id=f"cid-fp-{idx}",
+            order_type="limit",
+            status_code=504,
+            detail="no broker response",
+        )
+
+    allowed, context = engine._symbol_submit_no_result_backoff_allows_opening(
+        symbol="AAPL"
+    )
+    assert allowed is False
+    assert context["reason"] == "submit_no_result_fingerprint_backoff"
+    assert context["cluster_count"] >= 2
+
+
+def test_submit_no_result_broker_health_backoff_blocks_new_openings(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_TRIGGER_COUNT", "99"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_BROKER_HEALTH_GUARD_ENABLED", "1"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_BROKER_HEALTH_TRIGGER_COUNT", "2"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_BROKER_HEALTH_MIN_SYMBOLS", "2"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_BROKER_HEALTH_COOLDOWN_SEC", "60"
+    )
+    now = {"value": 50_000.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: float(now["value"]))
+
+    engine._record_submit_failure(
+        symbol="AAPL",
+        side="buy",
+        reason="submit_no_result",
+        client_order_id="cid-bh-1",
+        order_type="limit",
+        status_code=504,
+        detail="no broker response",
+    )
+    now["value"] += 1.0
+    engine._record_submit_failure(
+        symbol="MSFT",
+        side="buy",
+        reason="submit_no_result",
+        client_order_id="cid-bh-2",
+        order_type="limit",
+        status_code=504,
+        detail="no broker response",
+    )
+
+    allowed, context = engine._submit_no_result_broker_health_allows_opening(
+        symbol="NVDA"
+    )
+    assert allowed is False
+    assert context["reason"] == "submit_no_result_broker_health_backoff"
+
+    now["value"] += 120.0
+    allowed_after, context_after = engine._submit_no_result_broker_health_allows_opening(
+        symbol="NVDA"
+    )
+    assert allowed_after is True
+    assert context_after["reason"] == "backoff_inactive"
+
+
+def test_adaptive_submit_no_result_recovery_wait_scales_with_backoff_pressure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    now = {"value": 70_000.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: float(now["value"]))
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_RECOVERY_WAIT_MAX_SECONDS", "5.0"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_RECOVERY_WAIT_FINGERPRINT_MULTIPLIER",
+        "1.8",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_RECOVERY_WAIT_BROKER_HEALTH_MULTIPLIER",
+        "2.5",
+    )
+    engine._symbol_submit_no_result_last_fingerprint["AAPL"] = "504:no_broker_response"
+    engine._submit_no_result_fingerprint_backoff_until[
+        "504:no_broker_response"
+    ] = float(now["value"]) + 120.0
+    engine._submit_no_result_broker_health_backoff_until_mono = (
+        float(now["value"]) + 90.0
+    )
+
+    adapted_wait, context = engine._adaptive_submit_no_result_recovery_wait_seconds(
+        base_wait_seconds=2.0,
+        symbol="AAPL",
+    )
+
+    assert adapted_wait == pytest.approx(5.0)
+    assert context["applied"] is True
+    assert context["multiplier"] == pytest.approx(2.5)
+    assert context["error_fingerprint"] == "504:no_broker_response"
+    assert context["fingerprint_backoff_remaining_s"] > 0.0
+    assert context["broker_health_backoff_remaining_s"] > 0.0
+
+
+def test_sample_formation_override_applies_when_execution_quality_starved(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SAMPLE_FORMATION_EXPLORATION_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SAMPLE_FORMATION_REQUIRE_INSUFFICIENT_SAMPLES", "1"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SAMPLE_FORMATION_SYMBOLS", "AAPL,MSFT"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SAMPLE_FORMATION_MAX_EVENTS_PER_WINDOW", "2"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SAMPLE_FORMATION_MAX_EVENTS_PER_SYMBOL_PER_WINDOW", "1"
+    )
+    monkeypatch.setattr(
+        engine,
+        "_execution_quality_context",
+        lambda: {
+            "enabled": True,
+            "state": "insufficient_samples",
+            "scale": 1.0,
+            "pause_active": False,
+            "pause_remaining_s": 0.0,
+        },
+    )
+    now = {"value": 60_000.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: float(now["value"]))
+
+    action_first, context_first = (
+        engine._maybe_override_passive_fill_low_prob_action_for_sample_formation(
+            symbol="AAPL",
+            action_token="skip",
+            fill_probability=0.19,
+            threshold=0.32,
+        )
+    )
+    assert action_first == "ioc"
+    assert context_first["applied"] is True
+
+    now["value"] += 1.0
+    action_second, context_second = (
+        engine._maybe_override_passive_fill_low_prob_action_for_sample_formation(
+            symbol="AAPL",
+            action_token="skip",
+            fill_probability=0.17,
+            threshold=0.31,
+        )
+    )
+    assert action_second == "skip"
+    assert context_second["reason"] == "symbol_quota_exhausted"
 
 
 def test_record_cycle_outcome_records_live_submit_outcome_edge_telemetry(monkeypatch):
@@ -3905,6 +4098,73 @@ def test_execution_kpi_snapshot_updates_skip_pressure_context() -> None:
     assert context["live_expected_net_edge_bps"] == pytest.approx(5.0)
     assert context["live_edge_capture_ratio"] == pytest.approx(-0.5)
     assert context["live_realized_net_edge_samples"] == 1
+
+
+def test_execution_kpi_snapshot_tracks_precheck_detail_reason(caplog) -> None:
+    engine = _engine_stub()
+    engine._runtime_exec_event_persistence_enabled = lambda: False
+    engine._skip_submit(
+        symbol="AAPL",
+        side="buy",
+        reason="pre_execution_order_checks_failed",
+        order_type="limit",
+        detail="runtime_gonogo_gate",
+        context={"reason": "runtime_gonogo_gate"},
+    )
+    engine._list_open_orders_snapshot = lambda: []
+
+    caplog.set_level(logging.INFO)
+    engine._emit_cycle_execution_kpis()
+
+    record = next(rec for rec in caplog.records if rec.message == "EXECUTION_KPI_SNAPSHOT")
+    assert record.precheck_detail_counts == {"runtime_gonogo_gate": 1}
+
+
+def test_execution_kpi_snapshot_includes_submit_no_result_fingerprint_and_rolling_sum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_REALIZED_BPS_ROLLING_WINDOW_SEC", "1800")
+    now = {"value": 10_000.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: float(now["value"]))
+    engine._record_cycle_order_outcome(
+        symbol="AAPL",
+        side="buy",
+        status="filled",
+        fill_source="live",
+        realized_net_edge_bps=3.5,
+    )
+    engine._cycle_order_outcomes = [
+        {
+            "status": "failed",
+            "reason": "submit_no_result",
+            "submit_no_result_failure": True,
+            "submit_no_result_error_fingerprint": "504:no_broker_response",
+            "symbol": "AAPL",
+            "duration_s": 0.1,
+        },
+        {
+            "status": "filled",
+            "duration_s": 0.1,
+            "fill_source": "live",
+            "realized_net_edge_bps": 3.5,
+            "expected_net_edge_bps": 5.0,
+        },
+    ]
+    engine._list_open_orders_snapshot = lambda: []
+
+    engine._emit_cycle_execution_kpis()
+
+    context = getattr(engine, "_execution_skip_pressure_context", {})
+    assert context["submit_no_result_failure_count"] == 1
+    assert context["submit_no_result_error_fingerprint_counts"] == {
+        "504:no_broker_response": 1
+    }
+    assert context["submit_no_result_symbol_fingerprint_counts"] == {
+        "AAPL|504:no_broker_response": 1
+    }
+    assert context["sum_realized_bps_30m"] == pytest.approx(3.5)
+    assert context["sum_realized_bps_30m_samples"] == 1
 
 
 def test_passive_fill_min_probability_relaxed_applies_under_pressure(

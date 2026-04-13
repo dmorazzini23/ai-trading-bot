@@ -361,7 +361,7 @@ def _collect_gate_window_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         default_relative="runtime/gate_effectiveness.jsonl",
     )
     rows = _tail_jsonl_rows(gate_events_path, max_rows=max_rows)
-    blocked_by_gate: dict[str, float] = {}
+    gate_stats: dict[str, dict[str, float]] = {}
     rejected_records_total = 0
     sampled_rows = 0
     for row in rows:
@@ -379,17 +379,37 @@ def _collect_gate_window_snapshot(args: dict[str, Any]) -> dict[str, Any]:
             blocked = _float_or_none(payload.get("blocked_records"))
             if blocked is None or blocked <= 0.0:
                 continue
+            accepted = _float_or_none(payload.get("accepted_records"))
             key = str(gate_name or "").strip()
             if not key:
                 continue
-            blocked_by_gate[key] = blocked_by_gate.get(key, 0.0) + float(blocked)
+            gate_entry = gate_stats.setdefault(
+                key,
+                {
+                    "blocked_records": 0.0,
+                    "accepted_records": 0.0,
+                },
+            )
+            gate_entry["blocked_records"] = float(gate_entry["blocked_records"]) + float(blocked)
+            gate_entry["accepted_records"] = float(gate_entry["accepted_records"]) + float(
+                accepted if accepted is not None else 0.0
+            )
 
     top_gate = ""
     top_blocked = 0.0
-    if blocked_by_gate:
+    blocking_only_stats = {
+        gate_name: stats
+        for gate_name, stats in gate_stats.items()
+        if float(stats.get("blocked_records", 0.0) or 0.0) > 0.0
+        and float(stats.get("accepted_records", 0.0) or 0.0) <= 0.0
+    }
+    if blocking_only_stats:
         top_gate, top_blocked = max(
-            blocked_by_gate.items(),
-            key=lambda item: item[1],
+            (
+                (gate_name, float(stats.get("blocked_records", 0.0) or 0.0))
+                for gate_name, stats in blocking_only_stats.items()
+            ),
+            key=lambda item: float(item[1]),
         )
     top_ratio = (
         (float(top_blocked) / float(rejected_records_total))
@@ -403,6 +423,7 @@ def _collect_gate_window_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         "gate_rejected_records": int(rejected_records_total),
         "top_rejection_concentration_gate": top_gate or "",
         "top_rejection_concentration_ratio": top_ratio,
+        "top_rejection_concentration_blocking_gate_found": bool(top_gate),
     }
 
 
@@ -425,15 +446,26 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         gate_rejected_records = _int_arg(
             gate_effectiveness.get("rejected_records"), default=0
         )
-    top_rejection_gate = str(
-        gate_window.get("top_rejection_concentration_gate")
-        or gate_effectiveness.get("top_rejection_concentration_gate")
-        or ""
+    gate_window_rows = _int_arg(gate_window.get("gate_window_rows"), default=0)
+    gate_window_blocking_found = _bool_arg(
+        gate_window.get("top_rejection_concentration_blocking_gate_found"),
+        default=False,
     )
-    top_rejection_ratio = _float_or_none(
-        gate_window.get("top_rejection_concentration_ratio")
-    )
-    if top_rejection_ratio is None:
+    if gate_window_rows > 0:
+        if gate_window_blocking_found:
+            top_rejection_gate = str(
+                gate_window.get("top_rejection_concentration_gate") or ""
+            ).strip()
+            top_rejection_ratio = _float_or_none(
+                gate_window.get("top_rejection_concentration_ratio")
+            )
+        else:
+            top_rejection_gate = ""
+            top_rejection_ratio = None
+    else:
+        top_rejection_gate = str(
+            gate_effectiveness.get("top_rejection_concentration_gate") or ""
+        ).strip()
         top_rejection_ratio = _float_or_none(
             gate_effectiveness.get("top_rejection_concentration_ratio")
         )
@@ -454,11 +486,8 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         "gate_rejected_records": int(gate_rejected_records),
         "top_rejection_concentration_gate": top_rejection_gate,
         "top_rejection_concentration_ratio": top_rejection_ratio,
-        "gate_window_minutes": _int_arg(
-            gate_window.get("gate_window_minutes"),
-            default=60,
-        ),
-        "gate_window_rows": _int_arg(gate_window.get("gate_window_rows"), default=0),
+        "gate_window_minutes": _int_arg(gate_window.get("gate_window_minutes"), default=60),
+        "gate_window_rows": int(gate_window_rows),
         "gate_window_events_path": str(
             gate_window.get("gate_window_events_path") or ""
         ),

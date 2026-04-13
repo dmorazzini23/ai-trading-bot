@@ -1,4 +1,5 @@
 import types
+from decimal import Decimal
 
 import pytest
 
@@ -173,6 +174,53 @@ def test_submit_order_recovers_when_submit_returns_none(monkeypatch):
     assert result is not None
     assert result["id"] == "recovered-1"
     assert result["client_order_id"] == "recover-cid-1"
+
+
+def test_submit_order_quantizes_limit_price_before_broker_request(monkeypatch):
+    engine = _make_engine(monkeypatch, response={"id": "ok", "status": "accepted"})
+    monkeypatch.setattr(live_trading, "get_tick_size", lambda _symbol: Decimal("0.1"))
+
+    engine._submit_order_to_alpaca(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 5,
+            "type": "limit",
+            "limit_price": 123.47,
+            "time_in_force": "day",
+            "client_order_id": "cid-quantize-1",
+        }
+    )
+
+    submitted = engine.trading_client.submitted
+    assert submitted
+    request_obj = submitted[-1]
+    expected = float(live_trading.Money(123.47).quantize(Decimal("0.1")).amount)
+    if isinstance(request_obj, dict):
+        actual = request_obj.get("limit_price")
+    else:
+        actual = getattr(request_obj, "limit_price", None)
+    assert actual == pytest.approx(expected)
+
+
+def test_submit_order_rejects_invalid_limit_price_before_broker_submit(monkeypatch):
+    engine = _make_engine(monkeypatch, response={"id": "ok", "status": "accepted"})
+
+    with pytest.raises(live_trading.NonRetryableBrokerError) as exc:
+        engine._submit_order_to_alpaca(
+            {
+                "symbol": "AAPL",
+                "side": "buy",
+                "quantity": 5,
+                "type": "limit",
+                "limit_price": None,
+                "time_in_force": "day",
+                "client_order_id": "cid-invalid-limit-1",
+            }
+        )
+
+    assert "invalid_limit_price" in str(exc.value)
+    assert engine.trading_client.submitted == []
 
 
 def test_submit_order_recovers_on_duplicate_client_order_id(monkeypatch):

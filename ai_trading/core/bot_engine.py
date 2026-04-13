@@ -11089,6 +11089,8 @@ class BotState:
     last_allocation_update_date: date | None = None
     last_policy_ablation_run_date: date | None = None
     policy_rollback_disabled_slices: list[str] = field(default_factory=list)
+    gate_auto_disable_hysteresis_state: dict[str, dict[str, Any]] = field(default_factory=dict)
+    gate_auto_disable_transition_ts: list[float] = field(default_factory=list)
 
     # Operational telemetry
     degraded_providers: set[str] = field(default_factory=set)
@@ -41546,6 +41548,233 @@ def _apply_operational_safety_hysteresis(
     return previous_tier, tuple(hold_reasons)
 
 
+def _apply_gate_auto_disable_hysteresis(
+    *,
+    state: BotState,
+    candidate_disabled_gates: set[str],
+    candidate_diagnostics: Mapping[str, Mapping[str, float]],
+    now: datetime,
+) -> tuple[set[str], dict[str, dict[str, float]], dict[str, Any]]:
+    """Stabilize gate auto-disable transitions with dwell and per-hour transition caps."""
+
+    min_on_dwell_sec = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_GATE_AUTO_DISABLE_MIN_ON_DWELL_SEC",
+                300.0,
+                cast=float,
+            )
+        ),
+    )
+    min_off_dwell_sec = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_GATE_AUTO_DISABLE_MIN_OFF_DWELL_SEC",
+                600.0,
+                cast=float,
+            )
+        ),
+    )
+    min_disabled_hold_sec = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_GATE_AUTO_DISABLE_MIN_DISABLED_HOLD_SEC",
+                300.0,
+                cast=float,
+            )
+        ),
+    )
+    max_transitions_per_hour = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_GATE_AUTO_DISABLE_MAX_TRANSITIONS_PER_HOUR",
+                6,
+                cast=int,
+            )
+        ),
+    )
+
+    now_ts = float(now.timestamp())
+    transition_window_sec = 3600.0
+    transition_ts = list(getattr(state, "gate_auto_disable_transition_ts", []) or [])
+    transition_ts = [
+        float(ts)
+        for ts in transition_ts
+        if isinstance(ts, (int, float)) and math.isfinite(float(ts))
+    ]
+    transition_ts = [
+        float(ts)
+        for ts in transition_ts
+        if (now_ts - float(ts)) <= float(transition_window_sec)
+    ]
+
+    state_raw = getattr(state, "gate_auto_disable_hysteresis_state", {}) or {}
+    state_map = state_raw if isinstance(state_raw, dict) else {}
+
+    candidate_set = {
+        str(gate).strip().upper()
+        for gate in candidate_disabled_gates
+        if str(gate).strip()
+    }
+    diagnostics_map: dict[str, dict[str, float]] = {}
+    for gate_name, payload in candidate_diagnostics.items():
+        gate_token = str(gate_name).strip().upper()
+        if not gate_token or not isinstance(payload, Mapping):
+            continue
+        diagnostics_map[gate_token] = {
+            "blocked_records": float(_safe_float(payload.get("blocked_records")) or 0.0),
+            "marginal_contribution_bps": float(
+                _safe_float(payload.get("marginal_contribution_bps")) or 0.0
+            ),
+        }
+
+    effective_disabled: set[str] = set()
+    effective_diagnostics: dict[str, dict[str, float]] = {}
+    transitions: list[dict[str, Any]] = []
+    hold_events: list[dict[str, Any]] = []
+    transitions_used = len(transition_ts)
+    all_gates = sorted(set(state_map.keys()) | set(candidate_set))
+    for gate in all_gates:
+        entry_raw = state_map.get(gate, {})
+        entry = entry_raw if isinstance(entry_raw, dict) else {}
+        disabled = bool(entry.get("disabled", False))
+        ineffective_since = _safe_float(entry.get("ineffective_since_ts"))
+        recovered_since = _safe_float(entry.get("recovered_since_ts"))
+        disabled_since = _safe_float(entry.get("disabled_since_ts"))
+        in_candidate = gate in candidate_set
+
+        if in_candidate:
+            if ineffective_since is None or ineffective_since <= 0.0:
+                ineffective_since = now_ts
+            recovered_since = None
+        else:
+            ineffective_since = None
+            if disabled:
+                if recovered_since is None or recovered_since <= 0.0:
+                    recovered_since = now_ts
+            else:
+                recovered_since = None
+
+        if disabled and (disabled_since is None or disabled_since <= 0.0):
+            disabled_since = now_ts
+
+        if not disabled and in_candidate:
+            ready_since = ineffective_since if ineffective_since is not None else now_ts
+            candidate_elapsed = max(now_ts - float(ready_since), 0.0)
+            if candidate_elapsed >= float(min_on_dwell_sec):
+                if transitions_used < int(max_transitions_per_hour):
+                    disabled = True
+                    disabled_since = now_ts
+                    transitions_used += 1
+                    transition_ts.append(now_ts)
+                    transitions.append(
+                        {
+                            "gate": gate,
+                            "from": "enabled",
+                            "to": "disabled",
+                            "reason": "ineffective_dwell_met",
+                            "candidate_elapsed_sec": round(float(candidate_elapsed), 3),
+                        }
+                    )
+                else:
+                    hold_events.append(
+                        {
+                            "gate": gate,
+                            "reason": "transition_rate_limited_disable",
+                            "candidate_elapsed_sec": round(float(candidate_elapsed), 3),
+                        }
+                    )
+        elif disabled and not in_candidate:
+            disabled_elapsed = (
+                max(now_ts - float(disabled_since), 0.0)
+                if disabled_since is not None
+                else float("inf")
+            )
+            recovered_elapsed = (
+                max(now_ts - float(recovered_since), 0.0)
+                if recovered_since is not None
+                else 0.0
+            )
+            if (
+                disabled_elapsed >= float(min_disabled_hold_sec)
+                and recovered_elapsed >= float(min_off_dwell_sec)
+            ):
+                if transitions_used < int(max_transitions_per_hour):
+                    disabled = False
+                    transitions_used += 1
+                    transition_ts.append(now_ts)
+                    transitions.append(
+                        {
+                            "gate": gate,
+                            "from": "disabled",
+                            "to": "enabled",
+                            "reason": "recovery_dwell_met",
+                            "disabled_elapsed_sec": round(float(disabled_elapsed), 3),
+                            "recovered_elapsed_sec": round(float(recovered_elapsed), 3),
+                        }
+                    )
+                    disabled_since = None
+                    recovered_since = None
+                else:
+                    hold_events.append(
+                        {
+                            "gate": gate,
+                            "reason": "transition_rate_limited_enable",
+                            "disabled_elapsed_sec": round(float(disabled_elapsed), 3),
+                            "recovered_elapsed_sec": round(float(recovered_elapsed), 3),
+                        }
+                    )
+
+        if disabled:
+            effective_disabled.add(gate)
+            effective_diagnostics[gate] = diagnostics_map.get(
+                gate,
+                {"blocked_records": 0.0, "marginal_contribution_bps": 0.0},
+            )
+
+        if disabled or in_candidate:
+            state_map[gate] = {
+                "disabled": bool(disabled),
+                "ineffective_since_ts": (
+                    float(ineffective_since)
+                    if ineffective_since is not None
+                    else None
+                ),
+                "recovered_since_ts": (
+                    float(recovered_since)
+                    if recovered_since is not None
+                    else None
+                ),
+                "disabled_since_ts": (
+                    float(disabled_since)
+                    if disabled_since is not None
+                    else None
+                ),
+            }
+        else:
+            state_map.pop(gate, None)
+
+    state.gate_auto_disable_hysteresis_state = state_map
+    state.gate_auto_disable_transition_ts = transition_ts
+
+    context = {
+        "min_on_dwell_sec": float(min_on_dwell_sec),
+        "min_off_dwell_sec": float(min_off_dwell_sec),
+        "min_disabled_hold_sec": float(min_disabled_hold_sec),
+        "max_transitions_per_hour": int(max_transitions_per_hour),
+        "transitions_used_in_window": int(len(transition_ts)),
+        "transitions": transitions,
+        "holds": hold_events,
+        "candidate_count": int(len(candidate_set)),
+        "effective_count": int(len(effective_disabled)),
+    }
+    return effective_disabled, effective_diagnostics, context
+
+
 def _run_reconciliation_if_due(state: BotState, runtime, cfg: TradingConfig, now: datetime) -> bool:
     if not bool(getattr(cfg, "recon_enabled", False)):
         return True
@@ -46432,6 +46661,17 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     }
     ineffective_gate_blocklist: set[str] = set()
     ineffective_gate_diagnostics: dict[str, dict[str, float]] = {}
+    gate_auto_disable_hysteresis_context: dict[str, Any] = {
+        "min_on_dwell_sec": 0.0,
+        "min_off_dwell_sec": 0.0,
+        "min_disabled_hold_sec": 0.0,
+        "max_transitions_per_hour": 0,
+        "transitions_used_in_window": 0,
+        "transitions": [],
+        "holds": [],
+        "candidate_count": 0,
+        "effective_count": 0,
+    }
     if gate_auto_disable_enabled:
         try:
             gate_rows = _read_jsonl_records(
@@ -46472,24 +46712,90 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 }
                 if marginal_contribution_bps < float(gate_auto_disable_min_contribution_bps):
                     ineffective_gate_blocklist.add(str(gate_name))
-            if ineffective_gate_blocklist:
-                logger.warning(
-                    "GATE_AUTO_DISABLE_APPLIED",
-                    extra={
-                        "disabled_gates": sorted(ineffective_gate_blocklist),
-                        "diagnostics": {
-                            gate_name: ineffective_gate_diagnostics.get(gate_name, {})
-                            for gate_name in sorted(ineffective_gate_blocklist)[:20]
-                        },
-                        "min_blocked": int(gate_auto_disable_min_blocked),
-                        "min_contribution_bps": float(
-                            gate_auto_disable_min_contribution_bps
-                        ),
-                        "lookback_cycles": int(gate_auto_disable_lookback_cycles),
-                    },
-                )
         except Exception:
             logger.debug("GATE_AUTO_DISABLE_EVALUATION_FAILED", exc_info=True)
+        (
+            ineffective_gate_blocklist,
+            ineffective_gate_diagnostics,
+            gate_auto_disable_hysteresis_context,
+        ) = _apply_gate_auto_disable_hysteresis(
+            state=state,
+            candidate_disabled_gates=ineffective_gate_blocklist,
+            candidate_diagnostics=ineffective_gate_diagnostics,
+            now=now,
+        )
+        if ineffective_gate_blocklist:
+            logger.warning(
+                "GATE_AUTO_DISABLE_APPLIED",
+                extra={
+                    "disabled_gates": sorted(ineffective_gate_blocklist),
+                    "diagnostics": {
+                        gate_name: ineffective_gate_diagnostics.get(gate_name, {})
+                        for gate_name in sorted(ineffective_gate_blocklist)[:20]
+                    },
+                    "min_blocked": int(gate_auto_disable_min_blocked),
+                    "min_contribution_bps": float(
+                        gate_auto_disable_min_contribution_bps
+                    ),
+                    "lookback_cycles": int(gate_auto_disable_lookback_cycles),
+                    "hysteresis": {
+                        "min_on_dwell_sec": float(
+                            gate_auto_disable_hysteresis_context.get(
+                                "min_on_dwell_sec", 0.0
+                            )
+                            or 0.0
+                        ),
+                        "min_off_dwell_sec": float(
+                            gate_auto_disable_hysteresis_context.get(
+                                "min_off_dwell_sec", 0.0
+                            )
+                            or 0.0
+                        ),
+                        "min_disabled_hold_sec": float(
+                            gate_auto_disable_hysteresis_context.get(
+                                "min_disabled_hold_sec", 0.0
+                            )
+                            or 0.0
+                        ),
+                        "max_transitions_per_hour": int(
+                            gate_auto_disable_hysteresis_context.get(
+                                "max_transitions_per_hour", 0
+                            )
+                            or 0
+                        ),
+                        "transitions_used_in_window": int(
+                            gate_auto_disable_hysteresis_context.get(
+                                "transitions_used_in_window", 0
+                            )
+                            or 0
+                        ),
+                    },
+                },
+            )
+        elif bool(gate_auto_disable_hysteresis_context.get("transitions")):
+            logger.info(
+                "GATE_AUTO_DISABLE_HYSTERESIS_TRANSITION",
+                extra={
+                    "transitions": list(
+                        gate_auto_disable_hysteresis_context.get("transitions", [])
+                    )[:20],
+                    "holds": list(
+                        gate_auto_disable_hysteresis_context.get("holds", [])
+                    )[:20],
+                    "transitions_used_in_window": int(
+                        gate_auto_disable_hysteresis_context.get(
+                            "transitions_used_in_window", 0
+                        )
+                        or 0
+                    ),
+                    "max_transitions_per_hour": int(
+                        gate_auto_disable_hysteresis_context.get(
+                            "max_transitions_per_hour", 0
+                        )
+                        or 0
+                    ),
+                },
+            )
     if policy_disabled_gate_roots:
         for gate_root in sorted(policy_disabled_gate_roots):
             ineffective_gate_blocklist.add(str(gate_root))
@@ -48580,6 +48886,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 and any(_gate_name_is_halt_noise(gate) for gate in gates)
             ):
                 continue
+            if "OK_TRADE" in gates or bool(observation.get("accepted")):
+                continue
             for gate in gates:
                 if gate != "OK_TRADE":
                     filtered_reject_counts[gate] += 1
@@ -48869,6 +49177,10 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             state.exit_policy_state = {}
         if not hasattr(state, "policy_rollback_disabled_slices"):
             state.policy_rollback_disabled_slices = []
+        if not hasattr(state, "gate_auto_disable_hysteresis_state"):
+            state.gate_auto_disable_hysteresis_state = {}
+        if not hasattr(state, "gate_auto_disable_transition_ts"):
+            state.gate_auto_disable_transition_ts = []
         if not hasattr(state, "last_policy_ablation_run_date"):
             state.last_policy_ablation_run_date = None
         if _restore_exit_policy_state(state):

@@ -233,6 +233,61 @@ def _is_live_fill_source(value: Any) -> bool:
     return normalized in _LIVE_FILL_SOURCE_TOKENS
 
 
+def _is_submit_no_result_reason(reason: Any) -> bool:
+    """Return whether a submit failure reason maps to submit-no-result failures."""
+
+    token = str(reason or "").strip().lower()
+    return "submit_no_result" in token
+
+
+def _submit_no_result_error_fingerprint(
+    *,
+    reason: Any,
+    detail: Any = None,
+    status_code: Any = None,
+    error_code: Any = None,
+) -> str | None:
+    """Build a stable error fingerprint for submit-no-result failures."""
+
+    if not _is_submit_no_result_reason(reason):
+        return None
+    status_token: str | None = None
+    if status_code not in (None, ""):
+        try:
+            status_token = str(int(status_code))
+        except (TypeError, ValueError):
+            status_token = str(status_code).strip() or None
+    if not status_token and error_code not in (None, ""):
+        try:
+            status_token = str(int(error_code))
+        except (TypeError, ValueError):
+            status_token = str(error_code).strip() or None
+    detail_text = str(detail or "").strip().lower()
+    if not detail_text and error_code not in (None, ""):
+        detail_text = str(error_code).strip().lower()
+    if "missing_client_order_id" in detail_text:
+        core = "missing_client_order_id"
+    elif "no_broker_response" in detail_text or "no broker response" in detail_text:
+        core = "no_broker_response"
+    elif "returned no response" in detail_text or "empty_response" in detail_text:
+        core = "empty_response"
+    elif "not_found" in detail_text:
+        core = "recovery_not_found"
+    elif "timeout" in detail_text:
+        core = "timeout"
+    elif "connection" in detail_text:
+        core = "connection"
+    elif "service unavailable" in detail_text or "unavailable" in detail_text:
+        core = "service_unavailable"
+    else:
+        cleaned = "".join(ch if ch.isalnum() else " " for ch in detail_text)
+        tokens = [token for token in cleaned.split() if token]
+        core = "_".join(tokens[:4]) if tokens else "unspecified"
+    if status_token:
+        return f"{status_token}:{core}"
+    return core
+
+
 def _as_positive_float(value: Any) -> float | None:
     """Return a finite positive float for ``value`` when possible."""
 
@@ -2317,6 +2372,14 @@ class ExecutionEngine:
         self._symbol_submit_no_result_backoff_reason: dict[str, str] = {}
         self._symbol_submit_no_result_alert_last_mono: dict[str, float] = {}
         self._symbol_submit_no_result_last_cluster_count: dict[str, int] = {}
+        self._symbol_submit_no_result_last_fingerprint: dict[str, str] = {}
+        self._submit_no_result_fingerprint_failure_mono: dict[str, deque[float]] = {}
+        self._submit_no_result_fingerprint_backoff_until: dict[str, float] = {}
+        self._submit_no_result_fingerprint_last_cluster_count: dict[str, int] = {}
+        self._submit_no_result_recent_events: deque[dict[str, Any]] = deque(maxlen=512)
+        self._submit_no_result_broker_health_backoff_until_mono: float = 0.0
+        self._submit_no_result_broker_health_context: dict[str, Any] = {}
+        self._submit_no_result_broker_health_alert_last_mono: float = 0.0
         self._symbol_repeat_loss_streak: dict[str, int] = {}
         self._symbol_repeat_loss_blocklist_until: dict[str, float] = {}
         self._symbol_repeat_loss_blocklist_reason: dict[str, str] = {}
@@ -2331,6 +2394,7 @@ class ExecutionEngine:
         self._markout_feedback_bps: deque[float] = deque(maxlen=512)
         self._symbol_markout_feedback_bps: dict[str, deque[float]] = {}
         self._slippage_feedback_bps: deque[float] = deque(maxlen=512)
+        self._realized_bps_rolling_samples: deque[tuple[float, float]] = deque(maxlen=4096)
         self._symbol_live_edge_bps_history: dict[str, deque[float]] = {}
         self._symbol_session_live_edge_bps_history: dict[str, deque[float]] = {}
         self._symbol_session_regime_live_edge_bps_history: dict[str, deque[float]] = {}
@@ -2357,6 +2421,7 @@ class ExecutionEngine:
         }
         self._execution_quality_pause_until_mono: float = 0.0
         self._execution_quality_recovery_streak: int = 0
+        self._sample_formation_exploration_events: deque[dict[str, Any]] = deque(maxlen=512)
         self._opening_ramp_last_context: dict[str, Any] = {
             "enabled": False,
             "state": "inactive",
@@ -3297,7 +3362,10 @@ class ExecutionEngine:
         )
         submit_no_result_count = max(
             0,
-            _safe_int(pressure.get("submit_no_result_count"), 0),
+            max(
+                _safe_int(pressure.get("submit_no_result_failure_count"), 0),
+                _safe_int(pressure.get("submit_no_result_count"), 0),
+            ),
         )
         skip_share = (
             float(passive_low_skip_count) / float(skipped)
@@ -6368,6 +6436,123 @@ class ExecutionEngine:
         if not math.isfinite(parsed):
             return None
         return parsed
+
+    def _normalize_limit_price_for_symbol(
+        self,
+        *,
+        symbol: str | None,
+        price: Any,
+        field_name: str,
+    ) -> float | None:
+        """Normalize a limit-like price to symbol tick size."""
+
+        parsed_price = self._coerce_finite_float(price)
+        if parsed_price is None or parsed_price <= 0.0:
+            return None
+        symbol_token = str(symbol or "").strip().upper()
+        normalized_price = float(parsed_price)
+        if symbol_token:
+            try:
+                tick_size = get_tick_size(symbol_token)
+                original_money = Money(float(parsed_price))
+                snapped_money = original_money.quantize(tick_size)
+                normalized_price = float(snapped_money.amount)
+                if not math.isclose(
+                    normalized_price,
+                    float(parsed_price),
+                    rel_tol=0.0,
+                    abs_tol=1e-12,
+                ):
+                    logger.debug(
+                        "LIMIT_PRICE_NORMALIZED",
+                        extra={
+                            "symbol": symbol_token,
+                            "field": str(field_name),
+                            "input_price": float(parsed_price),
+                            "normalized_price": float(normalized_price),
+                            "tick_size": float(tick_size),
+                        },
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "LIMIT_PRICE_NORMALIZATION_FAILED",
+                    extra={
+                        "symbol": symbol_token,
+                        "field": str(field_name),
+                        "input_price": float(parsed_price),
+                        "error": str(exc),
+                    },
+                )
+                normalized_price = float(parsed_price)
+        if not math.isfinite(float(normalized_price)) or float(normalized_price) <= 0.0:
+            return None
+        return float(normalized_price)
+
+    def _realized_bps_rolling_window_seconds(self) -> float:
+        """Return rolling window in seconds used for realized edge sums."""
+
+        window_s = _config_float(
+            "AI_TRADING_EXECUTION_REALIZED_BPS_ROLLING_WINDOW_SEC",
+            1800.0,
+        )
+        if window_s is None or not math.isfinite(float(window_s)):
+            window_s = 1800.0
+        return max(60.0, min(float(window_s), 4.0 * 3600.0))
+
+    def _prune_realized_bps_rolling_samples(
+        self,
+        *,
+        now_mono: float | None = None,
+    ) -> deque[tuple[float, float]]:
+        """Prune expired rolling realized-edge samples and return active deque."""
+
+        samples = getattr(self, "_realized_bps_rolling_samples", None)
+        if not isinstance(samples, deque):
+            samples = deque(maxlen=4096)
+            self._realized_bps_rolling_samples = samples
+        current_mono = float(monotonic_time()) if now_mono is None else float(now_mono)
+        cutoff = current_mono - float(self._realized_bps_rolling_window_seconds())
+        while samples:
+            head_item = samples[0]
+            if not isinstance(head_item, (tuple, list)) or not head_item:
+                samples.popleft()
+                continue
+            head_mono = self._coerce_finite_float(head_item[0])
+            if head_mono is None:
+                samples.popleft()
+                continue
+            if head_mono >= cutoff:
+                break
+            samples.popleft()
+        return samples
+
+    def _record_realized_bps_rolling_sample(self, realized_net_edge_bps: Any) -> None:
+        """Record one live realized edge sample for rolling 30-minute telemetry."""
+
+        parsed = self._coerce_finite_float(realized_net_edge_bps)
+        if parsed is None:
+            return
+        now_mono = float(monotonic_time())
+        samples = self._prune_realized_bps_rolling_samples(now_mono=now_mono)
+        samples.append((now_mono, float(parsed)))
+        self._prune_realized_bps_rolling_samples(now_mono=now_mono)
+
+    def _sum_realized_bps_rolling_window(self) -> tuple[float, int]:
+        """Return rolling sum of realized edge bps and sample count."""
+
+        samples = self._prune_realized_bps_rolling_samples()
+        realized_values: list[float] = []
+        for item in samples:
+            if not isinstance(item, (tuple, list)) or len(item) < 2:
+                continue
+            value = item[1]
+            parsed = self._coerce_finite_float(value)
+            if parsed is None:
+                continue
+            realized_values.append(float(parsed))
+        if not realized_values:
+            return 0.0, 0
+        return float(sum(realized_values)), int(len(realized_values))
 
     def _execution_slippage_volatility_bps(self) -> float:
         """Return rolling slippage volatility proxy in bps."""
@@ -9492,6 +9677,154 @@ class ExecutionEngine:
         context["pause_remaining_s"] = max(pause_until - now_mono, 0.0) if pause_active else 0.0
         context["pause_until_mono"] = float(pause_until)
         return context
+
+    def _maybe_override_passive_fill_low_prob_action_for_sample_formation(
+        self,
+        *,
+        symbol: str,
+        action_token: str,
+        fill_probability: float,
+        threshold: float,
+        manual_limit_requested: bool = False,
+    ) -> tuple[str, dict[str, Any]]:
+        """Allow bounded low-probability exploration while execution quality is sample-starved."""
+
+        normalized_action = self._normalize_low_fill_probability_action(
+            action_token,
+            default="skip",
+        )
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_SAMPLE_FORMATION_EXPLORATION_ENABLED")
+        if enabled is None:
+            enabled = True
+        context: dict[str, Any] = {
+            "enabled": bool(enabled),
+            "applied": False,
+            "action_before": str(normalized_action),
+            "action_after": str(normalized_action),
+        }
+        if not bool(enabled):
+            context["reason"] = "disabled"
+            return normalized_action, context
+        if normalized_action != "skip":
+            context["reason"] = "action_not_skip"
+            return normalized_action, context
+
+        quality_context = self._execution_quality_context()
+        quality_state = str(quality_context.get("state") or "").strip().lower()
+        context["execution_quality_state"] = quality_state or "unknown"
+        require_insufficient_samples = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SAMPLE_FORMATION_REQUIRE_INSUFFICIENT_SAMPLES"
+        )
+        if require_insufficient_samples is None:
+            require_insufficient_samples = True
+        if bool(require_insufficient_samples) and quality_state != "insufficient_samples":
+            context["reason"] = "quality_state_not_insufficient_samples"
+            return normalized_action, context
+
+        symbol_token = str(symbol or "").strip().upper()
+        if not symbol_token:
+            context["reason"] = "symbol_missing"
+            return normalized_action, context
+
+        allowlist_raw = str(
+            _runtime_env(
+                "AI_TRADING_EXECUTION_SAMPLE_FORMATION_SYMBOLS",
+                "AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA",
+            )
+            or ""
+        ).strip()
+        allowlist = {
+            token.strip().upper()
+            for token in allowlist_raw.split(",")
+            if token.strip()
+        }
+        context["allowlist_size"] = int(len(allowlist))
+        if allowlist and symbol_token not in allowlist:
+            context["reason"] = "symbol_not_in_allowlist"
+            context["symbol"] = symbol_token
+            return normalized_action, context
+
+        window_minutes = _config_int(
+            "AI_TRADING_EXECUTION_SAMPLE_FORMATION_WINDOW_MINUTES",
+            30,
+        )
+        if window_minutes is None:
+            window_minutes = 30
+        window_minutes = max(1, min(int(window_minutes), 240))
+        max_events = _config_int(
+            "AI_TRADING_EXECUTION_SAMPLE_FORMATION_MAX_EVENTS_PER_WINDOW",
+            4,
+        )
+        if max_events is None:
+            max_events = 4
+        max_events = max(1, min(int(max_events), 200))
+        max_per_symbol = _config_int(
+            "AI_TRADING_EXECUTION_SAMPLE_FORMATION_MAX_EVENTS_PER_SYMBOL_PER_WINDOW",
+            2,
+        )
+        if max_per_symbol is None:
+            max_per_symbol = 2
+        max_per_symbol = max(1, min(int(max_per_symbol), max_events))
+
+        events_raw = getattr(self, "_sample_formation_exploration_events", None)
+        events = events_raw if isinstance(events_raw, deque) else deque(maxlen=512)
+        self._sample_formation_exploration_events = events
+        now_mono = float(monotonic_time())
+        cutoff = now_mono - (float(window_minutes) * 60.0)
+        while events and (_safe_float(events[0].get("ts_mono")) or 0.0) < cutoff:
+            events.popleft()
+        total_events = len(events)
+        symbol_events = sum(
+            1
+            for item in events
+            if str(item.get("symbol") or "").strip().upper() == symbol_token
+        )
+        context["window_minutes"] = int(window_minutes)
+        context["max_events_per_window"] = int(max_events)
+        context["max_events_per_symbol"] = int(max_per_symbol)
+        context["events_in_window"] = int(total_events)
+        context["symbol_events_in_window"] = int(symbol_events)
+        if total_events >= int(max_events):
+            context["reason"] = "window_quota_exhausted"
+            return normalized_action, context
+        if symbol_events >= int(max_per_symbol):
+            context["reason"] = "symbol_quota_exhausted"
+            return normalized_action, context
+
+        action_override = self._normalize_low_fill_probability_action(
+            _runtime_env(
+                "AI_TRADING_EXECUTION_SAMPLE_FORMATION_EXPLORATION_ACTION",
+                "ioc",
+            ),
+            default="ioc",
+        )
+        if action_override == "skip":
+            action_override = "ioc"
+        if action_override == "market" and bool(manual_limit_requested):
+            action_override = "ioc"
+
+        events.append(
+            {
+                "ts_mono": float(now_mono),
+                "symbol": symbol_token,
+                "fill_probability": float(fill_probability),
+                "threshold": float(threshold),
+                "quality_state": quality_state,
+                "action": str(action_override),
+            }
+        )
+        context.update(
+            {
+                "applied": True,
+                "reason": "sample_formation_override",
+                "symbol": symbol_token,
+                "fill_probability": float(fill_probability),
+                "threshold": float(threshold),
+                "action_after": str(action_override),
+                "events_in_window_after": int(len(events)),
+            }
+        )
+        return str(action_override), context
 
     def _update_execution_quality_governor(
         self,
@@ -13156,6 +13489,8 @@ class ExecutionEngine:
         side: str | None,
         status: str | None,
         reason: str | None = None,
+        detail: str | None = None,
+        context: Mapping[str, Any] | None = None,
         submit_started_at: float | None = None,
         duration_s: float | None = None,
         ack_timed_out: bool = False,
@@ -13184,6 +13519,8 @@ class ExecutionEngine:
         model_id: str | None = None,
         model_version: str | None = None,
         config_snapshot_hash: str | None = None,
+        submit_no_result_failure: bool | None = None,
+        submit_no_result_error_fingerprint: str | None = None,
     ) -> None:
         """Append a normalized order outcome entry for cycle-level KPI reporting."""
 
@@ -13217,6 +13554,16 @@ class ExecutionEngine:
             payload["side"] = str(side)
         if reason:
             payload["reason"] = str(reason)
+        if detail not in (None, ""):
+            payload["detail"] = str(detail)
+        if isinstance(context, Mapping):
+            payload["context"] = dict(context)
+        if submit_no_result_failure is not None:
+            payload["submit_no_result_failure"] = bool(submit_no_result_failure)
+        if submit_no_result_error_fingerprint not in (None, ""):
+            payload["submit_no_result_error_fingerprint"] = str(
+                submit_no_result_error_fingerprint
+            ).strip()
         if execution_drift_bps is not None:
             try:
                 parsed_drift = float(execution_drift_bps)
@@ -13323,6 +13670,13 @@ class ExecutionEngine:
 
         normalized_fill_source = _normalize_fill_source(fill_source)
         source_is_live = _is_live_fill_source(fill_source)
+        if (
+            normalized_status in {"filled", "partially_filled"}
+            and source_is_live
+            and parsed_realized_net_edge_bps is not None
+            and math.isfinite(float(parsed_realized_net_edge_bps))
+        ):
+            self._record_realized_bps_rolling_sample(parsed_realized_net_edge_bps)
         if normalized_status in {"filled", "partially_filled"} and source_is_live:
             quality_payload: dict[str, Any] = {
                 "event": "submit_outcome",
@@ -13496,6 +13850,8 @@ class ExecutionEngine:
             side=side,
             status="skipped",
             reason=reason,
+            detail=detail,
+            context=context,
             order_type=order_type,
             submit_started_at=submit_started_at,
         )
@@ -13545,6 +13901,13 @@ class ExecutionEngine:
         if resolved_error_code in (None, ""):
             reason_token = str(reason or "").strip().lower()
             resolved_error_code = reason_token or None
+        submit_no_result_failure = _is_submit_no_result_reason(reason)
+        submit_no_result_error_fingerprint = _submit_no_result_error_fingerprint(
+            reason=reason,
+            detail=detail,
+            status_code=status_code,
+            error_code=resolved_error_code,
+        )
 
         payload: dict[str, Any] = {
             "reason": str(reason),
@@ -13566,6 +13929,11 @@ class ExecutionEngine:
             payload["error_code"] = resolved_error_code
         if detail:
             payload["detail"] = str(detail)
+        payload["submit_no_result_failure"] = bool(submit_no_result_failure)
+        if submit_no_result_error_fingerprint:
+            payload["submit_no_result_error_fingerprint"] = str(
+                submit_no_result_error_fingerprint
+            )
         logger.error("ORDER_SUBMIT_FAILED", extra=payload)
         self._last_submit_outcome = {
             "status": "failed",
@@ -13578,6 +13946,12 @@ class ExecutionEngine:
             "detail": str(detail) if detail else None,
             "error_code": resolved_error_code,
             "status_code": int(status_code) if status_code is not None else None,
+            "submit_no_result_failure": bool(submit_no_result_failure),
+            "submit_no_result_error_fingerprint": (
+                str(submit_no_result_error_fingerprint)
+                if submit_no_result_error_fingerprint
+                else None
+            ),
             "recorded_at_mono": float(monotonic_time()),
         }
         self._update_symbol_submit_no_result_backoff(
@@ -13585,13 +13959,21 @@ class ExecutionEngine:
             reason=reason,
             status_code=status_code,
             client_order_id=client_order_id,
+            error_fingerprint=submit_no_result_error_fingerprint,
         )
         self._record_cycle_order_outcome(
             symbol=symbol,
             side=side,
             status="failed",
             reason=reason,
+            detail=detail,
             order_type=order_type,
+            submit_no_result_failure=bool(submit_no_result_failure),
+            submit_no_result_error_fingerprint=(
+                str(submit_no_result_error_fingerprint)
+                if submit_no_result_error_fingerprint
+                else None
+            ),
             submit_started_at=submit_started_at,
         )
         quality_payload: dict[str, Any] = {
@@ -13599,6 +13981,7 @@ class ExecutionEngine:
             "status": "failed",
             "reason": str(reason),
             "phase": resolved_phase,
+            "submit_no_result_failure": bool(submit_no_result_failure),
         }
         if symbol:
             quality_payload["symbol"] = str(symbol)
@@ -13616,6 +13999,10 @@ class ExecutionEngine:
             quality_payload["error_code"] = resolved_error_code
         if detail:
             quality_payload["detail"] = str(detail)
+        if submit_no_result_error_fingerprint:
+            quality_payload["submit_no_result_error_fingerprint"] = str(
+                submit_no_result_error_fingerprint
+            )
         self._record_execution_quality_event(quality_payload)
 
     def _emit_cycle_execution_kpis(self) -> None:
@@ -13652,6 +14039,9 @@ class ExecutionEngine:
         skip_reason_counts: dict[str, int] = {}
         failed_reason_counts: dict[str, int] = {}
         precheck_detail_counts: dict[str, int] = {}
+        submit_no_result_error_fingerprint_counts: dict[str, int] = {}
+        submit_no_result_symbol_fingerprint_counts: dict[str, int] = {}
+        submit_no_result_failure_count = 0
         for item, status in normalized_outcomes:
             if status == "failed":
                 try:
@@ -13663,6 +14053,32 @@ class ExecutionEngine:
                 failed_reason_counts[fail_reason] = (
                     failed_reason_counts.get(fail_reason, 0) + 1
                 )
+                submit_no_result_failure = bool(item.get("submit_no_result_failure"))
+                if not submit_no_result_failure and _is_submit_no_result_reason(fail_reason):
+                    submit_no_result_failure = True
+                if submit_no_result_failure:
+                    submit_no_result_failure_count += 1
+                    symbol_token = str(item.get("symbol") or "").strip().upper() or "UNKNOWN"
+                    fingerprint = str(
+                        item.get("submit_no_result_error_fingerprint") or ""
+                    ).strip().lower()
+                    if not fingerprint:
+                        fingerprint = (
+                            _submit_no_result_error_fingerprint(
+                                reason=fail_reason,
+                                detail=item.get("detail"),
+                                status_code=item.get("status_code"),
+                                error_code=item.get("error_code"),
+                            )
+                            or "unspecified"
+                        )
+                    submit_no_result_error_fingerprint_counts[fingerprint] = (
+                        submit_no_result_error_fingerprint_counts.get(fingerprint, 0) + 1
+                    )
+                    symbol_key = f"{symbol_token}|{fingerprint}"
+                    submit_no_result_symbol_fingerprint_counts[symbol_key] = (
+                        submit_no_result_symbol_fingerprint_counts.get(symbol_key, 0) + 1
+                    )
                 continue
             if status != "skipped":
                 continue
@@ -13692,6 +14108,14 @@ class ExecutionEngine:
             key: precheck_detail_counts[key]
             for key in sorted(precheck_detail_counts)
         }
+        submit_no_result_error_fingerprint_counts = {
+            key: submit_no_result_error_fingerprint_counts[key]
+            for key in sorted(submit_no_result_error_fingerprint_counts)
+        }
+        submit_no_result_symbol_fingerprint_counts = {
+            key: submit_no_result_symbol_fingerprint_counts[key]
+            for key in sorted(submit_no_result_symbol_fingerprint_counts)
+        }
         decision_count = len(normalized_outcomes)
         pacing_cap_hits = int(skip_reason_counts.get("order_pacing_cap", 0))
         precheck_failure_count = int(
@@ -13706,7 +14130,15 @@ class ExecutionEngine:
             if skipped > 0
             else 0.0
         )
-        submit_no_result_count = int(failed_reason_counts.get("submit_no_result", 0))
+        submit_no_result_count = int(
+            max(
+                submit_no_result_failure_count,
+                int(failed_reason_counts.get("submit_no_result", 0)),
+            )
+        )
+        sum_realized_bps_30m, sum_realized_bps_samples_30m = (
+            self._sum_realized_bps_rolling_window()
+        )
         self._precheck_failure_pressure_context = {
             "updated_at": datetime.now(UTC).isoformat(),
             "updated_at_mono": float(monotonic_time()),
@@ -13726,6 +14158,15 @@ class ExecutionEngine:
             "passive_fill_probability_low_skip_count": int(passive_low_skip_count),
             "passive_fill_probability_low_skip_share": float(passive_low_skip_share),
             "submit_no_result_count": int(submit_no_result_count),
+            "submit_no_result_failure_count": int(submit_no_result_count),
+            "submit_no_result_error_fingerprint_counts": dict(
+                submit_no_result_error_fingerprint_counts
+            ),
+            "submit_no_result_symbol_fingerprint_counts": dict(
+                submit_no_result_symbol_fingerprint_counts
+            ),
+            "sum_realized_bps_30m": float(sum_realized_bps_30m),
+            "sum_realized_bps_30m_samples": int(sum_realized_bps_samples_30m),
         }
         pacing_cap_hit_rate_pct = (
             (float(pacing_cap_hits) / float(decision_count) * 100.0)
@@ -13944,6 +14385,14 @@ class ExecutionEngine:
                 "precheck_failure_count": int(precheck_failure_count),
                 "precheck_failure_ratio": round(float(precheck_failure_ratio), 4),
                 "precheck_detail_counts": dict(precheck_detail_counts),
+                "submit_no_result_count": int(submit_no_result_count),
+                "submit_no_result_failure_count": int(submit_no_result_count),
+                "submit_no_result_error_fingerprint_counts": dict(
+                    submit_no_result_error_fingerprint_counts
+                ),
+                "submit_no_result_symbol_fingerprint_counts": dict(
+                    submit_no_result_symbol_fingerprint_counts
+                ),
                 "order_pacing_cap_hit_rate_pct": round(pacing_cap_hit_rate_pct, 4),
                 "fill_ratio": round(fill_ratio, 4),
                 "cancel_ratio": round(cancel_ratio, 4),
@@ -13980,6 +14429,8 @@ class ExecutionEngine:
                 ),
                 "live_expected_net_edge_samples": int(len(live_expected_net_edge_values)),
                 "live_edge_capture_ratio_samples": int(len(live_edge_capture_ratio_values)),
+                "sum_realized_bps_30m": round(float(sum_realized_bps_30m), 4),
+                "sum_realized_bps_30m_samples": int(sum_realized_bps_samples_30m),
                 "turnover_notional": round(float(turnover_notional), 4),
                 "open_pending_count": len(pending_open_ages),
                 "oldest_pending_s": round(oldest_pending_s, 3),
@@ -14032,6 +14483,27 @@ class ExecutionEngine:
                     else None
                 ),
             },
+        )
+        self._record_execution_quality_event(
+            {
+                "event": "cycle_kpi_snapshot",
+                "submitted": int(submitted),
+                "filled": int(filled),
+                "failed": int(failed),
+                "skipped": int(skipped),
+                "passive_fill_probability_low_skip_share": float(
+                    passive_low_skip_share
+                ),
+                "submit_no_result_failure_count": int(submit_no_result_count),
+                "submit_no_result_error_fingerprint_counts": dict(
+                    submit_no_result_error_fingerprint_counts
+                ),
+                "submit_no_result_symbol_fingerprint_counts": dict(
+                    submit_no_result_symbol_fingerprint_counts
+                ),
+                "sum_realized_bps_30m": float(sum_realized_bps_30m),
+                "sum_realized_bps_30m_samples": int(sum_realized_bps_samples_30m),
+            }
         )
 
         alerts_enabled = _resolve_bool_env("AI_TRADING_EXEC_KPI_ALERTS_ENABLED")
@@ -14735,15 +15207,40 @@ class ExecutionEngine:
                     break
         if trace_value:
             row["trace_id"] = trace_value
+        reason_token = str(row.get("reason") or "").strip().lower()
+        submit_no_result_failure = row.get("submit_no_result_failure")
+        if submit_no_result_failure in (None, ""):
+            submit_no_result_failure = _is_submit_no_result_reason(reason_token)
+        row["submit_no_result_failure"] = bool(submit_no_result_failure)
+        if bool(submit_no_result_failure):
+            fingerprint = str(
+                row.get("submit_no_result_error_fingerprint") or ""
+            ).strip().lower()
+            if not fingerprint:
+                fingerprint = (
+                    _submit_no_result_error_fingerprint(
+                        reason=reason_token,
+                        detail=row.get("detail"),
+                        status_code=row.get("status_code"),
+                        error_code=row.get("error_code"),
+                    )
+                    or "unspecified"
+                )
+            row["submit_no_result_error_fingerprint"] = fingerprint
         error_code = row.get("error_code")
         if error_code in (None, ""):
             status_value = row.get("status_code")
             if status_value not in (None, ""):
                 row["error_code"] = status_value
             else:
-                reason_token = str(row.get("reason") or "").strip().lower()
                 if reason_token:
                     row["error_code"] = reason_token
+        if "sum_realized_bps_30m" not in row:
+            sum_realized_bps_30m, sum_realized_bps_samples_30m = (
+                self._sum_realized_bps_rolling_window()
+            )
+            row["sum_realized_bps_30m"] = float(sum_realized_bps_30m)
+            row["sum_realized_bps_30m_samples"] = int(sum_realized_bps_samples_30m)
         self._append_runtime_jsonl(
             env_key="AI_TRADING_EXEC_QUALITY_EVENTS_PATH",
             default_relative="runtime/execution_quality_events.jsonl",
@@ -16689,7 +17186,11 @@ class ExecutionEngine:
             ):
                 parsed_limit = _safe_float(limit_candidate)
                 if parsed_limit is not None and parsed_limit > 0.0:
-                    effective_limit_price = float(parsed_limit)
+                    effective_limit_price = self._normalize_limit_price_for_symbol(
+                        symbol=symbol,
+                        price=parsed_limit,
+                        field_name="submit_market_order.precheck_limit_price",
+                    )
                     break
             if effective_limit_price is None:
                 self.stats.setdefault("capacity_skips", 0)
@@ -16699,7 +17200,7 @@ class ExecutionEngine:
                 self._skip_submit(
                     symbol=symbol,
                     side=side_lower,
-                    reason="precheck_limit_price_missing",
+                    reason="precheck_limit_price_invalid",
                     order_type="limit",
                     context={
                         "source": "pre_execution_order_checks",
@@ -17299,20 +17800,14 @@ class ExecutionEngine:
                 return {"status": "error", "code": "SYMBOL_INVALID", "error": symbol, "order_id": None}
             quantity = int(_pos_num("qty", quantity))
             limit_price = _pos_num("limit_price", limit_price)
-            tick_size = get_tick_size(symbol)
-            original_money = Money(limit_price)
-            snapped_money = original_money.quantize(tick_size)
-            if snapped_money.amount != original_money.amount:
-                logger.debug(
-                    "LIMIT_PRICE_NORMALIZED",
-                    extra={
-                        "symbol": symbol,
-                        "input_price": float(original_money.amount),
-                        "normalized_price": float(snapped_money.amount),
-                        "tick_size": float(tick_size),
-                    },
-                )
-            limit_price = float(snapped_money.amount)
+            normalized_limit = self._normalize_limit_price_for_symbol(
+                symbol=symbol,
+                price=limit_price,
+                field_name="submit_limit_order.input_limit_price",
+            )
+            if normalized_limit is None:
+                raise ValueError("limit_price must be a finite positive number")
+            limit_price = float(normalized_limit)
         except (ValueError, TypeError) as e:
             logger.error("ORDER_INPUT_INVALID", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
@@ -17450,7 +17945,26 @@ class ExecutionEngine:
             or precheck_order.get("price_hint")
         )
         if precheck_limit_price is not None and precheck_limit_price > 0.0:
-            limit_price = float(precheck_limit_price)
+            normalized_limit = self._normalize_limit_price_for_symbol(
+                symbol=symbol,
+                price=precheck_limit_price,
+                field_name="submit_limit_order.precheck_limit_price",
+            )
+            if normalized_limit is None:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                self._skip_submit(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason="precheck_limit_price_invalid",
+                    order_type="limit",
+                    context={"source": "pre_execution_order_checks"},
+                    submit_started_at=submit_started_at,
+                )
+                return None
+            limit_price = float(normalized_limit)
 
         if not self.is_initialized and not self._ensure_initialized():
             return None
@@ -19574,6 +20088,49 @@ class ExecutionEngine:
                     )
                 if adaptive_action_context:
                     adaptive_action_context["ioc_guard"] = ioc_guard_context
+                sample_exploration_context: dict[str, Any] = {}
+                if action_token == "skip":
+                    action_token, sample_exploration_context = (
+                        self._maybe_override_passive_fill_low_prob_action_for_sample_formation(
+                            symbol=str(symbol),
+                            action_token=action_token,
+                            fill_probability=float(fill_probability),
+                            threshold=float(min_fill_probability),
+                            manual_limit_requested=bool(manual_limit_requested),
+                        )
+                    )
+                    if bool(sample_exploration_context.get("applied")):
+                        logger.info(
+                            "PASSIVE_FILL_SAMPLE_FORMATION_OVERRIDE",
+                            extra={
+                                "symbol": symbol,
+                                "side": mapped_side,
+                                "action_before": sample_exploration_context.get(
+                                    "action_before"
+                                ),
+                                "action_after": sample_exploration_context.get(
+                                    "action_after"
+                                ),
+                                "execution_quality_state": sample_exploration_context.get(
+                                    "execution_quality_state"
+                                ),
+                                "events_in_window_after": sample_exploration_context.get(
+                                    "events_in_window_after"
+                                ),
+                                "window_minutes": sample_exploration_context.get(
+                                    "window_minutes"
+                                ),
+                                "max_events_per_window": sample_exploration_context.get(
+                                    "max_events_per_window"
+                                ),
+                            },
+                        )
+                if sample_exploration_context:
+                    if not adaptive_action_context:
+                        adaptive_action_context = {}
+                    adaptive_action_context["sample_formation_exploration"] = dict(
+                        sample_exploration_context
+                    )
                 if action_token == "market":
                     order_type_normalized = "market"
                     resolved_limit_price = None
@@ -25512,25 +26069,37 @@ class ExecutionEngine:
         if not symbol_token:
             return True, {"enabled": True, "reason": "symbol_missing"}
 
-        backoff_until_raw = (
-            getattr(self, "_symbol_submit_no_result_backoff_until", {}) or {}
+        backoff_until_raw = getattr(self, "_symbol_submit_no_result_backoff_until", {}) or {}
+        backoff_until_map = backoff_until_raw if isinstance(backoff_until_raw, dict) else {}
+        backoff_reason_raw = getattr(self, "_symbol_submit_no_result_backoff_reason", {}) or {}
+        backoff_reason_map = backoff_reason_raw if isinstance(backoff_reason_raw, dict) else {}
+        cluster_count_raw = getattr(self, "_symbol_submit_no_result_last_cluster_count", {}) or {}
+        cluster_count_map = cluster_count_raw if isinstance(cluster_count_raw, dict) else {}
+        symbol_fingerprint_raw = getattr(self, "_symbol_submit_no_result_last_fingerprint", {}) or {}
+        symbol_fingerprint_map = (
+            symbol_fingerprint_raw if isinstance(symbol_fingerprint_raw, dict) else {}
         )
-        backoff_until_map = (
-            backoff_until_raw if isinstance(backoff_until_raw, dict) else {}
+        fingerprint_backoff_raw = (
+            getattr(self, "_submit_no_result_fingerprint_backoff_until", {}) or {}
         )
-        backoff_reason_raw = (
-            getattr(self, "_symbol_submit_no_result_backoff_reason", {}) or {}
+        fingerprint_backoff_map = (
+            fingerprint_backoff_raw if isinstance(fingerprint_backoff_raw, dict) else {}
         )
-        backoff_reason_map = (
-            backoff_reason_raw if isinstance(backoff_reason_raw, dict) else {}
+        fingerprint_cluster_raw = (
+            getattr(self, "_submit_no_result_fingerprint_last_cluster_count", {}) or {}
         )
-        cluster_count_raw = (
-            getattr(self, "_symbol_submit_no_result_last_cluster_count", {}) or {}
-        )
-        cluster_count_map = (
-            cluster_count_raw if isinstance(cluster_count_raw, dict) else {}
+        fingerprint_cluster_map = (
+            fingerprint_cluster_raw if isinstance(fingerprint_cluster_raw, dict) else {}
         )
         backoff_expiry = _safe_float(backoff_until_map.get(symbol_token)) or 0.0
+        fingerprint_token = str(symbol_fingerprint_map.get(symbol_token) or "").strip().lower()
+        fingerprint_expiry = (
+            _safe_float(fingerprint_backoff_map.get(fingerprint_token))
+            if fingerprint_token
+            else None
+        )
+        if fingerprint_expiry is None:
+            fingerprint_expiry = 0.0
         now_mono = float(monotonic_time())
         if backoff_expiry <= now_mono:
             if backoff_expiry > 0.0 and isinstance(backoff_until_raw, dict):
@@ -25539,22 +26108,88 @@ class ExecutionEngine:
                 backoff_reason_map.pop(symbol_token, None)
             if isinstance(cluster_count_map, dict):
                 cluster_count_map.pop(symbol_token, None)
+            backoff_expiry = 0.0
+        if fingerprint_token and fingerprint_expiry <= now_mono:
+            if isinstance(fingerprint_backoff_raw, dict):
+                fingerprint_backoff_raw.pop(fingerprint_token, None)
+            if isinstance(fingerprint_cluster_map, dict):
+                fingerprint_cluster_map.pop(fingerprint_token, None)
+            fingerprint_expiry = 0.0
+        remaining = max(backoff_expiry - now_mono, 0.0)
+        fingerprint_remaining = max(float(fingerprint_expiry) - now_mono, 0.0)
+        if remaining > 0.0:
+            return False, {
+                "enabled": True,
+                "reason": "submit_no_result_symbol_backoff",
+                "symbol": symbol_token,
+                "remaining_seconds": round(float(remaining), 3),
+                "cluster_reason": str(
+                    backoff_reason_map.get(symbol_token) or "submit_no_result_504_cluster"
+                ),
+                "cluster_count": int(_safe_int(cluster_count_map.get(symbol_token), 0)),
+                "error_fingerprint": fingerprint_token or None,
+                "fingerprint_remaining_seconds": round(float(fingerprint_remaining), 3),
+                "fingerprint_cluster_count": int(
+                    _safe_int(fingerprint_cluster_map.get(fingerprint_token), 0)
+                )
+                if fingerprint_token
+                else 0,
+            }
+        if fingerprint_token and fingerprint_remaining > 0.0:
+            return False, {
+                "enabled": True,
+                "reason": "submit_no_result_fingerprint_backoff",
+                "symbol": symbol_token,
+                "error_fingerprint": fingerprint_token,
+                "remaining_seconds": round(float(fingerprint_remaining), 3),
+                "cluster_count": int(_safe_int(fingerprint_cluster_map.get(fingerprint_token), 0)),
+            }
+        return True, {
+            "enabled": True,
+            "reason": "backoff_inactive",
+            "symbol": symbol_token,
+        }
+
+    def _submit_no_result_broker_health_allows_opening(
+        self,
+        *,
+        symbol: str | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Return whether broker-health backoff from submit-no-result clusters blocks openings."""
+
+        enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_BROKER_HEALTH_GUARD_ENABLED"
+        )
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+        now_mono = float(monotonic_time())
+        blocked_until = (
+            _safe_float(
+                getattr(self, "_submit_no_result_broker_health_backoff_until_mono", 0.0)
+            )
+            or 0.0
+        )
+        if blocked_until <= now_mono:
+            self._submit_no_result_broker_health_backoff_until_mono = 0.0
+            self._submit_no_result_broker_health_context = {}
             return True, {
                 "enabled": True,
                 "reason": "backoff_inactive",
-                "symbol": symbol_token,
+                "symbol": str(symbol or "").strip().upper() or None,
             }
-        remaining = max(backoff_expiry - now_mono, 0.0)
-        return False, {
+        remaining = max(blocked_until - now_mono, 0.0)
+        payload: dict[str, Any] = {
             "enabled": True,
-            "reason": "submit_no_result_symbol_backoff",
-            "symbol": symbol_token,
+            "reason": "submit_no_result_broker_health_backoff",
             "remaining_seconds": round(float(remaining), 3),
-            "cluster_reason": str(
-                backoff_reason_map.get(symbol_token) or "submit_no_result_504_cluster"
-            ),
-            "cluster_count": int(_safe_int(cluster_count_map.get(symbol_token), 0)),
+            "symbol": str(symbol or "").strip().upper() or None,
         }
+        context_raw = getattr(self, "_submit_no_result_broker_health_context", {}) or {}
+        if isinstance(context_raw, Mapping):
+            payload["context"] = dict(context_raw)
+        return False, payload
 
     def _update_symbol_submit_no_result_backoff(
         self,
@@ -25563,6 +26198,7 @@ class ExecutionEngine:
         reason: str | None,
         status_code: int | None,
         client_order_id: str | None,
+        error_fingerprint: str | None = None,
     ) -> None:
         """Track submit timeout clusters and arm a temporary symbol backoff."""
 
@@ -25594,7 +26230,7 @@ class ExecutionEngine:
         )
         if trigger_count is None:
             trigger_count = 6
-        trigger_count = max(2, min(int(trigger_count), 1000))
+        trigger_count = max(1, min(int(trigger_count), 1000))
         cooldown_sec = _config_float(
             "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_COOLDOWN_SEC",
             900.0,
@@ -25602,6 +26238,20 @@ class ExecutionEngine:
         if cooldown_sec is None or not math.isfinite(float(cooldown_sec)):
             cooldown_sec = 900.0
         cooldown_sec = max(30.0, min(float(cooldown_sec), 6.0 * 3600.0))
+        symbol_tier_step_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_TIER_STEP_SEC",
+            120.0,
+        )
+        if symbol_tier_step_sec is None or not math.isfinite(float(symbol_tier_step_sec)):
+            symbol_tier_step_sec = 120.0
+        symbol_tier_step_sec = max(0.0, min(float(symbol_tier_step_sec), 3600.0))
+        symbol_max_cooldown_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_MAX_COOLDOWN_SEC",
+            3600.0,
+        )
+        if symbol_max_cooldown_sec is None or not math.isfinite(float(symbol_max_cooldown_sec)):
+            symbol_max_cooldown_sec = 3600.0
+        symbol_max_cooldown_sec = max(float(cooldown_sec), min(float(symbol_max_cooldown_sec), 24.0 * 3600.0))
         alert_cooldown_sec = _config_float(
             "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_ALERT_COOLDOWN_SEC",
             120.0,
@@ -25609,8 +26259,70 @@ class ExecutionEngine:
         if alert_cooldown_sec is None or not math.isfinite(float(alert_cooldown_sec)):
             alert_cooldown_sec = 120.0
         alert_cooldown_sec = max(0.0, min(float(alert_cooldown_sec), 6.0 * 3600.0))
+        fingerprint_window_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_FINGERPRINT_BACKOFF_WINDOW_SEC",
+            float(window_sec),
+        )
+        if fingerprint_window_sec is None or not math.isfinite(float(fingerprint_window_sec)):
+            fingerprint_window_sec = float(window_sec)
+        fingerprint_window_sec = max(30.0, min(float(fingerprint_window_sec), 24.0 * 3600.0))
+        fingerprint_trigger_count = _config_int(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_FINGERPRINT_BACKOFF_TRIGGER_COUNT",
+            3,
+        )
+        if fingerprint_trigger_count is None:
+            fingerprint_trigger_count = 3
+        fingerprint_trigger_count = max(1, min(int(fingerprint_trigger_count), 1000))
+        fingerprint_base_cooldown_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_FINGERPRINT_BACKOFF_BASE_COOLDOWN_SEC",
+            180.0,
+        )
+        if fingerprint_base_cooldown_sec is None or not math.isfinite(
+            float(fingerprint_base_cooldown_sec)
+        ):
+            fingerprint_base_cooldown_sec = 180.0
+        fingerprint_base_cooldown_sec = max(10.0, min(float(fingerprint_base_cooldown_sec), 6.0 * 3600.0))
+        fingerprint_step_cooldown_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_FINGERPRINT_BACKOFF_STEP_COOLDOWN_SEC",
+            90.0,
+        )
+        if fingerprint_step_cooldown_sec is None or not math.isfinite(
+            float(fingerprint_step_cooldown_sec)
+        ):
+            fingerprint_step_cooldown_sec = 90.0
+        fingerprint_step_cooldown_sec = max(0.0, min(float(fingerprint_step_cooldown_sec), 3600.0))
+        fingerprint_max_cooldown_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_FINGERPRINT_BACKOFF_MAX_COOLDOWN_SEC",
+            1800.0,
+        )
+        if fingerprint_max_cooldown_sec is None or not math.isfinite(
+            float(fingerprint_max_cooldown_sec)
+        ):
+            fingerprint_max_cooldown_sec = 1800.0
+        fingerprint_max_cooldown_sec = max(
+            float(fingerprint_base_cooldown_sec),
+            min(float(fingerprint_max_cooldown_sec), 24.0 * 3600.0),
+        )
 
         now_mono = float(monotonic_time())
+        fingerprint_token = str(error_fingerprint or "").strip().lower()
+        if not fingerprint_token:
+            fingerprint_token = (
+                _submit_no_result_error_fingerprint(
+                    reason=reason,
+                    detail=None,
+                    status_code=status_code_int,
+                    error_code=None,
+                )
+                or "status_504:no_broker_response"
+            )
+        symbol_fingerprint_raw = getattr(self, "_symbol_submit_no_result_last_fingerprint", {}) or {}
+        symbol_fingerprint_map = (
+            symbol_fingerprint_raw if isinstance(symbol_fingerprint_raw, dict) else {}
+        )
+        symbol_fingerprint_map[symbol_token] = str(fingerprint_token)
+        self._symbol_submit_no_result_last_fingerprint = symbol_fingerprint_map
+
         history_raw = (
             getattr(self, "_symbol_submit_no_result_failure_mono", {}) or {}
         )
@@ -25630,6 +26342,206 @@ class ExecutionEngine:
         self._symbol_submit_no_result_failure_mono = history_map
 
         cluster_count = len(history)
+
+        fp_history_raw = (
+            getattr(self, "_submit_no_result_fingerprint_failure_mono", {}) or {}
+        )
+        fp_history_map = fp_history_raw if isinstance(fp_history_raw, dict) else {}
+        fp_history_entry = fp_history_map.get(str(fingerprint_token))
+        if isinstance(fp_history_entry, deque):
+            fp_history = fp_history_entry
+        elif isinstance(fp_history_entry, list):
+            fp_history = deque((_safe_float(item) or 0.0) for item in fp_history_entry)
+        else:
+            fp_history = deque()
+        fp_cutoff = now_mono - float(fingerprint_window_sec)
+        while fp_history and float(fp_history[0]) < fp_cutoff:
+            fp_history.popleft()
+        fp_history.append(now_mono)
+        fp_history_map[str(fingerprint_token)] = fp_history
+        self._submit_no_result_fingerprint_failure_mono = fp_history_map
+        fingerprint_cluster_count = len(fp_history)
+        fingerprint_backoff_until_raw = (
+            getattr(self, "_submit_no_result_fingerprint_backoff_until", {}) or {}
+        )
+        fingerprint_backoff_until_map = (
+            fingerprint_backoff_until_raw
+            if isinstance(fingerprint_backoff_until_raw, dict)
+            else {}
+        )
+        fingerprint_last_cluster_raw = (
+            getattr(self, "_submit_no_result_fingerprint_last_cluster_count", {}) or {}
+        )
+        fingerprint_last_cluster_map = (
+            fingerprint_last_cluster_raw
+            if isinstance(fingerprint_last_cluster_raw, dict)
+            else {}
+        )
+        if fingerprint_cluster_count >= int(fingerprint_trigger_count):
+            fingerprint_extra = max(
+                int(fingerprint_cluster_count) - int(fingerprint_trigger_count),
+                0,
+            )
+            fingerprint_cooldown = min(
+                float(fingerprint_base_cooldown_sec)
+                + (float(fingerprint_step_cooldown_sec) * float(fingerprint_extra)),
+                float(fingerprint_max_cooldown_sec),
+            )
+            prev_fingerprint_until = (
+                _safe_float(fingerprint_backoff_until_map.get(str(fingerprint_token))) or 0.0
+            )
+            fingerprint_backoff_until_map[str(fingerprint_token)] = max(
+                float(prev_fingerprint_until),
+                now_mono + float(fingerprint_cooldown),
+            )
+            fingerprint_last_cluster_map[str(fingerprint_token)] = int(
+                fingerprint_cluster_count
+            )
+            self._submit_no_result_fingerprint_backoff_until = (
+                fingerprint_backoff_until_map
+            )
+            self._submit_no_result_fingerprint_last_cluster_count = (
+                fingerprint_last_cluster_map
+            )
+
+        recent_events_raw = getattr(self, "_submit_no_result_recent_events", None)
+        recent_events = (
+            recent_events_raw
+            if isinstance(recent_events_raw, deque)
+            else deque(maxlen=512)
+        )
+        self._submit_no_result_recent_events = recent_events
+        broker_health_window_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_BROKER_HEALTH_WINDOW_SEC",
+            300.0,
+        )
+        if broker_health_window_sec is None or not math.isfinite(float(broker_health_window_sec)):
+            broker_health_window_sec = 300.0
+        broker_health_window_sec = max(30.0, min(float(broker_health_window_sec), 3600.0))
+        while recent_events and (
+            (_safe_float(recent_events[0].get("ts_mono")) or 0.0)
+            < (now_mono - float(broker_health_window_sec))
+        ):
+            recent_events.popleft()
+        recent_events.append(
+            {
+                "ts_mono": float(now_mono),
+                "symbol": symbol_token,
+                "fingerprint": str(fingerprint_token),
+            }
+        )
+        broker_health_trigger_count = _config_int(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_BROKER_HEALTH_TRIGGER_COUNT",
+            8,
+        )
+        if broker_health_trigger_count is None:
+            broker_health_trigger_count = 8
+        broker_health_trigger_count = max(1, min(int(broker_health_trigger_count), 200))
+        broker_health_min_symbols = _config_int(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_BROKER_HEALTH_MIN_SYMBOLS",
+            2,
+        )
+        if broker_health_min_symbols is None:
+            broker_health_min_symbols = 2
+        broker_health_min_symbols = max(1, min(int(broker_health_min_symbols), 50))
+        broker_health_cooldown_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_BROKER_HEALTH_COOLDOWN_SEC",
+            120.0,
+        )
+        if broker_health_cooldown_sec is None or not math.isfinite(float(broker_health_cooldown_sec)):
+            broker_health_cooldown_sec = 120.0
+        broker_health_cooldown_sec = max(10.0, min(float(broker_health_cooldown_sec), 3600.0))
+        broker_health_step_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_BROKER_HEALTH_STEP_COOLDOWN_SEC",
+            30.0,
+        )
+        if broker_health_step_sec is None or not math.isfinite(float(broker_health_step_sec)):
+            broker_health_step_sec = 30.0
+        broker_health_step_sec = max(0.0, min(float(broker_health_step_sec), 600.0))
+        broker_health_max_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_BROKER_HEALTH_MAX_COOLDOWN_SEC",
+            600.0,
+        )
+        if broker_health_max_sec is None or not math.isfinite(float(broker_health_max_sec)):
+            broker_health_max_sec = 600.0
+        broker_health_max_sec = max(
+            float(broker_health_cooldown_sec),
+            min(float(broker_health_max_sec), 6.0 * 3600.0),
+        )
+        broker_health_alert_cooldown_sec = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_BROKER_HEALTH_ALERT_COOLDOWN_SEC",
+            60.0,
+        )
+        if broker_health_alert_cooldown_sec is None or not math.isfinite(
+            float(broker_health_alert_cooldown_sec)
+        ):
+            broker_health_alert_cooldown_sec = 60.0
+        broker_health_alert_cooldown_sec = max(
+            0.0,
+            min(float(broker_health_alert_cooldown_sec), 3600.0),
+        )
+        recent_total = len(recent_events)
+        recent_unique_symbols = len(
+            {
+                str(item.get("symbol") or "").strip().upper()
+                for item in recent_events
+                if str(item.get("symbol") or "").strip()
+            }
+        )
+        if (
+            int(recent_total) >= int(broker_health_trigger_count)
+            and int(recent_unique_symbols) >= int(broker_health_min_symbols)
+        ):
+            broker_health_extra = max(
+                int(recent_total) - int(broker_health_trigger_count),
+                0,
+            )
+            broker_health_cooldown = min(
+                float(broker_health_cooldown_sec)
+                + (float(broker_health_step_sec) * float(broker_health_extra)),
+                float(broker_health_max_sec),
+            )
+            current_health_until = (
+                _safe_float(
+                    getattr(self, "_submit_no_result_broker_health_backoff_until_mono", 0.0)
+                )
+                or 0.0
+            )
+            next_health_until = max(
+                float(current_health_until),
+                now_mono + float(broker_health_cooldown),
+            )
+            self._submit_no_result_broker_health_backoff_until_mono = float(
+                next_health_until
+            )
+            broker_health_context = {
+                "reason": "submit_no_result_broker_health_backoff",
+                "window_sec": float(broker_health_window_sec),
+                "events": int(recent_total),
+                "unique_symbols": int(recent_unique_symbols),
+                "trigger_count": int(broker_health_trigger_count),
+                "min_symbols": int(broker_health_min_symbols),
+                "cooldown_sec": float(broker_health_cooldown),
+                "error_fingerprint": str(fingerprint_token),
+            }
+            self._submit_no_result_broker_health_context = dict(
+                broker_health_context
+            )
+            last_broker_health_alert = _safe_float(
+                getattr(self, "_submit_no_result_broker_health_alert_last_mono", 0.0)
+            ) or 0.0
+            if (
+                float(broker_health_alert_cooldown_sec) <= 0.0
+                or last_broker_health_alert <= 0.0
+                or (now_mono - last_broker_health_alert)
+                >= float(broker_health_alert_cooldown_sec)
+            ):
+                self._submit_no_result_broker_health_alert_last_mono = float(now_mono)
+                logger.warning(
+                    "SUBMIT_NO_RESULT_BROKER_HEALTH_BACKOFF_TRIGGERED",
+                    extra=broker_health_context,
+                )
+
         if cluster_count < int(trigger_count):
             return
 
@@ -25652,9 +26564,30 @@ class ExecutionEngine:
             cluster_count_raw if isinstance(cluster_count_raw, dict) else {}
         )
         previous_until = _safe_float(backoff_until_map.get(symbol_token)) or 0.0
-        next_until = max(previous_until, now_mono + float(cooldown_sec))
+        cluster_extra = max(int(cluster_count) - int(trigger_count), 0)
+        tiered_symbol_cooldown = min(
+            float(cooldown_sec) + (float(symbol_tier_step_sec) * float(cluster_extra)),
+            float(symbol_max_cooldown_sec),
+        )
+        if int(fingerprint_cluster_count) >= int(fingerprint_trigger_count):
+            fingerprint_extra = max(
+                int(fingerprint_cluster_count) - int(fingerprint_trigger_count),
+                0,
+            )
+            fingerprint_cooldown = min(
+                float(fingerprint_base_cooldown_sec)
+                + (float(fingerprint_step_cooldown_sec) * float(fingerprint_extra)),
+                float(fingerprint_max_cooldown_sec),
+            )
+            tiered_symbol_cooldown = max(
+                float(tiered_symbol_cooldown),
+                float(min(fingerprint_cooldown, symbol_max_cooldown_sec)),
+            )
+        next_until = max(previous_until, now_mono + float(tiered_symbol_cooldown))
         backoff_until_map[symbol_token] = next_until
-        backoff_reason_map[symbol_token] = "submit_no_result_504_cluster"
+        backoff_reason_map[symbol_token] = (
+            f"submit_no_result_504_cluster:{fingerprint_token}"
+        )
         cluster_count_map[symbol_token] = int(cluster_count)
         self._symbol_submit_no_result_backoff_until = backoff_until_map
         self._symbol_submit_no_result_backoff_reason = backoff_reason_map
@@ -25680,7 +26613,9 @@ class ExecutionEngine:
                 "cluster_count": int(cluster_count),
                 "trigger_count": int(trigger_count),
                 "window_sec": float(window_sec),
-                "cooldown_sec": float(cooldown_sec),
+                "cooldown_sec": float(tiered_symbol_cooldown),
+                "error_fingerprint": str(fingerprint_token),
+                "fingerprint_cluster_count": int(fingerprint_cluster_count),
                 "client_order_id": (
                     str(client_order_id)
                     if client_order_id not in (None, "")
@@ -27383,6 +28318,45 @@ class ExecutionEngine:
                 )
                 _mark_precheck_failure("symbol_loss_cooldown", symbol_cooldown_context)
                 return False
+            submit_broker_health_allowed, submit_broker_health_context = (
+                self._submit_no_result_broker_health_allows_opening(
+                    symbol=str(order.get("symbol") or ""),
+                )
+            )
+            if not submit_broker_health_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "submit_no_result_broker_health_backoff",
+                    "context": submit_broker_health_context,
+                }
+                logger.warning(
+                    "ENTRY_CONSTRAINED_SUBMIT_NO_RESULT_BROKER_HEALTH",
+                    extra=skip_payload,
+                )
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "submit_no_result_broker_health_backoff",
+                    submit_broker_health_context,
+                    extra=skip_payload
+                    | {"detail": "submit_no_result_broker_health_backoff"},
+                )
+                _mark_precheck_failure(
+                    "submit_no_result_broker_health_backoff",
+                    submit_broker_health_context,
+                )
+                return False
             submit_timeout_backoff_allowed, submit_timeout_backoff_context = (
                 self._symbol_submit_no_result_backoff_allows_opening(
                     symbol=str(order.get("symbol") or ""),
@@ -28167,7 +29141,20 @@ class ExecutionEngine:
         )
         if wait_seconds is None or not math.isfinite(float(wait_seconds)):
             wait_seconds = 1.5
-        wait_seconds = max(0.0, min(float(wait_seconds), 8.0))
+        wait_cap_seconds = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_RECOVERY_WAIT_MAX_SECONDS",
+            8.0,
+        )
+        if wait_cap_seconds is None or not math.isfinite(float(wait_cap_seconds)):
+            wait_cap_seconds = 8.0
+        wait_cap_seconds = max(1.0, min(float(wait_cap_seconds), 30.0))
+        wait_seconds = max(0.0, min(float(wait_seconds), float(wait_cap_seconds)))
+        wait_seconds, wait_context = self._adaptive_submit_no_result_recovery_wait_seconds(
+            base_wait_seconds=float(wait_seconds),
+            symbol=symbol,
+        )
+        if bool(wait_context.get("applied")):
+            logger.info("SUBMIT_NO_RESULT_RECOVERY_WAIT_ADAPTED", extra=wait_context)
         recovered = self._lookup_order_by_client_order_id(
             token,
             symbol=symbol,
@@ -28183,6 +29170,100 @@ class ExecutionEngine:
         if recovered is not None:
             return recovered, "open_recent_scan"
         return None, "not_found"
+
+    def _adaptive_submit_no_result_recovery_wait_seconds(
+        self,
+        *,
+        base_wait_seconds: float,
+        symbol: str | None = None,
+        error_fingerprint: str | None = None,
+    ) -> tuple[float, dict[str, Any]]:
+        """Return adaptive submit-no-result recovery wait based on live fingerprint/broker pressure."""
+
+        wait_cap_seconds = _config_float(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_RECOVERY_WAIT_MAX_SECONDS",
+            8.0,
+        )
+        if wait_cap_seconds is None or not math.isfinite(float(wait_cap_seconds)):
+            wait_cap_seconds = 8.0
+        wait_cap_seconds = max(1.0, min(float(wait_cap_seconds), 30.0))
+        base_wait = max(0.0, min(float(base_wait_seconds), float(wait_cap_seconds)))
+        multiplier = 1.0
+        now_mono = float(monotonic_time())
+        symbol_token = str(symbol or "").strip().upper()
+        fingerprint_token = str(error_fingerprint or "").strip().lower()
+        if not fingerprint_token and symbol_token:
+            symbol_fingerprint_raw = (
+                getattr(self, "_symbol_submit_no_result_last_fingerprint", {}) or {}
+            )
+            if isinstance(symbol_fingerprint_raw, Mapping):
+                fingerprint_token = str(
+                    symbol_fingerprint_raw.get(symbol_token) or ""
+                ).strip().lower()
+
+        fingerprint_remaining_s = 0.0
+        if fingerprint_token:
+            fingerprint_backoff_raw = (
+                getattr(self, "_submit_no_result_fingerprint_backoff_until", {}) or {}
+            )
+            if isinstance(fingerprint_backoff_raw, Mapping):
+                fingerprint_until = _safe_float(
+                    fingerprint_backoff_raw.get(fingerprint_token)
+                ) or 0.0
+                fingerprint_remaining_s = max(fingerprint_until - now_mono, 0.0)
+                if fingerprint_remaining_s > 0.0:
+                    fingerprint_multiplier = _config_float(
+                        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_RECOVERY_WAIT_FINGERPRINT_MULTIPLIER",
+                        1.7,
+                    )
+                    if fingerprint_multiplier is None or not math.isfinite(
+                        float(fingerprint_multiplier)
+                    ):
+                        fingerprint_multiplier = 1.7
+                    multiplier = max(
+                        float(multiplier),
+                        max(1.0, min(float(fingerprint_multiplier), 4.0)),
+                    )
+
+        broker_remaining_s = max(
+            (
+                _safe_float(
+                    getattr(
+                        self,
+                        "_submit_no_result_broker_health_backoff_until_mono",
+                        0.0,
+                    )
+                )
+                or 0.0
+            )
+            - now_mono,
+            0.0,
+        )
+        if broker_remaining_s > 0.0:
+            broker_multiplier = _config_float(
+                "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_RECOVERY_WAIT_BROKER_HEALTH_MULTIPLIER",
+                2.0,
+            )
+            if broker_multiplier is None or not math.isfinite(float(broker_multiplier)):
+                broker_multiplier = 2.0
+            multiplier = max(
+                float(multiplier),
+                max(1.0, min(float(broker_multiplier), 6.0)),
+            )
+
+        adapted_wait = min(float(wait_cap_seconds), max(0.0, float(base_wait) * float(multiplier)))
+        context = {
+            "applied": bool(multiplier > 1.0 and adapted_wait > base_wait),
+            "base_wait_seconds": float(base_wait),
+            "adapted_wait_seconds": float(adapted_wait),
+            "multiplier": float(multiplier),
+            "max_wait_seconds": float(wait_cap_seconds),
+            "symbol": symbol_token or None,
+            "error_fingerprint": fingerprint_token or None,
+            "fingerprint_backoff_remaining_s": float(fingerprint_remaining_s),
+            "broker_health_backoff_remaining_s": float(broker_remaining_s),
+        }
+        return float(adapted_wait), context
 
     def _is_circuit_breaker_open(self) -> bool:
         """Check if circuit breaker should reset."""
@@ -28254,6 +29335,53 @@ class ExecutionEngine:
             )
             return {"status": "skipped", "reason": "pdt_lockout", "context": {"pdt": True}}
 
+        # Normalize order payload before any broker submit path, including pytest hooks.
+        order_type = str(order_data.get("type", "limit")).lower()
+        tif_token = self._resolve_time_in_force(order_data.get("time_in_force"))
+        order_data["time_in_force"] = tif_token
+        symbol_token = str(order_data.get("symbol") or "").strip().upper()
+        order_limit_price = order_data.get("limit_price")
+        if order_type == "limit" or order_limit_price not in (None, ""):
+            normalized_limit_price = self._normalize_limit_price_for_symbol(
+                symbol=symbol_token,
+                price=order_limit_price,
+                field_name="_submit_order_to_alpaca.limit_price",
+            )
+            if normalized_limit_price is None:
+                raise NonRetryableBrokerError(
+                    "invalid_limit_price",
+                    code="invalid_limit_price",
+                    symbol=symbol_token or None,
+                    detail=(
+                        f"invalid limit_price={order_limit_price!r} symbol={symbol_token or 'unknown'}"
+                    ),
+                )
+            order_data["limit_price"] = float(normalized_limit_price)
+        take_profit_payload = order_data.get("take_profit")
+        if isinstance(take_profit_payload, Mapping):
+            tp_limit_price = self._coerce_finite_float(
+                take_profit_payload.get("limit_price")
+            )
+            if tp_limit_price is not None:
+                normalized_tp_limit_price = self._normalize_limit_price_for_symbol(
+                    symbol=symbol_token,
+                    price=tp_limit_price,
+                    field_name="_submit_order_to_alpaca.take_profit_limit_price",
+                )
+                if normalized_tp_limit_price is None:
+                    raise NonRetryableBrokerError(
+                        "invalid_limit_price",
+                        code="invalid_limit_price",
+                        symbol=symbol_token or None,
+                        detail=(
+                            "invalid take_profit.limit_price"
+                            f" value={tp_limit_price!r} symbol={symbol_token or 'unknown'}"
+                        ),
+                    )
+                tp_payload = dict(take_profit_payload)
+                tp_payload["limit_price"] = float(normalized_tp_limit_price)
+                order_data["take_profit"] = tp_payload
+
         resp: Any | None = None
         if _runtime_env("PYTEST_RUNNING"):
             client = getattr(self, "trading_client", None)
@@ -28268,9 +29396,6 @@ class ExecutionEngine:
                 raise RuntimeError("Alpaca TradingClient is not initialized")
 
         # If bracket requested, call submit_order with keyword args to pass nested structures
-        order_type = str(order_data.get("type", "limit")).lower()
-        tif_token = self._resolve_time_in_force(order_data.get("time_in_force"))
-        order_data["time_in_force"] = tif_token
         alpaca_payload = dict(order_data)
         qty_payload = alpaca_payload.get("quantity")
         if qty_payload is not None:

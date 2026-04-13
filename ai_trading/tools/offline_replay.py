@@ -398,6 +398,26 @@ def _augment_model_features(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def _sanitize_model_feature_index(frame: pd.DataFrame, *, symbol: str) -> pd.DataFrame:
+    """Normalize index labels before indicator computation to avoid duplicate-label failures."""
+
+    frame = frame.sort_index(kind="stable")
+    duplicate_labels = int(frame.index.duplicated(keep=False).sum())
+    null_labels = int(pd.isna(frame.index).sum())
+    if duplicate_labels > 0 or null_labels > 0:
+        logger.info(
+            "OFFLINE_REPLAY_MODEL_FEATURE_INDEX_SANITIZED",
+            extra={
+                "symbol": symbol,
+                "rows": int(len(frame)),
+                "duplicate_labels": duplicate_labels,
+                "null_labels": null_labels,
+            },
+        )
+        frame = frame.reset_index(drop=True)
+    return frame
+
+
 def _attach_policy_context(bars: list[dict[str, Any]]) -> None:
     if not bars:
         return
@@ -664,7 +684,7 @@ def _compute_model_signal(
     symbol: str,
     model_context: ReplayModelContext,
 ) -> tuple[pd.Series, pd.Series]:
-    frame = df.copy()
+    frame = _sanitize_model_feature_index(df.copy(), symbol=symbol)
     frame = compute_macd(frame)
     frame = compute_macds(frame)
     frame = compute_atr(frame)
@@ -1341,6 +1361,15 @@ def _run_policy_sensitivity(
     model_context: ReplayModelContext | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     baseline_profile = _load_policy_profile_from_env()
+    replay_quality_sweep_max_age_hours = max(
+        float(baseline_profile.replay_quality_max_age_hours),
+        24.0 * 30.0,
+    )
+    bandit_live_description = (
+        "Enable live bandit rank adjustment with permissive sample threshold."
+        if baseline_profile.bandit_shadow_only
+        else "Increase live bandit coverage with permissive sample threshold."
+    )
     baseline_payload = _run_parity_simulation(
         args=args,
         cfg=cfg,
@@ -1383,23 +1412,39 @@ def _run_policy_sensitivity(
         ),
         (
             "bandit_live_enabled",
-            "Enable live bandit rank adjustment (disable shadow-only mode).",
-            replace(baseline_profile, bandit_shadow_only=False),
+            bandit_live_description,
+            replace(
+                baseline_profile,
+                bandit_shadow_only=False,
+                bandit_min_samples=1,
+            ),
         ),
         (
             "replay_quality_weight_0_10",
-            "Replay-quality weight sweep variant: 0.10.",
-            replace(baseline_profile, replay_quality_weight=0.10),
+            "Replay-quality weight sweep variant: 0.10 (extended age horizon).",
+            replace(
+                baseline_profile,
+                replay_quality_weight=0.10,
+                replay_quality_max_age_hours=replay_quality_sweep_max_age_hours,
+            ),
         ),
         (
             "replay_quality_weight_0_25",
-            "Replay-quality weight sweep variant: 0.25.",
-            replace(baseline_profile, replay_quality_weight=0.25),
+            "Replay-quality weight sweep variant: 0.25 (extended age horizon).",
+            replace(
+                baseline_profile,
+                replay_quality_weight=0.25,
+                replay_quality_max_age_hours=replay_quality_sweep_max_age_hours,
+            ),
         ),
         (
             "replay_quality_weight_0_40",
-            "Replay-quality weight sweep variant: 0.40.",
-            replace(baseline_profile, replay_quality_weight=0.40),
+            "Replay-quality weight sweep variant: 0.40 (extended age horizon).",
+            replace(
+                baseline_profile,
+                replay_quality_weight=0.40,
+                replay_quality_max_age_hours=replay_quality_sweep_max_age_hours,
+            ),
         ),
     ]
 

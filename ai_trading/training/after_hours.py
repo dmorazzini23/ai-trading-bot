@@ -5223,6 +5223,191 @@ def _write_after_hours_reports(
     return timestamped_path, daily_alias_path
 
 
+def _sync_after_hours_latest_artifacts(
+    *,
+    report_dir: Path,
+    now_utc: datetime,
+    report: Mapping[str, Any],
+    report_path: Path,
+    daily_report_path: Path,
+) -> dict[str, str | None]:
+    """Write canonical latest after-hours artifacts used by runtime governance."""
+
+    sync_paths: dict[str, str | None] = {
+        "report_latest_path": None,
+        "orientation_latest_path": None,
+        "sensitivity_latest_path": None,
+        "rl_governance_sidecar_path": None,
+    }
+
+    report_latest_raw = str(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_REPORT_LATEST_PATH",
+            "",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    if report_latest_raw:
+        report_latest_path = _resolve_after_hours_output_path(
+            report_latest_raw,
+            default_relative="runtime/research_reports/after_hours_training_latest.json",
+        )
+    else:
+        report_latest_path = (report_dir / "after_hours_training_latest.json").resolve()
+    report_latest_payload = {
+        "updated_at": now_utc.isoformat(),
+        "report_path": str(report_path),
+        "daily_report_path": str(daily_report_path),
+        "report": dict(report),
+    }
+    try:
+        _write_json(report_latest_path, report_latest_payload)
+        sync_paths["report_latest_path"] = str(report_latest_path)
+    except OSError as exc:
+        logger.warning(
+            "AFTER_HOURS_REPORT_LATEST_WRITE_FAILED",
+            extra={"path": str(report_latest_path), "error": str(exc)},
+        )
+
+    model_raw = report.get("model")
+    model_payload = dict(model_raw) if isinstance(model_raw, Mapping) else {}
+    rl_overlay_raw = report.get("rl_overlay")
+    rl_overlay = dict(rl_overlay_raw) if isinstance(rl_overlay_raw, Mapping) else {}
+
+    orientation_latest_path = _resolve_after_hours_output_path(
+        str(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_ORIENTATION_CHECK_PATH",
+                "runtime/research_reports/after_hours_orientation_check.json",
+                cast=str,
+            )
+            or ""
+        ).strip()
+        or "runtime/research_reports/after_hours_orientation_check.json",
+        default_relative="runtime/research_reports/after_hours_orientation_check.json",
+    )
+    orientation_payload = {
+        "updated_at": now_utc.isoformat(),
+        "report_path": str(report_path),
+        "daily_report_path": str(daily_report_path),
+        "model_id": str(model_payload.get("model_id") or "").strip() or None,
+        "model_name": str(model_payload.get("name") or "").strip() or None,
+        "governance_status": (
+            str(model_payload.get("governance_status") or "").strip().lower() or None
+        ),
+        "score_orientation": str(report.get("score_orientation") or "").strip() or None,
+        "score_orientation_report": (
+            dict(report.get("score_orientation_report", {}))
+            if isinstance(report.get("score_orientation_report"), Mapping)
+            else {}
+        ),
+        "promotion": (
+            dict(report.get("promotion", {}))
+            if isinstance(report.get("promotion"), Mapping)
+            else {}
+        ),
+        "promotion_confidence_gate": (
+            dict(report.get("promotion_confidence_gate", {}))
+            if isinstance(report.get("promotion_confidence_gate"), Mapping)
+            else {}
+        ),
+        "rl_overlay": {
+            "enabled": bool(rl_overlay.get("enabled", False)),
+            "trained": bool(rl_overlay.get("trained", False)),
+            "recommend_use_rl_agent": bool(
+                rl_overlay.get("recommend_use_rl_agent", False)
+            ),
+            "governance_status": (
+                str(rl_overlay.get("governance_status") or "").strip().lower() or None
+            ),
+            "promoted_model_path": str(rl_overlay.get("promoted_model_path") or "").strip()
+            or None,
+            "promoted_governance_path": str(
+                rl_overlay.get("promoted_governance_path") or ""
+            ).strip()
+            or None,
+        },
+    }
+    try:
+        _write_json(orientation_latest_path, orientation_payload)
+        sync_paths["orientation_latest_path"] = str(orientation_latest_path)
+    except OSError as exc:
+        logger.warning(
+            "AFTER_HOURS_ORIENTATION_LATEST_WRITE_FAILED",
+            extra={"path": str(orientation_latest_path), "error": str(exc)},
+        )
+
+    sensitivity_latest_path = _resolve_after_hours_output_path(
+        str(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_SENSITIVITY_LATEST_PATH",
+                "runtime/research_reports/after_hours_sensitivity_sweep_latest.json",
+                cast=str,
+            )
+            or ""
+        ).strip()
+        or "runtime/research_reports/after_hours_sensitivity_sweep_latest.json",
+        default_relative="runtime/research_reports/after_hours_sensitivity_sweep_latest.json",
+    )
+    sensitivity_payload = {
+        "updated_at": now_utc.isoformat(),
+        "report_path": str(report_path),
+        "daily_report_path": str(daily_report_path),
+        "model_id": str(model_payload.get("model_id") or "").strip() or None,
+        "governance_status": (
+            str(model_payload.get("governance_status") or "").strip().lower() or None
+        ),
+        "sensitivity_sweep": (
+            dict(report.get("sensitivity_sweep", {}))
+            if isinstance(report.get("sensitivity_sweep"), Mapping)
+            else {}
+        ),
+    }
+    try:
+        _write_json(sensitivity_latest_path, sensitivity_payload)
+        sync_paths["sensitivity_latest_path"] = str(sensitivity_latest_path)
+    except OSError as exc:
+        logger.warning(
+            "AFTER_HOURS_SENSITIVITY_LATEST_WRITE_FAILED",
+            extra={"path": str(sensitivity_latest_path), "error": str(exc)},
+        )
+
+    runtime_rl_path_raw = str(rl_overlay.get("promoted_model_path") or "").strip()
+    if not runtime_rl_path_raw:
+        runtime_rl_path_raw = str(get_env("AI_TRADING_RL_MODEL_PATH", "", cast=str) or "").strip()
+    if not runtime_rl_path_raw:
+        runtime_rl_path_raw = "models/runtime/rl_agent.zip"
+    runtime_rl_path = _resolve_after_hours_output_path(
+        runtime_rl_path_raw,
+        default_relative="models/runtime/rl_agent.zip",
+    )
+    governance_status_raw = (
+        str(rl_overlay.get("governance_status") or "").strip().lower()
+        or str(model_payload.get("governance_status") or "").strip().lower()
+        or "shadow"
+    )
+    sidecar_path = _write_rl_runtime_governance_sidecar(
+        runtime_rl_path,
+        governance_status=governance_status_raw,
+        recommend_use_rl_agent=bool(rl_overlay.get("recommend_use_rl_agent", False)),
+        mean_reward=float(rl_overlay.get("mean_reward", 0.0) or 0.0),
+        baseline_expectancy_bps=float(
+            rl_overlay.get(
+                "baseline_expectancy_bps",
+                (
+                    report.get("metrics", {}).get("mean_expectancy_bps")
+                    if isinstance(report.get("metrics"), Mapping)
+                    else 0.0
+                ),
+            )
+            or 0.0
+        ),
+    )
+    sync_paths["rl_governance_sidecar_path"] = sidecar_path
+    return sync_paths
+
+
 def _is_pytest_temp_path(path_value: Any) -> bool:
     normalized = str(path_value or "").strip().replace("\\", "/").lower()
     return "/pytest-of-" in normalized or "/tmp/pytest-" in normalized
@@ -6282,6 +6467,13 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         now_utc=now_utc,
         payload=report,
     )
+    artifact_sync = _sync_after_hours_latest_artifacts(
+        report_dir=report_dir,
+        now_utc=now_utc,
+        report=report,
+        report_path=report_path,
+        daily_report_path=daily_report_path,
+    )
     max_label_ts = _parse_ts(str(dataset["label_ts"].iloc[-1]))
     _write_after_hours_training_state(
         {
@@ -6313,6 +6505,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 promotion_confidence_gate.get("observed", {})
             ),
             "governance_status": str(status),
+            "artifact_sync": dict(artifact_sync),
         },
         preferred_path=training_state_path_hint,
     )
@@ -6373,6 +6566,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "champion_challenger_ab": champion_challenger_ab,
         "promotion_confidence_gate": promotion_confidence_gate,
         "rl_overlay": rl_overlay,
+        "artifact_sync": artifact_sync,
     }
 
 

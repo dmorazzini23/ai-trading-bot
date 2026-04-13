@@ -130,7 +130,9 @@ def test_netting_cycle_emits_decision_reject_reason_summary(monkeypatch, caplog)
         assert not written_records or all(str(record.symbol).upper() == "ALL" for record in written_records)
 
 
-def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(monkeypatch) -> None:
+def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(
+    monkeypatch, caplog
+) -> None:
     cfg = TradingConfig.from_env(allow_missing_drawdown=True)
     cfg.update(
         netting_enabled=True,
@@ -339,7 +341,8 @@ def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(monkey
         ),
     )
 
-    bot_engine._run_netting_cycle(state, runtime, "loop", 0.0)
+    with caplog.at_level(logging.INFO):
+        bot_engine._run_netting_cycle(state, runtime, "loop", 0.0)
 
     aapl_records = [record for record in written_records if str(record.symbol).upper() == "AAPL"]
     msft_records = [record for record in written_records if str(record.symbol).upper() == "MSFT"]
@@ -347,6 +350,25 @@ def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(monkey
     assert msft_records, written_records
     assert int(cast(int, captured_slo.get("orders_attempted", -1))) == 1
     assert int(cast(int, captured_slo.get("orders_submitted", -1))) == 1
+    summary_records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "DECISION_REJECT_REASON_SUMMARY"
+    ]
+    assert summary_records
+    latest_summary = summary_records[-1]
+    rejected_records = int(
+        cast(int, getattr(latest_summary, "rejected_records", 0) or 0)
+    )
+    top_reasons = list(
+        cast(list[dict[str, object]], getattr(latest_summary, "top_reasons", []) or [])
+    )
+    assert rejected_records > 0
+    # Reject summary counts should only come from rejected observations.
+    assert all(
+        int(cast(int, item.get("count", 0) or 0)) <= rejected_records
+        for item in top_reasons
+    )
 
 
 def test_netting_cycle_pacing_headroom_uses_submitted_orders(monkeypatch) -> None:

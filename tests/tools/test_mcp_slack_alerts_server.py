@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -341,6 +342,118 @@ def test_collect_execution_window_snapshot_tracks_precheck_detail_breakdown(
         {"detail": "symbol_reentry_cooldown", "count": 2},
         {"detail": "opening_min_notional", "count": 1},
     ]
+
+
+def test_collect_gate_window_snapshot_uses_blocking_only_concentration_gate(
+    monkeypatch, tmp_path: Path
+) -> None:
+    now_iso = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    gate_path = tmp_path / "gate_effectiveness.jsonl"
+    gate_path.write_text(
+        json.dumps(
+            {
+                "ts": now_iso,
+                "rejected_records": 10,
+                "gate_attribution": {
+                    "EXPECTED_CAPTURE_MODEL_LEARNED": {
+                        "blocked_records": 9,
+                        "accepted_records": 5,
+                    },
+                    "PASSIVE_FILL_PROBABILITY_LOW": {
+                        "blocked_records": 3,
+                        "accepted_records": 0,
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_GATE_EFFECTIVENESS_LOG_PATH", str(gate_path))
+
+    snapshot = slack_srv._collect_gate_window_snapshot(
+        {"gate_window_minutes": 60, "gate_window_max_rows": 200}
+    )
+
+    assert snapshot["top_rejection_concentration_gate"] == "PASSIVE_FILL_PROBABILITY_LOW"
+    assert snapshot["top_rejection_concentration_blocking_gate_found"] is True
+    assert abs(float(snapshot["top_rejection_concentration_ratio"] or 0.0) - 0.3) < 1e-9
+
+
+def test_collect_runtime_snapshot_does_not_fallback_to_report_concentration_for_annotation_only_window(
+    monkeypatch, tmp_path: Path
+) -> None:
+    now_iso = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    gate_path = tmp_path / "gate_effectiveness.jsonl"
+    gate_path.write_text(
+        json.dumps(
+            {
+                "ts": now_iso,
+                "rejected_records": 12,
+                "gate_attribution": {
+                    "EXPECTED_CAPTURE_MODEL_LEARNED": {
+                        "blocked_records": 11,
+                        "accepted_records": 4,
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_GATE_EFFECTIVENESS_LOG_PATH", str(gate_path))
+    monkeypatch.setattr(
+        slack_srv,
+        "_runtime_report_payload",
+        lambda: {
+            "go_no_go": {"gate_passed": True, "failed_checks": []},
+            "execution_vs_alpha": {},
+            "gate_effectiveness": {
+                "rejected_records": 999,
+                "top_rejection_concentration_gate": "EXPECTED_CAPTURE_MODEL_LEARNED",
+                "top_rejection_concentration_ratio": 0.99,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        slack_srv,
+        "_health_payload",
+        lambda **_: {
+            "status": "healthy",
+            "reason": "runtime_health_ok",
+            "timestamp": now_iso,
+            "data_provider": {
+                "status": "healthy",
+                "active": "alpaca",
+                "using_backup": False,
+                "reason": "data_available_netting",
+            },
+            "broker": {"status": "connected"},
+        },
+    )
+    monkeypatch.setattr(
+        slack_srv,
+        "_collect_execution_window_snapshot",
+        lambda _args: {
+            "execution_fill_ratio": None,
+            "execution_fill_ratio_samples": 0,
+            "execution_fill_ratio_filled": 0,
+            "execution_window_minutes": 30,
+            "execution_skipped_count": 0,
+            "precheck_failure_count": 0,
+            "precheck_failure_ratio": None,
+            "precheck_failure_top_details": [],
+            "precheck_failure_top_actionable_details": [],
+            "order_events_path": str(tmp_path / "order_events.jsonl"),
+            "exec_quality_events_path": str(tmp_path / "execution_quality_events.jsonl"),
+        },
+    )
+
+    snapshot = slack_srv._collect_runtime_snapshot({})
+
+    assert snapshot["gate_rejected_records"] == 12
+    assert snapshot["top_rejection_concentration_gate"] == ""
+    assert snapshot["top_rejection_concentration_ratio"] is None
 
 
 def test_incident_message_includes_top_precheck_blockers() -> None:
