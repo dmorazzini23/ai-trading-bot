@@ -361,3 +361,85 @@ def test_health_payload_exposes_provider_reason_code(monkeypatch):
     assert response.status_code == 200
     assert payload["data_provider"]["reason_code"] == "timeout"
     assert payload["data_provider"]["reason_detail"] == "request_timeout"
+
+
+def test_runtime_health_payload_includes_database_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        health_payload_module,
+        "_database_readiness_snapshot",
+        lambda: {
+            "enabled": True,
+            "configured": True,
+            "ok": True,
+            "connected": True,
+            "backend": "sqlite",
+        },
+    )
+    payload = health_payload_module.build_runtime_health_payload()
+    assert "database" in payload
+    assert payload["database"]["ok"] is True
+    assert payload["database"]["backend"] == "sqlite"
+
+
+def test_runtime_health_payload_db_requirement_marks_degraded(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_DB_READY", "1")
+    monkeypatch.setattr(
+        health_payload_module,
+        "_database_readiness_snapshot",
+        lambda: {
+            "enabled": True,
+            "configured": True,
+            "ok": False,
+            "connected": False,
+            "backend": "postgres",
+            "error": "connection refused",
+        },
+    )
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload.get("reason") == "database_unhealthy"
+
+
+def test_runtime_health_payload_includes_oms_invariants_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_invariants_snapshot",
+        lambda: {
+            "enabled": True,
+            "available": True,
+            "ok": True,
+            "scanned_intents": 12,
+            "total_violations": 0,
+        },
+    )
+    payload = health_payload_module.build_runtime_health_payload()
+    assert "oms_invariants" in payload
+    assert payload["oms_invariants"]["ok"] is True
+    assert payload["oms_invariants"]["scanned_intents"] == 12
+
+
+def test_runtime_health_payload_oms_invariants_requirement_marks_degraded(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS", "1")
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_invariants_snapshot",
+        lambda: {
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "total_violations": 3,
+        },
+    )
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload.get("reason") == "oms_invariants_failed"

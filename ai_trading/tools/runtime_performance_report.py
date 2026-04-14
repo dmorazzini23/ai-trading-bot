@@ -812,6 +812,92 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 cast=float,
             )
         )
+    require_oms_invariants = get_env(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_OMS_INVARIANTS",
+        None,
+        cast=bool,
+    )
+    if require_oms_invariants is None:
+        require_oms_invariants = bool(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_REQUIRE_OMS_INVARIANTS",
+                False,
+                cast=bool,
+            )
+        )
+    max_oms_invariant_violations = _as_int(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_OMS_INVARIANT_VIOLATIONS",
+            None,
+            cast=int,
+        )
+    )
+    if max_oms_invariant_violations is None:
+        max_oms_invariant_violations = _as_int(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_OMS_INVARIANT_VIOLATIONS",
+                0,
+                cast=int,
+            )
+        )
+    require_oms_event_tca = get_env(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_OMS_EVENT_TCA",
+        None,
+        cast=bool,
+    )
+    if require_oms_event_tca is None:
+        require_oms_event_tca = bool(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_REQUIRE_OMS_EVENT_TCA",
+                False,
+                cast=bool,
+            )
+        )
+    min_event_tca_filled_events = _as_int(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_EVENT_TCA_FILLED_EVENTS",
+            None,
+            cast=int,
+        )
+    )
+    if min_event_tca_filled_events is None:
+        min_event_tca_filled_events = _as_int(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MIN_EVENT_TCA_FILLED_EVENTS",
+                25,
+                cast=int,
+            )
+        )
+    max_event_tca_submit_reject_rate_pct = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_EVENT_TCA_SUBMIT_REJECT_RATE_PCT",
+            None,
+            cast=float,
+        )
+    )
+    if max_event_tca_submit_reject_rate_pct is None:
+        max_event_tca_submit_reject_rate_pct = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_EVENT_TCA_SUBMIT_REJECT_RATE_PCT",
+                5.0,
+                cast=float,
+            )
+        )
+    max_event_tca_p90_slippage_bps = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_EVENT_TCA_P90_SLIPPAGE_BPS",
+            None,
+            cast=float,
+        )
+    )
+    if max_event_tca_p90_slippage_bps is None:
+        max_event_tca_p90_slippage_bps = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_EVENT_TCA_P90_SLIPPAGE_BPS",
+                25.0,
+                cast=float,
+            )
+        )
     return {
         "min_closed_trades": int(max(0, min_closed_trades or 50)),
         "min_profit_factor": float(min_profit_factor if min_profit_factor is not None else 1.0),
@@ -911,6 +997,48 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 min(
                     1.0,
                     min_execution_capture_ratio if min_execution_capture_ratio is not None else 0.08,
+                ),
+            )
+        ),
+        "require_oms_invariants": bool(require_oms_invariants),
+        "max_oms_invariant_violations": int(
+            max(
+                0,
+                (
+                    max_oms_invariant_violations
+                    if max_oms_invariant_violations is not None
+                    else 0
+                ),
+            )
+        ),
+        "require_oms_event_tca": bool(require_oms_event_tca),
+        "min_event_tca_filled_events": int(
+            max(
+                0,
+                (
+                    min_event_tca_filled_events
+                    if min_event_tca_filled_events is not None
+                    else 25
+                ),
+            )
+        ),
+        "max_event_tca_submit_reject_rate_pct": float(
+            max(
+                0.0,
+                (
+                    max_event_tca_submit_reject_rate_pct
+                    if max_event_tca_submit_reject_rate_pct is not None
+                    else 5.0
+                ),
+            )
+        ),
+        "max_event_tca_p90_slippage_bps": float(
+            max(
+                0.0,
+                (
+                    max_event_tca_p90_slippage_bps
+                    if max_event_tca_p90_slippage_bps is not None
+                    else 25.0
                 ),
             )
         ),
@@ -3523,6 +3651,112 @@ def summarize_post_trade_attribution_ledger(
     }
 
 
+def summarize_oms_event_tca() -> dict[str, Any]:
+    """Return event-driven TCA summary derived from immutable OMS events."""
+
+    enabled = bool(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_OMS_EVENT_TCA_ENABLED",
+            False,
+            cast=bool,
+        )
+    )
+    if not enabled:
+        return {"enabled": False, "available": False}
+
+    database_url = str(
+        get_env("DATABASE_URL", "", cast=str, resolve_aliases=False) or ""
+    ).strip()
+    intent_store_path = str(
+        get_env(
+            "AI_TRADING_OMS_INTENT_STORE_PATH",
+            "",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or ""
+    ).strip()
+    lookback_days = _as_int(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_OMS_EVENT_TCA_LOOKBACK_DAYS",
+            None,
+            cast=int,
+        )
+    )
+    limit = _as_int(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_OMS_EVENT_TCA_LIMIT",
+            50000,
+            cast=int,
+        )
+    )
+    try:
+        from ai_trading.tca.event_analytics import summarize_oms_event_tca
+
+        payload = summarize_oms_event_tca(
+            database_url=(database_url or None),
+            intent_store_path=(intent_store_path or None),
+            lookback_days=(
+                int(lookback_days) if lookback_days is not None and lookback_days >= 0 else None
+            ),
+            limit=max(1, int(limit if limit is not None else 50000)),
+        )
+        summary = dict(payload) if isinstance(payload, Mapping) else {}
+        summary["enabled"] = True
+        summary["available"] = True
+        return summary
+    except Exception as exc:
+        return {"enabled": True, "available": False, "error": str(exc)}
+
+
+def summarize_oms_invariants() -> dict[str, Any]:
+    """Return OMS reconciliation invariant summary for go/no-go gating."""
+
+    enabled = bool(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_OMS_INVARIANTS_ENABLED",
+            False,
+            cast=bool,
+        )
+    )
+    if not enabled:
+        return {"enabled": False, "available": False}
+
+    database_url = str(
+        get_env("DATABASE_URL", "", cast=str, resolve_aliases=False) or ""
+    ).strip()
+    intent_store_path = str(
+        get_env(
+            "AI_TRADING_OMS_INTENT_STORE_PATH",
+            "",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or ""
+    ).strip()
+    limit = _as_int(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_OMS_INVARIANTS_LIMIT",
+            5000,
+            cast=int,
+        )
+    )
+    try:
+        from ai_trading.oms.invariants import evaluate_oms_reconciliation_invariants
+
+        payload = evaluate_oms_reconciliation_invariants(
+            database_url=(database_url or None),
+            intent_store_path=(intent_store_path or None),
+            limit=max(1, int(limit if limit is not None else 5000)),
+        )
+        summary = dict(payload) if isinstance(payload, Mapping) else {}
+        summary["enabled"] = True
+        summary["available"] = True
+        return summary
+    except Exception as exc:
+        return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
+
+
 def build_report(
     *,
     trade_history_path: Path,
@@ -3642,6 +3876,8 @@ def build_report(
         "gate_effectiveness": gate_summary,
         "execution_vs_alpha": execution_vs_alpha,
         "post_trade_attribution_ledger": post_trade_attribution_ledger,
+        "oms_event_tca": summarize_oms_event_tca(),
+        "oms_invariants": summarize_oms_invariants(),
         "edge_realism": summarize_edge_realism_state(resolved_edge_realism_path),
         "policy_ablation": summarize_policy_ablation_state(
             resolved_policy_ablation_path
@@ -3860,6 +4096,38 @@ def evaluate_go_no_go(
         0.0,
         min(1.0, float(min_execution_capture_ratio)),
     )
+    require_oms_invariants = bool(
+        threshold_map.get("require_oms_invariants", False)
+    )
+    max_oms_invariant_violations = _as_int(
+        threshold_map.get("max_oms_invariant_violations")
+    )
+    if max_oms_invariant_violations is None:
+        max_oms_invariant_violations = 0
+    max_oms_invariant_violations = max(0, int(max_oms_invariant_violations))
+    require_oms_event_tca = bool(
+        threshold_map.get("require_oms_event_tca", False)
+    )
+    min_event_tca_filled_events = _as_int(
+        threshold_map.get("min_event_tca_filled_events")
+    )
+    if min_event_tca_filled_events is None:
+        min_event_tca_filled_events = 25
+    min_event_tca_filled_events = max(0, int(min_event_tca_filled_events))
+    max_event_tca_submit_reject_rate_pct = _as_float(
+        threshold_map.get("max_event_tca_submit_reject_rate_pct")
+    )
+    if max_event_tca_submit_reject_rate_pct is None:
+        max_event_tca_submit_reject_rate_pct = 5.0
+    max_event_tca_submit_reject_rate_pct = max(
+        0.0, float(max_event_tca_submit_reject_rate_pct)
+    )
+    max_event_tca_p90_slippage_bps = _as_float(
+        threshold_map.get("max_event_tca_p90_slippage_bps")
+    )
+    if max_event_tca_p90_slippage_bps is None:
+        max_event_tca_p90_slippage_bps = 25.0
+    max_event_tca_p90_slippage_bps = max(0.0, float(max_event_tca_p90_slippage_bps))
 
     trade = report.get("trade_history", {})
     if not isinstance(trade, Mapping):
@@ -4227,6 +4495,67 @@ def evaluate_go_no_go(
         execution_capture_ratio is None
         or execution_capture_ratio >= float(min_execution_capture_ratio)
     )
+    oms_invariants_raw = report.get("oms_invariants")
+    oms_invariants = (
+        dict(oms_invariants_raw)
+        if isinstance(oms_invariants_raw, Mapping)
+        else {}
+    )
+    oms_invariants_enabled = bool(oms_invariants.get("enabled", bool(oms_invariants)))
+    oms_invariants_available = bool(
+        oms_invariants.get("available", oms_invariants_enabled)
+    )
+    oms_invariants_total_violations = max(
+        0,
+        _as_int(oms_invariants.get("total_violations")) or 0,
+    )
+    oms_invariants_ok_raw = _as_bool(oms_invariants.get("ok"))
+    oms_invariants_ok = (
+        bool(oms_invariants_ok_raw)
+        if oms_invariants_ok_raw is not None
+        else bool(
+            oms_invariants_available
+            and oms_invariants_total_violations
+            <= int(max_oms_invariant_violations)
+        )
+    )
+    oms_invariants_consistent = bool(
+        oms_invariants_ok
+        and oms_invariants_total_violations <= int(max_oms_invariant_violations)
+    )
+
+    oms_event_tca_raw = report.get("oms_event_tca")
+    oms_event_tca = (
+        dict(oms_event_tca_raw)
+        if isinstance(oms_event_tca_raw, Mapping)
+        else {}
+    )
+    oms_event_tca_enabled = bool(oms_event_tca.get("enabled", bool(oms_event_tca)))
+    oms_event_tca_available = bool(
+        oms_event_tca.get("available", oms_event_tca_enabled)
+    )
+    event_tca_filled_events = max(0, _as_int(oms_event_tca.get("filled_events")) or 0)
+    event_tca_submit_reject_rate_pct = _as_float(
+        oms_event_tca.get("submit_reject_rate_pct")
+    )
+    event_tca_p90_slippage_bps = _as_float(oms_event_tca.get("p90_slippage_bps"))
+    event_tca_submit_reject_rate_ok = bool(
+        event_tca_submit_reject_rate_pct is None
+        or event_tca_submit_reject_rate_pct
+        <= float(max_event_tca_submit_reject_rate_pct)
+    )
+    event_tca_p90_slippage_ok = bool(
+        event_tca_p90_slippage_bps is None
+        or event_tca_p90_slippage_bps <= float(max_event_tca_p90_slippage_bps)
+    )
+    event_tca_fill_count_ok = bool(
+        int(event_tca_filled_events) >= int(min_event_tca_filled_events)
+    )
+    oms_event_tca_consistent = bool(
+        event_tca_submit_reject_rate_ok
+        and event_tca_p90_slippage_ok
+        and event_tca_fill_count_ok
+    )
     confidence_enabled = bool(
         float(min_win_rate_confidence_floor) > 0.0 and float(win_rate_confidence_z) > 0.0
     )
@@ -4357,6 +4686,26 @@ def evaluate_go_no_go(
             if (reconciliation_available and require_open_position_reconciliation)
             else (not require_open_position_reconciliation)
         ),
+        "oms_invariants_available": (
+            oms_invariants_available
+            if require_oms_invariants
+            else True
+        ),
+        "oms_invariants_consistent": (
+            oms_invariants_consistent
+            if (oms_invariants_available and require_oms_invariants)
+            else (not require_oms_invariants)
+        ),
+        "oms_event_tca_available": (
+            oms_event_tca_available
+            if require_oms_event_tca
+            else True
+        ),
+        "oms_event_tca_consistent": (
+            oms_event_tca_consistent
+            if (oms_event_tca_available and require_oms_event_tca)
+            else (not require_oms_event_tca)
+        ),
     }
     if requested_trade_fill_source == "auto_live" and bool(auto_live_fail_closed):
         checks["live_samples_sufficient"] = bool(auto_live_context.get("used_live", False))
@@ -4410,6 +4759,14 @@ def evaluate_go_no_go(
             "max_open_position_abs_delta_qty": float(max_open_position_abs_delta_qty),
             "max_slippage_drag_bps": float(max_slippage_drag_bps),
             "min_execution_capture_ratio": float(min_execution_capture_ratio),
+            "require_oms_invariants": bool(require_oms_invariants),
+            "max_oms_invariant_violations": int(max_oms_invariant_violations),
+            "require_oms_event_tca": bool(require_oms_event_tca),
+            "min_event_tca_filled_events": int(min_event_tca_filled_events),
+            "max_event_tca_submit_reject_rate_pct": float(
+                max_event_tca_submit_reject_rate_pct
+            ),
+            "max_event_tca_p90_slippage_bps": float(max_event_tca_p90_slippage_bps),
         },
         "observed": {
             "pnl_available": pnl_available,
@@ -4462,6 +4819,20 @@ def evaluate_go_no_go(
             "open_position_reconciliation_consistent": bool(
                 reconciliation_consistent
             ),
+            "oms_invariants_enabled": bool(oms_invariants_enabled),
+            "oms_invariants_available": bool(oms_invariants_available),
+            "oms_invariants_ok": bool(oms_invariants_ok),
+            "oms_invariants_consistent": bool(oms_invariants_consistent),
+            "oms_invariants_total_violations": int(oms_invariants_total_violations),
+            "oms_event_tca_enabled": bool(oms_event_tca_enabled),
+            "oms_event_tca_available": bool(oms_event_tca_available),
+            "oms_event_tca_consistent": bool(oms_event_tca_consistent),
+            "event_tca_filled_events": int(event_tca_filled_events),
+            "event_tca_submit_reject_rate_pct": event_tca_submit_reject_rate_pct,
+            "event_tca_p90_slippage_bps": event_tca_p90_slippage_bps,
+            "event_tca_submit_reject_rate_ok": bool(event_tca_submit_reject_rate_ok),
+            "event_tca_p90_slippage_ok": bool(event_tca_p90_slippage_ok),
+            "event_tca_fill_count_ok": bool(event_tca_fill_count_ok),
             "trade_fill_source": trade_fill_source,
             "requested_trade_fill_source": requested_trade_fill_source,
             "auto_live_selection": auto_live_context,

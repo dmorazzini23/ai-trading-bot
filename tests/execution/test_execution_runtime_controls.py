@@ -3587,6 +3587,101 @@ def test_submit_no_result_symbol_backoff_expires(monkeypatch):
     assert context_after["reason"] == "backoff_inactive"
 
 
+def test_submit_no_result_symbol_backoff_uses_session_close_window(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_TRIGGER_COUNT", "1"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_COOLDOWN_SEC", "120"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_UNTIL_SESSION_CLOSE",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_ALERT_COOLDOWN_SEC", "0"
+    )
+    now = {"value": 30_000.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: float(now["value"]))
+
+    class _SessionDateTime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:
+            base = datetime(2026, 4, 14, 15, 0, 0, tzinfo=ZoneInfo("America/New_York"))
+            if tz is None:
+                return base.astimezone(UTC).replace(tzinfo=None)
+            return base.astimezone(tz)
+
+    monkeypatch.setattr(lt, "datetime", _SessionDateTime)
+
+    engine._record_submit_failure(
+        symbol="AAPL",
+        side="buy",
+        reason="submit_no_result",
+        client_order_id="cid-snr-session-close-1",
+        order_type="limit",
+        status_code=504,
+        detail="no broker response",
+    )
+
+    allowed, context = engine._symbol_submit_no_result_backoff_allows_opening(
+        symbol="AAPL"
+    )
+    assert allowed is False
+    assert context["reason"] == "submit_no_result_symbol_backoff"
+    assert float(context["remaining_seconds"]) > 3000.0
+    assert float(context["remaining_seconds"]) <= 3600.0
+
+
+def test_submit_no_result_symbol_backoff_session_close_falls_back_offhours(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_TRIGGER_COUNT", "1"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_COOLDOWN_SEC", "120"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_UNTIL_SESSION_CLOSE",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_ALERT_COOLDOWN_SEC", "0"
+    )
+    now = {"value": 40_000.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: float(now["value"]))
+
+    class _AfterHoursDateTime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:
+            base = datetime(2026, 4, 14, 16, 30, 0, tzinfo=ZoneInfo("America/New_York"))
+            if tz is None:
+                return base.astimezone(UTC).replace(tzinfo=None)
+            return base.astimezone(tz)
+
+    monkeypatch.setattr(lt, "datetime", _AfterHoursDateTime)
+
+    engine._record_submit_failure(
+        symbol="MSFT",
+        side="sell",
+        reason="submit_no_result",
+        client_order_id="cid-snr-after-hours-1",
+        order_type="limit",
+        status_code=504,
+        detail="no broker response",
+    )
+
+    allowed, context = engine._symbol_submit_no_result_backoff_allows_opening(
+        symbol="MSFT"
+    )
+    assert allowed is False
+    assert context["reason"] == "submit_no_result_symbol_backoff"
+    assert 100.0 <= float(context["remaining_seconds"]) <= 120.0
+
+
 def test_submit_no_result_fingerprint_backoff_triggers_without_symbol_backoff(monkeypatch):
     engine = _engine_stub()
     monkeypatch.setenv("AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_ENABLED", "1")
@@ -3766,6 +3861,48 @@ def test_sample_formation_override_applies_when_execution_quality_starved(monkey
     )
     assert action_second == "skip"
     assert context_second["reason"] == "symbol_quota_exhausted"
+
+
+def test_sample_formation_override_allowlist_wildcard_allows_any_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SAMPLE_FORMATION_EXPLORATION_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SAMPLE_FORMATION_REQUIRE_INSUFFICIENT_SAMPLES", "1"
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SAMPLE_FORMATION_SYMBOLS", "*")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SAMPLE_FORMATION_MAX_EVENTS_PER_WINDOW", "3"
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SAMPLE_FORMATION_MAX_EVENTS_PER_SYMBOL_PER_WINDOW", "2"
+    )
+    monkeypatch.setattr(
+        engine,
+        "_execution_quality_context",
+        lambda: {
+            "enabled": True,
+            "state": "insufficient_samples",
+            "scale": 1.0,
+            "pause_active": False,
+            "pause_remaining_s": 0.0,
+        },
+    )
+    monkeypatch.setattr(lt, "monotonic_time", lambda: 80_000.0)
+
+    action, context = (
+        engine._maybe_override_passive_fill_low_prob_action_for_sample_formation(
+            symbol="QCOM",
+            action_token="skip",
+            fill_probability=0.14,
+            threshold=0.27,
+        )
+    )
+    assert action == "ioc"
+    assert context["applied"] is True
+    assert context["allowlist_mode"] == "all"
+    assert context["allowlist_size"] == 0
 
 
 def test_record_cycle_outcome_records_live_submit_outcome_edge_telemetry(monkeypatch):

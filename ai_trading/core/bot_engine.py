@@ -36672,6 +36672,19 @@ def _write_decision_record(record: Any, path: str | None) -> None:
     if bool(get_env("AI_TRADING_DECISION_RECORD_SNAPSHOT_REDACT_SECRETS", True, cast=bool)):
         payload = _redact_snapshot_payload(payload)
     logger.info("DECISION_RECORD", extra={"decision": payload})
+    if bool(get_env("AI_TRADING_DECISION_EVENT_EMIT_ENABLED", True, cast=bool)):
+        try:
+            from ai_trading.oms.decision_events import emit_decision_event_from_payload
+
+            emit_decision_event_from_payload(
+                payload if isinstance(payload, Mapping) else {"record": payload},
+                event_source="decision_record",
+            )
+        except Exception as exc:
+            logger.warning(
+                "DECISION_EVENT_EMIT_FAILED",
+                extra={"error": str(exc)},
+            )
     if not path:
         path_targets: list[str] = []
     else:

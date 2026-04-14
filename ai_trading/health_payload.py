@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.telemetry import runtime_state
 
 
@@ -72,6 +75,196 @@ def _model_liveness_snapshot() -> dict[str, Any]:
     except Exception:
         pass
     return {}
+
+
+def _database_readiness_snapshot() -> dict[str, Any]:
+    enabled = _env_bool("AI_TRADING_HEALTH_DB_READINESS_ENABLED", True)
+    if not enabled:
+        return {"enabled": False}
+
+    try:
+        from ai_trading.config.management import get_env
+
+        configured_database_url = str(
+            get_env("DATABASE_URL", "", cast=str, resolve_aliases=False) or ""
+        ).strip()
+        configured_store_path = str(
+            get_env(
+                "AI_TRADING_OMS_INTENT_STORE_PATH",
+                "",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or ""
+        ).strip()
+        expected_revision = str(
+            get_env(
+                "AI_TRADING_OMS_EXPECTED_ALEMBIC_REVISION",
+                "20260414_0001",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or ""
+        ).strip()
+    except Exception as exc:
+        return {"enabled": True, "configured": False, "ok": False, "error": str(exc)}
+
+    if not configured_database_url and not configured_store_path:
+        return {
+            "enabled": True,
+            "configured": False,
+            "ok": True,
+            "reason": "database_not_configured",
+        }
+
+    store: Any | None = None
+    try:
+        from ai_trading.oms.event_store import EventStore
+
+        store = EventStore(
+            path=(configured_store_path or None),
+            url=(configured_database_url or None),
+        )
+        payload_raw = store.is_healthy(expected_revision=expected_revision)
+        payload = (
+            dict(payload_raw)
+            if isinstance(payload_raw, Mapping)
+            else {"ok": bool(payload_raw)}
+        )
+        payload["enabled"] = True
+        payload["configured"] = True
+        payload["expected_revision"] = expected_revision
+        return payload
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "configured": True,
+            "ok": False,
+            "connected": False,
+            "error": str(exc),
+            "expected_revision": expected_revision,
+        }
+    finally:
+        if store is not None:
+            try:
+                store.close()
+            except Exception:
+                pass
+
+
+def _oms_invariants_snapshot() -> dict[str, Any]:
+    enabled = _env_bool("AI_TRADING_HEALTH_OMS_INVARIANTS_ENABLED", False)
+    if not enabled:
+        return {"enabled": False}
+    try:
+        from ai_trading.config.management import get_env
+        from ai_trading.oms.invariants import evaluate_oms_reconciliation_invariants
+
+        configured_database_url = str(
+            get_env("DATABASE_URL", "", cast=str, resolve_aliases=False) or ""
+        ).strip()
+        configured_store_path = str(
+            get_env(
+                "AI_TRADING_OMS_INTENT_STORE_PATH",
+                "",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or ""
+        ).strip()
+        summary = evaluate_oms_reconciliation_invariants(
+            database_url=(configured_database_url or None),
+            intent_store_path=(configured_store_path or None),
+            limit=int(
+                get_env(
+                    "AI_TRADING_HEALTH_OMS_INVARIANTS_LIMIT",
+                    5000,
+                    cast=int,
+                    resolve_aliases=False,
+                )
+            ),
+        )
+        payload = dict(summary)
+        payload["enabled"] = True
+        return payload
+    except Exception as exc:
+        return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
+
+
+def _read_json_mapping_artifact(
+    *,
+    configured_path: str,
+    default_relative: str,
+) -> tuple[dict[str, Any], Path]:
+    resolved = resolve_runtime_artifact_path(
+        configured_path or default_relative,
+        default_relative=default_relative,
+    )
+    if not resolved.exists():
+        return ({}, resolved)
+    try:
+        parsed = json.loads(resolved.read_text(encoding="utf-8"))
+    except Exception:
+        return ({}, resolved)
+    if isinstance(parsed, dict):
+        return (dict(parsed), resolved)
+    return ({}, resolved)
+
+
+def _runtime_performance_snapshot() -> dict[str, Any]:
+    try:
+        from ai_trading.config.management import get_env
+
+        latest_path = str(
+            get_env(
+                "AI_TRADING_RUNTIME_PERF_REPORT_LATEST_PATH",
+                "runtime/runtime_performance_report_latest.json",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or "runtime/runtime_performance_report_latest.json"
+        ).strip()
+    except Exception:
+        latest_path = "runtime/runtime_performance_report_latest.json"
+    payload, resolved = _read_json_mapping_artifact(
+        configured_path=latest_path,
+        default_relative="runtime/runtime_performance_report_latest.json",
+    )
+    go_no_go_raw = payload.get("go_no_go")
+    go_no_go = dict(go_no_go_raw) if isinstance(go_no_go_raw, Mapping) else {}
+    return {
+        "available": bool(payload),
+        "path": str(resolved),
+        "go_no_go": go_no_go,
+        "generated_at": payload.get("generated_at"),
+        "source": payload.get("source"),
+    }
+
+
+def _manual_override_snapshot() -> dict[str, Any]:
+    try:
+        from ai_trading.config.management import get_env
+
+        toggle_path = str(
+            get_env(
+                "AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH",
+                "runtime/policy_runtime_toggles.json",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or "runtime/policy_runtime_toggles.json"
+        ).strip()
+    except Exception:
+        toggle_path = "runtime/policy_runtime_toggles.json"
+    payload, resolved = _read_json_mapping_artifact(
+        configured_path=toggle_path,
+        default_relative="runtime/policy_runtime_toggles.json",
+    )
+    return {
+        "available": bool(payload),
+        "path": str(resolved),
+        "state": payload,
+    }
 
 
 def build_alpaca_health_payload(
@@ -145,6 +338,8 @@ def build_runtime_health_payload(
     )
     quote_state: dict[str, Any] = _safe_observe(runtime_state.observe_quote_status, {})
     model_liveness = _model_liveness_snapshot()
+    database_readiness = _database_readiness_snapshot()
+    oms_invariants = _oms_invariants_snapshot()
 
     raw_provider_status = provider_state.get("status")
     provider_status = raw_provider_status or (
@@ -285,6 +480,18 @@ def build_runtime_health_payload(
         degraded = False
     if force_ok_for_pytest:
         overall_ok = True
+    require_database_ready = _env_bool("AI_TRADING_HEALTH_REQUIRE_DB_READY", False)
+    database_configured = bool(database_readiness.get("configured"))
+    database_ok = bool(database_readiness.get("ok"))
+    if require_database_ready and database_configured and not database_ok:
+        overall_ok = False
+        degraded = True
+    require_oms_invariants = _env_bool("AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS", False)
+    if require_oms_invariants and oms_invariants.get("enabled", False) and not bool(
+        oms_invariants.get("ok")
+    ):
+        overall_ok = False
+        degraded = True
     if not overall_ok:
         degraded = True
 
@@ -319,6 +526,8 @@ def build_runtime_health_payload(
         "cooldown_seconds_remaining": provider_payload.get("cooldown_seconds_remaining"),
         "data_status": data_status,
         "model_liveness": model_liveness,
+        "database": database_readiness,
+        "oms_invariants": oms_invariants,
     }
     if offhours_market_closed_ready:
         payload["reason"] = "market_closed"
@@ -339,10 +548,93 @@ def build_runtime_health_payload(
         payload["reason"] = "provider_status_unknown"
     if broker_unknown and not payload.get("reason"):
         payload["reason"] = "broker_status_unknown"
+    if require_database_ready and database_configured and not database_ok and not payload.get("reason"):
+        payload["reason"] = "database_unhealthy"
+    if (
+        require_oms_invariants
+        and oms_invariants.get("enabled", False)
+        and not bool(oms_invariants.get("ok"))
+        and not payload.get("reason")
+    ):
+        payload["reason"] = "oms_invariants_failed"
     if force_ok_for_pytest:
         payload["ok"] = True
         payload.setdefault("status", payload.get("status") or "healthy")
     return payload
+
+
+def build_control_plane_snapshot(
+    *,
+    service_name: str = "ai-trading",
+) -> dict[str, Any]:
+    """Build an operator-facing control-plane snapshot from runtime state."""
+
+    provider_state: dict[str, Any] = _safe_observe(
+        runtime_state.observe_data_provider_state,
+        {},
+    )
+    broker_state: dict[str, Any] = _safe_observe(runtime_state.observe_broker_status, {})
+    service_state: dict[str, Any] = _safe_observe(runtime_state.observe_service_status, {})
+    quote_state: dict[str, Any] = _safe_observe(runtime_state.observe_quote_status, {})
+    model_liveness = _model_liveness_snapshot()
+    database_readiness = _database_readiness_snapshot()
+    oms_invariants = _oms_invariants_snapshot()
+    runtime_performance = _runtime_performance_snapshot()
+    manual_overrides = _manual_override_snapshot()
+
+    go_no_go_raw = runtime_performance.get("go_no_go")
+    go_no_go = dict(go_no_go_raw) if isinstance(go_no_go_raw, Mapping) else {}
+    go_no_go_observed_raw = go_no_go.get("observed")
+    go_no_go_observed = (
+        dict(go_no_go_observed_raw)
+        if isinstance(go_no_go_observed_raw, Mapping)
+        else {}
+    )
+
+    return {
+        "service": service_name,
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "rollout": {
+            "phase": service_state.get("phase"),
+            "phase_since": service_state.get("phase_since"),
+            "cycle_index": service_state.get("cycle_index"),
+            "status": service_state.get("status"),
+            "reason": service_state.get("reason"),
+        },
+        "broker_health": broker_state,
+        "data_provider": provider_state,
+        "quotes": quote_state,
+        "positions": {
+            "reconciliation_available": go_no_go_observed.get(
+                "open_position_reconciliation_available"
+            ),
+            "reconciliation_consistent": go_no_go_observed.get(
+                "open_position_reconciliation_consistent"
+            ),
+            "reconciliation_ratio": go_no_go_observed.get(
+                "open_position_reconciliation_ratio"
+            ),
+            "mismatch_count": go_no_go_observed.get(
+                "open_position_reconciliation_mismatch_count"
+            ),
+            "max_abs_delta_qty": go_no_go_observed.get(
+                "open_position_reconciliation_max_abs_delta_qty"
+            ),
+        },
+        "open_orders": {
+            "available": runtime_performance.get("available"),
+            "source": runtime_performance.get("source"),
+        },
+        "circuit_breakers": {
+            "go_no_go_gate_passed": go_no_go.get("gate_passed"),
+            "failed_checks": go_no_go.get("failed_checks"),
+        },
+        "liveness": model_liveness,
+        "database": database_readiness,
+        "oms_invariants": oms_invariants,
+        "runtime_performance": runtime_performance,
+        "manual_overrides": manual_overrides,
+    }
 
 
 def build_service_health_payload(
@@ -566,6 +858,7 @@ def register_healthz_routes(
 
 __all__ = [
     "build_runtime_health_payload",
+    "build_control_plane_snapshot",
     "build_alpaca_health_payload",
     "build_service_health_payload",
     "build_api_health_payload",

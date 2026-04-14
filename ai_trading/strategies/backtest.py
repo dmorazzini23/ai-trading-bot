@@ -7,12 +7,14 @@ performance analysis for institutional trading strategies.
 import math
 import random
 import statistics
+import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from ai_trading.config.management import get_env
+from ai_trading.config.management import get_env, reload_env
 from ai_trading.logging import logger
+from ai_trading.oms.simulated_lifecycle import SimulatedLifecycleDriver
 from .base import BaseStrategy, StrategySignal
 
 # Optional numpy dependency used for noise; provide lightweight fallback for linting
@@ -60,6 +62,7 @@ class BacktestEngine:
             enable_partial_fills: Whether to model partial fills
             slippage_model: Slippage model ('linear', 'sqrt', 'impact')
         """
+        reload_env()
         self.initial_capital = initial_capital
         self.commission_bps = commission_bps
         self.commission_flat = commission_flat
@@ -117,6 +120,120 @@ class BacktestEngine:
             'BacktestEngine initialized with realistic execution modeling',
             extra={"legacy_module": True, "seed": self.random_seed},
         )
+        self._oms_events_enabled = bool(
+            get_env("AI_TRADING_BACKTEST_OMS_EVENTS_ENABLED", False, cast=bool)
+        )
+        database_url = str(
+            get_env("DATABASE_URL", "", cast=str, resolve_aliases=False) or ""
+        ).strip()
+        intent_store_path = str(
+            get_env(
+                "AI_TRADING_OMS_INTENT_STORE_PATH",
+                "",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or ""
+        ).strip()
+        self._oms_lifecycle = SimulatedLifecycleDriver(
+            enabled=self._oms_events_enabled,
+            source="legacy_backtest_engine",
+            database_url=(database_url or None),
+            intent_store_path=(intent_store_path or None),
+        )
+        self._event_counter = 0
+
+    def _close_event_store(self) -> None:
+        self._oms_lifecycle.close()
+
+    @staticmethod
+    def _hash_token(*parts: Any) -> str:
+        material = "|".join(str(part) for part in parts if part not in (None, ""))
+        if not material:
+            material = "legacy-backtest-event"
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _ts_text(value: Any) -> str:
+        iso = getattr(value, "isoformat", None)
+        if callable(iso):
+            try:
+                return str(iso())
+            except Exception:
+                return str(value)
+        return str(value)
+
+    def _emit_order_submit_lifecycle(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: int,
+        price: float,
+        trade_timestamp: Any,
+    ) -> tuple[str | None, str | None]:
+        self._event_counter += 1
+        base_token = self._hash_token(
+            "legacy_backtest",
+            symbol,
+            side,
+            quantity,
+            price,
+            self._ts_text(trade_timestamp),
+            self._event_counter,
+        )
+        intent_id = f"lbt-{base_token[:24]}"
+        ref = self._oms_lifecycle.open_submitted_intent(
+            intent_id=intent_id,
+            idempotency_key=base_token,
+            symbol=symbol,
+            side=side,
+            quantity=float(quantity),
+            decision_ts=trade_timestamp,
+            broker_order_id=intent_id,
+            strategy_id="legacy_backtest_engine",
+            metadata={
+                "price": float(price),
+                "bar_ts": self._ts_text(trade_timestamp),
+                "legacy_backtest": True,
+            },
+        )
+        if ref is None:
+            return (None, None)
+        return (ref.intent_id, ref.idempotency_key)
+
+    def _emit_fill_lifecycle(
+        self,
+        *,
+        intent_id: str | None,
+        base_token: str | None,
+        trade_result: dict[str, Any],
+        trade_timestamp: Any,
+    ) -> None:
+        _ = base_token
+        if not intent_id:
+            return
+        event_ts = str(trade_result.get("timestamp") or self._ts_text(trade_timestamp))
+        fill_qty = int(max(0, float(trade_result.get("quantity_filled", 0) or 0)))
+        fill_price = float(
+            trade_result.get("execution_price")
+            or trade_result.get("signal_price")
+            or 0.0
+        )
+        self._oms_lifecycle.record_fill_and_close_intent(
+            intent_id=str(intent_id),
+            fill_qty=float(fill_qty),
+            fill_price=fill_price,
+            fee=float(trade_result.get("total_commission", 0.0) or 0.0),
+            fill_ts=event_ts,
+            terminal_status=("FILLED" if fill_qty > 0 else "FAILED"),
+            last_error=(
+                str(trade_result.get("error"))
+                if trade_result.get("error") not in (None, "")
+                else None
+            ),
+            liquidity_flag="SIMULATED",
+        )
 
     def run_backtest(
         self,
@@ -152,7 +269,21 @@ class BacktestEngine:
                         if strategy.validate_signal(signal):
                             position_size = strategy.calculate_position_size(signal, current_capital, 0)
                             if position_size > 0:
-                                trade_result = self._simulate_trade(signal, position_size, data_point, trade_timestamp=data_point.get('timestamp', datetime.now(UTC)))
+                                trade_timestamp = data_point.get('timestamp', datetime.now(UTC))
+                                intent_id, base_token = self._emit_order_submit_lifecycle(
+                                    symbol=str(signal.symbol),
+                                    side=str(signal.side),
+                                    quantity=int(position_size),
+                                    price=float(data_point.get('close', 0.0) or 0.0),
+                                    trade_timestamp=trade_timestamp,
+                                )
+                                trade_result = self._simulate_trade(signal, position_size, data_point, trade_timestamp=trade_timestamp)
+                                self._emit_fill_lifecycle(
+                                    intent_id=intent_id,
+                                    base_token=base_token,
+                                    trade_result=trade_result,
+                                    trade_timestamp=trade_timestamp,
+                                )
                                 current_capital += trade_result['net_pnl']
                                 portfolio_values.append(current_capital)
                                 results['trades'].append(trade_result)
@@ -191,9 +322,11 @@ class BacktestEngine:
                 results['avg_slippage_bps'] = statistics.mean(slippage_costs) if slippage_costs else 0.0
             results['max_drawdown'] = self._calculate_max_drawdown(portfolio_values)
             logger.info(f"Backtest completed for {strategy.name}: {results['total_return']:.2%} return, {results['total_trades']} trades")
+            self._close_event_store()
             return results
         except (ValueError, TypeError) as e:
             logger.error(f'Error running backtest: {e}')
+            self._close_event_store()
             return {'error': str(e)}
 
     def _simulate_trade(

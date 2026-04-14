@@ -5,10 +5,11 @@ from .rollups import (
     load_tca_records,
     summarize_tca_records,
 )
+from .event_analytics import summarize_oms_event_tca
 
 __all__ = [
     "calibrate_cost_model_from_tca",
     "load_tca_records",
     "summarize_tca_records",
+    "summarize_oms_event_tca",
 ]
-

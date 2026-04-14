@@ -31,6 +31,23 @@ def test_operator_plan_endpoint_returns_default_plan(monkeypatch):
     assert payload["plan"]["name"] == "balanced"
 
 
+def test_operator_control_plane_snapshot_endpoint(monkeypatch):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    app = create_app()
+    client = app.test_client()
+
+    response = client.get("/operator/control-plane")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    snapshot = payload["snapshot"]
+    assert snapshot["service"] == "ai-trading"
+    assert "rollout" in snapshot
+    assert "broker_health" in snapshot
+    assert "manual_overrides" in snapshot
+
+
 def test_operator_plan_builder_accepts_valid_override():
     plan = build_plan("balanced", {"max_positions": 8, "capital_cap": 0.05})
 

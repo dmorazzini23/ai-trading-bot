@@ -9733,12 +9733,20 @@ class ExecutionEngine:
             )
             or ""
         ).strip()
-        allowlist = {
-            token.strip().upper()
-            for token in allowlist_raw.split(",")
-            if token.strip()
-        }
+        allowlist_mode = "list"
+        allowlist: set[str]
+        allowlist_token = allowlist_raw.strip().upper()
+        if allowlist_token in {"*", "ALL", "__ALL__", "ANY"}:
+            allowlist = set()
+            allowlist_mode = "all"
+        else:
+            allowlist = {
+                token.strip().upper()
+                for token in allowlist_raw.split(",")
+                if token.strip()
+            }
         context["allowlist_size"] = int(len(allowlist))
+        context["allowlist_mode"] = str(allowlist_mode)
         if allowlist and symbol_token not in allowlist:
             context["reason"] = "symbol_not_in_allowlist"
             context["symbol"] = symbol_token
@@ -26150,6 +26158,29 @@ class ExecutionEngine:
             "symbol": symbol_token,
         }
 
+    def _submit_no_result_symbol_backoff_seconds_until_session_close(self) -> float | None:
+        """Return seconds until regular-session close when currently inside RTH."""
+
+        try:
+            now_et = datetime.now(ZoneInfo("America/New_York"))
+            weekday = int(now_et.weekday())
+            minute_of_day = int((now_et.hour * 60) + now_et.minute)
+            open_minute = (9 * 60) + 30
+            close_minute = 16 * 60
+            if weekday >= 5 or minute_of_day < open_minute or minute_of_day >= close_minute:
+                return None
+            session_close_et = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+            remaining = float((session_close_et - now_et).total_seconds())
+            if not math.isfinite(remaining) or remaining <= 0.0:
+                return None
+            return max(1.0, min(float(remaining), 24.0 * 3600.0))
+        except Exception:
+            logger.debug(
+                "SUBMIT_NO_RESULT_BACKOFF_SESSION_CLOSE_CALC_FAILED",
+                exc_info=True,
+            )
+            return None
+
     def _submit_no_result_broker_health_allows_opening(
         self,
         *,
@@ -26583,6 +26614,19 @@ class ExecutionEngine:
                 float(tiered_symbol_cooldown),
                 float(min(fingerprint_cooldown, symbol_max_cooldown_sec)),
             )
+        session_close_mode = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SUBMIT_NO_RESULT_SYMBOL_BACKOFF_UNTIL_SESSION_CLOSE"
+        )
+        if session_close_mode is None:
+            session_close_mode = False
+        cooldown_mode = "fixed"
+        if bool(session_close_mode):
+            session_close_remaining = (
+                self._submit_no_result_symbol_backoff_seconds_until_session_close()
+            )
+            if session_close_remaining is not None:
+                tiered_symbol_cooldown = float(session_close_remaining)
+                cooldown_mode = "session_close"
         next_until = max(previous_until, now_mono + float(tiered_symbol_cooldown))
         backoff_until_map[symbol_token] = next_until
         backoff_reason_map[symbol_token] = (
@@ -26614,6 +26658,7 @@ class ExecutionEngine:
                 "trigger_count": int(trigger_count),
                 "window_sec": float(window_sec),
                 "cooldown_sec": float(tiered_symbol_cooldown),
+                "cooldown_mode": str(cooldown_mode),
                 "error_fingerprint": str(fingerprint_token),
                 "fingerprint_cluster_count": int(fingerprint_cluster_count),
                 "client_order_id": (

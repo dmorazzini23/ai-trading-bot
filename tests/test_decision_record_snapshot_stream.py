@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from ai_trading.core import bot_engine
+from ai_trading.oms.decision_events import reset_decision_event_store_cache
+from ai_trading.oms.event_store import EventStore
 
 
 class _DummyDecisionRecord:
@@ -28,6 +30,32 @@ class _TimestampDecisionRecord:
             "symbol": "AAPL",
             "bar_ts": datetime.now(UTC),
             "metrics": {"observed_at": datetime.now(UTC)},
+        }
+
+
+class _DecisionEventRecord:
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "symbol": "AAPL",
+            "bar_ts": datetime.now(UTC).isoformat(),
+            "gates": ["OK_TRADE"],
+            "order": {
+                "id": "intent-aapl-1",
+                "client_order_id": "coid-aapl-1",
+                "side": "buy",
+                "qty": 1.0,
+                "price": 100.5,
+                "strategy_id": "mean_revert_v2",
+            },
+            "metrics": {
+                "confidence": 0.82,
+                "expected_net_edge_bps": 14.2,
+                "score": 0.51,
+            },
+            "config_snapshot": {
+                "config_snapshot_hash": "cfg-hash-1",
+                "effective_policy_hash": "policy-hash-1",
+            },
         }
 
 
@@ -91,6 +119,61 @@ def test_write_decision_record_serializes_timestamp_like_values(
     assert payload["schema_version"] == "2.0.0"
     assert isinstance(payload["bar_ts"], str)
     assert not any(record.getMessage() == "DECISION_RECORD_WRITE_FAILED" for record in caplog.records)
+
+
+def test_write_decision_record_emits_immutable_decision_events(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    decision_path = tmp_path / "decision_events.jsonl"
+    db_path = tmp_path / "decision_events.db"
+    monkeypatch.setenv("AI_TRADING_CONFIG_SNAPSHOT_PATH", "")
+    monkeypatch.setenv("AI_TRADING_DECISION_EVENT_EMIT_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DECISION_EVENT_STORE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    reset_decision_event_store_cache()
+
+    bot_engine._write_decision_record(_DecisionEventRecord(), str(decision_path))
+
+    event_store = EventStore(url=f"sqlite:///{db_path}")
+    decision_rows = event_store.list_decision_events(symbol="AAPL")
+    oms_rows = event_store.list_oms_events(intent_id="intent-aapl-1")
+    event_store.close()
+    reset_decision_event_store_cache()
+
+    assert len(decision_rows) == 1
+    assert str(decision_rows[0]["decision_action"]) == "BUY"
+    assert str(decision_rows[0]["strategy_id"]) == "mean_revert_v2"
+    assert len(oms_rows) == 1
+    assert str(oms_rows[0]["event_type"]) == "DECISION_EMITTED"
+
+
+def test_write_decision_record_emits_decision_events_idempotently(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    decision_path = tmp_path / "decision_events_idempotent.jsonl"
+    db_path = tmp_path / "decision_events_idempotent.db"
+    monkeypatch.setenv("AI_TRADING_CONFIG_SNAPSHOT_PATH", "")
+    monkeypatch.setenv("AI_TRADING_DECISION_EVENT_EMIT_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DECISION_EVENT_STORE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    reset_decision_event_store_cache()
+
+    record = _DecisionEventRecord()
+    bot_engine._write_decision_record(record, str(decision_path))
+    bot_engine._write_decision_record(record, str(decision_path))
+
+    event_store = EventStore(url=f"sqlite:///{db_path}")
+    decision_rows = event_store.list_decision_events(symbol="AAPL")
+    oms_rows = event_store.list_oms_events(intent_id="intent-aapl-1")
+    event_store.close()
+    reset_decision_event_store_cache()
+
+    assert len(decision_rows) == 1
+    assert len(oms_rows) == 1
 
 
 def test_tca_stale_block_reason_respects_latest_timestamp(

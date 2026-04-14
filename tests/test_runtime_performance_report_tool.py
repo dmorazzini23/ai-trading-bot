@@ -2527,6 +2527,101 @@ def test_evaluate_go_no_go_fails_on_open_position_reconciliation_when_required()
     assert "open_position_reconciliation_consistent" in decision["failed_checks"]
 
 
+def test_evaluate_go_no_go_fails_on_oms_invariants_when_required() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 30,
+            "profit_factor": 1.4,
+            "win_rate": 0.6,
+            "pnl_sum": 80.0,
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 12.0,
+        },
+        "oms_invariants": {
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "total_violations": 3,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 10,
+            "min_profit_factor": 1.0,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.01,
+            "min_expected_net_edge_bps": -50.0,
+            "require_gate_valid": True,
+            "require_pnl_available": True,
+            "require_open_position_reconciliation": False,
+            "require_oms_invariants": True,
+            "max_oms_invariant_violations": 0,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "oms_invariants_consistent" in decision["failed_checks"]
+    observed = decision["observed"]
+    assert observed["oms_invariants_available"] is True
+    assert observed["oms_invariants_total_violations"] == 3
+
+
+def test_evaluate_go_no_go_fails_on_event_tca_when_required() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 30,
+            "profit_factor": 1.4,
+            "win_rate": 0.6,
+            "pnl_sum": 80.0,
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 12.0,
+        },
+        "oms_event_tca": {
+            "enabled": True,
+            "available": True,
+            "filled_events": 12,
+            "submit_reject_rate_pct": 9.5,
+            "p90_slippage_bps": 11.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 10,
+            "min_profit_factor": 1.0,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.01,
+            "min_expected_net_edge_bps": -50.0,
+            "require_gate_valid": True,
+            "require_pnl_available": True,
+            "require_open_position_reconciliation": False,
+            "require_oms_event_tca": True,
+            "min_event_tca_filled_events": 10,
+            "max_event_tca_submit_reject_rate_pct": 5.0,
+            "max_event_tca_p90_slippage_bps": 25.0,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "oms_event_tca_consistent" in decision["failed_checks"]
+    observed = decision["observed"]
+    assert observed["oms_event_tca_available"] is True
+    assert observed["event_tca_submit_reject_rate_ok"] is False
+
+
 def test_main_resolves_runtime_paths_from_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

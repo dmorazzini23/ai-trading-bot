@@ -13,6 +13,7 @@ from ai_trading.logging import get_logger
 from ai_trading.health_payload import (
     build_api_health_payload,
     build_canonical_healthz_payload,
+    build_control_plane_snapshot,
     register_healthz_routes,
 )
 from ai_trading.utils.optional_dep import missing
@@ -530,6 +531,20 @@ def create_app():
         except (ImportError, PresetValidationError, ValueError, TypeError) as exc:
             _log.warning("OPERATOR_PLAN_UNAVAILABLE", extra={"error": str(exc)})
             return _safe_response({"ok": False, "error": "operator plan unavailable"}, status=503)
+
+    @app.route("/operator/control-plane")
+    def operator_control_plane_snapshot() -> Any:
+        """Return a consolidated runtime control-plane snapshot for operators."""
+
+        try:
+            snapshot = build_control_plane_snapshot(service_name=_SERVICE_NAME)
+            return _safe_response({"ok": True, "snapshot": snapshot}, status=200)
+        except (ImportError, ValueError, TypeError) as exc:
+            _log.warning("OPERATOR_CONTROL_PLANE_UNAVAILABLE", extra={"error": str(exc)})
+            return _safe_response(
+                {"ok": False, "error": "operator control plane unavailable"},
+                status=503,
+            )
 
     @app.route("/health")
     def health():

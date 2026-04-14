@@ -80,3 +80,41 @@ def test_reconcile_missing_open_orders_closes_intent_on_terminal_broker_lookup(
     assert refreshed.status == "FILLED"
     open_intent_ids = {record.intent_id for record in store.get_open_intents()}
     assert intent.intent_id not in open_intent_ids
+
+
+def test_reconcile_terminal_lookup_maps_done_for_day_to_expired(
+    tmp_path,
+) -> None:
+    store = IntentStore(path=str(tmp_path / "reconcile_terminal_done_for_day.db"))
+    manager = OrderManager()
+    manager.configure_intent_store(store)
+
+    intent, created = store.create_intent(
+        intent_id="intent-terminal-done-for-day",
+        idempotency_key="terminal-done-for-day-key",
+        symbol="MSFT",
+        side="buy",
+        quantity=5.0,
+        status="SUBMITTED",
+    )
+    assert created is True
+    store.mark_submitted(intent.intent_id, "broker-order-606")
+
+    def get_order_by_id(order_id: str) -> dict[str, str]:
+        assert order_id == "broker-order-606"
+        return {
+            "id": order_id,
+            "client_order_id": intent.intent_id,
+            "status": "done_for_day",
+        }
+
+    manager.reconcile_open_intents(
+        broker_orders=[],
+        get_order_by_id_fn=get_order_by_id,
+    )
+
+    refreshed = store.get_intent(intent.intent_id)
+    assert refreshed is not None
+    assert refreshed.status == "EXPIRED"
+    open_intent_ids = {record.intent_id for record in store.get_open_intents()}
+    assert intent.intent_id not in open_intent_ids

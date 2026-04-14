@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import hashlib
 import json
 from pathlib import Path
 import threading
@@ -12,9 +13,18 @@ from typing import Any, cast
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
+from ai_trading.oms.lifecycle import (
+    PENDING_SUBMIT_STATUS,
+    SUBMITTING_STATUS,
+    normalize_terminal_status,
+    status_for_fill,
+    status_for_submit_ack,
+    status_for_submit_claim,
+    status_for_submit_error,
+    terminal_event_type,
+)
 from ai_trading.oms.statuses import (
     TERMINAL_INTENT_STATUSES,
-    is_terminal_intent_status,
     normalize_intent_status,
 )
 
@@ -235,6 +245,11 @@ class IntentStore:
             expire_on_commit=False,
             future=True,
         )
+        self._event_dual_write_enabled = bool(
+            get_env("AI_TRADING_OMS_EVENT_DUAL_WRITE_ENABLED", True, cast=bool)
+        )
+        self._event_store: Any | None = None
+        self._event_store_init_failed = False
         self._bootstrap()
 
     @property
@@ -301,6 +316,71 @@ class IntentStore:
                 conn.execute(text("PRAGMA synchronous=NORMAL;"))
             _METADATA.create_all(conn)
 
+    @staticmethod
+    def _event_idempotency_key(*parts: Any) -> str:
+        material = "|".join(str(part) for part in parts if part not in (None, ""))
+        if not material:
+            material = "intent-store-event"
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    def _resolve_event_store(self) -> Any | None:
+        if not self._event_dual_write_enabled:
+            return None
+        if self._event_store_init_failed:
+            return None
+        if self._event_store is not None:
+            return self._event_store
+        with self._lock:
+            if self._event_store is not None:
+                return self._event_store
+            try:
+                from ai_trading.oms.event_store import EventStore
+
+                self._event_store = EventStore(url=self._database_url)
+            except Exception as exc:
+                self._event_store_init_failed = True
+                logger.warning(
+                    "OMS_EVENT_STORE_INIT_FAILED",
+                    extra={"database_url": self._database_url, "error": str(exc)},
+                )
+                return None
+            return self._event_store
+
+    def _append_oms_event(
+        self,
+        *,
+        event_type: str,
+        intent_id: str,
+        event_idempotency_key: str,
+        payload: Mapping[str, Any] | None = None,
+        broker_order_id: str | None = None,
+        fill_id: str | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        store = self._resolve_event_store()
+        if store is None:
+            return
+        try:
+            store.append_oms_event_payload(
+                event_type=event_type,
+                event_source="intent_store",
+                idempotency_key=event_idempotency_key,
+                intent_id=intent_id,
+                payload=dict(payload or {}),
+                broker_order_id=broker_order_id,
+                fill_id=fill_id,
+                error_code=error_code,
+            )
+        except Exception as exc:
+            logger.warning(
+                "OMS_EVENT_APPEND_FAILED",
+                extra={
+                    "intent_id": intent_id,
+                    "event_type": event_type,
+                    "error": str(exc),
+                },
+            )
+
     def create_intent(
         self,
         *,
@@ -314,7 +394,7 @@ class IntentStore:
         expected_edge_bps: float | None = None,
         regime: str | None = None,
         metadata: dict[str, Any] | None = None,
-        status: str = "PENDING_SUBMIT",
+        status: str = PENDING_SUBMIT_STATUS,
     ) -> tuple[IntentRecord, bool]:
         """Insert or return existing intent keyed by idempotency key."""
 
@@ -322,7 +402,10 @@ class IntentStore:
         now = self._utcnow_iso()
         record_decision_ts = decision_ts or now
         meta_payload = json.dumps(metadata or {}, sort_keys=True)
-        normalized_status = str(status).strip().upper() or "PENDING_SUBMIT"
+        normalized_status = normalize_intent_status(
+            status,
+            default=PENDING_SUBMIT_STATUS,
+        )
         payload = {
             "intent_id": intent_id,
             "idempotency_key": idempotency_key,
@@ -370,7 +453,27 @@ class IntentStore:
                 )
             if row is None:  # pragma: no cover - defensive
                 raise RuntimeError("intent_insert_missing_row")
-            return (self._row_to_intent(cast(Mapping[str, Any], row)), True)
+            inserted_record = self._row_to_intent(cast(Mapping[str, Any], row))
+            self._append_oms_event(
+                event_type="INTENT_CREATED",
+                intent_id=inserted_record.intent_id,
+                event_idempotency_key=self._event_idempotency_key(
+                    "INTENT_CREATED",
+                    inserted_record.intent_id,
+                    inserted_record.idempotency_key,
+                ),
+                payload={
+                    "symbol": inserted_record.symbol,
+                    "side": inserted_record.side,
+                    "quantity": inserted_record.quantity,
+                    "status": inserted_record.status,
+                    "strategy_id": inserted_record.strategy_id,
+                    "expected_edge_bps": inserted_record.expected_edge_bps,
+                    "regime": inserted_record.regime,
+                    "decision_ts": inserted_record.decision_ts,
+                },
+            )
+            return (inserted_record, True)
 
     def get_intent(self, intent_id: str) -> IntentRecord | None:
         """Return intent by ID."""
@@ -420,6 +523,17 @@ class IntentStore:
             rows = session.execute(stmt).mappings().all()
         return [self._row_to_intent(cast(Mapping[str, Any], row)) for row in rows]
 
+    def list_intents(self, *, limit: int = 5000) -> list[IntentRecord]:
+        """Return intents ordered by creation time."""
+
+        assert _INTENTS_TABLE is not None
+        stmt = select(_INTENTS_TABLE).order_by(_INTENTS_TABLE.c.created_at.asc()).limit(
+            max(1, int(limit))
+        )
+        with self._lock, self._session_factory() as session:
+            rows = session.execute(stmt).mappings().all()
+        return [self._row_to_intent(cast(Mapping[str, Any], row)) for row in rows]
+
     def claim_for_submit(
         self,
         intent_id: str,
@@ -438,15 +552,15 @@ class IntentStore:
             .where(_INTENTS_TABLE.c.intent_id == intent_id)
             .where(
                 (
-                    _INTENTS_TABLE.c.status == "PENDING_SUBMIT"
+                    _INTENTS_TABLE.c.status == PENDING_SUBMIT_STATUS
                 )
                 | (
-                    (_INTENTS_TABLE.c.status == "SUBMITTING")
+                    (_INTENTS_TABLE.c.status == SUBMITTING_STATUS)
                     & (_INTENTS_TABLE.c.updated_at <= stale_cutoff_iso)
                 )
             )
             .values(
-                status="SUBMITTING",
+                status=status_for_submit_claim(),
                 submit_attempts=_INTENTS_TABLE.c.submit_attempts + 1,
                 updated_at=now_iso,
                 last_error=None,
@@ -455,6 +569,35 @@ class IntentStore:
         with self._lock, self._session_factory.begin() as session:
             result = session.execute(stmt)
         rowcount = int(result.rowcount or 0)
+        if rowcount > 0:
+            claimed_record = self.get_intent(intent_id)
+            submit_attempts = int(getattr(claimed_record, "submit_attempts", 0) or 0)
+            self._append_oms_event(
+                event_type="SUBMIT_CLAIMED",
+                intent_id=intent_id,
+                event_idempotency_key=self._event_idempotency_key(
+                    "SUBMIT_CLAIMED",
+                    intent_id,
+                    submit_attempts,
+                ),
+                payload={
+                    "stale_after_seconds": stale_after,
+                    "submit_attempts": submit_attempts,
+                },
+            )
+            self._append_oms_event(
+                event_type="SUBMIT_ATTEMPTED",
+                intent_id=intent_id,
+                event_idempotency_key=self._event_idempotency_key(
+                    "SUBMIT_ATTEMPTED",
+                    intent_id,
+                    submit_attempts,
+                ),
+                payload={
+                    "submit_attempts": submit_attempts,
+                    "attempted_at": now_iso,
+                },
+            )
         return rowcount > 0
 
     def mark_submitted(self, intent_id: str, broker_order_id: str) -> None:
@@ -466,13 +609,28 @@ class IntentStore:
             update(_INTENTS_TABLE)
             .where(_INTENTS_TABLE.c.intent_id == intent_id)
             .values(
-                status="SUBMITTED",
+                status=status_for_submit_ack(),
                 broker_order_id=str(broker_order_id),
                 updated_at=now,
             )
         )
         with self._lock, self._session_factory.begin() as session:
-            session.execute(stmt)
+            result = session.execute(stmt)
+        if int(result.rowcount or 0) > 0:
+            self._append_oms_event(
+                event_type="SUBMIT_ACK",
+                intent_id=intent_id,
+                event_idempotency_key=self._event_idempotency_key(
+                    "SUBMIT_ACK",
+                    intent_id,
+                    broker_order_id,
+                ),
+                payload={
+                    "broker_order_id": str(broker_order_id),
+                    "status": status_for_submit_ack(),
+                },
+                broker_order_id=str(broker_order_id),
+            )
 
     def record_submit_error(self, intent_id: str, error: str) -> None:
         """Record submit failure while keeping intent retryable."""
@@ -483,13 +641,29 @@ class IntentStore:
             update(_INTENTS_TABLE)
             .where(_INTENTS_TABLE.c.intent_id == intent_id)
             .values(
-                status="PENDING_SUBMIT",
+                status=status_for_submit_error(),
                 last_error=str(error)[:500],
                 updated_at=now,
             )
         )
         with self._lock, self._session_factory.begin() as session:
-            session.execute(stmt)
+            result = session.execute(stmt)
+        if int(result.rowcount or 0) > 0:
+            normalized_error = str(error or "").strip()[:500]
+            self._append_oms_event(
+                event_type="SUBMIT_REJECT",
+                intent_id=intent_id,
+                event_idempotency_key=self._event_idempotency_key(
+                    "SUBMIT_REJECT",
+                    intent_id,
+                    normalized_error,
+                ),
+                payload={
+                    "error": normalized_error,
+                    "status": status_for_submit_error(),
+                },
+                error_code=normalized_error[:64] if normalized_error else None,
+            )
 
     def record_fill(
         self,
@@ -518,7 +692,7 @@ class IntentStore:
         )
         status_case = case(
             (_INTENTS_TABLE.c.status.in_(("FILLED", "CLOSED")), _INTENTS_TABLE.c.status),
-            else_="PARTIALLY_FILLED",
+            else_=status_for_fill(None),
         )
         update_stmt = (
             update(_INTENTS_TABLE)
@@ -528,9 +702,32 @@ class IntentStore:
                 updated_at=now,
             )
         )
+        fill_id_text: str | None = None
         with self._lock, self._session_factory.begin() as session:
-            session.execute(fill_stmt)
+            fill_result = session.execute(fill_stmt)
             session.execute(update_stmt)
+            inserted_primary = list(fill_result.inserted_primary_key or [])
+            if inserted_primary:
+                first = inserted_primary[0]
+                fill_id_text = str(first) if first is not None else None
+        self._append_oms_event(
+            event_type="ORDER_PARTIALLY_FILLED",
+            intent_id=intent_id,
+            event_idempotency_key=self._event_idempotency_key(
+                "ORDER_PARTIALLY_FILLED",
+                intent_id,
+                fill_id_text or now,
+            ),
+            payload={
+                "fill_qty": float(fill_qty),
+                "fill_price": (float(fill_price) if fill_price is not None else None),
+                "fee": float(fee),
+                "liquidity_flag": liquidity_flag,
+                "fill_ts": ts,
+                "status": status_for_fill(None),
+            },
+            fill_id=fill_id_text,
+        )
 
     def list_fills(self, intent_id: str) -> list[FillRecord]:
         """Return fills for intent in insertion order."""
@@ -555,9 +752,7 @@ class IntentStore:
         """Close intent with terminal status."""
 
         assert _INTENTS_TABLE is not None
-        normalized = normalize_intent_status(final_status, default="CLOSED")
-        if not is_terminal_intent_status(normalized):
-            raise ValueError(f"close_intent requires terminal status, got: {normalized}")
+        normalized = normalize_terminal_status(final_status)
         now = self._utcnow_iso()
         stmt = (
             update(_INTENTS_TABLE)
@@ -569,12 +764,49 @@ class IntentStore:
             )
         )
         with self._lock, self._session_factory.begin() as session:
-            session.execute(stmt)
+            result = session.execute(stmt)
+        if int(result.rowcount or 0) > 0:
+            mapped_terminal = terminal_event_type(normalized)
+            self._append_oms_event(
+                event_type=mapped_terminal,
+                intent_id=intent_id,
+                event_idempotency_key=self._event_idempotency_key(
+                    mapped_terminal,
+                    intent_id,
+                    normalized,
+                ),
+                payload={
+                    "final_status": normalized,
+                    "last_error": (str(last_error)[:500] if last_error else None),
+                },
+                error_code=(str(last_error)[:64] if last_error else None),
+            )
+            self._append_oms_event(
+                event_type="INTENT_CLOSED",
+                intent_id=intent_id,
+                event_idempotency_key=self._event_idempotency_key(
+                    "INTENT_CLOSED",
+                    intent_id,
+                    normalized,
+                ),
+                payload={
+                    "final_status": normalized,
+                    "last_error": (str(last_error)[:500] if last_error else None),
+                },
+                error_code=(str(last_error)[:64] if last_error else None),
+            )
 
     def close(self) -> None:
         """Dispose DB engine resources."""
 
         with self._lock:
+            if self._event_store is not None:
+                try:
+                    self._event_store.close()
+                except Exception:
+                    logger.debug("INTENT_STORE_EVENT_STORE_CLOSE_FAILED", exc_info=True)
+                finally:
+                    self._event_store = None
             try:
                 self._engine.dispose()
             except Exception:

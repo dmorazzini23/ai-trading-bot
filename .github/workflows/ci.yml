@@ -50,6 +50,42 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+      - name: Alembic migration gate
+        env:
+          OMS_CI_DB_PATH: ${{ github.workspace }}/.ci/oms_migration_gate.db
+          DATABASE_URL: sqlite:///${{ github.workspace }}/.ci/oms_migration_gate.db
+          AI_TRADING_OMS_INTENT_STORE_PATH: ${{ github.workspace }}/.ci/oms_migration_gate.db
+        run: |
+          mkdir -p "${{ github.workspace }}/.ci"
+          python3 -m alembic -c alembic.ini upgrade head
+          python3 - <<'PY'
+          import sqlite3
+          from pathlib import Path
+          import os
+
+          db_path = Path(os.environ["OMS_CI_DB_PATH"])
+          with sqlite3.connect(db_path) as conn:
+              row = conn.execute("SELECT version_num FROM alembic_version LIMIT 1").fetchone()
+
+          if row is None or str(row[0]) != "20260414_0001":
+              raise SystemExit(f"Alembic head mismatch: got {row!r}")
+          print("ALEMBIC_HEAD_OK")
+          PY
+      - name: OMS invariants gate
+        env:
+          DATABASE_URL: sqlite:///${{ github.workspace }}/.ci/oms_migration_gate.db
+          AI_TRADING_OMS_INTENT_STORE_PATH: ${{ github.workspace }}/.ci/oms_migration_gate.db
+        run: |
+          python3 - <<'PY'
+          from ai_trading.oms.invariants import evaluate_oms_reconciliation_invariants
+
+          summary = evaluate_oms_reconciliation_invariants(limit=500)
+          if not bool(summary.get("available", False)):
+              raise SystemExit(f"OMS invariant summary unavailable: {summary}")
+          if not bool(summary.get("ok", False)):
+              raise SystemExit(f"OMS invariant summary failed: {summary}")
+          print("OMS_INVARIANTS_OK")
+          PY
       - name: Verify institutional test dependencies
         run: |
           python3 - <<'PY'

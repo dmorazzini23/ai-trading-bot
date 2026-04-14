@@ -34,6 +34,7 @@ libcst==1.4.0
 
 # Infra & helpers (align with constraints)
 packaging==25.0
+alembic==1.14.1
 
 # test helpers that our tests import directly
 freezegun==1.5.1

@@ -69,3 +69,18 @@ def test_broker_stopped_maps_to_closed_terminal() -> None:
     engine._sync_intent_with_order_event(cast(Any, order), "updated")
 
     assert store.closed == [("intent-3", "CLOSED")]
+
+
+def test_event_type_terminal_fallback_closes_when_status_missing() -> None:
+    engine, store = _manager_with_store()
+    order = SimpleNamespace(
+        id="ord-4",
+        status=None,
+        filled_quantity=0.0,
+        average_fill_price=None,
+    )
+    engine._intent_by_order_id["ord-4"] = "intent-4"
+
+    engine._sync_intent_with_order_event(cast(Any, order), "canceled")
+
+    assert store.closed == [("intent-4", "CANCELED")]

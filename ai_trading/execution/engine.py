@@ -36,32 +36,14 @@ else:
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.metrics import CollectorRegistry, get_counter, get_registry, register_reset_hook
 from ai_trading.config.management import get_env, is_test_runtime
+from ai_trading.oms.lifecycle import resolve_terminal_intent_status
 from ai_trading.oms.intent_store import IntentStore
-from ai_trading.oms.statuses import TERMINAL_INTENT_STATUSES
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.utils.time import monotonic_time, safe_utcnow
 from ai_trading.meta_learning.persistence import record_trade_fill
 
 logger = get_logger(__name__)
 ORDER_STALE_AFTER_S = 8 * 60
-_BROKER_TERMINAL_STATUS_MAP: dict[str, str] = {
-    "DONE_FOR_DAY": "EXPIRED",
-    "REPLACED": "CLOSED",
-    "STOPPED": "CLOSED",
-    "STOPPED_OUT": "CLOSED",
-}
-_BROKER_TERMINAL_EVENT_TOKENS = frozenset(
-    {
-        "COMPLETED",
-        "CANCELLED",
-        "CANCELED",
-        "EXPIRED",
-        "DONE_FOR_DAY",
-        "REPLACED",
-        "STOPPED",
-        "STOPPED_OUT",
-    }
-)
 
 
 @dataclass(slots=True)
@@ -918,29 +900,24 @@ class OrderManager:
                     )
                     if not status_token:
                         status_token = str(recovered_status_raw or "").strip().upper()
-                    final_status = _BROKER_TERMINAL_STATUS_MAP.get(
-                        status_token,
-                        status_token,
+                    terminal_status = resolve_terminal_intent_status(
+                        status=status_token,
+                        status_is_terminal=bool(
+                            getattr(recovered_status, "is_terminal", False)
+                        ),
                     )
-                    is_terminal = (
-                        bool(getattr(recovered_status, "is_terminal", False))
-                        or status_token in _BROKER_TERMINAL_EVENT_TOKENS
-                        or final_status in TERMINAL_INTENT_STATUSES
-                    )
-                    if is_terminal:
-                        if final_status not in TERMINAL_INTENT_STATUSES:
-                            final_status = "CLOSED"
+                    if terminal_status is not None:
                         try:
                             self._intent_store.close_intent(
                                 intent.intent_id,
-                                final_status=final_status,
+                                final_status=terminal_status,
                             )
                         except Exception:
                             logger.debug(
                                 "OMS_INTENT_RECONCILE_CLOSE_FAILED",
                                 extra={
                                     "intent_id": intent.intent_id,
-                                    "final_status": final_status,
+                                    "final_status": terminal_status,
                                 },
                                 exc_info=True,
                             )
@@ -1366,21 +1343,15 @@ class OrderManager:
         )
         if not status_token:
             status_token = str(getattr(order, "status", "")).strip().upper()
-        if not status_token:
-            status_token = str(event_type).strip().upper()
-        final_status = _BROKER_TERMINAL_STATUS_MAP.get(status_token, status_token)
-        is_terminal = (
-            bool(getattr(normalized_status, "is_terminal", False))
-            or status_token in _BROKER_TERMINAL_EVENT_TOKENS
-            or str(event_type).strip().upper() in _BROKER_TERMINAL_EVENT_TOKENS
-            or final_status in TERMINAL_INTENT_STATUSES
+        terminal_status = resolve_terminal_intent_status(
+            status=status_token,
+            event_type=event_type,
+            status_is_terminal=bool(getattr(normalized_status, "is_terminal", False)),
         )
-        if not is_terminal:
+        if terminal_status is None:
             return
 
-        if final_status not in TERMINAL_INTENT_STATUSES:
-            final_status = "CLOSED"
-        self._intent_store.close_intent(intent_id, final_status=final_status)
+        self._intent_store.close_intent(intent_id, final_status=terminal_status)
         self._intent_by_order_id.pop(order_id, None)
         self._intent_reported_fill_qty.pop(order_id, None)
 
@@ -2026,7 +1997,7 @@ class ExecutionEngine:
 
         from ai_trading.risk.short_selling import validate_short_selling
 
-        return validate_short_selling(symbol, qty, price)
+        return bool(validate_short_selling(symbol, qty, price))
 
     def _reconcile_partial_fills(
         self, *args, requested_qty=None, remaining_qty=None, symbol=None, side=None, **_kwargs

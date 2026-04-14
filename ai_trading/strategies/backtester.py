@@ -1,5 +1,6 @@
 from __future__ import annotations
 import glob
+import hashlib
 import os
 import sys
 from abc import ABC, abstractmethod
@@ -9,6 +10,7 @@ from typing import Any, TYPE_CHECKING
 
 from ai_trading import config
 from ai_trading.logging import get_logger
+from ai_trading.oms.simulated_lifecycle import SimulatedLifecycleDriver
 
 if TYPE_CHECKING:  # pragma: no cover
     import pandas as pd
@@ -20,6 +22,8 @@ class Order:
     qty: int
     side: str
     price: float
+    intent_id: str | None = None
+    idempotency_key: str | None = None
 
 @dataclass
 class Fill:
@@ -27,6 +31,7 @@ class Fill:
     fill_price: float
     timestamp: datetime
     commission: float = 0.0
+    fill_id: str | None = None
 
 class ExecutionModel(ABC):
     """Abstract execution model interface."""
@@ -139,6 +144,15 @@ class BacktestEngine:
         self.trades: list[Fill] = []
         self.equity_curve: list[dict[str, float]] = []
         self._close_history: dict[str, list[float]] = {symbol: [] for symbol in data}
+        self._oms_events_enabled = bool(
+            config.get_env("AI_TRADING_BACKTEST_OMS_EVENTS_ENABLED", False, cast=bool)
+        )
+        self._oms_lifecycle = SimulatedLifecycleDriver(
+            enabled=self._oms_events_enabled,
+            source="backtest_engine",
+        )
+        self._event_counter = 0
+        self._fill_counter = 0
 
     def reset(self) -> None:
         """Reset internal state for a new symbol run."""
@@ -147,6 +161,72 @@ class BacktestEngine:
         self.trades = []
         self.equity_curve = []
         self._close_history = {symbol: [] for symbol in self.data}
+        self._event_counter = 0
+        self._fill_counter = 0
+
+    @staticmethod
+    def _hash_token(*parts: Any) -> str:
+        material = "|".join(str(part) for part in parts if part not in (None, ""))
+        if not material:
+            material = "backtest-event"
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _ts_text(value: Any) -> str:
+        iso = getattr(value, "isoformat", None)
+        if callable(iso):
+            try:
+                return str(iso())
+            except Exception:
+                return str(value)
+        return str(value)
+
+    def _emit_order_submit_lifecycle(self, order: Order, ts: Any) -> None:
+        self._event_counter += 1
+        token = self._hash_token(
+            "backtest",
+            order.symbol,
+            order.side,
+            order.qty,
+            order.price,
+            self._ts_text(ts),
+            self._event_counter,
+        )
+        order.intent_id = f"bt-{token[:24]}"
+        order.idempotency_key = token
+        self._oms_lifecycle.open_submitted_intent(
+            intent_id=order.intent_id,
+            idempotency_key=token,
+            symbol=order.symbol,
+            side=order.side,
+            quantity=float(order.qty),
+            decision_ts=ts,
+            broker_order_id=order.intent_id,
+            strategy_id="backtest_engine",
+            metadata={
+                "price": float(order.price),
+                "bar_ts": self._ts_text(ts),
+            },
+        )
+
+    def _emit_fill_lifecycle(self, fill: Fill, ts: Any) -> None:
+        intent_id = str(getattr(fill.order, "intent_id", "") or "").strip()
+        if not intent_id:
+            return
+        self._fill_counter += 1
+        fill.fill_id = str(fill.fill_id or f"{intent_id}-fill-{self._fill_counter}")
+        self._oms_lifecycle.record_fill_and_close_intent(
+            intent_id=intent_id,
+            fill_qty=float(max(fill.order.qty, 0)),
+            fill_price=float(fill.fill_price),
+            fee=float(fill.commission),
+            fill_ts=ts,
+            terminal_status="FILLED",
+            liquidity_flag="SIMULATED",
+        )
+
+    def _close_event_store(self) -> None:
+        self._oms_lifecycle.close()
 
     def run_single_symbol(self, df: 'pd.DataFrame', risk: Any) -> BacktestResult:
         """Run the backtest for ``df`` using local deterministic signals."""
@@ -166,6 +246,7 @@ class BacktestEngine:
             self.cash += -cost - fill.commission
         self.positions[fill.order.symbol] += qty
         self.trades.append(fill)
+        self._emit_fill_lifecycle(fill, ts)
 
     def _snapshot(self, ts: 'pd.Timestamp') -> None:
         pos_val = 0.0
@@ -215,6 +296,7 @@ class BacktestEngine:
                     continue
                 orders.extend(self._generate_orders_for_bar(sym, close))
             for order in orders:
+                self._emit_order_submit_lifecycle(order, ts)
                 for fill in self.execution_model.on_order(order):
                     self._apply_fill(fill, ts)
             for fill in self.execution_model.on_bar():
@@ -223,6 +305,7 @@ class BacktestEngine:
         trades_df = pd.DataFrame([{'symbol': f.order.symbol, 'qty': f.order.qty, 'side': f.order.side, 'price': f.fill_price, 'timestamp': f.timestamp, 'commission': f.commission} for f in self.trades])
         eq_df = pd.DataFrame(self.equity_curve).set_index('timestamp')
         stats = self._stats(eq_df, trades_df)
+        self._close_event_store()
         return BacktestResult(trades_df, eq_df, **stats)
 
     def _stats(self, equity: 'pd.DataFrame', trades: 'pd.DataFrame') -> dict[str, float]:
