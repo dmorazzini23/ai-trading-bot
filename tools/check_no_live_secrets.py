@@ -133,6 +133,8 @@ def _strip_inline_comment(value: str) -> str:
 
 def _normalize_value(raw: str) -> str:
     value = _strip_inline_comment(raw).strip()
+    if value.endswith("\\"):
+        value = value[:-1].rstrip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
         value = value[1:-1].strip()
     return value

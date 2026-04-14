@@ -217,8 +217,11 @@ def test_safe_submit_order_uses_order_request(monkeypatch):
     class FakeAPIError(bot_engine.APIError):
         def __init__(self, available: int):
             super().__init__("insufficient qty")
-            self.code = 40310000
             self._raw_errors = [{"available": available}]
+
+        @property
+        def code(self) -> int:
+            return 40310000
 
     class OrderDataAPI:
         def __init__(self, available: int) -> None:

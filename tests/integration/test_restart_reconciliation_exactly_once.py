@@ -56,7 +56,7 @@ def test_restart_like_pending_intent_submits_once(tmp_path) -> None:
     assert duplicate_response is None
 
 
-def test_reconcile_marks_missing_submitted_intent_failed(tmp_path) -> None:
+def test_reconcile_keeps_missing_submitted_intent_open(tmp_path) -> None:
     store = IntentStore(path=str(tmp_path / "reconcile_missing.db"))
     manager = OrderManager()
     manager.configure_intent_store(store)
@@ -74,14 +74,14 @@ def test_reconcile_marks_missing_submitted_intent_failed(tmp_path) -> None:
 
     summary = manager.reconcile_open_intents(broker_orders=[])
     assert summary["intents_checked"] == 1
-    assert summary["marked_failed"] == 1
+    assert summary["marked_failed"] == 0
 
     refreshed = store.get_intent(intent.intent_id)
     assert refreshed is not None
-    assert refreshed.status == "FAILED"
-    assert refreshed.last_error == "reconcile_missing_broker_order"
+    assert refreshed.status == "SUBMITTED"
+    assert refreshed.last_error in (None, "")
     open_intent_ids = {record.intent_id for record in store.get_open_intents()}
-    assert intent.intent_id not in open_intent_ids
+    assert intent.intent_id in open_intent_ids
 
 
 def test_reconcile_links_broker_id_from_client_order_id(tmp_path) -> None:

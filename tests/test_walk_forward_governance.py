@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 from ai_trading.core import bot_engine
 
@@ -52,7 +53,11 @@ def test_walk_forward_skips_leakage_when_no_folds(monkeypatch, tmp_path: Path) -
 
     state = _State()
     now = datetime(2026, 2, 20, 23, 0, tzinfo=UTC)
-    bot_engine._run_walk_forward_governance(state, now=now, market_open_now=False)
+    bot_engine._run_walk_forward_governance(
+        cast(Any, state),
+        now=now,
+        market_open_now=False,
+    )
 
     assert called["leakage"] == 0
     assert state.last_walk_forward_run_date == now.date()
@@ -88,7 +93,11 @@ def test_walk_forward_uses_explicit_horizon_days_for_leakage(monkeypatch, tmp_pa
 
     state = _State()
     now = datetime(2026, 2, 21, 23, 0, tzinfo=UTC)
-    bot_engine._run_walk_forward_governance(state, now=now, market_open_now=False)
+    bot_engine._run_walk_forward_governance(
+        cast(Any, state),
+        now=now,
+        market_open_now=False,
+    )
 
     assert captured["horizon_days"] == 3
     assert captured["embargo_days"] == 2

@@ -7,6 +7,7 @@ performance analysis for institutional trading strategies.
 import math
 import random
 import statistics
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -88,16 +89,22 @@ class BacktestEngine:
             lambda **_kwargs: None,
         )
         self.random_seed = int(get_env("AI_TRADING_LEGACY_BACKTEST_SEED", 42, cast=int))
+        rand_fn: Callable[[], float]
+        uniform_fn: Callable[[float, float], float]
+        normal_fn: Callable[[float, float], float]
         try:
             rng = np.random.default_rng(self.random_seed)  # type: ignore[attr-defined]
-            self._rand = rng.random
-            self._uniform = rng.uniform
-            self._normal = rng.normal
+            rand_fn = rng.random
+            uniform_fn = rng.uniform
+            normal_fn = rng.normal
         except Exception:  # pragma: no cover - fallback for minimal numpy stubs
             fallback_rng = random.Random(self.random_seed)
-            self._rand = fallback_rng.random
-            self._uniform = fallback_rng.uniform
-            self._normal = fallback_rng.gauss
+            rand_fn = fallback_rng.random
+            uniform_fn = fallback_rng.uniform
+            normal_fn = fallback_rng.gauss
+        self._rand = rand_fn
+        self._uniform = uniform_fn
+        self._normal = normal_fn
         self.microstructure_available = all(
             callable(fn)
             for fn in (

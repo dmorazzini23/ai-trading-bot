@@ -10,6 +10,9 @@ if [[ -z "${MYPY_CACHE_DIR:-}" ]]; then
   fi
 fi
 
+# Broad baseline coverage for the full application and test tree.
+python3 -m mypy --config-file mypy.ini ai_trading tests
+
 python3 -m mypy --config-file mypy_strict.ini \
   ai_trading/config/management.py \
   ai_trading/config/alpaca.py \

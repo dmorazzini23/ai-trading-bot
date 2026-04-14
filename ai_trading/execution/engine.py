@@ -728,6 +728,8 @@ class OrderManager:
         *,
         broker_orders: Iterable[Any] | None = None,
         list_orders_fn: Callable[..., Iterable[Any]] | None = None,
+        get_order_by_id_fn: Callable[[str], Any] | None = None,
+        get_order_by_client_order_id_fn: Callable[[str], Any] | None = None,
     ) -> dict[str, int]:
         """Reconcile non-terminal intents against broker open-order state."""
 
@@ -869,24 +871,86 @@ class OrderManager:
                         summary["deferred_submitting"] += 1
                         continue
 
-            if intent_status not in {"SUBMITTED", "SUBMITTING", "PARTIALLY_FILLED"}:
+            if intent_status in {"SUBMITTED", "SUBMITTING", "PARTIALLY_FILLED"}:
+                recovered_order: Any | None = None
+                if callable(get_order_by_id_fn) and intent.broker_order_id:
+                    try:
+                        recovered_order = get_order_by_id_fn(str(intent.broker_order_id))
+                    except Exception:
+                        logger.debug(
+                            "OMS_INTENT_RECONCILE_ORDER_LOOKUP_FAILED",
+                            extra={
+                                "intent_id": intent.intent_id,
+                                "broker_order_id": str(intent.broker_order_id),
+                            },
+                            exc_info=True,
+                        )
+                        summary["errors"] += 1
+                if (
+                    recovered_order is None
+                    and callable(get_order_by_client_order_id_fn)
+                ):
+                    try:
+                        recovered_order = get_order_by_client_order_id_fn(
+                            str(intent.intent_id)
+                        )
+                    except Exception:
+                        logger.debug(
+                            "OMS_INTENT_RECONCILE_CLIENT_LOOKUP_FAILED",
+                            extra={"intent_id": intent.intent_id},
+                            exc_info=True,
+                        )
+                        summary["errors"] += 1
+                if recovered_order is not None:
+                    recovered_status_raw = self._extract_payload_value(
+                        recovered_order,
+                        "status",
+                    )
+                    recovered_status = ExecutionResult._normalize_status(
+                        recovered_status_raw
+                    )
+                    status_token = (
+                        str(
+                            getattr(recovered_status, "value", recovered_status)
+                        ).strip().upper()
+                        if recovered_status is not None
+                        else ""
+                    )
+                    if not status_token:
+                        status_token = str(recovered_status_raw or "").strip().upper()
+                    final_status = _BROKER_TERMINAL_STATUS_MAP.get(
+                        status_token,
+                        status_token,
+                    )
+                    is_terminal = (
+                        bool(getattr(recovered_status, "is_terminal", False))
+                        or status_token in _BROKER_TERMINAL_EVENT_TOKENS
+                        or final_status in TERMINAL_INTENT_STATUSES
+                    )
+                    if is_terminal:
+                        if final_status not in TERMINAL_INTENT_STATUSES:
+                            final_status = "CLOSED"
+                        try:
+                            self._intent_store.close_intent(
+                                intent.intent_id,
+                                final_status=final_status,
+                            )
+                        except Exception:
+                            logger.debug(
+                                "OMS_INTENT_RECONCILE_CLOSE_FAILED",
+                                extra={
+                                    "intent_id": intent.intent_id,
+                                    "final_status": final_status,
+                                },
+                                exc_info=True,
+                            )
+                            summary["errors"] += 1
+                        continue
+                # An intent missing from the broker's open-order snapshot is not
+                # terminal evidence on its own; broker-side fills/cancels can
+                # race the snapshot and are reconciled through explicit terminal
+                # status paths elsewhere.
                 continue
-
-            try:
-                self._intent_store.close_intent(
-                    intent.intent_id,
-                    final_status="FAILED",
-                    last_error="reconcile_missing_broker_order",
-                )
-            except Exception:
-                logger.debug("OMS_INTENT_RECONCILE_MARK_FAILED_FAILED", exc_info=True)
-                summary["errors"] += 1
-            else:
-                summary["marked_failed"] += 1
-                _safe_counter_inc(
-                    _oms_reconcile_marked_failed_total,
-                    "oms_reconcile_marked_failed_total",
-                )
 
         if summary["intents_checked"] > 0:
             summary_payload: dict[str, Any] = dict(summary)

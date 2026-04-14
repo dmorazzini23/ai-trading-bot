@@ -2,7 +2,7 @@ import datetime as dt
 import sys
 import types
 from unittest.mock import MagicMock, patch
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -10,6 +10,9 @@ pd = pytest.importorskip("pandas")
 from ai_trading.alpaca_api import get_bars_df
 
 from tests.helpers.asserts import assert_df_like
+
+AlpacaTimeFrame: Any
+AlpacaTimeFrameUnit: Any
 
 try:
     from alpaca.data.timeframe import TimeFrame as AlpacaTimeFrame
@@ -30,8 +33,8 @@ except Exception:  # pragma: no cover - inject stub
     setattr(mod_any, "TimeFrame", _FallbackTimeFrame)
     setattr(mod_any, "TimeFrameUnit", _FallbackTimeFrameUnit)
     sys.modules.setdefault("alpaca.data.timeframe", mod)
-    AlpacaTimeFrame = _FallbackTimeFrame
-    AlpacaTimeFrameUnit = _FallbackTimeFrameUnit
+    AlpacaTimeFrame = cast(Any, _FallbackTimeFrame)
+    AlpacaTimeFrameUnit = cast(Any, _FallbackTimeFrameUnit)
 
 
 class _Resp:

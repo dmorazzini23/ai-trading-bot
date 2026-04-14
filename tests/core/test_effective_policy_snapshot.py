@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 from ai_trading.core import bot_engine as eng
 
@@ -41,7 +42,11 @@ def test_effective_policy_snapshot_falls_back_on_permission_error(
     monkeypatch.setattr(Path, "write_text", _deny_preferred_write)
 
     state = eng.BotState()
-    eng._persist_effective_policy_snapshot(state, _DummyPolicy(), loop_id="loop-1")
+    eng._persist_effective_policy_snapshot(
+        state,
+        cast(Any, _DummyPolicy()),
+        loop_id="loop-1",
+    )
 
     assert state.effective_policy_snapshot_path == str(fallback_path)
     payload = json.loads(fallback_path.read_text(encoding="utf-8"))
@@ -91,7 +96,11 @@ def test_effective_policy_snapshot_repairs_permission_with_unlink(
     monkeypatch.setattr(Path, "unlink", _track_unlink)
 
     state = eng.BotState()
-    eng._persist_effective_policy_snapshot(state, _DummyPolicy(), loop_id="loop-2")
+    eng._persist_effective_policy_snapshot(
+        state,
+        cast(Any, _DummyPolicy()),
+        loop_id="loop-2",
+    )
 
     assert unlink_attempts["preferred"] == 1
     assert state.effective_policy_snapshot_path == str(preferred_path)

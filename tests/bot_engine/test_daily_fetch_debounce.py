@@ -7,7 +7,7 @@ from datetime import UTC, datetime, time as dt_time, timedelta
 import logging
 import sys
 import types
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from ai_trading.data.fetch.normalize import normalize_ohlcv_df
@@ -119,7 +119,7 @@ def _expected_end_ts(fetch_date) -> datetime:
     end_ts = datetime.combine(fetch_date, dt_time.max, tzinfo=UTC)
     now_utc = FixedDateTime.now(UTC)
     if fetch_date >= now_utc.date():
-        return min(end_ts, now_utc)
+        return cast(datetime, min(end_ts, now_utc))
     return end_ts
 
 

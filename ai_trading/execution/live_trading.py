@@ -29980,6 +29980,37 @@ class ExecutionEngine:
                 list_orders = getattr(client, "get_orders", None)
             if callable(list_orders):
                 kwargs["list_orders_fn"] = list_orders
+        client = getattr(self, "trading_client", None)
+        if client is not None:
+            get_by_id = getattr(client, "get_order_by_id", None)
+            if not callable(get_by_id):
+                get_by_id = getattr(client, "get_order", None)
+            if callable(get_by_id):
+                def lookup_order_by_id(order_id: str) -> Any | None:
+                    try:
+                        return get_by_id(str(order_id))
+                    except Exception as err:
+                        if _is_missing_order_lookup_error(err):
+                            return None
+                        raise
+
+                kwargs["get_order_by_id_fn"] = lookup_order_by_id
+
+            get_by_client = getattr(client, "get_order_by_client_order_id", None)
+            if not callable(get_by_client):
+                get_by_client = getattr(client, "get_order_by_client_id", None)
+            if callable(get_by_client):
+                def lookup_order_by_client_order_id(client_order_id: str) -> Any | None:
+                    try:
+                        return get_by_client(str(client_order_id))
+                    except Exception as err:
+                        if _is_missing_order_lookup_error(err):
+                            return None
+                        raise
+
+                kwargs["get_order_by_client_order_id_fn"] = (
+                    lookup_order_by_client_order_id
+                )
         try:
             reconcile_fn(**kwargs)
         except Exception:

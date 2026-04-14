@@ -9,7 +9,13 @@ only need a handful of default attributes.
 """
 
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from alpaca.data.historical.stock import (
+        StockHistoricalDataClient as AlpacaStockHistoricalDataClient,
+    )
+    from alpaca.trading.client import TradingClient as AlpacaTradingClient
 
 BotContext: type[Any]
 LazyBotContext: type[Any]
@@ -95,6 +101,7 @@ def get_context() -> SimpleNamespace:
     try:  # pragma: no cover - exercised in integration tests
         from alpaca.trading.client import TradingClient  # type: ignore
     except Exception:  # pragma: no cover - client unavailable
+        trading_client: AlpacaTradingClient | UnavailableTradingClient
         trading_client = UnavailableTradingClient(paper=is_paper)
     else:
         try:
@@ -109,23 +116,14 @@ def get_context() -> SimpleNamespace:
     try:  # pragma: no cover - exercised in integration tests
         from alpaca.data.historical.stock import StockHistoricalDataClient  # type: ignore
     except Exception:  # pragma: no cover - client unavailable
+        data_client: AlpacaStockHistoricalDataClient | UnavailableDataClient
         data_client = UnavailableDataClient(paper=is_paper)
     else:
         try:
             data_client = StockHistoricalDataClient(
                 api_key=api_key,
                 secret_key=secret_key,
-                paper=is_paper,
             )
-        except TypeError:
-            try:
-                data_client = StockHistoricalDataClient.__call__(
-                    StockHistoricalDataClient,
-                    api_key=api_key,
-                    secret_key=secret_key,
-                )
-            except Exception:
-                data_client = UnavailableDataClient(paper=is_paper)
         except Exception:
             data_client = UnavailableDataClient(paper=is_paper)
 

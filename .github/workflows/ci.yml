@@ -75,14 +75,13 @@ jobs:
       - name: Institutional gates (strict bundle)
         run: INSTITUTIONAL_STRICT=1 INSTITUTIONAL_SKIP_PYTEST=0 INSTITUTIONAL_FAIL_ON_SKIP=1 make institutional-gates
       - name: Compile
-        run: python3 -m compileall . -q
+        run: python3 -m py_compile $(git ls-files '*.py')
       - name: Lint + Format + Types
         run: |
           ruff --version
           ruff check .
           ruff format --check .
-          mypy ai_trading tests
-          scripts/typecheck_strict.sh
+          bash scripts/typecheck_strict.sh
       - name: Runtime env guard
         run: python3 tools/ci/guard_runtime_env_access.py
       - name: Audit exceptions
