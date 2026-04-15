@@ -191,6 +191,45 @@ def _oms_invariants_snapshot() -> dict[str, Any]:
         return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
 
 
+def _oms_lifecycle_parity_snapshot() -> dict[str, Any]:
+    enabled = _env_bool("AI_TRADING_HEALTH_OMS_LIFECYCLE_PARITY_ENABLED", False)
+    if not enabled:
+        return {"enabled": False}
+    try:
+        from ai_trading.config.management import get_env
+        from ai_trading.oms.invariants import evaluate_oms_lifecycle_parity_invariants
+
+        configured_database_url = str(
+            get_env("DATABASE_URL", "", cast=str, resolve_aliases=False) or ""
+        ).strip()
+        configured_store_path = str(
+            get_env(
+                "AI_TRADING_OMS_INTENT_STORE_PATH",
+                "",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or ""
+        ).strip()
+        summary = evaluate_oms_lifecycle_parity_invariants(
+            database_url=(configured_database_url or None),
+            intent_store_path=(configured_store_path or None),
+            limit=int(
+                get_env(
+                    "AI_TRADING_HEALTH_OMS_LIFECYCLE_PARITY_LIMIT",
+                    5000,
+                    cast=int,
+                    resolve_aliases=False,
+                )
+            ),
+        )
+        payload = dict(summary)
+        payload["enabled"] = True
+        return payload
+    except Exception as exc:
+        return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
+
+
 def _read_json_mapping_artifact(
     *,
     configured_path: str,
@@ -340,6 +379,7 @@ def build_runtime_health_payload(
     model_liveness = _model_liveness_snapshot()
     database_readiness = _database_readiness_snapshot()
     oms_invariants = _oms_invariants_snapshot()
+    oms_lifecycle_parity = _oms_lifecycle_parity_snapshot()
 
     raw_provider_status = provider_state.get("status")
     provider_status = raw_provider_status or (
@@ -492,6 +532,17 @@ def build_runtime_health_payload(
     ):
         overall_ok = False
         degraded = True
+    require_oms_lifecycle_parity = _env_bool(
+        "AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY",
+        False,
+    )
+    if (
+        require_oms_lifecycle_parity
+        and oms_lifecycle_parity.get("enabled", False)
+        and not bool(oms_lifecycle_parity.get("ok"))
+    ):
+        overall_ok = False
+        degraded = True
     if not overall_ok:
         degraded = True
 
@@ -528,6 +579,7 @@ def build_runtime_health_payload(
         "model_liveness": model_liveness,
         "database": database_readiness,
         "oms_invariants": oms_invariants,
+        "oms_lifecycle_parity": oms_lifecycle_parity,
     }
     if offhours_market_closed_ready:
         payload["reason"] = "market_closed"
@@ -557,6 +609,13 @@ def build_runtime_health_payload(
         and not payload.get("reason")
     ):
         payload["reason"] = "oms_invariants_failed"
+    if (
+        require_oms_lifecycle_parity
+        and oms_lifecycle_parity.get("enabled", False)
+        and not bool(oms_lifecycle_parity.get("ok"))
+        and not payload.get("reason")
+    ):
+        payload["reason"] = "oms_lifecycle_parity_failed"
     if force_ok_for_pytest:
         payload["ok"] = True
         payload.setdefault("status", payload.get("status") or "healthy")
@@ -579,6 +638,7 @@ def build_control_plane_snapshot(
     model_liveness = _model_liveness_snapshot()
     database_readiness = _database_readiness_snapshot()
     oms_invariants = _oms_invariants_snapshot()
+    oms_lifecycle_parity = _oms_lifecycle_parity_snapshot()
     runtime_performance = _runtime_performance_snapshot()
     manual_overrides = _manual_override_snapshot()
 
@@ -632,6 +692,7 @@ def build_control_plane_snapshot(
         "liveness": model_liveness,
         "database": database_readiness,
         "oms_invariants": oms_invariants,
+        "oms_lifecycle_parity": oms_lifecycle_parity,
         "runtime_performance": runtime_performance,
         "manual_overrides": manual_overrides,
     }

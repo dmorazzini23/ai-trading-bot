@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 from ai_trading.governance.promotion import ModelPromotion, PromotionCriteria
 from ai_trading.model_registry import ModelRegistry
 
 
 def _register_test_model(registry: ModelRegistry, *, strategy: str, marker: str) -> str:
-    return registry.register_model(
-        model={"marker": marker},
-        strategy=strategy,
-        model_type="dict",
-        metadata={"marker": marker},
+    return cast(
+        str,
+        registry.register_model(
+            model={"marker": marker},
+            strategy=strategy,
+            model_type="dict",
+            metadata={"marker": marker},
+        ),
     )
 
 
@@ -125,6 +129,30 @@ def test_live_kpi_control_band_triggers_rollback(tmp_path: Path) -> None:
     production = registry.get_production_model(strategy)
     assert production is not None
     assert production[0] == champion
+
+
+def test_live_kpi_control_band_pending_when_rollback_not_allowed(tmp_path: Path) -> None:
+    registry = ModelRegistry(tmp_path / "registry")
+    promotion = ModelPromotion(model_registry=registry, base_path=str(tmp_path / "governance"))
+    strategy = "momentum"
+
+    champion = _register_test_model(registry, strategy=strategy, marker="champion")
+    challenger = _register_test_model(registry, strategy=strategy, marker="challenger")
+    registry.update_governance_status(champion, "production")
+    assert promotion.promote_to_production(challenger, force=True) is True
+
+    result = promotion.evaluate_live_kpis_and_maybe_rollback(
+        strategy=strategy,
+        live_kpis={"max_drawdown": 0.20, "reject_rate": 0.01, "execution_drift_bps": 10.0},
+        allow_rollback=False,
+    )
+
+    assert result["breached"] is True
+    assert result["triggered"] is False
+    assert result["status"] == "pending"
+    production = registry.get_production_model(strategy)
+    assert production is not None
+    assert production[0] == challenger
 
 
 def test_update_shadow_metrics_autoderives_validation_ratios(tmp_path: Path) -> None:

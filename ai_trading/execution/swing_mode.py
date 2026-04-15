@@ -1,4 +1,4 @@
-"""Swing Trading Mode - PDT-Safe Trading Strategy."""
+"""Swing trading mode strategy helpers."""
 
 import logging
 from datetime import datetime, time, timezone
@@ -69,7 +69,7 @@ def can_exit_today(position: Mapping[str, Any], now_utc: datetime) -> bool:
 
 class SwingTradingMode:
     """
-    Swing trading mode that prevents day trades.
+    Swing trading mode that prevents same-day exits.
     
     Rules:
     - Only enter new positions
@@ -86,7 +86,7 @@ class SwingTradingMode:
     def enable(self):
         """Enable swing trading mode."""
         self.enabled = True
-        logger.info("SWING_MODE_ENABLED | PDT-safe trading activated")
+        logger.info("SWING_MODE_ENABLED | same-day exits blocked")
     
     def disable(self):
         """Disable swing trading mode."""

@@ -27,7 +27,6 @@ def test_run_all_trades_overlap(monkeypatch, caplog):
     caplog.set_level("INFO")
 
     monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
-    monkeypatch.setattr(bot_engine, "check_pdt_rule", lambda ctx: False)
     monkeypatch.setattr(bot_engine, "_netting_pipeline_enabled", lambda runtime: False)
     monkeypatch.setattr(bot_engine, "_prepare_run", lambda ctx, st: (0.0, True, []))
     monkeypatch.setattr(bot_engine, "_process_symbols", lambda *a, **k: ([], {}, 0))
@@ -102,7 +101,6 @@ def test_run_all_trades_missing_get_account(monkeypatch, caplog):
     monkeypatch.setattr(bot_engine, "get_trade_logger", lambda: None)
     monkeypatch.setattr(bot_engine, "get_strategies", lambda: [])
     monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
-    monkeypatch.setattr(bot_engine, "check_pdt_rule", lambda ctx: False)
     monkeypatch.setattr(bot_engine, "_netting_pipeline_enabled", lambda runtime: False)
     monkeypatch.setattr(bot_engine, "get_verbose_logging", lambda: False)
     monkeypatch.setattr(bot_engine, "utc_now_iso", lambda: "now")

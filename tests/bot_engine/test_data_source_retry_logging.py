@@ -107,7 +107,6 @@ def test_data_source_retry_marks_failure(monkeypatch, caplog):
     monkeypatch.setattr(bot, "_ensure_execution_engine", lambda runtime: None)
     monkeypatch.setattr(bot, "ensure_alpaca_attached", lambda runtime: None)
     monkeypatch.setattr(bot, "_validate_trading_api", lambda api: True)
-    monkeypatch.setattr(bot, "check_pdt_rule", lambda runtime: False)
     monkeypatch.setattr(bot, "get_trade_cooldown_min", lambda: 0)
     monkeypatch.setattr(bot, "is_market_open", lambda: True)
     monkeypatch.setattr(bot, "get_verbose_logging", lambda: False)
@@ -191,7 +190,6 @@ def test_data_source_empty_skipped_when_no_fetch_attempts(monkeypatch, caplog):
     monkeypatch.setattr(bot, "_ensure_execution_engine", lambda runtime: None)
     monkeypatch.setattr(bot, "ensure_alpaca_attached", lambda runtime: None)
     monkeypatch.setattr(bot, "_validate_trading_api", lambda api: True)
-    monkeypatch.setattr(bot, "check_pdt_rule", lambda runtime: False)
     monkeypatch.setattr(bot, "get_trade_cooldown_min", lambda: 0)
     monkeypatch.setattr(bot, "is_market_open", lambda: True)
     monkeypatch.setattr(bot, "get_verbose_logging", lambda: False)
@@ -262,7 +260,6 @@ def test_market_closed_cycle_runs_broker_sync(monkeypatch, caplog):
     monkeypatch.setattr(bot, "_ensure_alpaca_classes", lambda: None)
     monkeypatch.setattr(bot, "_init_metrics", lambda: None)
     monkeypatch.setattr(bot, "_ensure_execution_engine", lambda runtime: None)
-    monkeypatch.setattr(bot, "check_pdt_rule", lambda runtime: False)
     monkeypatch.setattr(bot, "is_market_open", lambda: False)
     monkeypatch.setattr(
         bot,

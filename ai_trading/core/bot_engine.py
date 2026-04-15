@@ -81,6 +81,9 @@ from ai_trading.data.fetch import (
 )
 from ai_trading.data.fetch.metrics import backup_provider_used_total
 from ai_trading.data import price_quote_feed
+from ai_trading.data.feed_roles import get_execution_feed, get_reference_feed, normalize_feed_role
+from ai_trading.analytics.feed_drift import fetch_reference_snapshot
+from ai_trading.data.reference_reconcile import run_reference_reconciliation_once
 from ai_trading.data._alpaca_guard import should_import_alpaca_sdk
 from ai_trading.runtime.shutdown import should_stop
 if TYPE_CHECKING:  # pragma: no cover - type hints only
@@ -3272,6 +3275,10 @@ _PRICE_WARNING_TS: dict[tuple[str, str], float] = {}
 _PRICE_WARNING_INTERVAL = 60.0
 _INTRADAY_FEED_CACHE: str | None = None
 _SIP_LOCKED_SYMBOLS: set[str] = set()
+_FEED_RELIABILITY_CACHE_LOCK = Lock()
+_FEED_RELIABILITY_CACHE_SIGNATURE: tuple[str, int, int] | None = None
+_FEED_RELIABILITY_CACHE_SCORES: dict[str, dict[str, Any]] = {}
+_FEED_RELIABILITY_CACHE_AS_OF: str | None = None
 
 _cycle_feature_cache: dict[tuple[int, tuple[str, object]], pd.DataFrame] = {}
 _cycle_feature_cache_cycle: int | None = None
@@ -3491,10 +3498,251 @@ def _get_intraday_feed() -> str:
     if _INTRADAY_FEED_CACHE is not None:
         return _INTRADAY_FEED_CACHE
     settings = _load_execution_settings()
-    feed = getattr(settings, "data_feed_intraday", DATA_FEED_INTRADAY) if settings is not None else DATA_FEED_INTRADAY
-    normalized = str(feed or DATA_FEED_INTRADAY).strip().lower() or "iex"
+    requested = getattr(settings, "execution_feed", None) if settings is not None else None
+    if requested in (None, ""):
+        requested = getattr(settings, "data_feed_intraday", DATA_FEED_INTRADAY) if settings is not None else DATA_FEED_INTRADAY
+    normalized = get_execution_feed(str(requested or DATA_FEED_INTRADAY))
     _INTRADAY_FEED_CACHE = normalized
     return normalized
+
+
+def _clamp_unit_interval(value: Any, *, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = float(default)
+    if not math.isfinite(parsed):
+        parsed = float(default)
+    return max(0.0, min(1.0, float(parsed)))
+
+
+def _feed_reliability_enabled() -> bool:
+    try:
+        raw = get_env(
+            "AI_TRADING_FEED_RELIABILITY_ENABLED",
+            "1",
+            resolve_aliases=False,
+        )
+    except COMMON_EXC:
+        raw = "1"
+    return _truthy_env(raw)
+
+
+def _resolve_feed_reliability_path() -> Path:
+    default_path = "runtime/feed_reliability_scores.json"
+    configured = str(
+        get_env(
+            "AI_TRADING_FEED_RELIABILITY_PATH",
+            default_path,
+            cast=str,
+            resolve_aliases=False,
+        )
+        or default_path
+    ).strip()
+    return resolve_runtime_artifact_path(
+        configured or default_path,
+        default_relative=default_path,
+        for_write=False,
+    )
+
+
+def _feed_reliability_file_signature(path: Path) -> tuple[str, int, int] | None:
+    try:
+        stats = path.stat()
+    except OSError:
+        return None
+    return (str(path), int(stats.st_mtime_ns), int(stats.st_size))
+
+
+def _load_feed_reliability_scores() -> tuple[Mapping[str, Mapping[str, Any]], str | None]:
+    global _FEED_RELIABILITY_CACHE_SIGNATURE, _FEED_RELIABILITY_CACHE_SCORES, _FEED_RELIABILITY_CACHE_AS_OF
+    path = _resolve_feed_reliability_path()
+    signature = _feed_reliability_file_signature(path)
+
+    with _FEED_RELIABILITY_CACHE_LOCK:
+        if signature is not None and signature == _FEED_RELIABILITY_CACHE_SIGNATURE:
+            return _FEED_RELIABILITY_CACHE_SCORES, _FEED_RELIABILITY_CACHE_AS_OF
+
+    scores: dict[str, dict[str, Any]] = {}
+    as_of: str | None = None
+    if signature is not None:
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            payload = {}
+        if isinstance(payload, MappingABC):
+            raw_ts = payload.get("ts")
+            if raw_ts not in (None, ""):
+                as_of = str(raw_ts)
+            raw_scores = payload.get("scores")
+            if isinstance(raw_scores, MappingABC):
+                for raw_symbol, raw_entry in raw_scores.items():
+                    symbol = str(raw_symbol or "").strip().upper()
+                    if not symbol or not isinstance(raw_entry, MappingABC):
+                        continue
+                    scores[symbol] = dict(raw_entry)
+
+    with _FEED_RELIABILITY_CACHE_LOCK:
+        _FEED_RELIABILITY_CACHE_SIGNATURE = signature
+        _FEED_RELIABILITY_CACHE_SCORES = scores
+        _FEED_RELIABILITY_CACHE_AS_OF = as_of
+    return scores, as_of
+
+
+def _get_symbol_feed_reliability(symbol: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "enabled": False,
+        "active": False,
+        "score": None,
+        "sample_count": 0,
+        "min_samples": 0,
+        "min_score": 0.0,
+        "size_multiplier": 1.0,
+        "threshold_bonus": 0.0,
+        "blocked": False,
+        "as_of": None,
+    }
+    if not _feed_reliability_enabled():
+        return payload
+    payload["enabled"] = True
+
+    scores, as_of = _load_feed_reliability_scores()
+    payload["as_of"] = as_of
+    symbol_key = str(symbol or "").strip().upper()
+    if not symbol_key:
+        return payload
+    entry = scores.get(symbol_key)
+    if not isinstance(entry, MappingABC):
+        return payload
+
+    score_raw = _safe_float(entry.get("reliability_score"))
+    sample_count: int = 0
+    try:
+        sample_count = max(0, int(float(entry.get("sample_count", 0) or 0)))
+    except (TypeError, ValueError):
+        sample_count = 0
+    payload["sample_count"] = sample_count
+
+    default_min_samples = int(
+        get_env(
+            "AI_TRADING_FEED_RELIABILITY_MIN_SAMPLES",
+            3,
+            cast=int,
+            resolve_aliases=False,
+        )
+        or 3
+    )
+    min_samples = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_FEED_RELIABILITY_LIVE_MIN_SAMPLES",
+                default_min_samples,
+                cast=int,
+                resolve_aliases=False,
+            )
+            or default_min_samples
+        ),
+    )
+    payload["min_samples"] = min_samples
+    if score_raw is None:
+        return payload
+
+    score = _clamp_unit_interval(score_raw, default=0.0)
+    payload["score"] = score
+    if sample_count < min_samples:
+        return payload
+    payload["active"] = True
+
+    min_score = _clamp_unit_interval(
+        get_env(
+            "AI_TRADING_FEED_RELIABILITY_MIN_SCORE",
+            0.35,
+            cast=float,
+            resolve_aliases=False,
+        ),
+        default=0.35,
+    )
+    size_floor = _clamp_unit_interval(
+        get_env(
+            "AI_TRADING_FEED_RELIABILITY_SIZE_FLOOR",
+            0.25,
+            cast=float,
+            resolve_aliases=False,
+        ),
+        default=0.25,
+    )
+    threshold_bonus_max = _clamp_unit_interval(
+        get_env(
+            "AI_TRADING_FEED_RELIABILITY_THRESHOLD_BONUS_MAX",
+            0.10,
+            cast=float,
+            resolve_aliases=False,
+        ),
+        default=0.10,
+    )
+    payload["min_score"] = min_score
+    payload["size_multiplier"] = max(size_floor, score)
+    payload["threshold_bonus"] = max(0.0, threshold_bonus_max * (1.0 - score))
+    payload["blocked"] = score < min_score
+    return payload
+
+
+def _apply_feed_reliability_size_adjustment(
+    *,
+    symbol: str,
+    side: str,
+    qty: int,
+    reliability: Mapping[str, Any],
+) -> int:
+    if qty <= 0:
+        return int(qty)
+    if not bool(reliability.get("active")):
+        return int(qty)
+    multiplier = _safe_float(reliability.get("size_multiplier"))
+    if multiplier is None or not math.isfinite(multiplier):
+        return int(qty)
+    bounded_multiplier = _clamp_unit_interval(multiplier, default=1.0)
+    if bounded_multiplier >= 0.999:
+        return int(qty)
+    scaled_qty = int(math.floor(float(qty) * bounded_multiplier))
+    if scaled_qty <= 0:
+        scaled_qty = 1
+    if scaled_qty < int(qty):
+        logger.info(
+            "ORDER_SIZE_SCALED_FEED_RELIABILITY",
+            extra={
+                "symbol": symbol,
+                "side": side,
+                "base_qty": int(qty),
+                "scaled_qty": int(scaled_qty),
+                "multiplier": bounded_multiplier,
+                "reliability_score": _safe_float(reliability.get("score")),
+                "sample_count": int(reliability.get("sample_count", 0) or 0),
+            },
+        )
+    return int(scaled_qty)
+
+
+def _annotate_feed_reliability(
+    annotations: dict[str, Any],
+    reliability: Mapping[str, Any],
+) -> None:
+    if not bool(reliability.get("active")):
+        return
+    score = _safe_float(reliability.get("score"))
+    if score is not None:
+        annotations["feed_reliability_score"] = float(score)
+    annotations["feed_reliability_sample_count"] = int(
+        reliability.get("sample_count", 0) or 0
+    )
+    multiplier = _safe_float(reliability.get("size_multiplier"))
+    if multiplier is not None:
+        annotations["feed_reliability_size_multiplier"] = float(multiplier)
+    as_of = reliability.get("as_of")
+    if as_of not in (None, ""):
+        annotations["feed_reliability_as_of"] = str(as_of)
 
 
 def _sanitize_alpaca_feed(feed: str | None) -> str | None:
@@ -10773,14 +11021,64 @@ def _fetch_intraday_bars_chunked(
     return {k: v for k, v in out.items() if not v.empty}
 
 
+def _resolve_model_data_feed_role() -> str:
+    role_raw = str(
+        get_env(
+            "AI_TRADING_MODEL_DATA_FEED_ROLE",
+            "reference",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or "reference"
+    ).strip().lower()
+    return normalize_feed_role("reference" if role_raw == "reference" else "execution")
+
+
+def _get_daily_df_for_feed_role(
+    ctx: Any,
+    symbol: str,
+    *,
+    feed_role: str,
+) -> Any:
+    fetcher = getattr(ctx, "data_fetcher", None)
+    getter = getattr(fetcher, "get_daily_df", None) if fetcher is not None else None
+    if not callable(getter):
+        return None
+    resolved_role = normalize_feed_role(feed_role)
+    try:
+        return getter(ctx, symbol, feed_role=resolved_role)
+    except TypeError as exc:
+        message = str(exc)
+        if "unexpected keyword argument" in message and "feed_role" in message:
+            return getter(ctx, symbol)
+        raise
+
+
 def _fetch_regime_bars(
     ctx: BotContext, start, end, timeframe="1D"
 ) -> dict[str, pd.DataFrame]:
     settings = get_settings()
     syms_csv = (getattr(settings, "regime_symbols_csv", None) or "SPY").strip()
     symbols = [s.strip() for s in syms_csv.split(",") if s.strip()]
+    model_feed_role = _resolve_model_data_feed_role()
+    if model_feed_role == "reference":
+        out: dict[str, pd.DataFrame] = {}
+        for symbol in symbols:
+            try:
+                df = _get_daily_df_for_feed_role(ctx, symbol, feed_role=model_feed_role)
+            except COMMON_EXC:
+                df = None
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                out[symbol] = df
+        if out:
+            return out
+    feed_override = (
+        get_reference_feed(getattr(ctx, "data_feed", None))
+        if model_feed_role == "reference"
+        else getattr(ctx, "data_feed", None)
+    )
     return _fetch_universe_bars_chunked(
-        symbols, timeframe, start, end, getattr(ctx, "data_feed", None)
+        symbols, timeframe, start, end, feed_override
     )
 
 
@@ -10813,7 +11111,11 @@ def _build_regime_dataset(ctx: Any) -> pd.DataFrame:
                 "Regime dataset empty after normalization; attempting SPY-only fallback"
             )
             try:
-                spy_df = ctx.data_fetcher.get_daily_df(ctx, "SPY")
+                spy_df = _get_daily_df_for_feed_role(
+                    ctx,
+                    "SPY",
+                    feed_role=_resolve_model_data_feed_role(),
+                )
                 if spy_df is not None and not getattr(spy_df, "empty", False):
                     s = (
                         spy_df[["timestamp", "close"]]
@@ -10986,7 +11288,6 @@ class BotState:
         mode_obj (BotMode): Trading mode configuration (conservative/balanced/aggressive)
         no_signal_events (int): Count of cycles with insufficient trading signals
         indicator_failures (int): Count of technical indicator calculation failures
-        pdt_blocked (bool): Pattern Day Trader rule violation flag
         position_cache (Dict[str, int]): Cached broker positions to avoid redundant API calls
         long_positions (set[str]): Set of symbols with current long positions
         short_positions (set[str]): Set of symbols with current short positions
@@ -11028,8 +11329,6 @@ class BotState:
     # Signal & Indicator State
     no_signal_events: int = 0
     indicator_failures: int = 0
-    pdt_blocked: bool = False
-
     # Position Management
     position_cache: dict[str, int] = field(default_factory=dict)
     long_positions: set[str] = field(default_factory=set)
@@ -11591,9 +11890,6 @@ if not get_env("TESTING"):
     validate_trading_parameters()
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
-PDT_DAY_TRADE_LIMIT = params.get("PDT_DAY_TRADE_LIMIT", 3)
-PDT_EQUITY_THRESHOLD = params.get("PDT_EQUITY_THRESHOLD", 25_000.0)
-
 # Regime symbols (makes SPY configurable)
 REGIME_SYMBOLS = ["SPY"]
 
@@ -12590,19 +12886,26 @@ class DataFetcher:
         end: Any,
         *,
         feed: str | None = None,
+        feed_role: str = "execution",
         adjustment: str | None = None,
     ) -> pd.DataFrame | None:
         """Delegate to :func:`ai_trading.data.fetch.get_bars` honoring overrides."""
 
-        effective_feed = self._resolve_feed(feed)
-        if effective_feed is None:
-            effective_feed = feed  # type: ignore[assignment]
+        resolved_role = normalize_feed_role(feed_role)
+        effective_feed: str | None
+        if resolved_role == "reference":
+            effective_feed = get_reference_feed(feed)
+        else:
+            effective_feed = self._resolve_feed(feed)
+            if effective_feed is None:
+                effective_feed = feed  # type: ignore[assignment]
         return data_fetcher_module.get_bars(
             symbol,
             timeframe,
             start,
             end,
             feed=effective_feed,
+            feed_role=resolved_role,
             adjustment=adjustment,
         )
 
@@ -12783,9 +13086,11 @@ class DataFetcher:
         ctx: Any,
         symbol: str,
         *,
+        feed_role: str = "execution",
         return_meta: bool = False,
     ) -> Any:
         symbol = symbol.upper()
+        resolved_feed_role = normalize_feed_role(feed_role)
         now_utc = datetime.now(UTC)
         try:
             now_monotonic = float(time.monotonic())
@@ -13317,13 +13622,19 @@ class DataFetcher:
             _DAILY_FETCH_MEMO_TTL if min_interval <= 0 else max(_DAILY_FETCH_MEMO_TTL, float(min_interval))
         )
 
-        effective_feed = self._resolve_feed(
-            getattr(
-                self.settings,
-                "data_feed",
-                getattr(self.settings, "alpaca_data_feed", None),
+        effective_feed: str | None
+        if resolved_feed_role == "reference":
+            effective_feed = get_reference_feed(
+                getattr(self.settings, "alpaca_reference_feed", None),
             )
-        )
+        else:
+            effective_feed = self._resolve_feed(
+                getattr(
+                    self.settings,
+                    "data_feed",
+                    getattr(self.settings, "alpaca_data_feed", None),
+                )
+            )
         planned_provider = self._planned_daily_provider(effective_feed)
         error_key = (symbol, fetch_date.isoformat())
 
@@ -13903,16 +14214,28 @@ class DataFetcher:
         else:
             last_fetch_error: Exception | None = None
             try:
-                df = data_fetcher_module.get_daily_df(
-                    symbol,
-                    start=start_ts,
-                    end=end_ts,
-                    feed=effective_feed,
-                    adjustment=getattr(self.settings, "alpaca_adjustment", None),
-                )
+                try:
+                    df = data_fetcher_module.get_daily_df(
+                        symbol,
+                        start=start_ts,
+                        end=end_ts,
+                        feed=effective_feed,
+                        feed_role=resolved_feed_role,
+                        adjustment=getattr(self.settings, "alpaca_adjustment", None),
+                    )
+                except TypeError as exc:
+                    if not self._is_signature_mismatch(exc):
+                        raise
+                    df = data_fetcher_module.get_daily_df(
+                        symbol,
+                        start=start_ts,
+                        end=end_ts,
+                        feed=effective_feed,
+                        adjustment=getattr(self.settings, "alpaca_adjustment", None),
+                    )
             except data_fetcher_module.MissingOHLCVColumnsError as exc:
                 self._record_daily_error(error_key, exc, now_monotonic)
-                if planned_provider != "yahoo":
+                if planned_provider != "yahoo" and resolved_feed_role == "execution":
                     provider_monitor.update_data_health(
                         planned_provider,
                         "yahoo",
@@ -14019,7 +14342,12 @@ class DataFetcher:
         return _emit_daily_fetch_result(df, cache=False)
 
     def get_minute_df(
-        self, ctx: BotContext, symbol: str, lookback_minutes: int = 30
+        self,
+        ctx: BotContext,
+        symbol: str,
+        lookback_minutes: int = 30,
+        *,
+        feed_role: str = "execution",
     ) -> pd.DataFrame | None:
         symbol = symbol.upper()
         now_utc = datetime.now(UTC)
@@ -14028,6 +14356,23 @@ class DataFetcher:
             minutes=1
         )
         start_minute = last_closed_minute - timedelta(minutes=lookback_minutes)
+        resolved_feed_role = normalize_feed_role(feed_role)
+        if resolved_feed_role == "reference":
+            reference_feed = get_reference_feed(
+                getattr(self.settings, "alpaca_reference_feed", None),
+            )
+            reference_df = data_fetcher_module.get_minute_df(
+                symbol,
+                start_minute,
+                last_closed_minute,
+                feed=reference_feed,
+                feed_role="reference",
+            )
+            with cache_lock:
+                if reference_df is not None:
+                    self._minute_cache[symbol] = reference_df
+                    self._minute_timestamps[symbol] = now_utc
+            return reference_df
 
         with cache_lock:
             last_ts = self._minute_timestamps.get(symbol)
@@ -17130,11 +17475,11 @@ def _initialize_alpaca_clients() -> bool:
             logger.debug("Successfully imported Alpaca SDK class")
         except COMMON_EXC as e:
             logger.error(
-                "ALPACA_CLIENT_IMPORT_FAILED | PDT_CHECK_SKIPPED",
+                "ALPACA_CLIENT_IMPORT_FAILED | BROKER_PRECHECK_SKIPPED",
                 extra={"error": str(e)},
             )
             logger.warning(
-                "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions"
+                "BROKER_PRECHECK_SKIPPED - Alpaca unavailable, skipping broker-account precheck"
             )
             if attempt == 1:
                 time.sleep(1)
@@ -18461,369 +18806,6 @@ def count_day_trades() -> int:
         & (df["entry_date"] == df["exit_date"])
     )
     return int(mask.sum())
-
-
-@sleep_and_retry
-@limits(calls=200, period=60)
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    retry=retry_if_exception_type(APIError),
-)
-def check_pdt_rule(ctx) -> bool:
-    """Return ``True`` when PDT rules suppress new orders."""
-
-    def _truthy(value: object) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            return bool(value)
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized in {"1", "true", "yes", "y", "on"}:
-                return True
-            if normalized in {"0", "false", "no", "n", "off"}:
-                return False
-        return False
-
-    def _as_int(value: object, default: int = 0) -> int:
-        try:
-            if value in (None, ""):
-                return default
-            if isinstance(value, (int, float)):
-                return int(value)
-            if isinstance(value, (str, bytes, bytearray)):
-                return int(value)
-            return int(str(value))
-        except (TypeError, ValueError):
-            return default
-
-    def _as_float(value: object, default: float = 0.0) -> float:
-        try:
-            if value in (None, ""):
-                return float(default)
-            if isinstance(value, (int, float, str, bytes, bytearray)):
-                return float(value)
-            return float(str(value))
-        except (TypeError, ValueError):
-            return float(default)
-
-    def _get_attr(obj: object, *names: str) -> object:
-        for name in names:
-            if obj is None:
-                break
-            if hasattr(obj, name):
-                return getattr(obj, name)
-        return None
-
-    def _get_nested(obj: object, *path: str) -> object:
-        current = obj
-        for name in path:
-            if current is None or not hasattr(current, name):
-                return None
-            current = getattr(current, name)
-        return current
-
-    def _env_broker_block() -> bool:
-        for key in ("PATTERN_DAY_TRADER_BLOCKED", "PDT_BLOCKED", "PDT_BROKER_BLOCK"):
-            value = get_env(key, None, resolve_aliases=False)
-            if value not in (None, "") and _truthy(value):
-                return True
-        return False
-
-    def _safe_probe_open_orders() -> None:
-        api_obj = getattr(ctx, "api", None)
-        list_orders = getattr(api_obj, "list_orders", None)
-        if callable(list_orders):
-            try:
-                list_orders(status="open", nested=False, limit=10)
-            except Exception:
-                logger.debug("ALPACA_LIST_OPEN_ORDERS_PROBE_FAILED", exc_info=True)
-
-    explicit_account_provided = getattr(ctx, "account", None) is not None
-    account = getattr(ctx, "account", None)
-    if account is None and getattr(ctx, "api", None) is None:
-        creds_available = False
-        try:
-            creds_available = bool(_has_alpaca_credentials())
-        except Exception:
-            creds_available = False
-        if not creds_available:
-            logger.info(
-                "PDT_CHECK_SKIPPED",
-                extra={"reason": "account_unavailable"},
-            )
-            _safe_probe_open_orders()
-            return False
-    if account is None:
-        try:
-            ensure_alpaca_attached(ctx)
-        except Exception:
-            logger.debug("ALPACA_ATTACH_FOR_ACCOUNT_REFRESH_FAILED", exc_info=True)
-        try:
-            account = safe_alpaca_get_account(ctx)
-        except Exception:
-            account = None
-        else:
-            try:
-                setattr(ctx, "account", account)
-            except COMMON_EXC:
-                pass
-
-    if account is None:
-        logger.info(
-            "PDT_CHECK_SKIPPED",
-            extra={"reason": "account_unavailable"},
-        )
-        _safe_probe_open_orders()
-        return False
-
-    thresholds = getattr(ctx, "thresholds", None)
-    if thresholds is None:
-        thresholds = SimpleNamespace(min_equity=PDT_EQUITY_THRESHOLD)
-
-    trading_blocked_attr = _truthy(_get_attr(account, "trading_blocked", "is_trading_blocked"))
-    account_blocked_attr = _truthy(
-        _get_attr(account, "account_blocked", "is_account_blocked")
-    )
-    api_flag = _truthy(
-        _get_nested(getattr(ctx, "api", None), "flags", "pattern_day_trader_blocked")
-    )
-    broker_flag = _env_broker_block() or api_flag or trading_blocked_attr or account_blocked_attr
-
-    pattern_day_trader = _truthy(
-        _get_attr(account, "pattern_day_trader", "is_pattern_day_trader", "pdt")
-    )
-    daytrade_count = _as_int(
-        _get_attr(
-            account,
-            "daytrade_count",
-            "day_trade_count",
-            "pattern_day_trades",
-            "pattern_day_trades_count",
-        ),
-        0,
-    )
-    daytrade_limit_raw = _get_attr(
-        account,
-        "daytrade_limit",
-        "day_trade_limit",
-        "pattern_day_trade_limit",
-    )
-    daytrade_limit = _as_int(
-        daytrade_limit_raw if daytrade_limit_raw not in (None, "") else PDT_DAY_TRADE_LIMIT,
-        int(PDT_DAY_TRADE_LIMIT or 0),
-    )
-    ctx_daytrade_limit_raw = getattr(ctx, "daytrade_limit", None)
-    ctx_daytrade_limit_set = ctx_daytrade_limit_raw not in (None, "")
-    if ctx_daytrade_limit_set:
-        limit_to_use = _as_int(ctx_daytrade_limit_raw, daytrade_limit)
-    else:
-        limit_to_use = daytrade_limit
-    equity = _as_float(_get_attr(account, "equity"), 0.0)
-    min_equity = _as_float(getattr(thresholds, "min_equity", PDT_EQUITY_THRESHOLD), PDT_EQUITY_THRESHOLD)
-    dtbp = _as_float(
-        _get_attr(
-            account,
-            "dtbp",
-            "daytrading_buying_power",
-            "day_trade_buying_power",
-            "buying_power",
-        ),
-        0.0,
-    )
-    legacy_day_trades = _as_int(
-        _get_attr(account, "pattern_day_trades", "pattern_day_trades_count"),
-        daytrade_count,
-    )
-    enforce_daytrade_limit = bool(
-        getattr(ctx, "enforce_daytrade_limit", explicit_account_provided)
-    )
-
-    context: dict[str, Any] = {
-        "pattern_day_trader": bool(pattern_day_trader),
-        "daytrade_count": daytrade_count,
-        "daytrade_limit": limit_to_use,
-        "legacy_pattern_day_trades": legacy_day_trades,
-        "trading_blocked": bool(trading_blocked_attr or broker_flag),
-        "account_blocked": bool(account_blocked_attr or broker_flag),
-        "equity": equity,
-        "min_equity": min_equity,
-        "daytrading_buying_power": dtbp,
-        "daytrade_limit_enforced": enforce_daytrade_limit,
-    }
-
-    equity_ok = False
-    try:
-        equity_ok = math.isfinite(float(equity)) and float(equity) >= float(min_equity)
-    except (TypeError, ValueError, ArithmeticError):
-        equity_ok = False
-    context["pdt_equity_ok"] = bool(equity_ok)
-
-    def _store_context(
-        reason: str | None = None,
-        *,
-        enforced: bool = False,
-        warn_reasons: Sequence[str] | None = None,
-    ) -> None:
-        payload = dict(context)
-        if reason is not None:
-            payload["block_reason"] = reason
-        elif "block_reason" in payload and not enforced:
-            payload.pop("block_reason", None)
-        payload["block_enforced"] = bool(enforced)
-        if warn_reasons is not None:
-            payload["warn_reasons"] = tuple(warn_reasons)
-        setattr(ctx, "_pdt_last_context", payload)
-
-    now_local = datetime.now(UTC).astimezone(_EASTERN_TZ)
-    session_date = now_local.date()
-    snapshot = getattr(ctx, "_pdt_daytrade_snapshot", None)
-    if not isinstance(snapshot, dict) or snapshot.get("session_date") != session_date:
-        snapshot = {"session_date": session_date, "max_count": 0}
-    prev_count = _as_int(snapshot.get("last_count"), daytrade_count)
-    if prev_count > daytrade_count:
-        logger.info(
-            "PDT_DAYTRADE_COUNTER_RESET",
-            extra={
-                "previous": prev_count,
-                "current": daytrade_count,
-                "limit": limit_to_use,
-            },
-        )
-    snapshot["last_count"] = daytrade_count
-    snapshot["max_count"] = max(_as_int(snapshot.get("max_count"), 0), daytrade_count)
-    snapshot["limit"] = limit_to_use
-    setattr(ctx, "_pdt_daytrade_snapshot", snapshot)
-    context["daytrade_snapshot"] = {
-        "session_date": session_date.isoformat(),
-        "last_count": snapshot["last_count"],
-        "max_count": snapshot["max_count"],
-    }
-
-    logger.info(
-        "PDT_CHECK",
-        extra={
-            "equity": equity,
-            "daytrading_buying_power": dtbp,
-            "pattern_day_trader": bool(pattern_day_trader),
-            "daytrade_count": daytrade_count,
-            "daytrade_limit": daytrade_limit,
-            "min_equity": min_equity,
-            "trading_blocked": bool(trading_blocked_attr or broker_flag),
-            "account_blocked": bool(account_blocked_attr or broker_flag),
-        },
-    )
-
-    limit_reached = (
-        enforce_daytrade_limit
-        and pattern_day_trader
-        and limit_to_use > 0
-        and daytrade_count >= limit_to_use
-    )
-
-    warn_reasons: list[str] = []
-    block_reason: str | None = None
-    block_enforced = False
-
-    if broker_flag:
-        if limit_reached:
-            block_reason = "broker_blocked"
-            block_enforced = True
-        else:
-            warn_reasons.append("broker_blocked")
-
-    if limit_reached and not block_enforced:
-        warn_reasons.append("daytrade_limit_exhausted")
-
-    if dtbp <= 0.0:
-        warn_reasons.append("dtbp_exhausted")
-
-    if not equity_ok:
-        warn_reasons.append("equity_below_threshold")
-
-    unique_warns = tuple(dict.fromkeys(warn_reasons))
-    context["limit_reached"] = bool(limit_reached)
-    context["block_enforced"] = block_enforced
-    if block_reason is not None:
-        context["block_reason"] = block_reason
-    elif "block_reason" in context:
-        context.pop("block_reason", None)
-    context["warn_reasons"] = unique_warns
-
-    _store_context(
-        block_reason if block_enforced else None,
-        enforced=block_enforced,
-        warn_reasons=unique_warns,
-    )
-
-    if block_enforced:
-        logger.warning(
-            "PDT_BLOCK_BROKER_FLAG",
-            extra={
-                "trading_blocked": bool(trading_blocked_attr or broker_flag),
-                "account_blocked": bool(account_blocked_attr or broker_flag),
-                "reason": "broker_blocked",
-                "daytrade_count": daytrade_count,
-                "daytrade_limit": limit_to_use,
-            },
-        )
-        _safe_probe_open_orders()
-        return True
-
-    for reason in unique_warns:
-        if reason == "broker_blocked":
-            logger.warning(
-                "PDT_BROKER_FLAG_WARN_ONLY",
-                extra={
-                    "trading_blocked": bool(trading_blocked_attr or broker_flag),
-                    "account_blocked": bool(account_blocked_attr or broker_flag),
-                    "reason": "broker_blocked",
-                },
-            )
-        elif reason == "daytrade_limit_exhausted":
-            logger.warning(
-                "PDT_DAYTRADE_LIMIT_WARN_ONLY",
-                extra={
-                    "pattern_day_trader": bool(pattern_day_trader),
-                    "daytrade_count": daytrade_count,
-                    "daytrade_limit": limit_to_use,
-                    "reason": "daytrade_limit_exhausted",
-                },
-            )
-        elif reason == "dtbp_exhausted":
-            logger.warning(
-                "PDT_NO_DTBP_WARN_ONLY",
-                extra={
-                    "daytrading_buying_power": dtbp,
-                    "equity": equity,
-                    "reason": "dtbp_exhausted",
-                },
-            )
-        elif reason == "equity_below_threshold":
-            logger.warning(
-                "PDT_LOW_EQUITY_WARN_ONLY",
-                extra={
-                    "equity": equity,
-                    "min_equity": min_equity,
-                    "daytrading_buying_power": dtbp,
-                    "reason": "equity_below_threshold",
-                },
-            )
-
-    if not unique_warns:
-        logger.info(
-            "PDT_ELIGIBLE_EQ_OK",
-            extra={
-                "equity": equity,
-                "min_equity": min_equity,
-                "daytrading_buying_power": dtbp,
-                "pdt_equity_ok": bool(equity_ok),
-            },
-        )
-
-    _safe_probe_open_orders()
-    return False
 
 
 def set_halt_flag(reason: str) -> None:
@@ -21400,10 +21382,6 @@ def pre_trade_checks(
             extra={"symbol": symbol, "until": state.streak_halt_until},
         )
         _log_health_diagnostics(ctx, "streak")
-        return False
-    if getattr(state, "pdt_blocked", False):
-        logger.info("SKIP_PDT_RULE", extra={"symbol": symbol})
-        _log_health_diagnostics(ctx, "pdt")
         return False
     if check_halt_flag(ctx):
         logger.info("SKIP_HALT_FLAG", extra={"symbol": symbol})
@@ -24879,6 +24857,7 @@ def _enter_long(
         except (APIError, TimeoutError, ConnectionError, RequestException, AttributeError, ValueError):
             account_obj = None
     strategy_label = str(strat or "").strip().lower()
+    feed_reliability = _get_symbol_feed_reliability(symbol)
     primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
     provider_enabled = True
     if callable(primary_provider_fn):
@@ -25409,19 +25388,6 @@ def _enter_long(
                 return True
         return True
 
-    pdt_blocked, pdt_context = _pdt_limit_exhausted(ctx)
-    if pdt_blocked:
-        logger.warning(
-            "PDT_LIMIT_ACTIVE_SKIP",
-            extra={
-                "symbol": symbol,
-                "daytrade_count": pdt_context.get("daytrade_count") if pdt_context else None,
-                "daytrade_limit": pdt_context.get("daytrade_limit") if pdt_context else None,
-                "pattern_day_trader": pdt_context.get("pattern_day_trader") if pdt_context else None,
-            },
-        )
-        return True
-
     atr_value = _safe_float(feat_df["atr"].iloc[-1])
     if atr_value is None:
         atr_value = 0.0
@@ -25436,6 +25402,18 @@ def _enter_long(
         fallback_used=fallback_for_edge,
         quote_details=getattr(quote_gate, "details", None),
     ):
+        return True
+    if bool(feed_reliability.get("blocked")):
+        logger.info(
+            "ORDER_SKIPPED_FEED_RELIABILITY",
+            extra={
+                "symbol": symbol,
+                "side": "buy",
+                "reliability_score": _safe_float(feed_reliability.get("score")),
+                "sample_count": int(feed_reliability.get("sample_count", 0) or 0),
+                "min_score": _safe_float(feed_reliability.get("min_score")),
+            },
+        )
         return True
 
     # AI-AGENT-REF: Get target weight with sensible fallback for signal-based trading
@@ -25555,6 +25533,12 @@ def _enter_long(
                 f"Skipping {symbol}: insufficient capital for minimum position (balance=${balance:.0f}, weight={target_weight:.4f}, price=${current_price:.2f})"
             )
             return True
+    raw_qty = _apply_feed_reliability_size_adjustment(
+        symbol=symbol,
+        side="buy",
+        qty=int(raw_qty),
+        reliability=feed_reliability,
+    )
     prescale_requested_qty = int(raw_qty)
     raw_qty, precheck_bp = _enforce_buying_power_limit(
         ctx,
@@ -25636,6 +25620,7 @@ def _enter_long(
     )
     order_annotations["expected_edge_bps"] = float(expected_edge_bps)
     order_annotations["expected_net_edge_bps"] = float(expected_net_edge_bps)
+    _annotate_feed_reliability(order_annotations, feed_reliability)
 
     quote_source_for_log = str(quote_metadata.get("source", price_source))
     normalized_quote_source = quote_source_for_log.lower()
@@ -25724,6 +25709,7 @@ def _enter_short(
     strat: str,
 ) -> bool:
     prefer_backup_quote = bool(getattr(state, "prefer_backup_quotes", False))
+    feed_reliability = _get_symbol_feed_reliability(symbol)
     account_obj: Any | None = None
     api_obj = getattr(ctx, "api", None)
     get_account = getattr(api_obj, "get_account", None)
@@ -26216,19 +26202,6 @@ def _enter_short(
                 return True
         return True
 
-    pdt_blocked, pdt_context = _pdt_limit_exhausted(ctx)
-    if pdt_blocked:
-        logger.warning(
-            "PDT_LIMIT_ACTIVE_SKIP",
-            extra={
-                "symbol": symbol,
-                "daytrade_count": pdt_context.get("daytrade_count") if pdt_context else None,
-                "daytrade_limit": pdt_context.get("daytrade_limit") if pdt_context else None,
-                "pattern_day_trader": pdt_context.get("pattern_day_trader") if pdt_context else None,
-            },
-        )
-        return True
-
     atr = _safe_float(feat_df["atr"].iloc[-1])
     if atr is None:
         atr = 0.0
@@ -26243,6 +26216,18 @@ def _enter_short(
         fallback_used=fallback_for_edge,
         quote_details=getattr(quote_gate, "details", None),
     ):
+        return True
+    if bool(feed_reliability.get("blocked")):
+        logger.info(
+            "ORDER_SKIPPED_FEED_RELIABILITY",
+            extra={
+                "symbol": symbol,
+                "side": "sell_short",
+                "reliability_score": _safe_float(feed_reliability.get("score")),
+                "sample_count": int(feed_reliability.get("sample_count", 0) or 0),
+                "min_score": _safe_float(feed_reliability.get("min_score")),
+            },
+        )
         return True
 
     qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
@@ -26358,6 +26343,12 @@ def _enter_short(
     if qty is None or not np.isfinite(qty) or qty <= 0:
         logger.warning(f"Skipping {symbol}: computed qty <= 0")
         return True
+    qty = _apply_feed_reliability_size_adjustment(
+        symbol=symbol,
+        side="sell_short",
+        qty=int(qty),
+        reliability=feed_reliability,
+    )
     prescale_requested_qty = int(qty)
     qty, precheck_bp = _enforce_buying_power_limit(
         ctx,
@@ -26439,6 +26430,7 @@ def _enter_short(
     )
     order_annotations["expected_edge_bps"] = float(expected_edge_bps)
     order_annotations["expected_net_edge_bps"] = float(expected_net_edge_bps)
+    _annotate_feed_reliability(order_annotations, feed_reliability)
 
     quote_source_for_log = str(quote_metadata.get("source", price_source))
     normalized_quote_source = quote_source_for_log.lower()
@@ -27162,8 +27154,46 @@ def trade_logic(
                 },
             )
 
+    feed_reliability = _get_symbol_feed_reliability(symbol)
+    if current_qty == 0 and bool(feed_reliability.get("active")):
+        reliability_threshold_bonus = _safe_float(feed_reliability.get("threshold_bonus"))
+        if reliability_threshold_bonus is not None and reliability_threshold_bonus > 0.0:
+            threshold_before = local_threshold
+            local_threshold = min(1.0, local_threshold + reliability_threshold_bonus)
+            logger.info(
+                "ENTRY_THRESHOLD_RAISED_FEED_RELIABILITY",
+                extra={
+                    "symbol": symbol,
+                    "threshold_before": threshold_before,
+                    "threshold_after": local_threshold,
+                    "reliability_score": _safe_float(feed_reliability.get("score")),
+                    "sample_count": int(feed_reliability.get("sample_count", 0) or 0),
+                    "threshold_bonus": reliability_threshold_bonus,
+                },
+            )
+
     long_entry_candidate = final_score > 0 and conf >= local_threshold and current_qty == 0
     short_entry_candidate = final_score < 0 and conf >= local_threshold and current_qty == 0
+    if (
+        current_qty == 0
+        and (long_entry_candidate or short_entry_candidate)
+        and bool(feed_reliability.get("blocked"))
+    ):
+        entry_side = "buy" if long_entry_candidate else "sell_short"
+        logger.info(
+            "ENTRY_BLOCKED_FEED_RELIABILITY",
+            extra={
+                "symbol": symbol,
+                "side": entry_side,
+                "final_score": final_score,
+                "confidence": conf,
+                "reliability_score": _safe_float(feed_reliability.get("score")),
+                "sample_count": int(feed_reliability.get("sample_count", 0) or 0),
+                "min_score": _safe_float(feed_reliability.get("min_score")),
+            },
+        )
+        _reset_entry_flip_signal_streak(state, symbol)
+        return True
     if current_qty == 0 and not (long_entry_candidate or short_entry_candidate):
         _reset_entry_flip_signal_streak(state, symbol)
 
@@ -30220,7 +30250,11 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                 finally:
                     meta_lock.release()
 
-    df_train = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
+    df_train = _get_daily_df_for_feed_role(
+        ctx,
+        REGIME_SYMBOLS[0],
+        feed_role=_resolve_model_data_feed_role(),
+    )
     if df_train is not None and not df_train.empty:
         X_train = (
             df_train[["open", "high", "low", "close", "volume"]]
@@ -31074,32 +31108,6 @@ def _synthetic_quote_decision(
         context=details,
     )
     return QuoteGateDecision(True, None, details)
-
-
-def _pdt_limit_exhausted(ctx: Any) -> tuple[bool, Mapping[str, Any] | None]:
-    """Return ``(True, context)`` when PDT limits or counters block new trades."""
-
-    context = getattr(ctx, "_pdt_last_context", None)
-    if not isinstance(context, Mapping):
-        return False, None
-    enforced_flag = context.get("block_enforced")
-    if enforced_flag is not None:
-        return bool(enforced_flag), context
-    pattern_flag = bool(context.get("pattern_day_trader"))
-    try:
-        limit = int(context.get("daytrade_limit", 0))
-        count = int(context.get("daytrade_count", 0))
-    except (TypeError, ValueError):
-        limit = 0
-        count = 0
-    enforced = bool(context.get("daytrade_limit_enforced"))
-    threshold_hit = pattern_flag and limit > 0 and count >= limit
-    if threshold_hit:
-        return True, context
-    if enforced and limit <= 0 and pattern_flag and count > 0:
-        # Defensive guard when brokers flag PDT but limit absent.
-        return True, context
-    return False, context
 
 
 @dataclass(frozen=True)
@@ -49054,7 +49062,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
        - Calculate optimal position sizes using Kelly criterion
        - Check portfolio heat and individual position limits
        - Apply drawdown protection and loss streak controls
-       - Validate trades against PDT and margin rules
+       - Validate trades against broker margin and risk rules
 
     5. **Trade Execution**
        - Generate order instructions for qualified signals
@@ -49367,22 +49375,6 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         },
                     )
                 setattr(state, "_safe_mode_cancel_version", version)
-        state.pdt_blocked = check_pdt_rule(runtime)
-        if state.pdt_blocked is True:
-            pdt_context = getattr(runtime, "_pdt_last_context", {}) or {}
-            extra = {
-                "reason": pdt_context.get("block_reason", "pdt_gate"),
-                "pattern_day_trader": bool(pdt_context.get("pattern_day_trader", False)),
-                "daytrade_count": pdt_context.get("daytrade_count"),
-                "daytrade_limit": pdt_context.get("daytrade_limit"),
-                "equity": pdt_context.get("equity"),
-                "daytrading_buying_power": pdt_context.get("daytrading_buying_power"),
-                "trading_blocked": bool(pdt_context.get("trading_blocked", False)),
-                "account_blocked": bool(pdt_context.get("account_blocked", False)),
-                "symbol_count": len(getattr(runtime, "tickers", []) or []),
-            }
-            logger.info("ORDERS_SUPPRESSED_BY_PDT", extra=extra)
-            return
         feed_cache = getattr(state, "minute_feed_cache", None)
         if isinstance(feed_cache, dict):
             feed_cache.clear()
@@ -50774,6 +50766,39 @@ def main() -> None:
         schedule.every(5).minutes.do(
             lambda: Thread(target=_emit_periodic_metrics, daemon=True).start()
         )
+        reference_reconcile_minutes = max(
+            1,
+            int(
+                get_env(
+                    "AI_TRADING_REFERENCE_RECONCILE_MINUTES",
+                    10,
+                    cast=int,
+                )
+                or 10
+            ),
+        )
+
+        def _run_reference_reconcile_with_guard() -> None:
+            try:
+                run_reference_reconciliation_once()
+            except (
+                FileNotFoundError,
+                PermissionError,
+                IsADirectoryError,
+                JSONDecodeError,
+                ValueError,
+                KeyError,
+                TypeError,
+                OSError,
+            ) as exc:
+                logger.warning(
+                    "REFERENCE_RECONCILE_FAILED",
+                    extra={"error": str(exc)},
+                )
+
+        schedule.every(reference_reconcile_minutes).minutes.do(
+            lambda: Thread(target=_run_reference_reconcile_with_guard, daemon=True).start()
+        )
         schedule.every(6).hours.do(
             lambda: Thread(target=update_signal_weights, daemon=True).start()
         )
@@ -51594,6 +51619,10 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             except Exception:
                 logger.debug("CANONICAL_FETCH_BARS_DELEGATE_FAILED", exc_info=True)
 
+    feed_role = normalize_feed_role(str(__.get("feed_role") or "execution"))
+    if feed_role == "reference":
+        return get_reference_latest_price(symbol, feed=__.get("feed"))
+
     prefer_backup = bool(__.get("prefer_backup", False))
     feed_override_raw = __.get("feed")
     override_token: str | None = None
@@ -51990,7 +52019,64 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     return None
 
 
-get_latest_price = _get_latest_price_simple
+def get_execution_latest_price(
+    symbol: str,
+    *,
+    prefer_backup: bool = False,
+    feed: str | None = None,
+) -> float | None:
+    """Return latest execution price using the configured execution feed."""
+
+    value = _get_latest_price_simple(
+        symbol,
+        prefer_backup=prefer_backup,
+        feed=feed,
+        feed_role="execution",
+    )
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_reference_latest_price(
+    symbol: str,
+    *,
+    feed: str | None = None,
+) -> float | None:
+    """Return latest delayed reference price for analytics/reconciliation."""
+
+    reference_feed = get_reference_feed(feed)
+    snapshot = fetch_reference_snapshot(symbol, feed=reference_feed)
+    try:
+        price = float(snapshot.get("price"))
+    except (TypeError, ValueError):
+        _PRICE_SOURCE[symbol] = f"alpaca_reference_{reference_feed}_invalid"
+        return None
+    if price <= 0:
+        _PRICE_SOURCE[symbol] = f"alpaca_reference_{reference_feed}_invalid"
+        return None
+    _PRICE_SOURCE[symbol] = f"alpaca_reference_{reference_feed}"
+    return price
+
+
+def _get_latest_price_role_aware(
+    symbol: str,
+    *,
+    prefer_backup: bool = False,
+    feed: str | None = None,
+    feed_role: str = "execution",
+) -> float | None:
+    """Backward-compatible latest price entrypoint with optional feed role."""
+
+    if normalize_feed_role(feed_role) == "reference":
+        return get_reference_latest_price(symbol, feed=feed)
+    return get_execution_latest_price(symbol, prefer_backup=prefer_backup, feed=feed)
+
+
+get_latest_price = _get_latest_price_role_aware
 
 
 def _resolve_order_quote(

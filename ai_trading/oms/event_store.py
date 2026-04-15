@@ -13,7 +13,7 @@ from typing import Any
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 
-from .event_types import DecisionEvent, OmsEvent
+from .event_types import DecisionEvent, OmsEvent, new_event_uuid
 
 logger = get_logger(__name__)
 
@@ -97,10 +97,62 @@ if _SQLALCHEMY_AVAILABLE:
             name="uq_decision_events_idempotency_key",
         ),
     )
+    _POSITION_SNAPSHOTS_TABLE = Table(
+        "position_snapshots",
+        _EVENT_METADATA,
+        Column("snapshot_id", Integer, primary_key=True, autoincrement=True),
+        Column("snapshot_uuid", String(128), nullable=False, unique=True),
+        Column("snapshot_ts", String(64), nullable=False, index=True),
+        Column("snapshot_source", String(64), nullable=False, index=True),
+        Column("symbol", String(32), nullable=False, index=True),
+        Column("quantity", Float, nullable=False),
+        Column("side", String(16), nullable=True),
+        Column("avg_entry_price", Float, nullable=True),
+        Column("market_price", Float, nullable=True),
+        Column("market_value", Float, nullable=True),
+        Column("unrealized_pnl", Float, nullable=True),
+        Column("policy_hash", String(128), nullable=True),
+        Column("model_hash", String(128), nullable=True),
+        Column("idempotency_key", String(128), nullable=False),
+        Column("payload_json", Text, nullable=False),
+        Column("created_at", String(64), nullable=False),
+        UniqueConstraint(
+            "snapshot_source",
+            "idempotency_key",
+            name="uq_position_snapshots_source_idempotency",
+        ),
+    )
+    _RISK_SNAPSHOTS_TABLE = Table(
+        "risk_snapshots",
+        _EVENT_METADATA,
+        Column("risk_snapshot_id", Integer, primary_key=True, autoincrement=True),
+        Column("snapshot_uuid", String(128), nullable=False, unique=True),
+        Column("snapshot_ts", String(64), nullable=False, index=True),
+        Column("snapshot_source", String(64), nullable=False, index=True),
+        Column("idempotency_key", String(128), nullable=False),
+        Column("policy_hash", String(128), nullable=True),
+        Column("model_hash", String(128), nullable=True),
+        Column("config_hash", String(128), nullable=True),
+        Column("exposure_pct", Float, nullable=True),
+        Column("drawdown_pct", Float, nullable=True),
+        Column("var_95", Float, nullable=True),
+        Column("var_99", Float, nullable=True),
+        Column("positions_count", Integer, nullable=True),
+        Column("open_orders_count", Integer, nullable=True),
+        Column("payload_json", Text, nullable=False),
+        Column("created_at", String(64), nullable=False),
+        UniqueConstraint(
+            "snapshot_source",
+            "idempotency_key",
+            name="uq_risk_snapshots_source_idempotency",
+        ),
+    )
 else:
     _EVENT_METADATA = None
     _OMS_EVENTS_TABLE = None
     _DECISION_EVENTS_TABLE = None
+    _POSITION_SNAPSHOTS_TABLE = None
+    _RISK_SNAPSHOTS_TABLE = None
 
 
 def _normalize_database_url(
@@ -243,6 +295,190 @@ class EventStore:
                 conn.execute(text("PRAGMA journal_mode=WAL;"))
                 conn.execute(text("PRAGMA synchronous=NORMAL;"))
             _EVENT_METADATA.create_all(conn, checkfirst=True)
+            self._ensure_append_only_guards(conn)
+
+    def _ensure_append_only_guards(self, conn: Any) -> None:
+        """Install DB-side append-only guards for immutable event tables."""
+
+        dialect_name = str(getattr(conn.dialect, "name", "") or "").strip().lower()
+        statements: list[str] = []
+        if dialect_name == "sqlite":
+            statements = [
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_oms_events_no_update
+                BEFORE UPDATE ON oms_events
+                BEGIN
+                  SELECT RAISE(ABORT, 'oms_events is append-only');
+                END;
+                """,
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_oms_events_no_delete
+                BEFORE DELETE ON oms_events
+                BEGIN
+                  SELECT RAISE(ABORT, 'oms_events is append-only');
+                END;
+                """,
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_decision_events_no_update
+                BEFORE UPDATE ON decision_events
+                BEGIN
+                  SELECT RAISE(ABORT, 'decision_events is append-only');
+                END;
+                """,
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_decision_events_no_delete
+                BEFORE DELETE ON decision_events
+                BEGIN
+                  SELECT RAISE(ABORT, 'decision_events is append-only');
+                END;
+                """,
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_position_snapshots_no_update
+                BEFORE UPDATE ON position_snapshots
+                BEGIN
+                  SELECT RAISE(ABORT, 'position_snapshots is append-only');
+                END;
+                """,
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_position_snapshots_no_delete
+                BEFORE DELETE ON position_snapshots
+                BEGIN
+                  SELECT RAISE(ABORT, 'position_snapshots is append-only');
+                END;
+                """,
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_risk_snapshots_no_update
+                BEFORE UPDATE ON risk_snapshots
+                BEGIN
+                  SELECT RAISE(ABORT, 'risk_snapshots is append-only');
+                END;
+                """,
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_risk_snapshots_no_delete
+                BEFORE DELETE ON risk_snapshots
+                BEGIN
+                  SELECT RAISE(ABORT, 'risk_snapshots is append-only');
+                END;
+                """,
+            ]
+        elif dialect_name in {"postgresql", "postgres"}:
+            statements = [
+                """
+                CREATE OR REPLACE FUNCTION ai_trading_prevent_append_only_mutation()
+                RETURNS trigger AS $$
+                BEGIN
+                  RAISE EXCEPTION '% is append-only', TG_TABLE_NAME;
+                END;
+                $$ LANGUAGE plpgsql;
+                """,
+                """
+                DO $$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_oms_events_no_update'
+                  ) THEN
+                    CREATE TRIGGER trg_oms_events_no_update
+                    BEFORE UPDATE ON oms_events
+                    FOR EACH ROW
+                    EXECUTE FUNCTION ai_trading_prevent_append_only_mutation();
+                  END IF;
+                END $$;
+                """,
+                """
+                DO $$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_oms_events_no_delete'
+                  ) THEN
+                    CREATE TRIGGER trg_oms_events_no_delete
+                    BEFORE DELETE ON oms_events
+                    FOR EACH ROW
+                    EXECUTE FUNCTION ai_trading_prevent_append_only_mutation();
+                  END IF;
+                END $$;
+                """,
+                """
+                DO $$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_decision_events_no_update'
+                  ) THEN
+                    CREATE TRIGGER trg_decision_events_no_update
+                    BEFORE UPDATE ON decision_events
+                    FOR EACH ROW
+                    EXECUTE FUNCTION ai_trading_prevent_append_only_mutation();
+                  END IF;
+                END $$;
+                """,
+                """
+                DO $$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_decision_events_no_delete'
+                  ) THEN
+                    CREATE TRIGGER trg_decision_events_no_delete
+                    BEFORE DELETE ON decision_events
+                    FOR EACH ROW
+                    EXECUTE FUNCTION ai_trading_prevent_append_only_mutation();
+                  END IF;
+                END $$;
+                """,
+                """
+                DO $$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_position_snapshots_no_update'
+                  ) THEN
+                    CREATE TRIGGER trg_position_snapshots_no_update
+                    BEFORE UPDATE ON position_snapshots
+                    FOR EACH ROW
+                    EXECUTE FUNCTION ai_trading_prevent_append_only_mutation();
+                  END IF;
+                END $$;
+                """,
+                """
+                DO $$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_position_snapshots_no_delete'
+                  ) THEN
+                    CREATE TRIGGER trg_position_snapshots_no_delete
+                    BEFORE DELETE ON position_snapshots
+                    FOR EACH ROW
+                    EXECUTE FUNCTION ai_trading_prevent_append_only_mutation();
+                  END IF;
+                END $$;
+                """,
+                """
+                DO $$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_risk_snapshots_no_update'
+                  ) THEN
+                    CREATE TRIGGER trg_risk_snapshots_no_update
+                    BEFORE UPDATE ON risk_snapshots
+                    FOR EACH ROW
+                    EXECUTE FUNCTION ai_trading_prevent_append_only_mutation();
+                  END IF;
+                END $$;
+                """,
+                """
+                DO $$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_risk_snapshots_no_delete'
+                  ) THEN
+                    CREATE TRIGGER trg_risk_snapshots_no_delete
+                    BEFORE DELETE ON risk_snapshots
+                    FOR EACH ROW
+                    EXECUTE FUNCTION ai_trading_prevent_append_only_mutation();
+                  END IF;
+                END $$;
+                """,
+            ]
+
+        for stmt in statements:
+            conn.execute(text(stmt))
 
     def _write_jsonl(self, payload: Mapping[str, Any]) -> None:
         if not self._jsonl_enabled:
@@ -418,6 +654,158 @@ class EventStore:
         self._write_jsonl({"kind": "decision_event", "db_persisted": db_persisted, **payload_dict})
         return db_persisted
 
+    def append_position_snapshot_payload(
+        self,
+        *,
+        snapshot_source: str,
+        idempotency_key: str,
+        symbol: str,
+        quantity: float,
+        payload: Mapping[str, Any] | None = None,
+        side: str | None = None,
+        avg_entry_price: float | None = None,
+        market_price: float | None = None,
+        market_value: float | None = None,
+        unrealized_pnl: float | None = None,
+        snapshot_ts: str | None = None,
+        snapshot_uuid: str | None = None,
+        policy_hash: str | None = None,
+        model_hash: str | None = None,
+    ) -> bool:
+        """Append a single immutable position snapshot row."""
+
+        assert _POSITION_SNAPSHOTS_TABLE is not None
+        resolved_symbol = str(symbol or "").strip().upper()
+        if not resolved_symbol:
+            raise ValueError("symbol is required for position snapshot")
+        payload_dict = {
+            "snapshot_uuid": str(snapshot_uuid or new_event_uuid()),
+            "snapshot_ts": str(snapshot_ts or self._utc_now_iso()),
+            "snapshot_source": str(snapshot_source or "").strip() or "unknown",
+            "symbol": resolved_symbol,
+            "quantity": float(quantity),
+            "side": (str(side).strip().lower() if side not in (None, "") else None),
+            "avg_entry_price": (
+                float(avg_entry_price)
+                if avg_entry_price is not None
+                else None
+            ),
+            "market_price": float(market_price) if market_price is not None else None,
+            "market_value": float(market_value) if market_value is not None else None,
+            "unrealized_pnl": (
+                float(unrealized_pnl) if unrealized_pnl is not None else None
+            ),
+            "policy_hash": (
+                str(policy_hash) if policy_hash not in (None, "") else None
+            ),
+            "model_hash": str(model_hash) if model_hash not in (None, "") else None,
+            "idempotency_key": str(idempotency_key or "").strip(),
+            "payload_json": json.dumps(dict(payload or {}), sort_keys=True),
+            "created_at": self._utc_now_iso(),
+        }
+        if not payload_dict["idempotency_key"]:
+            raise ValueError("idempotency_key is required for position snapshot")
+        db_persisted = False
+        with self._lock:
+            try:
+                with self._session_factory.begin() as session:
+                    session.execute(insert(_POSITION_SNAPSHOTS_TABLE).values(**payload_dict))
+                db_persisted = True
+            except IntegrityError:
+                db_persisted = False
+            except Exception as exc:
+                logger.warning(
+                    "POSITION_SNAPSHOT_DB_WRITE_FAILED",
+                    extra={
+                        "symbol": resolved_symbol,
+                        "snapshot_source": payload_dict["snapshot_source"],
+                        "idempotency_key": payload_dict["idempotency_key"],
+                        "error": str(exc),
+                    },
+                )
+        self._write_jsonl(
+            {
+                "kind": "position_snapshot",
+                "db_persisted": db_persisted,
+                **payload_dict,
+                "payload": dict(payload or {}),
+            }
+        )
+        return db_persisted
+
+    def append_risk_snapshot_payload(
+        self,
+        *,
+        snapshot_source: str,
+        idempotency_key: str,
+        payload: Mapping[str, Any] | None = None,
+        snapshot_ts: str | None = None,
+        snapshot_uuid: str | None = None,
+        policy_hash: str | None = None,
+        model_hash: str | None = None,
+        config_hash: str | None = None,
+        exposure_pct: float | None = None,
+        drawdown_pct: float | None = None,
+        var_95: float | None = None,
+        var_99: float | None = None,
+        positions_count: int | None = None,
+        open_orders_count: int | None = None,
+    ) -> bool:
+        """Append an immutable risk snapshot row."""
+
+        assert _RISK_SNAPSHOTS_TABLE is not None
+        payload_dict = {
+            "snapshot_uuid": str(snapshot_uuid or new_event_uuid()),
+            "snapshot_ts": str(snapshot_ts or self._utc_now_iso()),
+            "snapshot_source": str(snapshot_source or "").strip() or "unknown",
+            "idempotency_key": str(idempotency_key or "").strip(),
+            "policy_hash": (
+                str(policy_hash) if policy_hash not in (None, "") else None
+            ),
+            "model_hash": str(model_hash) if model_hash not in (None, "") else None,
+            "config_hash": str(config_hash) if config_hash not in (None, "") else None,
+            "exposure_pct": float(exposure_pct) if exposure_pct is not None else None,
+            "drawdown_pct": float(drawdown_pct) if drawdown_pct is not None else None,
+            "var_95": float(var_95) if var_95 is not None else None,
+            "var_99": float(var_99) if var_99 is not None else None,
+            "positions_count": (
+                int(positions_count) if positions_count is not None else None
+            ),
+            "open_orders_count": (
+                int(open_orders_count) if open_orders_count is not None else None
+            ),
+            "payload_json": json.dumps(dict(payload or {}), sort_keys=True),
+            "created_at": self._utc_now_iso(),
+        }
+        if not payload_dict["idempotency_key"]:
+            raise ValueError("idempotency_key is required for risk snapshot")
+        db_persisted = False
+        with self._lock:
+            try:
+                with self._session_factory.begin() as session:
+                    session.execute(insert(_RISK_SNAPSHOTS_TABLE).values(**payload_dict))
+                db_persisted = True
+            except IntegrityError:
+                db_persisted = False
+            except Exception as exc:
+                logger.warning(
+                    "RISK_SNAPSHOT_DB_WRITE_FAILED",
+                    extra={
+                        "snapshot_source": payload_dict["snapshot_source"],
+                        "idempotency_key": payload_dict["idempotency_key"],
+                        "error": str(exc),
+                    },
+                )
+        self._write_jsonl(
+            {
+                "kind": "risk_snapshot",
+                "db_persisted": db_persisted,
+                **payload_dict,
+                "payload": dict(payload or {}),
+            }
+        )
+        return db_persisted
+
     def list_oms_events(self, *, intent_id: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
         """List OMS events for intent or globally ordered by event id."""
 
@@ -440,6 +828,44 @@ class EventStore:
         ).limit(max(1, int(limit)))
         if symbol not in (None, ""):
             stmt = stmt.where(_DECISION_EVENTS_TABLE.c.symbol == str(symbol).upper())
+        with self._session_factory() as session:
+            rows = session.execute(stmt).mappings().all()
+        return [dict(row) for row in rows]
+
+    def list_position_snapshots(
+        self,
+        *,
+        symbol: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """List immutable position snapshot rows ordered by insertion."""
+
+        assert _POSITION_SNAPSHOTS_TABLE is not None
+        stmt = select(_POSITION_SNAPSHOTS_TABLE).order_by(
+            _POSITION_SNAPSHOTS_TABLE.c.snapshot_id.asc()
+        ).limit(max(1, int(limit)))
+        if symbol not in (None, ""):
+            stmt = stmt.where(_POSITION_SNAPSHOTS_TABLE.c.symbol == str(symbol).upper())
+        with self._session_factory() as session:
+            rows = session.execute(stmt).mappings().all()
+        return [dict(row) for row in rows]
+
+    def list_risk_snapshots(
+        self,
+        *,
+        source: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """List immutable risk snapshot rows ordered by insertion."""
+
+        assert _RISK_SNAPSHOTS_TABLE is not None
+        stmt = select(_RISK_SNAPSHOTS_TABLE).order_by(
+            _RISK_SNAPSHOTS_TABLE.c.risk_snapshot_id.asc()
+        ).limit(max(1, int(limit)))
+        if source not in (None, ""):
+            stmt = stmt.where(
+                _RISK_SNAPSHOTS_TABLE.c.snapshot_source == str(source).strip()
+            )
         with self._session_factory() as session:
             rows = session.execute(stmt).mappings().all()
         return [dict(row) for row in rows]

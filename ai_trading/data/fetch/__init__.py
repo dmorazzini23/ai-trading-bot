@@ -259,6 +259,12 @@ from ai_trading.data.metrics import (
     provider_disabled,
     provider_fallback,
 )
+from ai_trading.data.feed_roles import (
+    get_execution_feed,
+    get_reference_feed,
+    is_delayed_feed,
+    normalize_feed_role,
+)
 from ai_trading.data.price_quote_feed import ensure_entitled_feed
 from ai_trading.data.provider_monitor import (
     activate_data_kill_switch,
@@ -1503,6 +1509,8 @@ def _normalize_feed_value(feed: object) -> str:
 
     if candidate.startswith("alpaca_"):
         candidate = candidate.split("_", 1)[1]
+    if candidate in {"delayed", "delayed-sip", "dsip"}:
+        candidate = "delayed_sip"
 
     validate_feed(candidate)
     return candidate
@@ -4720,7 +4728,7 @@ def _symbol_exists(symbol: str) -> bool:
         return False
 
 
-_VALID_FEEDS = {"iex", "sip"}
+_VALID_FEEDS = {"iex", "sip", "delayed_sip"}
 _VALID_ADJUSTMENTS = {"raw", "split", "dividend", "all"}
 _VALID_TIMEFRAMES = {"1Min", "5Min", "15Min", "1Hour", "1Day"}
 
@@ -7901,7 +7909,7 @@ def retry_empty_fetch_once(
     return payload
 
 
-_ALLOWED_FEEDS = {"iex", "sip", "yahoo", None}
+_ALLOWED_FEEDS = {"iex", "sip", "delayed_sip", "yahoo", None}
 _ALLOWED_ADJUSTMENTS = {"all", "raw", "split", None}
 
 
@@ -7933,6 +7941,84 @@ def _validate_fetch_params(
         raise ValueError("HTTP session not initialized for Alpaca fetch")
 
     return norm_feed, norm_adj
+
+
+def _empty_reference_frame() -> pd.DataFrame:
+    pd_local = _ensure_pandas()
+    if pd_local is None:
+        raise RuntimeError("pandas not available")
+    frame = _empty_ohlcv_frame(pd_local)
+    if isinstance(frame, pd_local.DataFrame):
+        return frame
+    return pd_local.DataFrame(
+        {
+            "timestamp": [],
+            "open": [],
+            "high": [],
+            "low": [],
+            "close": [],
+            "volume": [],
+        },
+    )
+
+
+def _fetch_reference_bars(
+    symbol: str,
+    start: Any,
+    end: Any,
+    timeframe: str,
+    *,
+    feed: str | None = None,
+    adjustment: str | None = None,
+) -> pd.DataFrame:
+    """Fetch delayed/reference bars without mutating execution provider health state."""
+
+    pd_local = _ensure_pandas()
+    if pd_local is None:
+        raise RuntimeError("pandas not available")
+    resolved_feed = get_reference_feed(feed)
+    resolved_adjustment = str(adjustment or "raw").strip().lower() or "raw"
+    validate_adjustment(resolved_adjustment)
+    try:
+        from ai_trading.alpaca_api import get_bars_df as _alpaca_get_bars_df
+    except Exception:
+        return _empty_reference_frame()
+
+    try:
+        raw_frame = _alpaca_get_bars_df(
+            symbol,
+            timeframe=timeframe,
+            start=ensure_datetime(start),
+            end=ensure_datetime(end),
+            feed=resolved_feed,
+            adjustment=resolved_adjustment,
+        )
+    except Exception:
+        logger.debug(
+            "REFERENCE_FETCH_FAILED",
+            extra={"symbol": symbol, "timeframe": timeframe, "feed": resolved_feed},
+            exc_info=True,
+        )
+        return _empty_reference_frame()
+
+    if raw_frame is None:
+        return _empty_reference_frame()
+    if not isinstance(raw_frame, pd_local.DataFrame):
+        raw_frame = pd_local.DataFrame(raw_frame)
+    if raw_frame.empty:
+        return _empty_reference_frame()
+
+    normalized = _flatten_and_normalize_ohlcv(raw_frame, symbol, timeframe)
+    normalized = normalize_ohlcv_df(normalized, include_columns=("timestamp",))
+    normalized = _restore_timestamp_column(normalized)
+    normalized = _apply_incomplete_row_policy(normalized, symbol=symbol, timeframe=timeframe)
+    if normalized is None or getattr(normalized, "empty", True):
+        return _empty_reference_frame()
+    return _annotate_df_source(
+        normalized,
+        provider="alpaca_reference",
+        feed=resolved_feed,
+    )
 
 
 def _fetch_bars(
@@ -11700,6 +11786,8 @@ def _fetch_minute_from_provider(
     provider: str,
     start: Any,
     end: Any,
+    *,
+    feed_role: str = "execution",
     **kwargs: Any,
 ):
     """Fetch minute bars from a specific provider/feed combination."""
@@ -11710,6 +11798,7 @@ def _fetch_minute_from_provider(
         fetch_kwargs["feed"] = "yahoo"
     elif normalized_feed:
         fetch_kwargs["feed"] = normalized_feed
+    fetch_kwargs.setdefault("feed_role", feed_role)
     return get_minute_df(symbol, start, end, **fetch_kwargs)
 
 
@@ -11741,6 +11830,7 @@ def get_minute_df(
     end: Any,
     feed: str | None = None,
     *,
+    feed_role: str = "execution",
     backfill: str | None = None,
 ) -> pd.DataFrame | None:
     """Minute bars fetch with provider fallback and gap handling.
@@ -11771,6 +11861,19 @@ def get_minute_df(
 
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
+    normalized_role = normalize_feed_role(feed_role)
+    if normalized_role == "execution" and is_delayed_feed(feed):
+        normalized_role = "reference"
+    if normalized_role == "reference":
+        reference_feed = get_reference_feed(feed)
+        return _fetch_reference_bars(
+            symbol,
+            start_dt,
+            end_dt,
+            "1Min",
+            feed=reference_feed,
+            adjustment="raw",
+        )
     pytest_active = _detect_pytest_env()
     override_sources = _env_source_override("1Min")
     forced_provider = (
@@ -13651,6 +13754,7 @@ def get_daily_df(
     end: Any | None = None,
     *,
     feed: str | None = None,
+    feed_role: str = "execution",
     adjustment: str | None = None,
     memo: Any | None = None,
 ) -> pd.DataFrame:
@@ -13665,12 +13769,25 @@ def get_daily_df(
     if forced_daily_provider == "finnhub":
         use_alpaca = False
 
-    normalized_feed = _normalize_feed_value(feed) if feed is not None else None
-
     start_dt = ensure_datetime(
         start if start is not None else datetime.now(UTC) - _dt.timedelta(days=10),
     )
     end_dt = ensure_datetime(end if end is not None else datetime.now(UTC))
+    normalized_role = normalize_feed_role(feed_role)
+    if normalized_role == "execution" and is_delayed_feed(feed):
+        normalized_role = "reference"
+    if normalized_role == "reference":
+        reference_feed = get_reference_feed(feed)
+        return _fetch_reference_bars(
+            symbol,
+            start_dt,
+            end_dt,
+            "1Day",
+            feed=reference_feed,
+            adjustment=adjustment or "raw",
+        )
+
+    normalized_feed = _normalize_feed_value(feed) if feed is not None else None
 
     if feed is None:
         tf_key = (symbol, _canon_tf("1Day"))
@@ -14042,6 +14159,7 @@ def get_bars(
     end: Any,
     *,
     feed: str | None = None,
+    feed_role: str = "execution",
     adjustment: str | None = None,
     return_meta: bool = False,
 ) -> pd.DataFrame | None | tuple[pd.DataFrame | None, dict[str, Any]]:
@@ -14057,12 +14175,51 @@ def get_bars(
     # If a client-like object is passed for `feed`, route via client helper for tests
     if feed is not None and not isinstance(feed, str):
         return _alpaca_get_bars(feed, symbol, start, end, timeframe=_canon_tf(timeframe))
+    resolved_role = normalize_feed_role(feed_role)
+    if resolved_role == "execution" and is_delayed_feed(feed):
+        resolved_role = "reference"
+    tf_norm = _canon_tf(timeframe)
+    if resolved_role == "reference":
+        reference_feed = get_reference_feed(feed)
+        reference_adjustment = adjustment or "raw"
+        if tf_norm == "1Day":
+            reference_df = get_daily_df(
+                symbol,
+                start=start,
+                end=end,
+                feed=reference_feed,
+                feed_role="reference",
+                adjustment=reference_adjustment,
+            )
+        elif tf_norm == "1Min":
+            reference_df = get_minute_df(
+                symbol,
+                start,
+                end,
+                feed=reference_feed,
+                feed_role="reference",
+            )
+        else:
+            reference_df = _fetch_reference_bars(
+                symbol,
+                start,
+                end,
+                tf_norm,
+                feed=reference_feed,
+                adjustment=reference_adjustment,
+            )
+        if return_meta:
+            return reference_df, {
+                "feed_role": "reference",
+                "provider": "alpaca_reference",
+                "feed": reference_feed,
+            }
+        return reference_df
     normalized_feed: str | None = None
     if isinstance(feed, str):
         normalized_feed = _normalize_feed_value(feed)
 
     # Resolve feed preference from settings when not explicitly provided
-    tf_norm = _canon_tf(timeframe)
     if normalized_feed is None:
         override = _FEED_OVERRIDE_BY_TF.get((symbol, tf_norm))
         if override:
@@ -14075,7 +14232,9 @@ def get_bars(
                     feed_candidate = prov.split("_", 1)[1]
                     break
             if feed_candidate is None:
-                feed_candidate = getattr(S, "data_feed", getattr(S, "alpaca_data_feed", "iex"))
+                feed_candidate = get_execution_feed(
+                    getattr(S, "data_feed", getattr(S, "alpaca_data_feed", "iex"))
+                )
             normalized_feed = _normalize_feed_value(feed_candidate)
 
     adjustment = adjustment or S.alpaca_adjustment
@@ -14188,10 +14347,28 @@ def get_bars(
 
 
 def get_bars_batch(
-    symbols: list[str], timeframe: str, start: Any, end: Any, *, feed: str | None = None, adjustment: str | None = None,
+    symbols: list[str],
+    timeframe: str,
+    start: Any,
+    end: Any,
+    *,
+    feed: str | None = None,
+    feed_role: str = "execution",
+    adjustment: str | None = None,
 ) -> dict[str, pd.DataFrame | None]:
     """Fetch bars for multiple symbols via get_bars."""
-    return {sym: get_bars(sym, timeframe, start, end, feed=feed, adjustment=adjustment) for sym in symbols}
+    return {
+        sym: get_bars(
+            sym,
+            timeframe,
+            start,
+            end,
+            feed=feed,
+            feed_role=feed_role,
+            adjustment=adjustment,
+        )
+        for sym in symbols
+    }
 
 
 def fetch_minute_yfinance(symbol: str, start_dt: _dt.datetime, end_dt: _dt.datetime) -> pd.DataFrame:

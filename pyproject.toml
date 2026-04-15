@@ -85,6 +85,7 @@ test = [
 [project.scripts]
 validate-env = "ai_trading.tools.env_validate:main"
 ai-offline-replay = "ai_trading.tools.offline_replay:main"
+ai-oms-lifecycle-parity-replay = "ai_trading.tools.oms_lifecycle_parity_replay:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

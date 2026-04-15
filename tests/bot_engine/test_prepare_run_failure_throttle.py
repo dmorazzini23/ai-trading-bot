@@ -157,7 +157,6 @@ def _patch_minimal_runtime(monkeypatch) -> None:
     monkeypatch.setattr(be, "get_trade_logger", lambda: None)
     monkeypatch.setattr(be, "get_strategies", lambda: [])
     monkeypatch.setattr(be, "is_market_open", lambda: True)
-    monkeypatch.setattr(be, "check_pdt_rule", lambda _rt: False)
     monkeypatch.setattr(be, "get_verbose_logging", lambda: False)
     monkeypatch.setattr(be, "_validate_trading_api", lambda _api: True)
     monkeypatch.setattr(be.CFG, "log_market_fetch", False, raising=False)

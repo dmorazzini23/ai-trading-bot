@@ -6,6 +6,7 @@ import pytest
 
 from ai_trading.execution.engine import ExecutionEngine
 from ai_trading.execution.live_trading import LiveTradingExecutionEngine
+from ai_trading.oms.event_store import EventStore
 from ai_trading.oms.intent_store import IntentStore
 
 pytest.importorskip("sqlalchemy")
@@ -45,6 +46,39 @@ def test_update_broker_snapshot_preserves_fractional_quantities() -> None:
     assert snapshot.open_buy_by_symbol["AAPL"] == 0.6
     assert snapshot.open_sell_by_symbol["AAPL"] == 0.4
     assert engine.open_order_totals("AAPL") == (0.6, 0.4)
+
+
+def test_update_broker_snapshot_persists_runtime_position_and_risk_snapshots(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Broker sync should persist immutable position and risk snapshots when enabled."""
+
+    db_path = tmp_path / "runtime_snapshot_events.db"
+    monkeypatch.setenv("AI_TRADING_OMS_RUNTIME_SNAPSHOT_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_PATH", str(db_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    engine = ExecutionEngine()
+    open_orders = [
+        {"symbol": "AAPL", "side": "buy", "qty": 1.5},
+        {"symbol": "AAPL", "side": "sell", "qty": 0.5},
+    ]
+    positions = [SimpleNamespace(symbol="AAPL", qty=3, side="long", market_price=190.25)]
+
+    engine._update_broker_snapshot(open_orders, positions)
+
+    store = EventStore(url=f"sqlite:///{db_path}")
+    position_rows = store.list_position_snapshots(symbol="AAPL")
+    risk_rows = store.list_risk_snapshots(source="executionengine")
+    assert len(position_rows) >= 1
+    assert len(risk_rows) >= 1
+    latest_position = position_rows[-1]
+    latest_risk = risk_rows[-1]
+    assert latest_position["symbol"] == "AAPL"
+    assert float(latest_position["quantity"]) == pytest.approx(3.0)
+    assert int(latest_risk["positions_count"]) == 1
+    assert int(latest_risk["open_orders_count"]) == 2
 
 
 class _StubTradingClient:

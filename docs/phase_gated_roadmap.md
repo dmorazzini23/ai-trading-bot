@@ -37,7 +37,7 @@ Optional promotion enforcement:
 
 ## Phase 2: Execution Edge Upgrade (TCA-Native Routing)
 
-Status: Planned.
+Status: In progress.
 
 Primary objective:
 - Improve realized net edge by reducing slippage and adverse selection.
@@ -47,6 +47,34 @@ Target gates (to be automated in code):
 - Fill-rate at target limit offset does not degrade more than 5 percent.
 - Execution drift and reject-rate remain within SLO control bands.
 - No increase in stale pending order incidents.
+
+Current automation surface:
+- Daily execution report now emits `roadmap.phase_2_execution_edge` with windowed
+  metrics, thresholds, gate booleans, and `gate_passed`.
+- Institutional gate script can enforce this at merge/deploy time via:
+  - `AI_TRADING_INSTITUTIONAL_REQUIRE_PHASE2_GATE=1`
+  - `AI_TRADING_INSTITUTIONAL_PHASE2_MAX_REPORT_AGE_HOURS` (default `36`)
+- Gate thresholds and baselines are runtime-configurable via:
+  - `AI_TRADING_ROADMAP_PHASE2_ENABLED`
+  - `AI_TRADING_ROADMAP_PHASE2_WINDOW_DAYS`
+  - `AI_TRADING_ROADMAP_PHASE2_MIN_SLIPPAGE_IMPROVEMENT_PCT`
+  - `AI_TRADING_ROADMAP_PHASE2_MAX_FILL_RATE_DEGRADATION_PCT`
+  - `AI_TRADING_ROADMAP_PHASE2_MAX_REJECT_RATE`
+  - `AI_TRADING_ROADMAP_PHASE2_MAX_EXECUTION_DRIFT_BPS`
+  - `AI_TRADING_ROADMAP_PHASE2_MAX_STALE_PENDING_INCREASE`
+  - `AI_TRADING_ROADMAP_PHASE2_BASELINE_SLIPPAGE_MEDIAN_BPS`
+  - `AI_TRADING_ROADMAP_PHASE2_BASELINE_FILL_RATE`
+  - `AI_TRADING_ROADMAP_PHASE2_BASELINE_STALE_PENDING_COUNT`
+  - `AI_TRADING_ROADMAP_PHASE2_BASELINE_PATH` (JSON artifact, default `runtime/phase2_execution_baseline.json`)
+
+Baseline artifact refresh:
+
+```bash
+python3 -m ai_trading.tools.update_phase2_execution_baseline \
+  --tca-path runtime/tca_records.jsonl \
+  --output-path runtime/phase2_execution_baseline.json \
+  --window-days 30
+```
 
 ## Phase 3: Live Auto-Demotion + Recovery
 
@@ -60,6 +88,13 @@ Target gates (to be automated in code):
 - Rollback-to-prior model executes within one cycle without service restart.
 - Post-demotion drawdown slope reduces versus pre-demotion window.
 - Recovery promotion requires fresh phase gate pass, not stale historical pass.
+
+Initial runtime scaffolding now available:
+- `AI_TRADING_PROMOTION_LIVE_KPI_BREACH_CONSECUTIVE_REQUIRED` controls how many
+  consecutive live KPI control-band breaches are required before auto-rollback.
+- `evaluate_live_kpis_and_maybe_rollback(..., allow_rollback=False)` enables
+  breach evaluation without immediate rollback, so callers can enforce
+  persistence windows before demotion.
 
 ## Operator Checks
 

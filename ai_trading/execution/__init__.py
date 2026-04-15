@@ -13,7 +13,7 @@ from ai_trading.utils.env import (
     get_alpaca_base_url,
 )
 
-from .guards import can_execute, pdt_preflight
+from .guards import can_execute
 
 _logger = get_logger(__name__)
 
@@ -38,6 +38,8 @@ _DEFAULT_EXECUTION_SETTINGS = SimpleNamespace(
     slippage_limit_bps=75,
     price_provider_order=_DEFAULT_PRICE_PROVIDER_ORDER,
     data_feed_intraday="iex",
+    execution_feed="iex",
+    reference_feed="delayed_sip",
 )
 
 
@@ -124,6 +126,8 @@ def _load_execution_settings() -> Tuple[Any, str | None]:
         slippage_limit_bps=75,
         price_provider_order=tuple(_PRICE_PROVIDER_ORDER),
         data_feed_intraday=str(_DATA_FEED_INTRADAY or "iex"),
+        execution_feed=str(_DATA_FEED_INTRADAY or "iex"),
+        reference_feed="delayed_sip",
     )
 
     try:
@@ -281,7 +285,6 @@ PnLEvent: Any
 PnLSource: Any
 PositionDiscrepancy: Any
 ProductionExecutionCoordinator: Any
-PDTManager: Any
 SwingTradingMode: Any
 
 # Optional submodule: algorithms
@@ -371,16 +374,14 @@ except Exception:  # noqa: BLE001 - broad to guard optional deps
     ProductionExecutionCoordinator = None
 
 try:  # pragma: no cover - optional dependency
-    from .pdt_manager import PDTManager
-    from .swing_mode import SwingTradingMode, get_swing_mode, enable_swing_mode, disable_swing_mode
+    from .swing_mode import SwingTradingMode, disable_swing_mode, enable_swing_mode, get_swing_mode
 except Exception:  # noqa: BLE001 - broad to guard optional deps
-    PDTManager = SwingTradingMode = None
+    SwingTradingMode = None
     get_swing_mode = enable_swing_mode = disable_swing_mode = None
 
 __all__ = [
     "Order",
     "can_execute",
-    "pdt_preflight",
     "ExecutionAlgorithm",
     "ExecutionEngine",
     "select_execution_engine",
@@ -421,7 +422,6 @@ __all__ = [
     "PnLSource",
     "PnLEvent",
     "estimate_cost",
-    "PDTManager",
     "SwingTradingMode",
     "get_swing_mode",
     "enable_swing_mode",

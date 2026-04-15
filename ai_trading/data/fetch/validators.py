@@ -11,7 +11,7 @@ from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
 
-VALID_FEEDS = {"iex", "sip", "yahoo", "finnhub"}
+VALID_FEEDS = {"iex", "sip", "delayed_sip", "yahoo", "finnhub"}
 VALID_ADJUSTMENTS = {"raw", "split", "all"}
 
 

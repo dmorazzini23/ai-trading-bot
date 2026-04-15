@@ -69,7 +69,7 @@ All notable changes to this project will be documented in this file.
   environment variables are missing.
 - **Main Extended**: `validate_environment` now raises `RuntimeError` when
   required environment variables are missing.
-- Normalize broker-unavailable contract; remove false PDT warnings; add regression tests.
+- Normalize broker-unavailable contract; remove false compliance-gate warnings; add regression tests.
 - Fix IndentationError in `bot_engine.py` (pybreaker stub); add static compile guard.
 - **Runtime safety**: improved Alpaca availability checks, stable logging shutdown,
   lazy client init, config parity, and added utility/environment helpers.

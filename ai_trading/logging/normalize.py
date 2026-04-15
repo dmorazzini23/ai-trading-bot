@@ -26,8 +26,10 @@ def canon_timeframe(value: Any) -> str:
     return '1Day'
 
 def canon_feed(value: Any) -> str:
-    """Return canonical feed: "iex" or "sip". Defaults to "sip" on ambiguity."""
+    """Return canonical feed: ``iex``, ``sip``, or ``delayed_sip``."""
     s = _as_lower_str(value)
+    if "delayed_sip" in s or "delayed-sip" in s or s == "delayed":
+        return "delayed_sip"
     if 'iex' in s:
         return 'iex'
     if 'sip' in s:

@@ -51,7 +51,6 @@ def test_run_all_trades_handles_empty_symbols(monkeypatch):
     monkeypatch.setattr(eng, "_init_metrics", lambda: None)
     monkeypatch.setattr(eng, "is_market_open", lambda: True)
     monkeypatch.setattr(eng, "ensure_alpaca_attached", lambda _rt: None)
-    monkeypatch.setattr(eng, "check_pdt_rule", lambda _rt: False)
     monkeypatch.setattr(eng, "get_strategies", lambda: [])
     monkeypatch.setattr(eng, "get_verbose_logging", lambda: False)
     monkeypatch.setattr(eng.CFG, "log_market_fetch", False, raising=False)

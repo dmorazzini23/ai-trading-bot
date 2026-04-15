@@ -16,7 +16,7 @@
 ## Control Flow (happy path)
 1. `main.py` → loads config → constructs `BotRuntime`.
 2. `bot_engine.run_all_trades_worker(runtime, state)`:
-   - Param validation, PDT check, data fetch health check.
+   - Param validation and data fetch health check.
    - Candidate screening: `screen_candidates(runtime, runtime.tickers)` → `screen_universe(..., runtime)`.
    - Regime: `check_market_regime(runtime, state)` → `detect_regime_state(runtime)`.
    - Model: `_load_primary_model(runtime)` (cached at `runtime.model`).

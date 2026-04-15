@@ -29,7 +29,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Optional, Sequence, cast
 from zoneinfo import ZoneInfo
 
-from ai_trading.logging import get_logger, log_pdt_enforcement, log_throttled_event
+from ai_trading.logging import get_logger, log_throttled_event
 from ai_trading.telemetry import runtime_state
 from ai_trading.market.symbol_specs import get_tick_size
 from ai_trading.math.money import Money
@@ -38,8 +38,6 @@ from ai_trading.config import EXECUTION_MODE, SAFE_MODE_ALLOW_PAPER, get_trading
 from ai_trading.broker.adapters import build_broker_adapter
 from ai_trading.execution.guards import (
     can_execute,
-    pdt_guard,
-    pdt_lockout_info,
     quote_fresh_enough,
     shadow_active as guard_shadow_active,
 )
@@ -182,6 +180,13 @@ from ai_trading.data.provider_monitor import (
     is_safe_mode_active,
     provider_monitor,
     safe_mode_reason,
+)
+from ai_trading.data.feed_roles import get_execution_feed, get_reference_feed
+from ai_trading.analytics.feed_drift import (
+    compute_drift_metrics,
+    derive_signal_agreement,
+    fetch_reference_snapshot,
+    normalize_signal_side,
 )
 from ai_trading.execution.engine import (
     BrokerSyncResult,
@@ -777,9 +782,6 @@ _ACK_TRIGGER_STATUSES = frozenset(
     }
 )
 _SUBMITTED_STATUS_MIN_RANK = _ORDER_STATUS_RANK.get("accepted", 20)
-_PDT_MIN_EQUITY = 25_000.0
-
-
 def _normalize_status(value: Any) -> str | None:
     """Normalize broker status tokens to lowercase strings."""
 
@@ -840,84 +842,6 @@ def apply_order_status(prev_status: str | None, new_status: Any) -> tuple[str | 
     return normalized_prev, False
 
 
-def _sanitize_pdt_context(raw_context: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return log-safe PDT context including required summary keys."""
-
-    context: dict[str, Any] = {}
-    if raw_context:
-        context.update({k: raw_context.get(k) for k in raw_context.keys()})
-
-    pattern_day_trader = bool(context.get("pattern_day_trader", context.get("is_pdt", False)))
-    daytrade_limit = _safe_int(context.get("daytrade_limit"), 0)
-    daytrade_count = _safe_int(context.get("daytrade_count"), 0)
-    remaining_daytrades = _safe_int(
-        context.get("remaining_daytrades", context.get("remaining")),
-        max(daytrade_limit - daytrade_count, 0),
-    )
-    pdt_equity_exempt = bool(context.get("pdt_equity_exempt", False))
-    if "pdt_limit_applicable" in context:
-        pdt_limit_applicable = bool(context.get("pdt_limit_applicable"))
-    else:
-        pdt_limit_applicable = bool(pattern_day_trader and not pdt_equity_exempt)
-    if not pattern_day_trader:
-        pdt_limit_applicable = False
-        pdt_equity_exempt = False
-    elif not pdt_limit_applicable:
-        pdt_equity_exempt = True
-    can_daytrade = bool(
-        context.get(
-            "can_daytrade",
-            (not pattern_day_trader)
-            or (not pdt_limit_applicable)
-            or daytrade_count < daytrade_limit,
-        )
-    )
-
-    strategy_raw = context.get("strategy")
-    if strategy_raw in (None, ""):
-        strategy_raw = context.get("strategy_recommendation")
-    strategy = str(strategy_raw).strip() if strategy_raw not in (None, "") else None
-
-    sanitized: dict[str, Any] = {
-        "pattern_day_trader": pattern_day_trader,
-        "is_pdt": pattern_day_trader,
-        "daytrade_limit": daytrade_limit,
-        "daytrade_count": daytrade_count,
-        "remaining_daytrades": remaining_daytrades,
-        "remaining": remaining_daytrades,
-        "can_daytrade": can_daytrade,
-        "equity": _safe_float(context.get("equity")),
-        "pdt_limit_applicable": pdt_limit_applicable,
-        "pdt_equity_exempt": pdt_equity_exempt,
-    }
-    if strategy is not None:
-        sanitized["strategy"] = strategy
-        sanitized["strategy_recommendation"] = strategy
-    for key in (
-        "symbol",
-        "side",
-        "closing_position",
-        "current_position",
-        "swing_mode_enabled",
-        "block_enforced",
-    ):
-        if key in context:
-            sanitized[key] = context.get(key)
-
-    lock_info = pdt_lockout_info()
-    if "active" in context:
-        lock_info["active"] = bool(context.get("active"))
-    if "limit" in context:
-        lock_info["limit"] = _safe_int(context.get("limit"), 0)
-    if "count" in context:
-        lock_info["count"] = _safe_int(context.get("count"), 0)
-
-    sanitized["active"] = bool(lock_info.get("active", False))
-    sanitized["limit"] = _safe_int(lock_info.get("limit"), 0)
-    sanitized["count"] = _safe_int(lock_info.get("count"), 0)
-    return sanitized
-
-
 def _extract_value(record: Any, *names: str) -> Any:
     """Return the first matching attribute or mapping value from record."""
 
@@ -929,22 +853,6 @@ def _extract_value(record: Any, *names: str) -> Any:
         if hasattr(record, name):
             return getattr(record, name)
     return None
-
-
-def _pdt_limit_applies(account: Any | None) -> bool:
-    """Return ``True`` when PDT day-trade counters should be enforced."""
-
-    if account is None:
-        return False
-    pattern_flag = _safe_bool(
-        _extract_value(account, "pattern_day_trader", "is_pattern_day_trader", "pdt")
-    )
-    if not pattern_flag:
-        return False
-    equity = _safe_float(_extract_value(account, "equity", "last_equity", "portfolio_value"))
-    if equity is not None and math.isfinite(equity) and equity >= _PDT_MIN_EQUITY:
-        return False
-    return True
 
 
 def _bool_from_record(record: Any, *names: str) -> bool | None:
@@ -2283,6 +2191,19 @@ class ExecutionEngine:
         self.trading_client = None
         self._broker_sync: BrokerSyncResult | None = None
         self._open_order_qty_index: dict[str, tuple[float, float]] = {}
+        runtime_snapshot_enabled = _resolve_bool_env("AI_TRADING_OMS_RUNTIME_SNAPSHOT_ENABLED")
+        if runtime_snapshot_enabled is None:
+            runtime_snapshot_enabled = str(requested_mode).strip().lower() == "live"
+        self._runtime_snapshot_persistence_enabled = bool(runtime_snapshot_enabled)
+        self._runtime_snapshot_store: Any | None = None
+        self._runtime_snapshot_store_init_failed = False
+        self._runtime_snapshot_source = str(
+            _runtime_env(
+                "AI_TRADING_OMS_RUNTIME_SNAPSHOT_SOURCE",
+                self.__class__.__name__.lower(),
+            )
+            or self.__class__.__name__.lower()
+        ).strip().lower()
         self.config: AlpacaConfig | None = None
         self.settings: ExecutionSettingsSnapshot | None = None
         self.execution_mode = str(requested_mode).lower()
@@ -2540,47 +2461,7 @@ class ExecutionEngine:
         self._last_pre_execution_order_check_failure = {}
         account = self._refresh_cycle_account()
         
-        # Check PDT status and activate swing mode if needed
-        if account is not None:
-            from ai_trading.execution.pdt_manager import PDTManager
-            from ai_trading.execution.swing_mode import get_swing_mode, enable_swing_mode
-
-            pdt_manager = PDTManager()
-            status = pdt_manager.get_pdt_status(account)
-
-            pdt_status_context = _sanitize_pdt_context(
-                {
-                    "pattern_day_trader": status.is_pattern_day_trader,
-                    "daytrade_count": status.daytrade_count,
-                    "daytrade_limit": status.daytrade_limit,
-                    "remaining_daytrades": status.remaining_daytrades,
-                    "can_daytrade": status.can_daytrade,
-                    "strategy": status.strategy_recommendation,
-                    "equity": status.equity,
-                    "pdt_limit_applicable": status.pdt_limit_applicable,
-                    "pdt_equity_exempt": (
-                        bool(status.is_pattern_day_trader and not status.pdt_limit_applicable)
-                    ),
-                }
-            )
-            logger.info(
-                "PDT_STATUS_CHECK",
-                extra=pdt_status_context,
-            )
-
-            # Auto-enable swing mode if PDT limit reached
-            if status.strategy_recommendation == "swing_only":
-                swing_mode = get_swing_mode()
-                if not swing_mode.enabled:
-                    enable_swing_mode()
-                    logger.warning(
-                        "PDT_LIMIT_EXCEEDED_SWING_MODE_ACTIVATED",
-                        extra={
-                            "daytrade_count": status.daytrade_count,
-                            "daytrade_limit": status.daytrade_limit,
-                            "message": "Automatically switched to swing trading mode to avoid PDT violations",
-                        },
-                    )
+        _ = account
         self._apply_pending_new_timeout_policy()
 
     def _reset_pending_new_policy_state_for_tests(self) -> None:
@@ -6524,7 +6405,7 @@ class ExecutionEngine:
             if head_mono >= cutoff:
                 break
             samples.popleft()
-        return samples
+        return cast(deque[tuple[float, float]], samples)
 
     def _record_realized_bps_rolling_sample(self, realized_net_edge_bps: Any) -> None:
         """Record one live realized edge sample for rolling 30-minute telemetry."""
@@ -15256,6 +15137,140 @@ class ExecutionEngine:
             failure_log="EXEC_QUALITY_EVENT_WRITE_FAILED",
         )
 
+    def _record_dual_feed_decision(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: int,
+        outcome: str,
+        execution_price: float | None = None,
+        execution_bid: float | None = None,
+        execution_ask: float | None = None,
+        execution_volume: float | None = None,
+        context: Mapping[str, Any] | None = None,
+        signal: Any | None = None,
+        signal_weight: float | None = None,
+    ) -> None:
+        """Persist execution/reference feed snapshots for decision attribution."""
+
+        if not self._runtime_exec_event_persistence_enabled():
+            return
+        decision_ts = datetime.now(UTC)
+        execution_feed = get_execution_feed(getattr(self, "data_feed_intraday", None))
+        reference_feed = get_reference_feed()
+        reference_snapshot = fetch_reference_snapshot(symbol, feed=reference_feed)
+        reference_price = _safe_float(reference_snapshot.get("price"))
+        reference_bid = _safe_float(reference_snapshot.get("bid"))
+        reference_ask = _safe_float(reference_snapshot.get("ask"))
+        metrics = compute_drift_metrics(
+            execution_price=_safe_float(execution_price),
+            reference_price=reference_price,
+            execution_bid=_safe_float(execution_bid),
+            execution_ask=_safe_float(execution_ask),
+            reference_bid=reference_bid,
+            reference_ask=reference_ask,
+            execution_volume=_safe_float(execution_volume),
+            reference_volume=_safe_float(reference_snapshot.get("volume")),
+        )
+        context_row = dict(context) if isinstance(context, Mapping) else {}
+        signal_side: str | None = None
+        for candidate in (
+            context_row.get("signal_side"),
+            getattr(signal, "side", None),
+            getattr(signal, "direction", None),
+            getattr(signal, "action", None),
+            side,
+        ):
+            signal_side = normalize_signal_side(candidate)
+            if signal_side is not None:
+                break
+        signal_strength = _safe_float(context_row.get("signal_strength"))
+        if signal_strength is None:
+            for attr in (
+                "strength",
+                "score",
+                "signal_score",
+                "final_score",
+                "raw_score",
+            ):
+                signal_strength = _safe_float(getattr(signal, attr, None))
+                if signal_strength is not None:
+                    break
+        signal_confidence = _safe_float(context_row.get("signal_confidence"))
+        if signal_confidence is None:
+            signal_confidence = _safe_float(getattr(signal, "confidence", None))
+        signal_weight_value = _safe_float(context_row.get("signal_weight"))
+        if signal_weight_value is None:
+            signal_weight_value = _safe_float(signal_weight)
+        if signal_weight_value is None:
+            signal_weight_value = _safe_float(getattr(signal, "weight", None))
+        drift_disagreement_bps = _config_float("AI_TRADING_FEED_DISAGREEMENT_BPS", 25.0)
+        if drift_disagreement_bps is None:
+            drift_disagreement_bps = 25.0
+        signal_metrics = derive_signal_agreement(
+            outcome=str(outcome),
+            side=side,
+            signal_side=signal_side,
+            signal_strength=signal_strength,
+            signal_confidence=signal_confidence,
+            price_drift_bps=metrics.get("price_drift_bps"),
+            drift_disagreement_bps=float(drift_disagreement_bps),
+        )
+        if signal_weight_value is not None:
+            signal_metrics["signal_weight"] = float(signal_weight_value)
+        if signal_side is not None and "signal_side" not in context_row:
+            context_row["signal_side"] = signal_side
+        if signal_strength is not None and "signal_strength" not in context_row:
+            context_row["signal_strength"] = float(signal_strength)
+        if signal_confidence is not None and "signal_confidence" not in context_row:
+            context_row["signal_confidence"] = float(signal_confidence)
+        if signal_weight_value is not None and "signal_weight" not in context_row:
+            context_row["signal_weight"] = float(signal_weight_value)
+        decision_seed = "|".join(
+            (
+                decision_ts.isoformat(),
+                str(symbol).upper(),
+                str(side).lower(),
+                str(quantity),
+                str(outcome),
+            )
+        )
+        decision_id = hashlib.sha1(decision_seed.encode("utf-8")).hexdigest()[:24]
+        row: dict[str, Any] = {
+            "decision_id": decision_id,
+            "decision_ts": decision_ts.isoformat(),
+            "symbol": str(symbol).upper(),
+            "side": str(side).lower(),
+            "quantity": int(max(quantity, 0)),
+            "outcome": str(outcome),
+            "execution_feed": execution_feed,
+            "execution_price": _safe_float(execution_price),
+            "execution_bid": _safe_float(execution_bid),
+            "execution_ask": _safe_float(execution_ask),
+            "execution_volume": _safe_float(execution_volume),
+            "reference_feed": reference_feed,
+            "reference_price": reference_price,
+            "reference_bid": reference_bid,
+            "reference_ask": reference_ask,
+            "metrics": metrics,
+            "signal_side": signal_metrics.get("signal_side"),
+            "signal_strength": signal_metrics.get("signal_strength"),
+            "signal_confidence": signal_metrics.get("signal_confidence"),
+            "signal_weight": signal_metrics.get("signal_weight"),
+            "signal_agreement": signal_metrics.get("signal_agreement"),
+            "signal_disagreement": signal_metrics.get("signal_disagreement"),
+            "signal_metrics": signal_metrics,
+        }
+        if context_row:
+            row["context"] = context_row
+        self._append_runtime_jsonl(
+            env_key="AI_TRADING_DUAL_FEED_DECISIONS_PATH",
+            default_relative="runtime/dual_feed_decisions.jsonl",
+            payload=row,
+            failure_log="DUAL_FEED_DECISION_WRITE_FAILED",
+        )
+
     def _current_cycle_reserved_opening_notional(self) -> Decimal:
         """Return local reserved opening-order notional for the current cycle."""
 
@@ -16204,108 +16219,6 @@ class ExecutionEngine:
             )
         return cast(dict[str, Any], summary)
 
-    def _pdt_lockout_active(self, account: Any | None) -> bool:
-        """Return ``True`` when the PDT lockout should block new openings."""
-
-        if not account:
-            return False
-        try:
-            if not _pdt_limit_applies(account):
-                return False
-            limit_val = _safe_int(
-                _extract_value(
-                    account,
-                    "daytrade_limit",
-                    "day_trade_limit",
-                    "pattern_day_trade_limit",
-                ),
-                0,
-            )
-            count_val = _safe_int(
-                _extract_value(
-                    account,
-                    "daytrade_count",
-                    "day_trade_count",
-                    "pattern_day_trades",
-                    "pattern_day_trades_count",
-                ),
-                0,
-            )
-        except Exception:
-            logger.debug("PDT_LIMIT_CHECK_FAILED", exc_info=True)
-            return False
-        if limit_val <= 0:
-            return False
-        return count_val >= limit_val
-
-    def _should_skip_for_pdt(
-        self, account: Any, closing_position: bool
-    ) -> tuple[bool, str | None, dict[str, Any]]:
-        """Return (skip, reason, context) if PDT limits should block the order."""
-
-        context: dict[str, Any] = {}
-        if closing_position or account is None:
-            return (False, None, context)
-
-        pattern_flag = _safe_bool(
-            _extract_value(account, "pattern_day_trader", "is_pattern_day_trader", "pdt")
-        )
-        context["pattern_day_trader"] = pattern_flag
-        if not pattern_flag:
-            return (False, None, context)
-        equity = _safe_float(_extract_value(account, "equity", "last_equity", "portfolio_value"))
-        context["equity"] = equity
-        if equity is not None and math.isfinite(equity) and equity >= _PDT_MIN_EQUITY:
-            context["pdt_equity_exempt"] = True
-            return (False, "pdt_equity_exempt", context)
-        context["pdt_equity_exempt"] = False
-
-        daytrade_limit = _config_int("EXECUTION_DAYTRADE_LIMIT", 3)
-        account_limit = _extract_value(account, "daytrade_limit", "day_trade_limit", "pattern_day_trade_limit")
-        if account_limit not in (None, ""):
-            account_limit_int = _safe_int(account_limit, daytrade_limit or 0)
-            if account_limit_int > 0:
-                daytrade_limit = account_limit_int
-        context["daytrade_limit"] = daytrade_limit
-
-        daytrade_count = _safe_int(
-            _extract_value(
-                account,
-                "daytrade_count",
-                "day_trade_count",
-                "pattern_day_trades",
-                "pattern_day_trades_count",
-            ),
-            0,
-        )
-        context["daytrade_count"] = daytrade_count
-
-        guard_allows = pdt_guard(bool(pattern_flag), int(daytrade_limit or 0), int(daytrade_count))
-        if not guard_allows:
-            lock_info = pdt_lockout_info()
-            context.update(lock_info)
-            return (True, "pdt_lockout", context)
-
-        if daytrade_limit is None or daytrade_limit <= 0:
-            return (False, None, context)
-
-        if daytrade_count >= daytrade_limit:
-            return (True, "pdt_limit_reached", context)
-
-        imminent_threshold = daytrade_limit - 1
-        if imminent_threshold >= 0 and daytrade_count == imminent_threshold:
-            logger.warning(
-                "PDT_LIMIT_IMMINENT",
-                extra={
-                    "daytrade_count": daytrade_count,
-                    "daytrade_limit": daytrade_limit,
-                    "pattern_day_trader": pattern_flag,
-                },
-            )
-            return (False, "pdt_limit_imminent", context)
-
-        return (False, None, context)
-
     def _refresh_settings(self) -> None:
         """Refresh cached execution settings from configuration."""
 
@@ -16335,7 +16248,9 @@ class ExecutionEngine:
             parsed_participation_rate = None
         self.max_participation_rate = parsed_participation_rate
         self.price_provider_order = tuple(settings.price_provider_order)
-        self.data_feed_intraday = str(settings.data_feed_intraday or "iex").lower()
+        self.data_feed_intraday = str(
+            getattr(settings, "execution_feed", settings.data_feed_intraday) or "iex"
+        ).lower()
         if self._explicit_mode is not None:
             self.execution_mode = str(self._explicit_mode).lower()
         if self._explicit_shadow is not None:
@@ -17039,6 +16954,8 @@ class ExecutionEngine:
             Order details if successful, None if failed
         """
         kwargs = _merge_pending_order_kwargs(self, kwargs)
+        signal = kwargs.get("signal")
+        signal_weight = kwargs.get("signal_weight")
         submit_started_at = time.monotonic()
         self._refresh_settings()
         try:
@@ -17345,91 +17262,6 @@ class ExecutionEngine:
                 "asset_class": kwargs.get("asset_class"),
             }
 
-        if not closing_position and account_snapshot:
-            pattern_attr = _extract_value(
-                account_snapshot,
-                "pattern_day_trader",
-                "is_pattern_day_trader",
-                "pdt",
-            )
-            limit_attr = _extract_value(
-                account_snapshot,
-                "daytrade_limit",
-                "day_trade_limit",
-                "pattern_day_trade_limit",
-            )
-            count_attr = _extract_value(
-                account_snapshot,
-                "daytrade_count",
-                "day_trade_count",
-                "pattern_day_trades",
-                "pattern_day_trades_count",
-            )
-            limit_default = _config_int("EXECUTION_DAYTRADE_LIMIT", 3) or 0
-            daytrade_limit_value = _safe_int(limit_attr, limit_default)
-            if daytrade_limit_value <= 0:
-                daytrade_limit_value = int(limit_default)
-            pattern_flag = _safe_bool(pattern_attr)
-            count_value = _safe_int(count_attr, 0)
-            lockout_active = (
-                pattern_flag
-                and daytrade_limit_value > 0
-                and count_value >= daytrade_limit_value
-            )
-            if lockout_active:
-                pdt_guard(pattern_flag, daytrade_limit_value, count_value)
-                info = pdt_lockout_info()
-                detail_context = {
-                    "pattern_day_trader": pattern_flag,
-                    "daytrade_limit": daytrade_limit_value,
-                    "daytrade_count": count_value,
-                    "active": _safe_bool(_extract_value(account_snapshot, "active")),
-                    "limit": info.get("limit"),
-                    "count": info.get("count"),
-                }
-                self.stats.setdefault("capacity_skips", 0)
-                self.stats.setdefault("skipped_orders", 0)
-                self.stats["capacity_skips"] += 1
-                self.stats["skipped_orders"] += 1
-                logger.info(
-                    "PDT_LOCKOUT_ACTIVE",
-                    extra={
-                        "symbol": symbol,
-                        "side": side_lower,
-                        "limit": info.get("limit"),
-                        "count": info.get("count"),
-                        "action": "skip_openings",
-                        "reason": "pdt_limit_reached",
-                    },
-                )
-                logger.info(
-                    "ORDER_SKIPPED_NONRETRYABLE",
-                    extra={
-                        "symbol": symbol,
-                        "side": side_lower,
-                        "quantity": quantity,
-                        "client_order_id": client_order_id,
-                        "order_type": "market",
-                        "reason": "pdt_limit_reached",
-                    },
-                )
-                logger.warning(
-                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
-                    "pdt_limit_reached",
-                    detail_context,
-                    extra={
-                        "symbol": symbol,
-                        "side": side_lower,
-                        "quantity": quantity,
-                        "client_order_id": client_order_id,
-                        "order_type": "market",
-                        "reason": "pdt_limit_reached",
-                        "detail": "pdt_limit_reached",
-                        "context": detail_context,
-                    },
-                )
-                return None
-
         if not capacity_prechecked:
             capacity_side = _capacity_precheck_side(
                 side_lower,
@@ -17657,6 +17489,23 @@ class ExecutionEngine:
                 if nbbo_gate_required and (provider_for_log != "alpaca" or synthetic_quote):
                     gate_log_extra["reason"] = "nbbo_provider_mismatch"
                 logger.warning("ORDER_SKIPPED_PRICE_GATED", extra=gate_log_extra)
+                execution_bid = _safe_float(bid)
+                execution_ask = _safe_float(ask)
+                execution_price = None
+                if execution_bid is not None and execution_ask is not None and execution_ask >= execution_bid:
+                    execution_price = (execution_bid + execution_ask) / 2.0
+                self._record_dual_feed_decision(
+                    symbol=symbol,
+                    side=side_lower,
+                    quantity=int(quantity),
+                    outcome=str(gate_log_extra.get("reason") or "price_gate_failed"),
+                    execution_price=execution_price,
+                    execution_bid=execution_bid,
+                    execution_ask=execution_ask,
+                    context={"phase": "price_gate", "provider": provider_for_log},
+                    signal=locals().get("signal"),
+                    signal_weight=locals().get("signal_weight"),
+                )
                 return None
 
         order_data_snapshot = dict(order_data)
@@ -17665,6 +17514,18 @@ class ExecutionEngine:
         logger.info(
             "Submitting market order",
             extra={"side": side, "quantity": quantity, "symbol": symbol, "client_order_id": client_order_id},
+        )
+        self._record_dual_feed_decision(
+            symbol=symbol,
+            side=side_lower,
+            quantity=int(quantity),
+            outcome="submit_attempt",
+            execution_price=_safe_float(order_data.get("limit_price")) or _safe_float(price_hint),
+            execution_bid=_safe_float(bid),
+            execution_ask=_safe_float(ask),
+            context={"phase": "submit_market", "client_order_id": client_order_id},
+            signal=locals().get("signal"),
+            signal_weight=locals().get("signal_weight"),
         )
         failure_exc: Exception | None = None
         failure_status: int | None = None
@@ -17800,6 +17661,8 @@ class ExecutionEngine:
             Order details if successful, None if failed
         """
         kwargs = _merge_pending_order_kwargs(self, kwargs)
+        signal = kwargs.get("signal")
+        signal_weight = kwargs.get("signal_weight")
         submit_started_at = time.monotonic()
         self._refresh_settings()
         try:
@@ -18183,88 +18046,6 @@ class ExecutionEngine:
             },
         )
 
-        if not closing_position and account_snapshot:
-            pattern_attr = _extract_value(
-                account_snapshot,
-                "pattern_day_trader",
-                "is_pattern_day_trader",
-                "pdt",
-            )
-            limit_attr = _extract_value(
-                account_snapshot,
-                "daytrade_limit",
-                "day_trade_limit",
-                "pattern_day_trade_limit",
-            )
-            count_attr = _extract_value(
-                account_snapshot,
-                "daytrade_count",
-                "day_trade_count",
-                "pattern_day_trades",
-                "pattern_day_trades_count",
-            )
-            pattern_flag = _safe_bool(pattern_attr)
-            daytrade_limit = _safe_int(limit_attr, 0)
-            daytrade_count = _safe_int(count_attr, 0)
-            lockout_active = (
-                pattern_flag
-                and daytrade_limit > 0
-                and daytrade_count >= daytrade_limit
-            )
-            if lockout_active and not pdt_guard(
-                pattern_flag,
-                daytrade_limit,
-                daytrade_count,
-            ):
-                info = pdt_lockout_info()
-                detail_context = {
-                    "pattern_day_trader": pattern_flag,
-                    "daytrade_limit": daytrade_limit,
-                    "daytrade_count": daytrade_count,
-                    "active": _safe_bool(_extract_value(account_snapshot, "active")),
-                    "limit": info.get("limit"),
-                    "count": info.get("count"),
-                }
-                logger.info(
-                    "PDT_LOCKOUT_ACTIVE",
-                    extra={
-                        "symbol": symbol,
-                        "side": side_lower,
-                        "limit": info.get("limit"),
-                        "count": info.get("count"),
-                        "action": "skip_openings",
-                    },
-                )
-                logger.info(
-                    "ORDER_SKIPPED_NONRETRYABLE",
-                    extra={
-                        "symbol": symbol,
-                        "side": side_lower,
-                        "quantity": quantity,
-                        "client_order_id": client_order_id,
-                        "order_type": "limit",
-                        "limit_price": None if limit_price is None else float(limit_price),
-                        "reason": "pdt_lockout",
-                    },
-                )
-                logger.warning(
-                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
-                    "pdt_lockout",
-                    detail_context,
-                    extra={
-                        "symbol": symbol,
-                        "side": side_lower,
-                        "quantity": quantity,
-                        "client_order_id": client_order_id,
-                        "order_type": "limit",
-                        "limit_price": None if limit_price is None else float(limit_price),
-                        "reason": "pdt_lockout",
-                        "detail": "pdt_lockout",
-                        "context": detail_context,
-                    },
-                )
-                return None
-
         quote_payload: Mapping[str, Any] | None = None
         fallback_age: float | int | None = None
         fallback_error: str | None = None
@@ -18360,6 +18141,18 @@ class ExecutionEngine:
                 "client_order_id": client_order_id,
                 "order_type": order_data.get("type"),
             },
+        )
+        self._record_dual_feed_decision(
+            symbol=symbol,
+            side=side_lower,
+            quantity=int(quantity),
+            outcome="submit_attempt",
+            execution_price=_safe_float(order_data.get("limit_price")) or _safe_float(price_hint),
+            execution_bid=_safe_float(bid),
+            execution_ask=_safe_float(ask),
+            context={"phase": "submit_limit", "client_order_id": client_order_id},
+            signal=locals().get("signal"),
+            signal_weight=locals().get("signal_weight"),
         )
         failure_exc: Exception | None = None
         failure_status: int | None = None
@@ -19426,6 +19219,17 @@ class ExecutionEngine:
                 )
             except Exception as exc:
                 logger.debug("ORDER_SKIPPED_LOG_FAILED", exc_info=exc)
+            self._record_dual_feed_decision(
+                symbol=symbol,
+                side=mapped_side,
+                quantity=int(quantity),
+                outcome="primary_quote_required",
+                execution_bid=_safe_float(locals().get("bid")),
+                execution_ask=_safe_float(locals().get("ask")),
+                context={"phase": "quote_presence_gate", "provider": provider_for_log},
+                signal=locals().get("signal"),
+                signal_weight=locals().get("signal_weight"),
+            )
             self._skip_submit(
                 symbol=symbol,
                 side=mapped_side,
@@ -19500,6 +19304,17 @@ class ExecutionEngine:
             }
             logger.warning("ORDER_SKIPPED_PRICE_GATED", extra=gate_extra)
             if not downgrade_allowed:
+                self._record_dual_feed_decision(
+                    symbol=symbol,
+                    side=mapped_side,
+                    quantity=int(quantity),
+                    outcome="realtime_nbbo_required",
+                    execution_bid=_safe_float(locals().get("bid")),
+                    execution_ask=_safe_float(locals().get("ask")),
+                    context={"phase": "nbbo_gate", "provider": provider_for_log},
+                    signal=locals().get("signal"),
+                    signal_weight=locals().get("signal_weight"),
+                )
                 _emit_quote_block_log(
                     "price_gate",
                     extra=gate_extra
@@ -19763,6 +19578,18 @@ class ExecutionEngine:
             if nbbo_gate_required and (provider_for_log != "alpaca" or synthetic_quote):
                 gate_log_extra["reason"] = "nbbo_provider_mismatch"
             logger.warning("ORDER_SKIPPED_PRICE_GATED", extra=gate_log_extra)
+            self._record_dual_feed_decision(
+                symbol=symbol,
+                side=mapped_side,
+                quantity=int(quantity),
+                outcome=str(gate_log_extra.get("reason") or "price_gate"),
+                execution_price=_safe_float(limit_for_log),
+                execution_bid=_safe_float(bid),
+                execution_ask=_safe_float(ask),
+                context={"phase": "price_gate", "provider": provider_for_log},
+                signal=locals().get("signal"),
+                signal_weight=locals().get("signal_weight"),
+            )
             _emit_quote_block_log(
                 "price_gate",
                 extra={
@@ -22273,6 +22100,147 @@ class ExecutionEngine:
             tracker[symbol_key] = qty_abs
         self._position_tracker_last_sync_mono = float(monotonic_time())
 
+    def _resolve_runtime_snapshot_store(self) -> Any | None:
+        if not bool(getattr(self, "_runtime_snapshot_persistence_enabled", False)):
+            return None
+        if bool(getattr(self, "_runtime_snapshot_store_init_failed", False)):
+            return None
+        existing = getattr(self, "_runtime_snapshot_store", None)
+        if existing is not None:
+            return existing
+        try:
+            from ai_trading.oms.event_store import EventStore
+
+            store = EventStore()
+        except Exception as exc:
+            self._runtime_snapshot_store_init_failed = True
+            logger.warning(
+                "RUNTIME_SNAPSHOT_STORE_INIT_FAILED",
+                extra={"error": str(exc)},
+            )
+            return None
+        self._runtime_snapshot_store = store
+        return store
+
+    @staticmethod
+    def _snapshot_idempotency_key(*parts: Any) -> str:
+        material = "|".join(str(part) for part in parts if part not in (None, ""))
+        if not material:
+            material = "runtime-snapshot"
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    def _emit_runtime_snapshots_from_broker_sync(
+        self,
+        *,
+        open_orders: tuple[Any, ...],
+        positions: tuple[Any, ...],
+        open_buy_by_symbol: Mapping[str, float],
+        open_sell_by_symbol: Mapping[str, float],
+    ) -> None:
+        store = self._resolve_runtime_snapshot_store()
+        if store is None:
+            return
+
+        snapshot_ts = datetime.now(UTC).isoformat()
+        source = str(getattr(self, "_runtime_snapshot_source", "") or "execution_engine")
+
+        emitted_positions = 0
+        net_qty_total = 0.0
+        gross_qty_total = 0.0
+        for idx, position in enumerate(positions):
+            symbol_raw = _extract_value(position, "symbol")
+            symbol = str(symbol_raw or "").strip().upper()
+            if not symbol:
+                continue
+
+            qty_raw = _extract_value(position, "qty", "quantity", "position", "current_qty")
+            qty = _safe_float(qty_raw)
+            if qty is None:
+                continue
+            side_raw = _extract_value(position, "side")
+            side_token = str(side_raw or "").strip().lower()
+            if side_token in {"sell", "sell_short", "sellshort", "short"}:
+                qty = -abs(qty)
+            elif side_token in {"buy", "long"}:
+                qty = abs(qty)
+
+            avg_entry_price = _safe_float(_extract_value(position, "avg_entry_price", "avg_cost"))
+            market_price = _safe_float(_extract_value(position, "market_price", "current_price"))
+            market_value = _safe_float(_extract_value(position, "market_value"))
+            if market_value is None and market_price is not None:
+                market_value = qty * market_price
+            unrealized_pnl = _safe_float(_extract_value(position, "unrealized_pl", "unrealized_pnl"))
+
+            inserted = bool(
+                store.append_position_snapshot_payload(
+                    snapshot_source=source,
+                    idempotency_key=self._snapshot_idempotency_key(
+                        source,
+                        "position_snapshot",
+                        snapshot_ts,
+                        symbol,
+                        qty,
+                        idx,
+                    ),
+                    snapshot_ts=snapshot_ts,
+                    symbol=symbol,
+                    quantity=float(qty),
+                    side=(side_token or None),
+                    avg_entry_price=avg_entry_price,
+                    market_price=market_price,
+                    market_value=market_value,
+                    unrealized_pnl=unrealized_pnl,
+                    payload={
+                        "symbol": symbol,
+                        "quantity": float(qty),
+                        "side": (str(side_raw) if side_raw not in (None, "") else None),
+                        "avg_entry_price": avg_entry_price,
+                        "market_price": market_price,
+                        "market_value": market_value,
+                        "unrealized_pnl": unrealized_pnl,
+                    },
+                )
+            )
+            if inserted:
+                emitted_positions += 1
+            net_qty_total += float(qty)
+            gross_qty_total += abs(float(qty))
+
+        open_buy_qty_total = sum(float(_safe_float(qty) or 0.0) for qty in open_buy_by_symbol.values())
+        open_sell_qty_total = sum(float(_safe_float(qty) or 0.0) for qty in open_sell_by_symbol.values())
+        account_snapshot = getattr(self, "_cycle_account", None)
+        equity = _safe_float(_extract_value(account_snapshot, "equity", "portfolio_value"))
+        buying_power = _safe_float(_extract_value(account_snapshot, "buying_power"))
+        exposure_pct = _safe_float(_extract_value(getattr(self, "ctx", None), "exposure_pct"))
+        risk_payload = {
+            "open_orders_count": int(len(open_orders)),
+            "positions_count": int(len(positions)),
+            "open_buy_qty_total": float(open_buy_qty_total),
+            "open_sell_qty_total": float(open_sell_qty_total),
+            "net_position_qty": float(net_qty_total),
+            "gross_position_qty": float(gross_qty_total),
+            "emitted_positions": int(emitted_positions),
+            "equity": equity,
+            "buying_power": buying_power,
+        }
+        store.append_risk_snapshot_payload(
+            snapshot_source=source,
+            idempotency_key=self._snapshot_idempotency_key(
+                source,
+                "risk_snapshot",
+                snapshot_ts,
+                risk_payload.get("positions_count"),
+                risk_payload.get("open_orders_count"),
+                risk_payload.get("net_position_qty"),
+                risk_payload.get("gross_position_qty"),
+            ),
+            snapshot_ts=snapshot_ts,
+            exposure_pct=exposure_pct,
+            positions_count=int(risk_payload["positions_count"]),
+            open_orders_count=int(risk_payload["open_orders_count"]),
+            payload=risk_payload,
+        )
+
     def _submit_cover_order(self, symbol: str, requested_qty: int) -> bool:
         client = getattr(self, "trading_client", None)
         if client is None:
@@ -22574,133 +22542,6 @@ class ExecutionEngine:
                 )
                 resolved = fallback
         return str(resolved)
-
-    def _evaluate_pdt_preflight(
-        self,
-        order: Mapping[str, Any],
-        account_snapshot: Any | None,
-        closing_position: bool,
-    ) -> tuple[bool, str | None, dict[str, Any]]:
-        """Return ``(skip, reason, context)`` for PDT policy enforcement."""
-
-        sanitized_context: dict[str, Any] = {"closing_position": bool(closing_position)}
-        if closing_position:
-            return False, "closing_position", sanitized_context
-
-        symbol = str(order.get("symbol") or "").upper()
-        side = str(order.get("side") or "").lower()
-        sanitized_context.update({"symbol": symbol or None, "side": side or None})
-
-        if account_snapshot is None:
-            return False, None, sanitized_context
-
-        try:
-            from ai_trading.execution.pdt_manager import PDTManager  # lazy import
-            from ai_trading.execution.swing_mode import get_swing_mode, enable_swing_mode
-        except Exception:
-            skip, reason, legacy_context = self._should_skip_for_pdt(account_snapshot, closing_position)
-            sanitized_context.update(_sanitize_pdt_context(legacy_context))
-            return skip, reason, sanitized_context
-
-        pdt_manager = PDTManager()
-        swing_mode = get_swing_mode()
-
-        current_position = 0
-        tracker = getattr(self, "_position_tracker", None)
-        try:
-            if isinstance(tracker, Mapping):
-                current_position = int(tracker.get(symbol, 0) or 0)
-            elif tracker is not None and hasattr(tracker, symbol):
-                current_position = int(getattr(tracker, symbol) or 0)
-        except Exception as exc:
-            logger.debug(
-                "POSITION_TRACKER_UNAVAILABLE",
-                extra={"symbol": symbol, "error": str(exc)},
-            )
-            current_position = 0
-
-        force_swing = getattr(swing_mode, "enabled", False)
-
-        try:
-            allow, reason, context = pdt_manager.should_allow_order(
-                account_snapshot,
-                symbol,
-                side,
-                current_position=current_position,
-                force_swing_mode=force_swing,
-            )
-
-            if not allow and reason == "pdt_limit_reached":
-                swing_retry_context = {
-                    "daytrade_count": context.get("daytrade_count"),
-                    "daytrade_limit": context.get("daytrade_limit"),
-                }
-                swing_mode_obj = swing_mode
-                try:
-                    swing_mode_obj = get_swing_mode()
-                    if not getattr(swing_mode_obj, "enabled", False):
-                        enable_swing_mode()
-                        swing_mode_obj = get_swing_mode()
-                        logger.warning(
-                            "PDT_LIMIT_EXCEEDED_SWING_MODE_ACTIVATED",
-                            extra={
-                                **{k: v for k, v in swing_retry_context.items() if v is not None},
-                                "message": "Automatically switched to swing trading mode to avoid PDT violations",
-                            },
-                        )
-                except Exception:
-                    logger.debug("SWING_MODE_ENABLE_FAILED", exc_info=True)
-
-                allow, reason, context = pdt_manager.should_allow_order(
-                    account_snapshot,
-                    symbol,
-                    side,
-                    current_position=current_position,
-                    force_swing_mode=True,
-                )
-                swing_mode = swing_mode_obj
-        except Exception as exc:
-            logger.exception("PDT_MANAGER_PRECHECK_FAILED", extra={"symbol": symbol, "error": str(exc)})
-            skip, reason, legacy_context = self._should_skip_for_pdt(account_snapshot, closing_position)
-            sanitized_context.update(_sanitize_pdt_context(legacy_context))
-            return skip, reason, sanitized_context
-
-        sanitized_context.update(_sanitize_pdt_context(context))
-        sanitized_context["current_position"] = current_position
-        sanitized_context["swing_mode_enabled"] = bool(getattr(swing_mode, "enabled", False))
-        skip = not allow
-
-        if allow and getattr(swing_mode, "enabled", False) and reason == "swing_mode_entry" and symbol:
-            try:
-                swing_mode.record_entry(symbol)
-            except Exception as exc:  # pragma: no cover - defensive logging path
-                logger.debug(
-                    "SWING_MODE_ENTRY_RECORD_FAILED",
-                    extra={"symbol": symbol, "error": str(exc)},
-                )
-            else:
-                logger.info(
-                    "SWING_MODE_ENTRY_RECORDED",
-                    extra={
-                        "symbol": symbol,
-                        "side": side,
-                        "reason": "pdt_safe_trading",
-                    },
-                )
-                sanitized_context["swing_mode_entry_recorded"] = True
-
-        if not skip and reason in {"pdt_limit_imminent", "pdt_conservative"}:
-            logger.warning(
-                "PDT_LIMIT_IMMINENT",
-                extra={
-                    "daytrade_count": sanitized_context.get("daytrade_count"),
-                    "daytrade_limit": sanitized_context.get("daytrade_limit"),
-                    "pattern_day_trader": sanitized_context.get("pattern_day_trader"),
-                },
-            )
-
-        sanitized_context["block_enforced"] = skip
-        return skip, reason, sanitized_context
 
     def _exposure_normalization_context(self, account_snapshot: Any | None) -> dict[str, Any] | None:
         """Build exposure/buying-power normalization context from broker account state."""
@@ -23064,10 +22905,13 @@ class ExecutionEngine:
             ).strip()
         if not configured:
             configured = "runtime/runtime_performance_report_latest.json"
-        return resolve_runtime_artifact_path(
-            configured,
-            default_relative="runtime/runtime_performance_report_latest.json",
-            for_write=True,
+        return cast(
+            Path,
+            resolve_runtime_artifact_path(
+                configured,
+                default_relative="runtime/runtime_performance_report_latest.json",
+                for_write=True,
+            ),
         )
 
     def _runtime_performance_report_min_interval_s(self) -> float:
@@ -28638,73 +28482,6 @@ class ExecutionEngine:
                 _mark_precheck_failure("opening_min_notional", opening_notional_context)
                 return False
 
-        snapshot_payload: Mapping[str, Any] = (
-            account_snapshot if isinstance(account_snapshot, Mapping) else {}
-        )
-        logger.debug(
-            "PDT_PREFLIGHT_CHECKED",
-            extra={
-                "pattern_day_trader": snapshot_payload.get("pattern_day_trader"),
-                "daytrade_limit": snapshot_payload.get("daytrade_limit"),
-                "daytrade_count": snapshot_payload.get("daytrade_count"),
-                "active": snapshot_payload.get("active"),
-                "limit": snapshot_payload.get("limit"),
-                "count": snapshot_payload.get("count"),
-                "closing_position": closing_position,
-            },
-        )
-
-        skip_pdt, pdt_reason, pdt_context = self._evaluate_pdt_preflight(
-            order, account_snapshot, closing_position
-        )
-        log_pdt_enforcement(blocked=skip_pdt, reason=pdt_reason, context=pdt_context)
-        logger.debug(
-            "PDT_PREFLIGHT_RESULT",
-            extra={
-                "blocked": bool(skip_pdt),
-                "reason": pdt_reason,
-                "context": pdt_context,
-            },
-        )
-        if skip_pdt:
-            self.stats.setdefault("capacity_skips", 0)
-            self.stats.setdefault("skipped_orders", 0)
-            self.stats["capacity_skips"] += 1
-            self.stats["skipped_orders"] += 1
-            symbol = order.get("symbol")
-            side = order.get("side")
-            quantity = order.get("quantity")
-            client_order_id = order.get("client_order_id")
-            asset_class = order.get("asset_class")
-            price_hint = order.get("price_hint")
-            order_type = order.get("order_type", "unknown")
-            using_fallback_price = bool(order.get("using_fallback_price"))
-            base_extra = {
-                "symbol": symbol,
-                "side": side,
-                "quantity": quantity,
-                "client_order_id": client_order_id,
-                "asset_class": asset_class,
-                "price_hint": price_hint,
-                "order_type": order_type,
-                "using_fallback_price": using_fallback_price,
-                "reason": pdt_reason,
-            }
-            logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
-            context_payload = pdt_context if isinstance(pdt_context, Mapping) else {}
-            detail_message = "ORDER_SKIPPED_NONRETRYABLE_DETAIL"
-            if context_payload:
-                context_pairs = " ".join(
-                    f"{key}={context_payload.get(key)!r}" for key in sorted(context_payload)
-                )
-                detail_message = f"{detail_message} {context_pairs}"
-            logger.warning(
-                detail_message,
-                extra=base_extra | {"context": context_payload},
-            )
-            _mark_precheck_failure(str(pdt_reason or "pdt_preflight_block"), context_payload)
-            return False
-
         return True
 
     def _validate_connection(self) -> bool:
@@ -29348,38 +29125,6 @@ class ExecutionEngine:
                 "client_order_id": client_order_id_text or None,
             }
 
-        if not closing_position and self._pdt_lockout_active(account_snapshot):
-            daytrade_limit = _safe_int(
-                _extract_value(
-                    account_snapshot,
-                    "daytrade_limit",
-                    "day_trade_limit",
-                    "pattern_day_trade_limit",
-                ),
-                0,
-            )
-            daytrade_count = _safe_int(
-                _extract_value(
-                    account_snapshot,
-                    "daytrade_count",
-                    "day_trade_count",
-                    "pattern_day_trades",
-                    "pattern_day_trades_count",
-                ),
-                0,
-            )
-            logger.warning(
-                "PDT_LOCKOUT_ACTIVE | action=skip_openings",
-                extra={
-                    "context": {
-                        "pattern_day_trader": True,
-                        "daytrade_limit": daytrade_limit,
-                        "daytrade_count": daytrade_count,
-                    }
-                },
-            )
-            return {"status": "skipped", "reason": "pdt_lockout", "context": {"pdt": True}}
-
         # Normalize order payload before any broker submit path, including pytest hooks.
         order_type = str(order_data.get("type", "limit")).lower()
         tif_token = self._resolve_time_in_force(order_data.get("time_in_force"))
@@ -29995,6 +29740,15 @@ class ExecutionEngine:
                 "BROKER_SYNC_POSITION_TRACKER_UPDATE_FAILED",
                 exc_info=True,
             )
+        try:
+            self._emit_runtime_snapshots_from_broker_sync(
+                open_orders=open_orders_tuple,
+                positions=positions_tuple,
+                open_buy_by_symbol=buy_index,
+                open_sell_by_symbol=sell_index,
+            )
+        except Exception:
+            logger.debug("BROKER_SYNC_RUNTIME_SNAPSHOT_EMIT_FAILED", exc_info=True)
         return snapshot
 
     def synchronize_broker_state(self) -> BrokerSyncResult:

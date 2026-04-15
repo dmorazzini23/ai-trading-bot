@@ -857,6 +857,107 @@ def _build_dummy_long_context(pd, symbol):
     return ctx, state, feat_df
 
 
+def test_enter_long_scales_quantity_using_feed_reliability(monkeypatch):
+    pd = pytest.importorskip("pandas")
+    symbol = "AAPL"
+    ctx, state, feat_df = _build_dummy_long_context(pd, symbol)
+
+    submitted: dict[str, Any] = {}
+
+    def _capture_submit_order(  # noqa: ANN001
+        _ctx,
+        _symbol,
+        qty,
+        side,
+        *,
+        price,
+        annotations=None,
+        metadata=None,
+        price_hint=None,
+        expected_net_edge_bps=None,
+    ):
+        submitted["symbol"] = _symbol
+        submitted["qty"] = qty
+        submitted["side"] = side
+        submitted["price"] = price
+        submitted["annotations"] = dict(annotations or {})
+        submitted["metadata"] = metadata
+        submitted["price_hint"] = price_hint
+        submitted["expected_net_edge_bps"] = expected_net_edge_bps
+        return types.SimpleNamespace(id="order-1")
+
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("DRY_RUN", raising=False)
+
+    monkeypatch.setattr(bot_engine, "_call_submit_order", _capture_submit_order)
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote",
+        lambda *_a, **_k: (100.0, "alpaca_ask"),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_evaluate_data_gating",
+        lambda *a, **k: bot_engine.DataGateDecision(False, tuple(), None, {}),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_ensure_executable_quote",
+        lambda *a, **k: types.SimpleNamespace(details={}),
+    )
+    monkeypatch.setattr(bot_engine, "_entry_expected_edge_gate", lambda **_k: True)
+    monkeypatch.setattr(
+        bot_engine,
+        "_apply_sector_cap_qty",
+        lambda _ctx, _sym, qty, _price: qty,
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_enforce_buying_power_limit",
+        lambda _ctx, _acct, _side, _price, qty: (qty, 1_000_000.0),
+    )
+    monkeypatch.setattr(bot_engine, "scaled_atr_stop", lambda **_k: (95.0, 105.0))
+    monkeypatch.setattr(bot_engine, "is_high_vol_regime", lambda: False)
+    monkeypatch.setattr(bot_engine, "get_take_profit_factor", lambda: 1.0)
+    monkeypatch.setattr(bot_engine, "_record_trade_in_frequency_tracker", lambda *a, **k: None)
+    monkeypatch.setattr(bot_engine, "_record_entry_expectancy_context", lambda *a, **k: None)
+    monkeypatch.setattr(
+        bot_engine,
+        "_get_symbol_feed_reliability",
+        lambda _symbol: {
+            "enabled": True,
+            "active": True,
+            "score": 0.4,
+            "sample_count": 15,
+            "size_multiplier": 0.4,
+            "threshold_bonus": 0.0,
+            "blocked": False,
+            "as_of": "2026-04-15T00:00:00+00:00",
+        },
+    )
+
+    result = bot_engine._enter_long(
+        ctx,
+        state,
+        symbol,
+        balance=100000.0,
+        feat_df=feat_df,
+        final_score=1.0,
+        conf=0.85,
+        strat="feed_reliability_scale",
+    )
+
+    assert result is True
+    assert submitted["symbol"] == symbol
+    assert submitted["qty"] == 8
+    assert submitted["side"] == "buy"
+    annotations = submitted["annotations"]
+    assert annotations["feed_reliability_score"] == pytest.approx(0.4)
+    assert annotations["feed_reliability_sample_count"] == 15
+    assert annotations["feed_reliability_size_multiplier"] == pytest.approx(0.4)
+
+
 def _patch_price_gate_common(monkeypatch, symbol: str, price: float) -> None:
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
     monkeypatch.delenv("TESTING", raising=False)

@@ -128,7 +128,6 @@ def test_service_start_without_data_fetcher_warning(monkeypatch, caplog):
     monkeypatch.setattr(eng, "_init_metrics", lambda: None)
     monkeypatch.setattr(eng, "is_market_open", lambda: True)
     monkeypatch.setattr(eng, "ensure_alpaca_attached", lambda runtime: None)
-    monkeypatch.setattr(eng, "check_pdt_rule", lambda runtime: False)
     monkeypatch.setattr(eng, "get_strategies", lambda: [])
     monkeypatch.setattr(eng, "get_verbose_logging", lambda: False)
     monkeypatch.setattr(eng, "_ensure_execution_engine", lambda runtime: None)

@@ -39,19 +39,25 @@ Focus: execution-quality governance and replay-backed confidence.
 ### Deliverables
 1. Daily TCA report review with top slippage/reject contributors.
 2. Replay determinism check in CI and pre-deploy.
-3. Walk-forward + leakage guard outputs tracked per release candidate.
-4. Model artifact verification policy enforced in deployment checklist.
+3. OMS lifecycle parity replay check in CI and pre-deploy.
+4. Walk-forward + leakage guard outputs tracked per release candidate.
+5. Model artifact verification policy enforced in deployment checklist.
 
 ### Acceptance Criteria
 1. Daily execution report generated on schedule and archived.
 2. Replay output hash remains stable for fixed seed/data window.
-3. Leakage checks fail hard when any horizon contamination is introduced.
-4. Live promotions require verified model artifact manifests.
+3. OMS lifecycle parity replay reports zero live/simulated stream mismatches.
+4. Leakage checks fail hard when any horizon contamination is introduced.
+5. Live promotions require verified model artifact manifests.
 
 ### Verification Commands
 ```bash
 pytest -q tests/test_tca_implementation_shortfall.py tests/test_execution_report_daily_rollup.py
 pytest -q tests/test_replay_engine_deterministic.py tests/test_walk_forward_no_leakage.py
+pytest -q tests/unit/test_oms_backtest_lifecycle_parity.py tests/unit/test_oms_lifecycle_parity_replay_tool.py
+python3 -m ai_trading.tools.oms_lifecycle_parity_replay --fixture tests/data/oms_lifecycle_parity_fixture.json
+python3 -m ai_trading.tools.update_phase2_execution_baseline --window-days 30
+AI_TRADING_INSTITUTIONAL_REQUIRE_PHASE2_GATE=1 bash ci/scripts/institutional_gates.sh
 pytest -q tests/test_model_artifacts.py tests/test_model_verification_policy.py
 ```
 

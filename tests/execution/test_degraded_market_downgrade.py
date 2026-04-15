@@ -65,9 +65,9 @@ def _patch_execution_guards(monkeypatch) -> None:
         )
     from ai_trading.execution import guards
 
-    guards.STATE.pdt = guards.PDTState()
-    guards.STATE.shadow_cycle = False
-    guards.STATE.shadow_cycle_forced = False
+    setattr(guards.STATE, "shadow_cycle", False)
+    if hasattr(guards.STATE, "shadow_cycle_forced"):
+        setattr(guards.STATE, "shadow_cycle_forced", False)
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
 
 

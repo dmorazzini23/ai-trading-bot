@@ -1,0 +1,41 @@
+{
+  "scenarios": [
+    {
+      "name": "filled",
+      "symbol": "AAPL",
+      "side": "buy",
+      "quantity": 3,
+      "fill_qty": 3,
+      "fill_price": 101.25,
+      "terminal_status": "FILLED"
+    },
+    {
+      "name": "canceled",
+      "symbol": "MSFT",
+      "side": "sell",
+      "quantity": 2,
+      "fill_qty": 0,
+      "fill_price": null,
+      "terminal_status": "CANCELED"
+    },
+    {
+      "name": "rejected",
+      "symbol": "NVDA",
+      "side": "buy",
+      "quantity": 1,
+      "fill_qty": 0,
+      "fill_price": null,
+      "terminal_status": "REJECTED",
+      "last_error": "simulated_reject"
+    },
+    {
+      "name": "expired",
+      "symbol": "TSLA",
+      "side": "sell",
+      "quantity": 4,
+      "fill_qty": 0,
+      "fill_price": null,
+      "terminal_status": "EXPIRED"
+    }
+  ]
+}

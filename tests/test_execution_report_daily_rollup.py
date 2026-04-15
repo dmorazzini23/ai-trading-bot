@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ai_trading.analytics import execution_report
@@ -89,3 +90,170 @@ def test_execution_report_rollup_tz_controls_output_day(tmp_path: Path, monkeypa
         rollup_tz="America/New_York",
     )
     assert (out_dir / "execution_report_20250101.json").exists()
+
+
+def test_execution_report_phase2_gate_passes_with_baselines(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_SLIPPAGE_MEDIAN_BPS", "10.0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_FILL_RATE", "0.90")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_STALE_PENDING_COUNT", "2")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_MIN_SLIPPAGE_IMPROVEMENT_PCT", "10.0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_MAX_FILL_RATE_DEGRADATION_PCT", "5.0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_MAX_REJECT_RATE", "0.10")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_MAX_EXECUTION_DRIFT_BPS", "10.0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_MAX_STALE_PENDING_INCREASE", "0")
+    records: list[dict[str, object]] = []
+    for idx in range(10):
+        records.append(
+            {
+                "ts": (now - timedelta(hours=1)).isoformat(),
+                "symbol": "AAPL",
+                "status": "filled",
+                "is_bps": 8.0,
+                "order_type": "limit",
+                "midpoint_offset_bps": 4.0,
+                "execution_drift_bps": 5.0,
+                "partial_fill": idx == 0,
+            }
+        )
+    records.append(
+        {
+            "ts": (now - timedelta(hours=1)).isoformat(),
+            "symbol": "AAPL",
+            "status": "rejected",
+            "is_bps": None,
+            "order_type": "limit",
+            "midpoint_offset_bps": 3.0,
+            "execution_drift_bps": 4.0,
+        }
+    )
+    records.append(
+        {
+            "ts": (now - timedelta(hours=1)).isoformat(),
+            "symbol": "AAPL",
+            "status": "canceled",
+            "order_type": "limit",
+            "pending_terminal_nonfill": True,
+        }
+    )
+    records.append(
+        {
+            "ts": (now - timedelta(hours=1)).isoformat(),
+            "symbol": "AAPL",
+            "status": "canceled",
+            "order_type": "limit",
+            "pending_terminal_nonfill": True,
+        }
+    )
+    report = execution_report.build_daily_execution_report(records)
+    phase2 = report["roadmap"]["phase_2_execution_edge"]
+    assert phase2["enabled"] is True
+    assert phase2["gate_passed"] is True
+    assert phase2["effective_gates"]["slippage_improvement"] is True
+    assert phase2["effective_gates"]["fill_rate_degradation"] is True
+    assert phase2["effective_gates"]["reject_rate_slo"] is True
+    assert phase2["effective_gates"]["execution_drift_slo"] is True
+    assert phase2["effective_gates"]["stale_pending_incidents"] is True
+
+
+def test_execution_report_phase2_gate_fails_on_reject_and_stale_pending(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_SLIPPAGE_MEDIAN_BPS", "12.0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_FILL_RATE", "0.95")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_STALE_PENDING_COUNT", "0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_MAX_REJECT_RATE", "0.05")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_MAX_EXECUTION_DRIFT_BPS", "8.0")
+    records = [
+        {
+            "ts": (now - timedelta(hours=2)).isoformat(),
+            "symbol": "MSFT",
+            "status": "filled",
+            "is_bps": 9.0,
+            "order_type": "limit",
+            "midpoint_offset_bps": 3.0,
+            "execution_drift_bps": 3.0,
+        },
+        {
+            "ts": (now - timedelta(hours=2)).isoformat(),
+            "symbol": "MSFT",
+            "status": "rejected",
+            "order_type": "limit",
+            "midpoint_offset_bps": 3.0,
+        },
+        {
+            "ts": (now - timedelta(hours=2)).isoformat(),
+            "symbol": "MSFT",
+            "status": "rejected",
+            "order_type": "limit",
+            "midpoint_offset_bps": 3.0,
+        },
+        {
+            "ts": (now - timedelta(hours=2)).isoformat(),
+            "symbol": "MSFT",
+            "status": "canceled",
+            "order_type": "limit",
+            "pending_terminal_nonfill": True,
+        },
+    ]
+    report = execution_report.build_daily_execution_report(records)
+    phase2 = report["roadmap"]["phase_2_execution_edge"]
+    assert phase2["enabled"] is True
+    assert phase2["gate_passed"] is False
+    assert phase2["effective_gates"]["reject_rate_slo"] is False
+    assert phase2["effective_gates"]["stale_pending_incidents"] is False
+
+
+def test_execution_report_phase2_loads_baselines_from_file(tmp_path: Path, monkeypatch) -> None:
+    baseline_path = tmp_path / "phase2_execution_baseline.json"
+    baseline_path.write_text(
+        json.dumps(
+            {
+                "baselines": {
+                    "slippage_median_abs_bps": 11.0,
+                    "target_limit_fill_rate": 0.88,
+                    "stale_pending_count": 3.0,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_PATH", str(baseline_path))
+    monkeypatch.delenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_SLIPPAGE_MEDIAN_BPS", raising=False)
+    monkeypatch.delenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_FILL_RATE", raising=False)
+    monkeypatch.delenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_STALE_PENDING_COUNT", raising=False)
+    report = execution_report.build_daily_execution_report([])
+    phase2 = report["roadmap"]["phase_2_execution_edge"]
+    assert phase2["baselines"]["slippage_median_abs_bps"] == 11.0
+    assert phase2["baselines"]["target_limit_fill_rate"] == 0.88
+    assert phase2["baselines"]["stale_pending_count"] == 3.0
+    assert phase2["baselines"]["sources"]["slippage_median_abs_bps"] == "file"
+
+
+def test_execution_report_phase2_env_overrides_file_baselines(
+    tmp_path: Path, monkeypatch
+) -> None:
+    baseline_path = tmp_path / "phase2_execution_baseline.json"
+    baseline_path.write_text(
+        json.dumps(
+            {
+                "baselines": {
+                    "slippage_median_abs_bps": 20.0,
+                    "target_limit_fill_rate": 0.50,
+                    "stale_pending_count": 9.0,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_PATH", str(baseline_path))
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_SLIPPAGE_MEDIAN_BPS", "10.0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_FILL_RATE", "0.95")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_STALE_PENDING_COUNT", "1")
+    report = execution_report.build_daily_execution_report([])
+    phase2 = report["roadmap"]["phase_2_execution_edge"]
+    assert phase2["baselines"]["slippage_median_abs_bps"] == 10.0
+    assert phase2["baselines"]["target_limit_fill_rate"] == 0.95
+    assert phase2["baselines"]["stale_pending_count"] == 1.0
+    assert phase2["baselines"]["sources"]["target_limit_fill_rate"] == "env"

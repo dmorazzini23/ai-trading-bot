@@ -189,7 +189,6 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
     monkeypatch.setattr(eng, "_init_metrics", lambda: None)
     monkeypatch.setattr(eng, "is_market_open", lambda: True)
     monkeypatch.setattr(eng, "ensure_alpaca_attached", lambda runtime: None)
-    monkeypatch.setattr(eng, "check_pdt_rule", lambda runtime: False)
     monkeypatch.setattr(eng, "get_strategies", lambda: [])
     monkeypatch.setattr(eng, "get_verbose_logging", lambda: False)
 
@@ -275,7 +274,6 @@ def test_run_all_trades_creates_trade_log(tmp_path, monkeypatch):
     monkeypatch.setattr(eng, "_init_metrics", lambda: None)
     monkeypatch.setattr(eng, "is_market_open", lambda: True)
     monkeypatch.setattr(eng, "ensure_alpaca_attached", lambda _rt: None)
-    monkeypatch.setattr(eng, "check_pdt_rule", lambda _rt: False)
     monkeypatch.setattr(eng, "get_strategies", lambda: [])
     monkeypatch.setattr(eng, "get_verbose_logging", lambda: False)
     monkeypatch.setattr(eng.CFG, "log_market_fetch", False, raising=False)
@@ -668,7 +666,6 @@ def test_run_all_trades_worker_netting_invokes_execution_cycle_hooks(monkeypatch
     monkeypatch.setattr(eng, "is_market_open", lambda: True)
     monkeypatch.setattr(eng, "ensure_alpaca_attached", lambda _runtime: None)
     monkeypatch.setattr(eng, "_validate_trading_api", lambda _api: True)
-    monkeypatch.setattr(eng, "check_pdt_rule", lambda _runtime: False)
     monkeypatch.setattr(eng, "get_strategies", lambda: [])
     monkeypatch.setattr(eng, "list_open_orders", lambda _api: [])
     monkeypatch.setattr(eng, "_handle_pending_orders", lambda _orders, _runtime: False)

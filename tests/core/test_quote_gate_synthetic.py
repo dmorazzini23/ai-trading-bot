@@ -217,30 +217,3 @@ def test_gap_ratio_exceeded_uses_synthetic(monkeypatch):
     monkeypatch.delenv("GAP_RATIO_LIMIT", raising=False)
     reload_trading_config()
 
-
-def test_pdt_limit_exhausted_helper():
-    ctx = SimpleNamespace(
-        _pdt_last_context={
-            "pattern_day_trader": True,
-            "daytrade_limit": 3,
-            "daytrade_count": 4,
-            "daytrade_limit_enforced": True,
-        }
-    )
-    blocked, context = bot_engine._pdt_limit_exhausted(ctx)
-    assert blocked is True
-    assert context is not None
-
-
-def test_pdt_limit_not_enforced():
-    ctx = SimpleNamespace(
-        _pdt_last_context={
-            "pattern_day_trader": True,
-            "daytrade_limit": 3,
-            "daytrade_count": 1,
-            "daytrade_limit_enforced": True,
-        }
-    )
-    blocked, context = bot_engine._pdt_limit_exhausted(ctx)
-    assert blocked is False
-    assert context is not None

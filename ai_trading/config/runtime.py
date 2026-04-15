@@ -172,6 +172,28 @@ def _parse_intraday_feed(raw: str) -> str:
     raise ValueError("DATA_FEED_INTRADAY must be one of: iex, sip, finnhub")
 
 
+def _parse_execution_feed(raw: str) -> str:
+    """Return normalized execution feed identifier."""
+
+    value = _strip_inline_comment(raw).strip().lower()
+    if value in {"", "iex"}:
+        return "iex"
+    if value == "sip":
+        return "sip"
+    raise ValueError("ALPACA_EXECUTION_FEED must be one of: iex, sip")
+
+
+def _parse_reference_feed(raw: str) -> str:
+    """Return normalized reference feed identifier."""
+
+    value = _strip_inline_comment(raw).strip().lower()
+    if value in {"", "auto", "delayed", "delayed-sip", "dsip"}:
+        return "delayed_sip"
+    if value in {"delayed_sip", "iex", "sip"}:
+        return value
+    raise ValueError("ALPACA_REFERENCE_FEED must be one of: delayed_sip, sip, iex")
+
+
 _VALID_PRICE_PROVIDERS = {
     "alpaca_trade",
     "alpaca_quote",
@@ -907,6 +929,20 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="Preferred Alpaca data feed (iex or sip).",
         choices=("iex", "sip"),
         deprecated_env={"DATA_FEED": "Use ALPACA_DATA_FEED instead."},
+    ),
+    ConfigSpec(
+        field="alpaca_execution_feed",
+        env=("ALPACA_EXECUTION_FEED", "ALPACA_DATA_FEED", "DATA_FEED"),
+        cast=_parse_execution_feed,
+        default="iex",
+        description="Execution feed for live order pricing (iex or sip).",
+    ),
+    ConfigSpec(
+        field="alpaca_reference_feed",
+        env=("ALPACA_REFERENCE_FEED",),
+        cast=_parse_reference_feed,
+        default="delayed_sip",
+        description="Reference feed used for delayed reconciliation/analytics.",
     ),
     ConfigSpec(
         field="data_feed_intraday",
@@ -2638,6 +2674,8 @@ class TradingConfig:
                 "slippage_limit_bps": getattr(self, "slippage_limit_bps", None),
                 "price_providers": tuple(getattr(self, "price_provider_order", ()) or ()),
                 "intraday_feed": getattr(self, "data_feed_intraday", None),
+                "execution_feed": getattr(self, "alpaca_execution_feed", None),
+                "reference_feed": getattr(self, "alpaca_reference_feed", None),
             },
             "auth": {
                 "alpaca_api_key": "***" if getattr(self, "alpaca_api_key", None) else "",
@@ -2719,7 +2757,46 @@ class TradingConfig:
             values["data_provider_priority"] = tuple(priority)
             values["data_provider"] = provider_override
 
-        if values.get("data_feed_intraday") == "sip":
+        if "data_feed_intraday" in provided_fields:
+            execution_feed_candidate = values.get("data_feed_intraday")
+        elif "alpaca_execution_feed" in provided_fields:
+            execution_feed_candidate = values.get("alpaca_execution_feed")
+        elif "alpaca_data_feed" in provided_fields:
+            execution_feed_candidate = values.get("alpaca_data_feed")
+        else:
+            # Preserve legacy default behaviour when no execution-specific knob is supplied.
+            execution_feed_candidate = (
+                values.get("alpaca_data_feed")
+                or values.get("alpaca_execution_feed")
+                or values.get("data_feed_intraday")
+                or "sip"
+            )
+        execution_feed_value = str(execution_feed_candidate or "iex").strip().lower()
+        if execution_feed_value not in {"iex", "sip"}:
+            execution_feed_value = "iex"
+        values["alpaca_execution_feed"] = execution_feed_value
+        values["alpaca_data_feed"] = execution_feed_value
+        intraday_feed_value = str(values.get("data_feed_intraday") or "").strip().lower()
+        if intraday_feed_value in {"", "iex", "sip"}:
+            values["data_feed_intraday"] = execution_feed_value
+
+        provider_normalized = str(values.get("data_provider") or "").strip().lower()
+        explicit_sip_requested = False
+        provider_is_alpaca = (
+            not provider_normalized
+            or provider_normalized in _ALPACA_PROVIDER_KEYS
+            or provider_normalized.startswith("alpaca")
+        )
+        if provider_is_alpaca and execution_feed_value == "sip":
+            explicit_sip_requested = any(
+                str(raw_value).strip().lower() == "sip"
+                for raw_value in (
+                    env_map.get("DATA_FEED_INTRADAY"),
+                    env_map.get("ALPACA_EXECUTION_FEED"),
+                )
+                if raw_value not in (None, "")
+            )
+        if explicit_sip_requested:
             allow_sip = bool(values.get("alpaca_allow_sip"))
             has_sip = bool(values.get("alpaca_has_sip"))
             sip_entitled_env = _to_bool(env_map.get("ALPACA_SIP_ENTITLED"), False)
@@ -2727,14 +2804,14 @@ class TradingConfig:
             if not sip_entitled:
                 raise ValueError(
                     (
-                        "DATA_FEED_INTRADAY=sip requires SIP entitlements. Set ALPACA_ALLOW_SIP=1 and either "
+                        "DATA_FEED_INTRADAY=sip or ALPACA_EXECUTION_FEED=sip requires SIP entitlements. "
+                        "Set ALPACA_ALLOW_SIP=1 and either "
                         "ALPACA_HAS_SIP=1 or ALPACA_SIP_ENTITLED=1. Ensure ALPACA_API_KEY, ALPACA_SECRET_KEY, "
-                        "and DATA_FEED_INTRADAY are configured. See docs/DEPLOYING.md#alpaca-feed-selection for "
+                        "and ALPACA_EXECUTION_FEED are configured. See docs/DEPLOYING.md#alpaca-feed-selection for "
                         "setup guidance."
                     )
                 )
-        provider_normalized = str(values.get("data_provider") or "").strip().lower()
-        feed_value = str(values.get("alpaca_data_feed") or "").strip().lower()
+        feed_value = execution_feed_value
         feed_ignored = False
         if feed_value in {"iex", "sip"} and provider_normalized and provider_normalized not in _ALPACA_PROVIDER_KEYS:
             feed_ignored = True

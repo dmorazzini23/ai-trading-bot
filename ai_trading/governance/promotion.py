@@ -974,6 +974,7 @@ class ModelPromotion:
         strategy: str,
         live_kpis: dict[str, Any],
         force: bool = True,
+        allow_rollback: bool = True,
     ) -> dict[str, Any]:
         """Rollback production when live KPI control bands are breached."""
 
@@ -1005,6 +1006,9 @@ class ModelPromotion:
             "triggered": False,
         }
         if not breaches:
+            return result
+        if not allow_rollback:
+            result["status"] = "pending"
             return result
 
         rollback_enabled = True

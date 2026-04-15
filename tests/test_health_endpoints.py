@@ -443,3 +443,45 @@ def test_runtime_health_payload_oms_invariants_requirement_marks_degraded(monkey
     assert payload["ok"] is False
     assert payload["status"] == "degraded"
     assert payload.get("reason") == "oms_invariants_failed"
+
+
+def test_runtime_health_payload_includes_oms_lifecycle_parity_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_lifecycle_parity_snapshot",
+        lambda: {
+            "enabled": True,
+            "available": True,
+            "ok": True,
+            "scanned_intents": 10,
+            "total_violations": 0,
+        },
+    )
+    payload = health_payload_module.build_runtime_health_payload()
+    assert "oms_lifecycle_parity" in payload
+    assert payload["oms_lifecycle_parity"]["ok"] is True
+    assert payload["oms_lifecycle_parity"]["scanned_intents"] == 10
+
+
+def test_runtime_health_payload_oms_lifecycle_parity_requirement_marks_degraded(
+    monkeypatch,
+):
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY", "1")
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_lifecycle_parity_snapshot",
+        lambda: {
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "total_violations": 2,
+        },
+    )
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload.get("reason") == "oms_lifecycle_parity_failed"

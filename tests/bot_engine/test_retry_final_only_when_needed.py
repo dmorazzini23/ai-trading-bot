@@ -39,7 +39,6 @@ def test_retry_final_skipped_on_single_success(monkeypatch, caplog):
     monkeypatch.setattr(bot, "_ensure_execution_engine", lambda runtime: None)
     monkeypatch.setattr(bot, "ensure_alpaca_attached", lambda runtime: None)
     monkeypatch.setattr(bot, "_validate_trading_api", lambda api: True)
-    monkeypatch.setattr(bot, "check_pdt_rule", lambda runtime: False)
     monkeypatch.setattr(bot, "get_trade_cooldown_min", lambda: 0)
     monkeypatch.setattr(bot, "is_market_open", lambda: True)
     monkeypatch.setattr(bot, "get_verbose_logging", lambda: False)

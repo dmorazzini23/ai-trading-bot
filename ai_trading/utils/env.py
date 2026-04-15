@@ -200,6 +200,25 @@ def resolve_alpaca_feed(requested: str | None) -> str | None:
     return "iex"
 
 
+def resolve_alpaca_reference_feed(requested: str | None) -> str:
+    """Return a valid reference feed, preferring delayed SIP by default."""
+
+    normalized = str(requested or "").strip().lower()
+    if normalized in {"", "auto"}:
+        normalized = str(
+            get_env("ALPACA_REFERENCE_FEED", "delayed_sip", cast=str, resolve_aliases=False)
+            or "delayed_sip"
+        ).strip().lower()
+
+    if normalized in {"delayed", "delayed_sip", "delayed-sip", "dsip"}:
+        return "delayed_sip"
+    if normalized == "iex":
+        return "iex"
+    if normalized == "sip":
+        return "sip" if str(resolve_alpaca_feed("sip")).strip().lower() == "sip" else "delayed_sip"
+    return "delayed_sip"
+
+
 def alpaca_credential_status() -> tuple[bool, bool]:
     """Return boolean flags for Alpaca credential presence."""
 
@@ -234,6 +253,7 @@ __all__ = [
     "get_alpaca_data_base_url",
     "get_alpaca_http_headers",
     "resolve_alpaca_feed",
+    "resolve_alpaca_reference_feed",
     "alpaca_credential_status",
     "get_resolved_alpaca_credentials",
     "resolve_alpaca_creds",

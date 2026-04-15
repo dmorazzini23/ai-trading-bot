@@ -89,3 +89,13 @@ def test_resolve_feed_cache_tracks_env_changes(monkeypatch: pytest.MonkeyPatch) 
 
     # The next lookup should observe the new credentials without an explicit refresh.
     assert env_utils.resolve_alpaca_feed(None) == "iex"
+
+
+def test_reference_feed_falls_back_to_delayed_sip_without_sip_entitlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ALPACA_REFERENCE_FEED", "sip")
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "0")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "0")
+    monkeypatch.setenv("ALPACA_SIP_ENTITLED", "0")
+    assert env_utils.resolve_alpaca_reference_feed(None) == "delayed_sip"

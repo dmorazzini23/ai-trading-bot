@@ -15,7 +15,7 @@ Respond when order rejects increase beyond normal baseline and risk blocking exe
 
 ```bash
 sudo journalctl -u ai-trading.service --since "30 min ago" --no-pager | \
-grep -E 'ORDER_REJECTED|ORDER_SUBMIT_FAILED|BROKER_CAPACITY|PDT|REJECT'
+grep -E 'ORDER_REJECTED|ORDER_SUBMIT_FAILED|BROKER_CAPACITY|REJECT'
 ```
 
 2. Check open/pending order pressure and pacing caps:

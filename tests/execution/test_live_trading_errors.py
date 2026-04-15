@@ -31,12 +31,6 @@ def test_submit_limit_order_handles_timeout_without_unboundlocalerror(monkeypatc
     monkeypatch.setattr(live_trading, "_safe_mode_guard", lambda *args, **kwargs: False)
     monkeypatch.setattr(live_trading.ExecutionEngine, "_refresh_settings", lambda self: None)
     monkeypatch.setattr(live_trading.ExecutionEngine, "_get_account_snapshot", lambda self: {})
-    monkeypatch.setattr(
-        live_trading.ExecutionEngine,
-        "_should_skip_for_pdt",
-        lambda self, *a, **k: (False, "", {}),
-    )
-
     engine: Any = live_trading.ExecutionEngine()
     engine.is_initialized = True
     engine.trading_client = object()

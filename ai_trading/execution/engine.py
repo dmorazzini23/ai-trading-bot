@@ -1412,6 +1412,21 @@ class ExecutionEngine:
         self._last_partial_fill_summary: dict[str, Any] | None = None
         self._broker_sync: BrokerSyncResult | None = None
         self._open_order_qty_index: dict[str, tuple[float, float]] = {}
+        execution_mode = str(get_env("EXECUTION_MODE", "paper") or "").strip().lower()
+        self._runtime_snapshot_persistence_enabled = _env_bool(
+            "AI_TRADING_OMS_RUNTIME_SNAPSHOT_ENABLED",
+            execution_mode == "live",
+        )
+        self._runtime_snapshot_store: Any | None = None
+        self._runtime_snapshot_store_init_failed = False
+        self._runtime_snapshot_source = str(
+            get_env(
+                "AI_TRADING_OMS_RUNTIME_SNAPSHOT_SOURCE",
+                self.__class__.__name__.lower(),
+                cast=str,
+            )
+            or self.__class__.__name__.lower()
+        ).strip().lower()
         self._policy_selector_enabled = _env_bool(
             "AI_TRADING_EXEC_POLICY_SELECTOR_ENABLED",
             False,
@@ -1846,6 +1861,15 @@ class ExecutionEngine:
                 "BROKER_SYNC_POSITION_TRACKER_UPDATE_FAILED",
                 exc_info=True,
             )
+        try:
+            self._emit_runtime_snapshots_from_broker_sync(
+                open_orders=open_orders_tuple,
+                positions=positions_tuple,
+                open_buy_by_symbol=buy_index,
+                open_sell_by_symbol=sell_index,
+            )
+        except Exception:
+            self.logger.debug("BROKER_SYNC_RUNTIME_SNAPSHOT_EMIT_FAILED", exc_info=True)
         return snapshot
 
     def _update_position_tracker_snapshot(self, positions: Iterable[Any]) -> None:
@@ -1907,6 +1931,194 @@ class ExecutionEngine:
             tracker[symbol] = qty
 
         self._position_tracker_last_sync_mono = float(monotonic_time())
+
+    def _resolve_runtime_snapshot_store(self) -> Any | None:
+        """Lazily resolve durable EventStore for runtime position/risk snapshots."""
+
+        if not self._runtime_snapshot_persistence_enabled:
+            return None
+        if self._runtime_snapshot_store_init_failed:
+            return None
+        if self._runtime_snapshot_store is not None:
+            return self._runtime_snapshot_store
+        try:
+            from ai_trading.oms.event_store import EventStore
+
+            self._runtime_snapshot_store = EventStore()
+        except Exception as exc:
+            self._runtime_snapshot_store_init_failed = True
+            self.logger.warning(
+                "RUNTIME_SNAPSHOT_STORE_INIT_FAILED",
+                extra={"error": str(exc)},
+            )
+            return None
+        return self._runtime_snapshot_store
+
+    @staticmethod
+    def _snapshot_extract(payload: Any, *keys: str) -> Any:
+        """Return first non-empty value for keys from mapping/object payload."""
+
+        if isinstance(payload, Mapping):
+            for key in keys:
+                value = payload.get(key)
+                if value not in (None, ""):
+                    return value
+            return None
+        for key in keys:
+            if hasattr(payload, key):
+                value = getattr(payload, key)
+                if value not in (None, ""):
+                    return value
+        return None
+
+    @staticmethod
+    def _snapshot_float(value: Any) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(parsed):
+            return None
+        return parsed
+
+    @staticmethod
+    def _snapshot_idempotency_key(*parts: Any) -> str:
+        material = "|".join(str(part) for part in parts if part not in (None, ""))
+        if not material:
+            material = "runtime-snapshot"
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    def _emit_runtime_snapshots_from_broker_sync(
+        self,
+        *,
+        open_orders: tuple[Any, ...],
+        positions: tuple[Any, ...],
+        open_buy_by_symbol: Mapping[str, float],
+        open_sell_by_symbol: Mapping[str, float],
+    ) -> None:
+        """Persist immutable position/risk snapshots derived from broker sync."""
+
+        store = self._resolve_runtime_snapshot_store()
+        if store is None:
+            return
+
+        snapshot_ts = datetime.now(UTC).isoformat()
+        source = self._runtime_snapshot_source or "execution_engine"
+        emitted_positions = 0
+        net_qty_total = 0.0
+        gross_qty_total = 0.0
+        for idx, position in enumerate(positions):
+            symbol_raw = self._snapshot_extract(position, "symbol")
+            symbol = str(symbol_raw or "").strip().upper()
+            if not symbol:
+                continue
+            side = self._snapshot_extract(position, "side")
+            qty = self._snapshot_float(
+                self._snapshot_extract(
+                    position,
+                    "qty",
+                    "quantity",
+                    "position",
+                    "current_qty",
+                )
+            )
+            if qty is None:
+                continue
+            side_token = str(side or "").strip().lower()
+            if side_token in {"sell", "sell_short", "sellshort", "short"}:
+                qty = -abs(qty)
+            elif side_token in {"buy", "long"}:
+                qty = abs(qty)
+            avg_entry_price = self._snapshot_float(
+                self._snapshot_extract(position, "avg_entry_price", "avg_cost")
+            )
+            market_price = self._snapshot_float(
+                self._snapshot_extract(position, "market_price", "current_price")
+            )
+            market_value = self._snapshot_float(
+                self._snapshot_extract(position, "market_value")
+            )
+            if market_value is None and market_price is not None:
+                market_value = qty * market_price
+            unrealized_pnl = self._snapshot_float(
+                self._snapshot_extract(position, "unrealized_pl", "unrealized_pnl")
+            )
+            position_payload = {
+                "symbol": symbol,
+                "quantity": qty,
+                "side": (str(side) if side not in (None, "") else None),
+                "avg_entry_price": avg_entry_price,
+                "market_price": market_price,
+                "market_value": market_value,
+                "unrealized_pnl": unrealized_pnl,
+            }
+            inserted = store.append_position_snapshot_payload(
+                snapshot_source=source,
+                idempotency_key=self._snapshot_idempotency_key(
+                    source,
+                    "position_snapshot",
+                    snapshot_ts,
+                    symbol,
+                    qty,
+                    idx,
+                ),
+                snapshot_ts=snapshot_ts,
+                symbol=symbol,
+                quantity=qty,
+                side=(side_token or None),
+                avg_entry_price=avg_entry_price,
+                market_price=market_price,
+                market_value=market_value,
+                unrealized_pnl=unrealized_pnl,
+                payload=position_payload,
+            )
+            if inserted:
+                emitted_positions += 1
+            net_qty_total += qty
+            gross_qty_total += abs(qty)
+
+        account_snapshot = getattr(self, "_cycle_account", None)
+        equity = self._snapshot_float(
+            self._snapshot_extract(account_snapshot, "equity", "portfolio_value")
+        )
+        buying_power = self._snapshot_float(
+            self._snapshot_extract(account_snapshot, "buying_power")
+        )
+        exposure_pct = self._snapshot_float(getattr(getattr(self, "ctx", None), "exposure_pct", None))
+        risk_payload = {
+            "open_orders_count": int(len(open_orders)),
+            "positions_count": int(len(positions)),
+            "open_buy_qty_total": float(
+                sum(self._snapshot_float(qty) or 0.0 for qty in open_buy_by_symbol.values())
+            ),
+            "open_sell_qty_total": float(
+                sum(self._snapshot_float(qty) or 0.0 for qty in open_sell_by_symbol.values())
+            ),
+            "net_position_qty": float(net_qty_total),
+            "gross_position_qty": float(gross_qty_total),
+            "emitted_positions": int(emitted_positions),
+            "equity": equity,
+            "buying_power": buying_power,
+        }
+        store.append_risk_snapshot_payload(
+            snapshot_source=source,
+            idempotency_key=self._snapshot_idempotency_key(
+                source,
+                "risk_snapshot",
+                snapshot_ts,
+                risk_payload.get("positions_count"),
+                risk_payload.get("open_orders_count"),
+                risk_payload.get("net_position_qty"),
+                risk_payload.get("gross_position_qty"),
+            ),
+            snapshot_ts=snapshot_ts,
+            exposure_pct=exposure_pct,
+            positions_count=int(risk_payload["positions_count"]),
+            open_orders_count=int(risk_payload["open_orders_count"]),
+            payload=risk_payload,
+        )
 
     def synchronize_broker_state(self) -> BrokerSyncResult:
         """Return the latest broker snapshot (no-op for base engine)."""

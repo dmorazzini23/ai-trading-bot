@@ -117,6 +117,28 @@ def alpaca_empty_to_backup(s: Settings | None = None) -> bool:
     return _to_bool(getattr(s, 'alpaca_empty_to_backup', True), True)
 
 
+def execution_feed(s: Settings | None = None) -> str:
+    """Return configured execution feed with legacy fallback."""
+
+    s = s or get_settings()
+    value = getattr(s, "alpaca_execution_feed", None) or getattr(s, "alpaca_data_feed", "iex")
+    token = str(value or "iex").strip().lower()
+    return token if token in {"iex", "sip"} else "iex"
+
+
+def reference_feed(s: Settings | None = None) -> str:
+    """Return configured reference feed."""
+
+    s = s or get_settings()
+    value = getattr(s, "alpaca_reference_feed", "delayed_sip")
+    token = str(value or "delayed_sip").strip().lower()
+    if token in {"delayed", "delayed-sip", "dsip"}:
+        token = "delayed_sip"
+    if token in {"delayed_sip", "iex", "sip"}:
+        return token
+    return "delayed_sip"
+
+
 def sentiment_retry_max(s: Settings | None = None) -> int:
     """Return maximum sentiment fetch retry count (defaults to 5 attempts)."""
     s = s or get_settings()
@@ -143,6 +165,8 @@ __all__ = [
     'minute_data_freshness_tolerance',
     'alpaca_feed_failover',
     'alpaca_empty_to_backup',
+    'execution_feed',
+    'reference_feed',
     'sentiment_retry_max',
     'sentiment_backoff_base',
     'sentiment_backoff_strategy',

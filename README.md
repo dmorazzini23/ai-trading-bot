@@ -1664,6 +1664,7 @@ Environment variables controlling startup import checks:
 - `make scan-extras` — strict scan for raw “install X” hints.
   Non-blocking variant also runs in smoke. To suppress a false positive on a single line, add `# extras:ignore` (or `<!-- extras:ignore -->` in docs).
 - `bash scripts/quick_verify.sh` — compile, lint, type-check, and run tests.
+- `python3 -m ai_trading.tools.oms_lifecycle_parity_replay --fixture tests/data/oms_lifecycle_parity_fixture.json` — compare live/simulated OMS lifecycle event streams.
 
 
 ## Development quick start

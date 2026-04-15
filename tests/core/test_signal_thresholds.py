@@ -60,6 +60,127 @@ def test_meta_confidence_cap_does_not_bypass_conf_threshold(monkeypatch):
     assert result is True
 
 
+def test_trade_logic_raises_threshold_when_feed_reliability_is_weak(monkeypatch, caplog):
+    ctx = _ctx(
+        signal_manager=SimpleNamespace(meta_confidence_capped=False),
+        position_map={},
+        portfolio_weights={},
+        rebalance_buys={},
+    )
+    state = BotState()
+    feat_df = pd.DataFrame({"close": [1.0, 1.1, 1.2]})
+
+    monkeypatch.setattr(bot_engine, "pre_trade_checks", lambda *a, **k: True)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(bot_engine, "_fetch_feature_data", lambda *a, **k: (feat_df, feat_df, None))
+    monkeypatch.setattr(bot_engine, "_model_feature_names", lambda *_a, **_k: [])
+    monkeypatch.setattr(bot_engine, "_mark_primary_provider_fallback", lambda *a, **k: None)
+    monkeypatch.setattr(bot_engine, "_clear_primary_provider_fallback", lambda *a, **k: None)
+    monkeypatch.setattr(bot_engine, "is_safe_mode_active", lambda: False)
+    monkeypatch.setattr(bot_engine, "_exit_positions_if_needed", lambda *a, **k: False)
+    monkeypatch.setattr(bot_engine, "_check_trade_frequency_limits", lambda *a, **k: False)
+    monkeypatch.setattr(bot_engine, "_enter_short", lambda *a, **k: pytest.fail("unexpected short path"))
+    monkeypatch.setattr(bot_engine, "get_buy_threshold", lambda: 0.6)
+    monkeypatch.setattr(bot_engine, "get_conf_threshold", lambda: 0.55)
+    monkeypatch.setattr(
+        bot_engine,
+        "_evaluate_trade_signal",
+        lambda *_a, **_k: (1.0, 0.62, "weak_feed"),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_get_symbol_feed_reliability",
+        lambda _symbol: {
+            "enabled": True,
+            "active": True,
+            "score": 0.2,
+            "sample_count": 12,
+            "threshold_bonus": 0.08,
+            "blocked": False,
+        },
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_enter_long",
+        lambda *_a, **_k: pytest.fail("entry should remain blocked by raised threshold"),
+    )
+
+    caplog.set_level(logging.INFO)
+    result = bot_engine.trade_logic(ctx, state, "TEST", balance=100000.0, model=None, regime_ok=True)
+
+    assert result is True
+    assert any(
+        record.message == "ENTRY_THRESHOLD_RAISED_FEED_RELIABILITY"
+        for record in caplog.records
+    )
+
+
+def test_trade_logic_blocks_entry_when_feed_reliability_below_floor(monkeypatch, caplog):
+    ctx = _ctx(
+        signal_manager=SimpleNamespace(meta_confidence_capped=False),
+        position_map={},
+        portfolio_weights={},
+        rebalance_buys={},
+    )
+    state = BotState()
+    feat_df = pd.DataFrame({"close": [1.0, 1.1, 1.2]})
+
+    monkeypatch.setattr(bot_engine, "pre_trade_checks", lambda *a, **k: True)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(bot_engine, "_fetch_feature_data", lambda *a, **k: (feat_df, feat_df, None))
+    monkeypatch.setattr(bot_engine, "_model_feature_names", lambda *_a, **_k: [])
+    monkeypatch.setattr(bot_engine, "_mark_primary_provider_fallback", lambda *a, **k: None)
+    monkeypatch.setattr(bot_engine, "_clear_primary_provider_fallback", lambda *a, **k: None)
+    monkeypatch.setattr(bot_engine, "is_safe_mode_active", lambda: False)
+    monkeypatch.setattr(bot_engine, "_exit_positions_if_needed", lambda *a, **k: False)
+    monkeypatch.setattr(bot_engine, "_check_trade_frequency_limits", lambda *a, **k: False)
+    monkeypatch.setattr(bot_engine, "_enter_short", lambda *a, **k: pytest.fail("unexpected short path"))
+    monkeypatch.setattr(bot_engine, "get_buy_threshold", lambda: 0.6)
+    monkeypatch.setattr(bot_engine, "get_conf_threshold", lambda: 0.55)
+    monkeypatch.setattr(
+        bot_engine,
+        "_evaluate_trade_signal",
+        lambda *_a, **_k: (1.0, 0.9, "blocked_feed"),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_get_symbol_feed_reliability",
+        lambda _symbol: {
+            "enabled": True,
+            "active": True,
+            "score": 0.2,
+            "sample_count": 18,
+            "min_score": 0.35,
+            "threshold_bonus": 0.0,
+            "blocked": True,
+        },
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_enter_long",
+        lambda *_a, **_k: pytest.fail("entry should be blocked by feed reliability floor"),
+    )
+
+    caplog.set_level(logging.INFO)
+    result = bot_engine.trade_logic(ctx, state, "TEST", balance=100000.0, model=None, regime_ok=True)
+
+    assert result is True
+    assert any(
+        record.message == "ENTRY_BLOCKED_FEED_RELIABILITY"
+        for record in caplog.records
+    )
+
+
 def test_trade_logic_blocks_entry_on_fallback_minute_data(monkeypatch, caplog):
     ctx = _ctx(
         signal_manager=SimpleNamespace(meta_confidence_capped=False),

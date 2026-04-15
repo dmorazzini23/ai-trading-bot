@@ -342,7 +342,17 @@ class _FallbackProbabilityModel:
 
 
 def _fetch_daily_bars(symbol: str, start_dt: datetime, end_dt: datetime):
-    return get_daily_df(symbol, start_dt, end_dt)
+    role = str(
+        get_env(
+            "AI_TRADING_MODEL_DATA_FEED_ROLE",
+            "reference",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or "reference"
+    ).strip().lower()
+    feed_role = "reference" if role == "reference" else "execution"
+    return get_daily_df(symbol, start_dt, end_dt, feed_role=feed_role)
 
 
 def _load_symbols() -> list[str]:

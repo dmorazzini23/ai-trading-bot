@@ -800,7 +800,7 @@ def can_trade() -> bool:
     - Risk management limits and drawdowns
     - Account status and buying power
     - Emergency halt flags
-    - Pattern Day Trader (PDT) restrictions
+    - Broker or account-level trading restrictions
 
     Examples
     --------

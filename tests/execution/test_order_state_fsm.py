@@ -31,9 +31,6 @@ class FSMEngine(live_trading.LiveTradingExecutionEngine):
         self.shadow_mode = False
         self.stats = defaultdict(float)
         self._cycle_account = {
-            "pattern_day_trader": False,
-            "daytrade_limit": 3,
-            "daytrade_count": 0,
             "shorting_enabled": True,
             "margin_enabled": True,
         }

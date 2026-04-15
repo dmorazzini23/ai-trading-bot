@@ -42,11 +42,7 @@ class DummyLiveEngine(live_trading.LiveTradingExecutionEngine):
         self.is_initialized = True
         self.shadow_mode = False
         self.stats = defaultdict(float)
-        self._cycle_account = {
-            "pattern_day_trader": False,
-            "daytrade_limit": 3,
-            "daytrade_count": 0,
-        }
+        self._cycle_account = {}
         self.trading_client = SimpleNamespace(
             get_asset=lambda _symbol: SimpleNamespace(shortable=True)
         )
@@ -107,7 +103,6 @@ def patch_shared_guards(monkeypatch):
                 lambda *_a, **_k: True,
                 raising=False,
             )
-        monkeypatch.setattr(live_mod, "pdt_guard", lambda *a, **k: True, raising=False)
     globals_ns = getattr(DummyLiveEngine.execute_order, "__globals__", None)
     if isinstance(globals_ns, dict):
         monkeypatch.setitem(globals_ns, "_safe_mode_guard", lambda *a, **k: False)
@@ -120,7 +115,6 @@ def patch_shared_guards(monkeypatch):
             "_call_preflight_capacity",
             lambda *a, **k: live_trading.CapacityCheck(True, int(a[3]), None),
         )
-        monkeypatch.setitem(globals_ns, "pdt_guard", lambda *a, **k: True)
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
 
 

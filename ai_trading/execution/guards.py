@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import datetime as _dt
 from decimal import Decimal
-from dataclasses import dataclass
 from typing import Any, Tuple
 
 from ai_trading.config.management import get_trading_config
@@ -17,28 +16,10 @@ def _utcnow() -> _dt.datetime:
     return _dt.datetime.utcnow().replace(tzinfo=_dt.timezone.utc)
 
 
-def _trading_day(ts: _dt.datetime | None = None) -> _dt.date:
-    """Return the NYSE trading day inferred from ``ts`` (UTC)."""
-
-    ts = ts or _utcnow()
-    return ts.date()
-
-
-@dataclass
-class PDTState:
-    """In-memory pattern day trader lockout state."""
-
-    locked_day: _dt.date | None = None
-    limit: int = 0
-    count: int = 0
-
-
 class SafetyState:
     """Process-wide safety state (reset on process restart)."""
 
-    pdt: PDTState = PDTState()
     shadow_cycle: bool = False
-    shadow_cycle_forced: bool = False
     stale_symbols: int = 0
     universe_size: int = 0
 
@@ -167,67 +148,6 @@ def can_execute(
     return True, None
 
 
-def pdt_preflight(ctx: dict[str, Any]) -> Tuple[bool, str | None]:
-    """Return PDT eligibility based on context mapping used in tests."""
-
-    pattern_day_trader = _safe_bool(ctx.get("pattern_day_trader"))
-    if not pattern_day_trader:
-        return True, None
-    count = int(ctx.get("daytrade_count", 0) or 0)
-    limit = int(ctx.get("daytrade_limit", 0) or 0)
-    if limit > 0 and count >= limit:
-        return False, "pdt_limit_exceeded"
-    return True, None
-
-
-def pdt_guard(pattern_day_trader: bool, daytrade_limit: int, daytrade_count: int) -> bool:
-    """Return ``True`` when opening trades are allowed for the current day."""
-
-    today = _trading_day()
-    if STATE.pdt.locked_day == today:
-        STATE.shadow_cycle_forced = True
-        STATE.shadow_cycle = True
-        return False
-
-    if pattern_day_trader and daytrade_count >= daytrade_limit > 0:
-        previous_day = STATE.pdt.locked_day
-        previously_forced = STATE.shadow_cycle_forced
-        STATE.pdt = PDTState(
-            locked_day=today,
-            limit=daytrade_limit,
-            count=daytrade_count,
-        )
-        STATE.shadow_cycle_forced = True
-        STATE.shadow_cycle = True
-        if previous_day != today or not previously_forced:
-            logger.info(
-                "PDT_SHADOW_MODE_ENABLED",
-                extra={
-                    "day": today.isoformat(),
-                    "limit": daytrade_limit,
-                    "count": daytrade_count,
-                },
-            )
-        return False
-    return True
-
-
-def pdt_lockout_active() -> bool:
-    """Return ``True`` when PDT lockout is active for today."""
-
-    return STATE.pdt.locked_day == _trading_day()
-
-
-def pdt_lockout_info() -> dict[str, int | bool | None]:
-    """Return metadata describing the PDT lockout state."""
-
-    return {
-        "active": pdt_lockout_active(),
-        "limit": STATE.pdt.limit,
-        "count": STATE.pdt.count,
-    }
-
-
 def quote_fresh_enough(
     quote_ts_utc: _dt.datetime | None,
     max_age_sec: int,
@@ -247,12 +167,8 @@ def begin_cycle(universe_size: int, degraded: bool) -> None:
 
     STATE.universe_size = int(universe_size or 0)
     STATE.stale_symbols = 0
-    # Shadow cycles are only forced by explicit guards (e.g., PDT lockout).
     # Degraded data should not implicitly enable shadow mode.
-    if STATE.shadow_cycle_forced:
-        STATE.shadow_cycle = True
-    else:
-        STATE.shadow_cycle = False
+    STATE.shadow_cycle = False
 
 
 def mark_symbol_stale() -> None:
@@ -266,10 +182,7 @@ def end_cycle(stale_threshold_ratio: float = 0.30) -> None:
 
     _ = stale_threshold_ratio  # Kept for API stability; stale-ratio promotion was removed.
 
-    # Shadow cycles are not promoted based on stale ratios; only explicit
-    # guards (e.g., PDT lockout) should enforce shadow mode.
-    if STATE.shadow_cycle_forced:
-        STATE.shadow_cycle = True
+    # Shadow cycles are not promoted based on stale ratios.
 
 
 def shadow_active() -> bool:

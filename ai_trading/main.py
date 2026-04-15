@@ -115,6 +115,8 @@ _INFO_LOG_TTL_LOCK = threading.Lock()
 _INFO_LOG_TTL_TRACKER: dict[str, float] = {}
 _PROMOTION_KPI_GUARD_LOCK = threading.Lock()
 _LAST_PROMOTION_KPI_GUARD_TS = 0.0
+_PROMOTION_KPI_STREAK_LOCK = threading.Lock()
+_PROMOTION_KPI_BREACH_STREAKS: dict[str, int] = {}
 _BAD_SESSION_REPLAY_LOCK = threading.Lock()
 _LAST_BAD_SESSION_REPLAY_TS = 0.0
 _PRIMARY_FALLBACK_STREAK_SINCE_TS: float | None = None
@@ -1330,6 +1332,16 @@ def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None
     strategies = _resolve_runtime_promotion_strategies(promotion_manager)
     if not strategies:
         return
+    consecutive_required = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_PROMOTION_LIVE_KPI_BREACH_CONSECUTIVE_REQUIRED",
+                1,
+                cast=int,
+            )
+        ),
+    )
     live_kpis, diagnostics = _collect_live_kpi_snapshot()
 
     triggered: list[dict[str, Any]] = []
@@ -1339,6 +1351,7 @@ def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None
                 strategy=str(strategy),
                 live_kpis=live_kpis,
                 force=True,
+                allow_rollback=False,
             )
         except Exception:
             logger.debug(
@@ -1347,7 +1360,47 @@ def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None
                 exc_info=True,
             )
             continue
+        breached = bool(result.get("breached"))
+        if breached:
+            with _PROMOTION_KPI_STREAK_LOCK:
+                streak = int(_PROMOTION_KPI_BREACH_STREAKS.get(strategy, 0)) + 1
+                _PROMOTION_KPI_BREACH_STREAKS[strategy] = streak
+        else:
+            with _PROMOTION_KPI_STREAK_LOCK:
+                _PROMOTION_KPI_BREACH_STREAKS.pop(strategy, None)
+            continue
+
+        if streak < consecutive_required:
+            logger.warning(
+                "LIVE_KPI_CONTROL_BAND_BREACH_PENDING",
+                extra={
+                    "strategy": strategy,
+                    "breaches": result.get("breaches", {}),
+                    "consecutive_breach_count": streak,
+                    "required_consecutive_breaches": consecutive_required,
+                },
+            )
+            continue
+
+        try:
+            result = promotion_manager.evaluate_live_kpis_and_maybe_rollback(
+                strategy=str(strategy),
+                live_kpis=live_kpis,
+                force=True,
+                allow_rollback=True,
+            )
+        except Exception:
+            logger.debug(
+                "LIVE_KPI_CONTROL_BAND_ROLLBACK_EVAL_FAILED",
+                extra={"strategy": strategy},
+                exc_info=True,
+            )
+            continue
+        result["consecutive_breach_count"] = streak
+        result["required_consecutive_breaches"] = consecutive_required
         if bool(result.get("triggered")):
+            with _PROMOTION_KPI_STREAK_LOCK:
+                _PROMOTION_KPI_BREACH_STREAKS.pop(strategy, None)
             payload = dict(result)
             payload["strategy"] = strategy
             triggered.append(payload)
@@ -1356,7 +1409,7 @@ def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None
                 severity="error",
                 details=payload,
             )
-        elif bool(result.get("breached")):
+        else:
             logger.warning("LIVE_KPI_CONTROL_BAND_BREACH", extra=result)
 
     log_live_kpis = dict(live_kpis)
@@ -1369,6 +1422,7 @@ def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None
         extra={
             "cycle_index": int(max(cycle_index, 0)),
             "strategies": strategies,
+            "required_consecutive_breaches": consecutive_required,
             "live_kpis": log_live_kpis,
             "diagnostics": diagnostics,
             "rollbacks_triggered": len(triggered),

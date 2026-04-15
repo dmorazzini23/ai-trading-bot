@@ -1,4 +1,5 @@
 import types
+from typing import Any, cast
 
 import ai_trading.core.bot_engine as be
 import ai_trading.trade_logic as tl
@@ -17,6 +18,48 @@ def test_regime_batch(monkeypatch):
     monkeypatch.setattr(be, "_fetch_regime_bars", lambda ctx, **kwargs: {"SPY": _mk_df(), "QQQ": _mk_df()})
     out = be._build_regime_dataset(ctx)
     assert "SPY" in out.columns and "QQQ" in out.columns
+
+
+def test_get_daily_df_for_feed_role_falls_back_without_keyword() -> None:
+    class _Fetcher:
+        def get_daily_df(self, ctx, symbol):
+            assert symbol == "SPY"
+            return _mk_df()
+
+    ctx = types.SimpleNamespace(data_fetcher=_Fetcher())
+    out = be._get_daily_df_for_feed_role(ctx, "SPY", feed_role="reference")
+    assert out is not None
+    assert not out.empty
+
+
+def test_fetch_regime_bars_reference_role_prefers_data_fetcher(monkeypatch) -> None:
+    called: list[str] = []
+
+    class _Fetcher:
+        def get_daily_df(self, ctx, symbol, *, feed_role="execution"):
+            called.append(feed_role)
+            return _mk_df()
+
+    ctx = types.SimpleNamespace(data_fetcher=_Fetcher(), data_feed="iex")
+    monkeypatch.setenv("AI_TRADING_MODEL_DATA_FEED_ROLE", "reference")
+    monkeypatch.setattr(
+        be,
+        "get_settings",
+        lambda: types.SimpleNamespace(regime_symbols_csv="SPY,QQQ"),
+    )
+    monkeypatch.setattr(
+        be,
+        "_fetch_universe_bars_chunked",
+        lambda *_args, **_kwargs: {},
+    )
+    out = be._fetch_regime_bars(
+        cast(Any, ctx),
+        start="2024-01-01",
+        end="2024-02-01",
+        timeframe="1D",
+    )
+    assert set(out.keys()) == {"SPY", "QQQ"}
+    assert called == ["reference", "reference"]
 
 def test_pretrade_batch(monkeypatch):
     ctx = types.SimpleNamespace(lookback_start="2024-01-01", lookback_end="2024-02-01", data_feed=None, min_rows=2)

@@ -840,6 +840,34 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 cast=int,
             )
         )
+    require_oms_lifecycle_parity = get_env(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_OMS_LIFECYCLE_PARITY",
+        None,
+        cast=bool,
+    )
+    if require_oms_lifecycle_parity is None:
+        require_oms_lifecycle_parity = bool(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_REQUIRE_OMS_LIFECYCLE_PARITY",
+                False,
+                cast=bool,
+            )
+        )
+    max_oms_lifecycle_parity_violations = _as_int(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_OMS_LIFECYCLE_PARITY_VIOLATIONS",
+            None,
+            cast=int,
+        )
+    )
+    if max_oms_lifecycle_parity_violations is None:
+        max_oms_lifecycle_parity_violations = _as_int(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_OMS_LIFECYCLE_PARITY_VIOLATIONS",
+                0,
+                cast=int,
+            )
+        )
     require_oms_event_tca = get_env(
         "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_OMS_EVENT_TCA",
         None,
@@ -1007,6 +1035,17 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 (
                     max_oms_invariant_violations
                     if max_oms_invariant_violations is not None
+                    else 0
+                ),
+            )
+        ),
+        "require_oms_lifecycle_parity": bool(require_oms_lifecycle_parity),
+        "max_oms_lifecycle_parity_violations": int(
+            max(
+                0,
+                (
+                    max_oms_lifecycle_parity_violations
+                    if max_oms_lifecycle_parity_violations is not None
                     else 0
                 ),
             )
@@ -3757,6 +3796,54 @@ def summarize_oms_invariants() -> dict[str, Any]:
         return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
 
 
+def summarize_oms_lifecycle_parity() -> dict[str, Any]:
+    """Return OMS lifecycle parity invariant summary for go/no-go gating."""
+
+    enabled = bool(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_OMS_LIFECYCLE_PARITY_ENABLED",
+            False,
+            cast=bool,
+        )
+    )
+    if not enabled:
+        return {"enabled": False, "available": False}
+
+    database_url = str(
+        get_env("DATABASE_URL", "", cast=str, resolve_aliases=False) or ""
+    ).strip()
+    intent_store_path = str(
+        get_env(
+            "AI_TRADING_OMS_INTENT_STORE_PATH",
+            "",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or ""
+    ).strip()
+    limit = _as_int(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_OMS_LIFECYCLE_PARITY_LIMIT",
+            5000,
+            cast=int,
+        )
+    )
+    try:
+        from ai_trading.oms.invariants import evaluate_oms_lifecycle_parity_invariants
+
+        payload = evaluate_oms_lifecycle_parity_invariants(
+            database_url=(database_url or None),
+            intent_store_path=(intent_store_path or None),
+            limit=max(1, int(limit if limit is not None else 5000)),
+        )
+        summary = dict(payload) if isinstance(payload, Mapping) else {}
+        summary["enabled"] = True
+        summary["available"] = True
+        return summary
+    except Exception as exc:
+        return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
+
+
 def build_report(
     *,
     trade_history_path: Path,
@@ -3878,6 +3965,7 @@ def build_report(
         "post_trade_attribution_ledger": post_trade_attribution_ledger,
         "oms_event_tca": summarize_oms_event_tca(),
         "oms_invariants": summarize_oms_invariants(),
+        "oms_lifecycle_parity": summarize_oms_lifecycle_parity(),
         "edge_realism": summarize_edge_realism_state(resolved_edge_realism_path),
         "policy_ablation": summarize_policy_ablation_state(
             resolved_policy_ablation_path
@@ -4105,6 +4193,18 @@ def evaluate_go_no_go(
     if max_oms_invariant_violations is None:
         max_oms_invariant_violations = 0
     max_oms_invariant_violations = max(0, int(max_oms_invariant_violations))
+    require_oms_lifecycle_parity = bool(
+        threshold_map.get("require_oms_lifecycle_parity", False)
+    )
+    max_oms_lifecycle_parity_violations = _as_int(
+        threshold_map.get("max_oms_lifecycle_parity_violations")
+    )
+    if max_oms_lifecycle_parity_violations is None:
+        max_oms_lifecycle_parity_violations = 0
+    max_oms_lifecycle_parity_violations = max(
+        0,
+        int(max_oms_lifecycle_parity_violations),
+    )
     require_oms_event_tca = bool(
         threshold_map.get("require_oms_event_tca", False)
     )
@@ -4523,6 +4623,37 @@ def evaluate_go_no_go(
         oms_invariants_ok
         and oms_invariants_total_violations <= int(max_oms_invariant_violations)
     )
+    oms_lifecycle_parity_raw = report.get("oms_lifecycle_parity")
+    oms_lifecycle_parity = (
+        dict(oms_lifecycle_parity_raw)
+        if isinstance(oms_lifecycle_parity_raw, Mapping)
+        else {}
+    )
+    oms_lifecycle_parity_enabled = bool(
+        oms_lifecycle_parity.get("enabled", bool(oms_lifecycle_parity))
+    )
+    oms_lifecycle_parity_available = bool(
+        oms_lifecycle_parity.get("available", oms_lifecycle_parity_enabled)
+    )
+    oms_lifecycle_parity_total_violations = max(
+        0,
+        _as_int(oms_lifecycle_parity.get("total_violations")) or 0,
+    )
+    oms_lifecycle_parity_ok_raw = _as_bool(oms_lifecycle_parity.get("ok"))
+    oms_lifecycle_parity_ok = (
+        bool(oms_lifecycle_parity_ok_raw)
+        if oms_lifecycle_parity_ok_raw is not None
+        else bool(
+            oms_lifecycle_parity_available
+            and oms_lifecycle_parity_total_violations
+            <= int(max_oms_lifecycle_parity_violations)
+        )
+    )
+    oms_lifecycle_parity_consistent = bool(
+        oms_lifecycle_parity_ok
+        and oms_lifecycle_parity_total_violations
+        <= int(max_oms_lifecycle_parity_violations)
+    )
 
     oms_event_tca_raw = report.get("oms_event_tca")
     oms_event_tca = (
@@ -4696,6 +4827,16 @@ def evaluate_go_no_go(
             if (oms_invariants_available and require_oms_invariants)
             else (not require_oms_invariants)
         ),
+        "oms_lifecycle_parity_available": (
+            oms_lifecycle_parity_available
+            if require_oms_lifecycle_parity
+            else True
+        ),
+        "oms_lifecycle_parity_consistent": (
+            oms_lifecycle_parity_consistent
+            if (oms_lifecycle_parity_available and require_oms_lifecycle_parity)
+            else (not require_oms_lifecycle_parity)
+        ),
         "oms_event_tca_available": (
             oms_event_tca_available
             if require_oms_event_tca
@@ -4761,6 +4902,10 @@ def evaluate_go_no_go(
             "min_execution_capture_ratio": float(min_execution_capture_ratio),
             "require_oms_invariants": bool(require_oms_invariants),
             "max_oms_invariant_violations": int(max_oms_invariant_violations),
+            "require_oms_lifecycle_parity": bool(require_oms_lifecycle_parity),
+            "max_oms_lifecycle_parity_violations": int(
+                max_oms_lifecycle_parity_violations
+            ),
             "require_oms_event_tca": bool(require_oms_event_tca),
             "min_event_tca_filled_events": int(min_event_tca_filled_events),
             "max_event_tca_submit_reject_rate_pct": float(
@@ -4824,6 +4969,15 @@ def evaluate_go_no_go(
             "oms_invariants_ok": bool(oms_invariants_ok),
             "oms_invariants_consistent": bool(oms_invariants_consistent),
             "oms_invariants_total_violations": int(oms_invariants_total_violations),
+            "oms_lifecycle_parity_enabled": bool(oms_lifecycle_parity_enabled),
+            "oms_lifecycle_parity_available": bool(oms_lifecycle_parity_available),
+            "oms_lifecycle_parity_ok": bool(oms_lifecycle_parity_ok),
+            "oms_lifecycle_parity_consistent": bool(
+                oms_lifecycle_parity_consistent
+            ),
+            "oms_lifecycle_parity_total_violations": int(
+                oms_lifecycle_parity_total_violations
+            ),
             "oms_event_tca_enabled": bool(oms_event_tca_enabled),
             "oms_event_tca_available": bool(oms_event_tca_available),
             "oms_event_tca_consistent": bool(oms_event_tca_consistent),

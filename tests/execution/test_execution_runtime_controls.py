@@ -1099,11 +1099,6 @@ def test_pre_execution_order_checks_blocks_openings_when_exposure_overloaded(mon
         "_enforce_opposite_side_policy",
         lambda *_args, **_kwargs: (True, None),
     )
-    monkeypatch.setattr(
-        engine,
-        "_evaluate_pdt_preflight",
-        lambda *_args, **_kwargs: (False, None, {}),
-    )
     order = {
         "symbol": "AAPL",
         "side": "buy",
@@ -1136,11 +1131,6 @@ def test_pre_execution_order_checks_blocks_openings_for_symbol_reentry_cooldown(
         engine,
         "_enforce_opposite_side_policy",
         lambda *_args, **_kwargs: (True, None),
-    )
-    monkeypatch.setattr(
-        engine,
-        "_evaluate_pdt_preflight",
-        lambda *_args, **_kwargs: (False, None, {}),
     )
     monkeypatch.setattr(
         engine,
@@ -1180,11 +1170,6 @@ def test_pre_execution_order_checks_blocks_openings_for_symbol_slippage_budget(m
         engine,
         "_enforce_opposite_side_policy",
         lambda *_args, **_kwargs: (True, None),
-    )
-    monkeypatch.setattr(
-        engine,
-        "_evaluate_pdt_preflight",
-        lambda *_args, **_kwargs: (False, None, {}),
     )
     monkeypatch.setattr(
         engine,
@@ -1235,11 +1220,6 @@ def test_pre_execution_order_checks_autosizes_openings_below_min_notional(monkey
         engine,
         "_enforce_opposite_side_policy",
         lambda *_args, **_kwargs: (True, None),
-    )
-    monkeypatch.setattr(
-        engine,
-        "_evaluate_pdt_preflight",
-        lambda *_args, **_kwargs: (False, None, {}),
     )
     monkeypatch.setattr(
         engine,
@@ -1497,11 +1477,6 @@ def test_runtime_gonogo_precheck_blocks_openings_when_gate_fails(monkeypatch, tm
         engine,
         "_enforce_opposite_side_policy",
         lambda *_args, **_kwargs: (True, None),
-    )
-    monkeypatch.setattr(
-        engine,
-        "_evaluate_pdt_preflight",
-        lambda *_args, **_kwargs: (False, None, {}),
     )
 
     allowed = engine._pre_execution_order_checks(
@@ -2037,11 +2012,6 @@ def test_runtime_gonogo_precheck_allows_openings_when_gate_passes(monkeypatch, t
         engine,
         "_enforce_opposite_side_policy",
         lambda *_args, **_kwargs: (True, None),
-    )
-    monkeypatch.setattr(
-        engine,
-        "_evaluate_pdt_preflight",
-        lambda *_args, **_kwargs: (False, None, {}),
     )
 
     allowed = engine._pre_execution_order_checks(
@@ -5968,11 +5938,6 @@ def test_pre_execution_order_checks_blocks_openings_for_repeat_loss_blocklist(
     )
     monkeypatch.setattr(
         engine,
-        "_evaluate_pdt_preflight",
-        lambda *_args, **_kwargs: (False, None, {}),
-    )
-    monkeypatch.setattr(
-        engine,
         "_runtime_gonogo_openings_allowed",
         lambda: (True, {"enabled": False}),
     )
@@ -6218,11 +6183,6 @@ def test_pre_execution_order_checks_blocks_when_reconciliation_freeze_active(
     )
     monkeypatch.setattr(
         engine,
-        "_evaluate_pdt_preflight",
-        lambda *_args, **_kwargs: (False, None, {}),
-    )
-    monkeypatch.setattr(
-        engine,
         "_resolve_exposure_normalization_settings",
         lambda: {"block_openings": False},
     )
@@ -6352,11 +6312,6 @@ def test_pre_execution_order_checks_derisks_hard_symbol_slippage_breach(
         engine,
         "_enforce_opposite_side_policy",
         lambda *_args, **_kwargs: (True, None),
-    )
-    monkeypatch.setattr(
-        engine,
-        "_evaluate_pdt_preflight",
-        lambda *_args, **_kwargs: (False, None, {}),
     )
     monkeypatch.setattr(
         engine,

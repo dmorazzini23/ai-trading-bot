@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, cast
 from types import SimpleNamespace
 import sys
-from pydantic import AliasChoices, BaseModel, Field, SecretStr, computed_field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, SecretStr, computed_field, field_validator, model_validator
 try:  # Prefer pydantic-settings v2 API
     import pydantic_settings as _pydantic_settings
 except Exception:  # pragma: no cover - fallback to pydantic v1 style
@@ -498,6 +498,14 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
         "iex",
         validation_alias=AliasChoices("ALPACA_DATA_FEED", "DATA_FEED", "data_feed"),
     )
+    alpaca_execution_feed: Literal["iex", "sip"] = Field(
+        "iex",
+        validation_alias=AliasChoices("ALPACA_EXECUTION_FEED"),
+    )
+    alpaca_reference_feed: Literal["iex", "sip", "delayed_sip"] = Field(
+        "delayed_sip",
+        validation_alias=AliasChoices("ALPACA_REFERENCE_FEED"),
+    )
     alpaca_feed_failover: Annotated[tuple[str, ...], _NO_DECODE_ANNOTATION] = Field(
         ("sip",),
         validation_alias="ALPACA_FEED_FAILOVER",
@@ -633,6 +641,19 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
     def _norm_feed(cls, v):
         return str(v).lower().strip()
 
+    @field_validator("alpaca_execution_feed", mode="before")
+    @classmethod
+    def _norm_execution_feed(cls, v):
+        return str(v).lower().strip()
+
+    @field_validator("alpaca_reference_feed", mode="before")
+    @classmethod
+    def _norm_reference_feed(cls, v):
+        token = str(v).lower().strip()
+        if token in {"delayed", "delayed-sip", "dsip"}:
+            return "delayed_sip"
+        return token
+
     @field_validator("alpaca_data_feed", mode="after")
     @classmethod
     def _enforce_allowed_feed(cls, v: str) -> str:
@@ -651,6 +672,60 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
             logger.warning("SIP_FEED_DISABLED", extra={"requested": "sip", "using": "iex"})
             return "iex"
         return v
+
+    @field_validator("alpaca_execution_feed", mode="after")
+    @classmethod
+    def _enforce_execution_feed(cls, v: str) -> str:
+        return cast(str, cls._enforce_allowed_feed(v))
+
+    @field_validator("alpaca_reference_feed", mode="after")
+    @classmethod
+    def _enforce_reference_feed(cls, v: str) -> str:
+        normalized = str(v).strip().lower()
+        if normalized in {"delayed_sip", "iex"}:
+            return normalized
+        if normalized == "sip":
+            return cast(str, cls._enforce_allowed_feed("sip"))
+        return "delayed_sip"
+
+    @model_validator(mode="after")
+    def _sync_feed_roles(self):
+        """Backfill execution/reference feed roles while preserving legacy feed access."""
+
+        try:
+            from ai_trading.config.management import get_env as _get_env
+        except Exception:
+            _get_env = None
+
+        execution_configured = None
+        if callable(_get_env):
+            try:
+                execution_configured = _get_env(
+                    "ALPACA_EXECUTION_FEED",
+                    None,
+                    cast=str,
+                    resolve_aliases=False,
+                )
+            except Exception:
+                execution_configured = None
+        if execution_configured in (None, ""):
+            execution_value = str(self.alpaca_data_feed or "iex").strip().lower()
+        else:
+            execution_value = str(self.alpaca_execution_feed or "iex").strip().lower()
+        execution_normalizer = cast(Any, type(self)._norm_execution_feed)
+        execution_enforcer = cast(Any, type(self)._enforce_execution_feed)
+        execution_value = execution_enforcer(execution_normalizer(execution_value))
+        object.__setattr__(self, "alpaca_execution_feed", execution_value)
+        object.__setattr__(self, "alpaca_data_feed", execution_value)
+
+        reference_value = str(getattr(self, "alpaca_reference_feed", "") or "").strip().lower()
+        if reference_value in {"", "auto"}:
+            reference_value = "delayed_sip"
+        reference_normalizer = cast(Any, type(self)._norm_reference_feed)
+        reference_enforcer = cast(Any, type(self)._enforce_reference_feed)
+        reference_value = reference_enforcer(reference_normalizer(reference_value))
+        object.__setattr__(self, "alpaca_reference_feed", reference_value)
+        return self
 
     @field_validator("alpaca_feed_failover", mode="before")
     @classmethod
@@ -814,16 +889,17 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
 
     @property
     def data_feed(self) -> Literal["iex", "sip"]:
-        """Alias for ``alpaca_data_feed`` supporting runtime mutation hooks."""
+        """Alias for execution feed supporting runtime mutation hooks."""
 
-        return self.alpaca_data_feed
+        return self.alpaca_execution_feed
 
     @data_feed.setter
     def data_feed(self, value: str) -> None:
-        normalizer = cast(Any, type(self)._norm_feed)
-        enforcer = cast(Any, type(self)._enforce_allowed_feed)
+        normalizer = cast(Any, type(self)._norm_execution_feed)
+        enforcer = cast(Any, type(self)._enforce_execution_feed)
         normalized = normalizer(value)
         normalized = enforcer(normalized)
+        super().__setattr__("alpaca_execution_feed", normalized)
         super().__setattr__("alpaca_data_feed", normalized)
         if not normalized:
             return

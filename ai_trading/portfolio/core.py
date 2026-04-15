@@ -13,6 +13,8 @@ from ai_trading.data.bars import (
     empty_bars_dataframe,
     safe_get_stock_bars,
 )
+from ai_trading.data.feed_roles import get_execution_feed, get_reference_feed
+from ai_trading.analytics.feed_drift import fetch_reference_snapshot
 
 if TYPE_CHECKING:  # pragma: no cover - import only for typing
     import pandas as pd
@@ -31,43 +33,77 @@ def _last_close_from(df: pd.DataFrame) -> float | None:
         return float(df[lower['close']].iloc[-1])
     return None
 
-def get_latest_price(ctx, symbol: str) -> float | None:
-    """Return latest price using daily bars with minute fallback."""
+def _fetch_minute_price_for_feed(ctx, symbol: str, *, feed: str, context: str) -> float | None:
+    import pandas as pd
+
+    now_utc = pd.Timestamp.now(tz="UTC")
+    start_iso = (now_utc.normalize() - pd.Timedelta(days=1)).isoformat()
+    end_iso = (now_utc + pd.Timedelta(minutes=1)).isoformat()
+    req = StockBarsRequest(
+        symbol_or_symbols=[symbol],
+        timeframe=TimeFrame.Minute,
+        start=start_iso,
+        end=end_iso,
+        feed=feed,
+    )
+    frame = _ensure_df(
+        safe_get_stock_bars(
+            getattr(ctx, "data_client", None),
+            req,
+            symbol,
+            context,
+        )
+    )
+    return _last_close_from(frame)
+
+
+def get_execution_latest_price(ctx, symbol: str) -> float | None:
+    """Return latest execution price using configured execution feed."""
     import pandas as pd
 
     df_day = _ensure_df(ctx.data_fetcher.get_daily_df(ctx, symbol))
     price = _last_close_from(df_day)
     if price is not None:
         return price
-    now_utc = pd.Timestamp.now(tz="UTC")
-    start_iso = (now_utc.normalize() - pd.Timedelta(days=1)).isoformat()
-    end_iso = (now_utc + pd.Timedelta(minutes=1)).isoformat()
+    primary_feed = get_execution_feed()
+    fallback_feed = "sip" if primary_feed == "iex" else "iex"
     try:
-        req = StockBarsRequest(
-            symbol_or_symbols=[symbol],
-            timeframe=TimeFrame.Minute,
-            start=start_iso,
-            end=end_iso,
-            feed="iex",
+        price = _fetch_minute_price_for_feed(
+            ctx,
+            symbol,
+            feed=primary_feed,
+            context=f"PRICE_SNAPSHOT_{primary_feed.upper()}",
         )
-        df_min = _ensure_df(
-            safe_get_stock_bars(
-                getattr(ctx, "data_client", None), req, symbol, "PRICE_SNAPSHOT"
-            )
-        )
-        if df_min.empty:
-            req.feed = "sip"
-            df_min = _ensure_df(
-                safe_get_stock_bars(
-                    getattr(ctx, "data_client", None),
-                    req,
-                    symbol,
-                    "PRICE_SNAPSHOT_SIP",
-                )
+        if price is not None:
+            return price
+        if fallback_feed != primary_feed:
+            return _fetch_minute_price_for_feed(
+                ctx,
+                symbol,
+                feed=fallback_feed,
+                context=f"PRICE_SNAPSHOT_{fallback_feed.upper()}",
             )
     except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, OSError):
-        df_min = pd.DataFrame()
-    return _last_close_from(df_min)
+        return None
+    return None
+
+
+def get_reference_latest_price(ctx, symbol: str) -> float | None:
+    """Return delayed reference price for analytics/reconciliation usage."""
+
+    _ = ctx
+    snapshot = fetch_reference_snapshot(symbol, feed=get_reference_feed())
+    try:
+        price = float(snapshot.get("price"))
+    except (TypeError, ValueError):
+        return None
+    return price if price > 0 else None
+
+
+def get_latest_price(ctx, symbol: str) -> float | None:
+    """Backward-compatible alias for execution pricing."""
+
+    return get_execution_latest_price(ctx, symbol)
 
 def compute_portfolio_weights(ctx, symbols: list[str]) -> dict[str, float]:
     """Compute portfolio weights with optional risk-aware methods.
@@ -99,7 +135,7 @@ def compute_portfolio_weights(ctx, symbols: list[str]) -> dict[str, float]:
             except Exception:
                 method = 'inverse_price'
         method = str(method).lower()
-        closes = {s: get_latest_price(ctx, s) for s in symbols}
+        closes = {s: get_execution_latest_price(ctx, s) for s in symbols}
         closes = {s: c for s, c in closes.items() if isinstance(c, int | float) and c > 0}
         if not closes:
             logger.error('No valid prices found for any symbols')

@@ -23,6 +23,8 @@ Sprint 1 establishes a migration-managed Postgres-first durability layer while p
 3. Add immutable append-only event tables:
    - `oms_events`
    - `decision_events`
+   - `position_snapshots`
+   - `risk_snapshots`
 4. Use `DATABASE_URL` as authoritative database URL for live mode.
 5. Keep JSONL ledger as emergency fallback only; it is not the live system of record.
 6. Ensure health endpoints can report DB readiness without uncaught exceptions.
@@ -51,6 +53,12 @@ Sprint 1 establishes a migration-managed Postgres-first durability layer while p
 - `HOLD`
 - `REDUCE`
 - `EXIT`
+
+`position_snapshots` captures per-symbol immutable broker position snapshots with
+quantity/mark-to-market context.
+
+`risk_snapshots` captures immutable cycle-level risk summaries (open orders,
+positions, exposure proxies, and account context when available).
 
 ## Idempotency and Ordering Rules
 

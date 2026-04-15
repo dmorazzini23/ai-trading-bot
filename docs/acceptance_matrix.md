@@ -27,6 +27,8 @@ This matrix maps institutional requirements to concrete tests and deployment che
 | AC-21 | Decision records include deterministic config snapshot | `ai_trading/core/netting.py`, `ai_trading/core/bot_engine.py` | `tests/test_decision_record_config_snapshot.py` | Snapshot toggle checks |
 | AC-22 | Model artifacts verified, live fails closed | `ai_trading/models/artifacts.py`, `ai_trading/core/bot_engine.py` | `tests/test_model_artifacts.py`, `tests/test_model_verification_policy.py` | Manifest presence/verification in deploy checklist |
 | AC-23 | Pretrade env key alignment for production `.env` keys | `ai_trading/oms/pretrade.py`, `ai_trading/core/bot_engine.py` | `tests/test_pretrade_env_key_alignment.py` | Gate script env sanity checks |
+| AC-24 | OMS lifecycle parity is enforced across live/simulated paths | `ai_trading/oms/invariants.py`, `ai_trading/tools/oms_lifecycle_parity_replay.py`, `ai_trading/health_payload.py`, `ai_trading/tools/runtime_performance_report.py` | `tests/unit/test_oms_backtest_lifecycle_parity.py`, `tests/unit/test_oms_lifecycle_parity_replay_tool.py`, `tests/test_health_endpoints.py`, `tests/test_runtime_performance_report_tool.py` | Gate script replay smoke + parity pytest targets |
+| AC-25 | Phase 2 execution-edge gate blocks deploy when performance regresses | `ai_trading/analytics/execution_report.py`, `ci/scripts/institutional_gates.sh`, `ai_trading/tools/update_phase2_execution_baseline.py` | `tests/test_execution_report_daily_rollup.py`, `tests/unit/test_update_phase2_execution_baseline_tool.py` | `AI_TRADING_INSTITUTIONAL_REQUIRE_PHASE2_GATE=1` with fresh execution report |
 
 ## Deployment Sign-Off Checklist
 1. Institutional gate script passes.
@@ -35,3 +37,4 @@ This matrix maps institutional requirements to concrete tests and deployment che
 4. Model manifest verification passes.
 5. Canary symbol list and rollback thresholds configured.
 6. Runbooks linked in release ticket and on-call assigned.
+7. OMS lifecycle parity replay fixture check passes with zero mismatches.

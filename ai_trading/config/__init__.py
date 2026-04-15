@@ -91,6 +91,13 @@ def _default_test_settings() -> Settings:
         alpaca_data_feed=str(
             get_env("ALPACA_DATA_FEED", "iex", cast=str, resolve_aliases=False) or "iex"
         ),
+        alpaca_execution_feed=str(
+            get_env("ALPACA_EXECUTION_FEED", "iex", cast=str, resolve_aliases=False) or "iex"
+        ),
+        alpaca_reference_feed=str(
+            get_env("ALPACA_REFERENCE_FEED", "delayed_sip", cast=str, resolve_aliases=False)
+            or "delayed_sip"
+        ),
         alpaca_adjustment=str(
             get_env("ALPACA_ADJUSTMENT", "raw", cast=str, resolve_aliases=False) or "raw"
         ),
@@ -139,17 +146,24 @@ def _normalize_intraday_feed(feed: str | None) -> str:
 def _derive_intraday_feed(cfg: TradingConfig | None = None) -> str:
     source = cfg or _CFG
     return _normalize_intraday_feed(
-        getattr(source, "data_feed_intraday", getattr(source, "alpaca_data_feed", "iex"))
+        getattr(
+            source,
+            "data_feed_intraday",
+            getattr(source, "alpaca_execution_feed", getattr(source, "alpaca_data_feed", "iex")),
+        )
     )
 
 
 def set_data_feed_intraday(feed: str | None) -> str:
     """Update the exported DATA_FEED_INTRADAY constant."""
 
-    global DATA_FEED_INTRADAY
+    global DATA_FEED_INTRADAY, ALPACA_EXECUTION_FEED
     DATA_FEED_INTRADAY = _normalize_intraday_feed(feed)
+    ALPACA_EXECUTION_FEED = DATA_FEED_INTRADAY
     try:
         setattr(_CFG, "data_feed_intraday", DATA_FEED_INTRADAY)
+        setattr(_CFG, "alpaca_execution_feed", ALPACA_EXECUTION_FEED)
+        setattr(_CFG, "alpaca_data_feed", ALPACA_EXECUTION_FEED)
     except Exception:  # pragma: no cover - defensive fallback
         pass
     return DATA_FEED_INTRADAY
@@ -224,6 +238,13 @@ ORDER_STALE_CLEANUP_INTERVAL = int(_CFG.order_stale_cleanup_interval)
 EXECUTION_MODE = str(getattr(_CFG, "execution_mode", "sim") or "sim").lower()
 SHADOW_MODE = bool(getattr(_CFG, "shadow_mode", False))
 DATA_FEED_INTRADAY: str = _derive_intraday_feed()
+ALPACA_EXECUTION_FEED: str = str(
+    getattr(_CFG, "alpaca_execution_feed", getattr(_CFG, "alpaca_data_feed", DATA_FEED_INTRADAY))
+    or DATA_FEED_INTRADAY
+).lower()
+ALPACA_REFERENCE_FEED: str = str(
+    getattr(_CFG, "alpaca_reference_feed", "delayed_sip") or "delayed_sip"
+).lower()
 SLIPPAGE_LIMIT_BPS = int(getattr(_CFG, "slippage_limit_bps", getattr(_CFG, "max_slippage_bps", 75)))
 SAFE_MODE_ALLOW_PAPER = bool(getattr(_CFG, "safe_mode_allow_paper", False))
 PRICE_PROVIDER_ORDER = tuple(getattr(_CFG, "price_provider_order", (
@@ -303,6 +324,8 @@ class ExecutionSettingsSnapshot:
     slippage_limit_bps: int
     price_provider_order: tuple[str, ...]
     data_feed_intraday: str
+    execution_feed: str = "iex"
+    reference_feed: str = "delayed_sip"
     time_in_force: str | None = None
     order_ttl_seconds: int = 20
     marketable_limit_slippage_bps: int = 10
@@ -336,6 +359,17 @@ def get_execution_settings() -> ExecutionSettingsSnapshot:
         price_provider_order=provider_order,
         data_feed_intraday=str(
             getattr(cfg, "data_feed_intraday", DATA_FEED_INTRADAY) or DATA_FEED_INTRADAY
+        ).lower(),
+        execution_feed=str(
+            getattr(
+                cfg,
+                "alpaca_execution_feed",
+                getattr(cfg, "alpaca_data_feed", ALPACA_EXECUTION_FEED),
+            )
+            or ALPACA_EXECUTION_FEED
+        ).lower(),
+        reference_feed=str(
+            getattr(cfg, "alpaca_reference_feed", ALPACA_REFERENCE_FEED) or ALPACA_REFERENCE_FEED
         ).lower(),
         time_in_force=(
             (str(getattr(cfg, "execution_time_in_force", "")).strip().lower() or None)
