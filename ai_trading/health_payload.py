@@ -271,12 +271,39 @@ def _runtime_performance_snapshot() -> dict[str, Any]:
     )
     go_no_go_raw = payload.get("go_no_go")
     go_no_go = dict(go_no_go_raw) if isinstance(go_no_go_raw, Mapping) else {}
+    oms_event_tca_raw = payload.get("oms_event_tca")
+    oms_event_tca = (
+        dict(oms_event_tca_raw)
+        if isinstance(oms_event_tca_raw, Mapping)
+        else {}
+    )
+    parent_scope_rows_raw = oms_event_tca.get("parent_execution_kpis_by_scope")
+    parent_scope_rows = (
+        [dict(row) for row in parent_scope_rows_raw if isinstance(row, Mapping)]
+        if isinstance(parent_scope_rows_raw, list)
+        else []
+    )
     return {
         "available": bool(payload),
         "path": str(resolved),
         "go_no_go": go_no_go,
         "generated_at": payload.get("generated_at"),
         "source": payload.get("source"),
+        "oms_event_tca": {
+            "enabled": bool(oms_event_tca.get("enabled", bool(oms_event_tca))),
+            "available": bool(
+                oms_event_tca.get("available", bool(oms_event_tca))
+            ),
+            "filled_events": oms_event_tca.get("filled_events"),
+            "submit_reject_rate_pct": oms_event_tca.get(
+                "submit_reject_rate_pct"
+            ),
+            "p90_slippage_bps": oms_event_tca.get("p90_slippage_bps"),
+            "parent_execution_summary_events": oms_event_tca.get(
+                "parent_execution_summary_events"
+            ),
+            "parent_execution_kpis_by_scope": parent_scope_rows[:5],
+        },
     }
 
 
@@ -650,6 +677,20 @@ def build_control_plane_snapshot(
         if isinstance(go_no_go_observed_raw, Mapping)
         else {}
     )
+    runtime_oms_event_tca_raw = runtime_performance.get("oms_event_tca")
+    runtime_oms_event_tca = (
+        dict(runtime_oms_event_tca_raw)
+        if isinstance(runtime_oms_event_tca_raw, Mapping)
+        else {}
+    )
+    parent_scope_rows_raw = runtime_oms_event_tca.get(
+        "parent_execution_kpis_by_scope"
+    )
+    parent_scope_rows = (
+        [dict(row) for row in parent_scope_rows_raw if isinstance(row, Mapping)]
+        if isinstance(parent_scope_rows_raw, list)
+        else []
+    )
 
     return {
         "service": service_name,
@@ -684,6 +725,35 @@ def build_control_plane_snapshot(
         "open_orders": {
             "available": runtime_performance.get("available"),
             "source": runtime_performance.get("source"),
+        },
+        "execution_quality": {
+            "oms_event_tca_available": runtime_oms_event_tca.get("available"),
+            "submit_reject_rate_pct": runtime_oms_event_tca.get(
+                "submit_reject_rate_pct"
+            ),
+            "p90_slippage_bps": runtime_oms_event_tca.get("p90_slippage_bps"),
+            "parent_execution_summary_events": runtime_oms_event_tca.get(
+                "parent_execution_summary_events"
+            ),
+            "parent_execution_kpis_by_scope": parent_scope_rows[:3],
+            "parent_retry_per_order": go_no_go_observed.get(
+                "event_tca_parent_retry_per_order"
+            ),
+            "parent_failed_slices_per_order": go_no_go_observed.get(
+                "event_tca_parent_failed_slices_per_order"
+            ),
+            "parent_avg_success_ratio": go_no_go_observed.get(
+                "event_tca_parent_avg_success_ratio"
+            ),
+            "parent_avg_arrival_slippage_bps": go_no_go_observed.get(
+                "event_tca_parent_avg_arrival_slippage_bps"
+            ),
+            "parent_execution_consistent": go_no_go_observed.get(
+                "event_tca_parent_execution_consistent"
+            ),
+            "parent_scope_threshold_breach_count": go_no_go_observed.get(
+                "event_tca_parent_scope_threshold_breach_count"
+            ),
         },
         "circuit_breakers": {
             "go_no_go_gate_passed": go_no_go.get("gate_passed"),

@@ -211,6 +211,238 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
     assert updated_stamp > first_stamp
 
 
+def test_reference_daily_cache_and_memo_isolated_from_execution(monkeypatch):
+    pd = load_pandas()
+    fetcher = _stub_fetcher(monkeypatch)
+    symbol = "AAPL"
+
+    monkeypatch.setattr(be, "datetime", FixedDateTime)
+    monkeypatch.setattr(be, "is_market_open", lambda: True)
+    monkeypatch.setattr(be.time, "monotonic", lambda: 25.0)
+    be.daily_cache_hit = None
+    be.daily_cache_miss = None
+    monkeypatch.setattr(
+        be,
+        "bars",
+        types.SimpleNamespace(TimeFrame=types.SimpleNamespace(Day="Day")),
+        raising=False,
+    )
+    monkeypatch.setattr(be.provider_monitor, "update_data_health", lambda *a, **k: None)
+
+    reference_df = pd.DataFrame(
+        {
+            "timestamp": [FixedDateTime.now(UTC)],
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.5],
+            "volume": [1000.0],
+        }
+    )
+    execution_df = pd.DataFrame(
+        {
+            "timestamp": [FixedDateTime.now(UTC)],
+            "open": [200.0],
+            "high": [201.0],
+            "low": [199.0],
+            "close": [200.5],
+            "volume": [2000.0],
+        }
+    )
+    calls: list[tuple[str, str | None]] = []
+
+    def fake_get_daily_df(symbol_arg, start, end, *, feed=None, feed_role="execution", adjustment=None):
+        del symbol_arg, start, end, adjustment
+        normalized_feed = str(feed).strip().lower() if feed is not None else None
+        calls.append((str(feed_role), normalized_feed))
+        if str(feed_role) == "reference" or normalized_feed == "delayed_sip":
+            return reference_df.copy()
+        return execution_df.copy()
+
+    monkeypatch.setattr(be.data_fetcher_module, "get_daily_df", fake_get_daily_df)
+    from ai_trading.data import fetch as fetch_module
+    monkeypatch.setattr(fetch_module, "get_daily_df", fake_get_daily_df)
+    monkeypatch.setitem(
+        be.DataFetcher.get_daily_df.__globals__,
+        "data_fetcher_module",
+        types.SimpleNamespace(
+            get_daily_df=fake_get_daily_df,
+            DataFetchError=be.data_fetcher_module.DataFetchError,
+            MissingOHLCVColumnsError=be.data_fetcher_module.MissingOHLCVColumnsError,
+            _backup_get_bars=lambda *_a, **_k: execution_df.copy(),
+            normalize_ohlcv_columns=lambda df: df,
+        ),
+    )
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", {}, raising=False)
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_REFERENCE", {}, raising=False)
+
+    ref_result = fetcher.get_daily_df(_ctx(), symbol, feed_role="reference")
+    assert isinstance(ref_result, pd.DataFrame)
+    assert not ref_result.empty
+    assert symbol not in fetcher._daily_cache
+    assert symbol in fetcher._daily_cache_reference
+    assert be._DAILY_FETCH_MEMO == {}
+    assert be._DAILY_FETCH_MEMO_REFERENCE
+
+    exec_result = fetcher.get_daily_df(_ctx(), symbol, feed_role="execution")
+    assert isinstance(exec_result, pd.DataFrame)
+    assert float(exec_result["close"].iloc[-1]) == 200.5
+    assert symbol in fetcher._daily_cache
+    assert len(calls) >= 2
+
+
+def test_daily_provider_session_cache_isolated_by_feed_role(monkeypatch):
+    pd = load_pandas()
+    fetcher = _stub_fetcher(monkeypatch)
+    symbol = "AAPL"
+
+    fetcher.settings.data_feed = "sip"
+    fetcher.settings.alpaca_data_feed = "sip"
+    fetcher.settings.alpaca_reference_feed = "sip"
+    fetcher._resolve_feed = lambda *_args, **_kwargs: "sip"
+
+    monkeypatch.setattr(be, "datetime", FixedDateTime)
+    monkeypatch.setattr(be, "is_market_open", lambda: True)
+    monkeypatch.setattr(be.time, "monotonic", lambda: 25.0)
+    monkeypatch.setattr(be.provider_monitor, "update_data_health", lambda *a, **k: None)
+    monkeypatch.setattr(be, "get_reference_feed", lambda *_args, **_kwargs: "sip")
+    be.daily_cache_hit = None
+    be.daily_cache_miss = None
+    monkeypatch.setattr(
+        be,
+        "bars",
+        types.SimpleNamespace(TimeFrame=types.SimpleNamespace(Day="Day")),
+        raising=False,
+    )
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", {}, raising=False)
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_REFERENCE", {}, raising=False)
+    monkeypatch.setattr(be, "_DAILY_PROVIDER_SESSION_CACHE", {}, raising=False)
+    monkeypatch.setattr(be, "_DAILY_PROVIDER_REQUEST_LOG", {}, raising=False)
+
+    def _daily_frame(close: float) -> Any:
+        frame = pd.DataFrame(
+            {
+                "timestamp": [FixedDateTime.now(UTC)],
+                "open": [close - 0.5],
+                "high": [close + 0.5],
+                "low": [close - 1.0],
+                "close": [close],
+                "volume": [1000.0],
+            }
+        )
+        frame.attrs["data_provider"] = "alpaca_sip"
+        return frame
+
+    execution_df = _daily_frame(200.5)
+    reference_df = _daily_frame(100.5)
+    calls: list[str] = []
+
+    def fake_get_daily_df(symbol_arg, start, end, *, feed=None, feed_role="execution", adjustment=None):
+        del symbol_arg, start, end, feed, adjustment
+        role = str(feed_role)
+        calls.append(role)
+        return execution_df.copy()
+
+    monkeypatch.setattr(be.data_fetcher_module, "get_daily_df", fake_get_daily_df)
+    from ai_trading.data import fetch as fetch_module
+    monkeypatch.setattr(fetch_module, "get_daily_df", fake_get_daily_df)
+    monkeypatch.setitem(
+        be.DataFetcher.get_daily_df.__globals__,
+        "data_fetcher_module",
+        types.SimpleNamespace(
+            get_daily_df=fake_get_daily_df,
+            DataFetchError=be.data_fetcher_module.DataFetchError,
+            MissingOHLCVColumnsError=be.data_fetcher_module.MissingOHLCVColumnsError,
+            _backup_get_bars=lambda *_a, **_k: execution_df.copy(),
+            normalize_ohlcv_columns=lambda df: df,
+        ),
+    )
+
+    # Seed the pre-patch legacy provider-session key shape (provider/date/symbol).
+    # Execution reads this key on the buggy implementation and leaks reference data.
+    fetch_date = FixedDateTime.now(UTC).date().isoformat()
+    be._DAILY_PROVIDER_SESSION_CACHE[("alpaca_sip", fetch_date, symbol)] = (
+        reference_df.copy(),
+        25.0,
+    )
+
+    exec_result = fetcher.get_daily_df(_ctx(), symbol, feed_role="execution")
+    assert isinstance(exec_result, pd.DataFrame)
+    assert float(exec_result["close"].iloc[-1]) == 200.5
+    assert calls == ["execution"]
+
+
+def test_daily_error_state_isolated_by_feed_role(monkeypatch):
+    pd = load_pandas()
+    fetcher = _stub_fetcher(monkeypatch)
+    symbol = "MSFT"
+
+    monkeypatch.setattr(be, "datetime", FixedDateTime)
+    monkeypatch.setattr(be, "is_market_open", lambda: True)
+    monkeypatch.setattr(be.time, "monotonic", lambda: 42.0)
+    monkeypatch.setattr(be.provider_monitor, "update_data_health", lambda *a, **k: None)
+    be.daily_cache_hit = None
+    be.daily_cache_miss = None
+    monkeypatch.setattr(
+        be,
+        "bars",
+        types.SimpleNamespace(TimeFrame=types.SimpleNamespace(Day="Day")),
+        raising=False,
+    )
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", {}, raising=False)
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_REFERENCE", {}, raising=False)
+    monkeypatch.setattr(be, "_DAILY_PROVIDER_SESSION_CACHE", {}, raising=False)
+    monkeypatch.setattr(be, "_DAILY_PROVIDER_REQUEST_LOG", {}, raising=False)
+
+    execution_df = pd.DataFrame(
+        {
+            "timestamp": [FixedDateTime.now(UTC)],
+            "open": [199.5],
+            "high": [201.0],
+            "low": [198.5],
+            "close": [200.5],
+            "volume": [1200.0],
+        }
+    )
+    calls: list[str] = []
+
+    def fake_get_daily_df(symbol_arg, start, end, *, feed=None, feed_role="execution", adjustment=None):
+        del symbol_arg, start, end, feed, adjustment
+        role = str(feed_role)
+        calls.append(role)
+        if role == "reference":
+            err = be.data_fetcher_module.MissingOHLCVColumnsError("ohlcv_columns_missing")
+            setattr(err, "fetch_reason", "ohlcv_columns_missing")
+            setattr(err, "missing_columns", ("close",))
+            setattr(err, "symbol", symbol)
+            setattr(err, "timeframe", "1Day")
+            raise err
+        return execution_df.copy()
+
+    monkeypatch.setattr(be.data_fetcher_module, "get_daily_df", fake_get_daily_df)
+    from ai_trading.data import fetch as fetch_module
+    monkeypatch.setattr(fetch_module, "get_daily_df", fake_get_daily_df)
+    monkeypatch.setitem(
+        be.DataFetcher.get_daily_df.__globals__,
+        "data_fetcher_module",
+        types.SimpleNamespace(
+            get_daily_df=fake_get_daily_df,
+            DataFetchError=be.data_fetcher_module.DataFetchError,
+            MissingOHLCVColumnsError=be.data_fetcher_module.MissingOHLCVColumnsError,
+            _backup_get_bars=lambda *_a, **_k: execution_df.copy(),
+            normalize_ohlcv_columns=lambda df: df,
+        ),
+    )
+
+    with pytest.raises(be.data_fetcher_module.MissingOHLCVColumnsError):
+        fetcher.get_daily_df(_ctx(), symbol, feed_role="reference")
+
+    exec_result = fetcher.get_daily_df(_ctx(), symbol, feed_role="execution")
+    assert isinstance(exec_result, pd.DataFrame)
+    assert float(exec_result["close"].iloc[-1]) == 200.5
+    assert calls == ["reference", "execution"]
+
+
 def test_daily_fetch_memo_primary_lookup_uses_helpers(monkeypatch):
     assert hasattr(be, "DataFetcher")
     fetcher = _stub_fetcher(monkeypatch)

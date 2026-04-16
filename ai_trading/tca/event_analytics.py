@@ -77,6 +77,8 @@ def summarize_oms_event_tca(
     scanned = 0
     decision_count = 0
     decision_inserted_count = 0
+    parent_execution_summary_events = 0
+    parent_scope_metrics: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     try:
         rows = event_store.list_oms_events(limit=max(1, int(limit)))
@@ -111,6 +113,60 @@ def summarize_oms_event_tca(
                 ):
                     slippage_bps = ((price - expected_price) / expected_price) * 10000.0
                     slippage_samples.append(float(slippage_bps))
+            elif event_type == "RECONCILE_UPDATE":
+                record_type = str(payload.get("record_type") or "").strip().lower()
+                if record_type != "parent_execution_summary":
+                    continue
+                parent_execution_summary_events += 1
+                symbol = str(payload.get("symbol") or "").strip().upper() or "UNKNOWN"
+                strategy_id = str(payload.get("strategy_id") or "").strip() or "unknown"
+                session_id = str(payload.get("session_id") or "").strip() or "unknown"
+                key = (symbol, strategy_id, session_id)
+                bucket = parent_scope_metrics.setdefault(
+                    key,
+                    {
+                        "symbol": symbol,
+                        "strategy_id": strategy_id,
+                        "session_id": session_id,
+                        "parent_orders": 0,
+                        "requested_quantity": 0.0,
+                        "submitted_quantity": 0.0,
+                        "failed_slices": 0,
+                        "retry_count": 0,
+                        "cancel_replace_count": 0,
+                        "success_ratio_sum": 0.0,
+                        "arrival_slippage_sum": 0.0,
+                        "arrival_slippage_count": 0,
+                    },
+                )
+                bucket["parent_orders"] = int(bucket["parent_orders"]) + 1
+                bucket["requested_quantity"] = float(bucket["requested_quantity"]) + float(
+                    _as_float(payload.get("requested_quantity")) or 0.0
+                )
+                bucket["submitted_quantity"] = float(bucket["submitted_quantity"]) + float(
+                    _as_float(payload.get("submitted_quantity")) or 0.0
+                )
+                bucket["failed_slices"] = int(bucket["failed_slices"]) + int(
+                    _as_float(payload.get("failed_slices")) or 0
+                )
+                bucket["retry_count"] = int(bucket["retry_count"]) + int(
+                    _as_float(payload.get("retry_count")) or 0
+                )
+                bucket["cancel_replace_count"] = int(bucket["cancel_replace_count"]) + int(
+                    _as_float(payload.get("cancel_replace_count")) or 0
+                )
+                bucket["success_ratio_sum"] = float(bucket["success_ratio_sum"]) + float(
+                    _as_float(payload.get("success_ratio")) or 0.0
+                )
+                arrival_mean = _as_float(payload.get("arrival_slippage_bps_mean"))
+                arrival_samples = int(_as_float(payload.get("arrival_slippage_sample_count")) or 0)
+                if arrival_mean is not None and arrival_samples > 0:
+                    bucket["arrival_slippage_sum"] = float(bucket["arrival_slippage_sum"]) + (
+                        float(arrival_mean) * float(arrival_samples)
+                    )
+                    bucket["arrival_slippage_count"] = int(bucket["arrival_slippage_count"]) + int(
+                        arrival_samples
+                    )
 
         decision_rows = event_store.list_decision_events(limit=max(1, int(limit)))
         for row in decision_rows:
@@ -133,6 +189,43 @@ def summarize_oms_event_tca(
         if (submit_ack_count + submit_reject_count) > 0
         else 0.0
     )
+    parent_execution_kpis_by_scope: list[dict[str, Any]] = []
+    for bucket in parent_scope_metrics.values():
+        parent_orders = max(1, int(bucket["parent_orders"]))
+        slippage_count = int(bucket["arrival_slippage_count"])
+        parent_execution_kpis_by_scope.append(
+            {
+                "symbol": bucket["symbol"],
+                "strategy_id": bucket["strategy_id"],
+                "session_id": bucket["session_id"],
+                "parent_orders": parent_orders,
+                "requested_quantity": float(bucket["requested_quantity"]),
+                "submitted_quantity": float(bucket["submitted_quantity"]),
+                "failed_slices": int(bucket["failed_slices"]),
+                "retry_count": int(bucket["retry_count"]),
+                "cancel_replace_count": int(bucket["cancel_replace_count"]),
+                "avg_success_ratio": float(bucket["success_ratio_sum"]) / float(parent_orders),
+                "avg_fill_ratio": (
+                    float(bucket["submitted_quantity"]) / float(bucket["requested_quantity"])
+                    if float(bucket["requested_quantity"]) > 0.0
+                    else 0.0
+                ),
+                "avg_arrival_slippage_bps": (
+                    float(bucket["arrival_slippage_sum"]) / float(slippage_count)
+                    if slippage_count > 0
+                    else 0.0
+                ),
+                "arrival_slippage_sample_count": slippage_count,
+            }
+        )
+    parent_execution_kpis_by_scope.sort(
+        key=lambda row: (
+            -int(row["parent_orders"]),
+            str(row["symbol"]),
+            str(row["strategy_id"]),
+            str(row["session_id"]),
+        )
+    )
     return {
         "scanned_oms_events": int(scanned),
         "filled_events": int(fills_count),
@@ -146,6 +239,8 @@ def summarize_oms_event_tca(
         "slippage_sample_count": int(len(slippage_samples)),
         "median_slippage_bps": float(median(sorted_slippage)) if sorted_slippage else 0.0,
         "p90_slippage_bps": float(p90_slippage),
+        "parent_execution_summary_events": int(parent_execution_summary_events),
+        "parent_execution_kpis_by_scope": parent_execution_kpis_by_scope,
         "decision_events_scanned": int(decision_count),
         "decision_events_in_window": int(decision_inserted_count),
         "lookback_days": int(lookback_days) if lookback_days is not None else None,

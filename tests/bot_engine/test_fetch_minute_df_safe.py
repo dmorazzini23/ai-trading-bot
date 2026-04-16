@@ -2004,6 +2004,110 @@ def test_get_minute_df_handles_missing_safe_get(monkeypatch):
     assert not hasattr(bot_engine.bars, "safe_get_stock_bars")
 
 
+def test_reference_minute_cache_isolated_from_execution(monkeypatch):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 3, 15, 31, tzinfo=UTC)
+    ref_idx = pd.date_range(end=base_now - timedelta(minutes=1), periods=3, freq="min", tz="UTC").rename(
+        "timestamp"
+    )
+    exec_idx = pd.date_range(end=base_now - timedelta(minutes=1), periods=3, freq="min", tz="UTC").rename(
+        "timestamp"
+    )
+    reference_df = pd.DataFrame(
+        {
+            "open": [10.0, 10.1, 10.2],
+            "high": [10.2, 10.3, 10.4],
+            "low": [9.9, 10.0, 10.1],
+            "close": [10.1, 10.2, 10.3],
+            "volume": [1000, 1001, 1002],
+            "symbol": ["AAPL", "AAPL", "AAPL"],
+        },
+        index=ref_idx,
+    )
+    execution_df = pd.DataFrame(
+        {
+            "open": [20.0, 20.1, 20.2],
+            "high": [20.2, 20.3, 20.4],
+            "low": [19.9, 20.0, 20.1],
+            "close": [20.1, 20.2, 20.3],
+            "volume": [2000, 2001, 2002],
+            "symbol": ["AAPL", "AAPL", "AAPL"],
+        },
+        index=exec_idx,
+    )
+
+    settings = types.SimpleNamespace(
+        alpaca_api_key="key",
+        alpaca_secret_key_plain="secret",
+        data_feed="iex",
+        alpaca_data_feed=None,
+        alpaca_feed_failover=(),
+        alpaca_adjustment=None,
+        alpaca_reference_feed="delayed_sip",
+    )
+
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    ref_calls: list[tuple[str, str | None, str | None]] = []
+
+    def fake_reference_minute_df(symbol, start, end, **kwargs):
+        del start, end
+        ref_calls.append(
+            (
+                str(symbol),
+                kwargs.get("feed_role"),
+                kwargs.get("feed"),
+            )
+        )
+        assert kwargs.get("feed_role") == "reference"
+        return reference_df.copy()
+
+    execution_calls: list[str] = []
+
+    def fake_get_stock_bars(self, provider_name, symbol, *_args, **_kwargs):
+        del self, provider_name
+        execution_calls.append(str(symbol))
+        return execution_df.copy()
+
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(bot_engine, "get_settings", lambda: settings, raising=False)
+    monkeypatch.setattr(bot_engine, "StockHistoricalDataClient", DummyClient, raising=False)
+    monkeypatch.setattr(bot_engine, "is_market_open", lambda: True, raising=False)
+    monkeypatch.setattr(bot_engine, "_minute_data_freshness_limit", lambda: 900, raising=False)
+    monkeypatch.setattr(bot_engine, "_maybe_check_minute_freshness", lambda *_a, **_k: True, raising=False)
+    monkeypatch.setattr(staleness, "_ensure_data_fresh", lambda *_a, **_k: None, raising=False)
+    monkeypatch.setattr(bot_engine.data_fetcher_module, "get_minute_df", fake_reference_minute_df, raising=False)
+    monkeypatch.setattr(bot_engine.DataFetcher, "_get_stock_bars", fake_get_stock_bars, raising=False)
+    monkeypatch.setattr(bot_engine, "minute_cache_hit", None, raising=False)
+    monkeypatch.setattr(bot_engine, "minute_cache_miss", None, raising=False)
+
+    fetcher = bot_engine.DataFetcher()
+    ctx = types.SimpleNamespace()
+
+    ref_result = fetcher.get_minute_df(cast(Any, ctx), "AAPL", lookback_minutes=5, feed_role="reference")
+    assert isinstance(ref_result, pd.DataFrame)
+    assert ref_calls
+    assert "AAPL" in fetcher._minute_cache_reference
+    assert "AAPL" not in fetcher._minute_cache
+
+    exec_result = fetcher.get_minute_df(cast(Any, ctx), "AAPL", lookback_minutes=5, feed_role="execution")
+    assert execution_calls == ["AAPL"]
+    assert isinstance(exec_result, pd.DataFrame)
+    assert float(exec_result["close"].iloc[-1]) == 20.3
+    assert float(fetcher._minute_cache["AAPL"]["close"].iloc[-1]) == 20.3
+    assert float(fetcher._minute_cache_reference["AAPL"]["close"].iloc[-1]) == 10.3
+
+
 def test_process_symbol_reuses_prefetched_minute_data(monkeypatch):
     pd = load_pandas()
     sample = _sample_df()

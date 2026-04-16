@@ -41,6 +41,26 @@ def test_summarize_oms_event_tca_from_immutable_events(tmp_path: Path) -> None:
             "expected_price": 100.5,
         },
     )
+    store.append_oms_event_payload(
+        event_type="RECONCILE_UPDATE",
+        event_source="unit_test",
+        idempotency_key="parent-summary-1",
+        intent_id="parent-1",
+        payload={
+            "record_type": "parent_execution_summary",
+            "symbol": "AAPL",
+            "strategy_id": "mean_reversion_v2",
+            "session_id": "regular_hours",
+            "requested_quantity": 10,
+            "submitted_quantity": 10,
+            "failed_slices": 0,
+            "retry_count": 1,
+            "cancel_replace_count": 1,
+            "success_ratio": 1.0,
+            "arrival_slippage_bps_mean": 12.5,
+            "arrival_slippage_sample_count": 4,
+        },
+    )
     store.append_decision_event(
         event=DecisionEvent(
             symbol="AAPL",
@@ -64,3 +84,11 @@ def test_summarize_oms_event_tca_from_immutable_events(tmp_path: Path) -> None:
     assert summary["slippage_sample_count"] == 1
     assert summary["fill_notional"] == pytest.approx(202.0)
     assert summary["decision_events_in_window"] == 1
+    assert summary["parent_execution_summary_events"] == 1
+    assert len(summary["parent_execution_kpis_by_scope"]) == 1
+    scope = summary["parent_execution_kpis_by_scope"][0]
+    assert scope["symbol"] == "AAPL"
+    assert scope["strategy_id"] == "mean_reversion_v2"
+    assert scope["session_id"] == "regular_hours"
+    assert scope["parent_orders"] == 1
+    assert scope["avg_arrival_slippage_bps"] == pytest.approx(12.5)

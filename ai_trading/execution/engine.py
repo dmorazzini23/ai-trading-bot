@@ -1410,6 +1410,12 @@ class ExecutionEngine:
             "average_fill_time": 0.0,
         }
         self._last_partial_fill_summary: dict[str, Any] | None = None
+        self._last_parent_execution_summary: dict[str, Any] | None = None
+        self._parent_execution_summary_history: list[dict[str, Any]] = []
+        self._parent_execution_summary_history_max = max(
+            10,
+            int(get_env("AI_TRADING_PARENT_EXEC_SUMMARY_HISTORY_MAX", 250, cast=int)),
+        )
         self._broker_sync: BrokerSyncResult | None = None
         self._open_order_qty_index: dict[str, tuple[float, float]] = {}
         execution_mode = str(get_env("EXECUTION_MODE", "paper") or "").strip().lower()
@@ -1422,6 +1428,20 @@ class ExecutionEngine:
         self._runtime_snapshot_source = str(
             get_env(
                 "AI_TRADING_OMS_RUNTIME_SNAPSHOT_SOURCE",
+                self.__class__.__name__.lower(),
+                cast=str,
+            )
+            or self.__class__.__name__.lower()
+        ).strip().lower()
+        self._execution_audit_events_enabled = _env_bool(
+            "AI_TRADING_EXECUTION_AUDIT_EVENTS_ENABLED",
+            execution_mode == "live",
+        )
+        self._execution_audit_store: Any | None = None
+        self._execution_audit_store_init_failed = False
+        self._execution_audit_source = str(
+            get_env(
+                "AI_TRADING_EXECUTION_AUDIT_SOURCE",
                 self.__class__.__name__.lower(),
                 cast=str,
             )
@@ -1708,6 +1728,103 @@ class ExecutionEngine:
         """Return the most recent partial fill summary recorded by the engine."""
         return self._last_partial_fill_summary
 
+    @property
+    def last_parent_execution_summary(self) -> dict[str, Any] | None:
+        """Return the latest parent/child execution summary."""
+
+        summary = self._last_parent_execution_summary
+        if isinstance(summary, Mapping):
+            return dict(summary)
+        return None
+
+    @property
+    def parent_execution_summary_history(self) -> list[dict[str, Any]]:
+        """Return recent parent/child execution summaries."""
+
+        history = getattr(self, "_parent_execution_summary_history", None)
+        if not isinstance(history, list):
+            return []
+        return [dict(item) for item in history if isinstance(item, Mapping)]
+
+    def summarize_parent_execution_scopes(self, *, limit: int = 500) -> list[dict[str, Any]]:
+        """Return aggregated execution KPIs by ``(symbol, strategy_id, session_id)``."""
+
+        max_items = max(1, int(limit))
+        history = self.parent_execution_summary_history[-max_items:]
+        grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for item in history:
+            symbol = str(item.get("symbol") or "").strip().upper() or "UNKNOWN"
+            strategy_id = str(item.get("strategy_id") or "").strip() or "unknown"
+            session_id = str(item.get("session_id") or "").strip() or "unknown"
+            key = (symbol, strategy_id, session_id)
+            bucket = grouped.setdefault(
+                key,
+                {
+                    "symbol": symbol,
+                    "strategy_id": strategy_id,
+                    "session_id": session_id,
+                    "parent_orders": 0,
+                    "requested_quantity": 0,
+                    "submitted_quantity": 0,
+                    "failed_slices": 0,
+                    "retry_count": 0,
+                    "cancel_replace_count": 0,
+                    "success_ratio_sum": 0.0,
+                    "fill_ratio_sum": 0.0,
+                },
+            )
+            bucket["parent_orders"] = int(bucket["parent_orders"]) + 1
+            bucket["requested_quantity"] = int(bucket["requested_quantity"]) + int(
+                item.get("requested_quantity", 0) or 0
+            )
+            bucket["submitted_quantity"] = int(bucket["submitted_quantity"]) + int(
+                item.get("submitted_quantity", 0) or 0
+            )
+            bucket["failed_slices"] = int(bucket["failed_slices"]) + int(
+                item.get("failed_slices", 0) or 0
+            )
+            bucket["retry_count"] = int(bucket["retry_count"]) + int(
+                item.get("retry_count", 0) or 0
+            )
+            bucket["cancel_replace_count"] = int(bucket["cancel_replace_count"]) + int(
+                item.get("cancel_replace_count", 0) or 0
+            )
+            bucket["success_ratio_sum"] = float(bucket["success_ratio_sum"]) + float(
+                item.get("success_ratio", 0.0) or 0.0
+            )
+            requested = float(item.get("requested_quantity", 0) or 0.0)
+            submitted = float(item.get("submitted_quantity", 0) or 0.0)
+            fill_ratio = (submitted / requested) if requested > 0 else 0.0
+            bucket["fill_ratio_sum"] = float(bucket["fill_ratio_sum"]) + float(fill_ratio)
+
+        summaries: list[dict[str, Any]] = []
+        for payload in grouped.values():
+            parent_orders = max(1, int(payload.get("parent_orders", 0) or 0))
+            summaries.append(
+                {
+                    "symbol": payload["symbol"],
+                    "strategy_id": payload["strategy_id"],
+                    "session_id": payload["session_id"],
+                    "parent_orders": parent_orders,
+                    "requested_quantity": int(payload["requested_quantity"]),
+                    "submitted_quantity": int(payload["submitted_quantity"]),
+                    "failed_slices": int(payload["failed_slices"]),
+                    "retry_count": int(payload["retry_count"]),
+                    "cancel_replace_count": int(payload["cancel_replace_count"]),
+                    "avg_success_ratio": float(payload["success_ratio_sum"]) / float(parent_orders),
+                    "avg_fill_ratio": float(payload["fill_ratio_sum"]) / float(parent_orders),
+                }
+            )
+        return sorted(
+            summaries,
+            key=lambda row: (
+                -int(row["parent_orders"]),
+                str(row["symbol"]),
+                str(row["strategy_id"]),
+                str(row["session_id"]),
+            ),
+        )
+
     def _update_position(self, symbol: str, side: OrderSide, quantity: int) -> None:
         """Update in-memory position ledger for a fill event."""
         delta = quantity if side == OrderSide.BUY else -quantity
@@ -1953,6 +2070,88 @@ class ExecutionEngine:
             )
             return None
         return self._runtime_snapshot_store
+
+    def _resolve_execution_audit_store(self) -> Any | None:
+        """Lazily resolve durable EventStore for execution-quality audit events."""
+
+        if not self._execution_audit_events_enabled:
+            return None
+        if self._execution_audit_store_init_failed:
+            return None
+        if self._execution_audit_store is not None:
+            return self._execution_audit_store
+        if self._runtime_snapshot_store is not None:
+            self._execution_audit_store = self._runtime_snapshot_store
+            return self._execution_audit_store
+        if self._runtime_snapshot_persistence_enabled:
+            runtime_store = self._resolve_runtime_snapshot_store()
+            if runtime_store is not None:
+                self._execution_audit_store = runtime_store
+                return self._execution_audit_store
+        try:
+            from ai_trading.oms.event_store import EventStore
+
+            self._execution_audit_store = EventStore()
+        except Exception as exc:
+            self._execution_audit_store_init_failed = True
+            self.logger.warning(
+                "EXECUTION_AUDIT_STORE_INIT_FAILED",
+                extra={"error": str(exc)},
+            )
+            return None
+        return self._execution_audit_store
+
+    def _append_parent_execution_summary_history(self, summary: Mapping[str, Any]) -> None:
+        """Store bounded in-memory history of parent execution summaries."""
+
+        history = getattr(self, "_parent_execution_summary_history", None)
+        if not isinstance(history, list):
+            history = []
+            self._parent_execution_summary_history = history
+        history.append(dict(summary))
+        max_items = max(10, int(getattr(self, "_parent_execution_summary_history_max", 250) or 250))
+        if len(history) > max_items:
+            del history[:-max_items]
+
+    def _emit_parent_execution_summary_event(self, summary: Mapping[str, Any]) -> bool:
+        """Persist parent execution summary event to immutable OMS audit store."""
+
+        store = self._resolve_execution_audit_store()
+        if store is None:
+            return False
+        parent_order_id = str(summary.get("parent_order_id") or "").strip()
+        if not parent_order_id:
+            return False
+        payload = dict(summary)
+        payload["record_type"] = "parent_execution_summary"
+        payload["kpi_scope"] = {
+            "symbol": str(summary.get("symbol") or "").strip().upper(),
+            "strategy_id": str(summary.get("strategy_id") or "").strip() or None,
+            "session_id": str(summary.get("session_id") or "").strip() or None,
+        }
+        idempotency_key = self._snapshot_idempotency_key(
+            "parent_execution_summary",
+            parent_order_id,
+            summary.get("started_at"),
+            summary.get("ended_at"),
+            summary.get("submitted_slices"),
+            summary.get("failed_slices"),
+            summary.get("retry_count"),
+            summary.get("cancel_replace_count"),
+        )
+        try:
+            return bool(
+                store.append_oms_event_payload(
+                    event_type="RECONCILE_UPDATE",
+                    event_source=self._execution_audit_source or "execution_engine",
+                    idempotency_key=idempotency_key,
+                    intent_id=parent_order_id,
+                    payload=payload,
+                )
+            )
+        except Exception:
+            logger.debug("PARENT_EXECUTION_SUMMARY_PERSIST_FAILED", exc_info=True)
+            return False
 
     @staticmethod
     def _snapshot_extract(payload: Any, *keys: str) -> Any:
@@ -2671,6 +2870,73 @@ class ExecutionEngine:
             except Exception:
                 order_type = OrderType.MARKET
         asset_class = kwargs.pop("asset_class", None)
+        parent_order_id = str(
+            kwargs.pop("parent_order_id", "") or f"parent-{uuid.uuid4().hex[:16]}"
+        )
+        strategy_id = str(kwargs.get("strategy_id") or "").strip() or None
+        session_id = str(
+            kwargs.get("session_id")
+            or kwargs.get("trading_session")
+            or kwargs.get("session")
+            or kwargs.get("market_session")
+            or ""
+        ).strip() or None
+        execution_algorithm = str(
+            kwargs.get("execution_algorithm") or kwargs.get("algorithm") or ""
+        ).strip() or None
+        slice_interval_seconds = max(
+            0.0,
+            float(
+                kwargs.pop(
+                    "slice_interval_seconds",
+                    get_env("AI_TRADING_EXEC_SLICE_INTERVAL_SECONDS", 0.0, cast=float),
+                )
+                or 0.0
+            ),
+        )
+        slice_retry_attempts = max(
+            1,
+            int(
+                kwargs.pop(
+                    "slice_retry_attempts",
+                    get_env("AI_TRADING_EXEC_SLICE_RETRY_ATTEMPTS", 1, cast=int),
+                )
+                or 1
+            ),
+        )
+        slice_retry_backoff_seconds = max(
+            0.0,
+            float(
+                kwargs.pop(
+                    "slice_retry_backoff_seconds",
+                    get_env("AI_TRADING_EXEC_SLICE_RETRY_BACKOFF_SECONDS", 0.0, cast=float),
+                )
+                or 0.0
+            ),
+        )
+        limit_replace_step_bps = max(
+            0.0,
+            float(
+                kwargs.pop(
+                    "slice_limit_replace_step_bps",
+                    get_env("AI_TRADING_EXEC_SLICE_LIMIT_REPLACE_STEP_BPS", 5.0, cast=float),
+                )
+                or 0.0
+            ),
+        )
+        allow_cancel_replace = _as_bool(
+            kwargs.pop(
+                "slice_allow_cancel_replace",
+                get_env("AI_TRADING_EXEC_SLICE_ALLOW_CANCEL_REPLACE", True, cast=bool),
+            )
+        )
+        max_participation_rate_raw = kwargs.get("max_participation_rate")
+        if max_participation_rate_raw in (None, ""):
+            max_participation_rate_raw = get_env(
+                "AI_TRADING_EXEC_MAX_PARTICIPATION_RATE",
+                "",
+                cast=str,
+            )
 
         if slices is None:
             slice_defs: list[Any] = []
@@ -2799,26 +3065,273 @@ class ExecutionEngine:
             else:
                 slice_specs.append({"quantity": total_quantity, "kwargs": {}})
 
+        participation_cap_qty: int | None = None
+        try:
+            max_participation_rate = (
+                float(max_participation_rate_raw)
+                if max_participation_rate_raw not in (None, "")
+                else None
+            )
+        except (TypeError, ValueError):
+            max_participation_rate = None
+        if max_participation_rate is not None and (
+            not math.isfinite(max_participation_rate)
+            or max_participation_rate <= 0
+            or max_participation_rate > 1
+        ):
+            max_participation_rate = None
+        volume_hint_raw = (
+            kwargs.get("avg_daily_volume")
+            or kwargs.get("volume_1d")
+            or kwargs.get("adv")
+            or kwargs.get("average_volume")
+        )
+        try:
+            volume_hint = (
+                float(volume_hint_raw)
+                if volume_hint_raw not in (None, "")
+                else None
+            )
+        except (TypeError, ValueError):
+            volume_hint = None
+        if volume_hint is not None and (not math.isfinite(volume_hint) or volume_hint <= 0):
+            volume_hint = None
+        if max_participation_rate is not None and volume_hint is not None:
+            participation_cap_qty = int(math.floor(volume_hint * max_participation_rate))
+            participation_cap_qty = max(1, participation_cap_qty)
+            capped_specs: list[dict[str, Any]] = []
+            for spec in slice_specs:
+                remaining_qty = int(spec.get("quantity", 0) or 0)
+                if remaining_qty <= 0:
+                    continue
+                per_slice_kwargs = dict(spec.get("kwargs", {}))
+                while remaining_qty > 0:
+                    child_qty = min(remaining_qty, participation_cap_qty)
+                    capped_specs.append({"quantity": child_qty, "kwargs": dict(per_slice_kwargs)})
+                    remaining_qty -= child_qty
+            slice_specs = capped_specs or slice_specs
+
         results: list[Any] = []
         shared_kwargs = dict(kwargs)
+        start_mono = monotonic_time()
+        start_ts = safe_utcnow().isoformat()
+        summary: dict[str, Any] = {
+            "parent_order_id": parent_order_id,
+            "symbol": symbol,
+            "side": getattr(side, "value", side),
+            "strategy_id": strategy_id,
+            "session_id": session_id,
+            "execution_algorithm": execution_algorithm,
+            "order_type": getattr(order_type, "value", order_type),
+            "requested_quantity": int(total_quantity),
+            "child_slice_target": int(len(slice_specs)),
+            "slice_retry_attempts": int(slice_retry_attempts),
+            "slice_retry_backoff_seconds": float(slice_retry_backoff_seconds),
+            "slice_interval_seconds": float(slice_interval_seconds),
+            "allow_cancel_replace": bool(allow_cancel_replace),
+            "cancel_replace_step_bps": float(limit_replace_step_bps),
+            "participation_cap_qty": participation_cap_qty,
+            "started_at": start_ts,
+            "submitted_slices": 0,
+            "failed_slices": 0,
+            "retry_count": 0,
+            "cancel_replace_count": 0,
+            "submitted_quantity": 0,
+            "filled_quantity": 0.0,
+            "failed_slice_sequences": [],
+            "arrival_slippage_sample_count": 0,
+            "arrival_slippage_bps_mean": 0.0,
+            "arrival_slippage_bps_p90": 0.0,
+        }
+        arrival_slippage_samples: list[float] = []
 
-        for spec in slice_specs:
+        def _result_filled_qty(result_payload: Any) -> float:
+            for key in ("filled_quantity", "filled_qty"):
+                candidate = getattr(result_payload, key, None)
+                if candidate in (None, "") and isinstance(result_payload, Mapping):
+                    candidate = result_payload.get(key)
+                if candidate in (None, ""):
+                    continue
+                try:
+                    return float(candidate)
+                except (TypeError, ValueError):
+                    continue
+            return 0.0
+
+        def _result_price(
+            result_payload: Any,
+            *keys: str,
+        ) -> float | None:
+            for key in keys:
+                candidate = getattr(result_payload, key, None)
+                if candidate in (None, "") and isinstance(result_payload, Mapping):
+                    candidate = result_payload.get(key)
+                if candidate in (None, ""):
+                    order_payload = getattr(result_payload, "order", None)
+                    if order_payload is None and isinstance(result_payload, Mapping):
+                        order_payload = result_payload.get("order")
+                    if order_payload is not None:
+                        candidate = getattr(order_payload, key, None)
+                        if candidate in (None, "") and isinstance(order_payload, Mapping):
+                            candidate = order_payload.get(key)
+                if candidate in (None, ""):
+                    continue
+                try:
+                    parsed = float(candidate)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(parsed) and parsed > 0.0:
+                    return parsed
+            return None
+
+        for idx, spec in enumerate(slice_specs, start=1):
             slice_qty = int(spec.get("quantity", 0) or 0)
             if slice_qty <= 0:
                 continue
-            slice_kwargs = dict(shared_kwargs)
-            slice_kwargs.update(spec.get("kwargs", {}))
-            per_order_type = slice_kwargs.pop("order_type", order_type)
-            per_asset_class = slice_kwargs.pop("asset_class", asset_class)
-            result = self.execute_order(
-                symbol,
-                side,
-                slice_qty,
-                per_order_type,
-                asset_class=per_asset_class,
-                **slice_kwargs,
-            )
+            base_slice_kwargs = dict(shared_kwargs)
+            base_slice_kwargs.update(spec.get("kwargs", {}))
+            if summary.get("strategy_id") in (None, ""):
+                strategy_value = str(base_slice_kwargs.get("strategy_id") or "").strip()
+                if strategy_value:
+                    summary["strategy_id"] = strategy_value
+            if summary.get("session_id") in (None, ""):
+                session_value = str(
+                    base_slice_kwargs.get("session_id")
+                    or base_slice_kwargs.get("trading_session")
+                    or base_slice_kwargs.get("session")
+                    or base_slice_kwargs.get("market_session")
+                    or ""
+                ).strip()
+                if session_value:
+                    summary["session_id"] = session_value
+            if summary.get("execution_algorithm") in (None, ""):
+                algorithm_value = str(
+                    base_slice_kwargs.get("execution_algorithm")
+                    or base_slice_kwargs.get("algorithm")
+                    or ""
+                ).strip()
+                if algorithm_value:
+                    summary["execution_algorithm"] = algorithm_value
+            per_order_type = base_slice_kwargs.pop("order_type", order_type)
+            per_asset_class = base_slice_kwargs.pop("asset_class", asset_class)
+            if isinstance(per_order_type, OrderType):
+                normalized_order_type = per_order_type
+            else:
+                try:
+                    normalized_order_type = OrderType(str(per_order_type).lower())
+                except Exception:
+                    normalized_order_type = order_type
+
+            submitted = False
+            result: Any = None
+            current_limit_price = base_slice_kwargs.get("limit_price")
+            for attempt in range(1, slice_retry_attempts + 1):
+                slice_kwargs = dict(base_slice_kwargs)
+                slice_kwargs["parent_order_id"] = parent_order_id
+                slice_kwargs.setdefault("slice_count", int(len(slice_specs)))
+                slice_kwargs["slice_sequence"] = int(idx)
+                slice_kwargs["slice_attempt"] = int(attempt)
+                slice_kwargs["slice_id"] = (
+                    f"{parent_order_id}:{idx:04d}:a{attempt:02d}"
+                )
+                if (
+                    normalized_order_type == OrderType.LIMIT
+                    and attempt > 1
+                    and allow_cancel_replace
+                    and limit_replace_step_bps > 0
+                ):
+                    prior_limit = current_limit_price
+                    if prior_limit in (None, ""):
+                        prior_limit = slice_kwargs.get("price")
+                    try:
+                        prior_limit_float = float(prior_limit)
+                    except (TypeError, ValueError):
+                        prior_limit_float = None
+                    if (
+                        prior_limit_float is not None
+                        and math.isfinite(prior_limit_float)
+                        and prior_limit_float > 0
+                    ):
+                        step_multiplier = limit_replace_step_bps / 10000.0
+                        if side == OrderSide.BUY:
+                            adjusted_limit = prior_limit_float * (1.0 + step_multiplier)
+                        else:
+                            adjusted_limit = prior_limit_float * (1.0 - step_multiplier)
+                        adjusted_limit = max(0.0001, adjusted_limit)
+                        current_limit_price = adjusted_limit
+                        slice_kwargs["limit_price"] = adjusted_limit
+                        summary["cancel_replace_count"] = int(summary["cancel_replace_count"]) + 1
+                elif current_limit_price not in (None, ""):
+                    slice_kwargs["limit_price"] = current_limit_price
+
+                result = self.execute_order(
+                    symbol,
+                    side,
+                    slice_qty,
+                    normalized_order_type,
+                    asset_class=per_asset_class,
+                    **slice_kwargs,
+                )
+                if result is not None:
+                    submitted = True
+                    break
+                if attempt < slice_retry_attempts:
+                    summary["retry_count"] = int(summary["retry_count"]) + 1
+                    logger.warning(
+                        "SLICED_ORDER_RETRY",
+                        extra={
+                            "parent_order_id": parent_order_id,
+                            "symbol": symbol,
+                            "slice_sequence": idx,
+                            "slice_attempt": attempt,
+                            "next_attempt": attempt + 1,
+                        },
+                    )
+                    if slice_retry_backoff_seconds > 0:
+                        time.sleep(slice_retry_backoff_seconds)
+
             results.append(result)
+            if submitted:
+                summary["submitted_slices"] = int(summary["submitted_slices"]) + 1
+                summary["submitted_quantity"] = int(summary["submitted_quantity"]) + int(slice_qty)
+                summary["filled_quantity"] = float(summary["filled_quantity"]) + _result_filled_qty(result)
+                fill_price = _result_price(result, "average_fill_price", "fill_price", "filled_avg_price")
+                expected_price = _result_price(result, "expected_price")
+                if fill_price is not None and expected_price is not None and expected_price > 0:
+                    slippage_bps = ((fill_price - expected_price) / expected_price) * 10000.0
+                    if side in {OrderSide.SELL, OrderSide.SELL_SHORT}:
+                        slippage_bps = -slippage_bps
+                    arrival_slippage_samples.append(float(slippage_bps))
+            else:
+                summary["failed_slices"] = int(summary["failed_slices"]) + 1
+                failed_sequences = cast(list[int], summary["failed_slice_sequences"])
+                if len(failed_sequences) < 50:
+                    failed_sequences.append(int(idx))
+
+            if slice_interval_seconds > 0 and idx < len(slice_specs):
+                time.sleep(slice_interval_seconds)
+
+        elapsed_seconds = max(0.0, float(monotonic_time() - start_mono))
+        summary["elapsed_seconds"] = elapsed_seconds
+        summary["ended_at"] = safe_utcnow().isoformat()
+        summary["success_ratio"] = (
+            float(summary["submitted_slices"]) / float(len(slice_specs))
+            if slice_specs
+            else 0.0
+        )
+        if arrival_slippage_samples:
+            ordered_slippage = sorted(arrival_slippage_samples)
+            p90_index = int(math.ceil(len(ordered_slippage) * 0.90)) - 1
+            p90_index = max(0, min(p90_index, len(ordered_slippage) - 1))
+            summary["arrival_slippage_sample_count"] = int(len(ordered_slippage))
+            summary["arrival_slippage_bps_mean"] = float(sum(ordered_slippage) / len(ordered_slippage))
+            summary["arrival_slippage_bps_p90"] = float(ordered_slippage[p90_index])
+        summary["persisted_to_event_store"] = bool(
+            self._emit_parent_execution_summary_event(summary)
+        )
+        self._last_parent_execution_summary = dict(summary)
+        self._append_parent_execution_summary_history(summary)
+        logger.info("PARENT_CHILD_EXECUTION_SUMMARY", extra=dict(summary))
 
         return results
 

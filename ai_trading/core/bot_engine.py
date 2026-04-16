@@ -11903,6 +11903,7 @@ meta_lock = Lock()
 run_lock = Lock()
 
 _DAILY_FETCH_MEMO: dict[tuple[str, ...], tuple[float, Any]] = {}
+_DAILY_FETCH_MEMO_REFERENCE: dict[tuple[str, ...], tuple[float, Any]] = {}
 try:
     _DAILY_FETCH_MEMO_TTL = float(get_env("DAILY_FETCH_MEMO_TTL", "60"))
 except (TypeError, ValueError):
@@ -11915,8 +11916,8 @@ except COMMON_EXC:
     except (TypeError, ValueError):
         _PROVIDER_DECISION_WINDOW = 120.0
 _DAILY_FETCH_MEMO_TTL = max(_DAILY_FETCH_MEMO_TTL, _PROVIDER_DECISION_WINDOW)
-_DAILY_PROVIDER_SESSION_CACHE: dict[tuple[str, str, str], tuple[Any, float]] = {}
-_DAILY_PROVIDER_REQUEST_LOG: dict[tuple[str, str], float] = {}
+_DAILY_PROVIDER_SESSION_CACHE: dict[tuple[str, str, str, str, str], tuple[Any, float]] = {}
+_DAILY_PROVIDER_REQUEST_LOG: dict[tuple[str, str, str, str], float] = {}
 # AI-AGENT-REF: Add thread-safe locking for trade cooldown state
 trade_cooldowns_lock = Lock()
 
@@ -12524,7 +12525,7 @@ class DataFetcher:
     prefer: str | None = None
     force_feed: str | None = None
     cache_minutes: int = 15
-    _daily_error_state: dict[tuple[str, str], tuple[BaseException, float]] = field(
+    _daily_error_state: dict[tuple[str, str, str, str], tuple[BaseException, float]] = field(
         init=False, default_factory=dict
     )
 
@@ -12533,8 +12534,11 @@ class DataFetcher:
         self.force_feed = self._normalize_feed_value(self.force_feed)
         self.settings = get_settings()
         self._daily_cache: dict[str, tuple[date, pd.DataFrame | None]] = {}
+        self._daily_cache_reference: dict[str, tuple[date, pd.DataFrame | None]] = {}
         self._minute_cache: dict[str, pd.DataFrame | None] = {}
+        self._minute_cache_reference: dict[str, pd.DataFrame | None] = {}
         self._minute_timestamps: dict[str, datetime] = {}
+        self._minute_timestamps_reference: dict[str, datetime] = {}
         # AI-AGENT-REF: rate-limit repeated warnings per (symbol, timeframe)
         self._warn_seen: dict[str, int] = {}
         self._daily_cache_hit_logged = False
@@ -13015,7 +13019,7 @@ class DataFetcher:
 
     def _record_daily_error(
         self,
-        key: tuple[str, str],
+        key: tuple[str, str, str, str],
         error: BaseException,
         stamp: float,
     ) -> None:
@@ -13091,6 +13095,13 @@ class DataFetcher:
     ) -> Any:
         symbol = symbol.upper()
         resolved_feed_role = normalize_feed_role(feed_role)
+        if not hasattr(self, "_daily_cache_reference"):
+            self._daily_cache_reference = {}
+        active_daily_cache: dict[str, tuple[date, Any]] = (
+            self._daily_cache
+            if resolved_feed_role == "execution"
+            else self._daily_cache_reference
+        )
         now_utc = datetime.now(UTC)
         try:
             now_monotonic = float(time.monotonic())
@@ -13146,7 +13157,15 @@ class DataFetcher:
             sys.modules.get("ai_trading.core.bot_engine")
             or sys.modules.get(__name__)
         )
-        memo_store = getattr(be_module, "_DAILY_FETCH_MEMO", None)
+        memo_store_name = (
+            "_DAILY_FETCH_MEMO_REFERENCE"
+            if resolved_feed_role == "reference"
+            else "_DAILY_FETCH_MEMO"
+        )
+        memo_store = getattr(be_module, memo_store_name, None)
+        if memo_store is None:
+            memo_store = _DAILY_FETCH_MEMO_REFERENCE if resolved_feed_role == "reference" else _DAILY_FETCH_MEMO
+        memo_store_active = memo_store
         if memo_store is not None:
             try:
                 keys_iter = getattr(memo_store, "keys", None)
@@ -13636,17 +13655,28 @@ class DataFetcher:
                 )
             )
         planned_provider = self._planned_daily_provider(effective_feed)
-        error_key = (symbol, fetch_date.isoformat())
+        effective_feed_key = str(effective_feed or "none").strip().lower()
+        error_key = (
+            resolved_feed_role,
+            effective_feed_key,
+            symbol,
+            fetch_date.isoformat(),
+        )
 
         cached_df: Any | None = None
         cached_reason: str | None = None
         fallback_entry: (
-            tuple[Any | None, str | None, str | None, tuple[str, str, str] | None]
+            tuple[
+                Any | None,
+                str | None,
+                str | None,
+                tuple[str, str, str, str, str] | None,
+            ]
             | None
         ) = None
 
         def _memo_get_entry(key: tuple[str, ...]) -> Any:
-            store = _DAILY_FETCH_MEMO
+            store = memo_store_active
             checked = False
             try:
                 if hasattr(store, "__contains__"):
@@ -13678,11 +13708,11 @@ class DataFetcher:
                 else:
                     payload = (ts_value, payload_value)
             try:
-                _DAILY_FETCH_MEMO[key] = payload
+                memo_store_active[key] = payload
                 return
             except TypeError:
                 pass
-            setter = getattr(_DAILY_FETCH_MEMO, "__setitem__", None)
+            setter = getattr(memo_store_active, "__setitem__", None)
             if callable(setter):
                 setter(key, payload)
 
@@ -13750,7 +13780,7 @@ class DataFetcher:
         refresh_stamp: float | None = None
         refresh_df: Any | None = None
         refresh_source: str | None = None
-        refresh_provider_key: tuple[str, str, str] | None = None
+        refresh_provider_key: tuple[str, str, str, str, str] | None = None
 
         def _finalize_cached_return() -> Any:
             if cached_df is None:
@@ -13767,7 +13797,7 @@ class DataFetcher:
                         _memo_set_entry(memo_key, (refresh_stamp, refresh_df))
                         _memo_set_entry(legacy_memo_key, (refresh_stamp, refresh_df))
                     if refresh_source == "cache":
-                        self._daily_cache[symbol] = (fetch_date, refresh_df)
+                        active_daily_cache[symbol] = (fetch_date, refresh_df)
                     if (
                         refresh_source == "provider_session"
                         and refresh_provider_key is not None
@@ -13779,7 +13809,7 @@ class DataFetcher:
             if refresh_df is not None and refresh_source != "provider_session":
                 if refresh_source != "memo":
                     with cache_lock:
-                        self._daily_cache[symbol] = (fetch_date, refresh_df)
+                        active_daily_cache[symbol] = (fetch_date, refresh_df)
             return _emit_cache_hit(cached_df, reason=cached_reason)
 
         def _apply_fallback_entry() -> Any:
@@ -14039,7 +14069,7 @@ class DataFetcher:
             if memo_ready:
                 entry = None
             else:
-                entry = self._daily_cache.get(symbol)
+                entry = active_daily_cache.get(symbol)
                 if entry and entry[0] == fetch_date:
                     cached_df = entry[1]
                     cached_reason = "cache"
@@ -14058,7 +14088,7 @@ class DataFetcher:
                             "cache",
                             None,
                         )
-                    self._daily_cache.pop(symbol, None)
+                    active_daily_cache.pop(symbol, None)
             error_entry = self._daily_error_state.get(error_key)
             if error_entry is not None:
                 cached_error, error_ts = error_entry
@@ -14069,7 +14099,13 @@ class DataFetcher:
         if memo_hit and cached_df is not None:
             return _finalize_cached_return()
         if cached_df is None:
-            provider_key = (planned_provider, fetch_date.isoformat(), symbol)
+            provider_key = (
+                resolved_feed_role,
+                effective_feed_key,
+                planned_provider,
+                fetch_date.isoformat(),
+                symbol,
+            )
             session_entry = _DAILY_PROVIDER_SESSION_CACHE.get(provider_key)
             if session_entry:
                 session_df, session_ts = session_entry
@@ -14112,7 +14148,12 @@ class DataFetcher:
                 extra={"symbol": symbol, "reason": provider_reason},
             )
 
-        log_key = (planned_provider, fetch_date.isoformat())
+        log_key = (
+            resolved_feed_role,
+            effective_feed_key,
+            planned_provider,
+            fetch_date.isoformat(),
+        )
         log_request = True
         with cache_lock:
             last_logged = _DAILY_PROVIDER_REQUEST_LOG.get(log_key)
@@ -14314,13 +14355,26 @@ class DataFetcher:
         with cache_lock:
             stamp = now_monotonic
             actual_provider = self._infer_provider_label(df, planned_provider)
-            provider_session_key = (actual_provider, fetch_date.isoformat(), symbol)
-            self._daily_cache[symbol] = (fetch_date, df)
+            provider_session_key = (
+                resolved_feed_role,
+                effective_feed_key,
+                actual_provider,
+                fetch_date.isoformat(),
+                symbol,
+            )
+            active_daily_cache[symbol] = (fetch_date, df)
             _memo_set_entry(canonical_memo_key, (stamp, df))
             _memo_set_entry(memo_key, (stamp, df))
             _memo_set_entry(legacy_memo_key, (stamp, df))
             _DAILY_PROVIDER_SESSION_CACHE[provider_session_key] = (df, stamp)
-            _DAILY_PROVIDER_REQUEST_LOG[(actual_provider, fetch_date.isoformat())] = stamp
+            _DAILY_PROVIDER_REQUEST_LOG[
+                (
+                    resolved_feed_role,
+                    effective_feed_key,
+                    actual_provider,
+                    fetch_date.isoformat(),
+                )
+            ] = stamp
             self._daily_error_state.pop(error_key, None)
 
         if daily_cache_miss:
@@ -14357,6 +14411,20 @@ class DataFetcher:
         )
         start_minute = last_closed_minute - timedelta(minutes=lookback_minutes)
         resolved_feed_role = normalize_feed_role(feed_role)
+        if not hasattr(self, "_minute_cache_reference"):
+            self._minute_cache_reference = {}
+        if not hasattr(self, "_minute_timestamps_reference"):
+            self._minute_timestamps_reference = {}
+        role_minute_cache: dict[str, pd.DataFrame | None] = (
+            self._minute_cache
+            if resolved_feed_role == "execution"
+            else self._minute_cache_reference
+        )
+        role_minute_timestamps: dict[str, datetime] = (
+            self._minute_timestamps
+            if resolved_feed_role == "execution"
+            else self._minute_timestamps_reference
+        )
         if resolved_feed_role == "reference":
             reference_feed = get_reference_feed(
                 getattr(self.settings, "alpaca_reference_feed", None),
@@ -14370,12 +14438,12 @@ class DataFetcher:
             )
             with cache_lock:
                 if reference_df is not None:
-                    self._minute_cache[symbol] = reference_df
-                    self._minute_timestamps[symbol] = now_utc
+                    role_minute_cache[symbol] = reference_df
+                    role_minute_timestamps[symbol] = now_utc
             return reference_df
 
         with cache_lock:
-            last_ts = self._minute_timestamps.get(symbol)
+            last_ts = role_minute_timestamps.get(symbol)
             if last_ts and last_ts > now_utc - timedelta(seconds=ttl_seconds()):
                 if minute_cache_hit:
                     try:
@@ -14392,7 +14460,7 @@ class DataFetcher:
                     ) as exc:  # AI-AGENT-REF: narrow exception
                         logger.exception("bot.py unexpected", exc_info=exc)
                         raise
-                return self._minute_cache[symbol]
+                return role_minute_cache[symbol]
 
         if minute_cache_miss:
             try:
@@ -14814,11 +14882,11 @@ class DataFetcher:
 
         with cache_lock:
             if data_fresh:
-                self._minute_cache[symbol] = df
-                self._minute_timestamps[symbol] = now_utc
+                role_minute_cache[symbol] = df
+                role_minute_timestamps[symbol] = now_utc
             else:
-                self._minute_cache.pop(symbol, None)
-                self._minute_timestamps.pop(symbol, None)
+                role_minute_cache.pop(symbol, None)
+                role_minute_timestamps.pop(symbol, None)
         _record_schema(df)
         return df
 

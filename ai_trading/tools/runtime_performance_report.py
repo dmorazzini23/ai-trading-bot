@@ -29,6 +29,20 @@ _DEFAULT_POLICY_ABLATION_STATE_PATH = "runtime/policy_ablation_state.json"
 _DEFAULT_POLICY_RUNTIME_TOGGLES_PATH = "runtime/policy_runtime_toggles.json"
 _DEFAULT_UNCERTAINTY_CAPITAL_STATE_PATH = "runtime/uncertainty_capital_state.json"
 _DEFAULT_COUNTERFACTUAL_STATE_PATH = "runtime/counterfactual_learning_state.json"
+_NON_BLOCKING_REJECTION_GATES = frozenset(
+    {
+        "EXPECTED_CAPTURE_MODEL_LEARNED",
+        "EXPECTED_CAPTURE_OPTIMIZER",
+        "PORTFOLIO_LOG_GROWTH",
+        "COUNTERFACTUAL_DR",
+        "COUNTERFACTUAL_DR_SHADOW",
+        "EDGE_MODEL_V2",
+        "EDGE_MODEL_V2_REGIME_BLEND",
+        "REPLAY_QUALITY_UPLIFT",
+        "REPLAY_QUALITY_DEWEIGHT",
+    }
+)
+_NON_BLOCKING_REJECTION_PREFIXES = ("BANDIT_",)
 
 _NY_TZ = ZoneInfo("America/New_York")
 
@@ -66,6 +80,15 @@ def _as_bool(value: Any) -> bool | None:
     if text in {"0", "false", "no", "off"}:
         return False
     return None
+
+
+def _is_non_blocking_rejection_gate(gate_name: str) -> bool:
+    token = str(gate_name or "").strip().upper()
+    if not token:
+        return False
+    if token in _NON_BLOCKING_REJECTION_GATES:
+        return True
+    return any(token.startswith(prefix) for prefix in _NON_BLOCKING_REJECTION_PREFIXES)
 
 
 def _confidence_z_from_level(level: float | None) -> float | None:
@@ -926,6 +949,81 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 cast=float,
             )
         )
+    min_event_tca_parent_summary_events = _as_int(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_EVENT_TCA_PARENT_SUMMARY_EVENTS",
+            None,
+            cast=int,
+        )
+    )
+    if min_event_tca_parent_summary_events is None:
+        min_event_tca_parent_summary_events = _as_int(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MIN_EVENT_TCA_PARENT_SUMMARY_EVENTS",
+                0,
+                cast=int,
+            )
+        )
+    max_event_tca_parent_retry_per_order = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_EVENT_TCA_PARENT_RETRY_PER_ORDER",
+            None,
+            cast=float,
+        )
+    )
+    if max_event_tca_parent_retry_per_order is None:
+        max_event_tca_parent_retry_per_order = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_EVENT_TCA_PARENT_RETRY_PER_ORDER",
+                3.0,
+                cast=float,
+            )
+        )
+    max_event_tca_parent_failed_slices_per_order = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_EVENT_TCA_PARENT_FAILED_SLICES_PER_ORDER",
+            None,
+            cast=float,
+        )
+    )
+    if max_event_tca_parent_failed_slices_per_order is None:
+        max_event_tca_parent_failed_slices_per_order = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_EVENT_TCA_PARENT_FAILED_SLICES_PER_ORDER",
+                1.0,
+                cast=float,
+            )
+        )
+    min_event_tca_parent_avg_success_ratio = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_EVENT_TCA_PARENT_AVG_SUCCESS_RATIO",
+            None,
+            cast=float,
+        )
+    )
+    if min_event_tca_parent_avg_success_ratio is None:
+        min_event_tca_parent_avg_success_ratio = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MIN_EVENT_TCA_PARENT_AVG_SUCCESS_RATIO",
+                0.7,
+                cast=float,
+            )
+        )
+    max_event_tca_parent_avg_arrival_slippage_bps = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_EVENT_TCA_PARENT_AVG_ARRIVAL_SLIPPAGE_BPS",
+            None,
+            cast=float,
+        )
+    )
+    if max_event_tca_parent_avg_arrival_slippage_bps is None:
+        max_event_tca_parent_avg_arrival_slippage_bps = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_EVENT_TCA_PARENT_AVG_ARRIVAL_SLIPPAGE_BPS",
+                25.0,
+                cast=float,
+            )
+        )
     return {
         "min_closed_trades": int(max(0, min_closed_trades or 50)),
         "min_profit_factor": float(min_profit_factor if min_profit_factor is not None else 1.0),
@@ -1077,6 +1175,59 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 (
                     max_event_tca_p90_slippage_bps
                     if max_event_tca_p90_slippage_bps is not None
+                    else 25.0
+                ),
+            )
+        ),
+        "min_event_tca_parent_summary_events": int(
+            max(
+                0,
+                (
+                    min_event_tca_parent_summary_events
+                    if min_event_tca_parent_summary_events is not None
+                    else 0
+                ),
+            )
+        ),
+        "max_event_tca_parent_retry_per_order": float(
+            max(
+                0.0,
+                (
+                    max_event_tca_parent_retry_per_order
+                    if max_event_tca_parent_retry_per_order is not None
+                    else 3.0
+                ),
+            )
+        ),
+        "max_event_tca_parent_failed_slices_per_order": float(
+            max(
+                0.0,
+                (
+                    max_event_tca_parent_failed_slices_per_order
+                    if max_event_tca_parent_failed_slices_per_order is not None
+                    else 1.0
+                ),
+            )
+        ),
+        "min_event_tca_parent_avg_success_ratio": float(
+            max(
+                0.0,
+                min(
+                    1.0,
+                    (
+                        min_event_tca_parent_avg_success_ratio
+                        if min_event_tca_parent_avg_success_ratio is not None
+                        else 0.7
+                    ),
+                ),
+            )
+        ),
+        "max_event_tca_parent_avg_arrival_slippage_bps": float(
+            max(
+                0.0,
+                (
+                    max_event_tca_parent_avg_arrival_slippage_bps
+                    if max_event_tca_parent_avg_arrival_slippage_bps is not None
                     else 25.0
                 ),
             )
@@ -2886,6 +3037,8 @@ def _top_rejection_gates_from_attribution(
             gate_name = str(name or "").strip()
             if not gate_name:
                 continue
+            if _is_non_blocking_rejection_gate(gate_name):
+                continue
             ranked.append((gate_name, int(blocked)))
         if ranked:
             ranked.sort(key=lambda item: (-item[1], item[0]))
@@ -2898,6 +3051,8 @@ def _top_rejection_gates_from_attribution(
         gate_name = str(item.get("gate") or "").strip()
         gate_count = _as_int(item.get("count")) or 0
         if not gate_name or gate_count <= 0:
+            continue
+        if _is_non_blocking_rejection_gate(gate_name):
             continue
         fallback_rows.append({"gate": gate_name, "count": int(gate_count)})
     return fallback_rows
@@ -4228,6 +4383,51 @@ def evaluate_go_no_go(
     if max_event_tca_p90_slippage_bps is None:
         max_event_tca_p90_slippage_bps = 25.0
     max_event_tca_p90_slippage_bps = max(0.0, float(max_event_tca_p90_slippage_bps))
+    min_event_tca_parent_summary_events = _as_int(
+        threshold_map.get("min_event_tca_parent_summary_events")
+    )
+    if min_event_tca_parent_summary_events is None:
+        min_event_tca_parent_summary_events = 0
+    min_event_tca_parent_summary_events = max(
+        0,
+        int(min_event_tca_parent_summary_events),
+    )
+    max_event_tca_parent_retry_per_order = _as_float(
+        threshold_map.get("max_event_tca_parent_retry_per_order")
+    )
+    if max_event_tca_parent_retry_per_order is None:
+        max_event_tca_parent_retry_per_order = 3.0
+    max_event_tca_parent_retry_per_order = max(
+        0.0,
+        float(max_event_tca_parent_retry_per_order),
+    )
+    max_event_tca_parent_failed_slices_per_order = _as_float(
+        threshold_map.get("max_event_tca_parent_failed_slices_per_order")
+    )
+    if max_event_tca_parent_failed_slices_per_order is None:
+        max_event_tca_parent_failed_slices_per_order = 1.0
+    max_event_tca_parent_failed_slices_per_order = max(
+        0.0,
+        float(max_event_tca_parent_failed_slices_per_order),
+    )
+    min_event_tca_parent_avg_success_ratio = _as_float(
+        threshold_map.get("min_event_tca_parent_avg_success_ratio")
+    )
+    if min_event_tca_parent_avg_success_ratio is None:
+        min_event_tca_parent_avg_success_ratio = 0.7
+    min_event_tca_parent_avg_success_ratio = max(
+        0.0,
+        min(1.0, float(min_event_tca_parent_avg_success_ratio)),
+    )
+    max_event_tca_parent_avg_arrival_slippage_bps = _as_float(
+        threshold_map.get("max_event_tca_parent_avg_arrival_slippage_bps")
+    )
+    if max_event_tca_parent_avg_arrival_slippage_bps is None:
+        max_event_tca_parent_avg_arrival_slippage_bps = 25.0
+    max_event_tca_parent_avg_arrival_slippage_bps = max(
+        0.0,
+        float(max_event_tca_parent_avg_arrival_slippage_bps),
+    )
 
     trade = report.get("trade_history", {})
     if not isinstance(trade, Mapping):
@@ -4682,10 +4882,121 @@ def evaluate_go_no_go(
     event_tca_fill_count_ok = bool(
         int(event_tca_filled_events) >= int(min_event_tca_filled_events)
     )
+    parent_scope_rows_raw = oms_event_tca.get("parent_execution_kpis_by_scope")
+    parent_scope_rows = (
+        [dict(row) for row in parent_scope_rows_raw if isinstance(row, Mapping)]
+        if isinstance(parent_scope_rows_raw, list)
+        else []
+    )
+    parent_execution_summary_events = max(
+        0,
+        _as_int(oms_event_tca.get("parent_execution_summary_events")) or 0,
+    )
+    if parent_execution_summary_events <= 0 and parent_scope_rows:
+        parent_execution_summary_events = int(len(parent_scope_rows))
+    parent_orders_total = 0
+    parent_retry_count_total = 0.0
+    parent_failed_slices_total = 0.0
+    parent_success_ratio_weight = 0
+    parent_success_ratio_weighted_sum = 0.0
+    parent_arrival_slippage_weight = 0
+    parent_arrival_slippage_weighted_sum = 0.0
+    parent_scope_threshold_breach_count = 0
+    for row in parent_scope_rows:
+        parent_orders = max(0, _as_int(row.get("parent_orders")) or 0)
+        if parent_orders <= 0:
+            parent_orders = 1
+        parent_orders_total += int(parent_orders)
+        parent_retry_count_total += float(_as_float(row.get("retry_count")) or 0.0)
+        parent_failed_slices_total += float(_as_float(row.get("failed_slices")) or 0.0)
+        row_success_ratio = _as_float(row.get("avg_success_ratio"))
+        if row_success_ratio is not None:
+            parent_success_ratio_weight += int(parent_orders)
+            parent_success_ratio_weighted_sum += (
+                float(row_success_ratio) * float(parent_orders)
+            )
+        row_arrival_slippage = _as_float(row.get("avg_arrival_slippage_bps"))
+        row_arrival_slippage_samples = max(
+            0,
+            _as_int(row.get("arrival_slippage_sample_count")) or 0,
+        )
+        if row_arrival_slippage is not None:
+            slippage_weight = row_arrival_slippage_samples or int(parent_orders)
+            parent_arrival_slippage_weight += int(slippage_weight)
+            parent_arrival_slippage_weighted_sum += (
+                float(row_arrival_slippage) * float(slippage_weight)
+            )
+        row_breach = False
+        if (
+            row_success_ratio is not None
+            and float(row_success_ratio) < float(min_event_tca_parent_avg_success_ratio)
+        ):
+            row_breach = True
+        if (
+            row_arrival_slippage is not None
+            and float(row_arrival_slippage)
+            > float(max_event_tca_parent_avg_arrival_slippage_bps)
+        ):
+            row_breach = True
+        if row_breach:
+            parent_scope_threshold_breach_count += 1
+    event_tca_parent_retry_per_order = (
+        float(parent_retry_count_total) / float(parent_orders_total)
+        if parent_orders_total > 0
+        else None
+    )
+    event_tca_parent_failed_slices_per_order = (
+        float(parent_failed_slices_total) / float(parent_orders_total)
+        if parent_orders_total > 0
+        else None
+    )
+    event_tca_parent_avg_success_ratio = (
+        float(parent_success_ratio_weighted_sum) / float(parent_success_ratio_weight)
+        if parent_success_ratio_weight > 0
+        else None
+    )
+    event_tca_parent_avg_arrival_slippage_bps = (
+        float(parent_arrival_slippage_weighted_sum)
+        / float(parent_arrival_slippage_weight)
+        if parent_arrival_slippage_weight > 0
+        else None
+    )
+    event_tca_parent_summary_event_count_ok = bool(
+        int(parent_execution_summary_events)
+        >= int(min_event_tca_parent_summary_events)
+    )
+    event_tca_parent_retry_ok = bool(
+        event_tca_parent_retry_per_order is None
+        or event_tca_parent_retry_per_order
+        <= float(max_event_tca_parent_retry_per_order)
+    )
+    event_tca_parent_failed_slices_ok = bool(
+        event_tca_parent_failed_slices_per_order is None
+        or event_tca_parent_failed_slices_per_order
+        <= float(max_event_tca_parent_failed_slices_per_order)
+    )
+    event_tca_parent_success_ratio_ok = bool(
+        event_tca_parent_avg_success_ratio is None
+        or event_tca_parent_avg_success_ratio
+        >= float(min_event_tca_parent_avg_success_ratio)
+    )
+    event_tca_parent_arrival_slippage_ok = bool(
+        event_tca_parent_avg_arrival_slippage_bps is None
+        or event_tca_parent_avg_arrival_slippage_bps
+        <= float(max_event_tca_parent_avg_arrival_slippage_bps)
+    )
+    event_tca_parent_execution_consistent = bool(
+        event_tca_parent_summary_event_count_ok
+        and event_tca_parent_retry_ok
+        and event_tca_parent_failed_slices_ok
+        and event_tca_parent_success_ratio_ok
+        and event_tca_parent_arrival_slippage_ok
+    )
     oms_event_tca_consistent = bool(
         event_tca_submit_reject_rate_ok
         and event_tca_p90_slippage_ok
         and event_tca_fill_count_ok
+        and event_tca_parent_execution_consistent
     )
     confidence_enabled = bool(
         float(min_win_rate_confidence_floor) > 0.0 and float(win_rate_confidence_z) > 0.0
@@ -4847,6 +5158,11 @@ def evaluate_go_no_go(
             if (oms_event_tca_available and require_oms_event_tca)
             else (not require_oms_event_tca)
         ),
+        "oms_event_tca_parent_execution_consistent": (
+            event_tca_parent_execution_consistent
+            if (oms_event_tca_available and require_oms_event_tca)
+            else (not require_oms_event_tca)
+        ),
     }
     if requested_trade_fill_source == "auto_live" and bool(auto_live_fail_closed):
         checks["live_samples_sufficient"] = bool(auto_live_context.get("used_live", False))
@@ -4912,6 +5228,21 @@ def evaluate_go_no_go(
                 max_event_tca_submit_reject_rate_pct
             ),
             "max_event_tca_p90_slippage_bps": float(max_event_tca_p90_slippage_bps),
+            "min_event_tca_parent_summary_events": int(
+                min_event_tca_parent_summary_events
+            ),
+            "max_event_tca_parent_retry_per_order": float(
+                max_event_tca_parent_retry_per_order
+            ),
+            "max_event_tca_parent_failed_slices_per_order": float(
+                max_event_tca_parent_failed_slices_per_order
+            ),
+            "min_event_tca_parent_avg_success_ratio": float(
+                min_event_tca_parent_avg_success_ratio
+            ),
+            "max_event_tca_parent_avg_arrival_slippage_bps": float(
+                max_event_tca_parent_avg_arrival_slippage_bps
+            ),
         },
         "observed": {
             "pnl_available": pnl_available,
@@ -4987,6 +5318,35 @@ def evaluate_go_no_go(
             "event_tca_submit_reject_rate_ok": bool(event_tca_submit_reject_rate_ok),
             "event_tca_p90_slippage_ok": bool(event_tca_p90_slippage_ok),
             "event_tca_fill_count_ok": bool(event_tca_fill_count_ok),
+            "event_tca_parent_summary_events": int(parent_execution_summary_events),
+            "event_tca_parent_orders": int(parent_orders_total),
+            "event_tca_parent_retry_per_order": event_tca_parent_retry_per_order,
+            "event_tca_parent_failed_slices_per_order": (
+                event_tca_parent_failed_slices_per_order
+            ),
+            "event_tca_parent_avg_success_ratio": event_tca_parent_avg_success_ratio,
+            "event_tca_parent_avg_arrival_slippage_bps": (
+                event_tca_parent_avg_arrival_slippage_bps
+            ),
+            "event_tca_parent_scope_threshold_breach_count": int(
+                parent_scope_threshold_breach_count
+            ),
+            "event_tca_parent_summary_event_count_ok": bool(
+                event_tca_parent_summary_event_count_ok
+            ),
+            "event_tca_parent_retry_ok": bool(event_tca_parent_retry_ok),
+            "event_tca_parent_failed_slices_ok": bool(
+                event_tca_parent_failed_slices_ok
+            ),
+            "event_tca_parent_success_ratio_ok": bool(
+                event_tca_parent_success_ratio_ok
+            ),
+            "event_tca_parent_arrival_slippage_ok": bool(
+                event_tca_parent_arrival_slippage_ok
+            ),
+            "event_tca_parent_execution_consistent": bool(
+                event_tca_parent_execution_consistent
+            ),
             "trade_fill_source": trade_fill_source,
             "requested_trade_fill_source": requested_trade_fill_source,
             "auto_live_selection": auto_live_context,

@@ -59,12 +59,12 @@ def _normalize_reference_feed(value: str | None) -> ReferenceFeed:
 def get_execution_feed(requested: str | None = None) -> ExecutionFeed:
     candidate = requested
     if candidate in (None, ""):
-        # Keep legacy ALPACA_DATA_FEED precedence for backward compatibility.
-        candidate = get_env("ALPACA_DATA_FEED", None, cast=str, resolve_aliases=False)
-    if candidate in (None, ""):
         candidate = get_env("ALPACA_EXECUTION_FEED", None, cast=str, resolve_aliases=False)
     if candidate in (None, ""):
         candidate = _settings_feed("alpaca_execution_feed")
+    if candidate in (None, ""):
+        # Legacy fallback only after explicit execution-feed knobs.
+        candidate = get_env("ALPACA_DATA_FEED", None, cast=str, resolve_aliases=False)
     if candidate in (None, ""):
         candidate = _settings_feed("alpaca_data_feed")
     resolved = resolve_alpaca_feed(candidate)
@@ -80,6 +80,23 @@ def get_reference_feed(requested: str | None = None) -> ReferenceFeed:
     if candidate in (None, ""):
         candidate = _settings_feed("alpaca_reference_feed")
     return _normalize_reference_feed(candidate)
+
+
+def get_reference_bars_feed(requested: str | None = None) -> ExecutionFeed:
+    """Return a bars-endpoint compatible feed for reference-role bar fetches.
+
+    Alpaca bars endpoints accept real-time feeds (``iex``/``sip``) and reject
+    ``delayed_sip``. When delayed reference is requested, prefer ``sip`` when
+    entitled; otherwise degrade to ``iex``.
+    """
+
+    reference_feed = get_reference_feed(requested)
+    if reference_feed == "iex":
+        return "iex"
+    sip_resolved = str(resolve_alpaca_feed("sip") or "").strip().lower()
+    if sip_resolved == "sip":
+        return "sip"
+    return "iex"
 
 
 def resolve_feed_for_role(
@@ -101,5 +118,6 @@ __all__ = [
     "is_delayed_feed",
     "get_execution_feed",
     "get_reference_feed",
+    "get_reference_bars_feed",
     "resolve_feed_for_role",
 ]

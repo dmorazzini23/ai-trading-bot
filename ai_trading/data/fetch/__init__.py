@@ -261,6 +261,7 @@ from ai_trading.data.metrics import (
 )
 from ai_trading.data.feed_roles import (
     get_execution_feed,
+    get_reference_bars_feed,
     get_reference_feed,
     is_delayed_feed,
     normalize_feed_role,
@@ -7977,6 +7978,7 @@ def _fetch_reference_bars(
     if pd_local is None:
         raise RuntimeError("pandas not available")
     resolved_feed = get_reference_feed(feed)
+    effective_feed = get_reference_bars_feed(feed)
     resolved_adjustment = str(adjustment or "raw").strip().lower() or "raw"
     validate_adjustment(resolved_adjustment)
     try:
@@ -7990,7 +7992,7 @@ def _fetch_reference_bars(
             timeframe=timeframe,
             start=ensure_datetime(start),
             end=ensure_datetime(end),
-            feed=resolved_feed,
+            feed=effective_feed,
             adjustment=resolved_adjustment,
         )
     except Exception:
@@ -8014,10 +8016,15 @@ def _fetch_reference_bars(
     normalized = _apply_incomplete_row_policy(normalized, symbol=symbol, timeframe=timeframe)
     if normalized is None or getattr(normalized, "empty", True):
         return _empty_reference_frame()
+    try:
+        normalized.attrs["reference_feed_requested"] = str(resolved_feed)
+        normalized.attrs["reference_feed_effective"] = str(effective_feed)
+    except Exception:
+        pass
     return _annotate_df_source(
         normalized,
         provider="alpaca_reference",
-        feed=resolved_feed,
+        feed=effective_feed,
     )
 
 

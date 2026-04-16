@@ -45,6 +45,7 @@ def test_operator_control_plane_snapshot_endpoint(monkeypatch):
     assert snapshot["service"] == "ai-trading"
     assert "rollout" in snapshot
     assert "broker_health" in snapshot
+    assert "execution_quality" in snapshot
     assert "manual_overrides" in snapshot
 
 

@@ -44,6 +44,22 @@ _STARTUP_WARMUP_HEALTH_REASONS = frozenset(
         "startup_pending_reconcile_complete",
     }
 )
+_NON_BLOCKING_REJECTION_GATES = frozenset(
+    {
+        "EXPECTED_CAPTURE_MODEL_LEARNED",
+        "EXPECTED_CAPTURE_OPTIMIZER",
+        "PORTFOLIO_LOG_GROWTH",
+        "COUNTERFACTUAL_DR",
+        "COUNTERFACTUAL_DR_SHADOW",
+        "EDGE_MODEL_V2",
+        "EDGE_MODEL_V2_REGIME_BLEND",
+        "REPLAY_QUALITY_UPLIFT",
+        "REPLAY_QUALITY_DEWEIGHT",
+    }
+)
+_NON_BLOCKING_REJECTION_PREFIXES = (
+    "BANDIT_",
+)
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -75,6 +91,15 @@ def _int_arg(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _is_non_blocking_rejection_gate(gate_name: str) -> bool:
+    token = str(gate_name or "").strip().upper()
+    if not token:
+        return False
+    if token in _NON_BLOCKING_REJECTION_GATES:
+        return True
+    return any(token.startswith(prefix) for prefix in _NON_BLOCKING_REJECTION_PREFIXES)
 
 
 def _runtime_report_payload() -> dict[str, Any]:
@@ -402,6 +427,7 @@ def _collect_gate_window_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         for gate_name, stats in gate_stats.items()
         if float(stats.get("blocked_records", 0.0) or 0.0) > 0.0
         and float(stats.get("accepted_records", 0.0) or 0.0) <= 0.0
+        and not _is_non_blocking_rejection_gate(gate_name)
     }
     if blocking_only_stats:
         top_gate, top_blocked = max(
@@ -459,6 +485,9 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
             top_rejection_ratio = _float_or_none(
                 gate_window.get("top_rejection_concentration_ratio")
             )
+            if _is_non_blocking_rejection_gate(top_rejection_gate):
+                top_rejection_gate = ""
+                top_rejection_ratio = None
         else:
             top_rejection_gate = ""
             top_rejection_ratio = None
@@ -469,6 +498,9 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         top_rejection_ratio = _float_or_none(
             gate_effectiveness.get("top_rejection_concentration_ratio")
         )
+        if _is_non_blocking_rejection_gate(top_rejection_gate):
+            top_rejection_gate = ""
+            top_rejection_ratio = None
 
     return {
         "runtime_gonogo_block_openings_enabled": _runtime_gonogo_block_openings_enabled(args),
@@ -846,7 +878,12 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
 
     capture_ratio = _float_or_none(snapshot.get("execution_capture_ratio"))
     min_capture = _capture_ratio_threshold(args)
-    if capture_ratio is not None and capture_ratio < min_capture:
+    if (
+        capture_ratio is not None
+        and capture_ratio < min_capture
+        and not startup_or_warmup
+        and not market_closed
+    ):
         triggers.append("execution_capture_ratio_low")
     fill_ratio = _float_or_none(snapshot.get("execution_fill_ratio"))
     fill_ratio_samples = _int_arg(snapshot.get("execution_fill_ratio_samples"), default=0)
@@ -867,6 +904,7 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
             and fill_ratio_samples >= min_fill_ratio_samples
             and fill_ratio < min_fill_ratio
             and not startup_or_warmup
+            and not market_closed
         ):
             triggers.append("execution_fill_ratio_low")
     fill_ratio_healthy = bool(
@@ -903,6 +941,7 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
         and precheck_failure_ratio >= precheck_spike_min_ratio
         and not fill_ratio_healthy
         and not startup_or_warmup
+        and not market_closed
     ):
         triggers.append("pre_execution_checks_spike")
 
@@ -930,6 +969,7 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
         and gate_rejected_records >= max(1, min_rejected_records_for_concentration)
         and top_rejection_concentration_ratio >= max_rejection_concentration_ratio
         and not startup_or_warmup
+        and not market_closed
     ):
         triggers.append("rejection_concentration_high")
 

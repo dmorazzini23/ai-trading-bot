@@ -130,6 +130,50 @@ def test_build_report_uses_blocked_gate_counts_for_rejection_concentration(
     assert gate["top_rejection_concentration_ratio"] == pytest.approx(8 / 70)
 
 
+def test_build_report_excludes_non_blocking_model_tags_from_rejection_concentration(
+    tmp_path: Path,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text("[]", encoding="utf-8")
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 40,
+                "total_accepted_records": 20,
+                "total_rejected_records": 20,
+                "gate_totals": {
+                    "EXPECTED_CAPTURE_MODEL_LEARNED": 15,
+                    "PRE_EXECUTION_ORDER_CHECKS_FAILED": 5,
+                    "OK_TRADE": 20,
+                },
+                "gate_attribution": {
+                    "EXPECTED_CAPTURE_MODEL_LEARNED": {
+                        "count": 15,
+                        "accepted_records": 0,
+                        "blocked_records": 15,
+                    },
+                    "PRE_EXECUTION_ORDER_CHECKS_FAILED": {
+                        "count": 5,
+                        "accepted_records": 0,
+                        "blocked_records": 5,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+
+    gate = report["gate_effectiveness"]
+    assert gate["top_rejection_concentration_gate"] == "PRE_EXECUTION_ORDER_CHECKS_FAILED"
+    assert gate["top_rejection_concentration_ratio"] == pytest.approx(5 / 20)
+
+
 def test_build_report_includes_execution_vs_alpha_attribution(tmp_path: Path) -> None:
     trade_history_path = tmp_path / "trade_history.json"
     gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
@@ -2666,6 +2710,79 @@ def test_evaluate_go_no_go_fails_on_event_tca_when_required() -> None:
     observed = decision["observed"]
     assert observed["oms_event_tca_available"] is True
     assert observed["event_tca_submit_reject_rate_ok"] is False
+
+
+def test_evaluate_go_no_go_flags_parent_execution_quality_when_thresholds_breach() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 40,
+            "profit_factor": 1.6,
+            "win_rate": 0.62,
+            "pnl_sum": 120.0,
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.24,
+            "total_expected_net_edge_bps": 22.0,
+        },
+        "oms_event_tca": {
+            "enabled": True,
+            "available": True,
+            "filled_events": 40,
+            "submit_reject_rate_pct": 1.5,
+            "p90_slippage_bps": 8.0,
+            "parent_execution_summary_events": 6,
+            "parent_execution_kpis_by_scope": [
+                {
+                    "symbol": "AAPL",
+                    "strategy_id": "mean_reversion_v2",
+                    "session_id": "regular",
+                    "parent_orders": 6,
+                    "retry_count": 18,
+                    "failed_slices": 9,
+                    "avg_success_ratio": 0.55,
+                    "avg_arrival_slippage_bps": 18.0,
+                    "arrival_slippage_sample_count": 10,
+                }
+            ],
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 10,
+            "min_profit_factor": 1.0,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.01,
+            "min_expected_net_edge_bps": -50.0,
+            "require_gate_valid": True,
+            "require_pnl_available": True,
+            "require_open_position_reconciliation": False,
+            "require_oms_event_tca": True,
+            "min_event_tca_filled_events": 20,
+            "max_event_tca_submit_reject_rate_pct": 5.0,
+            "max_event_tca_p90_slippage_bps": 25.0,
+            "min_event_tca_parent_summary_events": 1,
+            "max_event_tca_parent_retry_per_order": 1.0,
+            "max_event_tca_parent_failed_slices_per_order": 0.5,
+            "min_event_tca_parent_avg_success_ratio": 0.8,
+            "max_event_tca_parent_avg_arrival_slippage_bps": 12.0,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "oms_event_tca_parent_execution_consistent" in decision["failed_checks"]
+    observed = decision["observed"]
+    assert observed["oms_event_tca_available"] is True
+    assert observed["event_tca_parent_summary_events"] == 6
+    assert observed["event_tca_parent_retry_ok"] is False
+    assert observed["event_tca_parent_failed_slices_ok"] is False
+    assert observed["event_tca_parent_success_ratio_ok"] is False
+    assert observed["event_tca_parent_arrival_slippage_ok"] is False
+    assert observed["event_tca_parent_execution_consistent"] is False
 
 
 def test_main_resolves_runtime_paths_from_env(

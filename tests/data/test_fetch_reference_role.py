@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import sys
+import types
 
 import pandas as pd
 
@@ -86,3 +88,48 @@ def test_get_minute_df_delayed_feed_routes_reference(monkeypatch) -> None:
     assert isinstance(result, pd.DataFrame)
     assert not result.empty
     assert called_kwargs["feed"] == "delayed_sip"
+
+
+def test_fetch_reference_bars_uses_bars_supported_effective_feed(monkeypatch) -> None:
+    start = datetime.now(UTC) - timedelta(days=5)
+    end = datetime.now(UTC)
+    captured: dict[str, object] = {}
+    in_window_ts = start + timedelta(days=1)
+
+    def _fake_get_bars_df(*args, **kwargs):
+        del args
+        if kwargs:
+            captured.update(kwargs)
+        return pd.DataFrame(
+            [
+                {
+                    "timestamp": in_window_ts,
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.5,
+                    "close": 100.5,
+                    "volume": 1000.0,
+                },
+            ],
+        )
+
+    monkeypatch.setattr(data_fetcher, "get_reference_feed", lambda *_args, **_kwargs: "delayed_sip")
+    monkeypatch.setattr(data_fetcher, "get_reference_bars_feed", lambda *_args, **_kwargs: "sip")
+    alpaca_api_stub = types.ModuleType("ai_trading.alpaca_api")
+    setattr(alpaca_api_stub, "get_bars_df", _fake_get_bars_df)
+    monkeypatch.setitem(sys.modules, "ai_trading.alpaca_api", alpaca_api_stub)
+
+    result = data_fetcher._fetch_reference_bars(  # noqa: SLF001 - intentional integration test
+        "AAPL",
+        start,
+        end,
+        "1Day",
+        feed="delayed_sip",
+        adjustment="raw",
+    )
+
+    assert isinstance(result, pd.DataFrame)
+    assert list(result.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+    assert captured.get("feed") == "sip"
+    assert result.attrs.get("reference_feed_requested") == "delayed_sip"
+    assert result.attrs.get("reference_feed_effective") == "sip"

@@ -193,6 +193,47 @@ def test_evaluate_incident_triggers_suppresses_edge_realism_when_market_closed()
     assert "edge_realism_gap_high" not in triggers
 
 
+def test_evaluate_incident_triggers_suppresses_performance_spikes_when_market_closed() -> None:
+    snapshot = {
+        "go_no_go_gate_passed": True,
+        "go_no_go_failed_checks": [],
+        "execution_capture_ratio": 0.01,
+        "slippage_drag_bps": 7.0,
+        "execution_fill_ratio": 0.05,
+        "execution_fill_ratio_samples": 40,
+        "execution_skipped_count": 30,
+        "precheck_failure_count": 25,
+        "precheck_failure_ratio": 0.83,
+        "gate_rejected_records": 60,
+        "top_rejection_concentration_ratio": 0.9,
+        "health_ok": True,
+        "health_status": "healthy",
+        "health_reason": "market_closed",
+        "provider_status": "warming_up",
+        "provider_active": "alpaca",
+        "provider_reason": "market_closed",
+        "using_backup": False,
+        "broker_status": "connected",
+    }
+    triggers = slack_srv._evaluate_incident_triggers(
+        snapshot,
+        {
+            "min_capture_ratio": 0.08,
+            "min_fill_ratio": 0.25,
+            "min_fill_ratio_samples": 20,
+            "precheck_spike_min_count": 10,
+            "precheck_spike_min_ratio": 0.6,
+            "precheck_spike_min_skipped": 12,
+            "max_rejection_concentration_ratio": 0.65,
+            "min_rejected_records_for_concentration": 20,
+        },
+    )
+    assert "execution_capture_ratio_low" not in triggers
+    assert "execution_fill_ratio_low" not in triggers
+    assert "pre_execution_checks_spike" not in triggers
+    assert "rejection_concentration_high" not in triggers
+
+
 def test_evaluate_incident_triggers_suppresses_fill_and_precheck_during_startup() -> None:
     snapshot = {
         "go_no_go_gate_passed": None,
@@ -376,6 +417,42 @@ def test_collect_gate_window_snapshot_uses_blocking_only_concentration_gate(
     )
 
     assert snapshot["top_rejection_concentration_gate"] == "PASSIVE_FILL_PROBABILITY_LOW"
+    assert snapshot["top_rejection_concentration_blocking_gate_found"] is True
+    assert abs(float(snapshot["top_rejection_concentration_ratio"] or 0.0) - 0.3) < 1e-9
+
+
+def test_collect_gate_window_snapshot_excludes_non_blocking_model_tags(
+    monkeypatch, tmp_path: Path
+) -> None:
+    now_iso = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    gate_path = tmp_path / "gate_effectiveness.jsonl"
+    gate_path.write_text(
+        json.dumps(
+            {
+                "ts": now_iso,
+                "rejected_records": 10,
+                "gate_attribution": {
+                    "EXPECTED_CAPTURE_MODEL_LEARNED": {
+                        "blocked_records": 9,
+                        "accepted_records": 0,
+                    },
+                    "PRE_EXECUTION_ORDER_CHECKS_FAILED": {
+                        "blocked_records": 3,
+                        "accepted_records": 0,
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_GATE_EFFECTIVENESS_LOG_PATH", str(gate_path))
+
+    snapshot = slack_srv._collect_gate_window_snapshot(
+        {"gate_window_minutes": 60, "gate_window_max_rows": 200}
+    )
+
+    assert snapshot["top_rejection_concentration_gate"] == "PRE_EXECUTION_ORDER_CHECKS_FAILED"
     assert snapshot["top_rejection_concentration_blocking_gate_found"] is True
     assert abs(float(snapshot["top_rejection_concentration_ratio"] or 0.0) - 0.3) < 1e-9
 

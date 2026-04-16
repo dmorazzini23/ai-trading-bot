@@ -4365,6 +4365,57 @@ def test_update_markout_feedback_tracks_only_live_sources(monkeypatch):
     assert engine._markout_feedback_last_context["sample_count"] == 1
 
 
+def test_execution_adverse_selection_gate_uses_robust_markout_mean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setattr(
+        lt,
+        "_config_get_env",
+        lambda name, default=None, **_kwargs: os.getenv(name, default),
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_ADVERSE_SELECTION_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_ADVERSE_SELECTION_MIN_SAMPLES", "20")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_ADVERSE_SELECTION_SYMBOL_MIN_SAMPLES", "8")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_ADVERSE_SELECTION_MAX_RISK_BPS", "4.0")
+    monkeypatch.setenv("AI_TRADING_MARKOUT_FEEDBACK_ROBUST_MEAN_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_MARKOUT_FEEDBACK_ROBUST_MIN_SAMPLES", "12")
+    monkeypatch.setenv("AI_TRADING_MARKOUT_FEEDBACK_ROBUST_LOWER_Q", "0.10")
+    monkeypatch.setenv("AI_TRADING_MARKOUT_FEEDBACK_ROBUST_UPPER_Q", "0.90")
+
+    for _ in range(25):
+        engine._update_markout_feedback(
+            symbol="AAPL",
+            side="buy",
+            status="filled",
+            realized_net_edge_bps=-1.0,
+            realized_slippage_bps=0.5,
+            fill_source="live",
+        )
+    engine._update_markout_feedback(
+        symbol="AAPL",
+        side="buy",
+        status="filled",
+        realized_net_edge_bps=-175.0,
+        realized_slippage_bps=1.0,
+        fill_source="live",
+    )
+
+    context = engine._observe_markout_feedback()
+    assert context["sample_count"] == 26
+    assert context["robust_mean_applied"] is True
+    assert context["mean_bps_raw"] < -7.0
+    assert context["mean_bps"] > -2.0
+
+    allowed, adverse_context = engine._execution_adverse_selection_risk_allows_opening(
+        order={"symbol": "AAPL", "side": "buy"}
+    )
+
+    assert allowed is True
+    assert adverse_context["global_markout_mean_bps"] > -2.0
+    assert adverse_context["global_markout_mean_bps_raw"] < -7.0
+
+
 def test_execution_kpi_snapshot_includes_markout_feedback_fields(caplog):
     engine = _engine_stub()
     engine._cycle_order_outcomes = [

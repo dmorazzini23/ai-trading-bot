@@ -8792,6 +8792,7 @@ class ExecutionEngine:
         global_context = self._observe_markout_feedback()
         global_samples = max(0, _safe_int(global_context.get("sample_count"), 0))
         global_mean_bps = self._coerce_finite_float(global_context.get("mean_bps")) or 0.0
+        global_mean_bps_raw = self._coerce_finite_float(global_context.get("mean_bps_raw"))
         global_risk_bps = max(-float(global_mean_bps), 0.0)
 
         symbol = str(order.get("symbol") or "").strip().upper()
@@ -8812,7 +8813,10 @@ class ExecutionEngine:
                 ]
                 symbol_samples = int(len(values))
                 if values:
-                    symbol_mean_bps = float(statistics.mean(values))
+                    symbol_mean_context = self._markout_feedback_mean_context(values)
+                    symbol_mean_bps = self._coerce_finite_float(symbol_mean_context.get("mean_bps"))
+                    if symbol_mean_bps is None:
+                        symbol_mean_bps = float(statistics.mean(values))
                     symbol_risk_bps = max(-float(symbol_mean_bps), 0.0)
 
         if int(global_samples) < int(min_samples) and int(symbol_samples) < int(symbol_min_samples):
@@ -8845,6 +8849,9 @@ class ExecutionEngine:
             "adverse_selection_risk_bps": float(combined_risk_bps),
             "max_adverse_selection_risk_bps": float(max_risk_bps),
             "global_markout_mean_bps": float(global_mean_bps),
+            "global_markout_mean_bps_raw": (
+                float(global_mean_bps_raw) if global_mean_bps_raw is not None else None
+            ),
             "global_markout_samples": int(global_samples),
             "symbol_markout_mean_bps": float(symbol_mean_bps) if symbol_mean_bps is not None else None,
             "symbol_markout_samples": int(symbol_samples),
@@ -12165,10 +12172,126 @@ class ExecutionEngine:
         history_count = len(history_raw) if isinstance(history_raw, deque) else 0
         context.setdefault("sample_count", int(history_count))
         context.setdefault("mean_bps", 0.0)
+        context.setdefault("mean_bps_raw", context.get("mean_bps", 0.0))
+        context.setdefault("mean_bps_capped", context.get("mean_bps", 0.0))
+        context.setdefault("robust_mean_applied", False)
         context.setdefault("toxic", False)
         context.setdefault("threshold_bps", -4.0)
         context.setdefault("min_samples", 12)
         return context
+
+    @staticmethod
+    def _percentile_linear(values: Sequence[float], quantile: float) -> float | None:
+        """Return linear-interpolated percentile for finite numeric values."""
+
+        ordered = sorted(
+            float(value)
+            for value in values
+            if isinstance(value, (int, float)) and math.isfinite(float(value))
+        )
+        if not ordered:
+            return None
+        q = max(0.0, min(1.0, float(quantile)))
+        if len(ordered) == 1:
+            return float(ordered[0])
+        position = q * float(len(ordered) - 1)
+        lower_idx = int(math.floor(position))
+        upper_idx = int(math.ceil(position))
+        lower_value = float(ordered[lower_idx])
+        upper_value = float(ordered[upper_idx])
+        if lower_idx == upper_idx:
+            return lower_value
+        weight = position - float(lower_idx)
+        return float(lower_value + ((upper_value - lower_value) * weight))
+
+    def _markout_feedback_mean_context(self, values: Sequence[float]) -> dict[str, Any]:
+        """Compute raw/capped/robust mean context for markout feedback."""
+
+        clean_values = [
+            float(value)
+            for value in values
+            if isinstance(value, (int, float)) and math.isfinite(float(value))
+        ]
+        if not clean_values:
+            return {
+                "mean_bps": 0.0,
+                "mean_bps_raw": 0.0,
+                "mean_bps_capped": 0.0,
+                "robust_mean_applied": False,
+                "robust_lower_bound_bps": None,
+                "robust_upper_bound_bps": None,
+            }
+
+        robust_enabled = _resolve_bool_env("AI_TRADING_MARKOUT_FEEDBACK_ROBUST_MEAN_ENABLED")
+        if robust_enabled is None:
+            robust_enabled = True
+        robust_min_samples = _config_int("AI_TRADING_MARKOUT_FEEDBACK_ROBUST_MIN_SAMPLES", 12)
+        if robust_min_samples is None:
+            robust_min_samples = 12
+        robust_min_samples = max(3, min(int(robust_min_samples), 4096))
+        lower_q = _config_float("AI_TRADING_MARKOUT_FEEDBACK_ROBUST_LOWER_Q", 0.10)
+        if lower_q is None:
+            lower_q = 0.10
+        lower_q = max(0.0, min(float(lower_q), 0.49))
+        upper_q = _config_float("AI_TRADING_MARKOUT_FEEDBACK_ROBUST_UPPER_Q", 0.90)
+        if upper_q is None:
+            upper_q = 0.90
+        upper_q = max(float(lower_q) + 0.01, min(float(upper_q), 1.0))
+        abs_cap_bps = _config_float("AI_TRADING_MARKOUT_FEEDBACK_ABS_CAP_BPS", 250.0)
+        if abs_cap_bps is None:
+            abs_cap_bps = 250.0
+        abs_cap_bps = max(5.0, min(float(abs_cap_bps), 10_000.0))
+
+        raw_mean_bps = float(statistics.mean(clean_values))
+        capped_values = [
+            max(-float(abs_cap_bps), min(float(abs_cap_bps), float(value)))
+            for value in clean_values
+        ]
+        capped_mean_bps = float(statistics.mean(capped_values))
+        robust_values = list(capped_values)
+        robust_applied = False
+        robust_lower_bound_bps: float | None = None
+        robust_upper_bound_bps: float | None = None
+        if (
+            bool(robust_enabled)
+            and len(capped_values) >= int(robust_min_samples)
+            and float(upper_q) > float(lower_q)
+        ):
+            lower_bound = self._percentile_linear(capped_values, lower_q)
+            upper_bound = self._percentile_linear(capped_values, upper_q)
+            if lower_bound is not None and upper_bound is not None:
+                robust_lower_bound_bps = float(min(lower_bound, upper_bound))
+                robust_upper_bound_bps = float(max(lower_bound, upper_bound))
+                robust_values = [
+                    min(
+                        float(robust_upper_bound_bps),
+                        max(float(robust_lower_bound_bps), float(value)),
+                    )
+                    for value in capped_values
+                ]
+                robust_applied = True
+        robust_mean_bps = float(statistics.mean(robust_values))
+        return {
+            "mean_bps": float(robust_mean_bps),
+            "mean_bps_raw": float(raw_mean_bps),
+            "mean_bps_capped": float(capped_mean_bps),
+            "robust_mean_applied": bool(robust_applied),
+            "robust_enabled": bool(robust_enabled),
+            "robust_min_samples": int(robust_min_samples),
+            "robust_lower_q": float(lower_q),
+            "robust_upper_q": float(upper_q),
+            "robust_abs_cap_bps": float(abs_cap_bps),
+            "robust_lower_bound_bps": (
+                float(robust_lower_bound_bps)
+                if robust_lower_bound_bps is not None
+                else None
+            ),
+            "robust_upper_bound_bps": (
+                float(robust_upper_bound_bps)
+                if robust_upper_bound_bps is not None
+                else None
+            ),
+        }
 
     def _update_markout_feedback(
         self,
@@ -12236,11 +12359,32 @@ class ExecutionEngine:
             symbol_history.append(float(parsed_edge))
             symbol_history_map[symbol_token] = symbol_history
             self._symbol_markout_feedback_bps = symbol_history_map
-        mean_bps = float(statistics.mean(markout_history_raw)) if markout_history_raw else 0.0
+        mean_context = self._markout_feedback_mean_context(markout_history_raw)
+        mean_bps = float(self._coerce_finite_float(mean_context.get("mean_bps")) or 0.0)
+        mean_bps_raw = float(
+            self._coerce_finite_float(mean_context.get("mean_bps_raw")) or mean_bps
+        )
+        mean_bps_capped = float(
+            self._coerce_finite_float(mean_context.get("mean_bps_capped")) or mean_bps
+        )
         toxic = len(markout_history_raw) >= int(min_samples) and mean_bps <= float(threshold_bps)
         context = {
             "sample_count": int(len(markout_history_raw)),
             "mean_bps": float(mean_bps),
+            "mean_bps_raw": float(mean_bps_raw),
+            "mean_bps_capped": float(mean_bps_capped),
+            "robust_mean_applied": bool(mean_context.get("robust_mean_applied", False)),
+            "robust_enabled": bool(mean_context.get("robust_enabled", False)),
+            "robust_min_samples": int(mean_context.get("robust_min_samples", 0) or 0),
+            "robust_lower_q": self._coerce_finite_float(mean_context.get("robust_lower_q")),
+            "robust_upper_q": self._coerce_finite_float(mean_context.get("robust_upper_q")),
+            "robust_abs_cap_bps": self._coerce_finite_float(mean_context.get("robust_abs_cap_bps")),
+            "robust_lower_bound_bps": self._coerce_finite_float(
+                mean_context.get("robust_lower_bound_bps")
+            ),
+            "robust_upper_bound_bps": self._coerce_finite_float(
+                mean_context.get("robust_upper_bound_bps")
+            ),
             "toxic": bool(toxic),
             "threshold_bps": float(threshold_bps),
             "min_samples": int(min_samples),
@@ -12255,8 +12399,13 @@ class ExecutionEngine:
                 "fill_source": source_label or "live",
                 "realized_net_edge_bps": float(parsed_edge),
                 "markout_mean_bps": float(mean_bps),
+                "markout_mean_bps_raw": float(mean_bps_raw),
+                "markout_mean_bps_capped": float(mean_bps_capped),
                 "markout_samples": int(len(markout_history_raw)),
                 "markout_toxic": bool(toxic),
+                "markout_mean_robust_applied": bool(
+                    mean_context.get("robust_mean_applied", False)
+                ),
             },
         )
         self._persist_markout_execution_override(context)
