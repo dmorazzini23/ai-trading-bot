@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+import json
+from pathlib import Path
+
+from ai_trading.tools.check_promotion_approval_gate import (
+    evaluate_promotion_approval_gate,
+    main,
+)
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, sort_keys=True))
+            handle.write("\n")
+
+
+def test_approval_gate_passes_with_fresh_approval(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    approvals_path = tmp_path / "promotion_approvals.jsonl"
+    _write_jsonl(
+        approvals_path,
+        [
+            {
+                "approval_id": "approval-1",
+                "ts": now.isoformat(),
+                "strategy": "momentum",
+                "model_id": "model-1",
+                "decision": "approved",
+            }
+        ],
+    )
+
+    payload = evaluate_promotion_approval_gate(
+        governance_path=str(tmp_path),
+        max_age_hours=24.0,
+    )
+
+    assert payload["ok"] is True
+    assert payload["reason"] == "approval_fresh"
+
+
+def test_approval_gate_fails_on_stale_approval(tmp_path: Path) -> None:
+    stale = datetime.now(UTC) - timedelta(days=10)
+    approvals_path = tmp_path / "promotion_approvals.jsonl"
+    _write_jsonl(
+        approvals_path,
+        [
+            {
+                "approval_id": "approval-1",
+                "ts": stale.isoformat(),
+                "strategy": "momentum",
+                "model_id": "model-1",
+                "decision": "approved",
+            }
+        ],
+    )
+
+    payload = evaluate_promotion_approval_gate(
+        governance_path=str(tmp_path),
+        max_age_hours=24.0,
+    )
+
+    assert payload["ok"] is False
+    assert payload["reason"] == "approval_stale"
+
+
+def test_approval_gate_fails_when_latest_event_forced(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    _write_jsonl(
+        tmp_path / "promotion_approvals.jsonl",
+        [
+            {
+                "approval_id": "approval-1",
+                "ts": now.isoformat(),
+                "strategy": "momentum",
+                "model_id": "model-1",
+                "decision": "approved",
+            }
+        ],
+    )
+    _write_jsonl(
+        tmp_path / "promotion_events.jsonl",
+        [
+            {
+                "ts": now.isoformat(),
+                "strategy": "momentum",
+                "model_id": "model-1",
+                "force": True,
+                "approval_id": "approval-1",
+            }
+        ],
+    )
+
+    payload = evaluate_promotion_approval_gate(
+        governance_path=str(tmp_path),
+        max_age_hours=24.0,
+    )
+    assert payload["ok"] is False
+    assert payload["reason"] == "forced_promotion_disallowed"
+
+
+def test_approval_gate_cli_returns_nonzero_on_failure(tmp_path: Path) -> None:
+    _write_jsonl(tmp_path / "promotion_approvals.jsonl", [])
+    exit_code = main(
+        [
+            "--governance-path",
+            str(tmp_path),
+            "--max-age-hours",
+            "24",
+        ]
+    )
+    assert exit_code == 1

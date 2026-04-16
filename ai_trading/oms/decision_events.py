@@ -156,6 +156,98 @@ def _model_hash(payload: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _lineage_text(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    parsed = str(value).strip()
+    return parsed or None
+
+
+def _lineage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
+    metrics_payload = _as_mapping(payload.get("metrics"))
+    snapshot_payload = _as_mapping(payload.get("config_snapshot"))
+    order_payload = _as_mapping(payload.get("order"))
+
+    policy_hash = (
+        _lineage_text(snapshot_payload.get("effective_policy_hash"))
+        or _lineage_text(payload.get("policy_hash"))
+    )
+    config_snapshot_hash = (
+        _lineage_text(snapshot_payload.get("config_snapshot_hash"))
+        or _lineage_text(payload.get("config_snapshot_hash"))
+    )
+    model_id = (
+        _lineage_text(payload.get("model_id"))
+        or _lineage_text(metrics_payload.get("model_id"))
+        or _lineage_text(order_payload.get("model_id"))
+    )
+    model_version = (
+        _lineage_text(payload.get("model_version"))
+        or _lineage_text(metrics_payload.get("model_version"))
+        or _lineage_text(order_payload.get("model_version"))
+    )
+    dataset_hash = (
+        _lineage_text(payload.get("dataset_hash"))
+        or _lineage_text(metrics_payload.get("dataset_hash"))
+        or _lineage_text(snapshot_payload.get("dataset_hash"))
+        or _lineage_text(snapshot_payload.get("dataset_fingerprint"))
+    )
+    feature_version = (
+        _lineage_text(payload.get("feature_version"))
+        or _lineage_text(metrics_payload.get("feature_version"))
+        or _lineage_text(snapshot_payload.get("feature_version"))
+        or _lineage_text(snapshot_payload.get("feature_set_version"))
+    )
+    model_artifact_hash = (
+        _lineage_text(payload.get("model_artifact_hash"))
+        or _lineage_text(metrics_payload.get("model_artifact_hash"))
+        or _lineage_text(snapshot_payload.get("model_artifact_hash"))
+        or _lineage_text(metrics_payload.get("model_hash"))
+        or _lineage_text(snapshot_payload.get("model_hash"))
+        or _lineage_text(metrics_payload.get("model_version_hash"))
+    )
+    decision_trace_id = (
+        _lineage_text(payload.get("decision_trace_id"))
+        or _lineage_text(order_payload.get("decision_trace_id"))
+    )
+    if decision_trace_id is None:
+        symbol = str(payload.get("symbol") or "").strip().upper()
+        bar_ts = str(payload.get("bar_ts") or "").strip()
+        order_id = _lineage_text(order_payload.get("id"))
+        client_order_id = _lineage_text(order_payload.get("client_order_id"))
+        trace_material = "|".join(
+            (
+                symbol,
+                bar_ts,
+                order_id or "",
+                client_order_id or "",
+            )
+        )
+        if trace_material.replace("|", ""):
+            decision_trace_id = hashlib.sha1(
+                trace_material.encode("utf-8")
+            ).hexdigest()[:24]
+
+    lineage: dict[str, Any] = {}
+    if policy_hash is not None:
+        lineage["policy_hash"] = policy_hash
+    if config_snapshot_hash is not None:
+        lineage["config_snapshot_hash"] = config_snapshot_hash
+    if model_id is not None:
+        lineage["model_id"] = model_id
+    if model_version is not None:
+        lineage["model_version"] = model_version
+    if dataset_hash is not None:
+        lineage["dataset_hash"] = dataset_hash
+    if feature_version is not None:
+        lineage["feature_version"] = feature_version
+    if model_artifact_hash is not None:
+        lineage["model_artifact_hash"] = model_artifact_hash
+    if decision_trace_id is not None:
+        lineage["decision_trace_id"] = decision_trace_id
+    return lineage
+
+
 def _context(payload: Mapping[str, Any]) -> dict[str, Any]:
     order_payload = _as_mapping(payload.get("order"))
     net_target_payload = _as_mapping(payload.get("net_target"))
@@ -175,6 +267,7 @@ def _context(payload: Mapping[str, Any]) -> dict[str, Any]:
             "target_dollars": net_target_payload.get("target_dollars"),
             "target_shares": net_target_payload.get("target_shares"),
         },
+        "lineage": _lineage_context(payload),
     }
 
 
@@ -286,6 +379,8 @@ def emit_decision_event_from_payload(
         f"DECISION_EMITTED|{decision.idempotency_key}".encode("utf-8")
     ).hexdigest()
     try:
+        decision_context = dict(decision.context or {})
+        decision_lineage = _as_mapping(decision_context.get("lineage"))
         oms_persisted = bool(
             store.append_oms_event_payload(
                 event_type="DECISION_EMITTED",
@@ -302,6 +397,7 @@ def emit_decision_event_from_payload(
                     "strategy_id": decision.strategy_id,
                     "confidence": decision.confidence,
                     "expected_edge_bps": decision.expected_edge_bps,
+                    "lineage": decision_lineage,
                 },
             )
         )

@@ -10,7 +10,7 @@
 
 ## Unified Alpaca credential resolution
 - `resolve_alpaca_credentials` and `initialize` use the same dataclass wrapper, updating the cached credential state used by other modules.
-- Override via `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, and `ALPACA_BASE_URL`. Clearing the keys (or setting `shadow=True`) reverts to stub behaviour.
+- Override via `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, and `ALPACA_TRADING_BASE_URL`. Clearing the keys (or setting `shadow=True`) reverts to stub behaviour.
 
 ## Yahoo intraday fallback reliability
 - Oversized 1-minute windows now split into ≤8-day segments so Yahoo fallback remains reliable when Alpaca minute data is unavailable.

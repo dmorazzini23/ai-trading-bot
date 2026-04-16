@@ -119,7 +119,7 @@ export LOG_COMPACT_JSON=true
 export LOG_MARKET_FETCH=false
 
 # Start the bot
-python -m ai_trading.core.bot_engine
+python -m ai_trading
 ```
 
 ### Risk & Rollback

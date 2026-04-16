@@ -30,6 +30,10 @@ python3 scripts/migrate_oms_intent_store.py --dry-run
 - On engine initialization, intents are reconciled with broker open orders.
 - On each broker sync cycle, non-terminal intents are rechecked.
 - Reconcile outcomes are logged as `OMS_INTENT_RECONCILE`.
+- Runtime go/no-go can run bounded reconciliation retries before blocking openings:
+  - `AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_ENABLED` (default: `1`)
+  - `AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_ATTEMPTS` (default: `2`, max `5`)
+  - `AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_COOLDOWN_SEC` (default: `300`)
 
 ## Manual Verification
 
@@ -46,6 +50,18 @@ sudo journalctl -u ai-trading.service --since "10 min ago" --no-pager | grep OMS
 ```
 
 3. Inspect store and ensure no stale `SUBMITTING`/`SUBMITTED` intents without matching broker orders.
+
+4. Verify control-plane execution KPI visibility after recovery:
+
+```bash
+curl -sS http://127.0.0.1:9001/operator/control-plane | jq '.snapshot.execution_quality'
+```
+
+Check:
+- `parent_execution_kpis_by_scope`
+- `submit_reject_reasons_top`
+- `cancel_reasons_top`
+- `realized_slippage_decomposition`
 
 ## Expected Outcomes
 

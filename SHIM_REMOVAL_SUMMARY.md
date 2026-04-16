@@ -1,5 +1,11 @@
 # Import Guard and Runtime Mock Cleanup - Implementation Summary
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 ## Objective
 Complete the "no runtime shims" policy by removing try/except ImportError guards and runtime Mock classes, declaring hard dependencies, and gating optional features behind settings flags.
 

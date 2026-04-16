@@ -1,58 +1,97 @@
-# Deployment Guide: Alpaca Feed Selection
+# Deployment Guide
 
-## Intraday Feed Options
+## Runtime Targets
 
-The trading bot supports multiple Alpaca intraday data feeds. Configure the
-feed via the `DATA_FEED_INTRADAY` environment variable:
+- Python `3.12.3`
+- API on `0.0.0.0:9001`
+- Standalone health app on `HEALTHCHECK_PORT` (default `8081`)
+- Runtime SDK pin: `alpaca-py==0.42.1`
+- Timezone handling: stdlib `zoneinfo` only
 
-| Value | Description | SIP entitlement required |
-|-------|-------------|--------------------------|
-| `iex` | Default retail feed (15-minute IEX snapshot). | No |
-| `sip` | Consolidated SIP tape (full NBBO coverage). | **Yes** |
+## Required Environment Variables
 
-### Required Environment Variables
+Current startup validation requires:
 
-Regardless of feed selection the following variables must be present at
-startup:
+- `ALPACA_API_KEY`
+- `ALPACA_SECRET_KEY`
+- `ALPACA_TRADING_BASE_URL`
+- `ALPACA_DATA_FEED`
+- `WEBHOOK_SECRET`
+- `AI_TRADING_CAPITAL_CAP`
+- `DOLLAR_RISK_LIMIT`
 
-* `ALPACA_API_KEY`
-* `ALPACA_SECRET_KEY`
-* `DATA_FEED_INTRADAY`
+Deprecated and rejected:
 
-When `DATA_FEED_INTRADAY=sip`, Alpaca must confirm SIP access via one of:
+- `ALPACA_API_URL`
+- `ALPACA_BASE_URL`
+- `DATA_FEED`
 
-* `ALPACA_ALLOW_SIP=1`
-* `ALPACA_HAS_SIP=1`
+## Feed Selection
 
-If neither flag is set the service now fails fast with an actionable error so
-operators can request entitlements before launch.
+Two related settings exist:
 
-### Optional Overrides
+- `ALPACA_DATA_FEED`: required Alpaca market-data preference. Valid values:
+  `iex`, `sip`.
+- `DATA_FEED_INTRADAY`: execution-pricing preference. Valid values:
+  `iex`, `sip`, `finnhub`.
 
-* `ALPACA_FEED_FAILOVER` — Comma-separated backup order for Alpaca data feeds.
-* `AI_TRADING_HALT_FLAG_PATH` — Override the default `halt.flag` location used
-  by provider safe-mode.
+If `DATA_FEED_INTRADAY=sip` or `ALPACA_EXECUTION_FEED=sip`, the runtime expects
+SIP entitlements and will fail fast without them.
 
-### Troubleshooting SIP flags
+Optional feed controls:
 
-`ALPACA_SIP_UNAUTHORIZED=1` only disables the SIP path when
-`DATA_FEED_INTRADAY=sip`. Deployments running with `DATA_FEED_INTRADAY=iex`
-ignore this flag so primary IEX orders continue flowing. Clear the flag once
-SIP entitlements are restored before switching the intraday feed to `sip`.
+- `ALPACA_ALLOW_SIP=1`
+- `ALPACA_HAS_SIP=1`
+- `ALPACA_FEED_FAILOVER=sip,iex`
+- `ALPACA_EMPTY_TO_BACKUP=1`
+- `BACKUP_DATA_PROVIDER=yahoo|finnhub|finnhub_low_latency|none`
 
-### Validation Checklist
+## Packaged Services
 
-1. Export the required variables in the deployment environment.
-2. Run `pip show alpaca-py` to confirm runtime pins `0.42.1`.
-3. Start the service and watch for
-   `TRADING_PARAMS_VALIDATED`/`DATA_PROVIDER_READY` logs.
-4. For SIP, call `alpaca-proxy/data/v2/stocks/AAPL/bars` with the deployment
-   credentials to verify the consolidated feed before enabling live trading.
+Primary trader + API:
 
-## API Serving Options
+```bash
+sudo cp packaging/systemd/ai-trading.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ai-trading.service
+```
 
-The default `ai-trading.service` unit launches the trader and its built-in Flask API in a single process. This keeps operational overhead low and is the recommended mode for lab environments or managed rollouts where the systemd unit supervises everything.
+Optional dedicated Gunicorn API:
 
-For production environments that prefer a hardened HTTP stack, deploy the companion `packaging/systemd/ai-trading-api.service`. It runs `gunicorn --workers 2 --threads 4 --bind 0.0.0.0:9001 'ai_trading.app:create_app()'`, letting systemd supervise a dedicated API process while the trading loop continues to run under `ai-trading.service`. Use this split when API uptime requirements differ from the trading loop, or when an ingress controller expects a WSGI server instead of Flask's development server.
+```bash
+sudo cp packaging/systemd/ai-trading-api.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ai-trading-api.service
+```
 
-When both services are active, ensure probes and load balancers target the Gunicorn port (`9001` by default) and keep the single-process unit available for scenarios where a combined deployment is simpler (edge devices, QA sandboxes, etc.).
+The packaged Gunicorn service binds:
+
+```bash
+0.0.0.0:9001
+```
+
+## Health Surfaces
+
+Main runtime:
+
+- `http://127.0.0.1:9001/health`
+- `http://127.0.0.1:9001/healthz`
+- `http://127.0.0.1:9001/metrics`
+
+Standalone health app:
+
+```bash
+RUN_HEALTHCHECK=1 python3 -m ai_trading.app &
+curl -s http://127.0.0.1:${HEALTHCHECK_PORT:-8081}/healthz
+```
+
+When launching the standalone health app, `HEALTHCHECK_PORT` must differ from
+`API_PORT`.
+
+## Verification Checklist
+
+1. `python3 -c "import importlib.metadata as m; assert m.version('alpaca-py') == '0.42.1'"`
+2. `python3 -m ai_trading.tools.env_validate`
+3. `journalctl -u ai-trading.service -n 200 --no-pager`
+4. `curl -s http://127.0.0.1:9001/healthz | jq .`
+5. `curl -s http://127.0.0.1:9001/operator/control-plane | jq .`

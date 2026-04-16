@@ -1,5 +1,11 @@
 # Latest Critical Trading Bot Fixes - Implementation Summary
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 ## Overview
 This document summarizes the critical fixes implemented to resolve the primary production issues identified in the trading bot logs, specifically addressing the "Drawdown circuit breaker update failed" error and related system stability issues.
 

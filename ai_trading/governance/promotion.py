@@ -6,6 +6,7 @@ with performance validation and safety checks.
 """
 import json
 import math
+import uuid
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -115,6 +116,175 @@ class ModelPromotion:
         self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self.active_dir = self.base_path / 'active'
         self.active_dir.mkdir(exist_ok=True)
+
+    def _governance_event_path(self, filename: str) -> Path:
+        return self.base_path / str(filename)
+
+    def _append_jsonl_event(
+        self,
+        *,
+        filename: str,
+        payload: dict[str, Any],
+        error_event: str,
+    ) -> str | None:
+        path = self._governance_event_path(filename)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, sort_keys=True))
+                handle.write("\n")
+            return str(path)
+        except OSError as exc:
+            self.logger.error(
+                error_event,
+                extra={"path": str(path), "error": str(exc)},
+            )
+            return None
+
+    def _read_jsonl_tail(self, *, filename: str, limit: int = 20) -> list[dict[str, Any]]:
+        path = self._governance_event_path(filename)
+        if not path.exists():
+            return []
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        rows: list[dict[str, Any]] = []
+        for raw in lines[-max(1, int(limit)):]:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                rows.append(parsed)
+        return rows
+
+    def _promotion_requires_approval(self) -> bool:
+        try:
+            return bool(get_env("AI_TRADING_PROMOTION_REQUIRE_APPROVAL", False, cast=bool))
+        except Exception:
+            return False
+
+    def _promotion_approval_max_age_hours(self) -> float:
+        try:
+            value = float(get_env("AI_TRADING_PROMOTION_APPROVAL_MAX_AGE_HOURS", 168.0, cast=float))
+        except Exception:
+            value = 168.0
+        if not math.isfinite(value):
+            value = 168.0
+        return max(1.0, min(value, 24.0 * 365.0))
+
+    def record_promotion_approval(
+        self,
+        *,
+        strategy: str,
+        model_id: str,
+        approver: str,
+        decision: str = "approved",
+        note: str | None = None,
+        ticket: str | None = None,
+    ) -> str | None:
+        """Append an explicit promotion approval/rejection checkpoint."""
+
+        decision_token = str(decision or "").strip().lower()
+        if decision_token not in {"approved", "rejected"}:
+            raise ValueError("decision must be 'approved' or 'rejected'")
+        ts = datetime.now(UTC).isoformat()
+        payload: dict[str, Any] = {
+            "approval_id": str(uuid.uuid4()),
+            "ts": ts,
+            "strategy": str(strategy),
+            "model_id": str(model_id),
+            "approver": str(approver),
+            "decision": decision_token,
+            "max_age_hours": float(self._promotion_approval_max_age_hours()),
+        }
+        note_text = str(note or "").strip()
+        if note_text:
+            payload["note"] = note_text
+        ticket_text = str(ticket or "").strip()
+        if ticket_text:
+            payload["ticket"] = ticket_text
+        return self._append_jsonl_event(
+            filename="promotion_approvals.jsonl",
+            payload=payload,
+            error_event="PROMOTION_APPROVAL_WRITE_FAILED",
+        )
+
+    def _latest_promotion_approval(
+        self,
+        *,
+        strategy: str,
+        model_id: str,
+    ) -> dict[str, Any] | None:
+        rows = self._read_jsonl_tail(filename="promotion_approvals.jsonl", limit=500)
+        strategy_token = str(strategy or "").strip()
+        model_token = str(model_id or "").strip()
+        for row in reversed(rows):
+            if str(row.get("strategy") or "").strip() != strategy_token:
+                continue
+            if str(row.get("model_id") or "").strip() != model_token:
+                continue
+            return row
+        return None
+
+    def list_recent_promotion_approvals(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent promotion approval checkpoints."""
+
+        return self._read_jsonl_tail(
+            filename="promotion_approvals.jsonl",
+            limit=max(1, int(limit)),
+        )
+
+    def list_recent_rollback_audit(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent rollback lineage/audit events."""
+
+        return self._read_jsonl_tail(
+            filename="rollback_audit.jsonl",
+            limit=max(1, int(limit)),
+        )
+
+    def list_recent_champion_challenger_scorecards(
+        self,
+        *,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return recent champion/challenger scorecard summaries."""
+
+        return self._read_jsonl_tail(
+            filename="champion_challenger_scorecards.jsonl",
+            limit=max(1, int(limit)),
+        )
+
+    def _record_rollback_audit(
+        self,
+        *,
+        strategy: str,
+        status: str,
+        reason: str,
+        from_model_id: str | None = None,
+        to_model_id: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> str | None:
+        payload: dict[str, Any] = {
+            "ts": datetime.now(UTC).isoformat(),
+            "strategy": str(strategy),
+            "status": str(status),
+            "reason": str(reason),
+            "from_model_id": str(from_model_id) if from_model_id not in (None, "") else None,
+            "to_model_id": str(to_model_id) if to_model_id not in (None, "") else None,
+        }
+        if extra:
+            for key, value in extra.items():
+                payload[str(key)] = value
+        return self._append_jsonl_event(
+            filename="rollback_audit.jsonl",
+            payload=payload,
+            error_event="ROLLBACK_AUDIT_WRITE_FAILED",
+        )
 
     @staticmethod
     def _coerce_returns(values: Any) -> list[float]:
@@ -813,6 +983,61 @@ class ModelPromotion:
             if model_info is None:
                 raise ValueError(f'Model {model_id} not found')
             strategy = model_info['strategy']
+            approval_payload: dict[str, Any] | None = None
+            if (not force) and self._promotion_requires_approval():
+                approval_payload = self._latest_promotion_approval(
+                    strategy=str(strategy),
+                    model_id=str(model_id),
+                )
+                if not isinstance(approval_payload, dict):
+                    self.logger.warning(
+                        "PROMOTION_APPROVAL_REQUIRED_MISSING",
+                        extra={"strategy": strategy, "model_id": model_id},
+                    )
+                    return False
+                decision_token = str(approval_payload.get("decision") or "").strip().lower()
+                if decision_token != "approved":
+                    self.logger.warning(
+                        "PROMOTION_APPROVAL_REQUIRED_REJECTED",
+                        extra={
+                            "strategy": strategy,
+                            "model_id": model_id,
+                            "decision": decision_token or "unknown",
+                        },
+                    )
+                    return False
+                approved_ts_raw = str(approval_payload.get("ts") or "").strip()
+                approved_ts: datetime | None = None
+                if approved_ts_raw:
+                    approved_ts_text = (
+                        f"{approved_ts_raw[:-1]}+00:00"
+                        if approved_ts_raw.endswith("Z")
+                        else approved_ts_raw
+                    )
+                    try:
+                        approved_ts = datetime.fromisoformat(approved_ts_text)
+                    except ValueError:
+                        approved_ts = None
+                if approved_ts is not None:
+                    if approved_ts.tzinfo is None:
+                        approved_ts = approved_ts.replace(tzinfo=UTC)
+                    else:
+                        approved_ts = approved_ts.astimezone(UTC)
+                    age_hours = max(
+                        (datetime.now(UTC) - approved_ts).total_seconds() / 3600.0,
+                        0.0,
+                    )
+                    if age_hours > self._promotion_approval_max_age_hours():
+                        self.logger.warning(
+                            "PROMOTION_APPROVAL_REQUIRED_STALE",
+                            extra={
+                                "strategy": strategy,
+                                "model_id": model_id,
+                                "age_hours": age_hours,
+                                "max_age_hours": self._promotion_approval_max_age_hours(),
+                            },
+                        )
+                        return False
             current_production = self.registry.get_production_model(strategy)
             promoted_at = datetime.now(UTC).isoformat()
             previous_model_id: str | None = None
@@ -836,9 +1061,46 @@ class ModelPromotion:
                 {
                     'promoted_at': promoted_at,
                     'previous_production_model_id': previous_model_id,
+                    'promotion_approval_id': (
+                        str(approval_payload.get("approval_id"))
+                        if isinstance(approval_payload, dict)
+                        and approval_payload.get("approval_id") not in (None, "")
+                        else None
+                    ),
+                    'promotion_approved_by': (
+                        str(approval_payload.get("approver"))
+                        if isinstance(approval_payload, dict)
+                        and approval_payload.get("approver") not in (None, "")
+                        else None
+                    ),
+                    'promotion_approval_ts': (
+                        str(approval_payload.get("ts"))
+                        if isinstance(approval_payload, dict)
+                        and approval_payload.get("ts") not in (None, "")
+                        else None
+                    ),
                 },
             )
             self._create_active_symlink(strategy, model_id)
+            self._append_jsonl_event(
+                filename="promotion_events.jsonl",
+                payload={
+                    "ts": promoted_at,
+                    "strategy": str(strategy),
+                    "model_id": str(model_id),
+                    "previous_model_id": (
+                        str(previous_model_id) if previous_model_id not in (None, "") else None
+                    ),
+                    "force": bool(force),
+                    "approval_id": (
+                        str(approval_payload.get("approval_id"))
+                        if isinstance(approval_payload, dict)
+                        and approval_payload.get("approval_id") not in (None, "")
+                        else None
+                    ),
+                },
+                error_event="PROMOTION_EVENT_WRITE_FAILED",
+            )
             self.logger.info(f'Promoted model {model_id} to production for strategy {strategy}')
             return True
         except (ValueError, TypeError) as e:
@@ -863,6 +1125,12 @@ class ModelPromotion:
             "challenger_model_id": str(challenger_model_id),
             "metrics": dict(metrics),
         }
+        scorecard_payload: dict[str, Any] = {
+            "ts": payload["ts"],
+            "strategy": str(strategy),
+            "champion_model_id": str(champion_model_id),
+            "challenger_model_id": str(challenger_model_id),
+        }
         challenger_returns = metrics.get("challenger_returns")
         champion_returns = metrics.get("champion_returns")
         if isinstance(challenger_returns, list) and isinstance(champion_returns, list):
@@ -884,11 +1152,63 @@ class ModelPromotion:
                 "required_consecutive_passes": int(self.criteria.challenger_sequential_required_passes),
                 "session_pass": bool(sequential_pass),
             }
+            scorecard_payload["uplift_bps"] = float(significance.get("uplift_bps", 0.0))
+            scorecard_payload["p_value"] = float(significance.get("p_value", 1.0))
+            scorecard_payload["sample_count"] = int(max(sample_count, 0))
+            scorecard_payload["session_pass"] = bool(sequential_pass)
+            scorecard_payload["required_uplift_bps"] = float(
+                self.criteria.min_challenger_uplift_bps
+            )
+            scorecard_payload["required_alpha"] = float(
+                self.criteria.challenger_significance_alpha
+            )
+        else:
+            scorecard_payload["uplift_bps"] = float(
+                metrics.get("challenger_uplift_bps", 0.0) or 0.0
+            )
+            scorecard_payload["p_value"] = float(
+                metrics.get("challenger_p_value", 1.0) or 1.0
+            )
+        scorecard_payload["net_expectancy_bps_champion"] = float(
+            metrics.get("champion_net_expectancy_bps", 0.0) or 0.0
+        )
+        scorecard_payload["net_expectancy_bps_challenger"] = float(
+            metrics.get("challenger_net_expectancy_bps", 0.0) or 0.0
+        )
+        scorecard_payload["reject_rate_champion"] = float(
+            metrics.get("champion_reject_rate", 0.0) or 0.0
+        )
+        scorecard_payload["reject_rate_challenger"] = float(
+            metrics.get("challenger_reject_rate", 0.0) or 0.0
+        )
+        scorecard_payload["execution_drift_bps_champion"] = float(
+            metrics.get("champion_execution_drift_bps", 0.0) or 0.0
+        )
+        scorecard_payload["execution_drift_bps_challenger"] = float(
+            metrics.get("challenger_execution_drift_bps", 0.0) or 0.0
+        )
+        scorecard_payload["delta_net_expectancy_bps"] = float(
+            scorecard_payload["net_expectancy_bps_challenger"]
+            - scorecard_payload["net_expectancy_bps_champion"]
+        )
+        scorecard_payload["delta_reject_rate"] = float(
+            scorecard_payload["reject_rate_challenger"]
+            - scorecard_payload["reject_rate_champion"]
+        )
+        scorecard_payload["delta_execution_drift_bps"] = float(
+            scorecard_payload["execution_drift_bps_challenger"]
+            - scorecard_payload["execution_drift_bps_champion"]
+        )
         try:
             eval_path.parent.mkdir(parents=True, exist_ok=True)
             with eval_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(payload, sort_keys=True))
                 handle.write("\n")
+            self._append_jsonl_event(
+                filename="champion_challenger_scorecards.jsonl",
+                payload=scorecard_payload,
+                error_event="CHAMPION_CHALLENGER_SCORECARD_WRITE_FAILED",
+            )
             return str(eval_path)
         except OSError as exc:
             self.logger.error(
@@ -909,6 +1229,11 @@ class ModelPromotion:
         current = self.registry.get_production_model(strategy)
         if current is None:
             self.logger.warning("ROLLBACK_SKIPPED_NO_PRODUCTION_MODEL", extra={"strategy": strategy})
+            self._record_rollback_audit(
+                strategy=strategy,
+                status="skipped_no_production_model",
+                reason=reason,
+            )
             return False
         current_model_id, _current_meta = current
         governance = dict(_current_meta.get("governance", {}))
@@ -922,6 +1247,12 @@ class ModelPromotion:
                 "ROLLBACK_SKIPPED_NO_PREVIOUS_MODEL",
                 extra={"strategy": strategy, "current_model_id": current_model_id},
             )
+            self._record_rollback_audit(
+                strategy=strategy,
+                status="skipped_no_previous_model",
+                reason=reason,
+                from_model_id=current_model_id,
+            )
             return False
         if previous_model_id not in self.registry.model_index:
             self.logger.warning(
@@ -932,10 +1263,24 @@ class ModelPromotion:
                     "previous_model_id": previous_model_id,
                 },
             )
+            self._record_rollback_audit(
+                strategy=strategy,
+                status="skipped_previous_model_missing",
+                reason=reason,
+                from_model_id=current_model_id,
+                to_model_id=previous_model_id,
+            )
             return False
 
         promoted = self.promote_to_production(previous_model_id, force=force)
         if not promoted:
+            self._record_rollback_audit(
+                strategy=strategy,
+                status="rollback_failed",
+                reason=reason,
+                from_model_id=current_model_id,
+                to_model_id=previous_model_id,
+            )
             return False
 
         rolled_back_at = datetime.now(UTC).isoformat()
@@ -965,6 +1310,13 @@ class ModelPromotion:
                 "to_model_id": previous_model_id,
                 "reason": reason,
             },
+        )
+        self._record_rollback_audit(
+            strategy=strategy,
+            status="rolled_back",
+            reason=reason,
+            from_model_id=current_model_id,
+            to_model_id=previous_model_id,
         )
         return True
 
@@ -1009,6 +1361,12 @@ class ModelPromotion:
             return result
         if not allow_rollback:
             result["status"] = "pending"
+            self._record_rollback_audit(
+                strategy=strategy,
+                status="pending",
+                reason="live_kpi_control_band_breach",
+                extra={"breaches": dict(breaches)},
+            )
             return result
 
         rollback_enabled = True
@@ -1020,6 +1378,12 @@ class ModelPromotion:
             rollback_enabled = True
         if not rollback_enabled:
             result["status"] = "disabled"
+            self._record_rollback_audit(
+                strategy=strategy,
+                status="disabled",
+                reason="live_kpi_control_band_breach",
+                extra={"breaches": dict(breaches)},
+            )
             return result
 
         rolled_back = self.rollback_to_previous_production(

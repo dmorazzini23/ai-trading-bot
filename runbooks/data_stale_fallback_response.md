@@ -16,7 +16,8 @@
 ## Commands
 ```bash
 journalctl -u ai-trading.service -n 300 --no-pager | rg "BAD_DATA|fallback|CIRCUIT_OPEN_data|MARKET_CLOSED_BLOCK"
-curl -sS http://127.0.0.1:8081/healthz
+# Packaged service exposes /healthz on :9001; standalone health app uses HEALTHCHECK_PORT
+curl -sS http://127.0.0.1:${HEALTHCHECK_PORT:-9001}/healthz
 ```
 
 ## Tuning Levers

@@ -56,3 +56,29 @@ def test_execution_model_lineage_uses_cache_meta_when_env_missing(monkeypatch) -
 
     assert lineage["model_id"] == "live.joblib"
     assert lineage["model_version"] == "1234:1700000000"
+
+
+def test_execution_model_lineage_includes_extended_lineage_fields(monkeypatch) -> None:
+    monkeypatch.setenv("AI_TRADING_MODEL_ID", "ml-prod")
+    monkeypatch.setenv("AI_TRADING_MODEL_VERSION", "v1")
+    monkeypatch.delenv("AI_TRADING_DATASET_HASH", raising=False)
+    monkeypatch.delenv("AI_TRADING_FEATURE_VERSION", raising=False)
+    monkeypatch.delenv("AI_TRADING_MODEL_ARTIFACT_HASH", raising=False)
+    monkeypatch.setattr(
+        bot_engine,
+        "_MODEL_CACHE_META",
+        {
+            "dataset_fingerprint": "ds-123",
+            "feature_set_version": "feat-9",
+            "model_hash": "artifact-xyz",
+        },
+        raising=False,
+    )
+
+    lineage = bot_engine._execution_model_lineage()
+
+    assert lineage["model_id"] == "ml-prod"
+    assert lineage["model_version"] == "v1"
+    assert lineage["dataset_hash"] == "ds-123"
+    assert lineage["feature_version"] == "feat-9"
+    assert lineage["model_artifact_hash"] == "artifact-xyz"

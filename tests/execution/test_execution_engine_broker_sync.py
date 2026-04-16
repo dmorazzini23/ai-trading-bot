@@ -1,5 +1,6 @@
 """Unit tests for broker synchronization helpers."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -58,6 +59,13 @@ def test_update_broker_snapshot_persists_runtime_position_and_risk_snapshots(
     monkeypatch.setenv("AI_TRADING_OMS_RUNTIME_SNAPSHOT_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_PATH", str(db_path))
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("AI_TRADING_MODEL_ID", "ml-main")
+    monkeypatch.setenv("AI_TRADING_MODEL_VERSION", "v1")
+    monkeypatch.setenv("AI_TRADING_DATASET_HASH", "ds-1")
+    monkeypatch.setenv("AI_TRADING_FEATURE_VERSION", "fv-1")
+    monkeypatch.setenv("AI_TRADING_MODEL_ARTIFACT_HASH", "artifact-1")
+    monkeypatch.setenv("AI_TRADING_CONFIG_SNAPSHOT_HASH", "cfg-1")
+    monkeypatch.setenv("AI_TRADING_EFFECTIVE_POLICY_HASH", "policy-1")
 
     engine = ExecutionEngine()
     open_orders = [
@@ -79,6 +87,19 @@ def test_update_broker_snapshot_persists_runtime_position_and_risk_snapshots(
     assert float(latest_position["quantity"]) == pytest.approx(3.0)
     assert int(latest_risk["positions_count"]) == 1
     assert int(latest_risk["open_orders_count"]) == 2
+    assert str(latest_position["policy_hash"]) == "policy-1"
+    assert str(latest_position["model_hash"]) == "artifact-1"
+    assert str(latest_risk["policy_hash"]) == "policy-1"
+    assert str(latest_risk["model_hash"]) == "artifact-1"
+    assert str(latest_risk["config_hash"]) == "cfg-1"
+    position_payload = json.loads(str(latest_position["payload_json"]))
+    risk_payload = json.loads(str(latest_risk["payload_json"]))
+    position_lineage = position_payload.get("lineage", {})
+    risk_lineage = risk_payload.get("lineage", {})
+    assert position_lineage["dataset_hash"] == "ds-1"
+    assert position_lineage["feature_version"] == "fv-1"
+    assert risk_lineage["model_id"] == "ml-main"
+    assert risk_lineage["model_version"] == "v1"
 
 
 class _StubTradingClient:

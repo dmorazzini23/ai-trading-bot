@@ -1,6 +1,17 @@
 # Performance Optimization System
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 This document describes the comprehensive performance optimization system implemented for the AI Trading Bot to address critical memory and performance issues.
+
+The current repo still ships `scripts/system_diagnostic.py` and
+`scripts/memory_optimizer.py`. References below to `optimized_startup.py`,
+`performance_monitor.py`, and `performance_demo.py` are historical and are kept
+for context only.
 
 ## Issues Addressed
 
@@ -12,7 +23,7 @@ This document describes the comprehensive performance optimization system implem
 
 ## Components Implemented
 
-### 1. System Diagnostic (`system_diagnostic.py`)
+### 1. System Diagnostic (`scripts/system_diagnostic.py`)
 
 Comprehensive system health monitoring and analysis.
 
@@ -26,10 +37,10 @@ Comprehensive system health monitoring and analysis.
 
 **Usage:**
 ```bash
-python system_diagnostic.py
+python scripts/system_diagnostic.py
 ```
 
-### 2. Memory Optimizer (`memory_optimizer.py`)
+### 2. Memory Optimizer (`scripts/memory_optimizer.py`)
 
 Advanced memory management and optimization system.
 
@@ -93,7 +104,7 @@ Process management and service cleanup utilities.
 python -m ai_trading.process_manager
 ```
 
-### 5. Optimized Startup (`optimized_startup.py`)
+### 5. Optimized Startup (historical helper)
 
 Production-ready startup script with comprehensive optimizations.
 
@@ -107,7 +118,7 @@ Production-ready startup script with comprehensive optimizations.
 
 **Usage:**
 ```bash
-python optimized_startup.py
+# Historical helper retained in this document for context; no direct replacement script is shipped.
 ```
 
 ## Integration with Trading Code
@@ -192,14 +203,14 @@ The system provides comprehensive monitoring through:
 
 ### Production Deployment
 ```bash
-# Use optimized startup for production
-python optimized_startup.py
+# Use the current packaged runtime entrypoint for production
+python -m ai_trading
 ```
 
 ### Health Monitoring
 ```bash
 # Run periodic health checks
-python system_diagnostic.py
+python scripts/system_diagnostic.py
 
 # Monitor processes
 python -m ai_trading.process_manager
@@ -252,19 +263,19 @@ sudo systemctl restart ai-trading-bot.service
 
 ## Files Overview
 
-- `system_diagnostic.py`: System health monitoring
-- `memory_optimizer.py`: Memory management and optimization
+- `scripts/system_diagnostic.py`: System health monitoring
+- `scripts/memory_optimizer.py`: Memory management and optimization
 - `performance_monitor.py`: Real-time performance monitoring
 - `ai_trading/process_manager.py`: Process and service management
-- `optimized_startup.py`: Production startup script
-- `performance_demo.py`: Demonstration of all features
+- historical optimized-startup helper: retained in this document for context
+- historical demo helper: retained in this document for context
 
 ## Testing
 
 Run the comprehensive demo to verify all components:
 
 ```bash
-python performance_demo.py
+# Historical demo helper referenced by this archival document is no longer shipped.
 ```
 
 This will test all optimization components and show integration status.

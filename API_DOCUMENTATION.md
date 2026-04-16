@@ -1,614 +1,263 @@
-# 📚 API Documentation
+# API Documentation
 
-## Overview
+This file documents the HTTP routes that are present in the current Flask app
+created by `ai_trading.app:create_app()`.
 
-The AI Trading Bot provides both internal APIs for component interaction and external APIs for monitoring and control. This document covers all available APIs, endpoints, and integration patterns.
+## Base URLs
 
-## Table of Contents
+Main API/runtime surface:
 
-- [Internal APIs](#internal-apis)
-- [Web Interface APIs](#web-interface-apis)
-- [Trading APIs](#trading-apis)
-- [Data APIs](#data-apis)
-- [Command-Line Interface (CLI)](#command-line-interface-cli)
-- [Monitoring APIs](#monitoring-apis)
-- [Authentication](#authentication)
-- [Error Handling](#error-handling)
-- [Rate Limiting](#rate-limiting)
-
-## Internal APIs
-
-### Core Trading Engine API
-
-#### `bot_engine.py` - Main Trading Engine
-
-```python
-from ai_trading.core.bot_engine import pre_trade_health_check, run_all_trades_worker, BotState
-
-def pre_trade_health_check() -> bool:
-    """
-    Performs comprehensive system health check before trading.
-
-    Returns:
-        bool: True if system is healthy and ready for trading
-
-    Raises:
-        SystemError: If critical systems are unavailable
-        ValidationError: If configuration is invalid
-    """
-
-def run_all_trades_worker(
-    symbols: List[str],
-    timeframes: List[str] = ['1m', '5m', '15m', '1h', '1d'],
-    dry_run: bool = False
-) -> Dict[str, Any]:
-    """
-    Execute trading logic for specified symbols and timeframes.
-
-    Args:
-        symbols: List of trading symbols (e.g., ['SPY', 'AAPL'])
-        timeframes: List of timeframes to analyze
-        dry_run: If True, simulate trades without execution
-
-    Returns:
-        Dict containing trade results and performance metrics
-
-    Example:
-        >>> results = run_all_trades_worker(['SPY'], dry_run=True)
-        >>> print(results['trades_executed'])
-    """
-
-class BotState:
-    """Manages bot operational state and configuration."""
-
-    def get_current_positions(self) -> Dict[str, float]:
-        """Get current portfolio positions."""
-
-    def get_performance_metrics(self) -> Dict[str, float]:
-        """Get current performance statistics."""
-
-    def update_risk_parameters(self, params: Dict[str, Any]) -> None:
-        """Update risk management parameters."""
+```text
+http://127.0.0.1:9001
 ```
 
-#### `execution/engine.py` - Order Execution
+Standalone health app:
 
-```python
-from ai_trading.execution.engine import ExecutionEngine
-
-engine = ExecutionEngine()
-
-result = engine.execute_order(
-    symbol="AAPL",
-    quantity=10,
-    side="buy",
-    order_type="market",
-    time_in_force="day",
-    limit_price=None,
-)
+```text
+http://127.0.0.1:${HEALTHCHECK_PORT:-8081}
 ```
 
-### Data Management API
-
-#### `data.fetch` - Market Data
-
-```python
-from ai_trading.data import fetch as data_fetcher
-
-def get_historical_data(
-    symbol: str,
-    timeframe: str,
-    start_date: str,
-    end_date: str,
-    provider: Optional[str] = None
-) -> pd.DataFrame:
-    """
-    Fetch historical market data.
-
-    Args:
-        symbol: Trading symbol
-        timeframe: '1m', '5m', '15m', '1h', '1d'
-        start_date: Start date (YYYY-MM-DD)
-        end_date: End date (YYYY-MM-DD)
-        provider: 'alpaca', 'finnhub', 'yahoo' (auto-select if None)
-
-    Returns:
-        DataFrame with OHLCV data
-
-    Example:
-        >>> data = get_historical_data('SPY', '1h', '2024-01-01', '2024-01-31')
-        >>> print(data.head())
-    """
-
-async def get_real_time_data(symbols: List[str]) -> Dict[str, Dict]:
-    """Get real-time market data for symbols."""
-
-class DataProvider:
-    """Abstract base class for data providers."""
-
-    def validate_connection(self) -> bool:
-        """Check if data provider is accessible."""
-
-    def get_data(self, symbol: str, **kwargs) -> pd.DataFrame:
-        """Fetch data from provider."""
-```
-
-`get_bars()` will automatically attempt to reload environment variables via
-`ai_trading.config.management.reload_env()` if configuration is unavailable and
-retry once before raising an error. This permits runtime `.env` edits during
-tests or scripts without restarting the process.
-
-### Signal Generation API
-
-#### `signals.py` - Trading Signals
-
-```python
-from ai_trading.signals import generate_signals, SignalType, SignalStrength
-
-def generate_signals(
-    data: pd.DataFrame,
-    signal_types: List[str] = None,
-    timeframe: str = '1h'
-) -> Dict[str, Any]:
-    """
-    Generate trading signals from market data.
-
-    Args:
-        data: OHLCV DataFrame
-        signal_types: List of signal types to generate
-        timeframe: Data timeframe
-
-    Returns:
-        Dict containing signals and metadata
-
-    Example:
-        >>> signals = generate_signals(data, ['momentum', 'mean_reversion'])
-        >>> print(signals['momentum']['strength'])
-    """
-
-class SignalType(Enum):
-    """Available signal types."""
-    MOMENTUM = "momentum"
-    MEAN_REVERSION = "mean_reversion"
-    MOVING_AVERAGE_CROSSOVER = "ma_crossover"
-    REGIME_DETECTION = "regime"
-
-class SignalStrength(Enum):
-    """Signal strength levels."""
-    STRONG_BUY = 2
-    BUY = 1
-    NEUTRAL = 0
-    SELL = -1
-    STRONG_SELL = -2
-```
-
-### Risk Management API
-
-#### `ai_trading.risk.engine` - Risk Controls
-
-```python
-from ai_trading.risk.engine import (
-    RiskMetrics,
-    calculate_position_size,
-    check_risk_limits,
-)
-
-def calculate_position_size(
-    symbol: str,
-    signal_strength: float,
-    account_equity: float,
-    volatility: float,
-    max_position_pct: float = 0.05
-) -> float:
-    """
-    Calculate optimal position size using Kelly criterion and volatility.
-
-    Args:
-        symbol: Trading symbol
-        signal_strength: Signal confidence (-1 to 1)
-        account_equity: Current account value
-        volatility: Symbol volatility (annualized)
-        max_position_pct: Maximum position as % of equity
-
-    Returns:
-        Position size in shares
-    """
-
-def check_risk_limits(
-    portfolio: Dict[str, float],
-    new_position: Dict[str, Any]
-) -> Tuple[bool, List[str]]:
-    """
-    Check if new position violates risk limits.
-
-    Returns:
-        Tuple of (is_within_limits, violation_messages)
-    """
-
-class RiskMetrics:
-    """Risk calculation utilities."""
-
-    @staticmethod
-    def calculate_var(returns: pd.Series, confidence: float = 0.05) -> float:
-        """Calculate Value at Risk."""
-
-    @staticmethod
-    def calculate_sharpe_ratio(returns: pd.Series, risk_free_rate: float = 0.02) -> float:
-        """Calculate Sharpe ratio."""
-```
-
-## Command-Line Interface (CLI)
-
-`ai-trade`, `ai-backtest`, and `ai-health` expose common runtime flags:
-
-| Flag | Description |
-| ---- | ----------- |
-| `--dry-run` | Exit after imports without running logic and log `INDICATOR_IMPORT_OK` |
-| `--once` | Run a single iteration then exit |
-| `--interval SECONDS` | Sleep between iterations |
-| `--paper` / `--live` | Select paper (default) or live trading |
-
-
-Example dry run:
+The standalone health app is launched with:
 
 ```bash
-python -m ai_trading --dry-run
+RUN_HEALTHCHECK=1 python3 -m ai_trading.app
 ```
 
+## Health Routes
 
-The Alpaca SDK is imported lazily; runtime preflight checks will terminate the process if `alpaca-py` is unavailable.
-The trading engine honors `AI_TRADING_CONF_THRESHOLD` (default **0.75**) to require a minimum model confidence before executing a trade.
+### `GET /health`
 
-## Web Interface APIs
-
-### Monitoring Dashboard
-
-#### Health Check Endpoint
-
-```http
-GET http://127.0.0.1:$HEALTHCHECK_PORT/healthz
-```
-
-Available when `RUN_HEALTHCHECK=1` on `$HEALTHCHECK_PORT` (default **9101** and distinct from the API port); always returns JSON and must never 500.
+Lightweight liveness payload with Alpaca diagnostics.
 
 Example:
 
 ```bash
-RUN_HEALTHCHECK=1 python -m ai_trading.app &
-curl -sf http://127.0.0.1:$HEALTHCHECK_PORT/healthz
+curl -s http://127.0.0.1:9001/health | jq .
 ```
 
-**Response:**
+Representative response:
+
 ```json
 {
   "ok": true,
-  "ts": "2025-01-01T00:00:00+00:00",
-  "service": "ai-trading"
+  "service": "ai-trading",
+  "status": "service",
+  "timestamp": "2026-04-16T04:42:22.000Z",
+  "alpaca": {
+    "sdk_ok": true,
+    "initialized": false,
+    "client_attached": false,
+    "has_key": true,
+    "has_secret": true,
+    "base_url": "https://paper-api.alpaca.markets",
+    "paper": true,
+    "shadow_mode": false
+  }
 }
 ```
 
-If required environment variables are missing the response remains HTTP 200 with `"ok": false` and an `"error"` field.
+### `GET /healthz`
 
-#### Metrics Endpoint
+Canonical health payload shared by the API and health-service surfaces.
 
-```http
-GET http://127.0.0.1:$HEALTHCHECK_PORT/metrics
+Example:
+
+```bash
+curl -s http://127.0.0.1:9001/healthz | jq .
 ```
 
-Prometheus metrics; available when `RUN_HEALTHCHECK=1` on the same port.
+Representative response fields:
 
-**Response:**
-```text
-# HELP trades_total Total trades executed
-# TYPE trades_total counter
-trades_total 42
-```
-
-#### Configuration Management
-
-```http
-POST /api/config/update
-Content-Type: application/json
-
+```json
 {
-    "risk_parameters": {
-        "max_position_pct": 0.08,
-        "max_portfolio_heat": 0.15
+  "ok": true,
+  "service": "ai-trading",
+  "status": "service",
+  "timestamp": "2026-04-16T04:42:22.000Z",
+  "fallback_active": false,
+  "data_provider": {
+    "primary": "alpaca",
+    "active": "alpaca"
+  },
+  "broker_connectivity": {
+    "connected": false,
+    "status": "unknown"
+  },
+  "quotes_status": {
+    "allowed": true
+  }
+}
+```
+
+Notes:
+
+- The handler is designed to degrade gracefully rather than raising uncaught
+  exceptions.
+- Health payloads may report `"status": "degraded"` while still returning HTTP
+  `200`.
+
+### `GET /metrics`
+
+Prometheus metrics from the active runtime registry.
+
+Example:
+
+```bash
+curl -s http://127.0.0.1:9001/metrics
+```
+
+Behavior:
+
+- Returns `200` with Prometheus text when metrics are available.
+- Returns `501` with `metrics unavailable` when the metrics backend is not
+  available.
+
+## Diagnostics Route
+
+### `GET /diag`
+
+Environment and Alpaca diagnostics from `ai_trading.diagnostics.http_diag`.
+
+Example:
+
+```bash
+curl -s http://127.0.0.1:9001/diag | jq .
+```
+
+Representative response:
+
+```json
+{
+  "alpaca": {
+    "configured_feed": "iex",
+    "data_base_url": "https://data.alpaca.markets",
+    "environment": "paper",
+    "has_key": true,
+    "has_secret": true,
+    "paper": true,
+    "shadow_mode": false,
+    "trading_base_url": "https://paper-api.alpaca.markets"
+  }
+}
+```
+
+## Operator Routes
+
+### `GET /operator/presets`
+
+Returns the available guarded operator presets.
+
+Example:
+
+```bash
+curl -s http://127.0.0.1:9001/operator/presets | jq .
+```
+
+Representative response:
+
+```json
+{
+  "ok": true,
+  "presets": [
+    {
+      "name": "conservative",
+      "trading_mode": "conservative",
+      "capital_cap": 0.03
     },
-    "trading_parameters": {
-        "signal_threshold": 0.7,
-        "rebalance_frequency": "daily"
+    {
+      "name": "balanced",
+      "trading_mode": "balanced",
+      "capital_cap": 0.06
     }
+  ]
 }
 ```
 
-**Response:**
-```json
-{
-    "status": "success",
-    "message": "Configuration updated successfully",
-    "updated_parameters": ["risk_parameters", "trading_parameters"]
-}
-```
+### `GET /operator/plan`
 
-### Trade Management
-
-#### Get Current Positions
-
-```http
-GET /api/positions
-```
-
-**Response:**
-```json
-{
-    "positions": [
-        {
-            "symbol": "AAPL",
-            "quantity": 100,
-            "market_value": 17000.00,
-            "unrealized_pnl": 250.00,
-            "cost_basis": 165.00,
-            "current_price": 167.50
-        }
-    ],
-    "total_equity": 50000.00,
-    "buying_power": 25000.00
-}
-```
-
-#### Execute Manual Trade
-
-```http
-POST /api/trades/execute
-Content-Type: application/json
-
-{
-    "symbol": "AAPL",
-    "quantity": 10,
-    "side": "buy",
-    "order_type": "market",
-    "dry_run": false
-}
-```
-
-**Response:**
-```json
-{
-    "order_id": "12345678-abcd-1234-5678-123456789abc",
-    "status": "filled",
-    "symbol": "AAPL",
-    "quantity": 10,
-    "filled_price": 167.25,
-    "commission": 0.00,
-    "timestamp": "2024-01-15T10:45:00Z"
-}
-```
-
-## External Integration APIs
-
-### Webhook Integration
-
-#### Trade Notifications
-
-```http
-POST /webhooks/trade-executed
-Content-Type: application/json
-
-{
-    "event": "trade_executed",
-    "data": {
-        "symbol": "AAPL",
-        "side": "buy",
-        "quantity": 50,
-        "price": 167.50,
-        "timestamp": "2024-01-15T10:30:00Z"
-    }
-}
-```
-
-#### Performance Alerts
-
-```http
-POST /webhooks/performance-alert
-Content-Type: application/json
-
-{
-    "event": "drawdown_alert",
-    "data": {
-        "current_drawdown": -0.08,
-        "threshold": -0.05,
-        "portfolio_value": 45000.00,
-        "timestamp": "2024-01-15T11:00:00Z"
-    }
-}
-```
-
-## Authentication
-
-### API Key Authentication
-
-All API requests require authentication via API key in the header:
-
-```http
-Authorization: Bearer YOUR_API_KEY
-```
-
-### Environment Variables
+Returns the default guarded plan for the `balanced` preset.
 
 ```bash
-# Required for API access
-API_SECRET_KEY=your_secret_key_here
-
-# Alpaca API credentials
-ALPACA_API_KEY=your_alpaca_key
-ALPACA_SECRET_KEY=your_alpaca_secret
-ALPACA_BASE_URL=https://paper-api.alpaca.markets
+curl -s http://127.0.0.1:9001/operator/plan | jq .
 ```
 
-## Error Handling
-
-### Standard Error Response
+Representative response:
 
 ```json
 {
-    "error": {
-        "code": "INVALID_SYMBOL",
-        "message": "Symbol 'INVALID' is not supported",
-        "details": {
-            "supported_symbols": ["AAPL", "SPY", "QQQ", "..."]
-        },
-        "timestamp": "2024-01-15T10:30:00Z"
-    }
+  "ok": true,
+  "plan": {
+    "name": "balanced",
+    "trading_mode": "balanced",
+    "capital_cap": 0.06,
+    "max_positions": 10
+  }
 }
 ```
 
-### Error Codes
+### `POST /operator/plan`
 
-| Code | Description | HTTP Status |
-|------|-------------|-------------|
-| `INVALID_SYMBOL` | Unsupported trading symbol | 400 |
-| `INSUFFICIENT_FUNDS` | Not enough buying power | 400 |
-| `MARKET_CLOSED` | Market is currently closed | 423 |
-| `API_RATE_LIMIT` | Rate limit exceeded | 429 |
-| `SYSTEM_ERROR` | Internal system error | 500 |
-| `API_UNAVAILABLE` | External API unavailable | 503 |
+Validates a requested preset and optional overrides.
 
-## Rate Limiting
-
-### Default Limits
-
-- **Public endpoints**: 100 requests per minute
-- **Trading endpoints**: 50 requests per minute
-- **Webhook endpoints**: 1000 requests per minute
-
-### Rate Limit Headers
-
-```http
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 95
-X-RateLimit-Reset: 1642248600
-```
-
-### Exceeding Limits
-
-When rate limits are exceeded, a 429 status code is returned:
-
-```json
-{
-    "error": {
-        "code": "API_RATE_LIMIT",
-        "message": "Rate limit exceeded. Try again in 60 seconds.",
-        "retry_after": 60
-    }
-}
-```
-
-## SDK and Client Libraries
-
-### Python Client
-
-```python
-from ai_trading.client import TradingBotClient
-
-client = TradingBotClient(api_key="your_api_key")
-
-# Get current positions
-positions = client.get_positions()
-
-# Execute trade
-result = client.execute_trade(
-    symbol="AAPL",
-    quantity=10,
-    side="buy"
-)
-
-# Get performance metrics
-metrics = client.get_performance_metrics()
-```
-
-### JavaScript/Node.js Client
-
-```javascript
-const TradingBot = require('ai-trading-bot-client');
-
-const client = new TradingBot({
-    apiKey: 'your_api_key',
-    baseUrl: 'http://localhost:5000'
-});
-
-// Get positions
-const positions = await client.getPositions();
-
-// Execute trade
-const trade = await client.executeTrade({
-    symbol: 'AAPL',
-    quantity: 10,
-    side: 'buy'
-});
-```
-
-## WebSocket APIs
-
-### Real-time Data Stream
-
-```javascript
-const ws = new WebSocket('ws://localhost:5000/ws/data');
-
-ws.onmessage = function(event) {
-    const data = JSON.parse(event.data);
-    if (data.type === 'price_update') {
-        console.log(`${data.symbol}: $${data.price}`);
-    }
-};
-
-// Subscribe to symbols
-ws.send(JSON.stringify({
-    action: 'subscribe',
-    symbols: ['AAPL', 'SPY']
-}));
-```
-
-### Trade Notifications
-
-```javascript
-const ws = new WebSocket('ws://localhost:5000/ws/trades');
-
-ws.onmessage = function(event) {
-    const trade = JSON.parse(event.data);
-    console.log(`Trade executed: ${trade.symbol} ${trade.side} ${trade.quantity}`);
-};
-```
-
-## Testing and Development
-
-### Mock API Server
-
-For development and testing, a mock API server is available:
+Example request:
 
 ```bash
-python -m ai_trading.mock_server --port 5001
+curl -s \
+  -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"preset":"balanced","overrides":{"max_positions":8,"capital_cap":0.05}}' \
+  http://127.0.0.1:9001/operator/plan | jq .
 ```
 
-### Test Data
+Success response:
 
-Sample API responses for testing:
-
-```python
-# Import the client library
-from ai_trading.client import TradingBotClient
-# Test configuration
-TEST_CONFIG = {
-    "base_url": "http://localhost:5001",
-    "api_key": "test_key_123",
-    "mock_responses": True
+```json
+{
+  "ok": true,
+  "plan": {
+    "name": "balanced",
+    "max_positions": 8,
+    "capital_cap": 0.05
+  }
 }
-
-# Sample test
-def test_get_positions():
-    client = TradingBotClient(**TEST_CONFIG)
-    positions = client.get_positions()
-    assert len(positions) > 0
 ```
 
-This API documentation provides comprehensive coverage of all available endpoints and integration patterns for the AI Trading Bot system.
+Validation failure response:
+
+```json
+{
+  "ok": false,
+  "error": "capital_cap must be between ..."
+}
+```
+
+### `GET /operator/control-plane`
+
+Returns a consolidated runtime control-plane snapshot.
+
+```bash
+curl -s http://127.0.0.1:9001/operator/control-plane | jq .
+```
+
+Representative top-level snapshot fields:
+
+```json
+{
+  "ok": true,
+  "snapshot": {
+    "service": "ai-trading",
+    "rollout": {},
+    "broker_health": {},
+    "execution_quality": {},
+    "manual_overrides": {},
+    "governance": {}
+  }
+}
+```
+
+## Not Currently Documented As Public API
+
+The current repository does not ship a canonical public websocket server,
+browser SDK, or `ai_trading.client` module. Older docs that referenced
+`/ws/data`, `/ws/trades`, or `TradingBotClient` were removed because those
+surfaces do not exist in the current app factory.

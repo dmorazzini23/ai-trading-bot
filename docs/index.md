@@ -1,101 +1,71 @@
-# AI Trading Bot
+# AI Trading Bot Docs
 
-This repository contains a simple trading bot together with a backtesting
-harness for optimizing its tunable hyperparameters.
+## Core Runtime
 
-For details on how entry and exit signals are generated, see
-[Entry and Exit Signal Methodology](ENTRY_EXIT_SIGNALS.md).
+- Main runtime entrypoint: `python3 -m ai_trading`
+- Main API port: `9001`
+- Default standalone health port: `8081`
+- Canonical health route: `/healthz`
+- Canonical config access: `ai_trading.config.management`
 
-Before running in production, ensure meta-learning has seed data as
-described in [Seeding Trade History](SEED_TRADE_HISTORY.md).
+## Getting Started
 
-## Running the Backtester
-
-```
-python backtester.py --symbols SPY,AAPL --start 2024-01-01 --end 2024-12-31
-```
-
-This command runs a grid search over a default parameter grid and writes the best
-combination to `best_hyperparams.json`.
-
-### Customizing the Parameter Grid
-
-Edit `backtester.py` and modify the `param_grid` dictionary in `main()` to search
-different ranges for each hyperparameter.
-
-## Using Optimized Hyperparameters
-
-When starting the live bot (`python -m ai_trading.core.bot_engine`), the bot will automatically load
-`best_hyperparams.json` if it exists. Otherwise it falls back to the default
-values in `hyperparams.json`.
-
-## Development
-
-Install dependencies:
+Install and smoke-test:
 
 ```bash
-python -m pip install -U pip
+python3 -m pip install -U pip
 pip install -e .
-pip install -r requirements-dev.txt
+python3 -m ai_trading --dry-run
+ruff check .
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
 ```
 
-### Running Tests
+Run the standalone health app:
 
 ```bash
-pytest
+RUN_HEALTHCHECK=1 python3 -m ai_trading.app &
+curl -s http://127.0.0.1:8081/healthz
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/metrics
 ```
 
-## Institutional Operations
-
-- [Institutional 30/60/90 Roadmap](institutional_roadmap_30_60_90.md)
-- [Phase-Gated Roadmap](phase_gated_roadmap.md)
-- [Institutional Acceptance Matrix](acceptance_matrix.md)
-- [SLO Alerts](slo_alerts.md)
-- [Degraded Data Playbook](degraded_data_playbook.md)
-
-
-## Systemd Service
-
-A sample service file `ai-trading.service` is provided. It calls `python -m ai_trading` inside the project virtual environment.
-
-To use it:
+Run the main API/runtime surface:
 
 ```bash
-sudo cp packaging/systemd/ai-trading.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now ai-trading.service
-sudo systemctl restart ai-trading.service
-sudo systemctl status ai-trading.service
-journalctl -u ai-trading.service -n 200 --no-pager
+python3 -m ai_trading
 curl -s http://127.0.0.1:9001/healthz
 curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9001/metrics
 ```
 
-Ensure `RUN_HEALTHCHECK=1` is set in the environment to expose these endpoints.
+## Backtesting
 
-The service writes to `logs/scheduler.log` (or `$BOT_LOG_FILE`). View logs with
-`tail -F logs/scheduler.log` or via the systemd journal.
-
-### Runtime Healthcheck Timer
-
-The repository includes a periodic runtime guardrail check that runs the
-Phase-1 health script every 30 minutes and writes results to journald.
-
-Install and enable:
+The repository ships a deterministic CSV backtester module:
 
 ```bash
-sudo cp packaging/systemd/ai-trading-healthcheck.service /etc/systemd/system/
-sudo cp packaging/systemd/ai-trading-healthcheck.timer /etc/systemd/system/
-sudo chmod +x /home/aiuser/ai-trading-bot/scripts/runtime_phase1_health_check.sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now ai-trading-healthcheck.timer
-sudo systemctl start ai-trading-healthcheck.service
+python3 -m ai_trading.strategies.backtester \
+  --symbols SPY AAPL \
+  --data-dir ./data \
+  --start 2024-01-01 \
+  --end 2024-12-31
 ```
 
-Inspect status/logs:
+## Deployment & Ops
 
-```bash
-systemctl status ai-trading-healthcheck.timer --no-pager
-systemctl list-timers ai-trading-healthcheck.timer --all --no-pager
-journalctl -u ai-trading-healthcheck.service -n 200 --no-pager
-```
+- [Deployment Guide](DEPLOYING.md)
+- [Operations](OPERATIONS.md)
+- [Provider Configuration](provider_configuration.md)
+- [Data Providers](data-providers.md)
+- [SLO Alerts](slo_alerts.md)
+- [Degraded Data Playbook](degraded_data_playbook.md)
+
+## Strategy & Risk
+
+- [Entry and Exit Signals](ENTRY_EXIT_SIGNALS.md)
+- [Risk Engine](risk_engine.md)
+- [Slippage](slippage.md)
+- [Precision and Costs](precision_and_costs.md)
+
+## Institutional Rollout
+
+- [Institutional 30/60/90 Roadmap](institutional_roadmap_30_60_90.md)
+- [Phase-Gated Roadmap](phase_gated_roadmap.md)
+- [Acceptance Matrix](acceptance_matrix.md)

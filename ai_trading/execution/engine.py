@@ -148,6 +148,11 @@ KNOWN_EXECUTE_ORDER_KWARGS: frozenset[str] = frozenset(
         "model_id",
         "model_version",
         "config_snapshot_hash",
+        "dataset_hash",
+        "feature_version",
+        "model_artifact_hash",
+        "policy_hash",
+        "decision_trace_id",
         "min_quantity",
         "notional",
         "notes",
@@ -2183,6 +2188,57 @@ class ExecutionEngine:
         return parsed
 
     @staticmethod
+    def _snapshot_lineage_text(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        parsed = str(value).strip()
+        return parsed or None
+
+    def _runtime_snapshot_lineage(self) -> dict[str, Any]:
+        """Return lineage context attached to runtime position/risk snapshots."""
+
+        last_outcome_raw = getattr(self, "_last_submit_outcome", None)
+        last_outcome = (
+            dict(last_outcome_raw) if isinstance(last_outcome_raw, Mapping) else {}
+        )
+
+        model_id = self._snapshot_lineage_text(
+            get_env("AI_TRADING_MODEL_ID", "", cast=str)
+        ) or self._snapshot_lineage_text(last_outcome.get("model_id"))
+        model_version = self._snapshot_lineage_text(
+            get_env("AI_TRADING_MODEL_VERSION", "", cast=str)
+        ) or self._snapshot_lineage_text(last_outcome.get("model_version"))
+        dataset_hash = self._snapshot_lineage_text(
+            get_env("AI_TRADING_DATASET_HASH", "", cast=str)
+        ) or self._snapshot_lineage_text(last_outcome.get("dataset_hash"))
+        feature_version = self._snapshot_lineage_text(
+            get_env("AI_TRADING_FEATURE_VERSION", "", cast=str)
+        ) or self._snapshot_lineage_text(last_outcome.get("feature_version"))
+        model_artifact_hash = self._snapshot_lineage_text(
+            get_env("AI_TRADING_MODEL_ARTIFACT_HASH", "", cast=str)
+        ) or self._snapshot_lineage_text(last_outcome.get("model_artifact_hash"))
+        config_snapshot_hash = self._snapshot_lineage_text(
+            get_env("AI_TRADING_CONFIG_SNAPSHOT_HASH", "", cast=str)
+        ) or self._snapshot_lineage_text(last_outcome.get("config_snapshot_hash"))
+        policy_hash = self._snapshot_lineage_text(
+            get_env("AI_TRADING_EFFECTIVE_POLICY_HASH", "", cast=str)
+        ) or self._snapshot_lineage_text(last_outcome.get("policy_hash"))
+        decision_trace_id = self._snapshot_lineage_text(
+            last_outcome.get("decision_trace_id")
+        )
+
+        return {
+            "model_id": model_id,
+            "model_version": model_version,
+            "dataset_hash": dataset_hash,
+            "feature_version": feature_version,
+            "model_artifact_hash": model_artifact_hash,
+            "config_snapshot_hash": config_snapshot_hash,
+            "policy_hash": policy_hash,
+            "decision_trace_id": decision_trace_id,
+        }
+
+    @staticmethod
     def _snapshot_idempotency_key(*parts: Any) -> str:
         material = "|".join(str(part) for part in parts if part not in (None, ""))
         if not material:
@@ -2205,6 +2261,7 @@ class ExecutionEngine:
 
         snapshot_ts = datetime.now(UTC).isoformat()
         source = self._runtime_snapshot_source or "execution_engine"
+        lineage = self._runtime_snapshot_lineage()
         emitted_positions = 0
         net_qty_total = 0.0
         gross_qty_total = 0.0
@@ -2252,6 +2309,7 @@ class ExecutionEngine:
                 "market_price": market_price,
                 "market_value": market_value,
                 "unrealized_pnl": unrealized_pnl,
+                "lineage": dict(lineage),
             }
             inserted = store.append_position_snapshot_payload(
                 snapshot_source=source,
@@ -2271,6 +2329,10 @@ class ExecutionEngine:
                 market_price=market_price,
                 market_value=market_value,
                 unrealized_pnl=unrealized_pnl,
+                policy_hash=self._snapshot_lineage_text(lineage.get("policy_hash")),
+                model_hash=self._snapshot_lineage_text(
+                    lineage.get("model_artifact_hash")
+                ),
                 payload=position_payload,
             )
             if inserted:
@@ -2286,9 +2348,11 @@ class ExecutionEngine:
             self._snapshot_extract(account_snapshot, "buying_power")
         )
         exposure_pct = self._snapshot_float(getattr(getattr(self, "ctx", None), "exposure_pct", None))
+        open_orders_count = int(len(open_orders))
+        positions_count = int(len(positions))
         risk_payload = {
-            "open_orders_count": int(len(open_orders)),
-            "positions_count": int(len(positions)),
+            "open_orders_count": open_orders_count,
+            "positions_count": positions_count,
             "open_buy_qty_total": float(
                 sum(self._snapshot_float(qty) or 0.0 for qty in open_buy_by_symbol.values())
             ),
@@ -2300,6 +2364,7 @@ class ExecutionEngine:
             "emitted_positions": int(emitted_positions),
             "equity": equity,
             "buying_power": buying_power,
+            "lineage": dict(lineage),
         }
         store.append_risk_snapshot_payload(
             snapshot_source=source,
@@ -2314,8 +2379,13 @@ class ExecutionEngine:
             ),
             snapshot_ts=snapshot_ts,
             exposure_pct=exposure_pct,
-            positions_count=int(risk_payload["positions_count"]),
-            open_orders_count=int(risk_payload["open_orders_count"]),
+            positions_count=positions_count,
+            open_orders_count=open_orders_count,
+            policy_hash=self._snapshot_lineage_text(lineage.get("policy_hash")),
+            model_hash=self._snapshot_lineage_text(lineage.get("model_artifact_hash")),
+            config_hash=self._snapshot_lineage_text(
+                lineage.get("config_snapshot_hash")
+            ),
             payload=risk_payload,
         )
 

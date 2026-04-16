@@ -17,7 +17,8 @@
 touch runtime/kill_switch
 
 # Inspect health and logs
-curl -sS http://127.0.0.1:8081/healthz
+# Packaged service exposes /healthz on :9001; standalone health app uses HEALTHCHECK_PORT
+curl -sS http://127.0.0.1:${HEALTHCHECK_PORT:-9001}/healthz
 journalctl -u ai-trading.service -n 200 --no-pager | rg "HALT|CANCEL_ALL|CIRCUIT_OPEN"
 ```
 

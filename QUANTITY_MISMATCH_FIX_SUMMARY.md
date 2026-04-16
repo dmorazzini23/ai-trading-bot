@@ -1,5 +1,11 @@
 # Quantity Mismatch Bug Fix - Implementation Summary
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 ## Critical Issue Fixed
 
 **Bug**: The trading bot had a severe quantity tracking issue where it reported phantom filled shares by using original signal quantity instead of actual submitted quantity after liquidity retry halving.

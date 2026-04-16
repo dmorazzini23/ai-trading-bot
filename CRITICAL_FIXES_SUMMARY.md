@@ -1,5 +1,11 @@
 # Critical Trade Execution Pipeline Fixes - Summary
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 ## Issues Identified and Fixed
 
 Based on the production logs from 2025-08-01 15:26-15:28, the following critical issues were identified and resolved:

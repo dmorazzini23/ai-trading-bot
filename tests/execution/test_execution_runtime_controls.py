@@ -1838,6 +1838,100 @@ def test_runtime_gonogo_reconciliation_retry_runs_with_mixed_failed_checks(
     assert context["reason"] == "reconciliation_retry_passed"
 
 
+def test_runtime_gonogo_reconciliation_retry_can_run_multiple_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_ENABLED",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_ATTEMPTS",
+        "3",
+    )
+
+    from ai_trading.tools import runtime_performance_report as runtime_perf_report
+
+    eval_calls = {"count": 0}
+    sync_calls = {"count": 0}
+
+    monkeypatch.setattr(
+        runtime_perf_report,
+        "build_report",
+        lambda *args, **kwargs: {"trade_history": {}, "gate_effectiveness": {}},
+    )
+
+    def _evaluate_go_no_go(*_args, **_kwargs):
+        eval_calls["count"] += 1
+        if eval_calls["count"] == 1:
+            return {
+                "gate_passed": False,
+                "failed_checks": ["open_position_reconciliation_consistent"],
+                "thresholds": {
+                    "max_open_position_mismatch_count": 25,
+                    "max_open_position_abs_delta_qty": 50.0,
+                },
+                "observed": {
+                    "open_position_reconciliation_mismatch_count": 2,
+                    "open_position_reconciliation_max_abs_delta_qty": 6.0,
+                },
+            }
+        if eval_calls["count"] == 2:
+            return {
+                "gate_passed": False,
+                "failed_checks": ["open_position_reconciliation_consistent"],
+                "thresholds": {
+                    "max_open_position_mismatch_count": 25,
+                    "max_open_position_abs_delta_qty": 50.0,
+                },
+                "observed": {
+                    "open_position_reconciliation_mismatch_count": 1,
+                    "open_position_reconciliation_max_abs_delta_qty": 2.0,
+                },
+            }
+        return {
+            "gate_passed": True,
+            "failed_checks": [],
+            "thresholds": {},
+            "observed": {},
+        }
+
+    monkeypatch.setattr(runtime_perf_report, "evaluate_go_no_go", _evaluate_go_no_go)
+
+    def _sync_state() -> SimpleNamespace:
+        sync_calls["count"] += 1
+        return SimpleNamespace(open_orders=(), positions=())
+
+    monkeypatch.setattr(engine, "synchronize_broker_state", _sync_state)
+    monkeypatch.setattr(
+        engine,
+        "_backfill_pending_tca_from_fill_events",
+        lambda: {"enabled": True, "reason": "no_new_fill_events"},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_finalize_stale_pending_tca_events",
+        lambda: {"enabled": True, "reason": "interval_not_elapsed"},
+    )
+
+    allowed, context = engine._runtime_gonogo_openings_allowed()
+
+    assert allowed is True
+    assert eval_calls["count"] == 3
+    assert sync_calls["count"] == 2
+    retry = context["reconciliation_retry"]
+    assert retry["attempted"] is True
+    assert retry["max_attempts"] == 3
+    assert retry["attempt"] == 2
+    assert len(retry["attempts"]) == 2
+    assert retry["gate_passed_after"] is True
+    assert context["reason"] == "reconciliation_retry_passed"
+
+
 def test_reconciliation_mismatch_burst_arms_openings_freeze(monkeypatch):
     engine = _engine_stub()
     clock = {"mono": 100.0}

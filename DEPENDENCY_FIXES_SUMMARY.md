@@ -1,5 +1,8 @@
 # Dependency and Data Issues Fixes Summary
 
+> Historical summary: the current runtime standard is `alpaca-py==0.42.1`,
+> stdlib `zoneinfo`, and no new compatibility shims in runtime paths.
+
 ## Issues Addressed
 
 This document summarizes the fixes implemented to resolve the critical issues identified in the system logs from August 9th, 2025.
@@ -11,7 +14,7 @@ This document summarizes the fixes implemented to resolve the critical issues id
 **Root Cause**: Multiple Alpaca SDKs were mixed. The project now standardizes on `alpaca-py`.
 
 **Solution**:
-- Standardized on `alpaca-py==0.42.0` as the production SDK
+- Standardized on `alpaca-py==0.42.1` as the production SDK
 - Improved error handling in `ai_trading/utils/base.py` with proper fallback to mock classes
 - Enhanced logging to distinguish between successful import and fallback usage
 
@@ -26,7 +29,8 @@ This document summarizes the fixes implemented to resolve the critical issues id
 **Problem**: Poor error messages when dependencies are missing
 
 **Solution**:
-- Added graceful fallback using mock TradingClient when `alpaca-py` is unavailable
+- Added dependency validation so missing `alpaca-py` fails fast instead of
+  silently drifting at runtime
 - Enhanced logging to clearly indicate when fallbacks are being used
 - Added dependency validation in startup sequence
 

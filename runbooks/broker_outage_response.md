@@ -15,7 +15,8 @@
 ```bash
 touch runtime/kill_switch
 journalctl -u ai-trading.service -n 300 --no-pager | rg "broker_|AUTH_HALT|CIRCUIT_OPEN"
-curl -sS http://127.0.0.1:8081/healthz
+# Packaged service exposes /healthz on :9001; standalone health app uses HEALTHCHECK_PORT
+curl -sS http://127.0.0.1:${HEALTHCHECK_PORT:-9001}/healthz
 ```
 
 ## Decision Tree

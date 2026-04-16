@@ -14,6 +14,7 @@ import logging
 import math
 import os
 import random
+import re
 import statistics
 import sys
 import time
@@ -1544,6 +1545,11 @@ class _SignalMeta:
     model_id: str | None = None
     model_version: str | None = None
     config_snapshot_hash: str | None = None
+    dataset_hash: str | None = None
+    feature_version: str | None = None
+    model_artifact_hash: str | None = None
+    policy_hash: str | None = None
+    decision_trace_id: str | None = None
 
 
 @lru_cache(maxsize=8)
@@ -2263,6 +2269,8 @@ class ExecutionEngine:
         self._capacity_exhausted_reason: str | None = None
         self._broker_locked_until: float = 0.0
         self._broker_lock_reason: str | None = None
+        self._broker_failover_provider_cooldown_until: dict[str, float] = {}
+        self._broker_failover_provider_cooldown_reason: dict[str, dict[str, Any]] = {}
         self._long_only_mode_reason: str | None = None
         self._long_only_context: dict[str, Any] | None = None
         self._broker_lock_logged: bool = False
@@ -15602,6 +15610,11 @@ class ExecutionEngine:
         model_id: str | None = None,
         model_version: str | None = None,
         config_snapshot_hash: str | None = None,
+        dataset_hash: str | None = None,
+        feature_version: str | None = None,
+        model_artifact_hash: str | None = None,
+        policy_hash: str | None = None,
+        decision_trace_id: str | None = None,
     ) -> None:
         """Persist canonical fill-derived record for learning and truth reporting."""
 
@@ -15722,6 +15735,27 @@ class ExecutionEngine:
             if config_snapshot_hash not in (None, "")
             else None
         )
+        resolved_dataset_hash = (
+            str(dataset_hash).strip() if dataset_hash not in (None, "") else None
+        )
+        resolved_feature_version = (
+            str(feature_version).strip()
+            if feature_version not in (None, "")
+            else None
+        )
+        resolved_model_artifact_hash = (
+            str(model_artifact_hash).strip()
+            if model_artifact_hash not in (None, "")
+            else None
+        )
+        resolved_policy_hash = (
+            str(policy_hash).strip() if policy_hash not in (None, "") else None
+        )
+        resolved_decision_trace_id = (
+            str(decision_trace_id).strip()
+            if decision_trace_id not in (None, "")
+            else None
+        )
         if runtime_payload is not None:
             if resolved_model_id is None:
                 for key in ("model_id", "model_name", "model"):
@@ -15745,6 +15779,44 @@ class ExecutionEngine:
                     parsed = str(candidate).strip()
                     if parsed:
                         resolved_config_snapshot_hash = parsed
+            if resolved_dataset_hash is None:
+                for key in ("dataset_hash", "dataset_fingerprint"):
+                    candidate = runtime_payload.get(key)
+                    if candidate not in (None, ""):
+                        parsed = str(candidate).strip()
+                        if parsed:
+                            resolved_dataset_hash = parsed
+                            break
+            if resolved_feature_version is None:
+                for key in ("feature_version", "feature_set_version"):
+                    candidate = runtime_payload.get(key)
+                    if candidate not in (None, ""):
+                        parsed = str(candidate).strip()
+                        if parsed:
+                            resolved_feature_version = parsed
+                            break
+            if resolved_model_artifact_hash is None:
+                for key in ("model_artifact_hash", "model_hash", "model_version_hash"):
+                    candidate = runtime_payload.get(key)
+                    if candidate not in (None, ""):
+                        parsed = str(candidate).strip()
+                        if parsed:
+                            resolved_model_artifact_hash = parsed
+                            break
+            if resolved_policy_hash is None:
+                for key in ("policy_hash", "effective_policy_hash"):
+                    candidate = runtime_payload.get(key)
+                    if candidate not in (None, ""):
+                        parsed = str(candidate).strip()
+                        if parsed:
+                            resolved_policy_hash = parsed
+                            break
+            if resolved_decision_trace_id is None:
+                candidate = runtime_payload.get("decision_trace_id")
+                if candidate not in (None, ""):
+                    parsed = str(candidate).strip()
+                    if parsed:
+                        resolved_decision_trace_id = parsed
             for container_key in ("metadata", "annotations"):
                 nested_raw = runtime_payload.get(container_key)
                 if not isinstance(nested_raw, Mapping):
@@ -15771,16 +15843,64 @@ class ExecutionEngine:
                         parsed = str(candidate).strip()
                         if parsed:
                             resolved_config_snapshot_hash = parsed
+                if resolved_dataset_hash is None:
+                    for key in ("dataset_hash", "dataset_fingerprint"):
+                        candidate = nested_raw.get(key)
+                        if candidate not in (None, ""):
+                            parsed = str(candidate).strip()
+                            if parsed:
+                                resolved_dataset_hash = parsed
+                                break
+                if resolved_feature_version is None:
+                    for key in ("feature_version", "feature_set_version"):
+                        candidate = nested_raw.get(key)
+                        if candidate not in (None, ""):
+                            parsed = str(candidate).strip()
+                            if parsed:
+                                resolved_feature_version = parsed
+                                break
+                if resolved_model_artifact_hash is None:
+                    for key in ("model_artifact_hash", "model_hash", "model_version_hash"):
+                        candidate = nested_raw.get(key)
+                        if candidate not in (None, ""):
+                            parsed = str(candidate).strip()
+                            if parsed:
+                                resolved_model_artifact_hash = parsed
+                                break
+                if resolved_policy_hash is None:
+                    for key in ("policy_hash", "effective_policy_hash"):
+                        candidate = nested_raw.get(key)
+                        if candidate not in (None, ""):
+                            parsed = str(candidate).strip()
+                            if parsed:
+                                resolved_policy_hash = parsed
+                                break
+                if resolved_decision_trace_id is None:
+                    candidate = nested_raw.get("decision_trace_id")
+                    if candidate not in (None, ""):
+                        parsed = str(candidate).strip()
+                        if parsed:
+                            resolved_decision_trace_id = parsed
                 if (
                     resolved_model_id is not None
                     and resolved_model_version is not None
                     and resolved_config_snapshot_hash is not None
+                    and resolved_dataset_hash is not None
+                    and resolved_feature_version is not None
+                    and resolved_model_artifact_hash is not None
+                    and resolved_policy_hash is not None
+                    and resolved_decision_trace_id is not None
                 ):
                     break
         if (
             resolved_model_id is None
             or resolved_model_version is None
             or resolved_config_snapshot_hash is None
+            or resolved_dataset_hash is None
+            or resolved_feature_version is None
+            or resolved_model_artifact_hash is None
+            or resolved_policy_hash is None
+            or resolved_decision_trace_id is None
         ):
             meta_store = getattr(self, "_order_signal_meta", None)
             if isinstance(meta_store, Mapping):
@@ -15803,6 +15923,37 @@ class ExecutionEngine:
                             resolved_config_snapshot_hash = str(
                                 meta_entry.config_snapshot_hash
                             ).strip()
+                        if (
+                            resolved_dataset_hash is None
+                            and meta_entry.dataset_hash not in (None, "")
+                        ):
+                            resolved_dataset_hash = str(meta_entry.dataset_hash).strip()
+                        if (
+                            resolved_feature_version is None
+                            and meta_entry.feature_version not in (None, "")
+                        ):
+                            resolved_feature_version = str(
+                                meta_entry.feature_version
+                            ).strip()
+                        if (
+                            resolved_model_artifact_hash is None
+                            and meta_entry.model_artifact_hash not in (None, "")
+                        ):
+                            resolved_model_artifact_hash = str(
+                                meta_entry.model_artifact_hash
+                            ).strip()
+                        if (
+                            resolved_policy_hash is None
+                            and meta_entry.policy_hash not in (None, "")
+                        ):
+                            resolved_policy_hash = str(meta_entry.policy_hash).strip()
+                        if (
+                            resolved_decision_trace_id is None
+                            and meta_entry.decision_trace_id not in (None, "")
+                        ):
+                            resolved_decision_trace_id = str(
+                                meta_entry.decision_trace_id
+                            ).strip()
                         break
                     if isinstance(meta_entry, Mapping):
                         if resolved_model_id is None:
@@ -15817,6 +15968,34 @@ class ExecutionEngine:
                             candidate = meta_entry.get("config_snapshot_hash")
                             if candidate not in (None, ""):
                                 resolved_config_snapshot_hash = str(candidate).strip()
+                        if resolved_dataset_hash is None:
+                            for key in ("dataset_hash", "dataset_fingerprint"):
+                                candidate = meta_entry.get(key)
+                                if candidate not in (None, ""):
+                                    resolved_dataset_hash = str(candidate).strip()
+                                    break
+                        if resolved_feature_version is None:
+                            for key in ("feature_version", "feature_set_version"):
+                                candidate = meta_entry.get(key)
+                                if candidate not in (None, ""):
+                                    resolved_feature_version = str(candidate).strip()
+                                    break
+                        if resolved_model_artifact_hash is None:
+                            for key in ("model_artifact_hash", "model_hash", "model_version_hash"):
+                                candidate = meta_entry.get(key)
+                                if candidate not in (None, ""):
+                                    resolved_model_artifact_hash = str(candidate).strip()
+                                    break
+                        if resolved_policy_hash is None:
+                            for key in ("policy_hash", "effective_policy_hash"):
+                                candidate = meta_entry.get(key)
+                                if candidate not in (None, ""):
+                                    resolved_policy_hash = str(candidate).strip()
+                                    break
+                        if resolved_decision_trace_id is None:
+                            candidate = meta_entry.get("decision_trace_id")
+                            if candidate not in (None, ""):
+                                resolved_decision_trace_id = str(candidate).strip()
                         break
         signal_tags = getattr(signal, "signal_tags", None) or getattr(signal, "tags", "")
         try:
@@ -15897,6 +16076,16 @@ class ExecutionEngine:
             fill_record["model_version"] = str(resolved_model_version)
         if resolved_config_snapshot_hash not in (None, ""):
             fill_record["config_snapshot_hash"] = str(resolved_config_snapshot_hash)
+        if resolved_dataset_hash not in (None, ""):
+            fill_record["dataset_hash"] = str(resolved_dataset_hash)
+        if resolved_feature_version not in (None, ""):
+            fill_record["feature_version"] = str(resolved_feature_version)
+        if resolved_model_artifact_hash not in (None, ""):
+            fill_record["model_artifact_hash"] = str(resolved_model_artifact_hash)
+        if resolved_policy_hash not in (None, ""):
+            fill_record["policy_hash"] = str(resolved_policy_hash)
+        if resolved_decision_trace_id not in (None, ""):
+            fill_record["decision_trace_id"] = str(resolved_decision_trace_id)
         source_value = fill_source
         if source_value in (None, "") and runtime_payload is not None:
             source_value = runtime_payload.get("source")
@@ -16690,6 +16879,212 @@ class ExecutionEngine:
                 extra={"path": str(path), "error": str(exc)},
             )
 
+    def _resolve_failover_provider_candidates(self) -> list[str]:
+        """Resolve ordered broker failover provider candidates."""
+
+        providers_raw: Any = None
+        if _config_get_env is not None:
+            try:
+                providers_raw = _config_get_env(
+                    "AI_TRADING_BROKER_FAILOVER_PROVIDERS",
+                    None,
+                )
+            except Exception:
+                providers_raw = None
+        if providers_raw in (None, ""):
+            providers_raw = _runtime_env("AI_TRADING_BROKER_FAILOVER_PROVIDERS", None)
+
+        candidates: list[str] = []
+        if providers_raw not in (None, ""):
+            raw_text = str(providers_raw or "")
+            parsed = [
+                token.strip().lower()
+                for token in re.split(r"[,\s]+", raw_text)
+                if token.strip()
+            ]
+            candidates.extend(parsed)
+
+        provider_raw: Any = None
+        if _config_get_env is not None:
+            try:
+                provider_raw = _config_get_env("AI_TRADING_BROKER_FAILOVER_PROVIDER", None)
+            except Exception:
+                provider_raw = None
+        if provider_raw in (None, ""):
+            provider_raw = _runtime_env("AI_TRADING_BROKER_FAILOVER_PROVIDER", "paper")
+        provider = str(provider_raw or "paper").strip().lower()
+        if provider:
+            candidates.append(provider)
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for token in candidates:
+            clean = str(token or "").strip().lower()
+            if not clean or clean in seen:
+                continue
+            seen.add(clean)
+            deduped.append(clean)
+        return deduped
+
+    def _failover_provider_cooldown_seconds(self) -> float:
+        """Return per-provider cooldown after a failover provider failure."""
+
+        cooldown = _config_float(
+            "AI_TRADING_BROKER_FAILOVER_PROVIDER_COOLDOWN_SEC",
+            120.0,
+        )
+        if cooldown is None:
+            cooldown = 120.0
+        try:
+            value = float(cooldown)
+        except (TypeError, ValueError):
+            value = 120.0
+        if not math.isfinite(value):
+            value = 120.0
+        return max(5.0, min(value, 3600.0))
+
+    def _failover_provider_cooldown_remaining(
+        self,
+        *,
+        provider: str,
+        now_mono: float,
+    ) -> float:
+        """Return cooldown remaining for a provider in monotonic seconds."""
+
+        raw_map = getattr(self, "_broker_failover_provider_cooldown_until", {}) or {}
+        cooldown_map = raw_map if isinstance(raw_map, Mapping) else {}
+        key = str(provider or "").strip().lower()
+        if not key:
+            return 0.0
+        until = _safe_float(cooldown_map.get(key)) or 0.0
+        return max(float(until) - float(now_mono), 0.0)
+
+    def _mark_failover_provider_cooldown(
+        self,
+        *,
+        provider: str,
+        now_mono: float,
+        reason: str,
+        error: str | None = None,
+    ) -> None:
+        """Mark provider as cooling down after failover attempt failure."""
+
+        key = str(provider or "").strip().lower()
+        if not key:
+            return
+        duration = self._failover_provider_cooldown_seconds()
+        until = float(now_mono) + float(duration)
+        map_raw = getattr(self, "_broker_failover_provider_cooldown_until", {}) or {}
+        cooldown_map = dict(map_raw) if isinstance(map_raw, Mapping) else {}
+        cooldown_map[key] = float(until)
+        self._broker_failover_provider_cooldown_until = cooldown_map
+        reason_raw = getattr(self, "_broker_failover_provider_cooldown_reason", {}) or {}
+        reason_map = dict(reason_raw) if isinstance(reason_raw, Mapping) else {}
+        reason_map[key] = {
+            "reason": str(reason),
+            "error": str(error) if error not in (None, "") else None,
+            "until_mono": float(until),
+        }
+        self._broker_failover_provider_cooldown_reason = reason_map
+
+    def _clear_failover_provider_cooldown(self, *, provider: str) -> None:
+        """Clear any active cooldown marker for provider after success."""
+
+        key = str(provider or "").strip().lower()
+        if not key:
+            return
+        map_raw = getattr(self, "_broker_failover_provider_cooldown_until", {}) or {}
+        if isinstance(map_raw, Mapping) and key in map_raw:
+            cooldown_map = dict(map_raw)
+            cooldown_map.pop(key, None)
+            self._broker_failover_provider_cooldown_until = cooldown_map
+        reason_raw = getattr(self, "_broker_failover_provider_cooldown_reason", {}) or {}
+        if isinstance(reason_raw, Mapping) and key in reason_raw:
+            reason_map = dict(reason_raw)
+            reason_map.pop(key, None)
+            self._broker_failover_provider_cooldown_reason = reason_map
+
+    def _failover_post_submit_reconcile(
+        self,
+        *,
+        provider: str,
+    ) -> dict[str, Any]:
+        """Run best-effort reconciliation after failover submit acceptance."""
+
+        enabled = _resolve_bool_env(
+            "AI_TRADING_BROKER_FAILOVER_POST_SUBMIT_RECONCILE_ENABLED"
+        )
+        if enabled is None:
+            enabled = True
+        context: dict[str, Any] = {
+            "enabled": bool(enabled),
+            "provider": str(provider),
+            "attempted": False,
+        }
+        if not bool(enabled):
+            context["reason"] = "disabled"
+            return context
+
+        context["attempted"] = True
+        context["reason"] = "attempted"
+        open_orders_for_reconcile: tuple[Any, ...] = ()
+
+        sync_fn = getattr(self, "synchronize_broker_state", None)
+        if callable(sync_fn):
+            try:
+                snapshot = sync_fn()
+                open_orders_for_reconcile = tuple(
+                    getattr(snapshot, "open_orders", ()) or ()
+                )
+                context["broker_sync"] = {
+                    "open_orders": int(len(open_orders_for_reconcile)),
+                    "positions": int(len(getattr(snapshot, "positions", ()) or ())),
+                }
+            except Exception as exc:
+                context["broker_sync_error"] = str(exc)
+        if not open_orders_for_reconcile:
+            sync_snapshot = getattr(self, "_broker_sync", None)
+            if sync_snapshot is not None:
+                try:
+                    open_orders_for_reconcile = tuple(
+                        getattr(sync_snapshot, "open_orders", ()) or ()
+                    )
+                except Exception:
+                    open_orders_for_reconcile = ()
+
+        durable_reconcile_fn = getattr(self, "_reconcile_durable_intents", None)
+        if callable(durable_reconcile_fn):
+            try:
+                durable_reconcile_fn(open_orders=open_orders_for_reconcile)
+                context["durable_intent_reconcile"] = True
+            except Exception as exc:
+                context["durable_intent_reconcile_error"] = str(exc)
+
+        artifact_reconcile_fn = getattr(
+            self,
+            "_reconcile_pending_order_runtime_artifacts",
+            None,
+        )
+        if callable(artifact_reconcile_fn):
+            try:
+                artifact_reconcile_fn(open_orders=open_orders_for_reconcile)
+                context["pending_artifact_reconcile"] = {
+                    "attempted": True,
+                    "open_orders": int(len(open_orders_for_reconcile)),
+                }
+            except Exception as exc:
+                context["pending_artifact_reconcile_error"] = str(exc)
+
+        context["success"] = not any(
+            str(key).endswith("_error")
+            for key in context
+        )
+        if bool(context["success"]):
+            context["reason"] = "reconciled"
+        else:
+            context["reason"] = "reconcile_errors"
+        return context
+
     def _attempt_failover_submit(
         self,
         order_data: Mapping[str, Any],
@@ -16703,40 +17098,9 @@ class ExecutionEngine:
             return None
         if not self._is_failover_eligible_error(primary_error):
             return None
-        provider_raw: Any = None
-        if _config_get_env is not None:
-            try:
-                provider_raw = _config_get_env("AI_TRADING_BROKER_FAILOVER_PROVIDER", None)
-            except Exception:
-                provider_raw = None
-        if provider_raw in (None, ""):
-            provider_raw = _runtime_env("AI_TRADING_BROKER_FAILOVER_PROVIDER", "paper")
-        provider = str(provider_raw or "paper").strip().lower()
-        if not provider:
+        providers = self._resolve_failover_provider_candidates()
+        if not providers:
             return None
-        try:
-            adapter = build_broker_adapter(provider=provider, client=None, paper_buying_power="100000")
-        except Exception as exc:
-            self.stats.setdefault("failover_failures", 0)
-            self.stats["failover_failures"] += 1
-            self._record_broker_resilience_playbook(
-                action="failover_adapter_error",
-                provider=provider,
-                reason="adapter_build_failed",
-                details={"error": str(exc)},
-            )
-            return None
-        if adapter is None:
-            self.stats.setdefault("failover_failures", 0)
-            self.stats["failover_failures"] += 1
-            self._record_broker_resilience_playbook(
-                action="failover_adapter_missing",
-                provider=provider,
-                reason="adapter_unavailable",
-                details={"primary_error": str(primary_error)},
-            )
-            return None
-
         quantity = order_data.get("quantity", order_data.get("qty"))
         payload: dict[str, Any] = {
             "symbol": order_data.get("symbol"),
@@ -16749,78 +17113,192 @@ class ExecutionEngine:
             "time_in_force": order_data.get("time_in_force", "day"),
             "client_order_id": order_data.get("client_order_id"),
         }
-        submit = getattr(adapter, "submit_order", None)
-        if not callable(submit):
-            self.stats.setdefault("failover_failures", 0)
-            self.stats["failover_failures"] += 1
-            self._record_broker_resilience_playbook(
-                action="failover_submit_missing",
+        now_mono = float(monotonic_time())
+        attempted_count = 0
+        for provider_index, provider in enumerate(providers, start=1):
+            cooldown_remaining = self._failover_provider_cooldown_remaining(
                 provider=provider,
-                reason="submit_order_missing",
-                details={},
+                now_mono=now_mono,
             )
-            return None
-        try:
-            response = submit(payload)
-        except Exception as exc:
-            self.stats.setdefault("failover_failures", 0)
-            self.stats["failover_failures"] += 1
+            if cooldown_remaining > 0.0:
+                self.stats.setdefault("failover_provider_cooldown_skips", 0)
+                self.stats["failover_provider_cooldown_skips"] += 1
+                self._record_broker_resilience_playbook(
+                    action="failover_provider_cooldown_skip",
+                    provider=provider,
+                    reason="provider_cooldown_active",
+                    details={
+                        "primary_error": str(primary_error),
+                        "cooldown_remaining_s": round(cooldown_remaining, 3),
+                        "attempt_index": int(provider_index),
+                        "providers_total": int(len(providers)),
+                        "symbol": str(order_data.get("symbol") or ""),
+                    },
+                )
+                continue
+
+            attempted_count += 1
+            self.stats.setdefault("failover_attempts", 0)
+            self.stats["failover_attempts"] += 1
+            try:
+                adapter = build_broker_adapter(
+                    provider=provider,
+                    client=None,
+                    paper_buying_power="100000",
+                )
+            except Exception as exc:
+                self.stats.setdefault("failover_failures", 0)
+                self.stats["failover_failures"] += 1
+                self._mark_failover_provider_cooldown(
+                    provider=provider,
+                    now_mono=now_mono,
+                    reason="adapter_build_failed",
+                    error=str(exc),
+                )
+                self._record_broker_resilience_playbook(
+                    action="failover_adapter_error",
+                    provider=provider,
+                    reason="adapter_build_failed",
+                    details={
+                        "error": str(exc),
+                        "attempt_index": int(provider_index),
+                        "providers_total": int(len(providers)),
+                    },
+                )
+                continue
+            if adapter is None:
+                self.stats.setdefault("failover_failures", 0)
+                self.stats["failover_failures"] += 1
+                self._mark_failover_provider_cooldown(
+                    provider=provider,
+                    now_mono=now_mono,
+                    reason="adapter_unavailable",
+                    error=str(primary_error),
+                )
+                self._record_broker_resilience_playbook(
+                    action="failover_adapter_missing",
+                    provider=provider,
+                    reason="adapter_unavailable",
+                    details={
+                        "primary_error": str(primary_error),
+                        "attempt_index": int(provider_index),
+                        "providers_total": int(len(providers)),
+                    },
+                )
+                continue
+
+            submit = getattr(adapter, "submit_order", None)
+            if not callable(submit):
+                self.stats.setdefault("failover_failures", 0)
+                self.stats["failover_failures"] += 1
+                self._mark_failover_provider_cooldown(
+                    provider=provider,
+                    now_mono=now_mono,
+                    reason="submit_order_missing",
+                )
+                self._record_broker_resilience_playbook(
+                    action="failover_submit_missing",
+                    provider=provider,
+                    reason="submit_order_missing",
+                    details={
+                        "attempt_index": int(provider_index),
+                        "providers_total": int(len(providers)),
+                    },
+                )
+                continue
+            try:
+                response = submit(payload)
+            except Exception as exc:
+                self.stats.setdefault("failover_failures", 0)
+                self.stats["failover_failures"] += 1
+                self._mark_failover_provider_cooldown(
+                    provider=provider,
+                    now_mono=now_mono,
+                    reason="submit_failed",
+                    error=str(exc),
+                )
+                self._record_broker_resilience_playbook(
+                    action="failover_submit_failed",
+                    provider=provider,
+                    reason="submit_failed",
+                    details={
+                        "primary_error": str(primary_error),
+                        "error": str(exc),
+                        "symbol": str(order_data.get("symbol") or ""),
+                        "attempt_index": int(provider_index),
+                        "providers_total": int(len(providers)),
+                    },
+                )
+                logger.error(
+                    "BROKER_FAILOVER_SUBMIT_FAILED",
+                    extra={
+                        "provider": provider,
+                        "symbol": order_data.get("symbol"),
+                        "error": str(exc),
+                        "attempt_index": int(provider_index),
+                        "providers_total": int(len(providers)),
+                    },
+                )
+                continue
+
+            order_id = _extract_value(response, "id", "order_id")
+            status = _extract_value(response, "status")
+            reconcile_context = self._failover_post_submit_reconcile(provider=provider)
+            self._clear_failover_provider_cooldown(provider=provider)
+            failover_response = {
+                "id": order_id or f"{provider}-fallback",
+                "status": str(status or "accepted"),
+                "symbol": order_data.get("symbol"),
+                "side": order_data.get("side"),
+                "qty": quantity,
+                "client_order_id": _extract_value(response, "client_order_id")
+                or order_data.get("client_order_id"),
+                "provider": provider,
+                "failover": True,
+                "raw": response,
+                "provider_attempt_index": int(provider_index),
+                "providers_considered": int(len(providers)),
+                "post_submit_reconcile": dict(reconcile_context),
+            }
+            self.stats.setdefault("failover_submits", 0)
+            self.stats["failover_submits"] += 1
             self._record_broker_resilience_playbook(
-                action="failover_submit_failed",
+                action="failover_submit_success",
                 provider=provider,
-                reason="submit_failed",
+                reason="primary_submit_failed",
                 details={
                     "primary_error": str(primary_error),
-                    "error": str(exc),
                     "symbol": str(order_data.get("symbol") or ""),
+                    "status": str(failover_response.get("status")),
+                    "attempt_index": int(provider_index),
+                    "providers_total": int(len(providers)),
+                    "post_submit_reconcile": dict(reconcile_context),
                 },
             )
-            logger.error(
-                "BROKER_FAILOVER_SUBMIT_FAILED",
+            logger.warning(
+                "BROKER_FAILOVER_SUBMIT_SUCCESS",
                 extra={
                     "provider": provider,
                     "symbol": order_data.get("symbol"),
-                    "error": str(exc),
+                    "order_id": failover_response["id"],
+                    "status": failover_response["status"],
+                    "attempt_index": int(provider_index),
+                    "providers_total": int(len(providers)),
                 },
             )
-            return None
-
-        order_id = _extract_value(response, "id", "order_id")
-        status = _extract_value(response, "status")
-        failover_response = {
-            "id": order_id or f"{provider}-fallback",
-            "status": str(status or "accepted"),
-            "symbol": order_data.get("symbol"),
-            "side": order_data.get("side"),
-            "qty": quantity,
-            "client_order_id": _extract_value(response, "client_order_id")
-            or order_data.get("client_order_id"),
-            "provider": provider,
-            "failover": True,
-            "raw": response,
-        }
-        self.stats.setdefault("failover_submits", 0)
-        self.stats["failover_submits"] += 1
+            return failover_response
         self._record_broker_resilience_playbook(
-            action="failover_submit_success",
-            provider=provider,
-            reason="primary_submit_failed",
+            action="failover_exhausted",
+            provider=providers[0] if providers else "unknown",
+            reason="all_providers_failed_or_cooling_down",
             details={
                 "primary_error": str(primary_error),
+                "providers": list(providers),
+                "attempted_providers": int(attempted_count),
                 "symbol": str(order_data.get("symbol") or ""),
-                "status": str(failover_response.get("status")),
             },
         )
-        logger.warning(
-            "BROKER_FAILOVER_SUBMIT_SUCCESS",
-            extra={
-                "provider": provider,
-                "symbol": order_data.get("symbol"),
-                "order_id": failover_response["id"],
-                "status": failover_response["status"],
-            },
-        )
-        return failover_response
+        return None
 
     def _submit_rate_limit_config(self) -> dict[str, Any]:
         """Resolve submit rate limiting configuration."""
@@ -18589,6 +19067,11 @@ class ExecutionEngine:
         model_id_hint = _lineage_text(kwargs.get("model_id"))
         model_version_hint = _lineage_text(kwargs.get("model_version"))
         config_snapshot_hash_hint = _lineage_text(kwargs.get("config_snapshot_hash"))
+        dataset_hash_hint = _lineage_text(kwargs.get("dataset_hash"))
+        feature_version_hint = _lineage_text(kwargs.get("feature_version"))
+        model_artifact_hash_hint = _lineage_text(kwargs.get("model_artifact_hash"))
+        policy_hash_hint = _lineage_text(kwargs.get("policy_hash"))
+        decision_trace_id_hint = _lineage_text(kwargs.get("decision_trace_id"))
         if model_id_hint is None and isinstance(annotations, Mapping):
             model_id_hint = (
                 _lineage_text(annotations.get("model_id"))
@@ -18608,6 +19091,29 @@ class ExecutionEngine:
             config_snapshot_hash_hint = _lineage_text(
                 annotations.get("config_snapshot_hash")
             )
+        if dataset_hash_hint is None and isinstance(annotations, Mapping):
+            dataset_hash_hint = (
+                _lineage_text(annotations.get("dataset_hash"))
+                or _lineage_text(annotations.get("dataset_fingerprint"))
+            )
+        if feature_version_hint is None and isinstance(annotations, Mapping):
+            feature_version_hint = (
+                _lineage_text(annotations.get("feature_version"))
+                or _lineage_text(annotations.get("feature_set_version"))
+            )
+        if model_artifact_hash_hint is None and isinstance(annotations, Mapping):
+            model_artifact_hash_hint = (
+                _lineage_text(annotations.get("model_artifact_hash"))
+                or _lineage_text(annotations.get("model_hash"))
+                or _lineage_text(annotations.get("model_version_hash"))
+            )
+        if policy_hash_hint is None and isinstance(annotations, Mapping):
+            policy_hash_hint = (
+                _lineage_text(annotations.get("policy_hash"))
+                or _lineage_text(annotations.get("effective_policy_hash"))
+            )
+        if decision_trace_id_hint is None and isinstance(annotations, Mapping):
+            decision_trace_id_hint = _lineage_text(annotations.get("decision_trace_id"))
         if model_id_hint is None and isinstance(metadata_raw, Mapping):
             model_id_hint = (
                 _lineage_text(metadata_raw.get("model_id"))
@@ -18627,6 +19133,29 @@ class ExecutionEngine:
             config_snapshot_hash_hint = _lineage_text(
                 metadata_raw.get("config_snapshot_hash")
             )
+        if dataset_hash_hint is None and isinstance(metadata_raw, Mapping):
+            dataset_hash_hint = (
+                _lineage_text(metadata_raw.get("dataset_hash"))
+                or _lineage_text(metadata_raw.get("dataset_fingerprint"))
+            )
+        if feature_version_hint is None and isinstance(metadata_raw, Mapping):
+            feature_version_hint = (
+                _lineage_text(metadata_raw.get("feature_version"))
+                or _lineage_text(metadata_raw.get("feature_set_version"))
+            )
+        if model_artifact_hash_hint is None and isinstance(metadata_raw, Mapping):
+            model_artifact_hash_hint = (
+                _lineage_text(metadata_raw.get("model_artifact_hash"))
+                or _lineage_text(metadata_raw.get("model_hash"))
+                or _lineage_text(metadata_raw.get("model_version_hash"))
+            )
+        if policy_hash_hint is None and isinstance(metadata_raw, Mapping):
+            policy_hash_hint = (
+                _lineage_text(metadata_raw.get("policy_hash"))
+                or _lineage_text(metadata_raw.get("effective_policy_hash"))
+            )
+        if decision_trace_id_hint is None and isinstance(metadata_raw, Mapping):
+            decision_trace_id_hint = _lineage_text(metadata_raw.get("decision_trace_id"))
         ignored_keys = {key for key in original_kwarg_keys if key not in KNOWN_EXECUTE_ORDER_KWARGS}
         for key in list(ignored_keys):
             kwargs.pop(key, None)
@@ -18780,6 +19309,16 @@ class ExecutionEngine:
             precheck_order["model_version"] = str(model_version_hint)
         if config_snapshot_hash_hint is not None:
             precheck_order["config_snapshot_hash"] = str(config_snapshot_hash_hint)
+        if dataset_hash_hint is not None:
+            precheck_order["dataset_hash"] = str(dataset_hash_hint)
+        if feature_version_hint is not None:
+            precheck_order["feature_version"] = str(feature_version_hint)
+        if model_artifact_hash_hint is not None:
+            precheck_order["model_artifact_hash"] = str(model_artifact_hash_hint)
+        if policy_hash_hint is not None:
+            precheck_order["policy_hash"] = str(policy_hash_hint)
+        if decision_trace_id_hint is not None:
+            precheck_order["decision_trace_id"] = str(decision_trace_id_hint)
         if expected_edge_hint is not None:
             precheck_order["expected_net_edge_bps_raw"] = float(expected_edge_hint)
             precheck_order["expected_net_edge_bps"] = float(
@@ -21320,6 +21859,11 @@ class ExecutionEngine:
                     model_id=model_id_hint,
                     model_version=model_version_hint,
                     config_snapshot_hash=config_snapshot_hash_hint,
+                    dataset_hash=dataset_hash_hint,
+                    feature_version=feature_version_hint,
+                    model_artifact_hash=model_artifact_hash_hint,
+                    policy_hash=policy_hash_hint,
+                    decision_trace_id=decision_trace_id_hint,
                 )
                 self._order_signal_meta = store
             else:
@@ -21355,6 +21899,16 @@ class ExecutionEngine:
             final_payload["model_version"] = str(model_version_hint)
         if config_snapshot_hash_hint is not None:
             final_payload["config_snapshot_hash"] = str(config_snapshot_hash_hint)
+        if dataset_hash_hint is not None:
+            final_payload["dataset_hash"] = str(dataset_hash_hint)
+        if feature_version_hint is not None:
+            final_payload["feature_version"] = str(feature_version_hint)
+        if model_artifact_hash_hint is not None:
+            final_payload["model_artifact_hash"] = str(model_artifact_hash_hint)
+        if policy_hash_hint is not None:
+            final_payload["policy_hash"] = str(policy_hash_hint)
+        if decision_trace_id_hint is not None:
+            final_payload["decision_trace_id"] = str(decision_trace_id_hint)
         if event_sequence > 0:
             final_payload["event_seq"] = event_sequence
         if last_prev_status is not None:
@@ -21401,6 +21955,16 @@ class ExecutionEngine:
                     pending_entry["model_version"] = str(model_version_hint)
                 if config_snapshot_hash_hint is not None:
                     pending_entry["config_snapshot_hash"] = str(config_snapshot_hash_hint)
+                if dataset_hash_hint is not None:
+                    pending_entry["dataset_hash"] = str(dataset_hash_hint)
+                if feature_version_hint is not None:
+                    pending_entry["feature_version"] = str(feature_version_hint)
+                if model_artifact_hash_hint is not None:
+                    pending_entry["model_artifact_hash"] = str(model_artifact_hash_hint)
+                if policy_hash_hint is not None:
+                    pending_entry["policy_hash"] = str(policy_hash_hint)
+                if decision_trace_id_hint is not None:
+                    pending_entry["decision_trace_id"] = str(decision_trace_id_hint)
                 pending_entry["updated_at"] = datetime.now(UTC).isoformat()
             self._pending_orders = store
 
@@ -21682,6 +22246,35 @@ class ExecutionEngine:
                     runtime_fill_payload["config_snapshot_hash"] = str(
                         config_snapshot_hash_hint
                     )
+                if (
+                    dataset_hash_hint is not None
+                    and runtime_fill_payload.get("dataset_hash") in (None, "")
+                ):
+                    runtime_fill_payload["dataset_hash"] = str(dataset_hash_hint)
+                if (
+                    feature_version_hint is not None
+                    and runtime_fill_payload.get("feature_version") in (None, "")
+                ):
+                    runtime_fill_payload["feature_version"] = str(feature_version_hint)
+                if (
+                    model_artifact_hash_hint is not None
+                    and runtime_fill_payload.get("model_artifact_hash") in (None, "")
+                ):
+                    runtime_fill_payload["model_artifact_hash"] = str(
+                        model_artifact_hash_hint
+                    )
+                if (
+                    policy_hash_hint is not None
+                    and runtime_fill_payload.get("policy_hash") in (None, "")
+                ):
+                    runtime_fill_payload["policy_hash"] = str(policy_hash_hint)
+                if (
+                    decision_trace_id_hint is not None
+                    and runtime_fill_payload.get("decision_trace_id") in (None, "")
+                ):
+                    runtime_fill_payload["decision_trace_id"] = str(
+                        decision_trace_id_hint
+                    )
                 runtime_source = str(runtime_fill_payload.get("source") or "live")
             self._persist_fill_derived_trade_record(
                 symbol=symbol,
@@ -21704,6 +22297,11 @@ class ExecutionEngine:
                 model_id=model_id_hint,
                 model_version=model_version_hint,
                 config_snapshot_hash=config_snapshot_hash_hint,
+                dataset_hash=dataset_hash_hint,
+                feature_version=feature_version_hint,
+                model_artifact_hash=model_artifact_hash_hint,
+                policy_hash=policy_hash_hint,
+                decision_trace_id=decision_trace_id_hint,
             )
         else:
             runtime_source = None
@@ -22278,6 +22876,39 @@ class ExecutionEngine:
             material = "runtime-snapshot"
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _snapshot_lineage_text(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        parsed = str(value).strip()
+        return parsed or None
+
+    def _runtime_snapshot_lineage(self) -> dict[str, Any]:
+        """Return lineage context attached to runtime position/risk snapshots."""
+
+        last_outcome_raw = getattr(self, "_last_submit_outcome", None)
+        last_outcome = (
+            dict(last_outcome_raw) if isinstance(last_outcome_raw, Mapping) else {}
+        )
+        model_id = self._snapshot_lineage_text(_runtime_env("AI_TRADING_MODEL_ID")) or self._snapshot_lineage_text(last_outcome.get("model_id"))
+        model_version = self._snapshot_lineage_text(_runtime_env("AI_TRADING_MODEL_VERSION")) or self._snapshot_lineage_text(last_outcome.get("model_version"))
+        dataset_hash = self._snapshot_lineage_text(_runtime_env("AI_TRADING_DATASET_HASH")) or self._snapshot_lineage_text(last_outcome.get("dataset_hash"))
+        feature_version = self._snapshot_lineage_text(_runtime_env("AI_TRADING_FEATURE_VERSION")) or self._snapshot_lineage_text(last_outcome.get("feature_version"))
+        model_artifact_hash = self._snapshot_lineage_text(_runtime_env("AI_TRADING_MODEL_ARTIFACT_HASH")) or self._snapshot_lineage_text(last_outcome.get("model_artifact_hash"))
+        config_snapshot_hash = self._snapshot_lineage_text(_runtime_env("AI_TRADING_CONFIG_SNAPSHOT_HASH")) or self._snapshot_lineage_text(last_outcome.get("config_snapshot_hash"))
+        policy_hash = self._snapshot_lineage_text(_runtime_env("AI_TRADING_EFFECTIVE_POLICY_HASH")) or self._snapshot_lineage_text(last_outcome.get("policy_hash"))
+        decision_trace_id = self._snapshot_lineage_text(last_outcome.get("decision_trace_id"))
+        return {
+            "model_id": model_id,
+            "model_version": model_version,
+            "dataset_hash": dataset_hash,
+            "feature_version": feature_version,
+            "model_artifact_hash": model_artifact_hash,
+            "config_snapshot_hash": config_snapshot_hash,
+            "policy_hash": policy_hash,
+            "decision_trace_id": decision_trace_id,
+        }
+
     def _emit_runtime_snapshots_from_broker_sync(
         self,
         *,
@@ -22292,6 +22923,7 @@ class ExecutionEngine:
 
         snapshot_ts = datetime.now(UTC).isoformat()
         source = str(getattr(self, "_runtime_snapshot_source", "") or "execution_engine")
+        lineage = self._runtime_snapshot_lineage()
 
         emitted_positions = 0
         net_qty_total = 0.0
@@ -22347,7 +22979,12 @@ class ExecutionEngine:
                         "market_price": market_price,
                         "market_value": market_value,
                         "unrealized_pnl": unrealized_pnl,
+                        "lineage": dict(lineage),
                     },
+                    policy_hash=self._snapshot_lineage_text(lineage.get("policy_hash")),
+                    model_hash=self._snapshot_lineage_text(
+                        lineage.get("model_artifact_hash")
+                    ),
                 )
             )
             if inserted:
@@ -22361,9 +22998,11 @@ class ExecutionEngine:
         equity = _safe_float(_extract_value(account_snapshot, "equity", "portfolio_value"))
         buying_power = _safe_float(_extract_value(account_snapshot, "buying_power"))
         exposure_pct = _safe_float(_extract_value(getattr(self, "ctx", None), "exposure_pct"))
+        open_orders_count = int(len(open_orders))
+        positions_count = int(len(positions))
         risk_payload = {
-            "open_orders_count": int(len(open_orders)),
-            "positions_count": int(len(positions)),
+            "open_orders_count": open_orders_count,
+            "positions_count": positions_count,
             "open_buy_qty_total": float(open_buy_qty_total),
             "open_sell_qty_total": float(open_sell_qty_total),
             "net_position_qty": float(net_qty_total),
@@ -22371,6 +23010,7 @@ class ExecutionEngine:
             "emitted_positions": int(emitted_positions),
             "equity": equity,
             "buying_power": buying_power,
+            "lineage": dict(lineage),
         }
         store.append_risk_snapshot_payload(
             snapshot_source=source,
@@ -22385,8 +23025,13 @@ class ExecutionEngine:
             ),
             snapshot_ts=snapshot_ts,
             exposure_pct=exposure_pct,
-            positions_count=int(risk_payload["positions_count"]),
-            open_orders_count=int(risk_payload["open_orders_count"]),
+            positions_count=positions_count,
+            open_orders_count=open_orders_count,
+            policy_hash=self._snapshot_lineage_text(lineage.get("policy_hash")),
+            model_hash=self._snapshot_lineage_text(lineage.get("model_artifact_hash")),
+            config_hash=self._snapshot_lineage_text(
+                lineage.get("config_snapshot_hash")
+            ),
             payload=risk_payload,
         )
 
@@ -23115,6 +23760,12 @@ class ExecutionEngine:
             if isinstance(execution_payload_raw, Mapping)
             else {}
         )
+        oms_event_tca_raw = report_payload.get("oms_event_tca")
+        oms_event_tca_payload = (
+            dict(oms_event_tca_raw)
+            if isinstance(oms_event_tca_raw, Mapping)
+            else {}
+        )
         edge_realism_payload_raw = report_payload.get("edge_realism")
         edge_realism_payload = (
             dict(edge_realism_payload_raw)
@@ -23176,6 +23827,7 @@ class ExecutionEngine:
                 execution_payload.get("edge_realism_gap_ratio")
             ),
             "edge_realism_report": edge_realism_payload,
+            "oms_event_tca": oms_event_tca_payload,
             "report": report_payload,
             "paths": paths_payload,
         }
@@ -23237,6 +23889,24 @@ class ExecutionEngine:
         if not math.isfinite(value):
             value = 300.0
         return max(10.0, min(value, 3600.0))
+
+    def _runtime_gonogo_reconciliation_retry_max_attempts(self) -> int:
+        """Return max reconciliation retry loops before declaring gate failure."""
+
+        attempts = _config_int(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_ATTEMPTS",
+            None,
+        )
+        if attempts is None:
+            attempts = _config_int(
+                "AI_TRADING_RUNTIME_GONOGO_RECONCILIATION_RETRY_ATTEMPTS",
+                2,
+            )
+        try:
+            parsed = int(attempts if attempts is not None else 2)
+        except (TypeError, ValueError):
+            parsed = 2
+        return max(1, min(parsed, 5))
 
     @staticmethod
     def _runtime_gonogo_reconciliation_retry_eligible(
@@ -23387,116 +24057,159 @@ class ExecutionEngine:
 
         self._runtime_gonogo_reconciliation_retry_last_mono = float(now_mono)
         retry_context["attempted"] = True
+        max_attempts = self._runtime_gonogo_reconciliation_retry_max_attempts()
+        retry_context["max_attempts"] = int(max_attempts)
+        retry_context["attempts"] = []
+        latest_decision: dict[str, Any] | None = None
 
-        open_orders_for_reconcile: tuple[Any, ...] = ()
-        sync_fn = getattr(self, "synchronize_broker_state", None)
-        if callable(sync_fn):
-            try:
-                snapshot = sync_fn()
-                open_orders_for_reconcile = tuple(
-                    getattr(snapshot, "open_orders", ()) or ()
-                )
-                retry_context["broker_sync"] = {
-                    "open_orders": int(len(open_orders_for_reconcile)),
-                    "positions": int(len(getattr(snapshot, "positions", ()) or ())),
-                }
-            except Exception as exc:
-                retry_context["broker_sync_error"] = str(exc)
-        if not open_orders_for_reconcile:
-            sync_snapshot = getattr(self, "_broker_sync", None)
-            if sync_snapshot is not None:
+        for attempt_index in range(1, max_attempts + 1):
+            attempt_context: dict[str, Any] = {"attempt": int(attempt_index)}
+            open_orders_for_reconcile: tuple[Any, ...] = ()
+            sync_fn = getattr(self, "synchronize_broker_state", None)
+            if callable(sync_fn):
                 try:
+                    snapshot = sync_fn()
                     open_orders_for_reconcile = tuple(
-                        getattr(sync_snapshot, "open_orders", ()) or ()
+                        getattr(snapshot, "open_orders", ()) or ()
                     )
-                except Exception:
-                    open_orders_for_reconcile = ()
+                    attempt_context["broker_sync"] = {
+                        "open_orders": int(len(open_orders_for_reconcile)),
+                        "positions": int(len(getattr(snapshot, "positions", ()) or ())),
+                    }
+                except Exception as exc:
+                    attempt_context["broker_sync_error"] = str(exc)
+            if not open_orders_for_reconcile:
+                sync_snapshot = getattr(self, "_broker_sync", None)
+                if sync_snapshot is not None:
+                    try:
+                        open_orders_for_reconcile = tuple(
+                            getattr(sync_snapshot, "open_orders", ()) or ()
+                        )
+                    except Exception:
+                        open_orders_for_reconcile = ()
 
-        intent_reconcile_fn = getattr(self, "_reconcile_durable_intents", None)
-        if callable(intent_reconcile_fn):
-            try:
-                intent_reconcile_fn(open_orders=open_orders_for_reconcile)
-                retry_context["intent_reconcile"] = {
-                    "attempted": True,
-                    "open_orders": int(len(open_orders_for_reconcile)),
-                }
-            except Exception as exc:
-                retry_context["intent_reconcile_error"] = str(exc)
+            intent_reconcile_fn = getattr(self, "_reconcile_durable_intents", None)
+            if callable(intent_reconcile_fn):
+                try:
+                    intent_reconcile_fn(open_orders=open_orders_for_reconcile)
+                    attempt_context["intent_reconcile"] = {
+                        "attempted": True,
+                        "open_orders": int(len(open_orders_for_reconcile)),
+                    }
+                except Exception as exc:
+                    attempt_context["intent_reconcile_error"] = str(exc)
 
-        artifact_reconcile_fn = getattr(
-            self,
-            "_reconcile_pending_order_runtime_artifacts",
-            None,
-        )
-        if callable(artifact_reconcile_fn):
-            try:
-                artifact_reconcile_fn(open_orders=open_orders_for_reconcile)
-                retry_context["pending_artifact_reconcile"] = {
-                    "attempted": True,
-                    "open_orders": int(len(open_orders_for_reconcile)),
-                }
-            except Exception as exc:
-                retry_context["pending_artifact_reconcile_error"] = str(exc)
-
-        backfill_fn = getattr(self, "_backfill_pending_tca_from_fill_events", None)
-        if callable(backfill_fn):
-            try:
-                backfill_result = backfill_fn()
-            except Exception as exc:
-                retry_context["tca_backfill_error"] = str(exc)
-            else:
-                if isinstance(backfill_result, Mapping):
-                    retry_context["tca_backfill"] = dict(backfill_result)
-
-        finalize_fn = getattr(self, "_finalize_stale_pending_tca_events", None)
-        if callable(finalize_fn):
-            try:
-                finalize_result = finalize_fn()
-            except Exception as exc:
-                retry_context["tca_finalize_error"] = str(exc)
-            else:
-                if isinstance(finalize_result, Mapping):
-                    retry_context["tca_finalize"] = dict(finalize_result)
-
-        try:
-            retry_report = performance_report_module.build_report(
-                trade_history_path=trade_history_path,
-                gate_summary_path=gate_summary_path,
-                gate_log_path=gate_log_path,
+            artifact_reconcile_fn = getattr(
+                self,
+                "_reconcile_pending_order_runtime_artifacts",
+                None,
             )
-            retry_decision_raw = performance_report_module.evaluate_go_no_go(
-                retry_report,
-                thresholds=thresholds,
+            if callable(artifact_reconcile_fn):
+                try:
+                    artifact_reconcile_fn(open_orders=open_orders_for_reconcile)
+                    attempt_context["pending_artifact_reconcile"] = {
+                        "attempted": True,
+                        "open_orders": int(len(open_orders_for_reconcile)),
+                    }
+                except Exception as exc:
+                    attempt_context["pending_artifact_reconcile_error"] = str(exc)
+
+            backfill_fn = getattr(self, "_backfill_pending_tca_from_fill_events", None)
+            if callable(backfill_fn):
+                try:
+                    backfill_result = backfill_fn()
+                except Exception as exc:
+                    attempt_context["tca_backfill_error"] = str(exc)
+                else:
+                    if isinstance(backfill_result, Mapping):
+                        attempt_context["tca_backfill"] = dict(backfill_result)
+
+            finalize_fn = getattr(self, "_finalize_stale_pending_tca_events", None)
+            if callable(finalize_fn):
+                try:
+                    finalize_result = finalize_fn()
+                except Exception as exc:
+                    attempt_context["tca_finalize_error"] = str(exc)
+                else:
+                    if isinstance(finalize_result, Mapping):
+                        attempt_context["tca_finalize"] = dict(finalize_result)
+
+            try:
+                retry_report = performance_report_module.build_report(
+                    trade_history_path=trade_history_path,
+                    gate_summary_path=gate_summary_path,
+                    gate_log_path=gate_log_path,
+                )
+                retry_decision_raw = performance_report_module.evaluate_go_no_go(
+                    retry_report,
+                    thresholds=thresholds,
+                )
+            except Exception as exc:
+                attempt_context["reason"] = "reevaluation_failed"
+                attempt_context["error"] = str(exc)
+                retry_context["attempts"].append(attempt_context)
+                retry_context["reason"] = "reevaluation_failed"
+                retry_context["error"] = str(exc)
+                return None, retry_context
+
+            retry_decision = (
+                dict(retry_decision_raw)
+                if isinstance(retry_decision_raw, Mapping)
+                else None
             )
-        except Exception as exc:
-            retry_context["reason"] = "reevaluation_failed"
-            retry_context["error"] = str(exc)
-            return None, retry_context
+            if retry_decision is None:
+                attempt_context["reason"] = "reevaluation_invalid"
+                retry_context["attempts"].append(attempt_context)
+                retry_context["reason"] = "reevaluation_invalid"
+                return None, retry_context
 
-        retry_decision = (
-            dict(retry_decision_raw)
-            if isinstance(retry_decision_raw, Mapping)
-            else None
-        )
-        if retry_decision is None:
-            retry_context["reason"] = "reevaluation_invalid"
-            return None, retry_context
+            failed_checks_after_raw = retry_decision.get("failed_checks")
+            failed_checks_after = (
+                [
+                    str(item).strip()
+                    for item in failed_checks_after_raw
+                    if str(item).strip()
+                ]
+                if isinstance(failed_checks_after_raw, Sequence)
+                and not isinstance(failed_checks_after_raw, (str, bytes))
+                else []
+            )
+            gate_passed_after = bool(retry_decision.get("gate_passed"))
+            attempt_context["failed_checks_after"] = list(failed_checks_after)
+            attempt_context["gate_passed_after"] = gate_passed_after
+            attempt_context["reason"] = "reevaluated"
+            retry_context["attempts"].append(attempt_context)
+            latest_decision = retry_decision
 
-        failed_checks_after_raw = retry_decision.get("failed_checks")
-        failed_checks_after = (
-            [
-                str(item).strip()
-                for item in failed_checks_after_raw
-                if str(item).strip()
-            ]
-            if isinstance(failed_checks_after_raw, Sequence)
-            and not isinstance(failed_checks_after_raw, (str, bytes))
+            if gate_passed_after:
+                retry_context["reason"] = "reevaluated"
+                retry_context["failed_checks_after"] = list(failed_checks_after)
+                retry_context["gate_passed_after"] = True
+                retry_context["attempt"] = int(attempt_index)
+                return latest_decision, retry_context
+
+            if not self._runtime_gonogo_reconciliation_retry_eligible(
+                failed_checks_after
+            ):
+                retry_context["reason"] = "reevaluated_non_reconciliation_failure"
+                retry_context["failed_checks_after"] = list(failed_checks_after)
+                retry_context["gate_passed_after"] = False
+                retry_context["attempt"] = int(attempt_index)
+                return latest_decision, retry_context
+
+        retry_context["reason"] = "reevaluated"
+        retry_context["failed_checks_after"] = (
+            list(latest_decision.get("failed_checks", []))
+            if isinstance(latest_decision, Mapping)
             else []
         )
-        retry_context["reason"] = "reevaluated"
-        retry_context["failed_checks_after"] = list(failed_checks_after)
-        retry_context["gate_passed_after"] = bool(retry_decision.get("gate_passed"))
-        return retry_decision, retry_context
+        retry_context["gate_passed_after"] = bool(
+            latest_decision.get("gate_passed")
+            if isinstance(latest_decision, Mapping)
+            else False
+        )
+        retry_context["attempt"] = int(max_attempts)
+        return latest_decision, retry_context
 
     def _apply_after_close_runtime_gonogo_overrides(
         self,

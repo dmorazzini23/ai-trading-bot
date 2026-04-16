@@ -30,10 +30,10 @@ sudo systemctl status ai-trading.service
 
 # 2. Verify configuration
 python -m ai_trading.tools.env_validate
-python verify_config.py
+curl -s http://127.0.0.1:9001/diag | jq .
 
 # 3. Test API connectivity
-python health_check.py
+curl -s http://127.0.0.1:9001/healthz | jq .
 
 # 4. Check logs for errors
 tail -n 50 logs/scheduler.log | grep -i error
@@ -94,7 +94,7 @@ pip install -e .
 # Check for missing environment variables
 python -c "
 import os
-required = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'TRADING_MODE']
+required = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_TRADING_BASE_URL', 'ALPACA_DATA_FEED']
 missing = [var for var in required if not os.getenv(var)]
 if missing:
     print(f'Missing: {missing}')
@@ -112,9 +112,9 @@ cat .env | grep -v "^#" | grep "="
 
 # Check for common configuration errors
 python -c "
-import config
+from ai_trading.config.management import validate_required_env
 try:
-    cfg = config.load_config()
+    validate_required_env()
     print('Configuration loaded successfully')
 except Exception as e:
     print(f'Configuration error: {e}')
@@ -131,28 +131,28 @@ except Exception as e:
 
 **Symptoms:**
 
-- Runtime crash with `Missing required environment variables` mentioning `ALPACA_API_URL` or `ALPACA_BASE_URL` even though you set them.
-- Logs show `Set ALPACA_API_URL or ALPACA_BASE_URL to a full https://... endpoint`.
+- Runtime crash with `Missing required environment variables` mentioning `ALPACA_TRADING_BASE_URL`.
+- Logs show deprecated-env guidance for `ALPACA_API_URL` or `ALPACA_BASE_URL`.
 - `_resolve_alpaca_env` falls back to the paper trading URL despite custom settings.
 
 **Why it happens:**
 
 - The config loader now rejects values that contain unresolved `${VAR}` placeholders or omit the HTTP scheme.
-- `systemd` does **not** expand shell-style placeholders in `Environment=` or `EnvironmentFile=` entries. If you ship a line such as `ALPACA_API_URL=${ALPACA_HOST}`, the literal string `${ALPACA_HOST}` is passed to the bot.
+- `systemd` does **not** expand shell-style placeholders in `Environment=` or `EnvironmentFile=` entries. If you ship a line such as `ALPACA_TRADING_BASE_URL=${ALPACA_HOST}`, the literal string `${ALPACA_HOST}` is passed to the bot.
 - `.env` files read by `python-dotenv` also treat `${VAR}` literally unless you pre-render them.
 
 **Fixes:**
 
-1. Define the full endpoint explicitly, e.g. `ALPACA_API_URL=https://api.alpaca.markets` (production) or `https://paper-api.alpaca.markets` (paper trading).
+1. Define the full endpoint explicitly, e.g. `ALPACA_TRADING_BASE_URL=https://api.alpaca.markets` (production) or `https://paper-api.alpaca.markets` (paper trading).
 2. When using systemd:
-   - Prefer direct assignments inside the unit file or a drop-in: `Environment="ALPACA_API_URL=https://api.alpaca.markets"`.
+   - Prefer direct assignments inside the unit file or a drop-in: `Environment="ALPACA_TRADING_BASE_URL=https://api.alpaca.markets"`.
    - If you must load from an `EnvironmentFile`, pre-process it (e.g. with `envsubst` or a templating step) so that only concrete `KEY=value` lines remain.
    - Reload systemd after editing: `sudo systemctl daemon-reload && sudo systemctl restart ai-trading.service`.
 3. For local `.env` workflows, avoid template placeholders; run `python -m ai_trading.tools.env_validate` to confirm the resolved URL is a full `https://...` endpoint.
 
 **Verification:**
 
-- `journalctl -u ai-trading.service | grep ALPACA_API_URL`
+- `journalctl -u ai-trading.service | grep ALPACA_TRADING_BASE_URL`
 - `systemctl show ai-trading.service -p Environment`
 - `grep -n '\${' /etc/ai-trading/ai-trading.env`
 
@@ -181,7 +181,7 @@ try:
     client = TradingClient(
         os.getenv('ALPACA_API_KEY'),
         os.getenv('ALPACA_SECRET_KEY'),
-        url_override=os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'),
+        url_override=os.getenv('ALPACA_TRADING_BASE_URL', 'https://paper-api.alpaca.markets'),
     )
     account = client.get_account()
     print(f'Connected to Alpaca. Account: {account.id}')
@@ -275,36 +275,29 @@ configuration before re-enabling the primary provider.
 ```python
 # test_data_providers.py
 from ai_trading.data import fetch as data_fetcher
-import pandas as pd
 from datetime import UTC, datetime, timedelta
 
 def test_data_provider(symbol='SPY', timeframe='1h'):
-    """Test all data providers for a symbol."""
+    """Fetch recent daily bars with the current provider stack."""
     end_date = datetime.now(UTC)
     start_date = end_date - timedelta(days=5)
 
-    providers = ['alpaca', 'finnhub', 'yahoo']
+    try:
+        bars = data_fetcher.get_daily_df(
+            symbol,
+            start_date.strftime('%Y-%m-%d'),
+            end_date.strftime('%Y-%m-%d'),
+        )
 
-    for provider in providers:
-        try:
-            print(f"\nTesting {provider}...")
-            data = data.fetch.get_historical_data(
-                symbol=symbol,
-                timeframe=timeframe,
-                start_date=start_date.strftime('%Y-%m-%d'),
-                end_date=end_date.strftime('%Y-%m-%d'),
-                provider=provider
-            )
+        if bars is not None and not bars.empty:
+            print(f"✓ got {len(bars)} rows")
+            print(f"  Latest: {bars.index[-1]}")
+            print(f"  Columns: {list(bars.columns)}")
+        else:
+            print("✗ no data returned")
 
-            if data is not None and not data.empty:
-                print(f"✓ {provider}: Got {len(data)} rows")
-                print(f"  Latest: {data.index[-1]}")
-                print(f"  Columns: {list(data.columns)}")
-            else:
-                print(f"✗ {provider}: No data returned")
-
-        except Exception as e:
-            print(f"✗ {provider}: Error - {e}")
+    except Exception as e:
+        print(f"✗ fetch failed: {e}")
 
 if __name__ == "__main__":
     test_data_provider()
@@ -370,7 +363,7 @@ def debug_order_issue(symbol, quantity, side):
     client = TradingClient(
         os.getenv('ALPACA_API_KEY'),
         os.getenv('ALPACA_SECRET_KEY'),
-        url_override=os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'),
+        url_override=os.getenv('ALPACA_TRADING_BASE_URL', 'https://paper-api.alpaca.markets'),
     )
 
     account = client.get_account()
@@ -424,8 +417,8 @@ def debug_position_sizing(symbol, signal_strength, account_equity):
 
     try:
         # Get volatility data
-        data = data.fetch.get_historical_data(
-            symbol, '1d',
+        data = data.fetch.get_daily_df(
+            symbol,
             (pd.Timestamp.now() - pd.Timedelta(days=30)).strftime('%Y-%m-%d'),
             pd.Timestamp.now().strftime('%Y-%m-%d')
         )
@@ -793,13 +786,13 @@ def batch_insert_trades(trades_data):
 curl -X GET \
   -H "APCA-API-KEY-ID: ${ALPACA_API_KEY}" \
   -H "APCA-API-SECRET-KEY: ${ALPACA_SECRET_KEY}" \
-  "${ALPACA_BASE_URL}/v2/account"
+  "${ALPACA_TRADING_BASE_URL}/v2/account"
 
 # Check market data permissions
 curl -X GET \
   -H "APCA-API-KEY-ID: ${ALPACA_API_KEY}" \
   -H "APCA-API-SECRET-KEY: ${ALPACA_SECRET_KEY}" \
-  "${ALPACA_BASE_URL}/v2/stocks/AAPL/quotes/latest"
+  "${ALPACA_TRADING_BASE_URL}/v2/stocks/AAPL/quotes/latest"
 ```
 
 **Common Alpaca Errors:**

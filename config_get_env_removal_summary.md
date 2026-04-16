@@ -1,5 +1,11 @@
 # Config.get_env Removal - Implementation Summary
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 ## Problem Solved
 Fixed the production failure: `AttributeError: module 'ai_trading.config' has no attribute 'get_env'` by completely removing all `config.get_env()` usages and replacing them with typed `Settings` from Pydantic.
 

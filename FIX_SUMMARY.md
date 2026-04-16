@@ -1,5 +1,11 @@
 # Fix Summary: Message-Shortening Ellipsis and Risk Exposure Task
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 ## Problem Statement
 - JSON logs showed Unicode ellipsis (`\u2026`) in `msg` fields due to `ensure_ascii=True`  
 - Periodic "risk engine exposure update" job referenced undefined module-scope `ctx`, causing minute-interval warnings

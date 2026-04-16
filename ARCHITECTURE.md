@@ -1,59 +1,51 @@
 # Architecture Overview
 
-## System
-- Python 3.12 app running on a DigitalOcean droplet, supervised by `systemd`.
-- Entry: `ai_trading/main.py`; core loop in `ai_trading/core/bot_engine.py`.
-- Alpaca SDK (`alpaca-py`) is imported lazily; startup preflight aborts if the SDK is missing.
-- Health & metrics via `python -m ai_trading.app` when `RUN_HEALTHCHECK=1`.
-  - `/healthz` JSON and `/metrics` Prometheus served on the port specified by the `HEALTHCHECK_PORT` environment variable (default **8081**, separate from the API port).
+## Runtime
 
-## Object Model
- - **TradingConfig**: static config (API keys, paths, thresholds).
-   - Confidence gate: `AI_TRADING_CONF_THRESHOLD` sets minimum model confidence (default **0.75**).
- - **BotRuntime**: process runtime (cfg, params, tickers, model, broker clients, etc.).
-   - Required fields: `cfg`, `params: dict`, `tickers: list[str]`, `model: Any (optional)`.
+- Python `3.12.3`
+- Main entrypoint: `python -m ai_trading`
+- Main API: `ai_trading.app:create_app()`
+- Main API port: `9001`
+- Optional standalone health app: `python -m ai_trading.app` with
+  `RUN_HEALTHCHECK=1` on `HEALTHCHECK_PORT` (default `8081`)
+- Runtime SDK pin: `alpaca-py==0.42.1`
 
-## Control Flow (happy path)
-1. `main.py` → loads config → constructs `BotRuntime`.
-2. `bot_engine.run_all_trades_worker(runtime, state)`:
-   - Param validation and data fetch health check.
-   - Candidate screening: `screen_candidates(runtime, runtime.tickers)` → `screen_universe(..., runtime)`.
-   - Regime: `check_market_regime(runtime, state)` → `detect_regime_state(runtime)`.
-   - Model: `_load_primary_model(runtime)` (cached at `runtime.model`).
-   - Planning/execution (risk, sizing, orders).
-3. Heartbeat logs.
+## Configuration
 
-## Logging
-- Structured JSON logs with fields: `ts`, `level`, `name`, `msg`, domain extras (e.g., `tickers`).
-- No `print()`. Use existing logger factories within `ai_trading.logging`.
+- Canonical runtime config access: `ai_trading.config.management`
+- Required startup env includes:
+  `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `ALPACA_TRADING_BASE_URL`,
+  `ALPACA_DATA_FEED`, `WEBHOOK_SECRET`, `AI_TRADING_CAPITAL_CAP`,
+  `DOLLAR_RISK_LIMIT`
+- Deprecated and rejected env aliases include:
+  `ALPACA_API_URL` and `ALPACA_BASE_URL`
 
-## Error Handling
-- Catch **specific** exceptions; fail fast on config errors.
-- Avoid silent fallbacks; prefer explicit “SKIP_*” logs when skipping a stage.
-- No `try/except ImportError` in prod—dependencies are explicit.
+## HTTP Surface
 
-## Data & Models
-- Candidate tickers: `tickers.csv` if present, else built-in fallback `[SPY, AAPL, MSFT, AMZN, GOOGL]`.
-- Model loader tries: `cfg.ml_model_path` / `cfg.model_path` (joblib/pickle), or `cfg.ml_model_module` / `cfg.model_module` (import module, `get_model(cfg)` or `Model(cfg)`).
-- Cache on `runtime.model`.
-- Data fetch normalization bypasses work only when an incoming OHLCV frame already includes the canonical column set (`timestamp`, `open`, `high`, `low`, `close`, `volume`) regardless of ordering or extra metadata, ensuring superset frames do not trigger false provider failovers.
+Current canonical routes from `create_app()`:
 
-## Coding Conventions
-- `runtime` parameter is mandatory in hot paths.
-- No `ctx`. If a function historically used it, pass `runtime`; optionally alias `ctx = runtime` as a **local** variable.
-- No dynamic `exec`/`eval`.
+- `GET /health`
+- `GET /healthz`
+- `GET /metrics`
+- `GET /diag`
+- `GET /operator/presets`
+- `GET /operator/plan`
+- `POST /operator/plan`
+- `GET /operator/control-plane`
 
-## Deployment
-- venv + pinned deps; `systemd` unit `ai-trading.service`.
-- Restart flow:
-  ```bash
-  sudo systemctl restart ai-trading.service
-  journalctl -u ai-trading.service -f | sed -n '1,200p'
-  ```
+## Control Flow
 
-## CLI
-- `ai-trade`, `ai-backtest`, `ai-health`
-  - `--dry-run`
-  - `--once`
-  - `--interval SECONDS`
-  - `--paper` / `--live`
+1. `python -m ai_trading` validates config and startup invariants.
+2. `ai_trading.main` starts the API server on `API_PORT`.
+3. The scheduler loop coordinates data fetch, signal generation, risk checks,
+   and execution through `ai_trading.core.bot_engine`.
+4. Health payloads are built through `ai_trading.health_payload`, which keeps
+   `/healthz` behavior canonical across entrypoints.
+
+## Operational Constraints
+
+- `zoneinfo` only; `pytz` is not part of the runtime path.
+- Structured logging only.
+- No compatibility shims in current runtime policy.
+- The main runtime refuses to start when another healthy API is already bound
+  to the configured API port.

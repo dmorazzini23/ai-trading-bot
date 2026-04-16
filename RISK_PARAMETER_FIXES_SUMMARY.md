@@ -1,5 +1,11 @@
 # Risk Management Parameter Consistency Fixes - Summary
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 This document summarizes the fixes applied to ensure all risk management parameters are consistent with PR #864 specifications.
 
 ## Problem Statement

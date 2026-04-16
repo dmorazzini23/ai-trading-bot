@@ -1,6 +1,12 @@
 # Critical Production Fixes Implementation Summary
 ## August 4, 2025
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 This document summarizes the implementation of critical production fixes for the AI Trading Bot system based on production analysis conducted on 2025-08-04.
 
 ## Issues Fixed

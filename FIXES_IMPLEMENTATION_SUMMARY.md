@@ -1,5 +1,11 @@
 # Critical Trading Bot Issues - Implementation Summary
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 ## Overview
 This document summarizes the implementation of fixes for critical issues identified from AI Trading Bot logs analysis conducted on August 1st, 2025.
 

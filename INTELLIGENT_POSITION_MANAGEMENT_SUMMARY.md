@@ -1,5 +1,11 @@
 # 🧠 Advanced Intelligent Position Holding Strategies - Implementation Summary
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 ## 🎯 Project Overview
 
 Successfully implemented sophisticated position management system that transforms the AI trading bot from basic threshold-based logic into an intelligent, adaptive position management engine.

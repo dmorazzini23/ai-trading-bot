@@ -65,7 +65,7 @@ With this enabled, sync fails fast if a managed key is missing from the AWS secr
 ```bash
 grep -n '^AI_TRADING_SECRETS_BACKEND=' .env .env.runtime
 sudo systemctl restart ai-trading
-curl -fsS http://127.0.0.1:8081/healthz | jq '{ok,status,reason,broker_status:.broker.status}'
+curl -fsS http://127.0.0.1:9001/healthz | jq '{ok,status,reason,broker_status:.broker.status}'
 ```
 
 ## Secret payload format in AWS

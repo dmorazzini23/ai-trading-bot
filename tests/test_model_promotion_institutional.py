@@ -237,3 +237,88 @@ def test_challenger_sequential_gate_requires_consecutive_passes(tmp_path: Path) 
     assert details_2["checks"]["challenger_sequential_check"] is True
     assert "calibration_ece_check" in details_2["checks"]
     assert "calibration_brier_check" in details_2["checks"]
+
+
+def test_promote_to_production_requires_explicit_approval_when_enabled(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PROMOTION_REQUIRE_APPROVAL", "1")
+    registry = ModelRegistry(tmp_path / "registry")
+    promotion = ModelPromotion(model_registry=registry, base_path=str(tmp_path / "governance"))
+    strategy = "approval_gate"
+
+    champion = _register_test_model(registry, strategy=strategy, marker="champion")
+    challenger = _register_test_model(registry, strategy=strategy, marker="challenger")
+    registry.update_governance_status(champion, "production")
+    registry.update_governance_status(challenger, "shadow")
+    monkeypatch.setattr(
+        promotion,
+        "check_promotion_eligibility",
+        lambda _model_id: (True, {"eligible": True}),
+    )
+
+    assert promotion.promote_to_production(challenger, force=False) is False
+
+    approval_path = promotion.record_promotion_approval(
+        strategy=strategy,
+        model_id=challenger,
+        approver="ops@example.com",
+        decision="approved",
+        note="weekly promotion review",
+    )
+    assert approval_path is not None
+
+    promoted = promotion.promote_to_production(challenger, force=False)
+    assert promoted is True
+    governance = registry.model_index[challenger]["governance"]
+    assert governance["status"] == "production"
+    assert governance["promotion_approved_by"] == "ops@example.com"
+    assert governance["promotion_approval_id"]
+
+
+def test_record_challenger_evaluation_writes_scorecard(tmp_path: Path) -> None:
+    registry = ModelRegistry(tmp_path / "registry")
+    promotion = ModelPromotion(model_registry=registry, base_path=str(tmp_path / "governance"))
+
+    promotion.record_challenger_evaluation(
+        strategy="swing",
+        champion_model_id="champ",
+        challenger_model_id="chall",
+        metrics={
+            "challenger_returns": [0.004, 0.003, 0.004, 0.005],
+            "champion_returns": [0.001, 0.001, 0.001, 0.001],
+            "champion_net_expectancy_bps": 4.0,
+            "challenger_net_expectancy_bps": 8.0,
+        },
+    )
+
+    scorecard_lines = (
+        tmp_path / "governance" / "champion_challenger_scorecards.jsonl"
+    ).read_text(encoding="utf-8").strip().splitlines()
+    assert len(scorecard_lines) == 1
+    scorecard = json.loads(scorecard_lines[0])
+    assert scorecard["champion_model_id"] == "champ"
+    assert scorecard["challenger_model_id"] == "chall"
+    assert float(scorecard["delta_net_expectancy_bps"]) == 4.0
+
+
+def test_rollback_to_previous_production_writes_audit_log(tmp_path: Path) -> None:
+    registry = ModelRegistry(tmp_path / "registry")
+    promotion = ModelPromotion(model_registry=registry, base_path=str(tmp_path / "governance"))
+    strategy = "audit_lineage"
+
+    champion = _register_test_model(registry, strategy=strategy, marker="champion")
+    challenger = _register_test_model(registry, strategy=strategy, marker="challenger")
+    registry.update_governance_status(champion, "production")
+    assert promotion.promote_to_production(challenger, force=True) is True
+    assert promotion.rollback_to_previous_production(strategy=strategy, reason="drawdown") is True
+
+    lines = (tmp_path / "governance" / "rollback_audit.jsonl").read_text(
+        encoding="utf-8"
+    ).strip().splitlines()
+    assert lines
+    payload = json.loads(lines[-1])
+    assert payload["status"] == "rolled_back"
+    assert payload["from_model_id"] == challenger
+    assert payload["to_model_id"] == champion

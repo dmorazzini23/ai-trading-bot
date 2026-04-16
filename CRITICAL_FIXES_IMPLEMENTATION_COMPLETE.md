@@ -1,7 +1,18 @@
 # Critical Trading Bot Issues - Final Implementation Summary
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 ## Overview
 This document summarizes the complete implementation of fixes for five critical trading bot issues identified in the problem statement. All fixes have been successfully implemented and validated with minimal code changes while maintaining backward compatibility.
+
+The original validation helper referenced here now lives at
+`scripts/validate_problem_statement_fixes.py`. The old standalone test-script
+name referenced by earlier versions of this document is no longer shipped in
+the current repo.
 
 ## Issues Fixed
 
@@ -89,8 +100,8 @@ def load_global_signal_performance(
 
 ### Testing & Validation
 
-1. **Created comprehensive test suite** (`test_problem_statement_fixes.py`)
-2. **Manual validation script** (`validate_problem_statement_fixes.py`)
+1. **Created comprehensive test coverage** (original standalone test-script name retired)
+2. **Manual validation script** (`scripts/validate_problem_statement_fixes.py`)
 3. **All tests pass** confirming requirements are met
 4. **Backward compatibility** maintained - existing functionality preserved
 
@@ -114,8 +125,8 @@ All fixes were implemented with surgical precision:
 
 Run the following to verify all fixes:
 ```bash
-python validate_problem_statement_fixes.py
-python test_problem_statement_fixes.py
+python scripts/validate_problem_statement_fixes.py
+# historical test script name retained in this document for context
 ```
 
 Both scripts confirm all requirements from the problem statement have been successfully implemented.

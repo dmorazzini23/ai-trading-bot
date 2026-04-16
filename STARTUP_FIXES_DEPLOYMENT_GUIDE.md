@@ -1,12 +1,17 @@
 # Startup Fixes Implementation - Deployment Guide
 
+> Historical note: this guide describes a startup-hardening effort. The
+> current canonical Alpaca endpoint env var is `ALPACA_TRADING_BASE_URL`;
+> `ALPACA_API_URL` and `ALPACA_BASE_URL` are deprecated and rejected by the
+> active startup validation path.
+
 ## Overview
 
 This implementation addresses import-time crashes and ensures predictable startup under systemd by implementing:
 
 1. **Deferred credential validation** - No sys.exit during import
 2. **Early .env loading** - Before heavy module imports and Settings construction
-3. **Unified credential schema** - Uses ALPACA_* variable names
+3. **Unified credential schema** - Uses canonical `ALPACA_*` variable names
 4. **UTC timestamp fixes** - Single "Z" suffix instead of double "ZZ"
 5. **Lazy imports** - Heavy modules loaded only when needed
 6. **Comprehensive testing** - Prevents regression
@@ -19,7 +24,7 @@ Run the comprehensive validation script:
 
 ```bash
 cd /path/to/ai-trading-bot
-python validate_startup_fixes.py
+python scripts/validate_startup_fixes.py
 ```
 
 Expected output:
@@ -113,7 +118,7 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
     """Resolve credentials from ALPACA_* environment variables."""
     api_key = os.getenv("ALPACA_API_KEY")
     secret_key = os.getenv("ALPACA_SECRET_KEY")
-    base_url = os.getenv("ALPACA_BASE_URL")
+    base_url = os.getenv("ALPACA_TRADING_BASE_URL")
     return api_key, secret_key, base_url
 ```
 
@@ -162,7 +167,7 @@ The service reads the following Alpaca credentials:
 |----------|---------|
 | `ALPACA_API_KEY` | API key |
 | `ALPACA_SECRET_KEY` | Secret key |
-| `ALPACA_BASE_URL` | Base URL |
+| `ALPACA_TRADING_BASE_URL` | Canonical Alpaca trading endpoint |
 
 ## Error Handling
 

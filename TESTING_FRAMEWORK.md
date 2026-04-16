@@ -4,6 +4,11 @@
 
 This comprehensive testing guide covers the complete testing framework for the AI Trading Bot, including unit tests, integration tests, performance tests, and testing best practices.
 
+Older examples in this document may use the historical helper name
+`get_historical_data(...)`. In the current codebase, prefer the concrete fetch
+helpers in `ai_trading.data.fetch`, such as `get_daily_df(...)` and
+`get_minute_df(...)`.
+
 ```bash
 ruff check .
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
@@ -442,8 +447,7 @@ from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
-from alpaca_api import AlpacaAPI
-from ai_trading.execution.engine import ExecutionEngine
+from ai_trading.broker.alpaca_credentials import resolve_alpaca_credentials_with_base
 
 
 class TestAlpacaIntegration:
@@ -451,10 +455,11 @@ class TestAlpacaIntegration:
 
     @pytest.fixture
     def api_client(self):
+        creds = resolve_alpaca_credentials_with_base()
         return TradingClient(
-            os.getenv('ALPACA_API_KEY'),
-            os.getenv('ALPACA_SECRET_KEY'),
-            url_override='https://paper-api.alpaca.markets',
+            creds.api_key,
+            creds.secret_key,
+            url_override=creds.base_url,
         )
 
     @pytest.fixture
@@ -489,17 +494,11 @@ class TestAlpacaIntegration:
         assert not bars.df.empty
 
     @pytest.mark.integration
-    def test_order_submission_dry_run(self, api_client):
+    def test_client_uses_canonical_endpoint(self, api_client):
         if not os.getenv('ALPACA_API_KEY'):
             pytest.skip('ALPACA_API_KEY not set')
 
-        executor = OrderExecutor()
-
-        with patch.dict(os.environ, {'DRY_RUN': 'true'}):
-            from ai_trading.core.enums import OrderSide
-            result = executor.execute_order('SPY', OrderSide.BUY, 1)
-
-            assert result is not None
+        assert api_client is not None
 
 
 class TestDataPipeline:
@@ -558,7 +557,7 @@ class TestTradingWorkflow:
     """Integration tests for complete trading workflows."""
 
     @pytest.mark.integration
-    @patch.dict(os.environ, {'DRY_RUN': 'true', 'TRADING_MODE': 'testing'})
+    @patch.dict(os.environ, {'DRY_RUN': 'true', 'TRADING_MODE': 'balanced', 'EXECUTION_MODE': 'paper'})
     def test_complete_trading_cycle(self):
         """Test a complete trading cycle in dry run mode."""
         from ai_trading.core import bot_engine
@@ -1025,9 +1024,10 @@ def setup_test_environment():
     """Setup test environment variables."""
     test_env = {
         'DRY_RUN': 'true',
-        'TRADING_MODE': 'testing',
+        'TRADING_MODE': 'balanced',
+        'EXECUTION_MODE': 'paper',
         'LOG_LEVEL': 'ERROR',  # Reduce log noise in tests
-        'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets'
+        'ALPACA_TRADING_BASE_URL': 'https://paper-api.alpaca.markets'
     }
 
     with TestHelpers.temp_env_vars(**test_env):

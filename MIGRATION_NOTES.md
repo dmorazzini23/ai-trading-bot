@@ -1,5 +1,13 @@
 # Migration Notes
 
+> Historical document: older sections below describe intermediate migration
+> states. Current runtime policy is:
+> `ALPACA_TRADING_BASE_URL` is the canonical Alpaca endpoint variable,
+> `TRADING_MODE` is the strategy aggressiveness preset,
+> execution intent is selected via `EXECUTION_MODE` or `python -m ai_trading --paper/--live`,
+> the runtime SDK pin is `alpaca-py==0.42.1`,
+> and active runtime paths must not rely on compatibility shims.
+
 ## Monitoring API Unification & Cost-Aware Strategy Enhancement (Latest)
 
 ### Summary
@@ -101,7 +109,9 @@ Moved portfolio optimization and transaction cost modules from `scripts/` to the
 - **Updated:** `ai_trading/signals.py` to import from new location
 
 **3. Backward Compatibility**
-- Both `scripts/` files are now compatibility shims that re-export from new locations
+- During that migration, temporary re-export wrappers were introduced. The
+  current runtime policy is to use the canonical package modules directly and
+  avoid new compatibility shims in active paths.
 - No breaking changes for existing code
 
 **4. Bug Fixes**
@@ -132,8 +142,9 @@ This document summarizes the changes made to eliminate import guards, unify Trad
 The following new environment variables have been added to TradingConfig and can be set in your `.env` file:
 
 ### Core Trading Parameters
-- `TRADING_MODE` (default: "paper") - Trading mode: "paper" or "live"
-- `ALPACA_API_URL` (default: "https://paper-api.alpaca.markets") - Alpaca API endpoint URL (formerly `ALPACA_BASE_URL`)
+- `TRADING_MODE` (default: "balanced") - Strategy aggressiveness preset: "conservative", "balanced", or "aggressive"
+- `EXECUTION_MODE` (default: runtime-dependent) - Broker execution intent: "sim", "paper", "live", or "disabled"
+- `ALPACA_TRADING_BASE_URL` (default: "https://paper-api.alpaca.markets") - Canonical Alpaca trading endpoint
 - `SLEEP_INTERVAL` (default: 1.0) - Sleep interval between operations in seconds
 - `MAX_RETRIES` (default: 3) - Maximum number of retry attempts
 - `BACKOFF_FACTOR` (default: 2.0) - Exponential backoff factor for retries
@@ -170,7 +181,7 @@ All `try/except ImportError` blocks have been removed from:
 ### 2. Required Dependencies
 The following packages are now hard dependencies:
 - `pandas_market_calendars>=4.3`
-- `alpaca-py>=0.42.0`
+- `alpaca-py==0.42.1`
 - `hmmlearn>=0.3.0`
 - `psutil>=5.9.8`
 

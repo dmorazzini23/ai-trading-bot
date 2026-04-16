@@ -38,6 +38,7 @@ class _DecisionEventRecord:
         return {
             "symbol": "AAPL",
             "bar_ts": datetime.now(UTC).isoformat(),
+            "decision_trace_id": "trace-aapl-1",
             "gates": ["OK_TRADE"],
             "order": {
                 "id": "intent-aapl-1",
@@ -46,15 +47,21 @@ class _DecisionEventRecord:
                 "qty": 1.0,
                 "price": 100.5,
                 "strategy_id": "mean_revert_v2",
+                "decision_trace_id": "trace-aapl-1",
             },
             "metrics": {
                 "confidence": 0.82,
                 "expected_net_edge_bps": 14.2,
                 "score": 0.51,
+                "model_id": "ml-main",
+                "model_version": "v2026.04.15",
             },
             "config_snapshot": {
                 "config_snapshot_hash": "cfg-hash-1",
                 "effective_policy_hash": "policy-hash-1",
+                "dataset_hash": "ds-hash-1",
+                "feature_version": "fv-2026.04",
+                "model_artifact_hash": "artifact-hash-1",
             },
         }
 
@@ -145,8 +152,19 @@ def test_write_decision_record_emits_immutable_decision_events(
     assert len(decision_rows) == 1
     assert str(decision_rows[0]["decision_action"]) == "BUY"
     assert str(decision_rows[0]["strategy_id"]) == "mean_revert_v2"
+    decision_context = json.loads(str(decision_rows[0]["context_json"] or "{}"))
+    lineage = decision_context.get("lineage", {})
+    assert lineage["policy_hash"] == "policy-hash-1"
+    assert lineage["config_snapshot_hash"] == "cfg-hash-1"
+    assert lineage["dataset_hash"] == "ds-hash-1"
+    assert lineage["feature_version"] == "fv-2026.04"
+    assert lineage["model_artifact_hash"] == "artifact-hash-1"
+    assert lineage["decision_trace_id"] == "trace-aapl-1"
     assert len(oms_rows) == 1
     assert str(oms_rows[0]["event_type"]) == "DECISION_EMITTED"
+    oms_payload = json.loads(str(oms_rows[0]["payload_json"] or "{}"))
+    assert oms_payload["lineage"]["dataset_hash"] == "ds-hash-1"
+    assert oms_payload["lineage"]["feature_version"] == "fv-2026.04"
 
 
 def test_write_decision_record_emits_decision_events_idempotently(

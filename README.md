@@ -35,10 +35,12 @@ The dry run exits with status **0** and prints `INDICATOR_IMPORT_OK`, confirming
 
 Set `RUN_HEALTHCHECK=1` to launch the lightweight Flask app that serves:
 
-* `GET /healthz` &mdash; minimal JSON liveness probe
+* `GET /healthz` &mdash; canonical JSON health probe
 * `GET /metrics` &mdash; Prometheus metrics (returns **501** if metrics are disabled)
 
-The health server binds to `HEALTHCHECK_PORT` (default **8081**) and must not reuse the API port (**9001**).
+The standalone health app binds to `HEALTHCHECK_PORT` (default **8081**). The
+main runtime API still serves `/health`, `/healthz`, and `/metrics` on
+`API_PORT` (**9001** by default).
 
 Runtime pins to **`alpaca-py==0.42.1`**.
 Startup validates required environment variables (API keys, feed selection, risk
@@ -405,7 +407,7 @@ docker build -t ai-trading-bot:latest .
 docker run -d --name ai-trading-bot \
   --env-file .env \
   -v $(pwd)/logs:/app/logs \
-  -p 5000:5000 \
+  -p 9001:9001 \
   ai-trading-bot:latest
 
 # Check status
@@ -491,32 +493,41 @@ python3 -m ai_trading --live --interval 10
 
 ```bash
 # Run backtest on popular ETFs
-python3 backtester.py --symbols SPY,QQQ,IWM --start 2024-01-01 --end 2024-12-31
+python3 -m ai_trading.strategies.backtester \
+  --symbols SPY QQQ IWM \
+  --data-dir ./data \
+  --start 2024-01-01 \
+  --end 2024-12-31
 
 # Test with custom parameters
-python3 backtester.py \
-  --symbols AAPL,MSFT,GOOGL \
+python3 -m ai_trading.strategies.backtester \
+  --symbols AAPL MSFT GOOGL \
+  --data-dir ./data \
   --start 2023-01-01 \
   --end 2024-01-01 \
-  --initial-capital 100000 \
-  --max-position-pct 0.08
+  --commission 0.001 \
+  --slippage-pips 0.02
 ```
 
 #### Advanced Backtesting
 
 ```bash
-# Run with specific strategy
-python3 backtester.py \
+# Add execution latency and slippage stress
+python3 -m ai_trading.strategies.backtester \
   --symbols SPY \
-  --strategy momentum \
-  --timeframes 1h,1d \
-  --optimize-hyperparams
+  --data-dir ./data \
+  --start 2024-01-01 \
+  --end 2024-03-31 \
+  --latency-bars 1 \
+  --slippage-pips 0.05
 
-# Multi-timeframe analysis
-python3 backtester.py \
-  --symbols SPY,AAPL,TSLA \
-  --timeframes 5m,15m,1h,1d \
-  --lookback-days 90
+# Multi-symbol run with commissions
+python3 -m ai_trading.strategies.backtester \
+  --symbols SPY AAPL TSLA \
+  --data-dir ./data \
+  --start 2024-01-01 \
+  --end 2024-03-31 \
+  --commission 0.001
 ```
 
 **Results:** The backtester performs grid search optimization and saves the best parameters to `best_hyperparams.json`.
@@ -542,23 +553,26 @@ python3 -m ai_trading.algorithm_optimizer --symbols SPY --iterations 100
 
 ```bash
 # Set environment for paper trading
-export ALPACA_API_URL=https://paper-api.alpaca.markets
-export TRADING_MODE=paper
+export ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
+export EXECUTION_MODE=paper
+export TRADING_MODE=balanced
 
 # Start bot
-python3 -m ai_trading
+python3 -m ai_trading --paper
 ```
 
 #### Live Trading (Production)
 
 ```bash
 # ⚠️  CAUTION: Real money trading
-export ALPACA_API_URL=https://api.alpaca.markets
-export TRADING_MODE=production
-export MAX_POSITION_PCT=0.03  # Conservative sizing
+export ALPACA_TRADING_BASE_URL=https://api.alpaca.markets
+export EXECUTION_MODE=live
+export TRADING_MODE=balanced
+export AI_TRADING_CAPITAL_CAP=0.10
+export DOLLAR_RISK_LIMIT=0.02
 
-# Start with extra safety checks
-python3 -m ai_trading --confirm-live-trading
+# Start live mode explicitly
+python3 -m ai_trading --live
 ```
 
 ### 📊 Monitoring & Control
@@ -567,7 +581,7 @@ python3 -m ai_trading --confirm-live-trading
 
 ```bash
 # Start web dashboard
-python3 monitoring_dashboard.py
+python3 scripts/monitoring_dashboard.py
 
 # Access at http://localhost:5000
 # View real-time performance, positions, and logs
@@ -596,7 +610,7 @@ print(f'Total PnL: ${trades[\"pnl\"].sum():.2f}')
 
 ```bash
 # System health check
-python3 health_check.py
+curl -s http://127.0.0.1:9001/healthz | jq .
 
 # API connectivity test
 python3 -c "
@@ -604,8 +618,8 @@ from ai_trading.data import fetch as data_fetcher
 test_all_providers(['SPY'])
 "
 
-# Risk limits check
-python3 -m ai_trading.risk.engine --check-limits
+# Runtime config validation
+python3 -m ai_trading.tools.env_validate
 ```
 
 ### 🔄 Advanced Usage
@@ -705,10 +719,10 @@ pytest -m "integration"  # Integration tests
 python3 -m cProfile -m ai_trading > profile_output.txt
 
 # Memory profiling
-python3 -m memory_profiler -m ai_trading.core.bot_engine
+python3 -m memory_profiler -m ai_trading
 
 # Benchmark indicators
-python3 profile_indicators.py
+python3 scripts/profile_indicators.py
 ```
 
 #### Data Management
@@ -717,11 +731,11 @@ python3 profile_indicators.py
 # Fetch and cache data for development
 python3 -m ai_trading.data.fetch --cache --symbols SPY,AAPL --days 30
 
-# Clean up old data
-python3 cleanup.py --older-than 30days
+# Prune oversized runtime JSONL artifacts
+bash scripts/prune_runtime_jsonl.sh
 
-# Validate data quality
-python3 data_validator.py --check-all
+# Check market-data fetch behavior
+python3 scripts/check_feed.py
 ```
 
 ### 🔧 Troubleshooting
@@ -733,7 +747,7 @@ For common issues and solutions, see [**TROUBLESHOOTING.md**](TROUBLESHOOTING.md
 ```bash
 # Reset and restart
 ./cleanup_pycache.sh
-python3 health_check.py
+curl -s http://127.0.0.1:9001/healthz | jq .
 python3 -m ai_trading
 
 # Check logs for errors
@@ -741,11 +755,12 @@ grep -i error logs/scheduler.log | tail -10
 
 # Validate configuration
 python3 -m ai_trading.tools.env_validate
-python3 verify_config.py
+curl -s http://127.0.0.1:9001/diag | jq .
 ```
 
-The CLI validates `DATA_FEED` and `TIMEFRAME` at startup using Pydantic and
-exits early with a clear error message when these values are invalid.
+Startup validates feed and timeframe-related config using the current Pydantic
+and env-schema validation path, and exits early with clear remediation hints
+when those values are invalid.
 
 ---
 
@@ -778,8 +793,9 @@ exits early with a clear error message when these values are invalid.
    ALPACA_API_KEY=your_actual_api_key_here
    ALPACA_SECRET_KEY=your_actual_secret_key_here
    # ALPACA_OAUTH=your_oauth_token_here
-   ALPACA_API_URL=https://paper-api.alpaca.markets  # Paper trading
+   ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets  # Paper trading
    ALPACA_DATA_FEED=iex
+   DATA_FEED_INTRADAY=iex
    # Set the following only if your Alpaca account has SIP permissions
   # ALPACA_DATA_FEED=sip
   # ALPACA_HAS_SIP=1      # set to 1 if your Alpaca account has SIP access
@@ -795,8 +811,7 @@ exits early with a clear error message when these values are invalid.
    DATA_LOOKBACK_DAYS_MINUTE=5
    MAX_EMPTY_RETRIES=10               # Max empty-bar retries before fallback/skip
    TZ=UTC
-   # ALPACA_API_URL=https://api.alpaca.markets     # Live trading (DANGER!)
-  # ALPACA_BASE_URL is also accepted for backward compatibility
+   # ALPACA_TRADING_BASE_URL=https://api.alpaca.markets     # Live trading (DANGER!)
   # ALPACA-only: legacy APCA_* variables are not supported. If you hit a config error,
   # run `make doctor` to locate APCA_* entries in your .env or systemd unit overrides,
   # then restart the service (sudo systemctl daemon-reload && sudo systemctl restart ai-trading.service).
@@ -807,15 +822,11 @@ exits early with a clear error message when these values are invalid.
    LOG_LEVEL=INFO                      # DEBUG, INFO, WARNING, ERROR
 
    # Risk Management
-   MAX_POSITION_PCT=0.05               # Maximum 5% per position
-   MAX_PORTFOLIO_HEAT=0.15             # Maximum 15% total risk
-   ENABLE_STOP_LOSS=true               # Enable stop-loss orders
-
   # Risk parameters
-  CAPITAL_CAP=0.25                    # Fraction of equity usable per cycle
+  AI_TRADING_CAPITAL_CAP=0.25         # Fraction of equity usable per cycle
   DOLLAR_RISK_LIMIT=0.05              # Max fraction of equity at risk per position
-  MAX_POSITION_SIZE=8000              # Static USD cap per position (1-10000). Ignored when AUTO sizing is active.
-  AI_TRADING_MAX_POSITION_SIZE=8000   # Hard override; takes precedence over dynamic sizing and is required by deploy scripts
+  AI_TRADING_SIGNAL_MAX_POSITION_SIZE=8000  # Static USD cap per position
+  AI_TRADING_CONF_THRESHOLD=0.75      # Minimum model confidence gate
   ```
 
 Repeated empty responses from Alpaca are retried up to `MAX_EMPTY_RETRIES`
@@ -832,12 +843,9 @@ fall back to another feed or skip the symbol to avoid infinite loops.
 
   Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH. Do not set both.
 
-  `MAX_POSITION_SIZE` must be a positive dollar value (>0). If `max_position_mode`
-  is set to `AUTO`, this static value is replaced at startup by multiplying
-  `CAPITAL_CAP` with current equity. `AI_TRADING_MAX_POSITION_SIZE`, when set,
-  acts as a hard ceiling and overrides both the static value and the automatic
-  equity-based sizing. Optionally set `MAX_POSITION_SIZE_PCT` to cap positions as
-  a percentage of the portfolio.
+  `AI_TRADING_SIGNAL_MAX_POSITION_SIZE` must be a positive dollar value (>0).
+  If `max_position_mode` is set to `AUTO`, the runtime derives a position cap
+  from `AI_TRADING_CAPITAL_CAP` and equity.
 
 If any `ALPACA_*` credentials are missing or `alpaca-py` is not installed,
 the bot now aborts startup with a clear error instead of running without broker
@@ -845,7 +853,7 @@ connectivity.
 
 4. **Quick Self-Check**
   ```bash
-  make self-check
+  python3 ai_trading/scripts/self_check.py
   ```
 
 ### 📋 Configuration Reference
@@ -854,22 +862,24 @@ connectivity.
 
 | Parameter | Default | Description | Range |
 |-----------|---------|-------------|-------|
-| `TRADING_MODE` | `balanced` | Trading aggressiveness | `conservative`, `balanced`, `aggressive` |
+| `TRADING_MODE` | `balanced` | Strategy aggressiveness preset | `conservative`, `balanced`, `aggressive` |
+| `EXECUTION_MODE` | `paper` | Broker execution intent | `sim`, `paper`, `live`, `disabled` |
 | `SCHEDULER_SLEEP_SECONDS` | `60` | Delay between trading cycles | `30-300` seconds |
-| `MAX_POSITION_PCT` | `0.05` | Maximum position size (% of equity) | `0.01-0.20` |
-| `MAX_PORTFOLIO_HEAT` | `0.15` | Maximum total portfolio risk | `0.05-0.30` |
-| `SIGNAL_THRESHOLD` | `0.7` | Minimum signal strength for trades | `0.1-1.0` |
-| `FORCE_TRADES` | `false` | Skip pre-trade halts (debug override) | `true`, `false` |
+| `AI_TRADING_CAPITAL_CAP` | `0.25` | Fraction of equity usable per cycle | `0.0-1.0` |
+| `DOLLAR_RISK_LIMIT` | `0.05` | Fraction of equity at risk per position | `0.0-1.0` |
+| `AI_TRADING_SIGNAL_MAX_POSITION_SIZE` | `8000` | Static USD cap per position | `>0` |
+| `AI_TRADING_CONF_THRESHOLD` | `0.75` | Minimum model confidence gate | `0.0-1.0` |
+| `FORCE_TRADES` | `false` | Skip selected pre-trade halts (debug override) | `true`, `false` |
 
 #### Data and Market Configuration
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `PRIMARY_DATA_PROVIDER` | `alpaca` | Primary data source |
-| `BACKUP_DATA_PROVIDER` | `yahoo` | Fallback data source (`yahoo`, `finnhub`, or `none`) |
-| `MARKET_DATA_TIMEOUT` | `30` | API timeout in seconds |
-| `CACHE_MARKET_DATA` | `true` | Enable data caching |
-| `TRADING_HOURS_ONLY` | `true` | Trade only during market hours |
+| `ALPACA_DATA_FEED` | `iex`/`sip` by env | Preferred Alpaca market-data feed |
+| `DATA_FEED_INTRADAY` | `iex` | Intraday execution-pricing feed |
+| `BACKUP_DATA_PROVIDER` | `yahoo` | Fallback provider (`yahoo`, `finnhub`, `finnhub_low_latency`, `none`) |
+| `ALPACA_FEED_FAILOVER` | `sip` | Ordered Alpaca feed failover list |
+| `ALLOW_AFTER_HOURS` | `false` | Allow cycles outside regular market hours |
 
 After several empty bar responses from the primary provider, the bot backs off
 and queries the backup source. Configure additional fallbacks with:
@@ -941,11 +951,14 @@ WEBHOOK_URL=https://your-webhook-url.com/trading-alerts
 
 ```bash
 # .env.testing
-TRADING_MODE=paper
-ALPACA_API_URL=https://paper-api.alpaca.markets
+TRADING_MODE=balanced
+EXECUTION_MODE=paper
+ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
+ALPACA_DATA_FEED=iex
 DRY_RUN=true
 LOG_LEVEL=DEBUG
-MAX_POSITION_PCT=0.01  # Very small positions for testing
+AI_TRADING_CAPITAL_CAP=0.01
+DOLLAR_RISK_LIMIT=0.01
 ```
 
 ### ✅ Configuration Validation
@@ -961,7 +974,7 @@ import os
 client = TradingClient(
     os.getenv('ALPACA_API_KEY'),
     os.getenv('ALPACA_SECRET_KEY'),
-    url_override=os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'),
+    url_override=os.getenv('ALPACA_TRADING_BASE_URL', 'https://paper-api.alpaca.markets'),
 )
 account = client.get_account()
 print(f'✅ Connected! Account: {account.id}')
@@ -1001,9 +1014,10 @@ The bot uses a multi-provider approach for reliable market data access:
 
 ```bash
 # Configure data providers in .env
-PRIMARY_DATA_PROVIDER=alpaca
-SECONDARY_DATA_PROVIDER=finnhub
-FALLBACK_DATA_PROVIDER=yahoo
+ALPACA_DATA_FEED=iex
+DATA_FEED_INTRADAY=iex
+BACKUP_DATA_PROVIDER=yahoo
+DATA_PROVIDER_PRIORITY=alpaca_iex,alpaca_sip,yahoo
 
 # Finnhub API (optional, for enhanced data)
 # Set ENABLE_FINNHUB=1 and provide FINNHUB_API_KEY to enable Finnhub fallback
@@ -1215,10 +1229,10 @@ curl http://localhost:9001/healthz
 curl -s -o /dev/null -w "%{http_code}" http://localhost:9001/metrics
 
 # System resource monitoring
-python3 monitoring_dashboard.py &
+python3 scripts/monitoring_dashboard.py &
 
-# Performance metrics
-python3 metrics.py --export-prometheus
+# Runtime metrics endpoint
+curl -s http://localhost:9001/metrics | head
 ```
 
 ---
@@ -1249,7 +1263,7 @@ echo "0 2 * * * /opt/ai-trading-bot/venv/bin/python3 -m retrain --trade-log /var
 # daily_maintenance.sh
 
 # Rotate logs
-python3 logger_rotator.py
+python3 scripts/logger_rotator.py
 
 # Cleanup old data
 find data/ -name "*.csv" -mtime +30 -delete
@@ -1258,17 +1272,17 @@ find data/ -name "*.csv" -mtime +30 -delete
 cp .env backup/.env.$(date +%Y%m%d)
 
 # Health check
-python3 health_check.py || echo "Health check failed" | mail -s "Bot Alert" admin@example.com
+curl -sf http://127.0.0.1:9001/healthz >/dev/null || echo "Health check failed" | mail -s "Bot Alert" admin@example.com
 
 # Performance report
-python3 performance_optimizer.py --generate-report
+python3 scripts/performance_optimizer.py --generate-report
 ```
 
 ### Performance Monitoring
 
 ```bash
 # Generate performance report
-python3 performance_optimizer.py --report
+python3 scripts/performance_optimizer.py --report
 
 # View trading statistics
 python3 -c "
@@ -1413,13 +1427,13 @@ p.sort_stats('cumulative').print_stats(20)
 
 # Memory profiling
 pip install memory-profiler
-python3 -m memory_profiler -m ai_trading.core.bot_engine
+python3 -m memory_profiler -m ai_trading
 
 # Line-by-line profiling
-kernprof -l -v -m ai_trading.core.bot_engine
+kernprof -l -v -m ai_trading.main
 
 # Real-time performance monitoring
-python3 performance_optimizer.py --monitor --duration 3600
+python3 scripts/performance_optimizer.py --monitor --duration 3600
 ```
 
 ### Optimization Techniques

@@ -44,11 +44,14 @@ def _managed_env(name: str, default: Any = None) -> Any:
 _jsonify_import_error: ImportError | None = None
 try:
     from flask import jsonify as _jsonify
+    from flask import request as _request
 except ImportError as exc:  # pragma: no cover - exercised via tests
     _jsonify_import_error = exc
     jsonify = None  # type: ignore[assignment]
+    request = None  # type: ignore[assignment]
 else:  # pragma: no cover - import path only evaluated once
     jsonify = _jsonify
+    request = _request
     _jsonify_import_error = None
 
 if TYPE_CHECKING:  # pragma: no cover - for type checkers only
@@ -201,11 +204,28 @@ def _ensure_test_client(app: Any, registry: Mapping[str, Any]) -> None:
         def __init__(self, routes: Mapping[str, Any]) -> None:
             self._routes = routes
 
-        def get(self, path: str, **_kwargs: Any) -> Any:
+        def _dispatch(
+            self,
+            *,
+            method: str,
+            path: str,
+            json_body: Any = None,
+        ) -> Any:
             handler = self._routes.get(path)
             if handler is None:
                 return _FallbackResponse({"error": "not_found"}, status=404)
-            result = handler()
+            request_original = globals().get("request", None)
+            request_replaced = False
+            if method.upper() != "GET":
+                request_replaced = True
+                globals()["request"] = SimpleNamespace(
+                    get_json=lambda silent=True: json_body,
+                )
+            try:
+                result = handler()
+            finally:
+                if request_replaced:
+                    globals()["request"] = request_original
             if hasattr(result, "get_json"):
                 return result
             if isinstance(result, tuple) and result:
@@ -219,6 +239,12 @@ def _ensure_test_client(app: Any, registry: Mapping[str, Any]) -> None:
             if isinstance(result, dict):
                 return _FallbackResponse(result, status=200)
             return _FallbackResponse(result, status=getattr(result, "status_code", 200))
+
+        def get(self, path: str, **_kwargs: Any) -> Any:
+            return self._dispatch(method="GET", path=path)
+
+        def post(self, path: str, json: Any = None, **_kwargs: Any) -> Any:
+            return self._dispatch(method="POST", path=path, json_body=json)
 
     app.test_client = lambda: _Client(registry)  # type: ignore[assignment]
 
@@ -543,6 +569,146 @@ def create_app():
             _log.warning("OPERATOR_CONTROL_PLANE_UNAVAILABLE", extra={"error": str(exc)})
             return _safe_response(
                 {"ok": False, "error": "operator control plane unavailable"},
+                status=503,
+            )
+
+    def _governance_base_path() -> str:
+        configured = str(
+            _managed_env("AI_TRADING_GOVERNANCE_BASE_PATH", "artifacts/governance")
+            or "artifacts/governance"
+        ).strip()
+        return configured or "artifacts/governance"
+
+    @app.route("/operator/governance")
+    def operator_governance_snapshot() -> Any:
+        """Return governance approvals/scorecards/rollback audit snapshot."""
+
+        try:
+            snapshot = build_control_plane_snapshot(service_name=_SERVICE_NAME)
+            governance_raw = snapshot.get("governance")
+            governance = (
+                dict(governance_raw)
+                if isinstance(governance_raw, Mapping)
+                else {}
+            )
+            return _safe_response({"ok": True, "governance": governance}, status=200)
+        except (ImportError, ValueError, TypeError) as exc:
+            _log.warning("OPERATOR_GOVERNANCE_SNAPSHOT_UNAVAILABLE", extra={"error": str(exc)})
+            return _safe_response(
+                {"ok": False, "error": "operator governance snapshot unavailable"},
+                status=503,
+            )
+
+    @app.route("/operator/governance/approval", methods=["POST"])
+    def operator_governance_record_approval() -> Any:
+        """Record an explicit governance approval/rejection checkpoint."""
+
+        request_obj = globals().get("request")
+        if request_obj is None or not callable(getattr(request_obj, "get_json", None)):
+            return _safe_response(
+                {"ok": False, "error": "request context unavailable"},
+                status=503,
+            )
+        body = request_obj.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            body = {}
+        strategy = str(body.get("strategy") or "").strip()
+        model_id = str(body.get("model_id") or "").strip()
+        approver = str(body.get("approver") or "").strip()
+        decision = str(body.get("decision") or "approved").strip().lower() or "approved"
+        note = str(body.get("note") or "").strip() or None
+        ticket = str(body.get("ticket") or "").strip() or None
+
+        if not strategy or not model_id or not approver:
+            return _safe_response(
+                {
+                    "ok": False,
+                    "error": "strategy, model_id, and approver are required",
+                },
+                status=400,
+            )
+        try:
+            from ai_trading.governance.promotion import ModelPromotion
+
+            promotion = ModelPromotion(base_path=_governance_base_path())
+            output_path = promotion.record_promotion_approval(
+                strategy=strategy,
+                model_id=model_id,
+                approver=approver,
+                decision=decision,
+                note=note,
+                ticket=ticket,
+            )
+            rows = promotion.list_recent_promotion_approvals(limit=5)
+            return _safe_response(
+                {
+                    "ok": True,
+                    "path": output_path,
+                    "approvals": rows,
+                },
+                status=200,
+            )
+        except ValueError as exc:
+            return _safe_response({"ok": False, "error": str(exc)}, status=400)
+        except (ImportError, TypeError) as exc:
+            _log.warning("OPERATOR_GOVERNANCE_APPROVAL_FAILED", extra={"error": str(exc)})
+            return _safe_response(
+                {"ok": False, "error": "operator governance approval unavailable"},
+                status=503,
+            )
+
+    @app.route("/operator/governance/rollback", methods=["POST"])
+    def operator_governance_manual_rollback() -> Any:
+        """Trigger a governance rollback to previous production model."""
+
+        request_obj = globals().get("request")
+        if request_obj is None or not callable(getattr(request_obj, "get_json", None)):
+            return _safe_response(
+                {"ok": False, "error": "request context unavailable"},
+                status=503,
+            )
+        body = request_obj.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            body = {}
+        strategy = str(body.get("strategy") or "").strip()
+        reason = str(body.get("reason") or "operator_manual_rollback").strip()
+        force_raw = body.get("force")
+        if isinstance(force_raw, bool):
+            force = force_raw
+        elif force_raw in (None, ""):
+            force = True
+        else:
+            force = str(force_raw).strip().lower() not in {"0", "false", "no", "off"}
+
+        if not strategy:
+            return _safe_response(
+                {"ok": False, "error": "strategy is required"},
+                status=400,
+            )
+        try:
+            from ai_trading.governance.promotion import ModelPromotion
+
+            promotion = ModelPromotion(base_path=_governance_base_path())
+            rolled_back = bool(
+                promotion.rollback_to_previous_production(
+                    strategy=strategy,
+                    reason=reason,
+                    force=force,
+                )
+            )
+            status_code = 200 if rolled_back else 409
+            return _safe_response(
+                {
+                    "ok": rolled_back,
+                    "rolled_back": rolled_back,
+                    "audit": promotion.list_recent_rollback_audit(limit=5),
+                },
+                status=status_code,
+            )
+        except (ImportError, TypeError, ValueError) as exc:
+            _log.warning("OPERATOR_GOVERNANCE_ROLLBACK_FAILED", extra={"error": str(exc)})
+            return _safe_response(
+                {"ok": False, "error": "operator governance rollback unavailable"},
                 status=503,
             )
 

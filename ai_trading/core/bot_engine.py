@@ -1879,8 +1879,18 @@ def _build_symbol_return_correlation_matrix(
 def _execution_model_lineage() -> dict[str, str]:
     """Return model lineage fields for execution telemetry."""
 
+    def _text_or_empty(value: Any) -> str:
+        if value in (None, ""):
+            return ""
+        return str(value).strip()
+
     model_id = str(get_env("AI_TRADING_MODEL_ID", "", cast=str) or "").strip()
     model_version = str(get_env("AI_TRADING_MODEL_VERSION", "", cast=str) or "").strip()
+    dataset_hash = str(get_env("AI_TRADING_DATASET_HASH", "", cast=str) or "").strip()
+    feature_version = str(get_env("AI_TRADING_FEATURE_VERSION", "", cast=str) or "").strip()
+    model_artifact_hash = str(
+        get_env("AI_TRADING_MODEL_ARTIFACT_HASH", "", cast=str) or ""
+    ).strip()
     model_meta = _MODEL_CACHE_META if isinstance(_MODEL_CACHE_META, MappingABC) else {}
 
     if not model_id:
@@ -1906,11 +1916,35 @@ def _execution_model_lineage() -> dict[str, str]:
         elif model_meta.get("module") not in (None, ""):
             model_version = str(model_meta.get("module")).strip()
 
+    if not dataset_hash:
+        for key in ("dataset_hash", "dataset_fingerprint", "dataset_fp"):
+            dataset_hash = _text_or_empty(model_meta.get(key))
+            if dataset_hash:
+                break
+
+    if not feature_version:
+        for key in ("feature_version", "feature_set_version", "features_version"):
+            feature_version = _text_or_empty(model_meta.get(key))
+            if feature_version:
+                break
+
+    if not model_artifact_hash:
+        for key in ("model_artifact_hash", "model_hash", "artifact_hash", "hash"):
+            model_artifact_hash = _text_or_empty(model_meta.get(key))
+            if model_artifact_hash:
+                break
+
     resolved: dict[str, str] = {}
     if model_id:
         resolved["model_id"] = str(model_id)
     if model_version:
         resolved["model_version"] = str(model_version)
+    if dataset_hash:
+        resolved["dataset_hash"] = str(dataset_hash)
+    if feature_version:
+        resolved["feature_version"] = str(feature_version)
+    if model_artifact_hash:
+        resolved["model_artifact_hash"] = str(model_artifact_hash)
     return resolved
 
 
@@ -48547,20 +48581,47 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         order_lineage_metadata: dict[str, Any] = {}
         model_id_for_order = str(execution_model_lineage.get("model_id") or "").strip()
         model_version_for_order = str(execution_model_lineage.get("model_version") or "").strip()
+        dataset_hash_for_order = str(execution_model_lineage.get("dataset_hash") or "").strip()
+        feature_version_for_order = str(
+            execution_model_lineage.get("feature_version") or ""
+        ).strip()
+        model_artifact_hash_for_order = str(
+            execution_model_lineage.get("model_artifact_hash") or ""
+        ).strip()
         config_snapshot_hash_for_order = str(
             symbol_snapshot.get("config_snapshot_hash") or ""
         ).strip()
+        policy_hash_for_order = str(symbol_snapshot.get("effective_policy_hash") or "").strip()
+        decision_trace_id_for_order = str(client_order_id or "").strip()
+        if not decision_trace_id_for_order:
+            decision_trace_id_for_order = (
+                f"{symbol}:{net_target.bar_ts.isoformat()}:decision_trace"
+            )
         if model_id_for_order:
             order_lineage_metadata["model_id"] = model_id_for_order
         if model_version_for_order:
             order_lineage_metadata["model_version"] = model_version_for_order
+        if dataset_hash_for_order:
+            order_lineage_metadata["dataset_hash"] = dataset_hash_for_order
+        if feature_version_for_order:
+            order_lineage_metadata["feature_version"] = feature_version_for_order
+        if model_artifact_hash_for_order:
+            order_lineage_metadata["model_artifact_hash"] = model_artifact_hash_for_order
         if config_snapshot_hash_for_order:
             order_lineage_metadata["config_snapshot_hash"] = config_snapshot_hash_for_order
+        if policy_hash_for_order:
+            order_lineage_metadata["policy_hash"] = policy_hash_for_order
+        if decision_trace_id_for_order:
+            order_lineage_metadata["decision_trace_id"] = decision_trace_id_for_order
         if submit_quote_source:
             order_lineage_metadata["price_source"] = submit_quote_source
         order_annotations: dict[str, Any] = {}
         if submit_quote_source:
             order_annotations["price_source"] = submit_quote_source
+        if policy_hash_for_order:
+            order_annotations["policy_hash"] = policy_hash_for_order
+        if decision_trace_id_for_order:
+            order_annotations["decision_trace_id"] = decision_trace_id_for_order
         if (
             submit_bid_at_arrival is not None
             and submit_ask_at_arrival is not None
@@ -48586,6 +48647,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 model_id=model_id_for_order or None,
                 model_version=model_version_for_order or None,
                 config_snapshot_hash=config_snapshot_hash_for_order or None,
+                dataset_hash=dataset_hash_for_order or None,
+                feature_version=feature_version_for_order or None,
+                model_artifact_hash=model_artifact_hash_for_order or None,
+                policy_hash=policy_hash_for_order or None,
+                decision_trace_id=decision_trace_id_for_order or None,
                 annotations=(order_annotations or None),
                 price_hint=(
                     float(submit_arrival_price)

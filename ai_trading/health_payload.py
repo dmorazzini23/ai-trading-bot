@@ -250,6 +250,72 @@ def _read_json_mapping_artifact(
     return ({}, resolved)
 
 
+def _governance_base_path() -> Path:
+    configured = "artifacts/governance"
+    try:
+        from ai_trading.config.management import get_env
+
+        configured = str(
+            get_env(
+                "AI_TRADING_GOVERNANCE_BASE_PATH",
+                configured,
+                cast=str,
+                resolve_aliases=False,
+            )
+            or configured
+        ).strip() or configured
+    except Exception:
+        configured = "artifacts/governance"
+    resolved = Path(configured).expanduser()
+    if not resolved.is_absolute():
+        resolved = (Path.cwd() / resolved).resolve()
+    return resolved
+
+
+def _read_jsonl_tail(path: Path, *, limit: int = 20) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    rows: list[dict[str, Any]] = []
+    for raw in lines[-max(1, int(limit)):]:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            rows.append(parsed)
+    return rows
+
+
+def _governance_snapshot() -> dict[str, Any]:
+    base = _governance_base_path()
+    approvals = _read_jsonl_tail(base / "promotion_approvals.jsonl", limit=20)
+    scorecards = _read_jsonl_tail(
+        base / "champion_challenger_scorecards.jsonl",
+        limit=20,
+    )
+    rollback_audit = _read_jsonl_tail(base / "rollback_audit.jsonl", limit=20)
+    promotion_events = _read_jsonl_tail(base / "promotion_events.jsonl", limit=20)
+    return {
+        "base_path": str(base),
+        "latest_promotion_approval": approvals[-1] if approvals else None,
+        "latest_champion_challenger_scorecard": (
+            scorecards[-1] if scorecards else None
+        ),
+        "latest_rollback_audit": rollback_audit[-1] if rollback_audit else None,
+        "latest_promotion_event": promotion_events[-1] if promotion_events else None,
+        "recent_promotion_approvals": approvals[-5:],
+        "recent_champion_challenger_scorecards": scorecards[-5:],
+        "recent_rollback_audit": rollback_audit[-5:],
+    }
+
+
 def _runtime_performance_snapshot() -> dict[str, Any]:
     try:
         from ai_trading.config.management import get_env
@@ -283,6 +349,30 @@ def _runtime_performance_snapshot() -> dict[str, Any]:
         if isinstance(parent_scope_rows_raw, list)
         else []
     )
+    outcomes_scope_rows_raw = oms_event_tca.get("event_outcomes_by_scope")
+    outcomes_scope_rows = (
+        [dict(row) for row in outcomes_scope_rows_raw if isinstance(row, Mapping)]
+        if isinstance(outcomes_scope_rows_raw, list)
+        else []
+    )
+    reject_reasons_raw = oms_event_tca.get("submit_reject_reasons_top")
+    reject_reasons = (
+        [dict(row) for row in reject_reasons_raw if isinstance(row, Mapping)]
+        if isinstance(reject_reasons_raw, list)
+        else []
+    )
+    cancel_reasons_raw = oms_event_tca.get("cancel_reasons_top")
+    cancel_reasons = (
+        [dict(row) for row in cancel_reasons_raw if isinstance(row, Mapping)]
+        if isinstance(cancel_reasons_raw, list)
+        else []
+    )
+    slippage_decomposition_raw = oms_event_tca.get("realized_slippage_decomposition")
+    slippage_decomposition = (
+        dict(slippage_decomposition_raw)
+        if isinstance(slippage_decomposition_raw, Mapping)
+        else {}
+    )
     return {
         "available": bool(payload),
         "path": str(resolved),
@@ -298,11 +388,21 @@ def _runtime_performance_snapshot() -> dict[str, Any]:
             "submit_reject_rate_pct": oms_event_tca.get(
                 "submit_reject_rate_pct"
             ),
+            "cancel_to_submit_ack_rate_pct": oms_event_tca.get(
+                "cancel_to_submit_ack_rate_pct"
+            ),
+            "reject_cancel_rate_pct": oms_event_tca.get(
+                "reject_cancel_rate_pct"
+            ),
             "p90_slippage_bps": oms_event_tca.get("p90_slippage_bps"),
             "parent_execution_summary_events": oms_event_tca.get(
                 "parent_execution_summary_events"
             ),
             "parent_execution_kpis_by_scope": parent_scope_rows[:5],
+            "event_outcomes_by_scope": outcomes_scope_rows[:5],
+            "submit_reject_reasons_top": reject_reasons[:5],
+            "cancel_reasons_top": cancel_reasons[:5],
+            "realized_slippage_decomposition": slippage_decomposition,
         },
     }
 
@@ -668,6 +768,7 @@ def build_control_plane_snapshot(
     oms_lifecycle_parity = _oms_lifecycle_parity_snapshot()
     runtime_performance = _runtime_performance_snapshot()
     manual_overrides = _manual_override_snapshot()
+    governance = _governance_snapshot()
 
     go_no_go_raw = runtime_performance.get("go_no_go")
     go_no_go = dict(go_no_go_raw) if isinstance(go_no_go_raw, Mapping) else {}
@@ -690,6 +791,32 @@ def build_control_plane_snapshot(
         [dict(row) for row in parent_scope_rows_raw if isinstance(row, Mapping)]
         if isinstance(parent_scope_rows_raw, list)
         else []
+    )
+    outcomes_scope_rows_raw = runtime_oms_event_tca.get("event_outcomes_by_scope")
+    outcomes_scope_rows = (
+        [dict(row) for row in outcomes_scope_rows_raw if isinstance(row, Mapping)]
+        if isinstance(outcomes_scope_rows_raw, list)
+        else []
+    )
+    reject_reasons_raw = runtime_oms_event_tca.get("submit_reject_reasons_top")
+    reject_reasons = (
+        [dict(row) for row in reject_reasons_raw if isinstance(row, Mapping)]
+        if isinstance(reject_reasons_raw, list)
+        else []
+    )
+    cancel_reasons_raw = runtime_oms_event_tca.get("cancel_reasons_top")
+    cancel_reasons = (
+        [dict(row) for row in cancel_reasons_raw if isinstance(row, Mapping)]
+        if isinstance(cancel_reasons_raw, list)
+        else []
+    )
+    slippage_decomposition_raw = runtime_oms_event_tca.get(
+        "realized_slippage_decomposition"
+    )
+    slippage_decomposition = (
+        dict(slippage_decomposition_raw)
+        if isinstance(slippage_decomposition_raw, Mapping)
+        else {}
     )
 
     return {
@@ -731,11 +858,21 @@ def build_control_plane_snapshot(
             "submit_reject_rate_pct": runtime_oms_event_tca.get(
                 "submit_reject_rate_pct"
             ),
+            "cancel_to_submit_ack_rate_pct": runtime_oms_event_tca.get(
+                "cancel_to_submit_ack_rate_pct"
+            ),
+            "reject_cancel_rate_pct": runtime_oms_event_tca.get(
+                "reject_cancel_rate_pct"
+            ),
             "p90_slippage_bps": runtime_oms_event_tca.get("p90_slippage_bps"),
             "parent_execution_summary_events": runtime_oms_event_tca.get(
                 "parent_execution_summary_events"
             ),
             "parent_execution_kpis_by_scope": parent_scope_rows[:3],
+            "event_outcomes_by_scope": outcomes_scope_rows[:5],
+            "submit_reject_reasons_top": reject_reasons[:5],
+            "cancel_reasons_top": cancel_reasons[:5],
+            "realized_slippage_decomposition": slippage_decomposition,
             "parent_retry_per_order": go_no_go_observed.get(
                 "event_tca_parent_retry_per_order"
             ),
@@ -765,6 +902,7 @@ def build_control_plane_snapshot(
         "oms_lifecycle_parity": oms_lifecycle_parity,
         "runtime_performance": runtime_performance,
         "manual_overrides": manual_overrides,
+        "governance": governance,
     }
 
 

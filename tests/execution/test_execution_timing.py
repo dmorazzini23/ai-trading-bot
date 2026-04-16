@@ -109,6 +109,11 @@ def test_submit_order_forwards_annotations_and_lineage(monkeypatch):
         model_id="ml-main",
         model_version="v2026.04.07",
         config_snapshot_hash="cfg-abc",
+        dataset_hash="ds-abc",
+        feature_version="feat-v3",
+        model_artifact_hash="artifact-abc",
+        policy_hash="policy-abc",
+        decision_trace_id="trace-abc",
         metadata={"model_id": "ml-main"},
     )
 
@@ -121,3 +126,8 @@ def test_submit_order_forwards_annotations_and_lineage(monkeypatch):
     assert kwargs["model_id"] == "ml-main"
     assert kwargs["model_version"] == "v2026.04.07"
     assert kwargs["config_snapshot_hash"] == "cfg-abc"
+    assert kwargs["dataset_hash"] == "ds-abc"
+    assert kwargs["feature_version"] == "feat-v3"
+    assert kwargs["model_artifact_hash"] == "artifact-abc"
+    assert kwargs["policy_hash"] == "policy-abc"
+    assert kwargs["decision_trace_id"] == "trace-abc"

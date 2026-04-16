@@ -1,5 +1,11 @@
 # Enhanced Trade Execution Debugging System
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 This system provides comprehensive debugging and tracking for the complete signal-to-execution pipeline, addressing critical issues like disconnected bot state, missing orders, and unexplained PnL changes.
 
 ## 🚨 Problem Solved
@@ -93,22 +99,22 @@ The debugging CLI provides real-time visibility into execution health:
 
 ```bash
 # Check overall system status
-python debug_cli.py status
+python scripts/debug_cli.py status
 
 # Show recent executions
-python debug_cli.py executions --limit 10
+python scripts/debug_cli.py executions --limit 10
 
 # Check for position discrepancies  
-python debug_cli.py positions
+python scripts/debug_cli.py positions
 
 # Analyze PnL breakdown
-python debug_cli.py pnl AAPL
+python scripts/debug_cli.py pnl AAPL
 
 # Trace a specific order
-python debug_cli.py trace AAPL_buy_1754510985158_7ed380f5
+python scripts/debug_cli.py trace AAPL_buy_1754510985158_7ed380f5
 
 # Run comprehensive health check
-python debug_cli.py health
+python scripts/debug_cli.py health
 ```
 
 ## 🔍 Debugging Workflow
@@ -232,13 +238,13 @@ The system includes hooks in the existing `ExecutionEngine`:
 Run the comprehensive test suite:
 
 ```bash
-python validate_enhanced_debugging.py
+python scripts/validate_enhanced_debugging.py
 ```
 
 Or run the demo to see all features:
 
 ```bash
-python demo_enhanced_debugging.py
+python scripts/demo_enhanced_debugging.py
 ```
 
 ## 📋 Features Summary
@@ -269,10 +275,10 @@ python demo_enhanced_debugging.py
 - `ai_trading/execution/debug_tracker.py` - Core execution debugging
 - `ai_trading/execution/position_reconciler.py` - Position sync system  
 - `ai_trading/execution/pnl_attributor.py` - PnL attribution engine
-- `debug_cli.py` - Command-line debugging tool
-- `demo_enhanced_debugging.py` - Full feature demonstration
+- `scripts/debug_cli.py` - Command-line debugging tool
+- `scripts/demo_enhanced_debugging.py` - Full feature demonstration
 - `INTEGRATION_GUIDE.py` - Integration examples
-- `validate_enhanced_debugging.py` - Test suite
+- `scripts/validate_enhanced_debugging.py` - Test suite
 
 ## 🆘 Troubleshooting
 
@@ -293,7 +299,7 @@ A: Use `explain_recent_pnl_changes()` to see detailed attribution. Check if mark
 ### Support
 
 For issues or questions:
-1. Run `python debug_cli.py health` for system diagnostics
+1. Run `python scripts/debug_cli.py health` for system diagnostics
 2. Check the execution timeline for failed orders
 3. Verify position reconciliation is running
 4. Review the integration guide for proper setup

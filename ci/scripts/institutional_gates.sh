@@ -260,6 +260,26 @@ PY
   fi
 }
 
+run_promotion_approval_gate_check() {
+  local require_approval
+  require_approval="${AI_TRADING_PROMOTION_REQUIRE_APPROVAL:-0}"
+  if [[ "${require_approval}" != "1" ]]; then
+    log "Skipping promotion approval freshness gate (AI_TRADING_PROMOTION_REQUIRE_APPROVAL!=1)"
+    return
+  fi
+
+  local governance_path
+  local max_age_hours
+  governance_path="${AI_TRADING_GOVERNANCE_BASE_PATH:-artifacts/governance}"
+  max_age_hours="${AI_TRADING_INSTITUTIONAL_PROMOTION_APPROVAL_MAX_AGE_HOURS:-${AI_TRADING_PROMOTION_APPROVAL_MAX_AGE_HOURS:-168}}"
+
+  if ! "${PYTHON_BIN}" -m ai_trading.tools.check_promotion_approval_gate \
+    --governance-path "${governance_path}" \
+    --max-age-hours "${max_age_hours}"; then
+    fail "Promotion approval freshness gate failed"
+  fi
+}
+
 require_file() {
   local path="$1"
   if [[ ! -f "$path" ]]; then
@@ -321,6 +341,7 @@ log "Running lint checks"
   ai_trading/oms/invariants.py \
   ai_trading/replay/replay_engine.py \
   ai_trading/tools/oms_lifecycle_parity_replay.py \
+  ai_trading/tools/check_promotion_approval_gate.py \
   ai_trading/tools/update_phase2_execution_baseline.py \
   ai_trading/research/walk_forward.py \
   ai_trading/research/leakage_tests.py \
@@ -347,6 +368,7 @@ log "Running mypy checks"
   ai_trading/analytics/tca.py \
   ai_trading/replay/replay_engine.py \
   ai_trading/tools/oms_lifecycle_parity_replay.py \
+  ai_trading/tools/check_promotion_approval_gate.py \
   ai_trading/tools/update_phase2_execution_baseline.py \
   ai_trading/research/walk_forward.py \
   ai_trading/research/leakage_tests.py \
@@ -363,6 +385,9 @@ fi
 
 log "Running Phase 2 execution-edge gate check"
 run_phase2_execution_gate_check
+
+log "Running promotion approval freshness gate check"
+run_promotion_approval_gate_check
 
 log "Running bytecode compile check"
 "${PYTHON_BIN}" -m py_compile $(git ls-files '*.py')

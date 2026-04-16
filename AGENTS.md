@@ -1,7 +1,7 @@
 # AGENTS: Operating Contract & Playbook
 
-**Last updated:** 2026-03-06  
-**Runtime targets:** Ubuntu 24.04 • Python 3.12.3 • zoneinfo-only • API on :9001 • Health server on `HEALTHCHECK_PORT` (default :8081)
+**Last updated:** 2026-04-15
+**Runtime targets:** Ubuntu 24.04 • Python 3.12.3 • zoneinfo-only • API on :9001 • health on shared `:9001` or standalone `HEALTHCHECK_PORT` (default :8081)
 
 This document is the authoritative playbook for Codex-style editing in this repository. If reality drifts, update this file immediately.
 
@@ -12,8 +12,10 @@ This document is the authoritative playbook for Codex-style editing in this repo
 - **Timezones:** Use stdlib **zoneinfo** exclusively; `pytz` is forbidden.
 - **Service topology:**
   - Flask **API on :9001** (0.0.0.0:9001).
-  - Dedicated **Health server on `HEALTHCHECK_PORT`** (default 8081) serving `GET /healthz` with JSON and HTTP 200 when healthy.
-  - If `HEALTHCHECK_PORT == API_PORT`, the API may serve health endpoints on the shared port; otherwise run health in its own thread/process.
+  - The main API serves `/health`, `/healthz`, and `/metrics` on `API_PORT`.
+  - A standalone health app may be launched with `RUN_HEALTHCHECK=1 python -m ai_trading.app` on `HEALTHCHECK_PORT` (default 8081).
+  - In the main runtime, if `HEALTHCHECK_PORT == API_PORT`, the API serves health endpoints on the shared port; otherwise an auxiliary health thread/process may bind `HEALTHCHECK_PORT`.
+  - During startup validation, `RUN_HEALTHCHECK=1` requires `HEALTHCHECK_PORT != API_PORT`.
   - Health routes must be registered through the shared canonical helpers; do not add bespoke per-entrypoint health implementations.
 - **Configuration access:** via `ai_trading.config.management` only (`get_env`, `reload_env`, `SEED`). No ad-hoc `os.environ` walks in runtime code.
 - **SDK policy:**
@@ -34,7 +36,18 @@ This document is the authoritative playbook for Codex-style editing in this repo
 
 ---
 
-## 3. Validation Requirements
+## 3. Documentation Authority
+- Current runtime authority lives in:
+  - `AGENTS.md`
+  - `README.md`
+  - `ARCHITECTURE.md`
+  - `API_DOCUMENTATION.md`
+  - `DEPLOYING.md`
+  - `docs/DEPLOYING.md`
+  - `docs/OPERATIONS.md`
+- Root-level `*_SUMMARY.md`, `*_FIX_*`, `*_REPORT.md`, `*_REMOVAL_*`, and similar implementation-snapshot documents are archival unless explicitly refreshed. Do not treat them as the sole source of truth for ports, env vars, entrypoints, or deployment behavior.
+
+## 4. Validation Requirements
 Agents must run and report these checks when changing runtime or library code (docs-only changes may explain why checks were skipped):
 - `pytest -q`
 - `ruff` (limit to changed paths when possible)
@@ -46,7 +59,7 @@ Always add or update unit tests when fixing bugs or adding behavior.
 
 ---
 
-## 4. PR Deliverables
+## 5. PR Deliverables
 Every agent-authored PR must include:
 - **WORKLOG** — summary of intent, root cause, and scope.
 - **PATCHSET** — list of `apply_patch` diffs (no file dumps or editors).
@@ -55,7 +68,7 @@ Every agent-authored PR must include:
 
 ---
 
-## 5. Greppable Anchors
+## 6. Greppable Anchors
 Use these stable strings to anchor surgical edits:
 - `IMPORT_PREFLIGHT_OK`
 - `HEALTHCHECK_PORT_CONFLICT`
@@ -64,17 +77,18 @@ Use these stable strings to anchor surgical edits:
 
 ---
 
-## 6. Operational Notes
-- The API and health server are distinct by default. Validate both surfaces when debugging deployments:
-  - `curl -sS http://127.0.0.1:9001/` (API route as applicable)
-  - `curl -sS http://127.0.0.1:${HEALTHCHECK_PORT}/healthz`
+## 7. Operational Notes
+- The checked-in `packaging/systemd/ai-trading.service` currently exposes `/healthz` on `:9001` because it sets `HEALTHCHECK_PORT=9001`.
+- Validate the surface that matches the deployment mode:
+  - packaged main service: `curl -sS http://127.0.0.1:9001/healthz`
+  - standalone health app: `curl -sS http://127.0.0.1:${HEALTHCHECK_PORT}/healthz`
 - Health endpoints must degrade gracefully (never raise uncaught exceptions); log structured diagnostics.
 - Keep health response construction and route registration on the shared canonical path; entrypoints may adapt payload context but must not fork health semantics.
 - Respect fail-fast configuration: missing required env vars should raise immediately with actionable errors.
 
 ---
 
-## 7. Anti-Patterns to Avoid
+## 8. Anti-Patterns to Avoid
 - Reintroducing shims, optional import helpers, or dynamic SDK swaps.
 - Adding new direct `os.getenv` / `os.environ` runtime access outside `ai_trading.config.management`, except for tightly justified non-runtime validation code.
 - Adding raw `print` statements or silent exception handling.

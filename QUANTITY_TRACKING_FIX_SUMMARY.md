@@ -1,5 +1,11 @@
 # Critical Quantity Tracking Fix Summary
 
+> Historical note: This file is an archival implementation snapshot. It may
+> mention older filenames, scripts, env vars, or deployment assumptions. For
+> current runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`.
+
 ## Problem Addressed
 Fixed systematic quantity misreporting bug in trade execution that caused 50-80% discrepancies between reported and actual filled quantities, leading to:
 - False `FULL_FILL_SUCCESS` reports for partial fills
