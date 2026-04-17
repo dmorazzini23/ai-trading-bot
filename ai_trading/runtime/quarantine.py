@@ -13,7 +13,7 @@ from ai_trading.logging import get_logger
 logger = get_logger(__name__)
 
 
-@dataclass(slots=True)
+@dataclass
 class QuarantineEntry:
     start_ts: datetime
     end_ts: datetime

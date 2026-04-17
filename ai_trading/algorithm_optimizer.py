@@ -456,7 +456,7 @@ class AlgorithmOptimizer:
             p = win_rate
             q = 1 - p
             kelly_fraction = (b * p - q) / b
-            return max(0, min(kelly_fraction, 0.25))
+            return float(max(0.0, min(float(kelly_fraction), 0.25)))
         except (ValueError, TypeError) as e:  # pragma: no cover - defensive
             self.logger.error(f"Error calculating Kelly fraction: {e}")
             return 0.02

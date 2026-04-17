@@ -25,7 +25,7 @@ def _resolve_conf_threshold(cfg: TradingConfig | None) -> float:
         if v is not None:
             v = float(v)
             if 0.0 <= v <= 1.0:
-                return v
+                return float(v)
     except (ValueError, TypeError):
         pass
     s = get_settings()
@@ -34,7 +34,7 @@ def _resolve_conf_threshold(cfg: TradingConfig | None) -> float:
             if cand is not None:
                 x = float(cand)
                 if 0.0 <= x <= 1.0:
-                    return x
+                    return float(x)
         except (ValueError, TypeError):
             continue
     return 0.6
@@ -219,15 +219,15 @@ class PerformanceBasedAllocator:
             avg_return = np.average(returns, weights=weights)
             volatility = np.sqrt(np.average((returns - avg_return) ** 2, weights=weights))
             sharpe_ratio = avg_return / max(volatility, 1e-06) * np.sqrt(252)
-            winning_trades = np.sum(returns > 0)
-            hit_rate = winning_trades / len(returns)
+            winning_trades: int = int(np.sum(returns > 0))
+            hit_rate = float(winning_trades) / float(len(returns))
             cumulative_returns = np.cumprod(1 + returns)
             running_max = np.maximum.accumulate(cumulative_returns)
             drawdowns = (cumulative_returns - running_max) / running_max
             max_drawdown = abs(np.min(drawdowns)) if len(drawdowns) > 0 else 0
             sharpe_component = self._normalize_metric(sharpe_ratio, -2, 3) * self.sharpe_weight
-            return_component = self._normalize_metric(avg_return * 252, -0.5, 0.5) * self.return_weight
-            hit_rate_component = self._normalize_metric(hit_rate, 0.3, 0.7) * self.hit_rate_weight
+            return_component = self._normalize_metric(float(avg_return) * 252.0, -0.5, 0.5) * self.return_weight
+            hit_rate_component = self._normalize_metric(float(hit_rate), 0.3, 0.7) * self.hit_rate_weight
             drawdown_component = self._normalize_metric(-max_drawdown, -0.3, 0) * self.drawdown_weight
             composite_score = sharpe_component + return_component + hit_rate_component + drawdown_component
             composite_score = max(0.0, min(1.0, composite_score))

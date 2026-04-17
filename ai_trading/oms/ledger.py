@@ -14,7 +14,7 @@ from ai_trading.logging import get_logger
 logger = get_logger(__name__)
 
 
-@dataclass(slots=True)
+@dataclass
 class LedgerEntry:
     client_order_id: str
     symbol: str

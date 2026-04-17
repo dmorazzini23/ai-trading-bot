@@ -69,7 +69,7 @@ def _collect_row_identifiers(row: Mapping[str, Any]) -> set[str]:
     return tokens
 
 
-@dataclass(slots=True)
+@dataclass
 class ExecutionBenchmark:
     arrival_price: float
     mid_at_arrival: float | None = None
@@ -81,7 +81,7 @@ class ExecutionBenchmark:
     first_fill_ts: datetime | None = None
 
 
-@dataclass(slots=True)
+@dataclass
 class FillSummary:
     fill_vwap: float | None
     total_qty: float

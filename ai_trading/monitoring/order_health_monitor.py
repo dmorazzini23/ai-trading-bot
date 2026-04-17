@@ -27,7 +27,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
 
 CONFIG = cast('TradingConfig', get_trading_config())
 
-@dataclass(slots=True)
+@dataclass
 class OrderInfo:
     order_id: str
     symbol: str

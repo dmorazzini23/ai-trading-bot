@@ -66,7 +66,7 @@ except Exception as exc:  # pragma: no cover - exercised in environments missing
 _TERMINAL_STATUSES: frozenset[str] = TERMINAL_INTENT_STATUSES
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class IntentRecord:
     """Persistent intent row."""
 
@@ -88,7 +88,7 @@ class IntentRecord:
     metadata_json: str | None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class FillRecord:
     """Persistent fill row tied to an intent."""
 

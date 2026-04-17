@@ -48,7 +48,7 @@ logger = get_logger(__name__)
 ORDER_STALE_AFTER_S = 8 * 60
 
 
-@dataclass(slots=True)
+@dataclass
 class BrokerSyncResult:
     """Snapshot of broker open orders and positions after synchronization."""
 

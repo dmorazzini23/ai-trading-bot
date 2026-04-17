@@ -287,7 +287,7 @@ class OrderFlowAnalyzer:
                     price_movement = (post_trade_mid - pre_trade_mid) / pre_trade_mid
                     if trade_side == 'buy' and price_movement > 0 or (trade_side == 'sell' and price_movement < 0):
                         toxicity_measures.append(abs(price_movement))
-            return statistics.mean(toxicity_measures) if toxicity_measures else 0.0
+            return float(statistics.mean(toxicity_measures)) if toxicity_measures else 0.0
         except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.0
 
@@ -304,7 +304,7 @@ class OrderFlowAnalyzer:
             price_variance = statistics.variance(prices)
             total_volume = sum(volumes)
             information_content = price_variance / (total_volume / len(volumes)) if total_volume > 0 else 0
-            return min(1.0, information_content * 1000)
+            return float(min(1.0, float(information_content) * 1000.0))
         except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.0
 

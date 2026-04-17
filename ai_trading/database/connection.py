@@ -367,9 +367,11 @@ class DatabaseSession:
         self._require_active()
         result = self._session.execute(text(query), params or {})
         rows: list[dict[str, Any]] = []
-        if result.returns_rows:
+        returns_rows = bool(getattr(result, "returns_rows", False))
+        if returns_rows:
             rows = [dict(row) for row in result.mappings().all()]
-        rowcount = int(result.rowcount or 0) if result.rowcount is not None else 0
+        rowcount_raw = getattr(result, "rowcount", None)
+        rowcount = int(rowcount_raw or 0) if rowcount_raw is not None else 0
         if rowcount < 0:
             rowcount = 0
         self.transaction_active = self._session.in_transaction()

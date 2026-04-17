@@ -26,7 +26,7 @@ class BrokerAdapter(Protocol):
         """Submit order payload and return broker response."""
 
 
-@dataclass(slots=True)
+@dataclass
 class AlpacaBrokerAdapter:
     """Thin adapter over an Alpaca-style client object."""
 
@@ -94,7 +94,7 @@ def _managed_env(name: str, default: Any = None) -> Any:
     return default
 
 
-@dataclass(slots=True)
+@dataclass
 class TradierBrokerAdapter:
     """Tradier HTTP adapter implementing the broker contract."""
 
@@ -243,7 +243,7 @@ class TradierBrokerAdapter:
         }
 
 
-@dataclass(slots=True)
+@dataclass
 class PaperBrokerAdapter:
     """In-memory paper broker adapter used as a non-Alpaca fallback."""
 

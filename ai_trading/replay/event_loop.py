@@ -20,7 +20,7 @@ def _to_utc(raw: Any) -> datetime:
     return parsed.astimezone(UTC)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class ReplayInvariantViolation:
     code: str
     message: str

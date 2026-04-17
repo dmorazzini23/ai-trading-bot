@@ -13,9 +13,9 @@ from ai_trading.logging import get_logger
 from ai_trading.health_payload import (
     build_api_health_payload,
     build_canonical_healthz_payload,
-    build_control_plane_snapshot,
     register_healthz_routes,
 )
+from ai_trading.services import ControlPlaneService, GovernanceService
 from ai_trading.utils.optional_dep import missing
 
 try:
@@ -567,7 +567,7 @@ def create_app():
         """Return a consolidated runtime control-plane snapshot for operators."""
 
         try:
-            snapshot = build_control_plane_snapshot(service_name=_SERVICE_NAME)
+            snapshot = ControlPlaneService(service_name=_SERVICE_NAME).snapshot()
             return _safe_response({"ok": True, "snapshot": snapshot}, status=200)
         except (ImportError, ValueError, TypeError) as exc:
             _log.warning("OPERATOR_CONTROL_PLANE_UNAVAILABLE", extra={"error": str(exc)})
@@ -575,6 +575,122 @@ def create_app():
                 {"ok": False, "error": "operator control plane unavailable"},
                 status=503,
             )
+
+    def _operator_control_plane_section_response(section: str) -> Any:
+        """Return an operator-facing control-plane section by canonical name."""
+
+        try:
+            payload = ControlPlaneService(service_name=_SERVICE_NAME).section(section)
+            return _safe_response({"ok": True, "section": section, "data": payload}, status=200)
+        except KeyError:
+            return _safe_response(
+                {"ok": False, "error": "unknown control-plane section"},
+                status=404,
+            )
+        except (ImportError, ValueError, TypeError) as exc:
+            _log.warning("OPERATOR_CONTROL_PLANE_SECTION_UNAVAILABLE", extra={"error": str(exc)})
+            return _safe_response(
+                {"ok": False, "error": "operator control-plane section unavailable"},
+                status=503,
+            )
+
+    @app.route("/operator/control-plane/rollout")
+    def operator_control_plane_rollout() -> Any:
+        return _operator_control_plane_section_response("rollout")
+
+    @app.route("/operator/control-plane/broker-health")
+    def operator_control_plane_broker_health() -> Any:
+        return _operator_control_plane_section_response("broker-health")
+
+    @app.route("/operator/control-plane/positions")
+    def operator_control_plane_positions() -> Any:
+        return _operator_control_plane_section_response("positions")
+
+    @app.route("/operator/control-plane/open-orders")
+    def operator_control_plane_open_orders() -> Any:
+        return _operator_control_plane_section_response("open-orders")
+
+    @app.route("/operator/control-plane/execution-quality")
+    def operator_control_plane_execution_quality() -> Any:
+        return _operator_control_plane_section_response("execution-quality")
+
+    @app.route("/operator/control-plane/circuit-breakers")
+    def operator_control_plane_circuit_breakers() -> Any:
+        return _operator_control_plane_section_response("circuit-breakers")
+
+    @app.route("/operator/control-plane/liveness")
+    def operator_control_plane_liveness() -> Any:
+        return _operator_control_plane_section_response("liveness")
+
+    @app.route("/operator/control-plane/manual-overrides")
+    def operator_control_plane_manual_overrides() -> Any:
+        return _operator_control_plane_section_response("manual-overrides")
+
+    @app.route("/operator/control-plane/services")
+    def operator_control_plane_services() -> Any:
+        return _operator_control_plane_section_response("services")
+
+    @app.route("/operator/control-plane/manual-overrides", methods=["POST"])
+    def operator_control_plane_update_manual_overrides() -> Any:
+        """Persist manual runtime override controls on the canonical operator path."""
+
+        request_obj = globals().get("request")
+        if request_obj is None or not callable(getattr(request_obj, "get_json", None)):
+            return _safe_response(
+                {"ok": False, "error": "request context unavailable"},
+                status=503,
+            )
+        body = request_obj.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            body = {}
+        disabled_slices_raw = body.get("disabled_slices")
+        disabled_slices = (
+            list(disabled_slices_raw)
+            if isinstance(disabled_slices_raw, list)
+            else []
+        )
+        diagnostics_raw = body.get("diagnostics")
+        diagnostics = dict(diagnostics_raw) if isinstance(diagnostics_raw, Mapping) else {}
+        source_updated_at = str(body.get("source_updated_at") or "").strip() or None
+        try:
+            payload = ControlPlaneService(service_name=_SERVICE_NAME).update_manual_overrides(
+                disabled_slices=disabled_slices,
+                diagnostics=diagnostics,
+                source_updated_at=source_updated_at,
+            )
+            return _safe_response({"ok": True, "manual_overrides": payload}, status=200)
+        except (OSError, ValueError, TypeError) as exc:
+            _log.warning("OPERATOR_MANUAL_OVERRIDES_UPDATE_FAILED", extra={"error": str(exc)})
+            return _safe_response(
+                {"ok": False, "error": "operator manual overrides unavailable"},
+                status=503,
+            )
+
+    @app.route("/operator/control-plane/manual-overrides/update")
+    def operator_control_plane_update_manual_overrides_compat() -> Any:
+        """Compatibility update path for lightweight test clients without POST routing."""
+
+        return operator_control_plane_update_manual_overrides()
+
+    @app.route("/operator/control-plane/manual-overrides", methods=["DELETE"])
+    def operator_control_plane_clear_manual_overrides() -> Any:
+        """Clear operator manual overrides while preserving the canonical payload shape."""
+
+        try:
+            payload = ControlPlaneService(service_name=_SERVICE_NAME).clear_manual_overrides()
+            return _safe_response({"ok": True, "manual_overrides": payload}, status=200)
+        except (OSError, ValueError, TypeError) as exc:
+            _log.warning("OPERATOR_MANUAL_OVERRIDES_CLEAR_FAILED", extra={"error": str(exc)})
+            return _safe_response(
+                {"ok": False, "error": "operator manual overrides unavailable"},
+                status=503,
+            )
+
+    @app.route("/operator/control-plane/manual-overrides/clear")
+    def operator_control_plane_clear_manual_overrides_compat() -> Any:
+        """Compatibility clear path for lightweight test clients without DELETE routing."""
+
+        return operator_control_plane_clear_manual_overrides()
 
     def _governance_base_path() -> str:
         configured = str(
@@ -588,13 +704,10 @@ def create_app():
         """Return governance approvals/scorecards/rollback audit snapshot."""
 
         try:
-            snapshot = build_control_plane_snapshot(service_name=_SERVICE_NAME)
-            governance_raw = snapshot.get("governance")
-            governance = (
-                dict(governance_raw)
-                if isinstance(governance_raw, Mapping)
-                else {}
-            )
+            governance = GovernanceService(
+                service_name=_SERVICE_NAME,
+                base_path=_governance_base_path(),
+            ).snapshot()
             return _safe_response({"ok": True, "governance": governance}, status=200)
         except (ImportError, ValueError, TypeError) as exc:
             _log.warning("OPERATOR_GOVERNANCE_SNAPSHOT_UNAVAILABLE", extra={"error": str(exc)})
@@ -632,10 +745,10 @@ def create_app():
                 status=400,
             )
         try:
-            from ai_trading.governance.promotion import ModelPromotion
-
-            promotion = ModelPromotion(base_path=_governance_base_path())
-            output_path = promotion.record_promotion_approval(
+            result = GovernanceService(
+                service_name=_SERVICE_NAME,
+                base_path=_governance_base_path(),
+            ).record_approval(
                 strategy=strategy,
                 model_id=model_id,
                 approver=approver,
@@ -643,12 +756,11 @@ def create_app():
                 note=note,
                 ticket=ticket,
             )
-            rows = promotion.list_recent_promotion_approvals(limit=5)
             return _safe_response(
                 {
                     "ok": True,
-                    "path": output_path,
-                    "approvals": rows,
+                    "path": result.get("path"),
+                    "approvals": result.get("approvals"),
                 },
                 status=200,
             )
@@ -660,6 +772,12 @@ def create_app():
                 {"ok": False, "error": "operator governance approval unavailable"},
                 status=503,
             )
+
+    @app.route("/operator/governance/approval/update")
+    def operator_governance_record_approval_compat() -> Any:
+        """Compatibility approval path for lightweight test clients without POST routing."""
+
+        return operator_governance_record_approval()
 
     @app.route("/operator/governance/rollback", methods=["POST"])
     def operator_governance_manual_rollback() -> Any:
@@ -690,23 +808,18 @@ def create_app():
                 status=400,
             )
         try:
-            from ai_trading.governance.promotion import ModelPromotion
-
-            promotion = ModelPromotion(base_path=_governance_base_path())
-            rolled_back = bool(
-                promotion.rollback_to_previous_production(
-                    strategy=strategy,
-                    reason=reason,
-                    force=force,
-                )
+            result = GovernanceService(
+                service_name=_SERVICE_NAME,
+                base_path=_governance_base_path(),
+            ).rollback(
+                strategy=strategy,
+                reason=reason,
+                force=force,
             )
+            rolled_back = bool(result.get("rolled_back"))
             status_code = 200 if rolled_back else 409
             return _safe_response(
-                {
-                    "ok": rolled_back,
-                    "rolled_back": rolled_back,
-                    "audit": promotion.list_recent_rollback_audit(limit=5),
-                },
+                result,
                 status=status_code,
             )
         except (ImportError, TypeError, ValueError) as exc:
@@ -715,6 +828,12 @@ def create_app():
                 {"ok": False, "error": "operator governance rollback unavailable"},
                 status=503,
             )
+
+    @app.route("/operator/governance/rollback/update")
+    def operator_governance_manual_rollback_compat() -> Any:
+        """Compatibility rollback path for lightweight test clients without POST routing."""
+
+        return operator_governance_manual_rollback()
 
     @app.route("/health")
     def health():

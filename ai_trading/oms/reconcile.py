@@ -9,7 +9,7 @@ from ai_trading.logging import get_logger
 logger = get_logger(__name__)
 
 
-@dataclass(slots=True)
+@dataclass
 class ReconcileResult:
     ok: bool
     mismatches: list[dict[str, Any]] = field(default_factory=list)
@@ -83,4 +83,3 @@ def reconcile(
             "mismatch_count": len(mismatches),
         },
     )
-

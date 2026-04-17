@@ -1666,7 +1666,7 @@ def _resolve_slippage_cost_with_source(
     return abs(qty * price * (slippage_bps / 10000.0)), source
 
 
-@dataclass(slots=True)
+@dataclass
 class _FillEvent:
     symbol: str
     side: str
@@ -1685,7 +1685,7 @@ class _FillEvent:
     venue: str | None
 
 
-@dataclass(slots=True)
+@dataclass
 class _OpenLot:
     side: str
     qty: float
@@ -1702,7 +1702,7 @@ class _OpenLot:
     venue: str | None
 
 
-@dataclass(slots=True)
+@dataclass
 class _TCALegEvent:
     symbol: str
     side: str

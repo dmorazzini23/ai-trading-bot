@@ -231,7 +231,7 @@ def _dump_model_with_fallback(
         return fallback_path
 
 
-@dataclass(slots=True)
+@dataclass
 class EdgeTargets:
     """Minimum edge criteria required for promotion gates."""
 
@@ -241,7 +241,7 @@ class EdgeTargets:
     min_hit_rate_stability: float
 
 
-@dataclass(slots=True)
+@dataclass
 class CandidateMetrics:
     """Aggregated out-of-sample metrics for a model candidate."""
 
@@ -265,7 +265,7 @@ class CandidateMetrics:
     score_orientation_report: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass
 class _CandidateSnapshot:
     name: str
     mean_expectancy_bps: float
@@ -277,7 +277,7 @@ class _CandidateSnapshot:
     profitable_fold_ratio: float
 
 
-@dataclass(slots=True)
+@dataclass
 class _ReportSnapshot:
     ts: datetime
     source: str

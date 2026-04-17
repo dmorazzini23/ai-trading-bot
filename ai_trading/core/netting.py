@@ -11,7 +11,7 @@ from typing import Any, Iterable
 DECISION_RECORD_SCHEMA_VERSION = "2.0.0"
 
 
-@dataclass(slots=True)
+@dataclass
 class SleeveConfig:
     name: str
     timeframe: str
@@ -29,7 +29,7 @@ class SleeveConfig:
     max_gross_dollars: float
 
 
-@dataclass(slots=True)
+@dataclass
 class SleeveProposal:
     symbol: str
     sleeve: str
@@ -44,7 +44,7 @@ class SleeveProposal:
     debug: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass
 class NettedTarget:
     symbol: str
     bar_ts: datetime
@@ -56,7 +56,7 @@ class NettedTarget:
     blocked: bool = False
 
 
-@dataclass(slots=True)
+@dataclass
 class DecisionRecord:
     symbol: str
     bar_ts: datetime
@@ -94,7 +94,7 @@ class DecisionRecord:
         }
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class NettingCostParams:
     base_bps: float
     min_bps: float

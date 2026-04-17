@@ -20,7 +20,7 @@ _METRIC_AFTER_HOURS = "after_hours_training"
 _CRITICAL_CANARY_METRICS = {_METRIC_ML_SIGNAL, _METRIC_RL_SIGNAL}
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _LivenessBreach:
     metric: str
     event: str

@@ -16,7 +16,7 @@ REQUIRED_COLUMNS = ("open", "high", "low", "close", "volume")
 _NY_TZ = ZoneInfo("America/New_York")
 
 
-@dataclass(slots=True)
+@dataclass
 class DataContractResult:
     ok: bool
     reason: str | None = None

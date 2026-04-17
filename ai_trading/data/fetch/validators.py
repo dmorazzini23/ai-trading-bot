@@ -15,7 +15,7 @@ VALID_FEEDS = {"iex", "sip", "delayed_sip", "yahoo", "finnhub"}
 VALID_ADJUSTMENTS = {"raw", "split", "all"}
 
 
-@dataclass(slots=True)
+@dataclass
 class GapSample:
     """Sampled coverage metrics captured when a gap event occurs."""
 
@@ -28,7 +28,7 @@ class GapSample:
     initial_missing: int = 0
 
 
-@dataclass(slots=True)
+@dataclass
 class GapStatistics:
     """Aggregated minute-bar gap statistics per symbol."""
 

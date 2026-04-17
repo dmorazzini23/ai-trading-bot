@@ -82,7 +82,7 @@ class TrainingConfig:
     timesteps: int = 0
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class RLAlgoConfig:
     """Declarative algorithm config used by the trainer."""
 

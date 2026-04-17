@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import ai_trading.app as app_mod
@@ -13,12 +14,21 @@ def _post_json_compat(client, path: str, payload: dict[str, object]):
     post = getattr(client, "post", None)
     if callable(post):
         return post(path, json=payload)
+    compat_path = f"{path}/update"
     request_original = getattr(app_mod, "request", None)
     setattr(app_mod, "request", SimpleNamespace(get_json=lambda silent=True: payload))
     try:
-        return client.get(path)
+        return client.get(compat_path)
     finally:
         setattr(app_mod, "request", request_original)
+
+
+def _delete_compat(client, path: str):
+    delete = getattr(client, "delete", None)
+    if callable(delete):
+        return delete(path)
+    compat_path = f"{path}/clear"
+    return client.get(compat_path)
 
 
 def test_operator_presets_endpoint(monkeypatch):
@@ -74,6 +84,58 @@ def test_operator_control_plane_snapshot_endpoint(monkeypatch):
     assert "latest_promotion_approval" in governance
     assert "latest_champion_challenger_scorecard" in governance
     assert "latest_rollback_audit" in governance
+    services = snapshot["services"]
+    assert "signal" in services
+    assert "execution" in services
+    assert "governance" in services
+
+
+def test_operator_control_plane_services_endpoint(monkeypatch):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    app = create_app()
+    client = app.test_client()
+
+    response = client.get("/operator/control-plane/services")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["section"] == "services"
+    assert payload["data"]["risk_approval"]["owner"] == "ai_trading.services.risk_approval"
+
+
+def test_operator_manual_overrides_post_and_delete(monkeypatch, tmp_path):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    toggle_path = tmp_path / "runtime" / "policy_runtime_toggles.json"
+    monkeypatch.setenv("AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH", str(toggle_path))
+    app = create_app()
+    client = app.test_client()
+
+    response = _post_json_compat(
+        client,
+        "/operator/control-plane/manual-overrides",
+        {
+            "disabled_slices": ["ranker:bandit", "gate:max_loss"],
+            "diagnostics": {"operator": "ops@example.com"},
+            "source_updated_at": "2026-04-17T00:00:00Z",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    state = payload["manual_overrides"]["state"]
+    assert state["disabled_slices"] == ["GATE:MAX_LOSS", "RANKER:BANDIT"]
+    assert state["toggles"]["rankers"]["bandit_enabled"] is False
+    assert state["toggles"]["disabled_gate_roots"] == ["MAX_LOSS"]
+    persisted = json.loads(toggle_path.read_text(encoding="utf-8"))
+    assert persisted["diagnostics"]["operator"] == "ops@example.com"
+
+    delete = _delete_compat(client, "/operator/control-plane/manual-overrides")
+    assert delete.status_code == 200
+    cleared = delete.get_json()
+    assert cleared["ok"] is True
+    assert cleared["manual_overrides"]["state"]["disabled_slices"] == []
 
 
 def test_operator_plan_builder_accepts_valid_override():

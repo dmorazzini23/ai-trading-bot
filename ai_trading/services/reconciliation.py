@@ -1,0 +1,47 @@
+from __future__ import annotations
+
+from json import JSONDecodeError
+from typing import Any
+
+
+def reconcile_position_targets(
+    ctx: Any,
+    *,
+    logger: Any,
+    targets_lock: Any,
+    warned: bool = False,
+) -> bool:
+    """Prune stale stop/take targets against live broker positions."""
+
+    if not getattr(ctx, "api", None):
+        if not warned:
+            logger.warning("Skipping reconciliation: no broker client")
+            return True
+        return warned
+    try:
+        live_positions = {
+            pos.symbol: int(pos.qty) for pos in ctx.api.list_positions()
+        }
+        with targets_lock:
+            symbols_with_targets = list(getattr(ctx, "stop_targets", {}).keys()) + list(
+                getattr(ctx, "take_profit_targets", {}).keys()
+            )
+            for symbol in symbols_with_targets:
+                if symbol not in live_positions or live_positions[symbol] == 0:
+                    ctx.stop_targets.pop(symbol, None)
+                    ctx.take_profit_targets.pop(symbol, None)
+    except (
+        FileNotFoundError,
+        PermissionError,
+        IsADirectoryError,
+        JSONDecodeError,
+        ValueError,
+        KeyError,
+        TypeError,
+        OSError,
+    ) as exc:
+        logger.exception("reconcile_positions failed", exc_info=exc)
+    return warned
+
+
+__all__ = ["reconcile_position_targets"]

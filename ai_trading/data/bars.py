@@ -83,7 +83,7 @@ _TRUTHY = {"1", "true", "yes", "on"}
 _FALSEY = {"0", "false", "no", "off", "disable", "disabled"}
 
 
-@dataclass(slots=True)
+@dataclass
 class BarsFetchFailed:
     """Sentinel returned when Alpaca HTTP bars fail."""
 
@@ -319,7 +319,7 @@ def _is_minute_timeframe(tf) -> bool:
 # key -> {"feeds": set[str], "generation": datetime | None}
 
 
-@dataclass(slots=True)
+@dataclass
 class _EntitlementCacheEntry:
     feeds: set[str]
     generation: datetime | None

@@ -34,7 +34,7 @@ class AlpacaCreds:
         return self._base_url or _DEFAULT_BASE_URL
 
 
-@dataclass(slots=True)
+@dataclass
 class AlpacaCredentials:
     """Extended credential payload that includes the trading base URL."""
 

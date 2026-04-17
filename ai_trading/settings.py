@@ -657,6 +657,10 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
     @field_validator("alpaca_data_feed", mode="after")
     @classmethod
     def _enforce_allowed_feed(cls, v: str) -> str:
+        return cls._resolve_allowed_feed(v)
+
+    @staticmethod
+    def _resolve_allowed_feed(v: str) -> str:
         """Force IEX feed unless SIP explicitly allowed."""
         try:
             from ai_trading.utils.env import resolve_alpaca_feed
@@ -676,7 +680,7 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
     @field_validator("alpaca_execution_feed", mode="after")
     @classmethod
     def _enforce_execution_feed(cls, v: str) -> str:
-        return cast(str, cls._enforce_allowed_feed(v))
+        return cls._resolve_allowed_feed(v)
 
     @field_validator("alpaca_reference_feed", mode="after")
     @classmethod
@@ -685,7 +689,7 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
         if normalized in {"delayed_sip", "iex"}:
             return normalized
         if normalized == "sip":
-            return cast(str, cls._enforce_allowed_feed("sip"))
+            return cls._resolve_allowed_feed("sip")
         return "delayed_sip"
 
     @model_validator(mode="after")

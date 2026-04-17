@@ -115,7 +115,7 @@ def list_evaluations(symbol: str, limit: int = 100) -> list[dict[str, Any]]:
 # Rich model registry implementation
 
 
-@dataclass(slots=True)
+@dataclass
 class _Pickler:
     """Pickle helper wiring serialize/deserialize callables."""
 

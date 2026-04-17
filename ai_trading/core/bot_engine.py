@@ -208,6 +208,30 @@ from ai_trading.governance.rollout import (
     load_rollout_state,
     save_rollout_state,
 )
+from ai_trading.services.execution import (
+    execute_signal_orders as _execute_signal_orders_service,
+)
+from ai_trading.services.portfolio import (
+    compute_portfolio_weights as _compute_portfolio_weights_service,
+    ensure_portfolio_weights as _ensure_portfolio_weights_service,
+)
+from ai_trading.services.reconciliation import (
+    reconcile_position_targets as _reconcile_position_targets_service,
+)
+from ai_trading.services.risk_approval import (
+    build_policy_runtime_toggles_payload as _build_policy_runtime_toggles_payload_service,
+    ensure_policy_learning_artifacts as _ensure_policy_learning_artifacts_service,
+    load_policy_rollback_state as _load_policy_rollback_state_service,
+    load_policy_runtime_toggles as _load_policy_runtime_toggles_service,
+    policy_rollback_state_path as _policy_rollback_state_path_service,
+    policy_runtime_toggles_path as _policy_runtime_toggles_path_service,
+    write_policy_rollback_state as _write_policy_rollback_state_service,
+    write_policy_runtime_toggles as _write_policy_runtime_toggles_service,
+)
+from ai_trading.services.signal import (
+    evaluate_signal_and_confirm as _evaluate_signal_and_confirm_service,
+    generate_directional_signals as _generate_directional_signals_service,
+)
 
 
 class CycleAbortSafeMode(RuntimeError):
@@ -6654,25 +6678,7 @@ info_kv(
 # Handling missing portfolio weights function
 def ensure_portfolio_weights(ctx, symbols):
     """Ensure portfolio weights are computed with fallback handling."""
-    try:
-        from ai_trading import portfolio
-
-        if hasattr(portfolio, "compute_portfolio_weights"):
-            return portfolio.compute_portfolio_weights(ctx, symbols)
-        else:
-            logger.warning("compute_portfolio_weights not found, using fallback method.")
-            # Placeholder fallback: Evenly distribute portfolio weights
-            return {symbol: 1.0 / len(symbols) for symbol in symbols}
-    except (
-        ZeroDivisionError,
-        ValueError,
-        KeyError,
-    ) as e:  # AI-AGENT-REF: tighten portfolio sizing errors
-        logger.error(
-            "PORTFOLIO_WEIGHT_FAILED",
-            extra={"cause": e.__class__.__name__, "detail": str(e)},
-        )
-        return {symbol: 1.0 / len(symbols) for symbol in symbols if symbols}
+    return _ensure_portfolio_weights_service(ctx, symbols, logger=logger)
 
 
 # Log Alpaca availability on startup (only once per process)
@@ -10508,34 +10514,12 @@ def reconcile_positions(ctx: BotContext) -> None:
     """On startup, fetch live positions and prune stale stop/take targets."""
 
     global _reconcile_warned
-    if not getattr(ctx, "api", None):
-        if not _reconcile_warned:
-            logger.warning("Skipping reconciliation: no broker client")
-            _reconcile_warned = True
-        return
-    try:
-        live_positions = {
-            pos.symbol: int(pos.qty) for pos in ctx.api.list_positions()
-        }
-        with targets_lock:
-            symbols_with_targets = list(ctx.stop_targets.keys()) + list(
-                ctx.take_profit_targets.keys()
-            )
-            for symbol in symbols_with_targets:
-                if symbol not in live_positions or live_positions[symbol] == 0:
-                    ctx.stop_targets.pop(symbol, None)
-                    ctx.take_profit_targets.pop(symbol, None)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        logger.exception("reconcile_positions failed", exc_info=exc)
+    _reconcile_warned = _reconcile_position_targets_service(
+        ctx,
+        logger=logger,
+        targets_lock=targets_lock,
+        warned=_reconcile_warned,
+    )
 
 
 import warnings
@@ -11290,7 +11274,7 @@ class BotMode:
         return dict(self.params)
 
 
-@dataclass(slots=True)
+@dataclass
 class ExecutionCycleMetrics:
     submitted: int = 0
     open_orders: int = 0
@@ -21449,13 +21433,15 @@ def signal_and_confirm(
     ctx: BotContext, state: BotState, symbol: str, df: pd.DataFrame, model
 ) -> tuple[int, float, str]:
     """Wrapper that evaluates signals and checks confidence threshold."""
-    sig, conf, strat = ctx.signal_manager.evaluate(ctx, state, df, symbol, model)
-    if sig == -1 or conf < get_conf_threshold():
-        logger.debug(
-            "SKIP_LOW_SIGNAL", extra={"symbol": symbol, "sig": sig, "conf": conf}
-        )
-        return -1, 0.0, ""
-    return sig, conf, strat
+    return _evaluate_signal_and_confirm_service(
+        ctx,
+        state,
+        symbol,
+        df,
+        model,
+        conf_threshold=get_conf_threshold(),
+        logger=logger,
+    )
 
 
 def pre_trade_checks(
@@ -23828,7 +23814,7 @@ def _price_reliability(state: BotState, symbol: str) -> tuple[bool, str | None]:
     return True, None
 
 
-@dataclass(slots=True)
+@dataclass
 class DataGateDecision:
     block: bool
     reasons: tuple[str, ...]
@@ -27406,9 +27392,7 @@ def trade_logic(
 
 def compute_portfolio_weights(ctx: BotContext, symbols: list[str]) -> dict[str, float]:
     """Delegate to ai_trading.portfolio.compute_portfolio_weights with correct ctx."""
-    from ai_trading.portfolio import compute_portfolio_weights as _cpw
-
-    return _cpw(ctx, symbols)
+    return _compute_portfolio_weights_service(ctx, symbols)
 
 
 def on_trade_exit_rebalance(ctx: BotContext) -> None:
@@ -31032,7 +31016,7 @@ def _quote_age_seconds(quote: Any | None) -> float:
         return float("inf")
 
 
-@dataclass(slots=True)
+@dataclass
 class QuoteGateDecision:
     """Outcome from quote gate validation."""
 
@@ -38069,33 +38053,11 @@ def _policy_ablation_events_path() -> Path:
 
 
 def _policy_rollback_state_path() -> Path:
-    configured = str(
-        get_env(
-            "AI_TRADING_POLICY_ROLLBACK_STATE_PATH",
-            "runtime/policy_rollback_state.json",
-            cast=str,
-        )
-        or ""
-    ).strip()
-    return resolve_runtime_artifact_path(
-        configured or "runtime/policy_rollback_state.json",
-        default_relative="runtime/policy_rollback_state.json",
-    )
+    return _policy_rollback_state_path_service()
 
 
 def _policy_runtime_toggles_path() -> Path:
-    configured = str(
-        get_env(
-            "AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH",
-            "runtime/policy_runtime_toggles.json",
-            cast=str,
-        )
-        or ""
-    ).strip()
-    return resolve_runtime_artifact_path(
-        configured or "runtime/policy_runtime_toggles.json",
-        default_relative="runtime/policy_runtime_toggles.json",
-    )
+    return _policy_runtime_toggles_path_service()
 
 
 def _ensure_policy_learning_artifacts(
@@ -38103,96 +38065,7 @@ def _ensure_policy_learning_artifacts(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Best-effort bootstrap for policy learning artifacts used by runtime readiness."""
-
-    ts = (now or datetime.now(UTC)).isoformat()
-    state_path = _policy_ablation_state_path()
-    events_path = _policy_ablation_events_path()
-    runtime_toggles_path = _policy_runtime_toggles_path()
-    context: dict[str, Any] = {
-        "state_path": str(state_path),
-        "events_path": str(events_path),
-        "runtime_toggles_path": str(runtime_toggles_path),
-        "state_ready": bool(state_path.exists()),
-        "events_ready": bool(events_path.exists()),
-        "runtime_toggles_ready": bool(runtime_toggles_path.exists()),
-        "state_created": False,
-        "events_created": False,
-        "runtime_toggles_created": False,
-    }
-
-    if not state_path.exists():
-        try:
-            state_path.parent.mkdir(parents=True, exist_ok=True)
-            state_path.write_text(
-                json.dumps({"updated_at": None, "slices": {}}, sort_keys=True)
-                + "\n",
-                encoding="utf-8",
-            )
-            context["state_created"] = True
-            context["state_ready"] = True
-            logger.info(
-                "POLICY_ABLATION_STATE_BOOTSTRAPPED",
-                extra={"path": str(state_path), "ts": ts},
-            )
-        except Exception as exc:
-            context["state_error"] = str(exc)
-            logger.warning(
-                "POLICY_ABLATION_STATE_BOOTSTRAP_FAILED",
-                extra={"path": str(state_path), "error": str(exc)},
-            )
-
-    if not events_path.exists():
-        try:
-            events_path.parent.mkdir(parents=True, exist_ok=True)
-            events_path.touch(exist_ok=True)
-            context["events_created"] = True
-            context["events_ready"] = True
-            logger.info(
-                "POLICY_ABLATION_EVENTS_BOOTSTRAPPED",
-                extra={"path": str(events_path), "ts": ts},
-            )
-        except Exception as exc:
-            context["events_error"] = str(exc)
-            logger.warning(
-                "POLICY_ABLATION_EVENTS_BOOTSTRAP_FAILED",
-                extra={"path": str(events_path), "error": str(exc)},
-            )
-
-    if not runtime_toggles_path.exists():
-        rollback_payload = _load_policy_rollback_state()
-        toggles_payload = _build_policy_runtime_toggles_payload(
-            disabled_slices=cast(
-                Sequence[str],
-                rollback_payload.get("disabled_slices", []),
-            ),
-            diagnostics=cast(Mapping[str, Any], rollback_payload.get("diagnostics", {})),
-            updated_at=cast(str | None, rollback_payload.get("updated_at")),
-            source_updated_at=cast(
-                str | None,
-                rollback_payload.get("source_updated_at"),
-            ),
-        )
-        try:
-            runtime_toggles_path.parent.mkdir(parents=True, exist_ok=True)
-            runtime_toggles_path.write_text(
-                json.dumps(toggles_payload, sort_keys=True, default=_json_dump_default)
-                + "\n",
-                encoding="utf-8",
-            )
-            context["runtime_toggles_created"] = True
-            context["runtime_toggles_ready"] = True
-            logger.info(
-                "POLICY_RUNTIME_TOGGLES_BOOTSTRAPPED",
-                extra={"path": str(runtime_toggles_path), "ts": ts},
-            )
-        except Exception as exc:
-            context["runtime_toggles_error"] = str(exc)
-            logger.warning(
-                "POLICY_RUNTIME_TOGGLES_BOOTSTRAP_FAILED",
-                extra={"path": str(runtime_toggles_path), "error": str(exc)},
-            )
-
-    return context
+    return _ensure_policy_learning_artifacts_service(now=now)
 
 
 def _build_policy_runtime_toggles_payload(
@@ -38202,105 +38075,16 @@ def _build_policy_runtime_toggles_payload(
     updated_at: str | None = None,
     source_updated_at: str | None = None,
 ) -> dict[str, Any]:
-    disabled = sorted(
-        {
-            str(item).strip().upper()
-            for item in disabled_slices
-            if str(item).strip()
-        }
+    return _build_policy_runtime_toggles_payload_service(
+        disabled_slices=disabled_slices,
+        diagnostics=diagnostics,
+        updated_at=updated_at,
+        source_updated_at=source_updated_at,
     )
-    disabled_set = set(disabled)
-    disabled_gate_roots = sorted(
-        {
-            str(item).split(":", 1)[1].strip().upper()
-            for item in disabled
-            if str(item).startswith("GATE:") and ":" in str(item)
-        }
-    )
-    disabled_sleeves = sorted(
-        {
-            str(item).split(":", 1)[1].strip().lower()
-            for item in disabled
-            if str(item).startswith("SLEEVE:") and ":" in str(item)
-        }
-    )
-    ranker_toggles = {
-        "bandit_enabled": "RANKER:BANDIT" not in disabled_set,
-        "counterfactual_enabled": "RANKER:COUNTERFACTUAL" not in disabled_set,
-        "geometric_enabled": "RANKER:GEOMETRIC" not in disabled_set,
-        "portfolio_log_growth_enabled": "RANKER:PORTFOLIO_LOG_GROWTH" not in disabled_set,
-    }
-    toggles = {
-        "rankers": ranker_toggles,
-        "disabled_gate_roots": disabled_gate_roots,
-        "disabled_sleeves": disabled_sleeves,
-    }
-    return {
-        "updated_at": updated_at or datetime.now(UTC).isoformat(),
-        "source_updated_at": source_updated_at,
-        "disabled_slices": disabled,
-        "toggles": toggles,
-        "diagnostics": dict(diagnostics) if isinstance(diagnostics, Mapping) else {},
-    }
 
 
 def _load_policy_runtime_toggles() -> dict[str, Any]:
-    path = _policy_runtime_toggles_path()
-    if path.exists():
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            logger.debug("POLICY_RUNTIME_TOGGLES_READ_FAILED", exc_info=True)
-        else:
-            if isinstance(payload, Mapping):
-                disabled_raw = payload.get("disabled_slices")
-                disabled = (
-                    [
-                        str(item).strip().upper()
-                        for item in disabled_raw
-                        if str(item).strip()
-                    ]
-                    if isinstance(disabled_raw, Sequence)
-                    and not isinstance(disabled_raw, (str, bytes, bytearray))
-                    else []
-                )
-                toggles_raw = payload.get("toggles")
-                toggles = dict(toggles_raw) if isinstance(toggles_raw, Mapping) else {}
-                diagnostics_raw = payload.get("diagnostics")
-                diagnostics = (
-                    dict(diagnostics_raw)
-                    if isinstance(diagnostics_raw, Mapping)
-                    else {}
-                )
-                return {
-                    "updated_at": payload.get("updated_at"),
-                    "source_updated_at": payload.get("source_updated_at"),
-                    "disabled_slices": sorted(set(disabled)),
-                    "toggles": toggles,
-                    "diagnostics": diagnostics,
-                }
-    rollback_payload = _load_policy_rollback_state()
-    fallback = _build_policy_runtime_toggles_payload(
-        disabled_slices=cast(
-            Sequence[str],
-            rollback_payload.get("disabled_slices", []),
-        ),
-        diagnostics=cast(Mapping[str, Any], rollback_payload.get("diagnostics", {})),
-        updated_at=cast(str | None, rollback_payload.get("updated_at")),
-        source_updated_at=cast(str | None, rollback_payload.get("source_updated_at")),
-    )
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(fallback, sort_keys=True, default=_json_dump_default) + "\n",
-            encoding="utf-8",
-        )
-    except Exception as exc:
-        logger.warning(
-            "POLICY_RUNTIME_TOGGLES_WRITE_FAILED",
-            extra={"path": str(path), "error": str(exc)},
-        )
-    return fallback
+    return _load_policy_runtime_toggles_service()
 
 
 def _uncertainty_capital_state_path() -> Path:
@@ -38699,36 +38483,7 @@ def _load_policy_ablation_state() -> dict[str, Any]:
 
 
 def _load_policy_rollback_state() -> dict[str, Any]:
-    path = _policy_rollback_state_path()
-    if not path.exists():
-        return {"updated_at": None, "disabled_slices": [], "diagnostics": {}}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        logger.debug("POLICY_ROLLBACK_STATE_READ_FAILED", exc_info=True)
-        return {"updated_at": None, "disabled_slices": [], "diagnostics": {}}
-    if not isinstance(payload, Mapping):
-        return {"updated_at": None, "disabled_slices": [], "diagnostics": {}}
-    disabled_raw = payload.get("disabled_slices")
-    disabled = (
-        [
-            str(item).strip().upper()
-            for item in disabled_raw
-            if str(item).strip()
-        ]
-        if isinstance(disabled_raw, Sequence)
-        and not isinstance(disabled_raw, (str, bytes, bytearray))
-        else []
-    )
-    diagnostics_raw = payload.get("diagnostics")
-    diagnostics = (
-        dict(diagnostics_raw) if isinstance(diagnostics_raw, Mapping) else {}
-    )
-    return {
-        "updated_at": payload.get("updated_at"),
-        "disabled_slices": sorted(set(disabled)),
-        "diagnostics": diagnostics,
-    }
+    return _load_policy_rollback_state_service()
 
 
 def _policy_slices_from_observation(observation: Mapping[str, Any]) -> set[str]:
@@ -39270,33 +39025,32 @@ def _run_policy_ablation_rollback(
         "toggle_significance_enabled": bool(toggle_significance_enabled),
         "toggle_significance_method": str(toggle_significance_method),
     }
-    rollback_path = _policy_rollback_state_path()
     try:
-        rollback_path.parent.mkdir(parents=True, exist_ok=True)
-        rollback_path.write_text(
-            json.dumps(rollback_payload, sort_keys=True, default=_json_dump_default) + "\n",
-            encoding="utf-8",
-        )
+        rollback_path = _write_policy_rollback_state_service(rollback_payload)
     except Exception as exc:
+        rollback_path = _policy_rollback_state_path()
         logger.warning(
             "POLICY_ROLLBACK_STATE_WRITE_FAILED",
             extra={"path": str(rollback_path), "error": str(exc)},
         )
-    runtime_toggles_payload = _build_policy_runtime_toggles_payload(
-        disabled_slices=cast(Sequence[str], rollback_payload.get("disabled_slices", [])),
-        diagnostics=cast(Mapping[str, Any], rollback_payload.get("diagnostics", {})),
-        updated_at=cast(str | None, rollback_payload.get("updated_at")),
-        source_updated_at=cast(str | None, rollback_payload.get("source_updated_at")),
-    )
-    runtime_toggles_path = _policy_runtime_toggles_path()
     try:
-        runtime_toggles_path.parent.mkdir(parents=True, exist_ok=True)
-        runtime_toggles_path.write_text(
-            json.dumps(runtime_toggles_payload, sort_keys=True, default=_json_dump_default)
-            + "\n",
-            encoding="utf-8",
+        runtime_toggles_path, _ = _write_policy_runtime_toggles_service(
+            disabled_slices=cast(
+                Sequence[str],
+                rollback_payload.get("disabled_slices", []),
+            ),
+            diagnostics=cast(
+                Mapping[str, Any],
+                rollback_payload.get("diagnostics", {}),
+            ),
+            updated_at=cast(str | None, rollback_payload.get("updated_at")),
+            source_updated_at=cast(
+                str | None,
+                rollback_payload.get("source_updated_at"),
+            ),
         )
     except Exception as exc:
+        runtime_toggles_path = _policy_runtime_toggles_path()
         logger.warning(
             "POLICY_RUNTIME_TOGGLES_WRITE_FAILED",
             extra={"path": str(runtime_toggles_path), "error": str(exc)},
@@ -52857,37 +52611,12 @@ def initialize_bot(api=None, data_loader=None):
 
 def generate_signals(df):
     """+1 if price rise, -1 if price fall, else 0."""
-    price = df["price"]  # KeyError if missing
-    diff = price.diff().fillna(0)  # NaN → 0 for the first row
-    signals = diff.apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
-    return signals  # pandas Series → .items()
+    return _generate_directional_signals_service(df)
 
 
 def execute_trades(ctx, signals: pd.Series) -> list[tuple[str, str]]:
     """Return orders inferred from ``signals`` without hitting real APIs."""
-    orders = []
-    for symbol, sig in signals.items():
-        if sig == 0:
-            continue
-        side = "buy" if sig > 0 else "sell"
-        api = getattr(ctx, "api", None)
-        if api is not None and hasattr(api, "submit_order"):
-            try:
-                api.submit_order(symbol, 1, side)
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ) as e:  # AI-AGENT-REF: narrow exception
-                # Order submission failed - log error and add to failed orders
-                logger.error("Failed to submit test order for %s %s: %s", symbol, side, e)
-        orders.append((symbol, side))
-    return orders
+    return _execute_signal_orders_service(ctx, signals, logger=logger)
 
 
 def run_trading_cycle(ctx, df: pd.DataFrame) -> list[tuple[str, str]]:

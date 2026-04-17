@@ -10,7 +10,7 @@ from ai_trading.data.fetch.normalize import normalize_ohlcv_df
 from ai_trading.utils.time import is_generator_stop
 
 
-@dataclass(slots=True)
+@dataclass
 class _MemoEntry:
     ts: float
     key: Tuple[str, str, str, str]

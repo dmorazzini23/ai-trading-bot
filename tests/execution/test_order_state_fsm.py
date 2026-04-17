@@ -29,7 +29,7 @@ class FSMEngine(live_trading.LiveTradingExecutionEngine):
         super().__init__(ctx=None)
         self.is_initialized = True
         self.shadow_mode = False
-        self.stats = defaultdict(float)
+        self.stats: defaultdict[str, float] = defaultdict(float)
         self._cycle_account = {
             "shorting_enabled": True,
             "margin_enabled": True,
@@ -49,13 +49,15 @@ class FSMEngine(live_trading.LiveTradingExecutionEngine):
     def _pre_execution_checks(self) -> bool:
         return True
 
-    def _execute_with_retry(self, submit_fn, order: dict):
+    def _execute_with_retry(self, func: Any, *args: Any, **kwargs: Any):
+        order = args[0] if args else kwargs.get("order", {})
+        order_dict = order if isinstance(order, dict) else {}
         return {
             "status": "accepted",
             "id": "order-1",
-            "client_order_id": order.get("client_order_id"),
-            "symbol": order.get("symbol"),
-            "qty": order.get("quantity"),
+            "client_order_id": order_dict.get("client_order_id"),
+            "symbol": order_dict.get("symbol"),
+            "qty": order_dict.get("quantity"),
         }
 
     def _get_account_snapshot(self):

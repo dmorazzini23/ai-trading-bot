@@ -249,8 +249,14 @@ class AlignedClock:
                 return False
             market_open = schedule.iloc[0]["market_open"]
             market_close = schedule.iloc[0]["market_close"]
-            market_open = market_open.tz_convert(timestamp.tzinfo)
-            market_close = market_close.tz_convert(timestamp.tzinfo)
+            if hasattr(market_open, "tz_convert"):
+                market_open = market_open.tz_convert(timestamp.tzinfo)
+            elif isinstance(market_open, datetime) and timestamp.tzinfo is not None:
+                market_open = market_open.astimezone(timestamp.tzinfo)
+            if hasattr(market_close, "tz_convert"):
+                market_close = market_close.tz_convert(timestamp.tzinfo)
+            elif isinstance(market_close, datetime) and timestamp.tzinfo is not None:
+                market_close = market_close.astimezone(timestamp.tzinfo)
             return bool(market_open <= timestamp <= market_close)
         except (ValueError, TypeError) as e:
             self.logger.warning(f"Market hours check failed: {e.__class__.__name__}: {e}")

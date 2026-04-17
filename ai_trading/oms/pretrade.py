@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from ai_trading.config.management import get_env
 
 
-@dataclass(slots=True)
+@dataclass
 class OrderIntent:
     symbol: str
     side: str

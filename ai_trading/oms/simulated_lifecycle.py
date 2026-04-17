@@ -15,7 +15,7 @@ from ai_trading.oms.lifecycle import (
 logger = get_logger(__name__)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class SimulatedIntentRef:
     """Reference to a simulated intent persisted through IntentStore."""
 
