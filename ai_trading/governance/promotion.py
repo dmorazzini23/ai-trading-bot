@@ -4,6 +4,7 @@ Model promotion pipeline for shadow-to-production governance.
 Manages the promotion process from shadow testing to production deployment
 with performance validation and safety checks.
 """
+import hashlib
 import json
 import math
 import uuid
@@ -116,6 +117,8 @@ class ModelPromotion:
         self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self.active_dir = self.base_path / 'active'
         self.active_dir.mkdir(exist_ok=True)
+        self._event_store: Any | None = None
+        self._event_store_init_failed = False
 
     def _governance_event_path(self, filename: str) -> Path:
         return self.base_path / str(filename)
@@ -177,6 +180,215 @@ class ModelPromotion:
             value = 168.0
         return max(1.0, min(value, 24.0 * 365.0))
 
+    def _governance_event_store_enabled(self) -> bool:
+        try:
+            return bool(get_env("AI_TRADING_GOVERNANCE_EVENT_STORE_ENABLED", True, cast=bool))
+        except Exception:
+            return True
+
+    def _resolve_event_store(self) -> Any | None:
+        if not self._governance_event_store_enabled():
+            return None
+        if self._event_store is not None:
+            return self._event_store
+        if self._event_store_init_failed:
+            return None
+        try:
+            from ai_trading.oms.event_store import EventStore
+
+            self._event_store = EventStore()
+        except Exception as exc:
+            self._event_store_init_failed = True
+            self.logger.warning(
+                "GOVERNANCE_EVENT_STORE_INIT_FAILED",
+                extra={"error": str(exc)},
+            )
+            return None
+        return self._event_store
+
+    @staticmethod
+    def _json_default(value: Any) -> str:
+        isoformat = getattr(value, "isoformat", None)
+        if callable(isoformat):
+            try:
+                return str(isoformat())
+            except Exception:
+                return str(value)
+        return str(value)
+
+    @staticmethod
+    def _lineage_text(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        parsed = str(value).strip()
+        return parsed or None
+
+    def _extract_model_lineage(self, model_id: str | None) -> dict[str, Any]:
+        resolved_model_id = str(model_id or "").strip()
+        if not resolved_model_id:
+            return {}
+        model_info = dict(self.registry.model_index.get(resolved_model_id) or {})
+        metadata_payload = dict(model_info.get("metadata", {}) or {})
+        combined_meta: dict[str, Any] = {}
+        try:
+            _model_obj, loaded_meta = self.registry.load_model(
+                resolved_model_id,
+                verify_dataset_hash=False,
+            )
+        except Exception:
+            loaded_meta = {}
+        if isinstance(loaded_meta, dict):
+            combined_meta.update(loaded_meta)
+        governance_payload = dict(combined_meta.get("governance", {}) or {})
+
+        def _first_text(*candidates: Any) -> str | None:
+            for candidate in candidates:
+                parsed = self._lineage_text(candidate)
+                if parsed is not None:
+                    return parsed
+            return None
+
+        model_hash = _first_text(
+            model_info.get("model_hash"),
+            combined_meta.get("model_hash"),
+            metadata_payload.get("model_hash"),
+        )
+        lineage: dict[str, Any] = {
+            "model_id": resolved_model_id,
+        }
+        strategy = _first_text(model_info.get("strategy"), combined_meta.get("strategy"))
+        if strategy is not None:
+            lineage["strategy"] = strategy
+        registered_at = _first_text(
+            model_info.get("registered_at"),
+            combined_meta.get("registered_at"),
+        )
+        if registered_at is not None:
+            lineage["registered_at"] = registered_at
+        governance_status = _first_text(
+            governance_payload.get("status"),
+            model_info.get("governance", {}).get("status") if isinstance(model_info.get("governance"), dict) else None,
+        )
+        if governance_status is not None:
+            lineage["governance_status"] = governance_status
+        dataset_hash = _first_text(
+            combined_meta.get("dataset_hash"),
+            metadata_payload.get("dataset_hash"),
+            combined_meta.get("dataset_fingerprint"),
+            metadata_payload.get("dataset_fingerprint"),
+            model_info.get("dataset_fingerprint"),
+        )
+        if dataset_hash is not None:
+            lineage["dataset_hash"] = dataset_hash
+        feature_version = _first_text(
+            combined_meta.get("feature_version"),
+            metadata_payload.get("feature_version"),
+            combined_meta.get("feature_set_version"),
+            metadata_payload.get("feature_set_version"),
+            combined_meta.get("features_version"),
+            metadata_payload.get("features_version"),
+        )
+        if feature_version is not None:
+            lineage["feature_version"] = feature_version
+        model_artifact_hash = _first_text(
+            combined_meta.get("model_artifact_hash"),
+            metadata_payload.get("model_artifact_hash"),
+            combined_meta.get("artifact_hash"),
+            metadata_payload.get("artifact_hash"),
+            combined_meta.get("hash"),
+            metadata_payload.get("hash"),
+            model_hash,
+        )
+        if model_artifact_hash is not None:
+            lineage["model_artifact_hash"] = model_artifact_hash
+        if model_hash is not None:
+            lineage["model_hash"] = model_hash
+        policy_hash = _first_text(
+            combined_meta.get("policy_hash"),
+            metadata_payload.get("policy_hash"),
+            combined_meta.get("effective_policy_hash"),
+            metadata_payload.get("effective_policy_hash"),
+            governance_payload.get("policy_hash"),
+        )
+        if policy_hash is not None:
+            lineage["policy_hash"] = policy_hash
+        config_snapshot_hash = _first_text(
+            combined_meta.get("config_snapshot_hash"),
+            metadata_payload.get("config_snapshot_hash"),
+        )
+        if config_snapshot_hash is not None:
+            lineage["config_snapshot_hash"] = config_snapshot_hash
+        return lineage
+
+    def _append_governance_audit_event(
+        self,
+        *,
+        event_type: str,
+        payload: dict[str, Any],
+        primary_lineage: dict[str, Any] | None = None,
+        related_lineages: dict[str, dict[str, Any]] | None = None,
+    ) -> bool:
+        store = self._resolve_event_store()
+        if store is None:
+            return False
+        event_payload = dict(payload)
+        if primary_lineage:
+            event_payload["lineage"] = dict(primary_lineage)
+        if related_lineages:
+            filtered_related = {
+                str(key): dict(value)
+                for key, value in related_lineages.items()
+                if isinstance(value, dict) and value
+            }
+            if filtered_related:
+                event_payload["related_lineages"] = filtered_related
+        anchor_lineage = primary_lineage or {}
+        if not anchor_lineage and related_lineages:
+            for candidate in related_lineages.values():
+                if isinstance(candidate, dict) and candidate:
+                    anchor_lineage = candidate
+                    break
+        try:
+            material = {
+                "event_type": str(event_type or "").strip().upper(),
+                "payload": event_payload,
+            }
+            idempotency_key = hashlib.sha256(
+                json.dumps(material, sort_keys=True, default=self._json_default).encode("utf-8")
+            ).hexdigest()
+            return bool(
+                store.append_oms_event_payload(
+                    event_type=str(event_type or "").strip().upper() or "RECONCILE_UPDATE",
+                    event_source="governance",
+                    idempotency_key=idempotency_key,
+                    event_ts=str(event_payload.get("ts") or datetime.now(UTC).isoformat()),
+                    policy_hash=(
+                        str(anchor_lineage.get("policy_hash"))
+                        if anchor_lineage.get("policy_hash") not in (None, "")
+                        else None
+                    ),
+                    model_hash=(
+                        str(
+                            anchor_lineage.get("model_hash")
+                            or anchor_lineage.get("model_artifact_hash")
+                        )
+                        if (
+                            anchor_lineage.get("model_hash")
+                            or anchor_lineage.get("model_artifact_hash")
+                        )
+                        not in (None, "")
+                        else None
+                    ),
+                    payload=event_payload,
+                )
+            )
+        except Exception as exc:
+            self.logger.warning(
+                "GOVERNANCE_EVENT_APPEND_FAILED",
+                extra={"event_type": str(event_type), "error": str(exc)},
+            )
+            return False
+
     def record_promotion_approval(
         self,
         *,
@@ -208,11 +420,17 @@ class ModelPromotion:
         ticket_text = str(ticket or "").strip()
         if ticket_text:
             payload["ticket"] = ticket_text
-        return self._append_jsonl_event(
+        output_path = self._append_jsonl_event(
             filename="promotion_approvals.jsonl",
             payload=payload,
             error_event="PROMOTION_APPROVAL_WRITE_FAILED",
         )
+        self._append_governance_audit_event(
+            event_type="GOVERNANCE_APPROVAL_RECORDED",
+            payload=payload,
+            primary_lineage=self._extract_model_lineage(model_id),
+        )
+        return output_path
 
     def _latest_promotion_approval(
         self,
@@ -280,11 +498,20 @@ class ModelPromotion:
         if extra:
             for key, value in extra.items():
                 payload[str(key)] = value
-        return self._append_jsonl_event(
+        output_path = self._append_jsonl_event(
             filename="rollback_audit.jsonl",
             payload=payload,
             error_event="ROLLBACK_AUDIT_WRITE_FAILED",
         )
+        self._append_governance_audit_event(
+            event_type="MODEL_ROLLBACK_RECORDED",
+            payload=payload,
+            primary_lineage=self._extract_model_lineage(from_model_id),
+            related_lineages={
+                "rollback_target": self._extract_model_lineage(to_model_id),
+            },
+        )
+        return output_path
 
     @staticmethod
     def _coerce_returns(values: Any) -> list[float]:
@@ -974,15 +1201,28 @@ class ModelPromotion:
             True if promotion successful
         """
         try:
-            if not force:
-                eligible, details = self.check_promotion_eligibility(model_id)
-                if not eligible:
-                    self.logger.warning(f'Model {model_id} not eligible for promotion: {details}')
-                    return False
             model_info = self.registry.model_index.get(model_id)
             if model_info is None:
                 raise ValueError(f'Model {model_id} not found')
             strategy = model_info['strategy']
+            model_lineage = self._extract_model_lineage(model_id)
+            if not force:
+                eligible, details = self.check_promotion_eligibility(model_id)
+                if not eligible:
+                    self.logger.warning(f'Model {model_id} not eligible for promotion: {details}')
+                    self._append_governance_audit_event(
+                        event_type="MODEL_PROMOTION_BLOCKED",
+                        payload={
+                            "ts": datetime.now(UTC).isoformat(),
+                            "strategy": str(strategy),
+                            "model_id": str(model_id),
+                            "force": bool(force),
+                            "reason": "eligibility_failed",
+                            "details": details,
+                        },
+                        primary_lineage=model_lineage,
+                    )
+                    return False
             approval_payload: dict[str, Any] | None = None
             if (not force) and self._promotion_requires_approval():
                 approval_payload = self._latest_promotion_approval(
@@ -994,6 +1234,17 @@ class ModelPromotion:
                         "PROMOTION_APPROVAL_REQUIRED_MISSING",
                         extra={"strategy": strategy, "model_id": model_id},
                     )
+                    self._append_governance_audit_event(
+                        event_type="MODEL_PROMOTION_BLOCKED",
+                        payload={
+                            "ts": datetime.now(UTC).isoformat(),
+                            "strategy": str(strategy),
+                            "model_id": str(model_id),
+                            "force": bool(force),
+                            "reason": "approval_missing",
+                        },
+                        primary_lineage=model_lineage,
+                    )
                     return False
                 decision_token = str(approval_payload.get("decision") or "").strip().lower()
                 if decision_token != "approved":
@@ -1004,6 +1255,18 @@ class ModelPromotion:
                             "model_id": model_id,
                             "decision": decision_token or "unknown",
                         },
+                    )
+                    self._append_governance_audit_event(
+                        event_type="MODEL_PROMOTION_BLOCKED",
+                        payload={
+                            "ts": datetime.now(UTC).isoformat(),
+                            "strategy": str(strategy),
+                            "model_id": str(model_id),
+                            "force": bool(force),
+                            "reason": "approval_rejected",
+                            "approval": dict(approval_payload),
+                        },
+                        primary_lineage=model_lineage,
                     )
                     return False
                 approved_ts_raw = str(approval_payload.get("ts") or "").strip()
@@ -1037,13 +1300,29 @@ class ModelPromotion:
                                 "max_age_hours": self._promotion_approval_max_age_hours(),
                             },
                         )
+                        self._append_governance_audit_event(
+                            event_type="MODEL_PROMOTION_BLOCKED",
+                            payload={
+                                "ts": datetime.now(UTC).isoformat(),
+                                "strategy": str(strategy),
+                                "model_id": str(model_id),
+                                "force": bool(force),
+                                "reason": "approval_stale",
+                                "approval": dict(approval_payload),
+                                "age_hours": age_hours,
+                                "max_age_hours": self._promotion_approval_max_age_hours(),
+                            },
+                            primary_lineage=model_lineage,
+                        )
                         return False
             current_production = self.registry.get_production_model(strategy)
             promoted_at = datetime.now(UTC).isoformat()
             previous_model_id: str | None = None
+            previous_model_lineage: dict[str, Any] = {}
             if current_production:
                 old_model_id, _ = current_production
                 previous_model_id = old_model_id
+                previous_model_lineage = self._extract_model_lineage(old_model_id)
                 if old_model_id != model_id:
                     self.registry.update_governance_status(
                         old_model_id,
@@ -1098,8 +1377,26 @@ class ModelPromotion:
                         and approval_payload.get("approval_id") not in (None, "")
                         else None
                     ),
+                    "approval": dict(approval_payload) if isinstance(approval_payload, dict) else None,
+                    "lineage": model_lineage,
+                    "previous_model_lineage": previous_model_lineage or None,
                 },
                 error_event="PROMOTION_EVENT_WRITE_FAILED",
+            )
+            self._append_governance_audit_event(
+                event_type="MODEL_PROMOTED",
+                payload={
+                    "ts": promoted_at,
+                    "strategy": str(strategy),
+                    "model_id": str(model_id),
+                    "previous_model_id": (
+                        str(previous_model_id) if previous_model_id not in (None, "") else None
+                    ),
+                    "force": bool(force),
+                    "approval": dict(approval_payload) if isinstance(approval_payload, dict) else None,
+                },
+                primary_lineage=model_lineage,
+                related_lineages={"previous_production": previous_model_lineage},
             )
             self.logger.info(f'Promoted model {model_id} to production for strategy {strategy}')
             return True
@@ -1199,6 +1496,8 @@ class ModelPromotion:
             scorecard_payload["execution_drift_bps_challenger"]
             - scorecard_payload["execution_drift_bps_champion"]
         )
+        challenger_lineage = self._extract_model_lineage(challenger_model_id)
+        champion_lineage = self._extract_model_lineage(champion_model_id)
         try:
             eval_path.parent.mkdir(parents=True, exist_ok=True)
             with eval_path.open("a", encoding="utf-8") as handle:
@@ -1208,6 +1507,18 @@ class ModelPromotion:
                 filename="champion_challenger_scorecards.jsonl",
                 payload=scorecard_payload,
                 error_event="CHAMPION_CHALLENGER_SCORECARD_WRITE_FAILED",
+            )
+            self._append_governance_audit_event(
+                event_type="CHALLENGER_EVALUATION_RECORDED",
+                payload=payload,
+                primary_lineage=challenger_lineage,
+                related_lineages={"champion": champion_lineage},
+            )
+            self._append_governance_audit_event(
+                event_type="CHAMPION_CHALLENGER_SCORECARD_RECORDED",
+                payload=scorecard_payload,
+                primary_lineage=challenger_lineage,
+                related_lineages={"champion": champion_lineage},
             )
             return str(eval_path)
         except OSError as exc:

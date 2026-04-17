@@ -106,6 +106,8 @@ def _block_external_network():
             ip = str(host)
         if ip.startswith("127.") or host in ("::1", "localhost"):
             return orig_connect(self, address)
+        with contextlib.suppress(Exception):
+            self.close()
         raise RuntimeError(
             f"External network blocked in tests (host={host}). "
             f"Set ALLOW_EXTERNAL_NETWORK=1 to override."

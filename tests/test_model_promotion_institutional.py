@@ -2,20 +2,27 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from ai_trading.governance.promotion import ModelPromotion, PromotionCriteria
 from ai_trading.model_registry import ModelRegistry
+from ai_trading.oms.event_store import EventStore
 
 
-def _register_test_model(registry: ModelRegistry, *, strategy: str, marker: str) -> str:
+def _register_test_model(
+    registry: ModelRegistry,
+    *,
+    strategy: str,
+    marker: str,
+    metadata: dict[str, Any] | None = None,
+) -> str:
     return cast(
         str,
         registry.register_model(
             model={"marker": marker},
             strategy=strategy,
             model_type="dict",
-            metadata={"marker": marker},
+            metadata={"marker": marker, **dict(metadata or {})},
         ),
     )
 
@@ -322,3 +329,188 @@ def test_rollback_to_previous_production_writes_audit_log(tmp_path: Path) -> Non
     assert payload["status"] == "rolled_back"
     assert payload["from_model_id"] == challenger
     assert payload["to_model_id"] == champion
+
+
+def test_record_promotion_approval_persists_durable_governance_lineage(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "governance_events.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AI_TRADING_GOVERNANCE_EVENT_STORE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
+
+    registry = ModelRegistry(tmp_path / "registry")
+    promotion = ModelPromotion(model_registry=registry, base_path=str(tmp_path / "governance"))
+    model_id = _register_test_model(
+        registry,
+        strategy="lineage",
+        marker="candidate",
+        metadata={
+            "dataset_hash": "dataset-2026-04-17",
+            "feature_version": "feature-set-v7",
+            "model_artifact_hash": "artifact-hash-abc",
+            "effective_policy_hash": "policy-hash-xyz",
+        },
+    )
+
+    approval_path = promotion.record_promotion_approval(
+        strategy="lineage",
+        model_id=model_id,
+        approver="ops@example.com",
+        decision="approved",
+        note="ready for promotion",
+        ticket="GOV-123",
+    )
+
+    assert approval_path is not None
+    store = EventStore(url=f"sqlite:///{db_path}")
+    rows = store.list_oms_events(
+        event_source="governance",
+        event_type="GOVERNANCE_APPROVAL_RECORDED",
+        limit=50,
+    )
+    store.close()
+
+    assert rows
+    payload = json.loads(rows[-1]["payload_json"])
+    assert payload["strategy"] == "lineage"
+    assert payload["model_id"] == model_id
+    assert payload["approver"] == "ops@example.com"
+    assert payload["ticket"] == "GOV-123"
+    lineage = payload["lineage"]
+    assert lineage["dataset_hash"] == "dataset-2026-04-17"
+    assert lineage["feature_version"] == "feature-set-v7"
+    assert lineage["model_artifact_hash"] == "artifact-hash-abc"
+    assert lineage["policy_hash"] == "policy-hash-xyz"
+
+
+def test_record_challenger_evaluation_persists_durable_scorecard(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "governance_scorecards.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AI_TRADING_GOVERNANCE_EVENT_STORE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
+
+    registry = ModelRegistry(tmp_path / "registry")
+    promotion = ModelPromotion(model_registry=registry, base_path=str(tmp_path / "governance"))
+    champion = _register_test_model(
+        registry,
+        strategy="swing",
+        marker="champion",
+        metadata={"dataset_hash": "champ-ds", "effective_policy_hash": "champ-policy"},
+    )
+    challenger = _register_test_model(
+        registry,
+        strategy="swing",
+        marker="challenger",
+        metadata={"dataset_hash": "chall-ds", "effective_policy_hash": "chall-policy"},
+    )
+
+    eval_path = promotion.record_challenger_evaluation(
+        strategy="swing",
+        champion_model_id=champion,
+        challenger_model_id=challenger,
+        metrics={
+            "challenger_returns": [0.004, 0.003, 0.004, 0.005],
+            "champion_returns": [0.001, 0.001, 0.001, 0.001],
+            "champion_net_expectancy_bps": 4.0,
+            "challenger_net_expectancy_bps": 8.0,
+        },
+    )
+
+    assert eval_path is not None
+    store = EventStore(url=f"sqlite:///{db_path}")
+    rows = store.list_oms_events(
+        event_source="governance",
+        event_type="CHAMPION_CHALLENGER_SCORECARD_RECORDED",
+        limit=50,
+    )
+    store.close()
+
+    assert rows
+    payload = json.loads(rows[-1]["payload_json"])
+    assert payload["challenger_model_id"] == challenger
+    assert payload["champion_model_id"] == champion
+    assert float(payload["delta_net_expectancy_bps"]) == 4.0
+    assert payload["lineage"]["dataset_hash"] == "chall-ds"
+    assert payload["related_lineages"]["champion"]["dataset_hash"] == "champ-ds"
+
+
+def test_promotion_and_rollback_persist_durable_governance_events(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "governance_promotions.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AI_TRADING_GOVERNANCE_EVENT_STORE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_REQUIRE_APPROVAL", "1")
+
+    registry = ModelRegistry(tmp_path / "registry")
+    promotion = ModelPromotion(model_registry=registry, base_path=str(tmp_path / "governance"))
+    strategy = "durable_lineage"
+    champion = _register_test_model(
+        registry,
+        strategy=strategy,
+        marker="champion",
+        metadata={"dataset_hash": "champ-ds", "feature_version": "fv1"},
+    )
+    challenger = _register_test_model(
+        registry,
+        strategy=strategy,
+        marker="challenger",
+        metadata={"dataset_hash": "chall-ds", "feature_version": "fv2"},
+    )
+    registry.update_governance_status(champion, "production")
+    registry.update_governance_status(challenger, "shadow")
+    monkeypatch.setattr(
+        promotion,
+        "check_promotion_eligibility",
+        lambda _model_id: (True, {"eligible": True}),
+    )
+
+    promotion.record_promotion_approval(
+        strategy=strategy,
+        model_id=challenger,
+        approver="ops@example.com",
+        decision="approved",
+        note="promotion review complete",
+    )
+    assert promotion.promote_to_production(challenger, force=False) is True
+    assert promotion.rollback_to_previous_production(strategy=strategy, reason="drawdown") is True
+
+    store = EventStore(url=f"sqlite:///{db_path}")
+    promotion_rows = store.list_oms_events(
+        event_source="governance",
+        event_type="MODEL_PROMOTED",
+        limit=50,
+    )
+    rollback_rows = store.list_oms_events(
+        event_source="governance",
+        event_type="MODEL_ROLLBACK_RECORDED",
+        limit=50,
+    )
+    store.close()
+
+    assert promotion_rows
+    promoted_payload = next(
+        json.loads(row["payload_json"])
+        for row in promotion_rows
+        if json.loads(row["payload_json"]).get("model_id") == challenger
+    )
+    assert promoted_payload["model_id"] == challenger
+    assert promoted_payload["previous_model_id"] == champion
+    assert promoted_payload["lineage"]["dataset_hash"] == "chall-ds"
+    assert promoted_payload["related_lineages"]["previous_production"]["dataset_hash"] == "champ-ds"
+    assert promoted_payload["approval"]["approver"] == "ops@example.com"
+
+    assert rollback_rows
+    rollback_payload = json.loads(rollback_rows[-1]["payload_json"])
+    assert rollback_payload["status"] == "rolled_back"
+    assert rollback_payload["from_model_id"] == challenger
+    assert rollback_payload["to_model_id"] == champion
+    assert rollback_payload["lineage"]["dataset_hash"] == "chall-ds"
+    assert rollback_payload["related_lineages"]["rollback_target"]["dataset_hash"] == "champ-ds"

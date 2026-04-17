@@ -20,4 +20,4 @@ def test_logger_emits_after_setup():
 
 def test_asyncio_task_capture_disabled_for_runtime_stability():
     """Task-name capture is disabled to avoid Python 3.12 startup crashes."""
-    assert logging.logAsyncioTasks is False
+    assert getattr(logging, "logAsyncioTasks", None) is False

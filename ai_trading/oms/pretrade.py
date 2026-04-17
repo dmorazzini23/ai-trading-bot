@@ -38,6 +38,7 @@ class OrderIntent:
     event_type: str | None = None
     execution_drift_bps: float | None = None
     reject_rate_pct: float | None = None
+    session_regime: str | None = None
 
 
 class SlidingWindowRateLimiter:
@@ -317,6 +318,57 @@ def _event_blackout_window_match(intent: OrderIntent) -> str | None:
         if _time_in_window(now_tod, parsed[0], parsed[1]):
             return f"custom_window:{token.strip()}"
     return None
+
+
+def _intent_session_regime(intent: OrderIntent) -> str:
+    explicit = str(intent.session_regime or "").strip().lower()
+    if explicit in {"opening", "midday", "closing", "offhours"}:
+        return explicit
+    ts = intent.bar_ts if intent.bar_ts.tzinfo else intent.bar_ts.replace(tzinfo=UTC)
+    ts_et = ts.astimezone(ZoneInfo("America/New_York"))
+    weekday = int(ts_et.weekday())
+    minute_of_day = int((ts_et.hour * 60) + ts_et.minute)
+    open_minute = (9 * 60) + 30
+    close_minute = 16 * 60
+    if weekday >= 5 or minute_of_day < open_minute or minute_of_day >= close_minute:
+        return "offhours"
+    minutes_from_open = minute_of_day - open_minute
+    minutes_to_close = close_minute - minute_of_day
+    if minutes_from_open < 45:
+        return "opening"
+    if minutes_to_close <= 45:
+        return "closing"
+    return "midday"
+
+
+def _effective_expected_slippage_bps(intent: OrderIntent) -> tuple[float | None, str | None]:
+    if intent.expected_slippage_bps is not None:
+        try:
+            return float(intent.expected_slippage_bps), "explicit"
+        except (TypeError, ValueError):
+            return None, None
+    reference = None
+    if intent.mid is not None:
+        try:
+            reference = float(intent.mid)
+        except (TypeError, ValueError):
+            reference = None
+    if (reference is None or reference <= 0.0) and intent.last_price is not None:
+        try:
+            reference = float(intent.last_price)
+        except (TypeError, ValueError):
+            reference = None
+    if (
+        intent.spread is not None
+        and reference is not None
+        and reference > 0.0
+    ):
+        try:
+            spread_bps = max(0.0, (float(intent.spread) / float(reference)) * 10_000.0)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None, None
+        return spread_bps, "derived_from_spread"
+    return None, None
 
 
 def _ledger_sector_notional(ledger: Any, sector: str | None) -> float | None:
@@ -716,24 +768,59 @@ def validate_pretrade(
         )
 
     bucket_default = {"THIN": 45.0, "NORMAL": 30.0, "THICK": 20.0}
+    symbol_default = {
+        "BA": 8.0,
+        "QCOM": 10.0,
+        "ADBE": 10.0,
+        "ABBV": 12.0,
+        "V": 12.0,
+        "PFE": 10.0,
+        "EXC": 10.0,
+    }
+    symbol_session_default = {
+        "BA:MIDDAY": 6.0,
+        "QCOM:MIDDAY": 8.0,
+        "ADBE:MIDDAY": 8.0,
+        "ABBV:MIDDAY": 10.0,
+        "V:OPENING": 10.0,
+        "ADBE:OPENING": 8.0,
+        "PFE:OPENING": 8.0,
+        "EXC:OPENING": 8.0,
+    }
     bucket_map = _json_env_dict("AI_TRADING_EXEC_SLIPPAGE_CEILING_BPS_BY_BUCKET", bucket_default)
-    symbol_map = _json_env_dict("AI_TRADING_EXEC_SLIPPAGE_CEILING_BPS_BY_SYMBOL", {})
+    symbol_map = _json_env_dict("AI_TRADING_EXEC_SLIPPAGE_CEILING_BPS_BY_SYMBOL", symbol_default)
+    symbol_session_map = _json_env_dict(
+        "AI_TRADING_EXEC_SLIPPAGE_CEILING_BPS_BY_SYMBOL_SESSION",
+        symbol_session_default,
+    )
     liquidity_bucket = str(intent.liquidity_bucket or "NORMAL").upper()
-    symbol_ceiling = symbol_map.get(str(intent.symbol).upper())
+    symbol_token = str(intent.symbol).upper()
+    session_regime = _intent_session_regime(intent)
+    symbol_session_ceiling = symbol_session_map.get(f"{symbol_token}:{session_regime.upper()}")
+    symbol_ceiling = symbol_map.get(symbol_token)
     bucket_ceiling = bucket_map.get(liquidity_bucket, bucket_map.get("NORMAL", 30.0))
-    slippage_ceiling_bps = symbol_ceiling if symbol_ceiling is not None else bucket_ceiling
+    slippage_ceiling_bps = (
+        symbol_session_ceiling
+        if symbol_session_ceiling is not None
+        else symbol_ceiling
+        if symbol_ceiling is not None
+        else bucket_ceiling
+    )
+    effective_expected_slippage_bps, slippage_source = _effective_expected_slippage_bps(intent)
     if (
-        intent.expected_slippage_bps is not None
+        effective_expected_slippage_bps is not None
         and slippage_ceiling_bps is not None
-        and float(intent.expected_slippage_bps) > float(slippage_ceiling_bps)
+        and float(effective_expected_slippage_bps) > float(slippage_ceiling_bps)
     ):
         return (
             False,
             "SLIPPAGE_CEILING_BLOCK",
             {
-                "symbol": str(intent.symbol).upper(),
+                "symbol": symbol_token,
                 "bucket": liquidity_bucket,
-                "expected_slippage_bps": float(intent.expected_slippage_bps),
+                "session_regime": session_regime,
+                "expected_slippage_bps": float(effective_expected_slippage_bps),
+                "expected_slippage_source": slippage_source,
                 "ceiling_bps": float(slippage_ceiling_bps),
             },
         )

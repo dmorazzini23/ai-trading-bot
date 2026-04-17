@@ -87,13 +87,14 @@ def _intent(
     price: float = 100.0,
     **kwargs,
 ) -> OrderIntent:
+    bar_ts = kwargs.pop("bar_ts", datetime.now(UTC))
     return OrderIntent(
         symbol=symbol,
         side=side,
         qty=qty,
         notional=abs(float(qty) * float(price)),
         limit_price=price,
-        bar_ts=datetime.now(UTC),
+        bar_ts=bar_ts,
         client_order_id=f"{symbol.lower()}-{side}-{qty}",
         last_price=price,
         mid=price,
@@ -198,6 +199,31 @@ def test_pretrade_blocks_symbol_slippage_ceiling(monkeypatch: pytest.MonkeyPatch
     assert allowed is False
     assert reason == "SLIPPAGE_CEILING_BLOCK"
     assert details["ceiling_bps"] == pytest.approx(10.0)
+
+
+def test_pretrade_blocks_default_hotspot_symbol_session_from_derived_spread() -> None:
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    ledger = _ExposureLedger()
+    intent = _intent(
+        symbol="BA",
+        side="buy",
+        qty=10,
+        price=100.0,
+        spread=0.09,
+        bar_ts=datetime(2026, 4, 16, 17, 0, tzinfo=UTC),
+        liquidity_bucket="NORMAL",
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "SLIPPAGE_CEILING_BLOCK"
+    assert details["symbol"] == "BA"
+    assert details["session_regime"] == "midday"
+    assert details["expected_slippage_source"] == "derived_from_spread"
+    assert details["expected_slippage_bps"] == pytest.approx(9.0)
+    assert details["ceiling_bps"] == pytest.approx(6.0)
 
 
 def test_pretrade_blocks_participation_adv(monkeypatch: pytest.MonkeyPatch) -> None:

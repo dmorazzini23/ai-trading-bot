@@ -116,6 +116,129 @@ def test_dedupe_gate_root_causes_keeps_first_gate_per_root() -> None:
     ]
 
 
+def test_lookup_execution_learning_bucket_entry_and_penalty() -> None:
+    state = {
+        "global": {},
+        "buckets": {},
+        "symbol_buckets": {
+            "BA:midday:unknown:balanced:buy": {
+                "samples": 4,
+                "mean_slippage_bps": 26.0,
+                "mean_net_edge_bps": -12.0,
+                "mean_realization_ratio": 0.40,
+                "mean_fill_probability": 0.65,
+                "fill_rate": 1.0,
+                "mean_adverse_selection_risk_bps": 3.0,
+            }
+        },
+    }
+
+    entry, key = bot_engine._lookup_execution_learning_bucket_entry(
+        state=state,
+        symbol="BA",
+        session_token="midday",
+        regime_token="unknown",
+        liquidity_role="balanced",
+        side="buy",
+        min_samples=2,
+    )
+
+    assert key == "BA:midday:unknown:balanced:buy"
+    assert entry is not None
+    penalty = bot_engine._compute_execution_learning_rank_penalty(
+        entry=entry,
+        min_samples=2,
+        slippage_floor_bps=4.0,
+        slippage_weight=0.30,
+        negative_edge_weight=0.15,
+        adverse_weight=0.10,
+        realization_floor=0.85,
+        realization_weight_bps=8.0,
+        max_penalty_bps=35.0,
+    )
+
+    assert penalty["samples"] == 4
+    assert penalty["penalty_bps"] > 0.0
+    assert penalty["slippage_penalty_bps"] > 0.0
+    assert penalty["negative_edge_penalty_bps"] > 0.0
+    assert penalty["realization_penalty_bps"] > 0.0
+    assert penalty["mean_fill_probability"] == 0.65
+
+
+def test_load_recent_rejection_concentration_by_symbol_counts_recent_rows(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    decision_path = tmp_path / "runtime" / "decision_records.jsonl"
+    decision_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "bar_ts": "2026-04-17T13:30:00+00:00",
+            "symbol": "BA",
+            "accepted": False,
+            "gates_blocking": [
+                "PRE_EXECUTION_ORDER_CHECKS_FAILED",
+                "SLIPPAGE_CEILING_BLOCK",
+                "PORTFOLIO_LOG_GROWTH",
+            ],
+        },
+        {
+            "bar_ts": "2026-04-17T13:40:00+00:00",
+            "symbol": "BA",
+            "accepted": False,
+            "gates_blocking": ["CAPACITY_THROTTLE_SCALE"],
+        },
+        {
+            "bar_ts": "2026-04-17T13:45:00+00:00",
+            "symbol": "BA",
+            "accepted": True,
+            "gates_blocking": ["PRE_EXECUTION_ORDER_CHECKS_FAILED"],
+        },
+        {
+            "bar_ts": "2026-04-16T01:00:00+00:00",
+            "symbol": "BA",
+            "accepted": False,
+            "gates_blocking": ["PRE_EXECUTION_ORDER_CHECKS_FAILED"],
+        },
+    ]
+    decision_path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_DECISION_LOG_PATH", str(decision_path))
+
+    counts = bot_engine._load_recent_rejection_concentration_by_symbol(
+        now=datetime(2026, 4, 17, 14, 0, tzinfo=UTC),
+        max_records=100,
+        lookback_hours=18.0,
+    )
+
+    assert counts["BA"]["total"] == 2
+    assert counts["BA"]["pre_execution"] == 1
+    assert counts["BA"]["slippage"] == 1
+    assert counts["BA"]["capacity"] == 1
+    assert counts["BA"]["portfolio"] == 1
+
+
+def test_compute_rejection_concentration_penalty_bps_respects_thresholds() -> None:
+    low_penalty = bot_engine._compute_rejection_concentration_penalty_bps(
+        counts={"total": 2, "pre_execution": 1, "slippage": 0, "capacity": 0, "portfolio": 0},
+        min_count=3,
+        scale_bps=0.45,
+        max_penalty_bps=24.0,
+    )
+    assert low_penalty["penalty_bps"] == 0.0
+
+    high_penalty = bot_engine._compute_rejection_concentration_penalty_bps(
+        counts={"total": 12, "pre_execution": 5, "slippage": 2, "capacity": 3, "portfolio": 6},
+        min_count=3,
+        scale_bps=0.45,
+        max_penalty_bps=24.0,
+    )
+    assert high_penalty["weighted_count"] > 0.0
+    assert 0.0 < high_penalty["penalty_bps"] <= 24.0
+
+
 def test_policy_ablation_update_and_rollback_disables_negative_slice(
     tmp_path,
     monkeypatch,

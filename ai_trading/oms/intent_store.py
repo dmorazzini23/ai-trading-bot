@@ -186,6 +186,7 @@ class IntentStore:
         path: str | None = None,
         *,
         url: str | None = None,
+        event_dual_write_enabled: bool | None = None,
     ) -> None:
         if not _SQLALCHEMY_AVAILABLE:
             detail = str(_SQLALCHEMY_IMPORT_ERROR) if _SQLALCHEMY_IMPORT_ERROR else "unknown"
@@ -245,9 +246,12 @@ class IntentStore:
             expire_on_commit=False,
             future=True,
         )
-        self._event_dual_write_enabled = bool(
-            get_env("AI_TRADING_OMS_EVENT_DUAL_WRITE_ENABLED", True, cast=bool)
-        )
+        if event_dual_write_enabled is None:
+            self._event_dual_write_enabled = bool(
+                get_env("AI_TRADING_OMS_EVENT_DUAL_WRITE_ENABLED", False, cast=bool)
+            )
+        else:
+            self._event_dual_write_enabled = bool(event_dual_write_enabled)
         self._event_store: Any | None = None
         self._event_store_init_failed = False
         self._bootstrap()
@@ -322,6 +326,18 @@ class IntentStore:
         if not material:
             material = "intent-store-event"
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _result_rowcount(result: Any) -> int:
+        rowcount = getattr(result, "rowcount", None)
+        return int(rowcount or 0)
+
+    @staticmethod
+    def _result_inserted_primary_key(result: Any) -> list[Any]:
+        inserted_primary_key = getattr(result, "inserted_primary_key", None)
+        if not inserted_primary_key:
+            return []
+        return list(inserted_primary_key)
 
     def _resolve_event_store(self) -> Any | None:
         if not self._event_dual_write_enabled:
@@ -568,7 +584,7 @@ class IntentStore:
         )
         with self._lock, self._session_factory.begin() as session:
             result = session.execute(stmt)
-        rowcount = int(result.rowcount or 0)
+        rowcount = self._result_rowcount(result)
         if rowcount > 0:
             claimed_record = self.get_intent(intent_id)
             submit_attempts = int(getattr(claimed_record, "submit_attempts", 0) or 0)
@@ -616,7 +632,7 @@ class IntentStore:
         )
         with self._lock, self._session_factory.begin() as session:
             result = session.execute(stmt)
-        if int(result.rowcount or 0) > 0:
+        if self._result_rowcount(result) > 0:
             self._append_oms_event(
                 event_type="SUBMIT_ACK",
                 intent_id=intent_id,
@@ -648,7 +664,7 @@ class IntentStore:
         )
         with self._lock, self._session_factory.begin() as session:
             result = session.execute(stmt)
-        if int(result.rowcount or 0) > 0:
+        if self._result_rowcount(result) > 0:
             normalized_error = str(error or "").strip()[:500]
             self._append_oms_event(
                 event_type="SUBMIT_REJECT",
@@ -706,7 +722,7 @@ class IntentStore:
         with self._lock, self._session_factory.begin() as session:
             fill_result = session.execute(fill_stmt)
             session.execute(update_stmt)
-            inserted_primary = list(fill_result.inserted_primary_key or [])
+            inserted_primary = self._result_inserted_primary_key(fill_result)
             if inserted_primary:
                 first = inserted_primary[0]
                 fill_id_text = str(first) if first is not None else None
@@ -765,7 +781,7 @@ class IntentStore:
         )
         with self._lock, self._session_factory.begin() as session:
             result = session.execute(stmt)
-        if int(result.rowcount or 0) > 0:
+        if self._result_rowcount(result) > 0:
             mapped_terminal = terminal_event_type(normalized)
             self._append_oms_event(
                 event_type=mapped_terminal,

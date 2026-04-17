@@ -3,7 +3,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
+from ai_trading.execution.engine import ExecutionAlgorithm
 from ai_trading.execution.engine import ExecutionEngine
+from ai_trading.core.enums import OrderSide, OrderType
 
 
 def test_execute_sliced_retries_with_limit_replace(monkeypatch) -> None:
@@ -160,3 +164,91 @@ def test_execute_sliced_persists_parent_summary_event(monkeypatch) -> None:
     summary = engine.last_parent_execution_summary
     assert summary is not None
     assert summary["persisted_to_event_store"] is True
+
+
+def test_execute_order_routes_vwap_through_parent_child(monkeypatch) -> None:
+    engine = ExecutionEngine()
+    captured: dict[str, Any] = {}
+
+    def _fake_execute_sliced(slices: Any, **kwargs: Any) -> list[Any]:
+        captured["slices"] = list(slices)
+        captured["kwargs"] = dict(kwargs)
+        return [
+            SimpleNamespace(
+                filled_quantity=4,
+                order=SimpleNamespace(average_fill_price=100.4, expected_price=100.0),
+            ),
+            SimpleNamespace(
+                filled_quantity=6,
+                order=SimpleNamespace(average_fill_price=100.3, expected_price=100.0),
+            ),
+        ]
+
+    monkeypatch.setattr(engine, "execute_sliced", _fake_execute_sliced)
+
+    result = engine.execute_order(
+        "AAPL",
+        OrderSide.BUY,
+        10,
+        order_type=OrderType.LIMIT,
+        limit_price=100.0,
+        execution_algorithm=ExecutionAlgorithm.VWAP,
+        vwap_slices=2,
+        vwap_duration_min=20,
+    )
+
+    assert result is not None
+    assert getattr(result, "filled_quantity", 0) == pytest.approx(10.0)
+    assert captured["kwargs"]["parent_order_id"]
+    assert captured["kwargs"]["execution_algorithm"] == ExecutionAlgorithm.VWAP.value
+    assert captured["kwargs"]["schedule_style"] == ExecutionAlgorithm.VWAP.value
+    assert captured["kwargs"]["benchmark_style"] == "vwap"
+    assert captured["kwargs"]["child_order_execution"] is True
+    slices = captured["slices"]
+    assert len(slices) == 2
+    assert sum(int(slice_def["qty"]) for slice_def in slices) == 10
+    assert all(str(slice_def["order_type"]) == "limit" for slice_def in slices)
+
+
+def test_execute_order_routes_implementation_shortfall_through_parent_child(monkeypatch) -> None:
+    engine = ExecutionEngine()
+    captured: dict[str, Any] = {}
+
+    def _fake_execute_sliced(slices: Any, **kwargs: Any) -> list[Any]:
+        captured["slices"] = list(slices)
+        captured["kwargs"] = dict(kwargs)
+        return [
+            SimpleNamespace(
+                filled_quantity=int(slice_def["qty"]),
+                order=SimpleNamespace(average_fill_price=101.0, expected_price=100.0),
+            )
+            for slice_def in captured["slices"]
+        ]
+
+    monkeypatch.setattr(engine, "execute_sliced", _fake_execute_sliced)
+
+    result = engine.execute_order(
+        "MSFT",
+        OrderSide.BUY,
+        12,
+        order_type=OrderType.LIMIT,
+        limit_price=101.0,
+        execution_algorithm=ExecutionAlgorithm.IMPLEMENTATION_SHORTFALL,
+        urgency_level="urgent",
+        is_duration_min=18,
+    )
+
+    assert result is not None
+    assert getattr(result, "filled_quantity", 0) == pytest.approx(12.0)
+    assert captured["kwargs"]["execution_algorithm"] == (
+        ExecutionAlgorithm.IMPLEMENTATION_SHORTFALL.value
+    )
+    assert captured["kwargs"]["schedule_style"] == (
+        ExecutionAlgorithm.IMPLEMENTATION_SHORTFALL.value
+    )
+    assert captured["kwargs"]["benchmark_style"] == "implementation_shortfall"
+    assert captured["kwargs"]["urgency_score"] > 0.75
+    slices = captured["slices"]
+    assert len(slices) >= 3
+    assert sum(int(slice_def["qty"]) for slice_def in slices) == 12
+    assert str(slices[0]["order_type"]) == "market"

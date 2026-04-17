@@ -11,6 +11,48 @@ from ai_trading.oms.event_types import DecisionEvent
 pytest.importorskip("sqlalchemy")
 
 
+def test_event_store_jsonl_fallback_is_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    jsonl_path = tmp_path / "oms_events.jsonl"
+    monkeypatch.delenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", raising=False)
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_PATH", str(jsonl_path))
+
+    store = EventStore(url=f"sqlite:///{tmp_path / 'oms_events_default.db'}")
+    inserted = store.append_oms_event_payload(
+        event_type="INTENT_CREATED",
+        event_source="unit_test",
+        idempotency_key="jsonl-default-off-key",
+        intent_id="intent-default-off-1",
+        payload={"symbol": "AAPL"},
+    )
+
+    assert inserted is True
+    assert jsonl_path.exists() is False
+
+
+def test_event_store_can_opt_into_jsonl_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    jsonl_path = tmp_path / "oms_events_opt_in.jsonl"
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_PATH", str(jsonl_path))
+
+    store = EventStore(url=f"sqlite:///{tmp_path / 'oms_events_opt_in.db'}")
+    inserted = store.append_oms_event_payload(
+        event_type="INTENT_CREATED",
+        event_source="unit_test",
+        idempotency_key="jsonl-opt-in-key",
+        intent_id="intent-opt-in-1",
+        payload={"symbol": "AAPL"},
+    )
+
+    assert inserted is True
+    assert jsonl_path.exists() is True
+
+
 def test_event_store_enforces_source_idempotency_uniqueness(tmp_path: Path) -> None:
     store = EventStore(url=f"sqlite:///{tmp_path / 'oms_events.db'}")
     inserted_first = store.append_oms_event_payload(

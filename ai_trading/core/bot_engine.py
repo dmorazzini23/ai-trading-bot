@@ -37433,6 +37433,304 @@ def _load_counterfactual_learning_state() -> dict[str, Any]:
     }
 
 
+def _execution_learning_state_path() -> Path:
+    configured = str(
+        get_env(
+            "AI_TRADING_EXECUTION_LEARNING_STATE_PATH",
+            "runtime/execution_learning_state.json",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    return resolve_runtime_artifact_path(
+        configured or "runtime/execution_learning_state.json",
+        default_relative="runtime/execution_learning_state.json",
+    )
+
+
+def _load_execution_learning_state() -> dict[str, Any]:
+    path = _execution_learning_state_path()
+    default_payload: dict[str, Any] = {
+        "updated_at": None,
+        "global": {},
+        "buckets": {},
+        "symbol_buckets": {},
+    }
+    if not path.exists():
+        return default_payload
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.debug("EXECUTION_LEARNING_STATE_READ_FAILED", exc_info=True)
+        return default_payload
+    if not isinstance(payload, Mapping):
+        return default_payload
+    global_raw = payload.get("global")
+    buckets_raw = payload.get("buckets")
+    symbol_buckets_raw = payload.get("symbol_buckets")
+    return {
+        "updated_at": payload.get("updated_at"),
+        "global": dict(global_raw) if isinstance(global_raw, Mapping) else {},
+        "buckets": dict(buckets_raw) if isinstance(buckets_raw, Mapping) else {},
+        "symbol_buckets": (
+            dict(symbol_buckets_raw) if isinstance(symbol_buckets_raw, Mapping) else {}
+        ),
+    }
+
+
+def _execution_learning_bucket_keys(
+    *,
+    symbol: str,
+    session_token: str,
+    regime_token: str,
+    liquidity_role: str,
+    side: str,
+) -> tuple[str, ...]:
+    symbol_token = str(symbol or "").strip().upper() or "UNKNOWN"
+    session_value = str(session_token or "").strip().lower() or "offhours"
+    regime_value = str(regime_token or "").strip().lower() or "unknown"
+    liquidity_value = str(liquidity_role or "").strip().lower() or "balanced"
+    side_value = str(side or "").strip().lower() or "unknown"
+    return (
+        f"{symbol_token}:{session_value}:{regime_value}:{liquidity_value}:{side_value}",
+        f"{symbol_token}:{session_value}:{regime_value}:{liquidity_value}",
+        f"{symbol_token}:{session_value}:{regime_value}",
+        f"{symbol_token}:{session_value}",
+        f"{symbol_token}",
+    )
+
+
+def _lookup_execution_learning_bucket_entry(
+    *,
+    state: Mapping[str, Any],
+    symbol: str,
+    session_token: str,
+    regime_token: str,
+    liquidity_role: str,
+    side: str,
+    min_samples: int,
+) -> tuple[dict[str, Any] | None, str | None]:
+    buckets_raw = state.get("buckets")
+    buckets = dict(buckets_raw) if isinstance(buckets_raw, Mapping) else {}
+    symbol_buckets_raw = state.get("symbol_buckets")
+    symbol_buckets = (
+        dict(symbol_buckets_raw) if isinstance(symbol_buckets_raw, Mapping) else {}
+    )
+    for key in _execution_learning_bucket_keys(
+        symbol=symbol,
+        session_token=session_token,
+        regime_token=regime_token,
+        liquidity_role=liquidity_role,
+        side=side,
+    ):
+        candidates = (
+            symbol_buckets.get(str(key)),
+            symbol_buckets.get(str(key).lower()),
+            buckets.get(str(key)),
+            buckets.get(str(key).lower()),
+        )
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                continue
+            samples = int(_safe_float(candidate.get("samples")) or 0.0)
+            if samples < int(min_samples):
+                continue
+            return (dict(candidate), str(key))
+    return (None, None)
+
+
+def _compute_execution_learning_rank_penalty(
+    *,
+    entry: Mapping[str, Any] | None,
+    min_samples: int,
+    slippage_floor_bps: float,
+    slippage_weight: float,
+    negative_edge_weight: float,
+    adverse_weight: float,
+    realization_floor: float,
+    realization_weight_bps: float,
+    max_penalty_bps: float,
+) -> dict[str, Any]:
+    if not isinstance(entry, Mapping):
+        return {
+            "samples": 0,
+            "penalty_bps": 0.0,
+            "blend": 0.0,
+            "slippage_penalty_bps": 0.0,
+            "negative_edge_penalty_bps": 0.0,
+            "adverse_penalty_bps": 0.0,
+            "realization_penalty_bps": 0.0,
+            "mean_fill_probability": None,
+            "fill_rate": None,
+        }
+    samples = max(0, int(_safe_float(entry.get("samples")) or 0.0))
+    blend = min(1.0, float(samples) / float(max(1, 2 * int(min_samples))))
+    mean_slippage = max(0.0, float(_safe_float(entry.get("mean_slippage_bps")) or 0.0))
+    mean_net_edge = float(_safe_float(entry.get("mean_net_edge_bps")) or 0.0)
+    mean_adverse = max(
+        0.0,
+        float(_safe_float(entry.get("mean_adverse_selection_risk_bps")) or 0.0),
+    )
+    realization_ratio = max(
+        0.0,
+        float(_safe_float(entry.get("mean_realization_ratio")) or 1.0),
+    )
+    mean_fill_probability = _safe_float(entry.get("mean_fill_probability"))
+    fill_rate = _safe_float(entry.get("fill_rate"))
+    slippage_penalty = max(0.0, mean_slippage - float(slippage_floor_bps)) * float(
+        slippage_weight
+    )
+    negative_edge_penalty = max(0.0, -mean_net_edge) * float(negative_edge_weight)
+    adverse_penalty = max(0.0, mean_adverse) * float(adverse_weight)
+    realization_penalty = max(
+        0.0,
+        float(realization_floor) - float(realization_ratio),
+    ) * float(realization_weight_bps)
+    penalty = float(blend) * (
+        float(slippage_penalty)
+        + float(negative_edge_penalty)
+        + float(adverse_penalty)
+        + float(realization_penalty)
+    )
+    penalty = max(0.0, min(float(max_penalty_bps), float(penalty)))
+    return {
+        "samples": int(samples),
+        "blend": float(blend),
+        "penalty_bps": float(penalty),
+        "slippage_penalty_bps": float(slippage_penalty * float(blend)),
+        "negative_edge_penalty_bps": float(negative_edge_penalty * float(blend)),
+        "adverse_penalty_bps": float(adverse_penalty * float(blend)),
+        "realization_penalty_bps": float(realization_penalty * float(blend)),
+        "mean_fill_probability": (
+            float(mean_fill_probability) if mean_fill_probability is not None else None
+        ),
+        "fill_rate": float(fill_rate) if fill_rate is not None else None,
+    }
+
+
+def _decision_log_runtime_path() -> Path:
+    configured = str(
+        get_env(
+            "AI_TRADING_DECISION_LOG_PATH",
+            "runtime/decision_records.jsonl",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    return resolve_runtime_artifact_path(
+        configured or "runtime/decision_records.jsonl",
+        default_relative="runtime/decision_records.jsonl",
+    )
+
+
+def _load_recent_rejection_concentration_by_symbol(
+    *,
+    now: datetime,
+    max_records: int,
+    lookback_hours: float,
+) -> dict[str, dict[str, int]]:
+    path = _decision_log_runtime_path()
+    if not path.exists():
+        return {}
+    cutoff = now - timedelta(hours=max(1.0, float(lookback_hours)))
+    counts_by_symbol: dict[str, dict[str, int]] = {}
+    rows = _read_jsonl_records(str(path), max_records=max(100, int(max_records)))
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        accepted_value = row.get("accepted")
+        if bool(accepted_value):
+            continue
+        ts = _parse_iso_timestamp(
+            row.get("bar_ts") or row.get("ts") or row.get("timestamp")
+        )
+        if ts is not None and ts < cutoff:
+            continue
+        symbol = str(row.get("symbol", "") or "").strip().upper()
+        if not symbol:
+            continue
+        counts = counts_by_symbol.setdefault(
+            symbol,
+            {
+                "total": 0,
+                "pre_execution": 0,
+                "slippage": 0,
+                "capacity": 0,
+                "portfolio": 0,
+            },
+        )
+        counts["total"] += 1
+        gates_raw = row.get("gates_blocking") or row.get("gates") or []
+        gates = {
+            str(item or "").strip()
+            for item in gates_raw
+            if str(item or "").strip()
+        }
+        if "PRE_EXECUTION_ORDER_CHECKS_FAILED" in gates:
+            counts["pre_execution"] += 1
+        if "SLIPPAGE_CEILING_BLOCK" in gates:
+            counts["slippage"] += 1
+        if any(
+            gate in gates
+            for gate in (
+                "CAPACITY_THROTTLE_SCALE",
+                "CAPACITY_THROTTLE_BLOCK",
+                "LIQ_REGIME_THIN_SCALE",
+            )
+        ):
+            counts["capacity"] += 1
+        if any(
+            gate in gates
+            for gate in ("PORTFOLIO_LOG_GROWTH", "RANK_DOWNSIDE_OVERLAP_CAP")
+        ):
+            counts["portfolio"] += 1
+    return counts_by_symbol
+
+
+def _compute_rejection_concentration_penalty_bps(
+    *,
+    counts: Mapping[str, Any] | None,
+    min_count: int,
+    scale_bps: float,
+    max_penalty_bps: float,
+) -> dict[str, float]:
+    if not isinstance(counts, Mapping):
+        return {
+            "total": 0.0,
+            "weighted_count": 0.0,
+            "penalty_bps": 0.0,
+            "pre_execution": 0.0,
+            "slippage": 0.0,
+            "capacity": 0.0,
+            "portfolio": 0.0,
+        }
+    total = max(0.0, float(_safe_float(counts.get("total")) or 0.0))
+    pre_execution = max(
+        0.0, float(_safe_float(counts.get("pre_execution")) or 0.0)
+    )
+    slippage = max(0.0, float(_safe_float(counts.get("slippage")) or 0.0))
+    capacity = max(0.0, float(_safe_float(counts.get("capacity")) or 0.0))
+    portfolio = max(0.0, float(_safe_float(counts.get("portfolio")) or 0.0))
+    weighted_count = (
+        (0.25 * float(total))
+        + (1.50 * float(pre_execution))
+        + (2.00 * float(slippage))
+        + (1.00 * float(capacity))
+        + (0.50 * float(portfolio))
+    )
+    effective_excess = max(0.0, float(weighted_count) - float(max(0, int(min_count))))
+    penalty = max(0.0, min(float(max_penalty_bps), effective_excess * float(scale_bps)))
+    return {
+        "total": float(total),
+        "weighted_count": float(weighted_count),
+        "penalty_bps": float(penalty),
+        "pre_execution": float(pre_execution),
+        "slippage": float(slippage),
+        "capacity": float(capacity),
+        "portfolio": float(portfolio),
+    }
+
+
 def _counterfactual_bucket_key_from_observation(observation: Mapping[str, Any]) -> str:
     symbol = str(observation.get("symbol", "") or "").strip().upper() or "UNKNOWN"
     session_bucket = (
@@ -44024,6 +44322,153 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             ),
         ),
     )
+    execution_learning_rank_enabled = bool(
+        get_env(
+            "AI_TRADING_EXECUTION_LEARNING_RANK_PENALTY_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    execution_learning_rank_min_samples = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_EXECUTION_LEARNING_RANK_MIN_SAMPLES",
+                2,
+                cast=int,
+            )
+        ),
+    )
+    execution_learning_rank_slippage_floor_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXECUTION_LEARNING_RANK_SLIPPAGE_FLOOR_BPS",
+                4.0,
+                cast=float,
+            )
+        ),
+    )
+    execution_learning_rank_slippage_weight = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXECUTION_LEARNING_RANK_SLIPPAGE_WEIGHT",
+                0.30,
+                cast=float,
+            )
+        ),
+    )
+    execution_learning_rank_negative_edge_weight = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXECUTION_LEARNING_RANK_NEGATIVE_EDGE_WEIGHT",
+                0.15,
+                cast=float,
+            )
+        ),
+    )
+    execution_learning_rank_adverse_weight = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXECUTION_LEARNING_RANK_ADVERSE_WEIGHT",
+                0.10,
+                cast=float,
+            )
+        ),
+    )
+    execution_learning_rank_realization_floor = max(
+        0.0,
+        min(
+            2.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXECUTION_LEARNING_RANK_REALIZATION_FLOOR",
+                    0.85,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    execution_learning_rank_realization_weight_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXECUTION_LEARNING_RANK_REALIZATION_WEIGHT_BPS",
+                8.0,
+                cast=float,
+            )
+        ),
+    )
+    execution_learning_rank_max_penalty_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXECUTION_LEARNING_RANK_MAX_PENALTY_BPS",
+                35.0,
+                cast=float,
+            )
+        ),
+    )
+    rejection_concentration_rank_enabled = bool(
+        get_env(
+            "AI_TRADING_EXEC_REJECTION_CONCENTRATION_RANK_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    rejection_concentration_window_records = max(
+        100,
+        int(
+            get_env(
+                "AI_TRADING_EXEC_REJECTION_CONCENTRATION_WINDOW_RECORDS",
+                4000,
+                cast=int,
+            )
+        ),
+    )
+    rejection_concentration_lookback_hours = max(
+        1.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_REJECTION_CONCENTRATION_LOOKBACK_HOURS",
+                18.0,
+                cast=float,
+            )
+        ),
+    )
+    rejection_concentration_min_count = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_EXEC_REJECTION_CONCENTRATION_MIN_COUNT",
+                3,
+                cast=int,
+            )
+        ),
+    )
+    rejection_concentration_scale_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_REJECTION_CONCENTRATION_SCALE_BPS",
+                0.45,
+                cast=float,
+            )
+        ),
+    )
+    rejection_concentration_max_penalty_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXEC_REJECTION_CONCENTRATION_MAX_PENALTY_BPS",
+                24.0,
+                cast=float,
+            )
+        ),
+    )
     replay_quality_rank_enabled = bool(
         get_env("AI_TRADING_EXEC_REPLAY_QUALITY_RANK_ENABLED", True, cast=bool)
     )
@@ -44358,6 +44803,20 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     counterfactual_buckets = (
         dict(counterfactual_buckets_raw)
         if isinstance(counterfactual_buckets_raw, Mapping)
+        else {}
+    )
+    execution_learning_state = (
+        _load_execution_learning_state()
+        if execution_learning_rank_enabled
+        else {"global": {}, "buckets": {}, "symbol_buckets": {}}
+    )
+    rejection_concentration_by_symbol = (
+        _load_recent_rejection_concentration_by_symbol(
+            now=now,
+            max_records=int(rejection_concentration_window_records),
+            lookback_hours=float(rejection_concentration_lookback_hours),
+        )
+        if rejection_concentration_rank_enabled
         else {}
     )
     if (
@@ -44883,6 +45342,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     candidate_rank: dict[str, float] = {}
     for symbol, target in targets.items():
         raw_net_edge_total = float(net_edge_raw_by_symbol.get(symbol, 0.0) or 0.0)
+        candidate_side = "buy" if float(target.target_dollars) >= 0.0 else "sell"
         edge_realism_rank_factor = float(
             edge_realism_rank_factor_by_symbol.get(symbol, 1.0)
         )
@@ -44939,6 +45399,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         expected_capture_fill_model_samples = 0
         expected_capture_cost_model_source = "heuristic"
         expected_capture_cost_model_samples = 0
+        execution_learning_penalty_bps = 0.0
+        execution_learning_penalty_context: dict[str, Any] = {}
+        execution_learning_source = "none"
+        rejection_penalty_bps = 0.0
+        rejection_penalty_context: dict[str, Any] = {}
         if expected_capture_rank_enabled:
             liq_features = latest_liquidity.get(symbol)
             spread_bps_value = max(
@@ -44986,6 +45451,63 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         learned_fill_key or "learned"
                     )
                     expected_capture_fill_model_samples = int(learned_fill_samples)
+            if execution_learning_rank_enabled:
+                execution_learning_entry, execution_learning_source_key = (
+                    _lookup_execution_learning_bucket_entry(
+                        state=execution_learning_state,
+                        symbol=str(symbol),
+                        session_token=str(bandit_active_session),
+                        regime_token=str(bandit_active_regime),
+                        liquidity_role=str(assumed_liquidity_role),
+                        side=str(candidate_side),
+                        min_samples=int(execution_learning_rank_min_samples),
+                    )
+                )
+                execution_learning_source = str(
+                    execution_learning_source_key or "none"
+                )
+                execution_learning_penalty_context = dict(
+                    _compute_execution_learning_rank_penalty(
+                        entry=execution_learning_entry,
+                        min_samples=int(execution_learning_rank_min_samples),
+                        slippage_floor_bps=float(
+                            execution_learning_rank_slippage_floor_bps
+                        ),
+                        slippage_weight=float(
+                            execution_learning_rank_slippage_weight
+                        ),
+                        negative_edge_weight=float(
+                            execution_learning_rank_negative_edge_weight
+                        ),
+                        adverse_weight=float(
+                            execution_learning_rank_adverse_weight
+                        ),
+                        realization_floor=float(
+                            execution_learning_rank_realization_floor
+                        ),
+                        realization_weight_bps=float(
+                            execution_learning_rank_realization_weight_bps
+                        ),
+                        max_penalty_bps=float(
+                            execution_learning_rank_max_penalty_bps
+                        ),
+                    )
+                )
+                execution_fill_cap = _safe_float(
+                    execution_learning_penalty_context.get("mean_fill_probability")
+                )
+                if execution_fill_cap is None or execution_fill_cap <= 0.0:
+                    execution_fill_cap = _safe_float(
+                        execution_learning_penalty_context.get("fill_rate")
+                    )
+                if execution_fill_cap is not None and execution_fill_cap > 0.0:
+                    fill_prob_proxy = min(
+                        float(fill_prob_proxy),
+                        max(
+                            float(expected_capture_fill_prob_floor),
+                            min(1.0, float(execution_fill_cap)),
+                        ),
+                    )
             expected_capture_fill_probability = max(
                 float(expected_capture_fill_prob_floor),
                 min(float(expected_capture_fill_prob_cap), float(fill_prob_proxy)),
@@ -45047,6 +45569,25 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     * float(latency_drift_cost_bps)
                 )
             )
+            execution_learning_penalty_bps = float(
+                execution_learning_penalty_context.get("penalty_bps", 0.0) or 0.0
+            )
+            modeled_execution_cost_bps += float(execution_learning_penalty_bps)
+            if rejection_concentration_rank_enabled:
+                rejection_penalty_context = dict(
+                    _compute_rejection_concentration_penalty_bps(
+                        counts=rejection_concentration_by_symbol.get(str(symbol)),
+                        min_count=int(rejection_concentration_min_count),
+                        scale_bps=float(rejection_concentration_scale_bps),
+                        max_penalty_bps=float(
+                            rejection_concentration_max_penalty_bps
+                        ),
+                    )
+                )
+                rejection_penalty_bps = float(
+                    rejection_penalty_context.get("penalty_bps", 0.0) or 0.0
+                )
+                modeled_execution_cost_bps += float(rejection_penalty_bps)
             expected_capture_bps = (
                 float(clipped_net_edge_total) * float(expected_capture_fill_probability)
             ) - float(modeled_execution_cost_bps)
@@ -45085,6 +45626,10 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 or expected_capture_cost_model_source != "heuristic"
             ):
                 target.reasons.append("EXPECTED_CAPTURE_MODEL_LEARNED")
+            if execution_learning_penalty_bps > 0.0:
+                target.reasons.append("EXECUTION_LEARNING_DEWEIGHT")
+            if rejection_penalty_bps > 0.0:
+                target.reasons.append("REJECTION_CONCENTRATION_DEWEIGHT")
             expected_capture_spread_bps = float(spread_bps_value)
             expected_capture_participation = float(participation)
             expected_capture_impact_cost_bps = float(impact_cost_bps)
@@ -45119,6 +45664,19 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     ),
                     "expected_capture_floor_bps": float(
                         expected_capture_floor_bps_effective
+                    ),
+                    "execution_learning_source": str(execution_learning_source),
+                    "execution_learning_penalty_bps": float(
+                        execution_learning_penalty_bps
+                    ),
+                    "execution_learning_penalty_context": dict(
+                        execution_learning_penalty_context
+                    ),
+                    "rejection_concentration_penalty_bps": float(
+                        rejection_penalty_bps
+                    ),
+                    "rejection_concentration_penalty_context": dict(
+                        rejection_penalty_context
                     ),
                 }
             )
@@ -45590,7 +46148,12 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 liquidity_impact_penalty = (
                     (float(spread_bps_for_impact) / 10.0) * float(participation_ratio)
                 )
-            marginal_log_growth_bps = float(clipped_net_edge_total) - (
+            portfolio_log_growth_base_bps = (
+                min(float(clipped_net_edge_total), float(expected_capture_bps))
+                if expected_capture_rank_enabled
+                else float(clipped_net_edge_total)
+            )
+            marginal_log_growth_bps = float(portfolio_log_growth_base_bps) - (
                 float(portfolio_log_growth_variance_penalty) * float(variance) * 10_000.0
             )
             marginal_log_growth_bps -= (
@@ -45621,6 +46184,9 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             target.reasons.append("PORTFOLIO_LOG_GROWTH")
             counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
                 {
+                    "portfolio_log_growth_base_bps": float(
+                        portfolio_log_growth_base_bps
+                    ),
                     "portfolio_log_growth_bps": float(marginal_log_growth_bps),
                     "portfolio_corr_penalty": float(corr_penalty),
                     "portfolio_exposure_penalty": float(exposure_penalty),
@@ -46025,6 +46591,30 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             ),
             "expected_capture_cost_model_min_samples": int(
                 expected_capture_cost_model_min_samples
+            ),
+            "execution_learning_rank_enabled": bool(
+                execution_learning_rank_enabled
+            ),
+            "execution_learning_rank_min_samples": int(
+                execution_learning_rank_min_samples
+            ),
+            "execution_learning_rank_slippage_floor_bps": float(
+                execution_learning_rank_slippage_floor_bps
+            ),
+            "execution_learning_rank_max_penalty_bps": float(
+                execution_learning_rank_max_penalty_bps
+            ),
+            "rejection_concentration_rank_enabled": bool(
+                rejection_concentration_rank_enabled
+            ),
+            "rejection_concentration_lookback_hours": float(
+                rejection_concentration_lookback_hours
+            ),
+            "rejection_concentration_window_records": int(
+                rejection_concentration_window_records
+            ),
+            "rejection_concentration_max_penalty_bps": float(
+                rejection_concentration_max_penalty_bps
             ),
             "expected_capture_fill_prob_floor": float(
                 expected_capture_fill_prob_floor

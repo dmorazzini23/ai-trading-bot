@@ -14,6 +14,8 @@ class ExecutionPolicy(str, Enum):
     PASSIVE_LIMIT = "passive_limit"
     MARKETABLE_LIMIT = "marketable_limit"
     TWAP = "twap"
+    VWAP = "vwap"
+    IMPLEMENTATION_SHORTFALL = "implementation_shortfall"
     POV = "pov"
 
 
@@ -83,6 +85,8 @@ class ExecutionPolicySelector:
         urgency: str | float | int | None,
         data_provenance: str | None = None,
         allow_twap: bool = True,
+        allow_vwap: bool = True,
+        allow_implementation_shortfall: bool = True,
     ) -> PolicyDecision:
         """Select the execution policy with deterministic rationale."""
 
@@ -117,10 +121,37 @@ class ExecutionPolicySelector:
 
         reasons: list[str] = []
 
+        if (
+            allow_implementation_shortfall
+            and urgency_score >= self.high_urgency
+            and participation >= self.pov_participation
+        ):
+            reasons.append("urgent_high_participation_prefers_is")
+            return PolicyDecision(
+                policy=ExecutionPolicy.IMPLEMENTATION_SHORTFALL,
+                reasons=tuple(reasons),
+                participation_rate=participation,
+                urgency_score=urgency_score,
+            )
+
         if allow_twap and participation >= self.twap_participation:
             reasons.append("participation_above_twap_threshold")
             return PolicyDecision(
                 policy=ExecutionPolicy.TWAP,
+                reasons=tuple(reasons),
+                participation_rate=participation,
+                urgency_score=urgency_score,
+            )
+
+        if (
+            allow_vwap
+            and participation >= self.pov_participation
+            and not delayed_feed
+            and spread <= max(self.spread_wide_bps * 1.25, self.spread_tight_bps)
+        ):
+            reasons.append("participation_above_vwap_threshold")
+            return PolicyDecision(
+                policy=ExecutionPolicy.VWAP,
                 reasons=tuple(reasons),
                 participation_rate=participation,
                 urgency_score=urgency_score,
@@ -181,4 +212,3 @@ def select_execution_policy(**kwargs: Any) -> PolicyDecision:
     """Convenience helper using default selector parameters."""
 
     return ExecutionPolicySelector().select_policy(**kwargs)
-

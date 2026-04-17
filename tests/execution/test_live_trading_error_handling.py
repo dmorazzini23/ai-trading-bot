@@ -420,6 +420,39 @@ def test_ttl_replacement_price_uses_tick_quantization(engine_factory, monkeypatc
     assert captured["payload"]["limit_price"] == pytest.approx(100.2)
 
 
+def test_ttl_replacement_uses_tighter_default_slippage(engine_factory):
+    engine = engine_factory()
+    captured: dict[str, Any] = {}
+    engine.order_ttl_seconds = 8
+    engine._cancel_order_alpaca = lambda _order_id: True
+
+    def _capture_submit(payload: dict[str, Any]) -> dict[str, Any]:
+        captured["payload"] = dict(payload)
+        return {
+            "id": "replace-2",
+            "status": "accepted",
+            "qty": payload.get("quantity", 0),
+            "symbol": payload.get("symbol"),
+            "side": payload.get("side"),
+            "client_order_id": payload.get("client_order_id"),
+        }
+
+    engine._submit_order_to_alpaca = _capture_submit
+
+    replacement = engine._replace_limit_order_with_marketable(
+        symbol="AAPL",
+        side="buy",
+        qty=2,
+        existing_order_id="old-order",
+        client_order_id="cid-old",
+        order_data_snapshot={"symbol": "AAPL", "side": "buy", "quantity": 2, "type": "limit"},
+        limit_price=100.0,
+    )
+
+    assert replacement is not None
+    assert captured["payload"]["limit_price"] == pytest.approx(100.04)
+
+
 def test_execute_order_records_skip_outcome_for_duplicate_intent(engine_factory, caplog):
     engine = engine_factory()
     engine._cycle_order_outcomes = []

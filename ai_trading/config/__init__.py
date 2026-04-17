@@ -327,8 +327,8 @@ class ExecutionSettingsSnapshot:
     execution_feed: str = "iex"
     reference_feed: str = "delayed_sip"
     time_in_force: str | None = None
-    order_ttl_seconds: int = 20
-    marketable_limit_slippage_bps: int = 10
+    order_ttl_seconds: int = 8
+    marketable_limit_slippage_bps: int = 4
     max_participation_rate: float | None = None
 
 
@@ -374,9 +374,9 @@ def get_execution_settings() -> ExecutionSettingsSnapshot:
         time_in_force=(
             (str(getattr(cfg, "execution_time_in_force", "")).strip().lower() or None)
         ),
-        order_ttl_seconds=int(getattr(cfg, "order_ttl_seconds", 20)),
+        order_ttl_seconds=int(getattr(cfg, "order_ttl_seconds", 8)),
         marketable_limit_slippage_bps=int(
-            getattr(cfg, "marketable_limit_slippage_bps", 10)
+            getattr(cfg, "marketable_limit_slippage_bps", 4)
         ),
         max_participation_rate=participation_cap,
     )

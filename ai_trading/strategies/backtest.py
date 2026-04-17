@@ -9,7 +9,7 @@ import random
 import statistics
 import hashlib
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ai_trading.config.management import get_env, reload_env
@@ -163,6 +163,26 @@ class BacktestEngine:
                 return str(value)
         return str(value)
 
+    @staticmethod
+    def _resolve_trade_timestamp(
+        raw_value: Any,
+        *,
+        start_date: datetime,
+        bar_index: int,
+    ) -> datetime:
+        if raw_value not in (None, ""):
+            if isinstance(raw_value, datetime):
+                return raw_value if raw_value.tzinfo is not None else raw_value.replace(tzinfo=UTC)
+            text = str(raw_value).strip()
+            if text.endswith("Z"):
+                text = f"{text[:-1]}+00:00"
+            parsed = datetime.fromisoformat(text)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+        base = start_date if start_date.tzinfo is not None else start_date.replace(tzinfo=UTC)
+        return base.astimezone(UTC) + timedelta(seconds=max(int(bar_index), 0))
+
     def _emit_order_submit_lifecycle(
         self,
         *,
@@ -269,7 +289,11 @@ class BacktestEngine:
                         if strategy.validate_signal(signal):
                             position_size = strategy.calculate_position_size(signal, current_capital, 0)
                             if position_size > 0:
-                                trade_timestamp = data_point.get('timestamp', datetime.now(UTC))
+                                trade_timestamp = self._resolve_trade_timestamp(
+                                    data_point.get('timestamp'),
+                                    start_date=start_date,
+                                    bar_index=i,
+                                )
                                 intent_id, base_token = self._emit_order_submit_lifecycle(
                                     symbol=str(signal.symbol),
                                     side=str(signal.side),
@@ -388,7 +412,7 @@ class BacktestEngine:
                 fill_prob = 1.0 - self.calculate_partial_fill_probability(trade_size=position_size, market_depth=market_depth, urgency='medium')
                 if self._rand() > fill_prob:
                     actual_quantity = int(position_size * self._uniform(0.3, 0.9))
-            execution_timestamp = trade_timestamp or datetime.now(UTC)
+            execution_timestamp = trade_timestamp or datetime(1970, 1, 1, tzinfo=UTC)
             if self.microstructure_available and trade_timestamp:
                 latency_cost = self._normal(0, 0.0001)
                 execution_price *= 1 + latency_cost
@@ -406,7 +430,7 @@ class BacktestEngine:
             spread_cost_bps = half_spread * 10000
             slippage_cost_bps = slippage_amount * 10000
             total_cost_bps = total_commission / turnover * 10000 if turnover > 0 else 0
-            return {'symbol': signal.symbol, 'side': signal.side, 'signal_price': signal_price, 'execution_price': execution_price, 'quantity_requested': position_size, 'quantity_filled': actual_quantity, 'fill_ratio': actual_quantity / position_size if position_size > 0 else 0, 'gross_pnl': gross_pnl, 'net_pnl': net_pnl, 'commission_bps': commission_bps_cost, 'commission_flat': commission_flat_cost, 'total_commission': total_commission, 'half_spread': half_spread, 'spread_cost_bps': spread_cost_bps, 'slippage_amount': slippage_amount, 'slippage_cost_bps': slippage_cost_bps, 'total_cost_bps': total_cost_bps, 'turnover': turnover, 'signal_strength': signal.strength, 'timestamp': execution_timestamp.isoformat() if execution_timestamp else datetime.now(UTC).isoformat(), 'latency_ms': self.latency_ms}
+            return {'symbol': signal.symbol, 'side': signal.side, 'signal_price': signal_price, 'execution_price': execution_price, 'quantity_requested': position_size, 'quantity_filled': actual_quantity, 'fill_ratio': actual_quantity / position_size if position_size > 0 else 0, 'gross_pnl': gross_pnl, 'net_pnl': net_pnl, 'commission_bps': commission_bps_cost, 'commission_flat': commission_flat_cost, 'total_commission': total_commission, 'half_spread': half_spread, 'spread_cost_bps': spread_cost_bps, 'slippage_amount': slippage_amount, 'slippage_cost_bps': slippage_cost_bps, 'total_cost_bps': total_cost_bps, 'turnover': turnover, 'signal_strength': signal.strength, 'timestamp': execution_timestamp.isoformat(), 'latency_ms': self.latency_ms}
         except (ValueError, TypeError) as e:
             logger.error(f'Error simulating trade: {e}')
             return {'symbol': signal.symbol, 'side': signal.side, 'net_pnl': 0, 'gross_pnl': 0, 'error': str(e), 'quantity_filled': 0, 'fill_ratio': 0.0, 'total_cost_bps': 0.0}

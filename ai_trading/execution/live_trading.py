@@ -2390,7 +2390,7 @@ class ExecutionEngine:
         self._cycle_account: Any | None = None
         self._cycle_account_fetched: bool = False
         self.order_ttl_seconds = 0
-        self.marketable_limit_slippage_bps = 10
+        self.marketable_limit_slippage_bps = 4
         self.max_participation_rate: float | None = None
         try:
             key, secret = get_alpaca_creds()
@@ -2582,7 +2582,7 @@ class ExecutionEngine:
         if timeout_s is None:
             timeout_s = _config_float("ORDER_TTL_SECONDS", None)
         if timeout_s is None:
-            timeout_s = float(max(getattr(self, "order_ttl_seconds", 0), 20))
+            timeout_s = float(max(getattr(self, "order_ttl_seconds", 0), 8))
         timeout_s = max(8.0, min(float(timeout_s), 3600.0))
 
         max_actions = _config_int_alias(
@@ -2601,10 +2601,10 @@ class ExecutionEngine:
                 "AI_TRADING_PENDING_NEW_REPLACE_WIDEN_BPS",
                 "EXECUTION_PENDING_NEW_REPLACE_WIDEN_BPS",
             ),
-            int(getattr(self, "marketable_limit_slippage_bps", 10)),
+            int(getattr(self, "marketable_limit_slippage_bps", 4)),
         )
         if replace_widen_bps is None:
-            replace_widen_bps = int(getattr(self, "marketable_limit_slippage_bps", 10))
+            replace_widen_bps = int(getattr(self, "marketable_limit_slippage_bps", 4))
         replace_widen_bps = max(0, min(int(replace_widen_bps), 1000))
 
         hard_timeout_s = _config_float(
@@ -15234,6 +15234,130 @@ class ExecutionEngine:
             failure_log="FILL_EVENT_WRITE_FAILED",
         )
 
+    def _begin_durable_order_lifecycle(
+        self,
+        *,
+        client_order_id: str | None,
+        symbol: str,
+        side: str,
+        quantity: int,
+        order_type: str,
+        expected_price: float | None,
+        expected_edge_bps: float | None,
+        closing_position: bool,
+        model_id: str | None,
+        model_version: str | None,
+        config_snapshot_hash: str | None,
+        dataset_hash: str | None,
+        feature_version: str | None,
+        model_artifact_hash: str | None,
+        policy_hash: str | None,
+        decision_trace_id: str | None,
+    ) -> str | None:
+        """Create and claim the canonical durable OMS intent for a live submit."""
+
+        manager = getattr(self, "order_manager", None)
+        begin_fn = getattr(manager, "begin_external_order_lifecycle", None)
+        token = str(client_order_id or "").strip()
+        if not callable(begin_fn) or not token:
+            return None
+        metadata: dict[str, Any] = {
+            "execution_mode": str(getattr(self, "execution_mode", "") or "").strip().lower() or None,
+            "order_type": str(order_type or "").strip().lower() or None,
+            "expected_price": float(expected_price) if expected_price not in (None, "") else None,
+            "closing_position": bool(closing_position),
+            "source": "live_execution_engine",
+        }
+        if model_id is not None:
+            metadata["model_id"] = str(model_id)
+        if model_version is not None:
+            metadata["model_version"] = str(model_version)
+        if config_snapshot_hash is not None:
+            metadata["config_snapshot_hash"] = str(config_snapshot_hash)
+        if dataset_hash is not None:
+            metadata["dataset_hash"] = str(dataset_hash)
+        if feature_version is not None:
+            metadata["feature_version"] = str(feature_version)
+        if model_artifact_hash is not None:
+            metadata["model_artifact_hash"] = str(model_artifact_hash)
+        if policy_hash is not None:
+            metadata["policy_hash"] = str(policy_hash)
+        if decision_trace_id is not None:
+            metadata["decision_trace_id"] = str(decision_trace_id)
+        metadata = {
+            key: value for key, value in metadata.items() if value not in (None, "")
+        }
+        try:
+            created_intent_id = begin_fn(
+                intent_id=token,
+                idempotency_key=token,
+                symbol=symbol,
+                side=side,
+                quantity=float(quantity),
+                decision_ts=datetime.now(UTC).isoformat(),
+                expected_edge_bps=expected_edge_bps,
+                metadata=metadata,
+            )
+            parsed_intent_id = str(created_intent_id or "").strip()
+            return parsed_intent_id or None
+        except Exception:
+            logger.debug("OMS_EXTERNAL_INTENT_CREATE_FAILED", exc_info=True)
+            return None
+
+    def _record_durable_submit_error(
+        self,
+        *,
+        intent_id: str | None,
+        order_id: str | None,
+        client_order_id: str | None,
+        error: str,
+    ) -> None:
+        """Record retryable broker submit failures against the canonical OMS intent."""
+
+        manager = getattr(self, "order_manager", None)
+        record_fn = getattr(manager, "record_external_submit_error", None)
+        if not callable(record_fn):
+            return
+        try:
+            record_fn(
+                intent_id=intent_id,
+                order_id=order_id,
+                client_order_id=client_order_id,
+                error=error,
+            )
+        except Exception:
+            logger.debug("OMS_EXTERNAL_SUBMIT_ERROR_RECORD_FAILED", exc_info=True)
+
+    def _sync_durable_order_state(
+        self,
+        *,
+        intent_id: str | None,
+        order_id: str | None,
+        client_order_id: str | None,
+        status: Any,
+        filled_qty: Any,
+        fill_price: Any,
+        error: str | None = None,
+    ) -> None:
+        """Advance the canonical durable OMS lifecycle from observed broker state."""
+
+        manager = getattr(self, "order_manager", None)
+        sync_fn = getattr(manager, "sync_external_order_state", None)
+        if not callable(sync_fn):
+            return
+        try:
+            sync_fn(
+                intent_id=intent_id,
+                order_id=order_id,
+                client_order_id=client_order_id,
+                status=status,
+                filled_qty=filled_qty,
+                fill_price=fill_price,
+                error=error,
+            )
+        except Exception:
+            logger.debug("OMS_EXTERNAL_STATE_SYNC_FAILED", exc_info=True)
+
     def _record_execution_quality_event(self, payload: Mapping[str, Any]) -> None:
         """Persist execution-quality diagnostics for skipped/failed submits."""
 
@@ -16571,8 +16695,8 @@ class ExecutionEngine:
         self.shadow_mode = bool(settings.shadow_mode)
         self.order_timeout_seconds = int(settings.order_timeout_seconds)
         self.slippage_limit_bps = int(settings.slippage_limit_bps)
-        self.order_ttl_seconds = int(getattr(settings, "order_ttl_seconds", 20))
-        self.marketable_limit_slippage_bps = int(getattr(settings, "marketable_limit_slippage_bps", 10))
+        self.order_ttl_seconds = int(getattr(settings, "order_ttl_seconds", 8))
+        self.marketable_limit_slippage_bps = int(getattr(settings, "marketable_limit_slippage_bps", 4))
         raw_participation_rate = getattr(settings, "max_participation_rate", None)
         try:
             parsed_participation_rate = float(raw_participation_rate)
@@ -20465,12 +20589,23 @@ class ExecutionEngine:
                 side=mapped_side,
             )
             if float(fill_probability) < float(min_fill_probability):
+                current_tif = str(kwargs.get("time_in_force") or "").strip().lower()
+                low_fill_default_action = (
+                    "ioc"
+                    if (
+                        bool(degrade_active)
+                        or bool(using_fallback_price)
+                        or bool(synthetic_quote)
+                        or current_tif in {"ioc", "fok"}
+                    )
+                    else "skip"
+                )
                 action_token = self._normalize_low_fill_probability_action(
                     _runtime_env(
                         "AI_TRADING_EXECUTION_PASSIVE_FILL_LOW_PROB_ACTION",
-                        "ioc",
+                        low_fill_default_action,
                     ),
-                    default="ioc",
+                    default=low_fill_default_action,
                 )
                 if action_token == "market" and manual_limit_requested:
                     action_token = "ioc"
@@ -21152,7 +21287,13 @@ class ExecutionEngine:
                             )
                         logger.info("SLIPPAGE_THRESHOLD_LIMIT_ORDER", extra=extra)
 
-        client_order_id = order_kwargs.get("client_order_id")
+        client_order_id = (
+            str(order_kwargs.get("client_order_id") or "").strip() or None
+        )
+        if client_order_id is None:
+            client_order_id = _stable_order_id(symbol, mapped_side)
+            order_kwargs["client_order_id"] = client_order_id
+        order_data["client_order_id"] = client_order_id
         asset_class_for_log = order_kwargs.get("asset_class")
         price_hint_str = str(price_hint) if price_hint is not None else None
 
@@ -21260,6 +21401,30 @@ class ExecutionEngine:
 
         order_type_submitted = order_type_normalized
         order: Any | None = None
+        durable_intent_id = self._begin_durable_order_lifecycle(
+            client_order_id=client_order_id,
+            symbol=symbol,
+            side=mapped_side,
+            quantity=qty,
+            order_type=order_type_submitted,
+            expected_price=(
+                price_for_limit
+                if price_for_limit is not None
+                else resolved_limit_price
+            ),
+            expected_edge_bps=(
+                float(expected_edge_hint) if expected_edge_hint is not None else None
+            ),
+            closing_position=bool(closing_position),
+            model_id=model_id_hint,
+            model_version=model_version_hint,
+            config_snapshot_hash=config_snapshot_hash_hint,
+            dataset_hash=dataset_hash_hint,
+            feature_version=feature_version_hint,
+            model_artifact_hash=model_artifact_hash_hint,
+            policy_hash=policy_hash_hint,
+            decision_trace_id=decision_trace_id_hint,
+        )
         try:
             if order_type_submitted == "market":
                 order_kwargs.pop("price", None)
@@ -21357,6 +21522,21 @@ class ExecutionEngine:
                         detail=str(md2.get("detail") or "retry_failed"),
                         submit_started_at=submit_started_at,
                     )
+                    self._record_durable_submit_error(
+                        intent_id=durable_intent_id,
+                        order_id=None,
+                        client_order_id=client_order_id,
+                        error=str(md2.get("detail") or "retry_failed"),
+                    )
+                    self._sync_durable_order_state(
+                        intent_id=durable_intent_id,
+                        order_id=None,
+                        client_order_id=client_order_id,
+                        status="rejected",
+                        filled_qty=0.0,
+                        fill_price=None,
+                        error=str(md2.get("detail") or "retry_failed"),
+                    )
                     _release_capacity_reservation("nonretryable_retry_failed")
                     return None
             else:
@@ -21376,6 +21556,21 @@ class ExecutionEngine:
                     order_type=order_type_submitted,
                     detail=str(detail_val or exc),
                     submit_started_at=submit_started_at,
+                )
+                self._record_durable_submit_error(
+                    intent_id=durable_intent_id,
+                    order_id=None,
+                    client_order_id=client_order_id,
+                    error=str(detail_val or exc),
+                )
+                self._sync_durable_order_state(
+                    intent_id=durable_intent_id,
+                    order_id=None,
+                    client_order_id=client_order_id,
+                    status="rejected",
+                    filled_qty=0.0,
+                    fill_price=None,
+                    error=str(detail_val or exc),
                 )
                 _release_capacity_reservation("nonretryable_rejected")
                 return None
@@ -21418,6 +21613,12 @@ class ExecutionEngine:
                 detail=str(exc) or "order execution failed",
                 submit_started_at=submit_started_at,
             )
+            self._record_durable_submit_error(
+                intent_id=durable_intent_id,
+                order_id=None,
+                client_order_id=client_order_id,
+                error=str(exc) or "order execution failed",
+            )
             _release_capacity_reservation("submit_exception")
             return None
         finally:
@@ -21438,6 +21639,12 @@ class ExecutionEngine:
                     order_type=order_type_normalized,
                     context=skip_context,
                     submit_started_at=submit_started_at,
+                )
+                self._record_durable_submit_error(
+                    intent_id=durable_intent_id,
+                    order_id=None,
+                    client_order_id=client_order_id,
+                    error=reason_token,
                 )
                 _release_capacity_reservation("submit_skipped")
                 return None
@@ -21516,6 +21723,14 @@ class ExecutionEngine:
                         f"no_broker_response client_order_id={missing_client_id or 'unknown'}"
                     ),
                     submit_started_at=submit_started_at,
+                )
+                self._record_durable_submit_error(
+                    intent_id=durable_intent_id,
+                    order_id=None,
+                    client_order_id=missing_client_id,
+                    error=(
+                        f"no_broker_response client_order_id={missing_client_id or 'unknown'}"
+                    ),
                 )
                 _release_capacity_reservation("submit_no_result")
                 return None
@@ -21625,6 +21840,24 @@ class ExecutionEngine:
                 fill_payload = dict(payload)
                 fill_payload["filled_qty"] = float(filled_qty or 0)
                 logger.info("ORDER_FILL_CONFIRMED", extra=fill_payload)
+            resolved_fill_price = _safe_float(
+                _extract_value(
+                    final_order,
+                    "filled_avg_price",
+                    "fill_price",
+                    "average_fill_price",
+                )
+            )
+            self._sync_durable_order_state(
+                intent_id=durable_intent_id,
+                order_id=(str(order_id) if order_id not in (None, "") else None),
+                client_order_id=(
+                    str(client_order_id) if client_order_id not in (None, "") else None
+                ),
+                status=decided_status,
+                filled_qty=filled_qty,
+                fill_price=resolved_fill_price,
+            )
 
         _handle_status_transition(status, source="initial")
 
@@ -21668,7 +21901,11 @@ class ExecutionEngine:
                     4,
                     int(max(_ACK_TIMEOUT_SECONDS, 0.1) / max(poll_interval, 0.05)) * 8,
                 )
-                while poll_attempts < max_poll_attempts and time.monotonic() < poll_deadline:
+                min_poll_attempts = 2
+                while poll_attempts < max_poll_attempts and (
+                    poll_attempts < min_poll_attempts
+                    or time.monotonic() < poll_deadline
+                ):
                     refreshed = None
                     try:
                         get_by_id = getattr(client, "get_order_by_id", None)
@@ -21812,6 +22049,12 @@ class ExecutionEngine:
                 detail=str(status),
                 submit_started_at=submit_started_at,
             )
+            self._record_durable_submit_error(
+                intent_id=durable_intent_id,
+                order_id=None,
+                client_order_id=client_order_id,
+                error=str(status),
+            )
             _release_capacity_reservation("invalid_order_response")
             return None
 
@@ -21881,6 +22124,25 @@ class ExecutionEngine:
         if rejection_detail is not None:
             rejection_detail = str(rejection_detail)
         parsed_rejection = _classify_rejection_reason(rejection_detail)
+        if order_status_lower == "rejected":
+            self._sync_durable_order_state(
+                intent_id=durable_intent_id,
+                order_id=(
+                    str(order_id_display) if order_id_display not in (None, "") else None
+                ),
+                client_order_id=(
+                    str(client_order_id) if client_order_id not in (None, "") else None
+                ),
+                status="rejected",
+                filled_qty=filled_qty,
+                fill_price=_extract_value(
+                    final_order,
+                    "filled_avg_price",
+                    "fill_price",
+                    "average_fill_price",
+                ),
+                error=(rejection_detail or parsed_rejection),
+            )
         final_payload = {
             "symbol": symbol,
             "order_id": str(order_id_display) if order_id_display is not None else None,
@@ -30361,7 +30623,7 @@ class ExecutionEngine:
         slippage_value = (
             int(slippage_bps)
             if slippage_bps is not None
-            else int(getattr(self, "marketable_limit_slippage_bps", 10))
+            else int(getattr(self, "marketable_limit_slippage_bps", 4))
         )
         slippage_value = max(0, slippage_value)
         basis = slippage_value / 10000.0
@@ -30677,11 +30939,73 @@ class ExecutionEngine:
         except Exception:
             logger.debug("OMS_INTENT_RECONCILE_FAILED", exc_info=True)
 
+    def _load_pending_candidates_from_durable_intents(
+        self,
+        *,
+        max_candidates: int,
+    ) -> dict[str, dict[str, Any]]:
+        """Hydrate pending-order candidates from canonical OMS intents."""
+
+        manager = getattr(self, "order_manager", None)
+        store = getattr(manager, "_intent_store", None)
+        if store is None:
+            return {}
+        try:
+            intents = list(store.get_open_intents())
+        except Exception:
+            logger.debug("OMS_INTENT_PENDING_BOOTSTRAP_FAILED", exc_info=True)
+            return {}
+
+        candidates: dict[str, dict[str, Any]] = {}
+        for intent in reversed(intents):
+            order_id = str(intent.broker_order_id or intent.intent_id or "").strip()
+            if not order_id or order_id in candidates:
+                continue
+            status = _normalize_status(intent.status) or str(intent.status or "").strip().lower()
+            if not status or status in _TERMINAL_ORDER_STATUSES:
+                continue
+            metadata: dict[str, Any] = {}
+            raw_metadata = getattr(intent, "metadata_json", None)
+            if raw_metadata not in (None, ""):
+                try:
+                    parsed_metadata = json.loads(str(raw_metadata))
+                except Exception:
+                    parsed_metadata = None
+                if isinstance(parsed_metadata, dict):
+                    metadata = parsed_metadata
+            expected_price = _resolve_expected_order_price(metadata)
+            candidate = {
+                "status": status,
+                "symbol": str(intent.symbol or "").strip().upper(),
+                "side": self._normalized_order_side(intent.side),
+                "qty": int(max(float(intent.quantity or 0.0), 0.0)),
+                "order_type": str(metadata.get("order_type") or "").strip().lower() or None,
+                "expected_price": expected_price,
+                "client_order_id": str(intent.intent_id or "").strip() or None,
+                "event_seq": _safe_int(metadata.get("event_seq"), 0),
+                "updated_at": getattr(intent, "updated_at", None),
+                "order_id": order_id,
+            }
+            for key in (
+                "expected_net_edge_bps",
+                "model_id",
+                "model_version",
+                "config_snapshot_hash",
+                "dataset_hash",
+                "feature_version",
+                "model_artifact_hash",
+                "policy_hash",
+                "decision_trace_id",
+            ):
+                if metadata.get(key) not in (None, ""):
+                    candidate[key] = metadata.get(key)
+            candidates[order_id] = candidate
+            if len(candidates) >= max_candidates:
+                break
+        return candidates
+
     def _load_pending_candidates_from_runtime_order_events(self) -> dict[str, dict[str, Any]]:
         """Hydrate pending-order candidates from runtime order event artifacts."""
-
-        if not self._runtime_exec_event_persistence_enabled():
-            return {}
 
         max_scan_lines = _config_int("AI_TRADING_PENDING_RECONCILE_ARTIFACT_SCAN_LINES", 2000)
         if max_scan_lines is None:
@@ -30692,6 +31016,15 @@ class ExecutionEngine:
         if max_candidates is None:
             max_candidates = 50
         max_candidates = max(1, min(int(max_candidates), 500))
+
+        durable_candidates = self._load_pending_candidates_from_durable_intents(
+            max_candidates=max_candidates,
+        )
+        if durable_candidates:
+            return durable_candidates
+
+        if not self._runtime_exec_event_persistence_enabled():
+            return {}
 
         configured_path = str(
             _runtime_env("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")

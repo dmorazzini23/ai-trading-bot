@@ -37,18 +37,30 @@ class ExecutionModel(ABC):
     """Abstract execution model interface."""
 
     @abstractmethod
-    def on_order(self, order: Order) -> list[Fill]:
+    def on_order(
+        self,
+        order: Order,
+        *,
+        timestamp: datetime | None = None,
+    ) -> list[Fill]:
         """Handle an order and return resulting fills."""
 
-    def on_bar(self) -> list[Fill]:
+    def on_bar(self, *, timestamp: datetime | None = None) -> list[Fill]:
         """Advance one bar and release pending fills."""
+        _ = timestamp
         return []
 
 class ImmediateExecutionModel(ExecutionModel):
     """Fill orders immediately at the order price."""
 
-    def on_order(self, order: Order) -> list[Fill]:
-        return [Fill(order=order, fill_price=order.price, timestamp=datetime.now(UTC))]
+    def on_order(
+        self,
+        order: Order,
+        *,
+        timestamp: datetime | None = None,
+    ) -> list[Fill]:
+        fill_ts = timestamp if timestamp is not None else datetime.now(UTC)
+        return [Fill(order=order, fill_price=order.price, timestamp=fill_ts)]
 
 class CommissionModel(ExecutionModel):
 
@@ -56,14 +68,19 @@ class CommissionModel(ExecutionModel):
         self.per_share_fee = per_share_fee
         self.inner = inner
 
-    def on_order(self, order: Order) -> list[Fill]:
-        fills = self.inner.on_order(order)
+    def on_order(
+        self,
+        order: Order,
+        *,
+        timestamp: datetime | None = None,
+    ) -> list[Fill]:
+        fills = self.inner.on_order(order, timestamp=timestamp)
         for f in fills:
             f.commission += self.per_share_fee * order.qty
         return fills
 
-    def on_bar(self) -> list[Fill]:
-        return self.inner.on_bar()
+    def on_bar(self, *, timestamp: datetime | None = None) -> list[Fill]:
+        return self.inner.on_bar(timestamp=timestamp)
 
 class SlippageModel(ExecutionModel):
 
@@ -71,15 +88,20 @@ class SlippageModel(ExecutionModel):
         self.pips = pips
         self.inner = inner
 
-    def on_order(self, order: Order) -> list[Fill]:
-        fills = self.inner.on_order(order)
+    def on_order(
+        self,
+        order: Order,
+        *,
+        timestamp: datetime | None = None,
+    ) -> list[Fill]:
+        fills = self.inner.on_order(order, timestamp=timestamp)
         adj = self.pips if order.side.lower() == 'buy' else -self.pips
         for f in fills:
             f.fill_price += adj
         return fills
 
-    def on_bar(self) -> list[Fill]:
-        return self.inner.on_bar()
+    def on_bar(self, *, timestamp: datetime | None = None) -> list[Fill]:
+        return self.inner.on_bar(timestamp=timestamp)
 
 class LatencyModel(ExecutionModel):
 
@@ -88,17 +110,24 @@ class LatencyModel(ExecutionModel):
         self.inner = inner
         self._queue: list[tuple[int, Fill]] = []
 
-    def on_order(self, order: Order) -> list[Fill]:
-        fills = self.inner.on_order(order)
+    def on_order(
+        self,
+        order: Order,
+        *,
+        timestamp: datetime | None = None,
+    ) -> list[Fill]:
+        fills = self.inner.on_order(order, timestamp=timestamp)
         for f in fills:
             self._queue.append((self.bar_delay, f))
         return []
 
-    def on_bar(self) -> list[Fill]:
+    def on_bar(self, *, timestamp: datetime | None = None) -> list[Fill]:
         ready: list[Fill] = []
         new_q: list[tuple[int, Fill]] = []
         for delay, f in self._queue:
             if delay <= 0:
+                if timestamp is not None:
+                    f.timestamp = timestamp
                 ready.append(f)
             else:
                 new_q.append((delay - 1, f))
@@ -114,11 +143,16 @@ class DefaultExecutionModel(ExecutionModel):
         base = SlippageModel(slippage_pips, base)
         self.model = LatencyModel(latency, base)
 
-    def on_order(self, order: Order) -> list[Fill]:
-        return self.model.on_order(order)
+    def on_order(
+        self,
+        order: Order,
+        *,
+        timestamp: datetime | None = None,
+    ) -> list[Fill]:
+        return self.model.on_order(order, timestamp=timestamp)
 
-    def on_bar(self) -> list[Fill]:
-        return self.model.on_bar()
+    def on_bar(self, *, timestamp: datetime | None = None) -> list[Fill]:
+        return self.model.on_bar(timestamp=timestamp)
 
 @dataclass
 class BacktestResult:
@@ -297,9 +331,9 @@ class BacktestEngine:
                 orders.extend(self._generate_orders_for_bar(sym, close))
             for order in orders:
                 self._emit_order_submit_lifecycle(order, ts)
-                for fill in self.execution_model.on_order(order):
+                for fill in self.execution_model.on_order(order, timestamp=ts):
                     self._apply_fill(fill, ts)
-            for fill in self.execution_model.on_bar():
+            for fill in self.execution_model.on_bar(timestamp=ts):
                 self._apply_fill(fill, ts)
             self._snapshot(ts)
         trades_df = pd.DataFrame([{'symbol': f.order.symbol, 'qty': f.order.qty, 'side': f.order.side, 'price': f.fill_price, 'timestamp': f.timestamp, 'commission': f.commission} for f in self.trades])

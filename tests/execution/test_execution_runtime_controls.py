@@ -3103,7 +3103,7 @@ def test_pending_new_policy_tightens_default_replace_cadence(monkeypatch):
 
     assert cfg["replace_min_interval_s"] == pytest.approx(30.0)
     assert cfg["replace_max_per_cycle"] == 1
-    assert cfg["timeout_s"] >= 20.0
+    assert cfg["timeout_s"] >= 8.0
 
 
 def test_resolve_order_submit_cap_includes_opening_ramp(monkeypatch):

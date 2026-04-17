@@ -1,4 +1,4 @@
-"""Immutable OMS/decision event store with optional JSONL dual-write."""
+"""Immutable OMS/decision event store with opt-in JSONL fallback writes."""
 
 from __future__ import annotations
 
@@ -206,7 +206,7 @@ class EventStore:
         self._lock = RLock()
         self._owns_engine = engine is None
         self._jsonl_enabled = bool(
-            get_env("AI_TRADING_OMS_EVENT_JSONL_ENABLED", True, cast=bool)
+            get_env("AI_TRADING_OMS_EVENT_JSONL_ENABLED", False, cast=bool)
         )
         self._jsonl_path = Path(
             str(
@@ -806,8 +806,15 @@ class EventStore:
         )
         return db_persisted
 
-    def list_oms_events(self, *, intent_id: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
-        """List OMS events for intent or globally ordered by event id."""
+    def list_oms_events(
+        self,
+        *,
+        intent_id: str | None = None,
+        event_source: str | None = None,
+        event_type: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """List OMS events optionally filtered by intent, source, and type."""
 
         assert _OMS_EVENTS_TABLE is not None
         stmt = select(_OMS_EVENTS_TABLE).order_by(_OMS_EVENTS_TABLE.c.event_id.asc()).limit(
@@ -815,6 +822,12 @@ class EventStore:
         )
         if intent_id not in (None, ""):
             stmt = stmt.where(_OMS_EVENTS_TABLE.c.intent_id == str(intent_id))
+        if event_source not in (None, ""):
+            stmt = stmt.where(_OMS_EVENTS_TABLE.c.event_source == str(event_source).strip())
+        if event_type not in (None, ""):
+            stmt = stmt.where(
+                _OMS_EVENTS_TABLE.c.event_type == str(event_type).strip().upper()
+            )
         with self._session_factory() as session:
             rows = session.execute(stmt).mappings().all()
         return [dict(row) for row in rows]

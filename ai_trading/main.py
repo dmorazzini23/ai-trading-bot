@@ -2865,7 +2865,9 @@ def run_flask_app(
     attempt_port = port
     attempts = 0
 
-    def _signal_ready_when_serving(serving_port: int) -> threading.Event | None:
+    def _signal_ready_when_serving(
+        serving_port: int,
+    ) -> tuple[threading.Event, threading.Thread] | None:
         if ready_signal is None:
             return None
         stop_probe = threading.Event()
@@ -2883,12 +2885,13 @@ def run_flask_app(
                     return
                 time.sleep(0.1)
 
-        threading.Thread(
+        probe_thread = threading.Thread(
             target=_probe_until_ready,
             name=f"api-ready-probe-{serving_port}",
             daemon=True,
-        ).start()
-        return stop_probe
+        )
+        probe_thread.start()
+        return stop_probe, probe_thread
 
     while attempts < max_attempts:
         attempts += 1
@@ -2906,7 +2909,7 @@ def run_flask_app(
             logger.error("API_PORT_OCCUPIED", extra={"port": attempt_port, "pid": pid})
             raise PortInUseError(attempt_port, pid)
 
-        probe_stop = _signal_ready_when_serving(attempt_port)
+        probe_probe = _signal_ready_when_serving(attempt_port)
         try:
             logger.info("Starting Flask app on 0.0.0.0:%s", attempt_port)
             application.run(host="0.0.0.0", port=attempt_port, debug=debug, **run_kwargs)
@@ -2920,8 +2923,10 @@ def run_flask_app(
                 continue
             raise
         finally:
-            if probe_stop is not None:
+            if probe_probe is not None:
+                probe_stop, probe_thread = probe_probe
                 probe_stop.set()
+                probe_thread.join(timeout=1.0)
 
     raise PortInUseError(attempt_port)
 
@@ -2947,8 +2952,14 @@ def _probe_local_api_health(port: int) -> bool:
         logger.debug("LOCAL_API_HEALTH_PROBE_REQUEST_FAILED", extra={"port": port}, exc_info=True)
         return False
     finally:
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                logger.debug("LOCAL_API_PROBE_RESPONSE_CLOSE_FAILED", exc_info=True)
         try:
-            conn.close()
+            if conn is not None:
+                conn.close()
         except Exception:
             logger.debug("LOCAL_API_PROBE_CONN_CLOSE_FAILED", exc_info=True)
 

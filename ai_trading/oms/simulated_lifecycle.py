@@ -61,6 +61,7 @@ class SimulatedLifecycleDriver:
             self._store = IntentStore(
                 path=self._intent_store_path,
                 url=self._database_url,
+                event_dual_write_enabled=self._enabled,
             )
         except Exception as exc:
             self._store_init_failed = True
@@ -248,4 +249,3 @@ class SimulatedLifecycleDriver:
 
 
 __all__ = ["SimulatedIntentRef", "SimulatedLifecycleDriver"]
-

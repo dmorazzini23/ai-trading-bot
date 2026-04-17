@@ -9,6 +9,7 @@ from __future__ import annotations
 from ai_trading.logging import get_logger
 import builtins
 import hashlib
+import json
 import math
 import threading
 import time
@@ -38,6 +39,7 @@ from ai_trading.metrics import CollectorRegistry, get_counter, get_registry, reg
 from ai_trading.config.management import get_env, is_test_runtime
 from ai_trading.oms.lifecycle import resolve_terminal_intent_status
 from ai_trading.oms.intent_store import IntentStore
+from ai_trading.oms.statuses import TERMINAL_INTENT_STATUSES, normalize_intent_status
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.utils.time import monotonic_time, safe_utcnow
 from ai_trading.meta_learning.persistence import record_trade_fill
@@ -128,6 +130,7 @@ KNOWN_EXECUTE_ORDER_KWARGS: frozenset[str] = frozenset(
         "allow_partial",
         "asset_class",
         "client_order_id",
+        "child_order_execution",
         "closing_position",
         "execution_algorithm",
         "expected_edge_bps",
@@ -153,6 +156,7 @@ KNOWN_EXECUTE_ORDER_KWARGS: frozenset[str] = frozenset(
         "model_artifact_hash",
         "policy_hash",
         "decision_trace_id",
+        "duration_minutes",
         "min_quantity",
         "notional",
         "notes",
@@ -184,10 +188,22 @@ KNOWN_EXECUTE_ORDER_KWARGS: frozenset[str] = frozenset(
         "time_in_force",
         "trail_percent",
         "trail_price",
+        "twap_duration_min",
+        "twap_slices",
         "urgency_level",
+        "urgency",
         "user_data",
         "volume",
         "volume_1d",
+        "volume_profile",
+        "vwap_duration_min",
+        "vwap_slices",
+        "vwap_volume_profile",
+        "is_duration_min",
+        "slice_attempt",
+        "slice_count",
+        "slice_sequence",
+        "use_twap",
     }
 )
 
@@ -638,10 +654,12 @@ class OrderManager:
             )
             raise RuntimeError(message)
         path = get_env("AI_TRADING_OMS_INTENT_STORE_PATH", "runtime/oms_intents.db")
+        event_dual_write_enabled = _env_bool("AI_TRADING_OMS_EVENT_DUAL_WRITE_ENABLED", True)
         try:
             self._intent_store = IntentStore(
                 path=str(path),
                 url=(database_url or None),
+                event_dual_write_enabled=event_dual_write_enabled,
             )
             resolved_url = str(getattr(self._intent_store, "database_url", "") or "")
             parsed = urlparse(resolved_url) if resolved_url else None
@@ -677,6 +695,203 @@ class OrderManager:
 
         self._intent_store = intent_store
         self._idempotency_cache = None
+
+    @staticmethod
+    def _normalize_broker_status_token(status: Any) -> str:
+        normalized_status = ExecutionResult._normalize_status(status)
+        token = (
+            str(getattr(normalized_status, "value", normalized_status)).strip().upper()
+            if normalized_status is not None
+            else ""
+        )
+        if not token:
+            token = str(status or "").strip().upper()
+        return token
+
+    def _resolve_external_intent_id(
+        self,
+        *,
+        intent_id: str | None = None,
+        order_id: str | None = None,
+        client_order_id: str | None = None,
+    ) -> str | None:
+        for candidate in (order_id, client_order_id, intent_id):
+            token = str(candidate or "").strip()
+            if not token:
+                continue
+            mapped = self._intent_by_order_id.get(token)
+            if mapped:
+                return str(mapped)
+        for candidate in (intent_id, client_order_id, order_id):
+            token = str(candidate or "").strip()
+            if token:
+                return token
+        return None
+
+    def begin_external_order_lifecycle(
+        self,
+        *,
+        intent_id: str,
+        idempotency_key: str,
+        symbol: str,
+        side: str,
+        quantity: float,
+        decision_ts: str | None = None,
+        strategy_id: str | None = None,
+        expected_edge_bps: float | None = None,
+        regime: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        stale_after_seconds: int = 90,
+    ) -> str | None:
+        """Create and claim a durable intent for externally submitted broker orders."""
+
+        store = self._intent_store
+        if store is None:
+            return None
+        resolved_intent_id = str(intent_id or "").strip()
+        resolved_key = str(idempotency_key or "").strip()
+        if not resolved_intent_id or not resolved_key:
+            return None
+        record, _created = store.create_intent(
+            intent_id=resolved_intent_id,
+            idempotency_key=resolved_key,
+            symbol=str(symbol or "").upper(),
+            side=str(side or "").lower(),
+            quantity=float(quantity),
+            decision_ts=decision_ts,
+            strategy_id=str(strategy_id) if strategy_id not in (None, "") else None,
+            expected_edge_bps=expected_edge_bps,
+            regime=str(regime) if regime not in (None, "") else None,
+            metadata=dict(metadata or {}),
+        )
+        self._intent_by_order_id[resolved_intent_id] = record.intent_id
+        self._intent_reported_fill_qty.setdefault(record.intent_id, 0.0)
+        try:
+            store.claim_for_submit(
+                record.intent_id,
+                stale_after_seconds=max(1, int(stale_after_seconds)),
+            )
+        except Exception:
+            logger.debug("OMS_EXTERNAL_INTENT_CLAIM_FAILED", exc_info=True)
+        return str(record.intent_id)
+
+    def record_external_submit_error(
+        self,
+        *,
+        intent_id: str | None = None,
+        order_id: str | None = None,
+        client_order_id: str | None = None,
+        error: str,
+    ) -> str | None:
+        """Record a retryable external submit failure against the durable intent."""
+
+        store = self._intent_store
+        if store is None:
+            return None
+        resolved_intent_id = self._resolve_external_intent_id(
+            intent_id=intent_id,
+            order_id=order_id,
+            client_order_id=client_order_id,
+        )
+        if resolved_intent_id is None:
+            return None
+        current = store.get_intent(resolved_intent_id)
+        if current is None:
+            return None
+        if normalize_intent_status(current.status) in TERMINAL_INTENT_STATUSES:
+            return resolved_intent_id
+        store.record_submit_error(resolved_intent_id, str(error or "submit_error"))
+        return resolved_intent_id
+
+    def sync_external_order_state(
+        self,
+        *,
+        intent_id: str | None = None,
+        order_id: str | None = None,
+        client_order_id: str | None = None,
+        status: Any = None,
+        filled_qty: Any = None,
+        fill_price: Any = None,
+        error: str | None = None,
+    ) -> str | None:
+        """Project external broker state transitions through the canonical intent lifecycle."""
+
+        store = self._intent_store
+        if store is None:
+            return None
+        resolved_intent_id = self._resolve_external_intent_id(
+            intent_id=intent_id,
+            order_id=order_id,
+            client_order_id=client_order_id,
+        )
+        if resolved_intent_id is None:
+            return None
+        current = store.get_intent(resolved_intent_id)
+        if current is None:
+            return None
+
+        order_token = str(order_id or "").strip() or None
+        client_token = str(client_order_id or "").strip() or None
+        if order_token is not None:
+            self._intent_by_order_id[order_token] = resolved_intent_id
+        if client_token is not None:
+            self._intent_by_order_id[client_token] = resolved_intent_id
+
+        if (
+            order_token is not None
+            and not str(getattr(current, "broker_order_id", "") or "").strip()
+        ):
+            store.mark_submitted(resolved_intent_id, order_token)
+            current = store.get_intent(resolved_intent_id) or current
+
+        filled_total: float | None
+        try:
+            filled_total = float(filled_qty) if filled_qty not in (None, "") else None
+        except (TypeError, ValueError):
+            filled_total = None
+        reported_qty = float(self._intent_reported_fill_qty.get(resolved_intent_id, 0.0) or 0.0)
+        if filled_total is not None and filled_total > reported_qty:
+            fill_delta = max(0.0, filled_total - reported_qty)
+            parsed_fill_price: float | None
+            try:
+                parsed_fill_price = (
+                    float(fill_price) if fill_price not in (None, "") else None
+                )
+            except (TypeError, ValueError):
+                parsed_fill_price = None
+            store.record_fill(
+                resolved_intent_id,
+                fill_qty=fill_delta,
+                fill_price=parsed_fill_price,
+            )
+            self._intent_reported_fill_qty[resolved_intent_id] = reported_qty + fill_delta
+            current = store.get_intent(resolved_intent_id) or current
+
+        if normalize_intent_status(current.status) in TERMINAL_INTENT_STATUSES:
+            return resolved_intent_id
+
+        status_token = self._normalize_broker_status_token(status)
+        terminal_status = resolve_terminal_intent_status(
+            status=status_token,
+            status_is_terminal=(status_token in TERMINAL_INTENT_STATUSES),
+        )
+        if terminal_status is None:
+            return resolved_intent_id
+
+        error_text = str(error or "").strip() or None
+        if terminal_status == "REJECTED" and error_text:
+            store.record_submit_error(resolved_intent_id, error_text)
+        store.close_intent(
+            resolved_intent_id,
+            final_status=terminal_status,
+            last_error=error_text,
+        )
+        for candidate in (resolved_intent_id, order_token, client_token):
+            token = str(candidate or "").strip()
+            if token:
+                self._intent_by_order_id.pop(token, None)
+        self._intent_reported_fill_qty.pop(resolved_intent_id, None)
+        return resolved_intent_id
 
     @staticmethod
     def _extract_payload_value(payload: Any, *keys: str) -> Any:
@@ -1674,6 +1889,11 @@ class ExecutionEngine:
             urgency=urgency,
             data_provenance=provenance,
             allow_twap=_env_bool("AI_TRADING_TWAP_ENABLED", True),
+            allow_vwap=_env_bool("AI_TRADING_VWAP_ENABLED", True),
+            allow_implementation_shortfall=_env_bool(
+                "AI_TRADING_IMPLEMENTATION_SHORTFALL_ENABLED",
+                True,
+            ),
         )
 
         routing: dict[str, Any] = {
@@ -1692,6 +1912,10 @@ class ExecutionEngine:
         if decision.policy == ExecutionPolicy.TWAP:
             routing["use_twap"] = True
             routing["execution_algorithm"] = ExecutionAlgorithm.TWAP
+        elif decision.policy == ExecutionPolicy.VWAP:
+            routing["execution_algorithm"] = ExecutionAlgorithm.VWAP
+        elif decision.policy == ExecutionPolicy.IMPLEMENTATION_SHORTFALL:
+            routing["execution_algorithm"] = ExecutionAlgorithm.IMPLEMENTATION_SHORTFALL
         elif decision.policy == ExecutionPolicy.POV:
             routing["execution_algorithm"] = ExecutionAlgorithm.IMPLEMENTATION_SHORTFALL
         elif decision.policy == ExecutionPolicy.PASSIVE_LIMIT:
@@ -1699,6 +1923,255 @@ class ExecutionEngine:
         else:
             routing["execution_algorithm"] = ExecutionAlgorithm.MARKET
         return routing
+
+    @staticmethod
+    def _normalize_execution_algorithm(
+        value: Any,
+    ) -> ExecutionAlgorithm | None:
+        """Return normalized execution algorithm enum when possible."""
+
+        if isinstance(value, ExecutionAlgorithm):
+            return value
+        token = str(getattr(value, "value", value) or "").strip().lower()
+        if not token:
+            return None
+        aliases = {
+            "market": ExecutionAlgorithm.MARKET,
+            "limit": ExecutionAlgorithm.LIMIT,
+            "twap": ExecutionAlgorithm.TWAP,
+            "vwap": ExecutionAlgorithm.VWAP,
+            "is": ExecutionAlgorithm.IMPLEMENTATION_SHORTFALL,
+            "implementation_shortfall": ExecutionAlgorithm.IMPLEMENTATION_SHORTFALL,
+            "implementation-shortfall": ExecutionAlgorithm.IMPLEMENTATION_SHORTFALL,
+            "pov": ExecutionAlgorithm.IMPLEMENTATION_SHORTFALL,
+            "iceberg": ExecutionAlgorithm.ICEBERG,
+        }
+        return aliases.get(token)
+
+    @staticmethod
+    def _normalize_execution_urgency(value: Any) -> float:
+        """Normalize urgency token/number to 0-1 range."""
+
+        if value is None:
+            return 0.5
+        if isinstance(value, str):
+            token = value.strip().lower()
+            mapping = {
+                "low": 0.25,
+                "normal": 0.5,
+                "medium": 0.5,
+                "high": 0.8,
+                "urgent": 0.95,
+            }
+            if token in mapping:
+                return mapping[token]
+        try:
+            raw = float(value)
+        except (TypeError, ValueError):
+            return 0.5
+        if not math.isfinite(raw):
+            return 0.5
+        return max(0.0, min(1.0, raw))
+
+    @staticmethod
+    def _allocate_weighted_quantities(
+        total_quantity: int,
+        weights: Iterable[Any],
+    ) -> list[int]:
+        """Allocate integer slice quantities from positive weights."""
+
+        parsed_weights: list[float] = []
+        for raw in weights:
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(value) or value <= 0.0:
+                continue
+            parsed_weights.append(value)
+        if not parsed_weights:
+            return [int(max(total_quantity, 0))]
+
+        weight_sum = float(sum(parsed_weights))
+        raw_allocations = [
+            (float(total_quantity) * weight / weight_sum)
+            for weight in parsed_weights
+        ]
+        quantities = [int(math.floor(value)) for value in raw_allocations]
+        remainder = int(max(total_quantity - sum(quantities), 0))
+        ranked_remainders = sorted(
+            (
+                (raw_allocations[idx] - quantities[idx], idx)
+                for idx in range(len(quantities))
+            ),
+            key=lambda item: (-item[0], item[1]),
+        )
+        for _fraction, idx in ranked_remainders[:remainder]:
+            quantities[idx] += 1
+        return [qty for qty in quantities if qty > 0]
+
+    @staticmethod
+    def _default_vwap_profile(count: int) -> list[float]:
+        """Return a simple U-shaped participation profile."""
+
+        base_profile = [0.08, 0.11, 0.14, 0.17, 0.17, 0.14, 0.11, 0.08]
+        if count <= 0:
+            return [1.0]
+        if count == len(base_profile):
+            return list(base_profile)
+        if count < len(base_profile):
+            return list(base_profile[:count])
+        profile = list(base_profile)
+        while len(profile) < count:
+            profile.append(base_profile[-1])
+        return profile[:count]
+
+    def _build_algorithmic_slices(
+        self,
+        *,
+        algorithm: ExecutionAlgorithm,
+        total_quantity: int,
+        side: OrderSide,
+        order_type: OrderType,
+        kwargs: Mapping[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Build parent/child slice definitions for algorithmic execution."""
+
+        resolved_order_type = order_type
+        if not isinstance(resolved_order_type, OrderType):
+            try:
+                resolved_order_type = OrderType(str(order_type).lower())
+            except Exception:
+                resolved_order_type = OrderType.MARKET
+
+        duration_raw = (
+            kwargs.get("duration_minutes")
+            or kwargs.get("twap_duration_min")
+            or kwargs.get("vwap_duration_min")
+            or kwargs.get("is_duration_min")
+            or 30
+        )
+        try:
+            duration_minutes = max(1, int(duration_raw))
+        except (TypeError, ValueError):
+            duration_minutes = 30
+
+        limit_price = kwargs.get("limit_price")
+        try:
+            parsed_limit_price = (
+                float(limit_price) if limit_price not in (None, "") else None
+            )
+        except (TypeError, ValueError):
+            parsed_limit_price = None
+
+        route_meta: dict[str, Any] = {
+            "schedule_style": str(algorithm.value),
+            "benchmark_style": "arrival",
+        }
+        slice_defs: list[dict[str, Any]] = []
+
+        if algorithm == ExecutionAlgorithm.TWAP:
+            requested_slices = kwargs.get("twap_slices")
+            try:
+                slice_count = int(requested_slices) if requested_slices not in (None, "") else 0
+            except (TypeError, ValueError):
+                slice_count = 0
+            if slice_count <= 0:
+                slice_count = max(1, min(8, duration_minutes // 5))
+            quantities = self._allocate_weighted_quantities(
+                int(total_quantity),
+                [1.0] * slice_count,
+            )
+            route_meta["benchmark_style"] = "time"
+            route_meta["slice_interval_seconds"] = max(
+                0.0,
+                float(duration_minutes * 60.0) / float(max(len(quantities), 1)),
+            )
+            for qty in quantities:
+                slice_defs.append({"qty": int(qty), "order_type": resolved_order_type.value})
+        elif algorithm == ExecutionAlgorithm.VWAP:
+            requested_profile = kwargs.get("volume_profile") or kwargs.get("vwap_volume_profile")
+            parsed_profile: list[float] = []
+            if isinstance(requested_profile, Iterable) and not isinstance(
+                requested_profile,
+                (str, bytes, Mapping),
+            ):
+                for item in requested_profile:
+                    try:
+                        value = float(item)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(value) and value > 0.0:
+                        parsed_profile.append(value)
+            requested_slices = kwargs.get("vwap_slices")
+            try:
+                slice_count = int(requested_slices) if requested_slices not in (None, "") else 0
+            except (TypeError, ValueError):
+                slice_count = 0
+            if parsed_profile:
+                profile = parsed_profile
+            else:
+                if slice_count <= 0:
+                    slice_count = max(4, min(8, duration_minutes // 8))
+                profile = self._default_vwap_profile(slice_count)
+            quantities = self._allocate_weighted_quantities(
+                int(total_quantity),
+                profile,
+            )
+            route_meta["benchmark_style"] = "vwap"
+            route_meta["volume_profile_name"] = "custom" if parsed_profile else "u_shape"
+            route_meta["slice_interval_seconds"] = max(
+                0.0,
+                float(duration_minutes * 60.0) / float(max(len(quantities), 1)),
+            )
+            for qty in quantities:
+                slice_payload: dict[str, Any] = {
+                    "qty": int(qty),
+                    "order_type": OrderType.LIMIT.value,
+                }
+                if parsed_limit_price is not None:
+                    slice_payload["limit_price"] = parsed_limit_price
+                slice_defs.append(slice_payload)
+        elif algorithm == ExecutionAlgorithm.IMPLEMENTATION_SHORTFALL:
+            urgency_score = self._normalize_execution_urgency(
+                kwargs.get("urgency_level") or kwargs.get("urgency")
+            )
+            slice_count = max(3, min(8, 3 + int(round(urgency_score * 4.0))))
+            weights = [
+                1.0 + (urgency_score * float(slice_count - idx))
+                for idx in range(slice_count)
+            ]
+            quantities = self._allocate_weighted_quantities(
+                int(total_quantity),
+                weights,
+            )
+            aggressive_slices = max(
+                1,
+                min(len(quantities), int(math.ceil(len(quantities) * max(urgency_score, 0.34) * 0.5))),
+            )
+            route_meta["benchmark_style"] = "implementation_shortfall"
+            route_meta["urgency_score"] = float(urgency_score)
+            route_meta["slice_interval_seconds"] = max(
+                0.0,
+                float(duration_minutes * 60.0) / float(max(len(quantities), 1)),
+            )
+            for idx, qty in enumerate(quantities):
+                aggressive = idx < aggressive_slices and urgency_score >= 0.75
+                slice_payload = {
+                    "qty": int(qty),
+                    "order_type": (
+                        OrderType.MARKET.value if aggressive else resolved_order_type.value
+                    ),
+                }
+                if not aggressive and parsed_limit_price is not None:
+                    slice_payload["limit_price"] = parsed_limit_price
+                slice_defs.append(slice_payload)
+        else:
+            slice_defs.append({"qty": int(total_quantity), "order_type": resolved_order_type.value})
+
+        if not slice_defs:
+            slice_defs.append({"qty": int(total_quantity), "order_type": resolved_order_type.value})
+        return slice_defs, route_meta
 
     def _select_api(self):
         """Return the active broker API interface."""
@@ -2615,6 +3088,7 @@ class ExecutionEngine:
             kwargs = dict(kwargs)
             signal = kwargs.pop("signal", None)
             explicit_signal_weight = kwargs.pop("signal_weight", None)
+            child_order_execution = _as_bool(kwargs.get("child_order_execution", False))
             raw_keys = set(kwargs)
             ignored_keys = set()
             if raw_keys:
@@ -2661,13 +3135,15 @@ class ExecutionEngine:
             if tif_alias is not None and not kwargs.get("time_in_force"):
                 kwargs["time_in_force"] = tif_alias
 
-            policy_routing = self._select_execution_policy(
-                symbol=symbol,
-                side=side,
-                quantity=quantity,
-                kwargs=kwargs,
-                limit_price=limit_price,
-            )
+            policy_routing = {"selected": False}
+            if not child_order_execution:
+                policy_routing = self._select_execution_policy(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    kwargs=kwargs,
+                    limit_price=limit_price,
+                )
             if policy_routing.get("selected"):
                 self.logger.info("EXEC_POLICY_SELECTED", extra=policy_routing)
                 if kwargs.get("execution_algorithm") is None:
@@ -2825,45 +3301,92 @@ class ExecutionEngine:
                     payload_extra["qty"] = quantity
             order = Order(symbol, side, quantity, order_type, **kwargs)
 
-            # Optional TWAP routing for large orders (config/kwargs gated)
-            use_twap = bool(kwargs.get("use_twap", False))
-            if not use_twap and getattr(order, "execution_algorithm", None) == ExecutionAlgorithm.TWAP:
-                use_twap = True
-            auto_twap_enabled = _env_bool(
-                "AI_TRADING_EXEC_AUTO_TWAP_ENABLED",
-                False,
-            )
-            if not use_twap and auto_twap_enabled:
-                try:
-                    from ai_trading.core.constants import EXECUTION_PARAMETERS as _EXECUTION_PARAMETERS
+            if not child_order_execution and quantity > 0:
+                use_twap = bool(kwargs.get("use_twap", False))
+                if (
+                    not use_twap
+                    and getattr(order, "execution_algorithm", None) == ExecutionAlgorithm.TWAP
+                ):
+                    use_twap = True
+                auto_twap_enabled = _env_bool(
+                    "AI_TRADING_EXEC_AUTO_TWAP_ENABLED",
+                    False,
+                )
+                if not use_twap and auto_twap_enabled:
+                    try:
+                        from ai_trading.core.constants import EXECUTION_PARAMETERS as _EXECUTION_PARAMETERS
 
-                    twap_min_qty = int(_EXECUTION_PARAMETERS.get("TWAP_MIN_QTY", 5000))
-                    use_twap = quantity >= twap_min_qty
-                except Exception:
-                    use_twap = False
-            if use_twap and quantity > 0:
-                try:
-                    from ai_trading.execution.algorithms import TWAPExecutor
+                        twap_min_qty = int(_EXECUTION_PARAMETERS.get("TWAP_MIN_QTY", 5000))
+                        use_twap = quantity >= twap_min_qty
+                    except Exception:
+                        use_twap = False
+                if use_twap and kwargs.get("execution_algorithm") is None:
+                    order.execution_algorithm = ExecutionAlgorithm.TWAP
+                    kwargs["execution_algorithm"] = ExecutionAlgorithm.TWAP
 
-                    duration_min = int(kwargs.get("twap_duration_min", 15))
-                    twap = TWAPExecutor(self.order_manager)
-                    child_ids = twap.execute_twap_order(
-                        symbol,
-                        side,
-                        quantity,
-                        duration_minutes=duration_min,
-                        parent_order_id=getattr(order, "id", None),
-                        strategy_id=order.strategy_id,
-                    )
-                    self.logger.info(
-                        "TWAP_SUBMITTED",
-                        extra={"symbol": symbol, "qty": quantity, "slices": len(child_ids)},
-                    )
-                    # Track parent for monitoring/telemetry
-                    self._track_order(order)
-                    return ExecutionResult(order, order.status, 0, quantity, self._coerce_signal_weight(explicit_signal_weight, signal))
-                except Exception:
-                    self.logger.debug("TWAP_FALLBACK_TO_DIRECT", exc_info=True)
+                algorithm = self._normalize_execution_algorithm(
+                    getattr(order, "execution_algorithm", None)
+                )
+                if algorithm in {
+                    ExecutionAlgorithm.TWAP,
+                    ExecutionAlgorithm.VWAP,
+                    ExecutionAlgorithm.IMPLEMENTATION_SHORTFALL,
+                }:
+                    try:
+                        slice_defs, route_meta = self._build_algorithmic_slices(
+                            algorithm=algorithm,
+                            total_quantity=quantity,
+                            side=side,
+                            order_type=order_type,
+                            kwargs=kwargs,
+                        )
+                        parent_kwargs = dict(kwargs)
+                        parent_kwargs.update(route_meta)
+                        parent_kwargs["execution_algorithm"] = algorithm.value
+                        parent_kwargs["child_order_execution"] = True
+                        child_results = self.execute_sliced(
+                            slice_defs,
+                            symbol=symbol,
+                            side=side,
+                            quantity=quantity,
+                            order_type=order_type,
+                            asset_class=asset_class,
+                            parent_order_id=getattr(order, "id", None),
+                            **parent_kwargs,
+                        )
+                        filled_quantity = 0.0
+                        for child_result in child_results:
+                            try:
+                                filled_quantity += float(
+                                    getattr(child_result, "filled_quantity", 0.0) or 0.0
+                                )
+                            except (TypeError, ValueError):
+                                continue
+                        if filled_quantity >= float(quantity):
+                            order.status = OrderStatus.FILLED
+                        elif filled_quantity > 0.0:
+                            order.status = OrderStatus.PARTIALLY_FILLED
+                        else:
+                            order.status = OrderStatus.PENDING
+                        self.logger.info(
+                            "ALGO_PARENT_ORDER_SUBMITTED",
+                            extra={
+                                "symbol": symbol,
+                                "qty": quantity,
+                                "algorithm": algorithm.value,
+                                "slices": len(slice_defs),
+                            },
+                        )
+                        self._track_order(order)
+                        return ExecutionResult(
+                            order,
+                            order.status,
+                            filled_quantity,
+                            quantity,
+                            self._coerce_signal_weight(explicit_signal_weight, signal),
+                        )
+                    except Exception:
+                        self.logger.debug("ALGO_PARENT_ROUTE_FALLBACK_TO_DIRECT", exc_info=True)
             if self.order_manager.submit_order(order):
                 self.execution_stats["total_orders"] += 1
                 meta_weight = self._coerce_signal_weight(explicit_signal_weight, signal)
@@ -3192,6 +3715,12 @@ class ExecutionEngine:
             "strategy_id": strategy_id,
             "session_id": session_id,
             "execution_algorithm": execution_algorithm,
+            "schedule_style": str(kwargs.get("schedule_style") or "").strip() or None,
+            "benchmark_style": str(kwargs.get("benchmark_style") or "").strip() or None,
+            "volume_profile_name": (
+                str(kwargs.get("volume_profile_name") or "").strip() or None
+            ),
+            "urgency_score": _as_float(kwargs.get("urgency_score")),
             "order_type": getattr(order_type, "value", order_type),
             "requested_quantity": int(total_quantity),
             "child_slice_target": int(len(slice_specs)),

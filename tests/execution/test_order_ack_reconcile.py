@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from ai_trading.oms.event_store import EventStore
 from tests.test_orders import StubExecutionEngine
 
 
@@ -398,6 +399,34 @@ def test_execute_order_persists_runtime_order_and_fill_events(monkeypatch, tmp_p
     assert any(row.get("event") == "fill_recorded" and row.get("symbol") == "AAPL" for row in fill_rows)
 
 
+def test_execute_order_emits_canonical_oms_lifecycle_events(monkeypatch, tmp_path):
+    db_path = tmp_path / "live_oms_lifecycle.db"
+    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_IN_TESTS", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_DUAL_WRITE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    engine = _build_engine(_AckStubClient())
+    _prime_engine(engine, monkeypatch)
+
+    result = engine.execute_order("AAPL", "buy", qty=5, order_type="limit", limit_price=100.0)
+
+    assert result is not None
+    event_store = EventStore(url=f"sqlite:///{db_path}")
+    rows = event_store.list_oms_events(limit=5000)
+    event_store.close()
+
+    assert rows
+    event_types = {str(row.get("event_type")) for row in rows}
+    assert "INTENT_CREATED" in event_types
+    assert "SUBMIT_CLAIMED" in event_types
+    assert "SUBMIT_ACK" in event_types
+    assert "ORDER_PARTIALLY_FILLED" in event_types
+    assert "ORDER_FILLED" in event_types
+    assert "INTENT_CLOSED" in event_types
+
+
 def test_synchronize_broker_state_reconciles_pending_fill_events(monkeypatch, tmp_path):
     class _BrokerTerminalFillClient(_AckStubClient):
         def get_orders(self, status: str = "open"):
@@ -735,6 +764,65 @@ def test_synchronize_broker_state_bootstraps_pending_from_order_events(monkeypat
         for row in fill_rows
     )
     assert engine._pending_orders == {}
+
+
+def test_synchronize_broker_state_bootstraps_pending_from_durable_intents(
+    monkeypatch,
+    tmp_path,
+):
+    db_path = tmp_path / "pending_bootstrap_intents.db"
+
+    class _BrokerHydrateFromIntentClient(_AckStubClient):
+        def get_orders(self, status: str = "open"):
+            return []
+
+        def get_order_by_id(self, order_id: str):
+            return {
+                "id": order_id,
+                "client_order_id": "client-intent-bootstrap",
+                "symbol": "IBM",
+                "side": "buy",
+                "qty": "2",
+                "status": "filled",
+                "filled_qty": "2",
+                "filled_avg_price": "145.10",
+                "filled_at": "2026-03-11T19:40:16+00:00",
+            }
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_IN_TESTS", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_DUAL_WRITE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    engine = _build_engine(_BrokerHydrateFromIntentClient())
+    _prime_engine(engine, monkeypatch)
+    engine._pending_orders = {}
+    store = engine.order_manager._intent_store
+    assert store is not None
+    intent, created = store.create_intent(
+        intent_id="client-intent-bootstrap",
+        idempotency_key="client-intent-bootstrap",
+        symbol="IBM",
+        side="buy",
+        quantity=2.0,
+        metadata={"order_type": "limit", "expected_price": 145.0},
+    )
+    assert created is True
+    assert store.claim_for_submit(intent.intent_id) is True
+    store.mark_submitted(intent.intent_id, "order-intent-bootstrap")
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot is not None
+    assert engine._pending_orders == {}
+    event_store = EventStore(url=f"sqlite:///{db_path}")
+    rows = event_store.list_oms_events(intent_id=intent.intent_id, limit=5000)
+    event_store.close()
+    event_types = {str(row.get("event_type")) for row in rows}
+    assert "ORDER_FILLED" in event_types
+    assert "INTENT_CLOSED" in event_types
 
 
 def test_pending_bootstrap_ignores_older_pending_when_latest_terminal(monkeypatch, tmp_path):

@@ -44,3 +44,28 @@ def test_policy_selector_prefers_marketable_when_urgent() -> None:
     )
     assert decision.policy == ExecutionPolicy.MARKETABLE_LIMIT
 
+
+def test_policy_selector_prefers_vwap_on_medium_participation() -> None:
+    selector = ExecutionPolicySelector()
+    decision = selector.select_policy(
+        spread_bps=10.0,
+        volatility_pct=0.015,
+        order_notional=90_000.0,
+        avg_daily_volume_notional=2_000_000.0,
+        urgency="normal",
+        data_provenance="iex",
+    )
+    assert decision.policy == ExecutionPolicy.VWAP
+
+
+def test_policy_selector_prefers_implementation_shortfall_when_urgent_and_large() -> None:
+    selector = ExecutionPolicySelector()
+    decision = selector.select_policy(
+        spread_bps=9.0,
+        volatility_pct=0.025,
+        order_notional=120_000.0,
+        avg_daily_volume_notional=2_000_000.0,
+        urgency="urgent",
+        data_provenance="iex",
+    )
+    assert decision.policy == ExecutionPolicy.IMPLEMENTATION_SHORTFALL

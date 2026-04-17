@@ -76,7 +76,8 @@ positions, exposure proxies, and account context when available).
 ## Rollout
 
 1. Apply migrations.
-2. Dual-write lifecycle events to DB + current fallback ledger.
+2. Keep DB persistence on by default and enable JSONL fallback dual-write only via
+   explicit feature flags during staged rollout or incident response.
 3. Validate with integration tests and restart reconciliation tests.
 4. Gate live rollout on health/readiness checks.
 
