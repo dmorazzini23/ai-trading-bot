@@ -1,5 +1,7 @@
 """Regression tests for QueueListener logging setup idempotency."""
 
+import logging
+
 from ai_trading.logging import get_logger, setup_logging
 
 
@@ -15,3 +17,7 @@ def test_logger_emits_after_setup():
     log = get_logger(__name__)
     log.info("queue-listener-ok")
 
+
+def test_asyncio_task_capture_disabled_for_runtime_stability():
+    """Task-name capture is disabled to avoid Python 3.12 startup crashes."""
+    assert logging.logAsyncioTasks is False

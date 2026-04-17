@@ -1,8 +1,9 @@
 from __future__ import annotations
+from pathlib import Path
 import sys
 import importlib.util
 from collections.abc import Iterable, Mapping
-from ai_trading.config.management import merged_env_snapshot
+from ai_trading.config.management import merged_env_snapshot, reload_env
 from ai_trading.logging import get_logger
 logger = get_logger(__name__)
 REQUIRED_KEYS: tuple[str, ...] = (
@@ -37,6 +38,8 @@ def validate_env(env: Mapping[str, str] | None=None) -> list[str]:
 def main(argv: Iterable[str] | None=None) -> int:
     """CLI entry point returning process exit code."""
     _ = list(argv or sys.argv[1:])
+    env_path = Path.cwd() / ".env"
+    reload_env(path=env_path if env_path.exists() else None, override=False)
     missing = validate_env()
     if not missing:
         logger.info('ENV_VALIDATE_OK', extra={'missing': 0})

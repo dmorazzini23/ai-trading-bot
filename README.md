@@ -18,13 +18,15 @@ A sophisticated **AI-powered algorithmic trading system** that combines machine 
 > Python **3.12** required. Tooling targets **py312**.
 
 ```bash
-python3 -m pip install -U pip
-pip install -e .  # installs runtime deps including alpaca-py==0.42.1
-python3 -c "import importlib.metadata as m; assert m.version('alpaca-py')=='0.42.1'"  # verify runtime SDK pin
-python3 -m ai_trading --dry-run
+python3.12 -m venv venv
+. venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e .  # installs runtime deps including alpaca-py==0.42.1
+python -c "import importlib.metadata as m; assert m.version('alpaca-py')=='0.42.1'"  # verify runtime SDK pin
+python -m ai_trading --dry-run
 ruff check .
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
-RUN_HEALTHCHECK=1 python3 -m ai_trading.app &
+RUN_HEALTHCHECK=1 python -m ai_trading.app &
 curl -s http://127.0.0.1:8081/healthz
 curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/metrics
 ```
@@ -1684,7 +1686,7 @@ Environment variables controlling startup import checks:
 ## Development quick start
 
 ```bash
-python3 -m venv venv && . venv/bin/activate
+python3.12 -m venv venv && . venv/bin/activate
 bash scripts/bootstrap.sh
 python3 -m compileall ai_trading
 pytest -q

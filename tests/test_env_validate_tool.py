@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+from pathlib import Path
 
 import pytest
 
+from ai_trading.tools import env_validate as env_validate_tool
 from ai_trading.tools.env_validate import validate_env
 
 
@@ -49,3 +51,22 @@ def test_validate_env_requires_some_url() -> None:
     missing = validate_env(env)
 
     assert 'ALPACA_TRADING_BASE_URL' in missing
+
+
+def test_main_loads_dotenv_from_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_path = tmp_path / '.env'
+    env_path.write_text(
+        '\n'.join(
+            (
+                'ALPACA_API_KEY=key',
+                'ALPACA_SECRET_KEY=secret',
+                'ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets',
+            )
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.chdir(tmp_path)
+    for key in ('ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_TRADING_BASE_URL'):
+        monkeypatch.delenv(key, raising=False)
+
+    assert env_validate_tool.main([]) == 0

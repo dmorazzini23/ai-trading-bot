@@ -4,9 +4,21 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-PYTHON_BIN="${PYTHON_BIN:-./venv/bin/python}"
-if [[ ! -x "${PYTHON_BIN}" ]]; then
-  PYTHON_BIN="python3"
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+  if [[ -x "${REPO_ROOT}/venv/bin/python" ]]; then
+    PYTHON_BIN="${REPO_ROOT}/venv/bin/python"
+  elif command -v python3.12 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3.12)"
+  else
+    echo "python3.12 is required; run bash scripts/bootstrap.sh first" >&2
+    exit 1
+  fi
+fi
+
+if ! "${PYTHON_BIN}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)'; then
+  echo "PYTHON_BIN must point to a Python 3.12 interpreter: ${PYTHON_BIN}" >&2
+  exit 1
 fi
 
 echo "== after-hours focused tests =="

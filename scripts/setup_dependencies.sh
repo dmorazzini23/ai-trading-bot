@@ -6,6 +6,21 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$SCRIPT_DIR/.."
 
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+    if command -v python3.12 >/dev/null 2>&1; then
+        PYTHON_BIN="$(command -v python3.12)"
+    else
+        echo "python3.12 is required for this repository"
+        exit 1
+    fi
+fi
+
+if ! "${PYTHON_BIN}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)'; then
+    echo "PYTHON_BIN must point to a Python 3.12 interpreter: ${PYTHON_BIN}"
+    exit 1
+fi
+
 echo "Setting up system dependencies for AI Trading Bot..."
 
 # Detect the operating system
@@ -54,13 +69,13 @@ fi
 
 # Install Python dependencies
 echo "Installing Python dependencies..."
-python3 -m pip install --upgrade pip
-python3 -m pip install -r requirements.txt
-"$ROOT_DIR/ci/scripts/verify_alpaca_sdk.sh"
+"${PYTHON_BIN}" -m pip install --upgrade pip
+"${PYTHON_BIN}" -m pip install -r requirements.txt
+PYTHON_BIN="${PYTHON_BIN}" bash "$ROOT_DIR/ci/scripts/verify_alpaca_sdk.sh"
 
 # Verify TA-Lib installation
 echo "Verifying TA-Lib installation..."
-python3 -c "import talib; print('TA-Lib successfully installed and working!')" || {
+"${PYTHON_BIN}" -c "import talib; print('TA-Lib successfully installed and working!')" || {
     echo "WARNING: TA-Lib Python package installation failed."
     echo "The system will use fallback implementations."
     echo "For enhanced technical analysis, ensure TA-Lib is properly installed:"
@@ -72,5 +87,5 @@ echo "Setup complete!"
 echo ""
 echo "Next steps:"
 echo "1. Copy .env.example to .env and configure your API keys"
-echo "2. Run the trading bot with: python3 -m ai_trading"
+echo "2. Run the trading bot with: ${PYTHON_BIN} -m ai_trading"
 echo "3. Check logs/ directory for execution logs"

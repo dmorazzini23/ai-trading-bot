@@ -44,15 +44,19 @@ def _managed_env(name: str, default: Any = None) -> Any:
 _jsonify_import_error: ImportError | None = None
 try:
     from flask import jsonify as _jsonify
-    from flask import request as _request
 except ImportError as exc:  # pragma: no cover - exercised via tests
     _jsonify_import_error = exc
     jsonify = None  # type: ignore[assignment]
-    request = None  # type: ignore[assignment]
 else:  # pragma: no cover - import path only evaluated once
     jsonify = _jsonify
-    request = _request
     _jsonify_import_error = None
+
+try:
+    from flask import request as _request
+except ImportError:  # pragma: no cover - exercised via tests
+    request = None  # type: ignore[assignment]
+else:  # pragma: no cover - import path only evaluated once
+    request = _request
 
 if TYPE_CHECKING:  # pragma: no cover - for type checkers only
     from flask import Flask

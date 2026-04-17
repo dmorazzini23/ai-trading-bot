@@ -30,6 +30,11 @@ from ai_trading.exc import COMMON_EXC
 from .json_formatter import JSONFormatter
 from ai_trading.logging.redact import _ENV_MASK
 
+# Python 3.12 can crash during early startup log record creation on some
+# distro/runtime combinations when asyncio task-name capture is enabled.
+# Our structured logs do not depend on ``taskName``, so disable it globally.
+logging.logAsyncioTasks = False
+
 
 def _runtime_env(name: str, default: str | None = None) -> str | None:
     """Resolve environment values via config-management helpers only."""

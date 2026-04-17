@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+  if [[ -x "./venv/bin/python" ]]; then
+    PYTHON_BIN="./venv/bin/python"
+  elif command -v python3.12 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3.12)"
+  else
+    echo "python3.12 is required; run bash scripts/bootstrap.sh first" >&2
+    exit 1
+  fi
+fi
+
+if ! "${PYTHON_BIN}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)'; then
+  echo "PYTHON_BIN must point to a Python 3.12 interpreter: ${PYTHON_BIN}" >&2
+  exit 1
+fi
+
 # High-signal strict type checks for critical runtime paths.
 if [[ -z "${MYPY_CACHE_DIR:-}" ]]; then
   if [[ -w ".mypy_cache" ]] || [[ ! -e ".mypy_cache" && -w "." ]]; then
@@ -11,9 +28,9 @@ if [[ -z "${MYPY_CACHE_DIR:-}" ]]; then
 fi
 
 # Broad baseline coverage for the full application and test tree.
-python3 -m mypy --config-file mypy.ini ai_trading tests
+"${PYTHON_BIN}" -m mypy --config-file mypy.ini ai_trading tests
 
-python3 -m mypy --config-file mypy_strict.ini \
+"${PYTHON_BIN}" -m mypy --config-file mypy_strict.ini \
   ai_trading/config/management.py \
   ai_trading/config/alpaca.py \
   ai_trading/config/__init__.py \
@@ -29,7 +46,7 @@ python3 -m mypy --config-file mypy_strict.ini \
 
 # Runtime-critical modules that are not yet strict-clean still get explicit
 # baseline type coverage in this gate.
-python3 -m mypy --config-file mypy.ini \
+"${PYTHON_BIN}" -m mypy --config-file mypy.ini \
   ai_trading/__main__.py \
   ai_trading/alpaca_api.py \
   ai_trading/app.py \
