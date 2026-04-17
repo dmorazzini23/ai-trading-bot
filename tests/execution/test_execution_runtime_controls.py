@@ -1569,6 +1569,7 @@ def test_runtime_gonogo_can_enforce_in_paper_when_enabled(monkeypatch, tmp_path)
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE", "1")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_GATE_VALID", "1")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_ENFORCE_IN_PAPER", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_SOFT_ENFORCE_IN_PAPER", "0")
 
     allowed, context = engine._runtime_gonogo_openings_allowed()
 
@@ -1576,6 +1577,99 @@ def test_runtime_gonogo_can_enforce_in_paper_when_enabled(monkeypatch, tmp_path)
     assert context["enabled"] is True
     assert context["gate_passed"] is False
     assert "profit_factor" in context["failed_checks"]
+
+
+def test_runtime_gonogo_soft_derisks_in_paper_when_enabled(monkeypatch, tmp_path):
+    engine = _engine_stub()
+    engine.execution_mode = "paper"
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_ENFORCE_IN_PAPER", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_CACHE_TTL_SEC", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_SOFT_ENFORCE_IN_PAPER_QTY_SCALE",
+        "0.3",
+    )
+
+    from ai_trading.tools import runtime_performance_report as runtime_perf_report
+
+    monkeypatch.setattr(
+        runtime_perf_report,
+        "build_report",
+        lambda *args, **kwargs: {
+            "trade_history": {},
+            "gate_effectiveness": {},
+            "execution_vs_alpha": {},
+        },
+    )
+    monkeypatch.setattr(
+        runtime_perf_report,
+        "evaluate_go_no_go",
+        lambda *_args, **_kwargs: {
+            "gate_passed": False,
+            "failed_checks": ["win_rate", "slippage_drag_bps"],
+            "thresholds": {
+                "min_win_rate": 0.46,
+                "max_slippage_drag_bps": 9.0,
+            },
+            "observed": {
+                "win_rate": 0.435,
+                "slippage_drag_bps": 11.5,
+            },
+        },
+    )
+
+    allowed, context = engine._runtime_gonogo_openings_allowed()
+
+    assert allowed is True
+    assert context["gate_passed"] is False
+    assert context["soft_enforced"] is True
+    assert context["reason"] == "paper_mode_soft_derisk"
+    assert context["execution_capture_guard"]["active"] is True
+    assert context["execution_capture_guard"]["order_qty_scale"] == pytest.approx(0.3)
+    assert context["execution_capture_guard"]["passive_only"] is True
+
+
+def test_runtime_gonogo_soft_derisk_does_not_bypass_integrity_failures(monkeypatch, tmp_path):
+    engine = _engine_stub()
+    engine.execution_mode = "paper"
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_ENFORCE_IN_PAPER", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_CACHE_TTL_SEC", "1")
+
+    from ai_trading.tools import runtime_performance_report as runtime_perf_report
+
+    monkeypatch.setattr(
+        runtime_perf_report,
+        "build_report",
+        lambda *args, **kwargs: {
+            "trade_history": {},
+            "gate_effectiveness": {},
+            "execution_vs_alpha": {},
+        },
+    )
+    monkeypatch.setattr(
+        runtime_perf_report,
+        "evaluate_go_no_go",
+        lambda *_args, **_kwargs: {
+            "gate_passed": False,
+            "failed_checks": ["open_position_reconciliation_consistent"],
+            "thresholds": {},
+            "observed": {
+                "open_position_reconciliation_consistent": False,
+            },
+        },
+    )
+
+    allowed, context = engine._runtime_gonogo_openings_allowed()
+
+    assert allowed is False
+    assert context["gate_passed"] is False
+    assert context.get("soft_enforced") is not True
+    assert "open_position_reconciliation_consistent" in context["failed_checks"]
 
 
 def test_runtime_gonogo_persists_latest_report_snapshot(monkeypatch, tmp_path):

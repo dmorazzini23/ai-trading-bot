@@ -28357,6 +28357,7 @@ class ExecutionEngine:
         if resolved_gate_log_path is None:
             resolved_gate_log_path = gate_summary_path.parent / "gate_effectiveness.jsonl"
         report: Mapping[str, Any] = {}
+        execution_allowed = True
 
         try:
             from ai_trading.tools import runtime_performance_report as performance_report
@@ -28368,6 +28369,7 @@ class ExecutionEngine:
             )
             decision = performance_report.evaluate_go_no_go(report, thresholds=thresholds)
             allowed = bool(decision.get("gate_passed"))
+            execution_allowed = bool(allowed)
             effective_thresholds = (
                 dict(decision.get("thresholds", {}))
                 if isinstance(decision.get("thresholds"), Mapping)
@@ -28609,15 +28611,94 @@ class ExecutionEngine:
                             "paths": paths_payload,
                         },
                     )
+            if not execution_allowed:
+                soft_failed_checks_allowed = {
+                    "profit_factor",
+                    "win_rate",
+                    "win_rate_confidence",
+                    "net_pnl",
+                    "acceptance_rate",
+                    "expected_net_edge_bps",
+                    "slippage_drag_bps",
+                    "execution_capture_ratio",
+                    "closed_trades",
+                    "gate_used_days",
+                    "trade_used_days",
+                }
+                soft_enforce_in_paper = _resolve_bool_env(
+                    "AI_TRADING_EXECUTION_RUNTIME_GONOGO_SOFT_ENFORCE_IN_PAPER"
+                )
+                if soft_enforce_in_paper is None:
+                    soft_enforce_in_paper = True
+                failed_checks_raw = context.get("failed_checks", [])
+                failed_checks = (
+                    [str(item).strip() for item in failed_checks_raw if str(item).strip()]
+                    if isinstance(failed_checks_raw, Sequence)
+                    and not isinstance(failed_checks_raw, (str, bytes))
+                    else []
+                )
+                if (
+                    execution_mode_raw in {"paper", "sim", "simulation"}
+                    and bool(enforce_in_paper)
+                    and bool(soft_enforce_in_paper)
+                    and failed_checks
+                    and all(
+                        check in soft_failed_checks_allowed
+                        for check in failed_checks
+                    )
+                ):
+                    soft_qty_scale = _config_float(
+                        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_SOFT_ENFORCE_IN_PAPER_QTY_SCALE",
+                        0.35,
+                    )
+                    if soft_qty_scale is None or not math.isfinite(float(soft_qty_scale)):
+                        soft_qty_scale = 0.35
+                    soft_qty_scale = max(0.05, min(float(soft_qty_scale), 1.0))
+                    soft_passive_only = _resolve_bool_env(
+                        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_SOFT_ENFORCE_IN_PAPER_PASSIVE_ONLY"
+                    )
+                    if soft_passive_only is None:
+                        soft_passive_only = True
+                    capture_guard_raw = context.get("execution_capture_guard")
+                    capture_guard = (
+                        dict(capture_guard_raw)
+                        if isinstance(capture_guard_raw, Mapping)
+                        else {}
+                    )
+                    existing_scale = _safe_float(capture_guard.get("order_qty_scale"))
+                    if existing_scale is not None and math.isfinite(float(existing_scale)):
+                        soft_qty_scale = min(float(existing_scale), float(soft_qty_scale))
+                    capture_guard.update(
+                        {
+                            "enabled": True,
+                            "active": True,
+                            "reason": "paper_runtime_gonogo_soft_derisk",
+                            "order_qty_scale": float(soft_qty_scale),
+                            "passive_only": bool(
+                                capture_guard.get("passive_only") or soft_passive_only
+                            ),
+                        }
+                    )
+                    if "block_new_symbols" not in capture_guard:
+                        capture_guard["block_new_symbols"] = False
+                    context["execution_capture_guard"] = capture_guard
+                    context["execution_gate_passed"] = False
+                    context["enforced"] = False
+                    context["soft_enforced"] = True
+                    context["soft_enforcement_reason"] = "paper_runtime_gonogo_soft_derisk"
+                    context["execution_mode"] = execution_mode_raw
+                    context["reason"] = "paper_mode_soft_derisk"
+                    execution_allowed = True
+
             self._persist_runtime_performance_report_snapshot(
                 report=report,
-                gate_passed=bool(allowed),
+                gate_passed=bool(context.get("gate_passed", allowed)),
                 context=context,
             )
             self._emit_execution_vs_alpha_alerts(
                 report=report,
                 thresholds=effective_thresholds,
-                gate_passed=bool(allowed),
+                gate_passed=bool(context.get("gate_passed", allowed)),
             )
         except Exception as exc:
             fail_closed_effective = bool(fail_closed)
@@ -28626,6 +28707,7 @@ class ExecutionEngine:
                 fail_closed_effective = True
                 fail_closed_forced = True
             allowed = not fail_closed_effective
+            execution_allowed = bool(allowed)
             context = {
                 "enabled": True,
                 "gate_passed": allowed,
@@ -28658,11 +28740,11 @@ class ExecutionEngine:
                 context=context,
             )
 
-        self._runtime_gonogo_cache_allowed = bool(allowed)
+        self._runtime_gonogo_cache_allowed = bool(execution_allowed)
         self._runtime_gonogo_cache_context = dict(context)
         self._runtime_gonogo_cache_report = dict(report) if isinstance(report, Mapping) else {}
         self._runtime_gonogo_cache_until_mono = now_mono + ttl
-        return bool(allowed), dict(context)
+        return bool(execution_allowed), dict(context)
 
     def _pre_execution_order_checks(self, order: Mapping[str, Any] | None = None) -> bool:
         """Run order-specific pre-execution checks."""
