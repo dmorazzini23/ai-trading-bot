@@ -69,3 +69,8 @@ Repeated Alpaca failures can trigger provider safe-mode:
 
 Resume only after Alpaca data is healthy again and the halt condition has been
 cleared intentionally.
+
+### Robustness Audit
+
+For the current control matrix, scenario drills, and operator cadence, see
+[docs/ROBUSTNESS_AUDIT.md](/home/aiuser/ai-trading-bot/docs/ROBUSTNESS_AUDIT.md).

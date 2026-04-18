@@ -235,3 +235,69 @@ class TestModelRegistry:
 
             _new_model, new_meta = registry.load_model(second_id)
             assert new_meta["version"] == 2
+
+    def test_get_production_model_returns_newest_registration(self):
+        """Production lookup should prefer the newest registered production model."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = ModelRegistry(temp_dir)
+
+            older = registry.register_model({"a": 1}, "ml_edge", "dict")
+            newer = registry.register_model({"a": 2}, "ml_edge", "dict")
+            registry.update_governance_status(older, "production")
+            registry.update_governance_status(newer, "production")
+
+            production = registry.get_production_model("ml_edge")
+
+            assert production is not None
+            assert production[0] == newer
+
+    def test_viable_production_lookup_skips_missing_artifacts(self):
+        """Viable production lookup should ignore stale production entries."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = ModelRegistry(temp_dir)
+
+            viable = registry.register_model({"a": 1}, "ml_edge", "dict")
+            stale = registry.register_model({"a": 2}, "ml_edge", "dict")
+            registry.update_governance_status(viable, "production")
+            registry.update_governance_status(stale, "production")
+
+            stale_artifact = Path(registry.model_index[stale]["artifact_path"])
+            stale_artifact.unlink()
+
+            production = registry.get_viable_production_model("ml_edge")
+
+            assert production is not None
+            prod_id, info = production
+            assert prod_id == viable
+            assert info["production_path_source"] == "artifact"
+            assert Path(info["production_path"]).is_file()
+
+    def test_record_runtime_promotion_persists_runtime_path(self):
+        """Runtime promotion metadata should be durable and usable for viable lookup."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = ModelRegistry(temp_dir)
+
+            model_id = registry.register_model({"a": 1}, "ml_edge", "dict")
+            registry.update_governance_status(model_id, "production")
+            artifact_path = Path(registry.model_index[model_id]["artifact_path"])
+            runtime_model_path = Path(temp_dir) / "runtime" / "ml_latest.joblib"
+            runtime_model_path.parent.mkdir(parents=True, exist_ok=True)
+            runtime_model_path.write_bytes(artifact_path.read_bytes())
+            artifact_path.unlink()
+
+            registry.record_runtime_promotion(
+                model_id,
+                model_path=runtime_model_path,
+                manifest_path=runtime_model_path.with_suffix(".manifest.json"),
+            )
+
+            refreshed = ModelRegistry(temp_dir)
+            production = refreshed.get_viable_production_model("ml_edge")
+
+            assert production is not None
+            prod_id, info = production
+            assert prod_id == model_id
+            assert info["production_path_source"] == "runtime_promotion"
+            assert info["production_path"] == str(runtime_model_path)
+            runtime_promotion = refreshed.model_index[model_id]["governance"]["runtime_promotion"]
+            assert runtime_promotion["model_path"] == str(runtime_model_path)

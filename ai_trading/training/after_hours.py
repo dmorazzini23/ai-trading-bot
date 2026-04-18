@@ -6381,6 +6381,12 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             model_path,
             manifest_metadata=manifest_metadata,
         )
+        if promoted_model_path:
+            registry.record_runtime_promotion(
+                model_id,
+                model_path=promoted_model_path,
+                manifest_path=promoted_manifest_path,
+            )
     else:
         promoted_model_path, promoted_manifest_path = None, None
         logger.info(

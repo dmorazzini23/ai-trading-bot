@@ -35,6 +35,13 @@ def _timestamp_age_seconds(raw_value: Any) -> float | None:
     return max((datetime.now(UTC) - parsed).total_seconds(), 0.0)
 
 
+def _safe_nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _env_bool(name: str, default: bool) -> bool:
     try:
         from ai_trading.config.management import get_env
@@ -561,6 +568,8 @@ def build_runtime_health_payload(
         "latency_ms": broker_state.get("latency_ms"),
         "last_error": broker_state.get("last_error"),
         "last_order_ack_ms": broker_state.get("last_order_ack_ms"),
+        "open_orders_count": broker_state.get("open_orders_count"),
+        "positions_count": broker_state.get("positions_count"),
     }
 
     service_status = service_state.get("status", "unknown")
@@ -573,6 +582,13 @@ def build_runtime_health_payload(
         provider_reason_normalized == "market_closed"
         or service_reason_normalized == "market_closed"
     )
+    attention_flags: list[str] = []
+    open_orders_count = _safe_nonnegative_int(broker_state.get("open_orders_count"))
+    positions_count = _safe_nonnegative_int(broker_state.get("positions_count"))
+    if market_closed_mode and positions_count > 0:
+        attention_flags.append("market_closed_non_flat_positions")
+    if market_closed_mode and open_orders_count > 0:
+        attention_flags.append("market_closed_open_orders")
     provider_disabled = provider_status_normalized in {"down", "disabled", "failed", "unreachable"}
     provider_unknown = provider_status_normalized in {"", "unknown"}
     broker_down = broker_status_normalized in {"unreachable", "down", "failed"}
@@ -707,6 +723,7 @@ def build_runtime_health_payload(
         "database": database_readiness,
         "oms_invariants": oms_invariants,
         "oms_lifecycle_parity": oms_lifecycle_parity,
+        "attention_flags": attention_flags,
     }
     if offhours_market_closed_ready:
         payload["reason"] = "market_closed"
@@ -830,6 +847,24 @@ def build_control_plane_snapshot(
             "reason": service_state.get("reason"),
         },
         "broker_health": broker_state,
+        "attention_flags": [
+            flag
+            for flag in (
+                (
+                    "market_closed_non_flat_positions"
+                    if str(provider_state.get("reason") or "").strip().lower() == "market_closed"
+                    and _safe_nonnegative_int(broker_state.get("positions_count")) > 0
+                    else None
+                ),
+                (
+                    "market_closed_open_orders"
+                    if str(provider_state.get("reason") or "").strip().lower() == "market_closed"
+                    and _safe_nonnegative_int(broker_state.get("open_orders_count")) > 0
+                    else None
+                ),
+            )
+            if flag
+        ],
         "data_provider": provider_state,
         "quotes": quote_state,
         "positions": {

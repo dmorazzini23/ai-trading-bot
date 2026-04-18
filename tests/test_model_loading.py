@@ -3,6 +3,7 @@ import logging
 import sys
 import time
 import types
+from pathlib import Path
 
 import pytest
 
@@ -111,14 +112,82 @@ def test_missing_model_file_creates_placeholder(monkeypatch, tmp_path, caplog):
     monkeypatch.delenv("AI_TRADING_WARN_IF_MODEL_MISSING", raising=False)
     caplog.set_level("WARNING")
     be = reload_bot_engine()
+    monkeypatch.setattr(be, "_resolve_registry_production_model_path", lambda *_args, **_kwargs: None)
     assert "ML_MODEL_MISSING" not in caplog.text
     mdl = be._load_required_model()
-    assert mdl == {"placeholder": True}
-    assert missing.is_file()
+    assert getattr(mdl, "is_disabled_model", False) is True
+    assert not missing.exists()
     assert any(
-        r.levelname == "WARNING" and r.getMessage() == "MODEL_PLACEHOLDER_CREATED"
+        r.levelname == "WARNING" and r.getMessage() == "MODEL_RUNTIME_DISABLED"
         for r in caplog.records
     )
+
+
+def test_placeholder_model_file_disables_runtime_ml(monkeypatch, tmp_path, caplog):
+    mpath = tmp_path / "placeholder.pkl"
+    joblib.dump({"placeholder": True}, mpath)
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(mpath))
+    monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
+    caplog.set_level("WARNING")
+    be = reload_bot_engine()
+    monkeypatch.setattr(be, "_resolve_registry_production_model_path", lambda *_args, **_kwargs: None)
+
+    mdl = be._load_required_model()
+
+    assert getattr(mdl, "is_disabled_model", False) is True
+    assert any(
+        r.levelname == "WARNING" and r.getMessage() == "MODEL_RUNTIME_DISABLED"
+        for r in caplog.records
+    )
+
+
+def test_missing_model_file_uses_registry_production_fallback(monkeypatch, tmp_path):
+    configured = tmp_path / "missing.pkl"
+    fallback = tmp_path / "approved.pkl"
+    joblib.dump({"approved": True}, fallback)
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(configured))
+    monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
+    be = reload_bot_engine()
+    monkeypatch.setattr(
+        be,
+        "_resolve_registry_production_model_path",
+        lambda *_args, **_kwargs: (
+            str(fallback),
+            {"model_id": "prod-123", "strategy": "ml_edge", "source": "registry_production"},
+        ),
+    )
+
+    mdl = be._load_required_model()
+
+    assert mdl == {"approved": True}
+
+
+def test_missing_model_file_uses_runtime_promotion_registry_fallback(monkeypatch, tmp_path):
+    from ai_trading.model_registry import ModelRegistry
+
+    configured = tmp_path / "missing.pkl"
+    runtime_model_path = tmp_path / "runtime" / "ml_latest.joblib"
+    runtime_model_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump({"approved": "runtime"}, runtime_model_path)
+
+    registry = ModelRegistry(tmp_path / "registry")
+    model_id = registry.register_model({"stale": True}, "ml_edge", "dict")
+    registry.update_governance_status(model_id, "production")
+    Path(registry.model_index[model_id]["artifact_path"]).unlink()
+    registry.record_runtime_promotion(
+        model_id,
+        model_path=runtime_model_path,
+        manifest_path=runtime_model_path.with_suffix(".manifest.json"),
+    )
+
+    monkeypatch.setenv("MODEL_REGISTRY_DIR", str(tmp_path / "registry"))
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(configured))
+    monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
+    be = reload_bot_engine()
+
+    mdl = be._load_required_model()
+
+    assert mdl == {"approved": "runtime"}
 
 
 def test_default_model_missing_no_warning(monkeypatch, caplog):

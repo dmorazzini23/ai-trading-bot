@@ -67,6 +67,8 @@ _DEFAULT_BROKER_STATE: dict[str, Any] = {
     "updated": None,
     "status": "unknown",
     "last_order_ack_ms": None,
+    "open_orders_count": None,
+    "positions_count": None,
 }
 
 _provider_state: dict[str, Any] = dict(_DEFAULT_PROVIDER_STATE)
@@ -359,6 +361,8 @@ def update_broker_status(
     last_error: str | None = None,
     status: str | None = None,
     last_order_ack_ms: float | None = None,
+    open_orders_count: int | None = None,
+    positions_count: int | None = None,
 ) -> None:
     """Record recent broker connectivity observations."""
 
@@ -377,6 +381,16 @@ def update_broker_status(
     if last_order_ack_ms is not None:
         try:
             updates["last_order_ack_ms"] = max(0.0, float(last_order_ack_ms))
+        except (TypeError, ValueError):
+            pass
+    if open_orders_count is not None:
+        try:
+            updates["open_orders_count"] = max(0, int(open_orders_count))
+        except (TypeError, ValueError):
+            pass
+    if positions_count is not None:
+        try:
+            updates["positions_count"] = max(0, int(positions_count))
         except (TypeError, ValueError):
             pass
     with _LOCK:

@@ -28,6 +28,8 @@ def _stub_runtime_state(monkeypatch):
         "connected": True,
         "latency_ms": 12.5,
         "last_error": None,
+        "open_orders_count": 0,
+        "positions_count": 0,
     }
     service_state = {"status": "ready"}
     quote_state = {"status": "aligned"}
@@ -53,6 +55,9 @@ def test_app_health_endpoint_shared_port():
     assert payload["safe_mode"] is False
     assert "model_liveness" in payload
     assert isinstance(payload["model_liveness"], dict)
+    assert payload["broker"]["open_orders_count"] == 0
+    assert payload["broker"]["positions_count"] == 0
+    assert payload["attention_flags"] == []
 
 
 def test_standalone_health_server_handler():
@@ -183,6 +188,8 @@ def test_health_market_closed_offhours_reports_healthy(monkeypatch):
         "connected": True,
         "latency_ms": 15.0,
         "last_error": None,
+        "open_orders_count": 1,
+        "positions_count": 7,
     }
     service_state = {
         "status": "warming_up",
@@ -205,6 +212,8 @@ def test_health_market_closed_offhours_reports_healthy(monkeypatch):
     assert payload["ok"] is True
     assert payload["status"] == "healthy"
     assert payload["reason"] == "market_closed"
+    assert "market_closed_non_flat_positions" in payload["attention_flags"]
+    assert "market_closed_open_orders" in payload["attention_flags"]
 
 
 def test_health_market_closed_does_not_hide_unknown_broker(monkeypatch):

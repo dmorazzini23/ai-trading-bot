@@ -319,6 +319,45 @@ class ModelRegistry:
             logger.debug("MODEL_REGISTRY_META_LOAD_FAILED", exc_info=True)
             return None
 
+    @staticmethod
+    def _registered_sort_key(info: Mapping[str, Any]) -> tuple[str, int]:
+        return (
+            str(info.get("registered_at", "") or ""),
+            int(info.get("registered_seq", 0) or 0),
+        )
+
+    @staticmethod
+    def _candidate_production_paths(info: Mapping[str, Any]) -> list[tuple[str, Path]]:
+        candidates: list[tuple[str, Path]] = []
+        governance = info.get("governance", {})
+        if isinstance(governance, Mapping):
+            runtime_promotion = governance.get("runtime_promotion", {})
+            if isinstance(runtime_promotion, Mapping):
+                runtime_model_path = str(runtime_promotion.get("model_path", "") or "").strip()
+                if runtime_model_path:
+                    candidates.append(("runtime_promotion", Path(runtime_model_path)))
+        artifact_path = str(info.get("artifact_path", "") or "").strip()
+        if artifact_path:
+            candidates.append(("artifact", Path(artifact_path)))
+        model_dir = str(info.get("path", "") or "").strip()
+        if model_dir:
+            candidates.append(("model_dir", Path(model_dir) / ModelRegistry._ARTIFACT_FILENAME))
+        return candidates
+
+    def _production_candidates(self, strategy: str) -> list[tuple[str, dict[str, Any]]]:
+        candidates: list[tuple[str, dict[str, Any]]] = []
+        for model_id, info in self.model_index.items():
+            if info.get("strategy") != strategy:
+                continue
+            governance = info.get("governance", {}) or {}
+            if governance.get("status") == "production":
+                candidates.append((model_id, dict(info)))
+        candidates.sort(
+            key=lambda item: self._registered_sort_key(item[1]),
+            reverse=True,
+        )
+        return candidates
+
     # -- Public API ----------------------------------------------------------
 
     def register_model(
@@ -524,12 +563,22 @@ class ModelRegistry:
         return results
 
     def get_production_model(self, strategy: str) -> tuple[str, dict[str, Any]] | None:
-        for model_id, info in self.model_index.items():
-            if info.get("strategy") != strategy:
-                continue
-            governance = info.get("governance", {}) or {}
-            if governance.get("status") == "production":
-                return model_id, dict(info)
+        candidates = self._production_candidates(strategy)
+        return candidates[0] if candidates else None
+
+    def get_viable_production_model(self, strategy: str) -> tuple[str, dict[str, Any]] | None:
+        for model_id, info in self._production_candidates(strategy):
+            for source, candidate_path in self._candidate_production_paths(info):
+                try:
+                    resolved_path = candidate_path.expanduser()
+                except OSError:
+                    continue
+                if not resolved_path.is_file():
+                    continue
+                info_with_path = dict(info)
+                info_with_path["production_path"] = str(resolved_path)
+                info_with_path["production_path_source"] = source
+                return model_id, info_with_path
         return None
 
     def update_governance_status(
@@ -558,6 +607,36 @@ class ModelRegistry:
         self.model_index[model_id] = info
         self._write_metadata_file(model_dir, meta_payload)
         self._save_index()
+
+    def record_runtime_promotion(
+        self,
+        model_id: str,
+        *,
+        model_path: str | Path,
+        manifest_path: str | Path | None = None,
+    ) -> None:
+        runtime_model_path = str(model_path).strip()
+        if not runtime_model_path:
+            raise ValueError("runtime model path is required")
+        runtime_manifest_path = (
+            str(manifest_path).strip() if manifest_path is not None else None
+        )
+        info = self.model_index.get(model_id)
+        if info is None:
+            raise ValueError(f"Model {model_id} not found")
+        governance = info.get("governance", {}) or {}
+        status = str(governance.get("status", "registered") or "registered")
+        self.update_governance_status(
+            model_id,
+            status,
+            extra={
+                "runtime_promotion": {
+                    "model_path": runtime_model_path,
+                    "manifest_path": runtime_manifest_path,
+                    "recorded_at": datetime.now(UTC).isoformat(),
+                }
+            },
+        )
 
 
 __all__ = [

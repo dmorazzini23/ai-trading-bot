@@ -1352,6 +1352,73 @@ def test_after_hours_strict_promotion_policy_can_promote_when_all_gates_pass(
     assert "phase_1_week_1" in result["roadmap"]
 
 
+def test_after_hours_runtime_promotion_records_registry_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tickers = tmp_path / "tickers.csv"
+    tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
+    tca_path = tmp_path / "tca_records.jsonl"
+    _write_tca(tca_path, n=420)
+    registry_dir = tmp_path / "registry"
+    runtime_model_path = tmp_path / "runtime" / "ml_latest.joblib"
+
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setenv("MODEL_REGISTRY_DIR", str(registry_dir))
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(runtime_model_path))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTE_MODEL_PATH", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_POLICY", "strict")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_ROWS", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_SUPPORT", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLDS", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLD_RATIO", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_PRIOR_IMPROVEMENT", "0")
+    monkeypatch.setenv("AI_TRADING_POLICY_PROMOTION_MIN_OOS_SAMPLES", "1")
+    monkeypatch.setenv("AI_TRADING_POLICY_PROMOTION_MIN_OOS_NET_BPS", "-9999")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SENSITIVITY_SWEEP_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_EDGE_TARGET_EXPECTANCY_BPS", "-9999")
+    monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_DRAWDOWN_BPS", "999999")
+    monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_TURNOVER_RATIO", "1.0")
+    monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MIN_HIT_RATE_STABILITY", "0.0")
+    monkeypatch.setattr(
+        after_hours,
+        "_fetch_daily_bars",
+        lambda symbol, _start, _end: _synthetic_daily(symbol),
+    )
+
+    result = after_hours.run_after_hours_training(
+        now=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),
+    )
+
+    assert result["status"] == "trained"
+    assert result["governance_status"] == "production"
+    assert result["promoted_model_path"] == str(runtime_model_path)
+
+    from ai_trading.model_registry import ModelRegistry
+
+    registry = ModelRegistry(registry_dir)
+    governance = registry.model_index[result["model_id"]]["governance"]
+    runtime_promotion = governance["runtime_promotion"]
+
+    assert runtime_promotion["model_path"] == str(runtime_model_path)
+    assert runtime_promotion["manifest_path"] == result["promoted_manifest_path"]
+    viable = registry.get_viable_production_model("ml_edge")
+    assert viable is not None
+    assert viable[0] == result["model_id"]
+    assert viable[1]["production_path"] == str(runtime_model_path)
+
+
 def test_promotion_consecutive_pass_gate_requires_second_pass(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

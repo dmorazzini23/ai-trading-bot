@@ -7,7 +7,12 @@ from ai_trading.telemetry import runtime_state
 def test_health_endpoint_reports_runtime_state():
     runtime_state.update_data_provider_state(primary="alpaca", active="yahoo", backup="yahoo", using_backup=True, reason="test")
     runtime_state.update_quote_status(allowed=False, reason="missing_bid_ask", status="stale", synthetic=False)
-    runtime_state.update_broker_status(connected=False, last_error="timeout")
+    runtime_state.update_broker_status(
+        connected=False,
+        last_error="timeout",
+        open_orders_count=2,
+        positions_count=1,
+    )
 
     ctx = SimpleNamespace(service="ai-trading")
     hc = HealthCheck(ctx=ctx)
@@ -25,6 +30,8 @@ def test_health_endpoint_reports_runtime_state():
     assert provider_info["active"] == "yahoo"
     assert payload["quotes_status"]["status"] == "stale"
     assert payload["broker_connectivity"]["connected"] is False
+    assert payload["broker_connectivity"]["open_orders_count"] == 2
+    assert payload["broker_connectivity"]["positions_count"] == 1
 
 
 def test_health_endpoint_reports_degraded_provider_state():

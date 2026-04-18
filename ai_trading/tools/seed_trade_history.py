@@ -7,7 +7,7 @@ from ai_trading.database.connection import initialize_database, get_session
 from ai_trading.database.models import Trade
 
 logger = get_logger(__name__)
-DEFAULT_PATH = "trade_history.json"
+DEFAULT_PATH = "trade_history.seed.json"
 
 def load_history(path: str | Path = DEFAULT_PATH) -> list[dict]:
     """Return list of trade records from *path* or empty list when unavailable."""

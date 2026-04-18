@@ -1,5 +1,14 @@
 # Alpha Quality Overhaul - Migration Guide
 
+> Archive note: this guide documents an earlier alpha-quality migration and is
+> no longer a source of truth for the current evaluation stack. For current
+> runtime behavior, use `AGENTS.md`, `README.md`, `ARCHITECTURE.md`,
+> `API_DOCUMENTATION.md`, `DEPLOYING.md`, `docs/DEPLOYING.md`, and
+> `docs/OPERATIONS.md`. In particular, use
+> `ai_trading.strategies.backtester` for research backtests and
+> `ai-offline-replay` for production-faithful historical replay. References to
+> `ai_trading.strategies.backtest` below are historical.
+
 This document outlines the major changes introduced in the alpha quality overhaul and provides migration guidance for existing trading strategies.
 
 ## Overview
@@ -119,34 +128,20 @@ print(f"Max Drawdown: {results['max_drawdown']:.2%}")
 
 ### 5. Enhanced Backtesting
 
-#### Updated Module
-- `ai_trading/strategies/backtest.py` - Now includes realistic execution
+#### Current Canonical Tools
+- `ai_trading/strategies/backtester.py` - research backtests and artifact output
+- `ai_trading/tools/offline_replay.py` - production-faithful historical replay
+- `ai_trading/strategies/backtest.py` - legacy module retained for compatibility
 
 #### Migration
-Update backtest initialization:
+Prefer the modern evaluation paths:
 
 ```python
-# OLD
-backtest_engine = BacktestEngine()
+# Research backtests
+python -m ai_trading.strategies.backtester --help
 
-# NEW - With realistic execution
-from ai_trading.strategies.backtest import BacktestEngine
-
-backtest_engine = BacktestEngine(
-    initial_capital=100000,
-    commission_bps=5.0,      # 5 bps commission
-    commission_flat=1.0,     # $1 flat fee
-    latency_ms=50.0,         # 50ms latency
-    enable_slippage=True,    # Model slippage
-    enable_partial_fills=False,  # Partial fills (optional)
-    slippage_model="impact"  # Advanced slippage model
-)
-
-# Results now include net metrics
-results = backtest_engine.run_backtest(strategy, data, start_date, end_date)
-print(f"Gross Return: {results['gross_return']:.2%}")
-print(f"Net Return: {results['net_return']:.2%}")  # After all costs
-print(f"Average Slippage: {results['avg_slippage_bps']:.1f} bps")
+# Production-faithful historical replay
+ai-offline-replay --help
 ```
 
 ### 6. Signal Ensemble Upgrades
@@ -293,11 +288,11 @@ python -m ai_trading.evaluation.walkforward --smoke
 # Run alpha quality tests
 python tests/test_alpha_quality.py
 
-# Validate backtest realism
-python -c "
-from ai_trading.strategies.backtest import BacktestEngine
-# Verify net metrics < gross metrics due to costs
-"
+# Inspect the current research backtest CLI
+python -m ai_trading.strategies.backtester --help
+
+# Inspect the production-faithful replay CLI
+ai-offline-replay --help
 ```
 
 ## Configuration Changes

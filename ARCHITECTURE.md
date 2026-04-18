@@ -42,6 +42,19 @@ Current canonical routes from `create_app()`:
 4. Health payloads are built through `ai_trading.health_payload`, which keeps
    `/healthz` behavior canonical across entrypoints.
 
+## Evaluation And Strategy Notes
+
+- `ai_trading.strategies.backtester` is the fast research backtest path.
+- `ai_trading.tools.offline_replay` is the production-faithful historical
+  replay path.
+- `ai_trading.strategies.regime_detection` is the broader pandas/DataFrame
+  market-regime analysis module used for rich analysis outputs.
+- `ai_trading.strategies.regime_detector` is the dynamic-threshold and
+  canonical `MarketRegime` module used by live-ish portfolio and signal flows.
+- `ai_trading.tools.seed_trade_history` uses the checked-in JSON seed file
+  `trade_history.seed.json`, while runtime trade-history persistence is
+  controlled separately through `AI_TRADING_TRADE_HISTORY_PATH`.
+
 ## Operational Constraints
 
 - `zoneinfo` only; `pytz` is not part of the runtime path.

@@ -5704,6 +5704,33 @@ class _ModelPlaceholder:
         return f"<ModelPlaceholder reason={self.reason}>"
 
 
+class _ModelDisabled:
+    """Explicit runtime sentinel used when no approved real model is available."""
+
+    __slots__ = ("reason", "configured_path", "fallback_path")
+
+    is_disabled_model = True
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        configured_path: str = "",
+        fallback_path: str = "",
+    ) -> None:
+        self.reason = reason
+        self.configured_path = configured_path
+        self.fallback_path = fallback_path
+
+    def __repr__(self) -> str:  # pragma: no cover - repr formatting is simple
+        return (
+            "<ModelDisabled "
+            f"reason={self.reason} "
+            f"configured_path={self.configured_path!r} "
+            f"fallback_path={self.fallback_path!r}>"
+        )
+
+
 _MODEL_CACHE: Any | None = None
 _MODEL_CACHE_META: dict[str, Any] | None = None
 
@@ -5722,14 +5749,15 @@ def _required_model_cache_matches(path: str, modname: str) -> bool:
     meta = _MODEL_CACHE_META or {}
     kind = str(meta.get("kind") or "")
     if path:
-        if kind != "file":
+        if kind not in {"file", "disabled"}:
             return False
         if str(meta.get("path") or "") != path:
             return False
-        return bool(meta.get("signature") == _model_file_signature(path))
+        resolved_path = str(meta.get("resolved_path") or path)
+        return bool(meta.get("signature") == _model_file_signature(resolved_path))
     if modname:
         return kind == "module" and str(meta.get("module") or "") == modname
-    return kind == "placeholder"
+    return kind in {"placeholder", "disabled"}
 
 
 def _set_required_model_cache(
@@ -5738,13 +5766,16 @@ def _set_required_model_cache(
     kind: str,
     path: str | None = None,
     module: str | None = None,
+    resolved_path: str | None = None,
 ) -> Any:
     global _MODEL_CACHE, _MODEL_CACHE_META
     _MODEL_CACHE = model
     metadata: dict[str, Any] = {"kind": kind}
     if path:
         metadata["path"] = path
-        metadata["signature"] = _model_file_signature(path)
+        effective_path = resolved_path or path
+        metadata["resolved_path"] = effective_path
+        metadata["signature"] = _model_file_signature(effective_path)
     if module:
         metadata["module"] = module
     _MODEL_CACHE_META = metadata
@@ -5786,8 +5817,134 @@ def _enforce_model_artifact_verification(model_path: str) -> None:
     logger.warning("MODEL_VERIFICATION_SKIPPED", extra=details)
 
 
+def _model_payload_is_placeholder(model: Any) -> bool:
+    if getattr(model, "is_placeholder_model", False):
+        return True
+    return bool(isinstance(model, dict) and model.get("placeholder") is True)
+
+
+def _resolve_registry_production_model_path(
+    configured_model_path: str = "",
+) -> tuple[str, dict[str, Any]] | None:
+    strategies_raw = str(
+        get_env(
+            "AI_TRADING_MODEL_REGISTRY_FALLBACK_STRATEGIES",
+            "after_hours_ml_edge,ml_edge",
+        )
+        or "after_hours_ml_edge,ml_edge"
+    ).strip()
+    strategies = [
+        token.strip()
+        for token in strategies_raw.split(",")
+        if token and token.strip()
+    ]
+    if not strategies:
+        return None
+
+    candidate_bases: list[Path | None] = []
+    registry_env = str(
+        get_env("MODEL_REGISTRY_DIR", "", cast=str, resolve_aliases=False) or ""
+    ).strip()
+    if registry_env:
+        candidate_bases.append(Path(registry_env).expanduser())
+    if configured_model_path:
+        try:
+            configured_root = Path(configured_model_path).expanduser().resolve().parent.parent
+        except OSError:
+            configured_root = None
+        candidate_bases.append(configured_root)
+    candidate_bases.append(None)
+
+    registries: list[tuple[str, Any]] = []
+    seen_registry_paths: set[str] = set()
+    try:
+        from ai_trading.model_registry import ModelRegistry
+    except COMMON_EXC:
+        logger.debug("MODEL_REGISTRY_FALLBACK_LOOKUP_FAILED", exc_info=True)
+        return None
+    for base in candidate_bases:
+        base_key = str(base or "<default>")
+        if base_key in seen_registry_paths:
+            continue
+        seen_registry_paths.add(base_key)
+        try:
+            registry = ModelRegistry(base) if base is not None else ModelRegistry()
+        except COMMON_EXC:
+            logger.debug(
+                "MODEL_REGISTRY_FALLBACK_INIT_FAILED",
+                extra={"registry_base": base_key},
+                exc_info=True,
+            )
+            continue
+        registries.append((base_key, registry))
+
+    for strategy in strategies:
+        for base_key, registry in registries:
+            try:
+                viable_lookup = getattr(registry, "get_viable_production_model", None)
+                if callable(viable_lookup):
+                    production = viable_lookup(strategy)
+                else:
+                    production = registry.get_production_model(strategy)
+            except COMMON_EXC:
+                logger.debug(
+                    "MODEL_REGISTRY_FALLBACK_STRATEGY_LOOKUP_FAILED",
+                    extra={"strategy": strategy, "registry_base": base_key},
+                    exc_info=True,
+                )
+                continue
+            if not production:
+                continue
+            model_id, info = production
+            production_path = str(info.get("production_path") or "").strip()
+            if production_path and os.path.isfile(production_path):
+                return production_path, {
+                    "model_id": model_id,
+                    "strategy": strategy,
+                    "registry_base": base_key,
+                    "source": str(info.get("production_path_source") or "registry_production"),
+                }
+            artifact_path = str(info.get("artifact_path") or "").strip()
+            if artifact_path and os.path.isfile(artifact_path):
+                return artifact_path, {
+                    "model_id": model_id,
+                    "strategy": strategy,
+                    "registry_base": base_key,
+                    "source": "registry_production",
+                }
+    return None
+
+
+def _disable_runtime_ml(
+    *,
+    reason: str,
+    configured_path: str = "",
+    fallback_path: str = "",
+    extra: dict[str, Any] | None = None,
+) -> Any:
+    details: dict[str, Any] = {
+        "reason": reason,
+        "configured_path": configured_path,
+        "fallback_path": fallback_path,
+    }
+    if extra:
+        details.update(extra)
+    logger.warning("MODEL_RUNTIME_DISABLED", extra=details)
+    disabled = _ModelDisabled(
+        reason,
+        configured_path=configured_path,
+        fallback_path=fallback_path,
+    )
+    return _set_required_model_cache(
+        disabled,
+        kind="disabled",
+        path=configured_path or None,
+        resolved_path=fallback_path or configured_path or None,
+    )
+
+
 def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
-    """Load ML model from path or module; create placeholder if missing."""  # AI-AGENT-REF: strict model loader
+    """Load ML model from path or module with explicit non-placeholder fallback."""  # AI-AGENT-REF: strict model loader
     path = str(get_env("AI_TRADING_MODEL_PATH", "") or "").strip()
     modname = str(get_env("AI_TRADING_MODEL_MODULE", "") or "").strip()
     if _required_model_cache_matches(path, modname):
@@ -5803,45 +5960,138 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
 
     if path:
         execution_mode = _runtime_execution_mode()
-        strict_live = execution_mode == "live" and not (
+        require_model = bool(get_env("AI_TRADING_REQUIRE_ML_MODEL", False, cast=bool))
+        strict_runtime = execution_mode == "live" and not (
             _is_testing_env() or is_runtime_contract_testing_mode()
         )
-        if not os.path.isfile(path):
-            if strict_live:
+        active_path = path
+        active_source = "configured"
+        registry_meta: dict[str, Any] = {}
+
+        if not os.path.isfile(active_path):
+            registry_fallback = _resolve_registry_production_model_path(path)
+            if registry_fallback is not None:
+                active_path, registry_meta = registry_fallback
+                active_source = "registry_production"
+                logger.warning(
+                    "MODEL_RUNTIME_FALLBACK_SELECTED",
+                    extra={
+                        "configured_path": path,
+                        "fallback_path": active_path,
+                        **registry_meta,
+                    },
+                )
+            elif strict_runtime and require_model:
                 logger.error(
                     "MODEL_VERIFICATION_FAILED",
                     extra={
-                        "model_path": path,
+                        "model_path": active_path,
                         "manifest_path": str(get_env("AI_TRADING_MODEL_MANIFEST_PATH", "") or ""),
                         "reason_code": "MODEL_FILE_MISSING",
                         "execution_mode": execution_mode,
                     },
                 )
                 raise RuntimeError("MODEL_VERIFICATION_FAILED: MODEL_FILE_MISSING")
-            try:
-                Path(path).parent.mkdir(parents=True, exist_ok=True)
-                joblib.dump({"placeholder": True}, path)
+            else:
+                return _disable_runtime_ml(
+                    reason="missing_real_model_artifact",
+                    configured_path=path,
+                )
+
+        if active_source == "configured":
+            _enforce_model_artifact_verification(active_path)
+        else:
+            logger.info(
+                "MODEL_ARTIFACT_VERIFIED_VIA_REGISTRY",
+                extra={
+                    "configured_path": path,
+                    "fallback_path": active_path,
+                    **registry_meta,
+                },
+            )
+
+        mdl = joblib.load(active_path)
+        if _model_payload_is_placeholder(mdl):
+            registry_fallback = (
+                _resolve_registry_production_model_path(path)
+                if active_source == "configured"
+                else None
+            )
+            if registry_fallback is not None:
+                active_path, registry_meta = registry_fallback
+                active_source = "registry_production"
                 logger.warning(
-                    "MODEL_PLACEHOLDER_CREATED", extra={"path": path}
+                    "MODEL_RUNTIME_FALLBACK_SELECTED",
+                    extra={
+                        "configured_path": path,
+                        "fallback_path": active_path,
+                        "reason": "configured_placeholder_artifact",
+                        **registry_meta,
+                    },
                 )
-            except OSError as e:  # pragma: no cover - unexpected I/O failures
+                logger.info(
+                    "MODEL_ARTIFACT_VERIFIED_VIA_REGISTRY",
+                    extra={
+                        "configured_path": path,
+                        "fallback_path": active_path,
+                        **registry_meta,
+                    },
+                )
+                mdl = joblib.load(active_path)
+            elif strict_runtime and require_model:
                 logger.error(
-                    "MODEL_PATH_INVALID",
-                    extra={"path": path, "error": str(e)},
+                    "MODEL_VERIFICATION_FAILED",
+                    extra={
+                        "model_path": active_path,
+                        "reason_code": "MODEL_PLACEHOLDER_ARTIFACT",
+                        "execution_mode": execution_mode,
+                    },
                 )
-                raise RuntimeError(
-                    f"AI_TRADING_MODEL_PATH '{path}' could not be created"
-                ) from e
-        _enforce_model_artifact_verification(path)
-        mdl = joblib.load(path)
+                raise RuntimeError("MODEL_VERIFICATION_FAILED: MODEL_PLACEHOLDER_ARTIFACT")
+            else:
+                return _disable_runtime_ml(
+                    reason="placeholder_artifact_detected",
+                    configured_path=path,
+                    fallback_path=active_path if active_source != "configured" else "",
+                    extra=registry_meta if active_source != "configured" else None,
+                )
+
+        if _model_payload_is_placeholder(mdl):
+            if strict_runtime and require_model:
+                logger.error(
+                    "MODEL_VERIFICATION_FAILED",
+                    extra={
+                        "model_path": active_path,
+                        "reason_code": "MODEL_PLACEHOLDER_ARTIFACT",
+                        "execution_mode": execution_mode,
+                    },
+                )
+                raise RuntimeError("MODEL_VERIFICATION_FAILED: MODEL_PLACEHOLDER_ARTIFACT")
+            return _disable_runtime_ml(
+                reason="placeholder_artifact_detected",
+                configured_path=path,
+                fallback_path=active_path if active_source != "configured" else "",
+                extra=registry_meta if active_source != "configured" else None,
+            )
         try:
-            digest = _sha256_file(path)
+            digest = _sha256_file(active_path)
         except OSError:  # hashing is best-effort; missing/perm issues shouldn't crash
             digest = "unknown"
         logger.info(
-            "MODEL_LOADED", extra={"source": "file", "path": path, "sha": digest}
+            "MODEL_LOADED",
+            extra={
+                "source": active_source,
+                "path": active_path,
+                "sha": digest,
+                **registry_meta,
+            },
         )
-        return _set_required_model_cache(mdl, kind="file", path=path)
+        return _set_required_model_cache(
+            mdl,
+            kind="file",
+            path=path,
+            resolved_path=active_path,
+        )
 
     if modname:
         try:
@@ -27144,6 +27394,8 @@ def _record_broker_sync_metrics(state: BotState, snapshot: "BrokerSyncResult" | 
             connected=bool(snapshot is not None),
             last_error=None if snapshot is not None else "broker_sync_unavailable",
             status="connected" if snapshot is not None else "unknown",
+            open_orders_count=int(open_orders_count),
+            positions_count=int(positions_count),
         )
     except Exception:
         logger.debug("BROKER_SYNC_RUNTIME_STATE_UPDATE_FAILED", exc_info=True)

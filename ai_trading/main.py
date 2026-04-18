@@ -1824,6 +1824,8 @@ def run_cycle() -> None:
                                         connected=bool(snapshot is not None),
                                         last_error=None if snapshot is not None else "broker_sync_unavailable",
                                         status="connected" if snapshot is not None else "unknown",
+                                        open_orders_count=int(open_orders_count),
+                                        positions_count=int(positions_count),
                                     )
                                 except Exception:
                                     logger.debug(
