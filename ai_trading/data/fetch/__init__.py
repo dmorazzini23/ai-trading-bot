@@ -965,7 +965,12 @@ def _provider_switch_cooldown_seconds() -> float:
 
 def _env_signature() -> tuple[str | None, str | None]:
     return (
-        str(get_env("ALPACA_DATA_FEED", "") or "") or None,
+        str(
+            get_env("ALPACA_EXECUTION_FEED", None)
+            or get_env("ALPACA_DATA_FEED", "")
+            or ""
+        )
+        or None,
         "1" if _is_sip_unauthorized() else "0",
     )
 
@@ -995,11 +1000,16 @@ def _ensure_override_state_current() -> None:
 
 def _current_intraday_feed() -> str:
     """Return the active intraday feed identifier."""
+    env_feed = get_env("ALPACA_EXECUTION_FEED")
+    if env_feed not in (None, ""):
+        normalized = str(env_feed).strip().lower()
+        if normalized:
+            return get_execution_feed(normalized)
     env_feed = get_env("DATA_FEED_INTRADAY")
     if env_feed not in (None, ""):
         normalized = str(env_feed).strip().lower()
         if normalized:
-            return normalized
+            return get_execution_feed(normalized)
     try:
         from ai_trading.config import (
             DATA_FEED_INTRADAY as _CFG_INTRADAY,  # local import to avoid cycles
@@ -1013,15 +1023,44 @@ def _current_intraday_feed() -> str:
         except Exception:
             settings = None
         if settings is not None:
-            feed = getattr(settings, "data_feed_intraday", None) or getattr(settings, "alpaca_data_feed", None)
+            feed = (
+                getattr(settings, "alpaca_execution_feed", None)
+                or getattr(settings, "execution_feed", None)
+                or getattr(settings, "data_feed_intraday", None)
+                or getattr(settings, "alpaca_data_feed", None)
+            )
     if feed in (None, ""):
         feed = get_env("ALPACA_DATA_FEED")
-    normalized = str(feed or "iex").strip().lower()
-    return normalized or "iex"
+    return get_execution_feed(str(feed or "iex"))
 
 
 def _intraday_feed_prefers_sip() -> bool:
-    """Return ``True`` when SIP is the selected intraday feed."""
+    """Return ``True`` when runtime configuration explicitly prefers SIP."""
+
+    candidates: list[object] = [
+        get_env("ALPACA_EXECUTION_FEED", None),
+        get_env("DATA_FEED_INTRADAY", None),
+    ]
+    try:
+        settings = _current_settings()
+    except Exception:
+        settings = None
+    if settings is not None:
+        candidates.extend(
+            [
+                getattr(settings, "alpaca_execution_feed", None),
+                getattr(settings, "execution_feed", None),
+                getattr(settings, "data_feed_intraday", None),
+                getattr(settings, "alpaca_data_feed", None),
+            ]
+        )
+    candidates.append(get_env("ALPACA_DATA_FEED", None))
+    for candidate in candidates:
+        token = str(candidate or "").strip().lower()
+        if token.startswith("alpaca_"):
+            token = token.split("_", 1)[1]
+        if token == "sip":
+            return True
     return _current_intraday_feed() == "sip"
 
 
@@ -4929,7 +4968,7 @@ def _env_source_override_raw(timeframe: str) -> tuple[str, ...] | None:
 
     if normalized == "alpaca":
         feed_candidates: list[str] = []
-        for key in ("ALPACA_DATA_FEED", "DATA_FEED_INTRADAY", "ALPACA_DEFAULT_FEED"):
+        for key in ("ALPACA_EXECUTION_FEED", "ALPACA_DATA_FEED", "DATA_FEED_INTRADAY", "ALPACA_DEFAULT_FEED"):
             try:
                 candidate = get_env(key)
             except Exception:
@@ -5016,7 +5055,9 @@ def refresh_default_feed(feed: str | None = None) -> str:
                 candidate = None
             else:
                 candidate = (
-                    getattr(cfg_default, "data_feed", None)
+                    getattr(cfg_default, "alpaca_execution_feed", None)
+                    or getattr(cfg_default, "execution_feed", None)
+                    or getattr(cfg_default, "data_feed", None)
                     or getattr(cfg_default, "alpaca_data_feed", "iex")
                     or "iex"
                 )
@@ -5062,7 +5103,13 @@ def _env_flag(key: str, default: bool = False) -> bool:
 
 
 def _prefers_sip() -> bool:
-    feed = str(get_env("ALPACA_DATA_FEED", "iex") or "iex").strip().lower()
+    feed = get_execution_feed(
+        str(
+            get_env("ALPACA_EXECUTION_FEED", None)
+            or get_env("ALPACA_DATA_FEED", "iex")
+            or "iex"
+        )
+    )
     if "sip" in feed:
         return True
     failover = str(get_env("ALPACA_FEED_FAILOVER", "") or "")
@@ -14240,7 +14287,15 @@ def get_bars(
                     break
             if feed_candidate is None:
                 feed_candidate = get_execution_feed(
-                    getattr(S, "data_feed", getattr(S, "alpaca_data_feed", "iex"))
+                    getattr(
+                        S,
+                        "alpaca_execution_feed",
+                        getattr(
+                            S,
+                            "execution_feed",
+                            getattr(S, "data_feed", getattr(S, "alpaca_data_feed", "iex")),
+                        ),
+                    )
                 )
             normalized_feed = _normalize_feed_value(feed_candidate)
 

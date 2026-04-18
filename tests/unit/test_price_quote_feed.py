@@ -167,6 +167,29 @@ def test_get_current_price_uses_configured_feed(monkeypatch):
     assert captured["params"] == {"feed": "sip"}
 
 
+def test_get_current_price_prefers_execution_feed_over_legacy(monkeypatch):
+    symbol = "TSLA"
+    monkeypatch.setenv("ALPACA_EXECUTION_FEED", "sip")
+    monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
+    monkeypatch.setenv("ALPACA_SIP_UNAUTHORIZED", "0")
+
+    captured: dict[str, object] = {}
+
+    def fake_alpaca_get(url, *, params=None, **_):
+        captured["url"] = url
+        captured["params"] = params
+        return {"ap": 101.25}
+
+    monkeypatch.setattr(utils_base, "alpaca_get", fake_alpaca_get)
+
+    price = utils_base.get_current_price(symbol)
+
+    assert price == pytest.approx(101.25)
+    assert captured["params"] == {"feed": "sip"}
+
+
 def test_get_current_price_http_error_uses_fallback(monkeypatch):
     symbol = "NVDA"
 

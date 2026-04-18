@@ -7,16 +7,32 @@ and re-exports core entry points for backwards compatibility.
 """
 
 from json import JSONDecodeError
-from typing import Any
+from typing import Any, cast
 import time as pytime
 from threading import Thread
 import csv
 from datetime import UTC, datetime
 
 from ai_trading.config.management import get_env
+from ai_trading.data.feed_roles import get_execution_feed
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _latest_quote_request(symbol: str, *, feed: str | None = None) -> Any:
+    bot_engine_module = cast(
+        Any,
+        __import__("ai_trading.core.bot_engine", fromlist=["bot_engine"]),
+    )
+    resolved_feed = feed or get_execution_feed()
+    try:
+        return bot_engine_module.StockLatestQuoteRequest(
+            symbol_or_symbols=[symbol],
+            feed=resolved_feed,
+        )
+    except TypeError:
+        return bot_engine_module.StockLatestQuoteRequest(symbol_or_symbols=[symbol])
 
 
 def poll_order_fill_status(ctx: Any, order_id: str, timeout: int | float = 120) -> None:
@@ -207,7 +223,7 @@ def vwap_pegged_submit(
                 or _bot_engine.StockLatestQuoteRequest is None
             ):
                 raise RuntimeError("StockLatestQuoteRequest unavailable")
-            req = _bot_engine.StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+            req = _latest_quote_request(symbol)
             quote = ctx.data_client.get_stock_latest_quote(req)
             spread = (
                 (quote.ask_price - quote.bid_price)
@@ -495,7 +511,7 @@ def pov_submit(
                 or _bot_engine.StockLatestQuoteRequest is None
             ):
                 raise RuntimeError("StockLatestQuoteRequest unavailable")
-            req = _bot_engine.StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+            req = _latest_quote_request(symbol)
             quote = ctx.data_client.get_stock_latest_quote(req)
             spread = (
                 (quote.ask_price - quote.bid_price)

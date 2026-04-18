@@ -23,6 +23,7 @@ import numpy as np
 
 from ai_trading import paths
 from ai_trading.config.management import get_env, reload_env
+from ai_trading.data.feed_roles import get_execution_feed, get_reference_feed, normalize_feed_role
 from ai_trading.data.fetch import get_daily_df, refresh_default_feed
 from ai_trading.data.splits import PurgedGroupTimeSeriesSplit
 from ai_trading.features.indicators import (
@@ -5201,6 +5202,19 @@ def _build_manifest_metadata(
             "minute_source": str(get_env("MINUTE_SOURCE", "unknown") or "unknown"),
             "data_provenance": str(get_env("DATA_PROVENANCE", "iex") or "iex"),
             "alpaca_data_feed": str(get_env("ALPACA_DATA_FEED", "unknown") or "unknown"),
+            "alpaca_execution_feed": get_execution_feed(),
+            "alpaca_reference_feed": get_reference_feed(),
+            "model_data_feed_role": normalize_feed_role(
+                str(
+                    get_env(
+                        "AI_TRADING_MODEL_DATA_FEED_ROLE",
+                        "reference",
+                        cast=str,
+                        resolve_aliases=False,
+                    )
+                    or "reference"
+                )
+            ),
         },
         "dataset_fingerprint": dataset_fingerprint,
         "sensitivity_sweep": {

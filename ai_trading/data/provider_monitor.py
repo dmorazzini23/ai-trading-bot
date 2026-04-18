@@ -24,6 +24,7 @@ from typing import Any, Callable, Deque, Dict, Mapping, MutableMapping, Tuple, c
 
 from ai_trading.config.management import get_env
 from ai_trading.config.settings import get_settings
+from ai_trading.data.feed_roles import get_execution_feed
 from ai_trading.logging import (
     get_logger,
     log_data_quality_event,
@@ -531,11 +532,16 @@ def safe_mode_cycle_marker() -> tuple[int, str | None]:
 def _current_intraday_feed() -> str:
     """Return the configured intraday feed identifier."""
 
+    env_feed = _env_value("ALPACA_EXECUTION_FEED")
+    if env_feed not in (None, ""):
+        normalized = env_feed.strip().lower()
+        if normalized:
+            return str(get_execution_feed(normalized))
     env_feed = _env_value("DATA_FEED_INTRADAY")
     if env_feed not in (None, ""):
         normalized = env_feed.strip().lower()
         if normalized:
-            return str(normalized)
+            return str(get_execution_feed(normalized))
     try:
         from ai_trading.config import DATA_FEED_INTRADAY as _CFG_FEED  # local import to avoid cycles
     except Exception:
@@ -547,11 +553,14 @@ def _current_intraday_feed() -> str:
         except Exception:
             settings = None
         if settings is not None:
-            feed = getattr(settings, "data_feed_intraday", None) or getattr(settings, "alpaca_data_feed", None)
+            feed = (
+                getattr(settings, "alpaca_execution_feed", None)
+                or getattr(settings, "data_feed_intraday", None)
+                or getattr(settings, "alpaca_data_feed", None)
+            )
     if feed in (None, ""):
         feed = _env_value("ALPACA_DATA_FEED")
-    normalized = str(feed or "iex").strip().lower()
-    return normalized or "iex"
+    return str(get_execution_feed(str(feed or "iex")))
 
 
 _GAP_RATIO_TRIGGER_CACHE: Dict[str, float] = {}

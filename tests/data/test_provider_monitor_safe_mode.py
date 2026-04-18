@@ -67,6 +67,9 @@ def test_provider_monitor_safe_mode_triggers_and_resets(
     record_func = getattr(pm, record_name)
     if record_name == "record_unauthorized_sip_event":
         monkeypatch.setenv("DATA_FEED_INTRADAY", "sip")
+        monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+        monkeypatch.setenv("ALPACA_HAS_SIP", "1")
+        monkeypatch.setenv("ALPACA_SIP_UNAUTHORIZED", "0")
         payload: dict[str, Any] = {"symbol": "AAPL"}
     else:
         monkeypatch.delenv("DATA_FEED_INTRADAY", raising=False)
@@ -295,3 +298,13 @@ def test_gap_event_threshold_strict_for_sip(monkeypatch: pytest.MonkeyPatch) -> 
     }
 
     assert pm._gap_event_is_severe(payload) is True
+
+
+def test_current_intraday_feed_prefers_execution_feed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALPACA_EXECUTION_FEED", "sip")
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
+    monkeypatch.setenv("ALPACA_SIP_UNAUTHORIZED", "0")
+    monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
+
+    assert pm._current_intraday_feed() == "sip"

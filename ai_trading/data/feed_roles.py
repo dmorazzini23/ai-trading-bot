@@ -61,10 +61,10 @@ def get_execution_feed(requested: str | None = None) -> ExecutionFeed:
     if candidate in (None, ""):
         candidate = get_env("ALPACA_EXECUTION_FEED", None, cast=str, resolve_aliases=False)
     if candidate in (None, ""):
-        candidate = _settings_feed("alpaca_execution_feed")
-    if candidate in (None, ""):
         # Legacy fallback only after explicit execution-feed knobs.
         candidate = get_env("ALPACA_DATA_FEED", None, cast=str, resolve_aliases=False)
+    if candidate in (None, ""):
+        candidate = _settings_feed("alpaca_execution_feed")
     if candidate in (None, ""):
         candidate = _settings_feed("alpaca_data_feed")
     resolved = resolve_alpaca_feed(candidate)

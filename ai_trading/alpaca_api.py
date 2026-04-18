@@ -22,6 +22,19 @@ else:
 
 TradingClient: type[Any] | None = _imported_trading_client
 
+
+def _default_execution_feed() -> str:
+    try:
+        from ai_trading.data.feed_roles import get_execution_feed
+
+        return get_execution_feed()
+    except Exception:
+        return str(
+            _managed_env("ALPACA_EXECUTION_FEED", None, cast=str)
+            or _managed_env("ALPACA_DATA_FEED", "iex", cast=str)
+            or "iex"
+        )
+
 _MarketOrderRequest: type[Any] | None
 _LimitOrderRequest: type[Any] | None
 _StopOrderRequest: type[Any] | None
@@ -965,7 +978,7 @@ def get_bars_df(
         if last_error is not None:
             raise RuntimeError("_get_rest unavailable") from last_error
         raise RuntimeError("_get_rest unavailable")
-    feed = feed or _managed_env("ALPACA_DATA_FEED", "iex", cast=str)
+    feed = feed or _default_execution_feed()
     adjustment = adjustment or _managed_env("ALPACA_ADJUSTMENT", "all", cast=str)
     tf_raw = timeframe
     normalize_timeframe = _module_callable(

@@ -51,6 +51,7 @@ except Exception:  # pragma: no cover - provide fallbacks when bot_engine unavai
 
 
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
+from ai_trading.data.feed_roles import get_execution_feed, get_reference_feed
 
 
 class UnavailableTradingClient:
@@ -90,7 +91,8 @@ def get_context() -> SimpleNamespace:
         return _CTX
 
     settings = get_settings()
-    feed = getattr(settings, "alpaca_data_feed", "iex")
+    execution_feed = get_execution_feed(getattr(settings, "alpaca_execution_feed", None))
+    reference_feed = get_reference_feed(getattr(settings, "alpaca_reference_feed", None))
     log_fetch = getattr(settings, "log_market_fetch", True)
     testing = getattr(settings, "testing", False)
     api_key = getattr(settings, "alpaca_api_key", None)
@@ -130,7 +132,9 @@ def get_context() -> SimpleNamespace:
     _CTX = SimpleNamespace(
         alpaca_trading_client=trading_client,
         alpaca_data_client=data_client,
-        alpaca_data_feed=feed,
+        alpaca_data_feed=execution_feed,
+        alpaca_execution_feed=execution_feed,
+        alpaca_reference_feed=reference_feed,
         log_market_fetch=log_fetch,
         testing=testing,
     )

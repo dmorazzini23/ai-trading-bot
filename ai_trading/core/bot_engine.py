@@ -1285,14 +1285,14 @@ def pretrade_data_health(runtime, universe) -> None:  # AI-AGENT-REF: data gate
             df = get_bars_df(
                 sym,
                 bars.TimeFrame.Day,
-                feed=get_env("ALPACA_DATA_FEED", "iex"),
+                feed=get_execution_feed(),
             )  # AI-AGENT-REF: derive window & feed
             if df is None or df.empty:
                 errors.append(f"{sym}:empty")
         except COMMON_EXC as exc:  # AI-AGENT-REF: narrow catch
             errors.append(f"{sym}:{exc}")
     if errors:
-        feed = get_env("ALPACA_DATA_FEED", "iex")
+        feed = get_execution_feed()
         logger.critical(
             "DATA_HEALTH_FAIL",
             extra={"endpoint": "alpaca/bars", "feed": feed, "symbols": symbols, "errors": errors},
@@ -7142,7 +7142,10 @@ try:
     _DEFAULT_FEED = _normalize_feed_name(data_fetcher_module.get_default_feed())
 except AttributeError:
     _DEFAULT_FEED = _normalize_feed_name(
-        getattr(CFG, "data_feed", None) or getattr(CFG, "alpaca_data_feed", "iex")
+        getattr(CFG, "alpaca_execution_feed", None)
+        or getattr(CFG, "execution_feed", None)
+        or getattr(CFG, "data_feed", None)
+        or getattr(CFG, "alpaca_data_feed", "iex")
     )
 
 
@@ -9369,7 +9372,9 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
         normalized_feed = _normalize_feed_name(feed)
         if not normalized_feed:
             normalized_feed = _normalize_feed_name(
-                configured_feed or get_env("ALPACA_DATA_FEED")
+                configured_feed
+                or get_env("ALPACA_EXECUTION_FEED")
+                or get_env("ALPACA_DATA_FEED")
             )
         if normalized_feed == "iex":
             return 0.75, 0.75
@@ -12579,8 +12584,16 @@ class DataFetcher:
             extra={
                 "feed": getattr(
                     self.settings,
-                    "data_feed",
-                    getattr(self.settings, "alpaca_data_feed", None),
+                    "alpaca_execution_feed",
+                    getattr(
+                        self.settings,
+                        "execution_feed",
+                        getattr(
+                            self.settings,
+                            "data_feed",
+                            getattr(self.settings, "alpaca_data_feed", None),
+                        ),
+                    ),
                 ),
                 "adjustment": getattr(self.settings, "alpaca_adjustment", None),
             },
@@ -12995,7 +13008,12 @@ class DataFetcher:
         )
 
     def _planned_daily_provider(self, feed: str | None) -> str:
-        candidate = feed or getattr(self.settings, "alpaca_data_feed", None)
+        candidate = (
+            feed
+            or getattr(self.settings, "alpaca_execution_feed", None)
+            or getattr(self.settings, "execution_feed", None)
+            or getattr(self.settings, "alpaca_data_feed", None)
+        )
         if candidate is None:
             candidate = getattr(self.settings, "data_feed", "iex")
         try:
@@ -13668,8 +13686,16 @@ class DataFetcher:
             effective_feed = self._resolve_feed(
                 getattr(
                     self.settings,
-                    "data_feed",
-                    getattr(self.settings, "alpaca_data_feed", None),
+                    "alpaca_execution_feed",
+                    getattr(
+                        self.settings,
+                        "execution_feed",
+                        getattr(
+                            self.settings,
+                            "data_feed",
+                            getattr(self.settings, "alpaca_data_feed", None),
+                        ),
+                    ),
                 )
             )
         planned_provider = self._planned_daily_provider(effective_feed)
@@ -14590,8 +14616,16 @@ class DataFetcher:
             feed = self._resolve_feed(
                 getattr(
                     self.settings,
-                    "data_feed",
-                    getattr(self.settings, "alpaca_data_feed", None),
+                    "alpaca_execution_feed",
+                    getattr(
+                        self.settings,
+                        "execution_feed",
+                        getattr(
+                            self.settings,
+                            "data_feed",
+                            getattr(self.settings, "alpaca_data_feed", None),
+                        ),
+                    ),
                 )
                 or "iex"
             )
@@ -14926,8 +14960,16 @@ class DataFetcher:
         feed = self._resolve_feed(
             getattr(
                 self.settings,
-                "data_feed",
-                getattr(self.settings, "alpaca_data_feed", None),
+                "alpaca_execution_feed",
+                getattr(
+                    self.settings,
+                    "execution_feed",
+                    getattr(
+                        self.settings,
+                        "data_feed",
+                        getattr(self.settings, "alpaca_data_feed", None),
+                    ),
+                ),
             )
             or "iex"
         )
@@ -19883,7 +19925,13 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
             )
         else:
             try:
-                req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+                try:
+                    req = StockLatestQuoteRequest(
+                        symbol_or_symbols=[symbol],
+                        feed=get_execution_feed(),
+                    )
+                except TypeError:
+                    req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
                 quote = data_client.get_stock_latest_quote(req)
             except APIError as exc:
                 fallback_reason = "api_error"
@@ -24225,7 +24273,13 @@ def _check_fallback_quote_age(
         return False, None, "quote_source_unavailable"
     payload_candidates: list[Any] = []
     try:
-        req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+        try:
+            req = StockLatestQuoteRequest(
+                symbol_or_symbols=[symbol],
+                feed=get_execution_feed(),
+            )
+        except TypeError:
+            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
     except COMMON_EXC as exc:
         logger.warning(
             "FALLBACK_QUOTE_REQUEST_FAILED",
@@ -30971,8 +31025,12 @@ def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | Non
     try:
         if not _stock_quote_request_ready():
             raise RuntimeError("StockLatestQuoteRequest unavailable")
-        if feed:
-            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol], feed=feed)
+        effective_feed = _sanitize_alpaca_feed(feed) if feed else None
+        if effective_feed is not None:
+            try:
+                req = StockLatestQuoteRequest(symbol_or_symbols=[symbol], feed=effective_feed)
+            except TypeError:
+                req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
         else:
             req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
         clients: list[Any] = []
@@ -31003,7 +31061,7 @@ def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | Non
             "QUOTE_FETCH_FAILED",
             extra={
                 "symbol": symbol,
-                "feed": feed or "nbbo",
+                "feed": effective_feed or "nbbo",
                 "error": str(exc),
             },
         )
@@ -51815,7 +51873,9 @@ def get_latest_price(
 
     preferred_feed = _prefer_feed_this_cycle()
     try:
-        configured_env_raw = get_env("ALPACA_DATA_FEED", None)
+        configured_env_raw = get_env("ALPACA_EXECUTION_FEED", None)
+        if configured_env_raw in (None, ""):
+            configured_env_raw = get_env("ALPACA_DATA_FEED", None)
     except COMMON_EXC:
         configured_env_raw = None
     configured_env = None
@@ -52145,7 +52205,9 @@ def _get_latest_price_simple(symbol: str, *_, **__):
 
     preferred_feed = _prefer_feed_this_cycle()
     try:
-        configured_env_raw = get_env("ALPACA_DATA_FEED", None)
+        configured_env_raw = get_env("ALPACA_EXECUTION_FEED", None)
+        if configured_env_raw in (None, ""):
+            configured_env_raw = get_env("ALPACA_DATA_FEED", None)
     except COMMON_EXC:
         configured_env_raw = None
     configured_env = None

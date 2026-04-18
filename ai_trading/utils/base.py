@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 from ai_trading.config import get_settings
 from ai_trading.config.management import get_env
+from ai_trading.data.feed_roles import get_execution_feed
 from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import get_logger
 from ai_trading.settings import get_verbose_logging
@@ -293,7 +294,7 @@ def get_current_price(symbol: str) -> float:
     price = 0.0
     http_error_types = _alpaca_http_error_types()
     try:
-        feed = get_env("ALPACA_DATA_FEED", "iex")
+        feed = get_execution_feed()
         params = {"feed": feed} if feed else None
         data = alpaca_get(
             f"{get_alpaca_data_v2_base()}/stocks/{symbol}/quotes/latest",
