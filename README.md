@@ -1634,6 +1634,28 @@ calls suppress further warnings to avoid log spam.
 - Sector classifications follow the Global Industry Classification Standard (GICS).
 - To add a symbol, append it to `ai_trading/data/tickers.csv` **and** extend `SECTOR_MAPPINGS` in `ai_trading/core/bot_engine.py` with the verified sector.
 
+### Dynamic Universe Overlay
+- `tickers.csv` remains the immutable base universe.
+- When `AI_TRADING_DYNAMIC_UNIVERSE_ENABLED=1`, each cycle builds a fresh overlay from Alpaca market movers before screening.
+- The runtime keeps `base_universe_tickers` separate from the cycle-scoped `universe_tickers` so movers do not become sticky across cycles.
+- Gainers are injected as long-biased candidates; losers are injected only when shorting is enabled via `TRADING__ALLOW_SHORTS` and the long/short sleeve is enabled.
+- Dynamic candidates are prepended ahead of the static list by default so `SCREEN_TOPN`, `AI_TRADING_PREPARE_SYMBOL_LIMIT`, and `MAX_SYMBOLS_PER_CYCLE` do not starve them.
+- Each cycle writes a structured snapshot to `runtime/dynamic_universe_snapshots.jsonl` unless overridden with `AI_TRADING_DYNAMIC_UNIVERSE_SNAPSHOT_PATH`.
+
+Recommended starter env:
+
+```env
+AI_TRADING_DYNAMIC_UNIVERSE_ENABLED=1
+AI_TRADING_DYNAMIC_UNIVERSE_REFRESH_SEC=300
+AI_TRADING_DYNAMIC_UNIVERSE_GAINERS_TOP=10
+AI_TRADING_DYNAMIC_UNIVERSE_LOSERS_TOP=10
+AI_TRADING_DYNAMIC_UNIVERSE_MIN_PRICE=5
+AI_TRADING_DYNAMIC_UNIVERSE_MIN_DOLLAR_VOLUME=5000000
+AI_TRADING_DYNAMIC_UNIVERSE_PREPEND=1
+AI_TRADING_DYNAMIC_UNIVERSE_REQUIRE_ETB_SHORTS=1
+SCREEN_TOPN=25
+```
+
 Example systemd unit override:
 
 ```ini

@@ -28553,6 +28553,7 @@ class ExecutionEngine:
                     context["failed_checks"] = failed_checks
                     context["gate_passed"] = False
                     context["reason"] = "pending_new_pressure_guard"
+            execution_allowed = bool(allowed)
             if not allowed:
                 failed_checks_raw = context.get("failed_checks", [])
                 failed_checks = (

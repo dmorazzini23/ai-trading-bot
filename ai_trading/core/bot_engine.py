@@ -29774,22 +29774,30 @@ def load_candidate_universe(runtime, tickers: list[str] | None = None) -> list[s
         If no tickers are available after loading.
     """  # AI-AGENT-REF: use packaged universe loader
     if tickers is not None:
-        # Preserve a canonical universe separate from cycle-scoped screened symbols.
         tickers = [symbol for symbol in (str(raw).strip() for raw in tickers) if symbol]
-        setattr(runtime, "tickers", tickers)
+        setattr(runtime, "base_universe_tickers", list(tickers))
         setattr(runtime, "universe_tickers", list(tickers))
+        if not getattr(runtime, "tickers", None):
+            setattr(runtime, "tickers", list(tickers))
     else:
-        tickers = getattr(runtime, "universe_tickers", None)
+        tickers = getattr(runtime, "base_universe_tickers", None)
+        if not tickers:
+            tickers = getattr(runtime, "universe_tickers", None)
         if not tickers:
             tickers = getattr(runtime, "tickers", None)
     if not tickers:
         tickers = load_tickers()
-        setattr(runtime, "tickers", tickers)
+        setattr(runtime, "base_universe_tickers", list(tickers))
         setattr(runtime, "universe_tickers", list(tickers))
+        setattr(runtime, "tickers", list(tickers))
     if not tickers:
         raise RuntimeError("No tickers available")
+    if not getattr(runtime, "base_universe_tickers", None):
+        setattr(runtime, "base_universe_tickers", list(tickers))
     if not getattr(runtime, "universe_tickers", None):
         setattr(runtime, "universe_tickers", list(tickers))
+    if not getattr(runtime, "tickers", None):
+        setattr(runtime, "tickers", list(tickers))
     logger.debug(
         "CANDIDATE_UNIVERSE_LOADED",
         extra={"count": len(tickers)},
@@ -33429,8 +33437,14 @@ def _prepare_run(
     params["get_capital_cap()"] = _param(runtime, "get_capital_cap()", 0.25)
     compute_spy_vol_stats(runtime)
 
-    full_watchlist = load_candidate_universe(runtime, tickers)
+    from ai_trading.data.dynamic_universe import build_dynamic_universe
+
+    base_watchlist = load_candidate_universe(runtime, tickers)
+    setattr(runtime, "base_universe_tickers", list(base_watchlist))
+    dynamic_result = build_dynamic_universe(runtime, list(base_watchlist))
+    full_watchlist = list(dynamic_result.merged_symbols)
     setattr(runtime, "universe_tickers", list(full_watchlist))
+    setattr(runtime, "dynamic_universe_metadata", dict(dynamic_result.metadata))
     degraded_snapshot = _resolve_data_provider_degraded()
     degraded_cycle, degrade_reason, degrade_fatal = _degrade_state(degraded_snapshot)
     try:
@@ -33476,8 +33490,10 @@ def _prepare_run(
     logger.info(
         "CANDIDATE_PIPELINE",
         extra={
+            "base_universe_count": len(base_watchlist),
             "universe_count": len(full_watchlist),
             "screened_count": len(symbols),
+            "dynamic_overlay_count": len(dynamic_result.additions),
             "degraded_cycle": bool(degraded_cycle),
             "degraded_reason": degrade_reason,
         },
@@ -50054,7 +50070,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             for attempt in range(3):
                 try:
                     current_cash, regime_ok, symbols = _prepare_run(
-                        runtime, state, getattr(runtime, "universe_tickers", None)
+                        runtime, state, getattr(runtime, "base_universe_tickers", None)
                     )
                     break
                 except DataFetchError as e:
