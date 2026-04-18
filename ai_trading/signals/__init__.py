@@ -9,7 +9,7 @@ import statistics
 import time
 from collections.abc import Iterable, Sequence
 from functools import lru_cache
-from typing import Any, TYPE_CHECKING, cast
+from typing import Any, TYPE_CHECKING, TypeAlias, cast
 
 if TYPE_CHECKING:  # pragma: no cover - used for type hints
     import numpy as np  # type: ignore
@@ -55,12 +55,21 @@ from ai_trading.config import get_settings
 from ai_trading.config.management import get_env as _get_env
 from ai_trading.indicators import atr, mean_reversion_zscore, rsi
 from ai_trading.utils.lazy_imports import load_pandas
-from ai_trading.utils.pandas_facade import DataFrame as PDDataFrame, Series as PDSeries
 
 # Heavy imports are loaded lazily within functions
 
 
 pd = load_pandas()
+_PANDAS_DATAFRAME_TYPE = pd.DataFrame
+
+if TYPE_CHECKING:
+    import pandas as _pd
+
+    PDDataFrame: TypeAlias = _pd.DataFrame
+    PDSeries: TypeAlias = _pd.Series
+else:
+    PDDataFrame = Any
+    PDSeries = Any
 
 
 def _get_numpy():
@@ -346,7 +355,7 @@ def _validate_input_df(data) -> None:
     pd = _get_pandas()
     if data is None:
         raise ValueError("Input must be a DataFrame")
-    if pd is not None and hasattr(pd, "DataFrame") and (not isinstance(data, PDDataFrame)):
+    if pd is not None and hasattr(pd, "DataFrame") and (not isinstance(data, _PANDAS_DATAFRAME_TYPE)):
         raise ValueError("Input must be a DataFrame")
     required = ["open", "high", "low", "close", "volume"]
     if hasattr(data, "columns"):
@@ -535,7 +544,7 @@ def generate_signal(df: PDDataFrame, column: str) -> PDSeries:
     if df is None:
         logger.error("Dataframe is None in generate_signal")
         raise ValueError("df cannot be None")
-    if not isinstance(df, PDDataFrame):
+    if not isinstance(df, _PANDAS_DATAFRAME_TYPE):
         logger.error("Expected DataFrame, got %s", type(df))
         raise TypeError("df must be a pandas DataFrame")
     if df.empty:

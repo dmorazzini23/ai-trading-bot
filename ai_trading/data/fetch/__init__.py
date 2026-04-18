@@ -6288,10 +6288,8 @@ def _normalize_finnhub_bars(frame: Any) -> pd.DataFrame | Any:
 
 def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     pd_local = _ensure_pandas()
-    fetcher_is_stub = getattr(fh_fetcher, "fetch", None) is None or getattr(fh_fetcher, "is_stub", False)
-    if fetcher_is_stub and get_env("FINNHUB_API_KEY"):
-        fetcher_is_stub = False
-    if fetcher_is_stub:
+    fetcher = fh_fetcher
+    if fetcher is None or getattr(fetcher, "fetch", None) is None:
         if pd_local is None:
             return []  # type: ignore[return-value]
         log_finnhub_disabled(symbol)
@@ -6306,7 +6304,7 @@ def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Da
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
     try:
-        df = fh_fetcher.fetch(symbol, start_dt, end_dt, resolution=resolution)
+        df = fetcher.fetch(symbol, start_dt, end_dt, resolution=resolution)
         if isinstance(df, pd_local.DataFrame):
             if "close" in df.columns:
                 for col in ("open", "high", "low"):
@@ -11862,7 +11860,7 @@ def _minute_df_from_finnhub(
     end: _dt.datetime,
 ) -> pd.DataFrame | None:
     fetcher = fh_fetcher
-    if fetcher is None or getattr(fetcher, "is_stub", True):
+    if fetcher is None:
         return None
     try:
         frame = fetcher.fetch(_canon_symbol(symbol), start, end, resolution="1")
@@ -12377,7 +12375,7 @@ def get_minute_df(
                 normalized_feed = _normalize_feed_value(cached_cycle_feed)
             except Exception:
                 normalized_feed = str(cached_cycle_feed).strip().lower()
-    finnhub_key_present = bool(get_env("FINNHUB_API_KEY")) and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
+    finnhub_key_present = bool(get_env("FINNHUB_API_KEY")) and fh_fetcher is not None
     if tf_key in _SKIPPED_SYMBOLS:
         skip_window_until = skip_until_dt
         skip_window_active_local = skip_window_active
@@ -12593,7 +12591,7 @@ def get_minute_df(
     forced_threshold_sip_switch_logged = False
 
     finnhub_api_key = get_env("FINNHUB_API_KEY")
-    if finnhub_api_key and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", True):
+    if finnhub_api_key and fh_fetcher is not None:
         finnhub_frame = _minute_df_from_finnhub(symbol, start_dt, end_dt)
         if finnhub_frame is not None and not getattr(finnhub_frame, "empty", True):
             finnhub_processed = _post_process(finnhub_frame, symbol=symbol, timeframe="1Min")

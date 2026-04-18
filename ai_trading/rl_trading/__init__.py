@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import importlib
-import importlib.util
-import importlib.machinery
 import inspect
 import sys
 import time
@@ -11,7 +9,7 @@ import uuid
 from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Iterable, TYPE_CHECKING, NoReturn
+from typing import Any, Iterable, TYPE_CHECKING
 
 from ai_trading.logging import get_logger
 
@@ -65,50 +63,20 @@ class RLAgent:
     def __init__(self, model_path: str | Path) -> None:
         self.model_path = str(model_path)
         self.model: Any | None = None
-        self._using_stub_model = False
-        self._stub_signal_warned = False
-
-    def _load_stub_model(self, model_path: Path) -> None:
-        """Load the lightweight stub model used when RL dependencies are missing."""
-
-        from . import train  # imported lazily to avoid optional deps at import time
-
-        logger.warning(
-            "RL stack unavailable – falling back to stub model for %s",
-            model_path,
-        )
-        self._using_stub_model = True
-        self._stub_signal_warned = False
-        if model_path.exists():
-            try:
-                self.model = train.Model.load(model_path)
-                return
-            except Exception as exc:  # pragma: no cover - defensive guard
-                logger.warning(
-                    "Failed to load stub RL model from %s: %s; creating fresh stub",
-                    model_path,
-                    exc,
-                )
-        self.model = train.Model(train.TrainingConfig(model_path=str(model_path)))
 
     def load(self) -> None:
         model_path = Path(self.model_path)
-        rl_ready = is_rl_available()
-        is_stub = getattr(PPO, "__name__", "") == "_SB3Stub"
-        if not rl_ready or PPO is None or is_stub:
-            self._load_stub_model(model_path)
-            return
+        if not is_rl_available() or PPO is None:
+            raise ImportError(
+                "RL stack not available; install stable-baselines3, gymnasium, and torch"
+            )
         if not model_path.exists():
-            logger.error("RL model not found at %s", self.model_path)
-            self._load_stub_model(model_path)
-            return
+            raise FileNotFoundError(f"RL model not found at {self.model_path}")
         try:
             self.model = PPO.load(self.model_path)
-            self._using_stub_model = False
-            self._stub_signal_warned = False
         except Exception as exc:  # pragma: no cover - defensive guard
             logger.error("RL model load failed for %s: %s", self.model_path, exc)
-            self._load_stub_model(model_path)
+            raise RuntimeError(f"RL model load failed for {self.model_path}") from exc
 
     def predict(
         self, state: Iterable[Any] | Any, symbols: list[str] | None = None
@@ -131,14 +99,6 @@ class RLAgent:
         """
         if self.model is None:
             logger.error("RL model not loaded")
-            return None
-        if self._using_stub_model:
-            if not self._stub_signal_warned:
-                logger.warning(
-                    "RL prediction skipped because agent is using stub model",
-                    extra={"model_path": self.model_path},
-                )
-                self._stub_signal_warned = True
             return None
         from ai_trading.strategies.base import StrategySignal  # noqa: E402
 
@@ -225,12 +185,7 @@ def _load_train_module() -> ModuleType:
         module = None
         sys.modules.pop(module_name, None)
     if module is None:
-        try:
-            module = importlib.import_module(module_name)
-        except ModuleNotFoundError as exc:
-            module = _load_train_stub(module_name, exc)
-        except ImportError as exc:  # pragma: no cover - defensive guard
-            module = _load_train_stub(module_name, exc)
+        module = importlib.import_module(module_name)
     if module is None or not inspect.ismodule(module):
         raise AttributeError(f"module {__name__!r} has no attribute 'train'")
     sys.modules[module_name] = module
@@ -238,37 +193,6 @@ def _load_train_module() -> ModuleType:
     _TRAIN_MODULE_STATE["load_count"] += 1
     _TRAIN_MODULE_STATE["last_loaded_at"] = time.time()
     _TRAIN_MODULE_STATE["last_load_duration"] = time.perf_counter() - start
-    return module
-
-
-def _load_train_stub(module_name: str, original_exc: Exception) -> ModuleType:
-    """Load the lightweight stub implementation for the train module."""
-
-    stub_name = f"{__name__}._train_stub"
-    spec = importlib.util.find_spec(stub_name)
-    if spec is None or spec.origin is None:
-        raise AttributeError(
-            f"module {__name__!r} has no attribute 'train'"
-        ) from original_exc
-    loader = importlib.machinery.SourceFileLoader(module_name, spec.origin)
-    stub_spec = importlib.util.spec_from_loader(module_name, loader, origin=spec.origin)
-    if stub_spec is None or stub_spec.loader is None:
-        raise AttributeError(
-            f"module {__name__!r} has no attribute 'train'"
-        ) from original_exc
-    module = importlib.util.module_from_spec(stub_spec)
-    sys.modules[module_name] = module
-    try:
-        stub_spec.loader.exec_module(module)
-    except Exception as stub_exc:  # pragma: no cover - defensive guard
-        raise AttributeError(
-            f"module {__name__!r} has no attribute 'train'"
-        ) from stub_exc
-    module.__dict__.setdefault("__fallback_exception__", original_exc)
-    module.__dict__.setdefault("USING_RL_TRAIN_STUB", True)
-    logger.warning(
-        "Using RL training stub due to import failure: %s", original_exc
-    )
     return module
 
 
@@ -286,20 +210,5 @@ def __dir__() -> list[str]:  # pragma: no cover - keep introspection predictable
 
 try:  # Eagerly import to keep a stable module reference for reloads.
     train = _load_train_module()
-except Exception as exc:  # pragma: no cover - optional dependency missing or other import failure
-    stub = ModuleType(f"{__name__}.train")
-
-    def _raise_import_error(*_a: Any, _exc: Exception = exc, **_k: Any) -> NoReturn:
-        raise ImportError(
-            "RL stack not available; install stable-baselines3, gymnasium, and torch"
-        ) from _exc
-
-    stub.__dict__.update(
-        {
-            "train": _raise_import_error,
-            "USING_RL_TRAIN_STUB": True,
-            "__fallback_exception__": exc,
-        }
-    )
-    sys.modules.setdefault(f"{__name__}.train", stub)
-    train = stub
+except Exception:  # pragma: no cover - optional dependency missing or other import failure
+    pass

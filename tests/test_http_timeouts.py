@@ -20,8 +20,8 @@ def _get_session_type():
 
 
 def test_httpsession_sets_default_timeout(monkeypatch):
-    s = http.HTTPSession(timeout=7)
     if http.REQUESTS_AVAILABLE:
+        s = http.HTTPSession(timeout=7)
         captured: dict[str, float] = {}
 
         def fake_request(self, method, url, **kw):  # type: ignore[override]
@@ -33,7 +33,7 @@ def test_httpsession_sets_default_timeout(monkeypatch):
         assert captured["timeout"] == 7, "HTTPSession.get must propagate default timeout"
     else:
         with pytest.raises(RuntimeError):
-            s.get("http://localhost/test")
+            http.HTTPSession(timeout=7)
 
 
 @pytest.mark.skipif(not http.REQUESTS_AVAILABLE, reason="requests not installed")

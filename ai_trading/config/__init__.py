@@ -79,49 +79,16 @@ def _env_is_truthy(name: str) -> bool:
     return value in _TRUTHY_ENV_VALUES
 
 
-def _default_test_settings() -> Settings:
-    """Return minimal settings stub suitable for tests."""
-
-    pytest_running = _env_is_truthy("PYTEST_RUNNING")
-    return cast(Settings, SimpleNamespace(
-        ENABLE_PORTFOLIO_FEATURES=False,
-        enable_memory_optimization=False,
-        env="test" if pytest_running else "dev",
-        api_port=9001,
-        alpaca_data_feed=str(
-            get_env("ALPACA_DATA_FEED", "iex", cast=str, resolve_aliases=False) or "iex"
-        ),
-        alpaca_execution_feed=str(
-            get_env("ALPACA_EXECUTION_FEED", "iex", cast=str, resolve_aliases=False) or "iex"
-        ),
-        alpaca_reference_feed=str(
-            get_env("ALPACA_REFERENCE_FEED", "delayed_sip", cast=str, resolve_aliases=False)
-            or "delayed_sip"
-        ),
-        alpaca_adjustment=str(
-            get_env("ALPACA_ADJUSTMENT", "raw", cast=str, resolve_aliases=False) or "raw"
-        ),
-    ))
-
-
 def get_settings() -> Settings:
-    """Return cached Settings object with test-friendly fallback."""
+    """Return the cached Settings object."""
 
     global _CACHED_SETTINGS
     if _CACHED_SETTINGS is not None:
         return _CACHED_SETTINGS
-    settings_obj: Settings
-    try:
-        settings_obj = _settings_get_settings()
-    except Exception:
-        if _env_is_truthy("PYTEST_RUNNING"):
-            settings_obj = _default_test_settings()
-        else:
-            raise
-    else:
-        maybe_settings: Any = settings_obj
-        if maybe_settings is None:
-            raise RuntimeError("settings unavailable")
+    settings_obj = _settings_get_settings()
+    maybe_settings: Any = settings_obj
+    if maybe_settings is None:
+        raise RuntimeError("settings unavailable")
     _CACHED_SETTINGS = settings_obj
     return settings_obj
 
@@ -134,7 +101,26 @@ def safe_settings() -> Settings:
     except Exception:
         settings_obj = None
     if settings_obj is None:
-        return _default_test_settings()
+        pytest_running = _env_is_truthy("PYTEST_RUNNING")
+        return cast(Settings, SimpleNamespace(
+            ENABLE_PORTFOLIO_FEATURES=False,
+            enable_memory_optimization=False,
+            env="test" if pytest_running else "dev",
+            api_port=9001,
+            alpaca_data_feed=str(
+                get_env("ALPACA_DATA_FEED", "iex", cast=str, resolve_aliases=False) or "iex"
+            ),
+            alpaca_execution_feed=str(
+                get_env("ALPACA_EXECUTION_FEED", "iex", cast=str, resolve_aliases=False) or "iex"
+            ),
+            alpaca_reference_feed=str(
+                get_env("ALPACA_REFERENCE_FEED", "delayed_sip", cast=str, resolve_aliases=False)
+                or "delayed_sip"
+            ),
+            alpaca_adjustment=str(
+                get_env("ALPACA_ADJUSTMENT", "raw", cast=str, resolve_aliases=False) or "raw"
+            ),
+        ))
     return settings_obj
 
 

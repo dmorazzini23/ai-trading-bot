@@ -750,7 +750,7 @@ def _client_fetch_stock_bars(client: Any, request: "StockBarsRequest"):
     get_bars_fn = getattr(client, "get_bars", None)
     if not callable(get_bars_fn):
         raise AttributeError("Alpaca client missing get_stock_bars/get_bars")
-    params = {}
+    params: dict[str, Any] = {}
     if getattr(request, "start", None) is not None:
         params["start"] = ensure_utc_datetime(request.start).isoformat()
     if getattr(request, "end", None) is not None:

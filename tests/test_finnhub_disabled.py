@@ -21,7 +21,7 @@ def test_get_minute_df_raises_when_finnhub_disabled(monkeypatch, caplog):
     def fail_fetch(*args, **kwargs):  # pragma: no cover - should never be called
         raise AssertionError("Finnhub fetch should be skipped")
 
-    monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", fail_fetch)
+    monkeypatch.setattr(data_fetcher, "fh_fetcher", None, raising=False)
     monkeypatch.setattr(data_fetcher, "_fetch_bars", lambda *a, **k: pd.DataFrame())
     monkeypatch.setattr(data_fetcher, "_yahoo_get_bars", lambda *a, **k: pd.DataFrame())
 

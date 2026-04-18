@@ -18,7 +18,7 @@ def test_disabled_logs_once(monkeypatch, caplog):
     sys.modules.pop("finnhub", None)
     with caplog.at_level(logging.DEBUG):
         mod = _reload_module()
-    assert getattr(mod.fh_fetcher, "is_stub", False)
+    assert mod.fh_fetcher is None
     assert mod._SENT_DEPS_LOGGED == {"finnhub"}
     assert any(r.message == "FINNHUB_DISABLED" for r in caplog.records)
 
@@ -30,5 +30,5 @@ def test_enabled_fetcher(monkeypatch):
     setattr(cast(Any, finnhub_stub), "Client", lambda key: object())
     monkeypatch.setitem(sys.modules, "finnhub", finnhub_stub)
     mod = _reload_module()
-    assert not getattr(mod.fh_fetcher, "is_stub", False)
+    assert mod.fh_fetcher is not None
     assert mod._SENT_DEPS_LOGGED == set()

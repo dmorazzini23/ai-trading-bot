@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, TYPE_CHECKING, cast
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
@@ -11,22 +11,10 @@ logger = get_logger(__name__)
 
 try:
     import requests  # type: ignore[import-untyped]
-except Exception:  # pragma: no cover - fallback when requests missing
-    class _FallbackSession:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            pass
-
-        def request(self, *args: object, **kwargs: object) -> object:
-            raise RuntimeError("requests library is required for HTTP operations")
-
-        def get(self, *args: object, **kwargs: object) -> object:
-            return self.request(*args, **kwargs)
-
-    class _RequestsFallback:
-        Session = _FallbackSession
-        get = None
-
-    requests = _RequestsFallback()  # type: ignore[assignment]
+    REQUESTS_AVAILABLE = True
+except Exception:
+    requests = None  # type: ignore[assignment]
+    REQUESTS_AVAILABLE = False
 try:
     from requests.adapters import HTTPAdapter  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover - requests missing
@@ -34,6 +22,9 @@ except Exception:  # pragma: no cover - requests missing
 from urllib3.util.retry import Retry
 from ai_trading.utils import clamp_request_timeout
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import requests as requests_types
 
 
 def ensure_urllib3_disable_warnings() -> None:
@@ -78,11 +69,16 @@ def ensure_urllib3_disable_warnings() -> None:
 ensure_urllib3_disable_warnings()
 
 
-class TimeoutSession(requests.Session):
+_SessionBase: type[Any] = requests.Session if REQUESTS_AVAILABLE and requests is not None else object
+
+
+class TimeoutSession(_SessionBase):
     """Requests ``Session`` that injects a default timeout."""
 
     def __init__(self, default_timeout: tuple[float, float] = (5.0, 10.0)) -> None:
         ensure_urllib3_disable_warnings()
+        if not REQUESTS_AVAILABLE:
+            raise RuntimeError("requests library is required for HTTP operations")
         super().__init__()
         self._default_timeout = cast(tuple[float, float], clamp_request_timeout(default_timeout))
 
@@ -207,8 +203,8 @@ class HostLimitController:
         return tuple(values)
 
     def apply(self, session: TimeoutSession) -> None:
-        if HTTPAdapter is object:  # pragma: no cover - requests missing
-            return
+        if not REQUESTS_AVAILABLE:
+            raise RuntimeError("requests library is required for HTTP operations")
         if not self.limit:
             limit, _ = self._resolve_limit()
             self.limit = limit
@@ -266,12 +262,12 @@ def build_retrying_session(
     """Create a session with urllib3 ``Retry`` and default timeout."""
 
     ensure_urllib3_disable_warnings()
+    if not REQUESTS_AVAILABLE:
+        raise RuntimeError("requests library is required for HTTP operations")
 
     connect_timeout_f = cast(float, clamp_request_timeout(connect_timeout))
     read_timeout_f = cast(float, clamp_request_timeout(read_timeout))
     s = TimeoutSession(default_timeout=(connect_timeout_f, read_timeout_f))
-    if HTTPAdapter is object:  # pragma: no cover - requests missing
-        return s
     retry = Retry(
         total=total_retries,
         connect=total_retries,

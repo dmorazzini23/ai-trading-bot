@@ -36,23 +36,10 @@ class _FernetLike(Protocol):
     def encrypt(self, data: bytes) -> bytes: ...
     def decrypt(self, token: bytes) -> bytes: ...
 
-
-class _FallbackFernet:
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        pass
-
-    def encrypt(self, data: bytes) -> bytes:
-        return data
-
-    def decrypt(self, token: bytes) -> bytes:
-        return token
-
-
-FernetType: type[_FernetLike] = (
+FernetType: type[_FernetLike] | None = (
     cast(type[_FernetLike], _crypto_fernet_cls)
     if _crypto_fernet_cls is not None
-    else _FallbackFernet
+    else None
 )
 HASHES_MODULE: Any = _hashes_module
 PBKDF2HMAC_CLS: Any = _pbkdf2hmac_cls
@@ -149,6 +136,8 @@ class SecureConfig:
                 iterations=100000,
             )
             key = base64.urlsafe_b64encode(kdf.derive(master_key_bytes))
+            if FernetType is None:
+                raise RuntimeError("Fernet implementation unavailable")
             fernet_cls = cast(Any, FernetType)
             return cast(_FernetLike, fernet_cls(key))
         except (ValueError, TypeError) as e:

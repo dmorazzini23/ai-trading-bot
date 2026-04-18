@@ -7330,15 +7330,6 @@ def _reload_rl_agent_from_runtime_path(
     try:
         rl = RLTrader(target)
         rl.load()  # load PPO policy from zip path
-        if getattr(rl, "_using_stub_model", False):
-            warning_kv(
-                logger,
-                "RL_AGENT_DISABLED_STUB",
-                extra={"model": str(target)},
-            )
-            if fail_hard_startup:
-                raise RuntimeError("RL_AGENT_DISABLED_STUB")
-            return False
     except COMMON_EXC as exc:  # noqa: BLE001
         warning_kv(
             logger,

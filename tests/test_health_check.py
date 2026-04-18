@@ -196,7 +196,7 @@ def test_health_endpoint_jsonify_failure_uses_sanitized_payload(monkeypatch):
 
 
 def test_health_endpoint_handles_missing_jsonify(monkeypatch):
-    monkeypatch.delattr(app_module, "jsonify", raising=False)
+    monkeypatch.setattr(app_module, "jsonify", None, raising=False)
 
     app = app_module.create_app()
     client = app.test_client()
@@ -204,13 +204,13 @@ def test_health_endpoint_handles_missing_jsonify(monkeypatch):
     assert resp.status_code == 200
     data = resp.get_json()
     _assert_payload_structure(data)
-    _assert_fallback_meta(data, used=True, reasons=("jsonify unavailable",))
+    _assert_fallback_meta(data, used=True, reasons=("TypeError",))
     assert data["ok"] is False
-    _assert_error_contains(data, "jsonify unavailable")
+    _assert_error_contains(data, "TypeError")
 
 
 def test_health_endpoint_missing_jsonify_dict_fallback_structure(monkeypatch):
-    monkeypatch.delattr(app_module, "jsonify", raising=False)
+    monkeypatch.setattr(app_module, "jsonify", None, raising=False)
 
     app = app_module.create_app()
     app.response_class = None
@@ -228,14 +228,13 @@ def test_health_endpoint_missing_jsonify_dict_fallback_structure(monkeypatch):
     payload = handler()
     assert isinstance(payload, dict)
     _assert_payload_structure(payload)
-    _assert_fallback_meta(payload, used=True, reasons=("jsonify unavailable",))
+    _assert_fallback_meta(payload, used=True, reasons=("TypeError",))
     assert payload["ok"] is False
-    _assert_error_contains(payload, "jsonify unavailable")
+    _assert_error_contains(payload, "TypeError")
 
 
 def test_health_endpoint_handles_jsonify_import_error(monkeypatch):
     monkeypatch.setattr(app_module, "jsonify", None, raising=False)
-    monkeypatch.setattr(app_module, "_jsonify_import_error", ImportError("flask missing"), raising=False)
 
     app = app_module.create_app()
     client = app.test_client()
@@ -246,10 +245,10 @@ def test_health_endpoint_handles_jsonify_import_error(monkeypatch):
     _assert_fallback_meta(
         data,
         used=True,
-        reasons=("jsonify unavailable", "ImportError", "flask missing"),
+        reasons=("TypeError",),
     )
     assert data["ok"] is False
-    _assert_error_contains(data, "jsonify unavailable", "ImportError", "flask missing")
+    _assert_error_contains(data, "TypeError")
 
 
 def test_health_endpoint_dict_fallback_preserves_structure(monkeypatch):

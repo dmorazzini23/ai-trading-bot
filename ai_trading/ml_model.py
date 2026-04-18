@@ -7,6 +7,7 @@ within the local ``models`` directory.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import importlib.util
 import io
 import logging
@@ -15,21 +16,11 @@ import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from ai_trading import paths
 
-try:  # pragma: no cover - optional heavy dependency
-    import pandas as pd  # type: ignore
-except Exception:  # pragma: no cover - fallback when pandas missing
-    class _Series: ...  # noqa: D401 - simple placeholder
-
-    class _DataFrame: ...
-
-    class _PD:
-        Series = _Series
-        DataFrame = _DataFrame
-
-    pd = _PD()  # type: ignore
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import pandas as pd
 
 try:  # pragma: no cover - optional heavy dependency
     import joblib  # type: ignore
@@ -51,49 +42,35 @@ except Exception:  # pragma: no cover
         return _Dummy()
 
 logger = logging.getLogger(__name__)
-_BaseEstimatorType: type[Any] = object
-_LinearRegressionType: type[Any] = object
 
-try:  # pragma: no cover - optional heavy dependency
-    from sklearn.base import BaseEstimator as _SkBaseEstimator
-    from sklearn.metrics import mean_squared_error
-    _SKLEARN_AVAILABLE = True
-except Exception:  # pragma: no cover
-    _SKLEARN_AVAILABLE = False
-    _SkBaseEstimator = None
 
-    class _FallbackBaseEstimator:  # minimal fallback
-        def __init__(self, *args, **kwargs) -> None:
-            logger.error("scikit-learn is required")
-            raise ImportError("scikit-learn is required")
+def _require_pandas():
+    try:
+        return importlib.import_module("pandas")
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise ImportError("pandas is required for ML model operations") from exc
 
-    def mean_squared_error(y_true, y_pred):
-        return 0.0
 
-    logger.warning("scikit-learn not available; using fallback implementations")
-    _BaseEstimatorType = _FallbackBaseEstimator
-else:
-    _BaseEstimatorType = _SkBaseEstimator
+def _require_joblib():
+    if joblib is None:  # pragma: no cover - optional dependency
+        raise ImportError("joblib is required for model persistence")
+    return joblib
 
-try:  # pragma: no cover - optional heavy dependency
-    if not _SKLEARN_AVAILABLE:
-        raise ImportError("sklearn unavailable")
-    from sklearn.linear_model import LinearRegression as _SkLinearRegression
-except Exception:  # pragma: no cover
 
-    class _FallbackLinearRegression:  # minimal fallback
-        def fit(self, X, y):
-            return self
+def _require_sklearn_linear_regression():
+    try:
+        from sklearn.linear_model import LinearRegression
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise ImportError("scikit-learn is required for model training") from exc
+    return LinearRegression
 
-        def predict(self, X):
-            return [0] * len(X)
 
-    logger.warning(
-        "sklearn.linear_model not available; using fallback LinearRegression"
-    )
-    _LinearRegressionType = _FallbackLinearRegression
-else:
-    _LinearRegressionType = _SkLinearRegression
+def _mean_squared_error(y_true: Any, y_pred: Any) -> float:
+    try:
+        from sklearn.metrics import mean_squared_error
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise ImportError("scikit-learn is required for model evaluation") from exc
+    return float(mean_squared_error(y_true, y_pred))
 
 
 class MLModel:
@@ -106,8 +83,8 @@ class MLModel:
     # ------------------------------------------------------------------
     # Validation helpers
     # ------------------------------------------------------------------
-    def _validate_inputs(self, X: pd.DataFrame) -> None:
-        import pandas as pd  # type: ignore
+    def _validate_inputs(self, X: Any) -> None:
+        pd = _require_pandas()
 
         if not isinstance(X, pd.DataFrame):
             raise TypeError("X must be a DataFrame")
@@ -122,7 +99,7 @@ class MLModel:
     # ------------------------------------------------------------------
     # Model training and prediction
     # ------------------------------------------------------------------
-    def fit(self, X: pd.DataFrame, y: Sequence[float] | pd.Series) -> float:
+    def fit(self, X: Any, y: Sequence[float] | Any) -> float:
         self._validate_inputs(X)
         start = time.time()
         self.logger.info("MODEL_TRAIN_START", extra={"rows": len(X)})
@@ -130,7 +107,7 @@ class MLModel:
             self.pipeline.fit(X, y)
             dur = time.time() - start
             preds = self.pipeline.predict(X)
-            mse = float(mean_squared_error(y, preds))
+            mse = _mean_squared_error(y, preds)
             self.logger.info(
                 "MODEL_TRAIN_END", extra={"duration": round(dur, 2), "mse": mse}
             )
@@ -139,7 +116,7 @@ class MLModel:
             self.logger.exception("MODEL_TRAIN_FAILED: %s", exc)
             raise
 
-    def predict(self, X: pd.DataFrame) -> Any:
+    def predict(self, X: Any) -> Any:
         self._validate_inputs(X)
         try:
             preds = self.pipeline.predict(X)
@@ -160,10 +137,8 @@ class MLModel:
         if not abs_path.is_relative_to(model_dir):
             raise RuntimeError(f"Model path outside allowed directory: {abs_path}")
         abs_path.parent.mkdir(parents=True, exist_ok=True)
-        if joblib is None:  # pragma: no cover - optional dep
-            raise ImportError("joblib is required to save models")
         try:
-            joblib.dump(self.pipeline, abs_path)
+            _require_joblib().dump(self.pipeline, abs_path)
             self.logger.info("MODEL_SAVED", extra={"path": str(abs_path)})
         except (OSError, ValueError) as exc:  # pragma: no cover - defensive
             self.logger.exception("MODEL_SAVE_FAILED: %s", exc)
@@ -178,13 +153,11 @@ class MLModel:
         abs_path = Path(path).resolve()
         if not abs_path.is_relative_to(model_dir):
             raise RuntimeError(f"Model path outside allowed directory: {abs_path}")
-        if joblib is None:  # pragma: no cover - optional dep
-            raise ImportError("joblib is required to load models")
         try:
             with abs_path.open("rb") as f:
                 data = f.read()
             digest = hashlib.sha256(data).hexdigest()
-            pipeline = joblib.load(io.BytesIO(data))
+            pipeline = _require_joblib().load(io.BytesIO(data))
             logger.info(
                 "MODEL_LOADED",
                 extra={
@@ -200,8 +173,8 @@ class MLModel:
 
 
 def train_model(
-    X: Sequence[float] | pd.Series | pd.DataFrame,
-    y: Sequence[float] | pd.Series,
+    X: Sequence[float] | Any,
+    y: Sequence[float] | Any,
     algorithm: str = "linear",
 ) -> Any:
     """Train a simple linear model and return the estimator."""
@@ -210,12 +183,12 @@ def train_model(
         raise ValueError("Invalid training data")
     if algorithm != "linear":
         raise ValueError("Unsupported algorithm")
-    model = _LinearRegressionType()
+    model = _require_sklearn_linear_regression()()
     model.fit([[v] for v in X], y)
     return model
 
 
-def predict_model(model: Any, X: Sequence[Any] | pd.DataFrame) -> list[float]:
+def predict_model(model: Any, X: Sequence[Any] | Any) -> list[float]:
     """Return predictions from a fitted model."""
 
     if model is None:
@@ -237,9 +210,7 @@ def save_model(model: Any, path: str) -> None:
     if not p.is_relative_to(model_dir):
         raise RuntimeError(f"Model path outside allowed directory: {p}")
     p.parent.mkdir(parents=True, exist_ok=True)
-    if joblib is None:  # pragma: no cover - optional dep
-        raise ImportError("joblib is required to save models")
-    joblib.dump(model, p)
+    _require_joblib().dump(model, p)
 
 
 def load_model(path: str) -> Any:
@@ -249,9 +220,7 @@ def load_model(path: str) -> Any:
     p = Path(path).resolve()
     if not p.is_relative_to(model_dir):
         raise RuntimeError(f"Model path outside allowed directory: {p}")
-    if joblib is None:  # pragma: no cover - optional dep
-        raise ImportError("joblib is required to load models")
-    return joblib.load(p)
+    return _require_joblib().load(p)
 
 
 def train_xgboost_with_optuna(

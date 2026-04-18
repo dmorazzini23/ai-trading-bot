@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from ai_trading.health import HealthCheck
 
 
@@ -13,8 +15,7 @@ def test_healthcheck_reports_alpaca_credential_presence_from_env(monkeypatch) ->
     monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
 
     hc = HealthCheck(ctx=SimpleNamespace(service="ai-trading"))
-    client = hc.app.test_client()
-    response = client.get("/healthz")
+    response = hc.app.test_client().get("/healthz")
     payload = response.get_json() if hasattr(response, "get_json") else response
 
     assert isinstance(payload, dict)

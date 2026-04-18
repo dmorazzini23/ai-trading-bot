@@ -1,34 +1,25 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
-import ai_trading.app as app_mod
 import ai_trading.governance.promotion as promotion_mod
 
 from ai_trading.app import create_app
 from ai_trading.operator_presets import PresetValidationError, build_plan
 
 
-def _post_json_compat(client, path: str, payload: dict[str, object]):
+def _post_json(client, path: str, payload: dict[str, object]):
     post = getattr(client, "post", None)
     if callable(post):
         return post(path, json=payload)
-    compat_path = f"{path}/update"
-    request_original = getattr(app_mod, "request", None)
-    setattr(app_mod, "request", SimpleNamespace(get_json=lambda silent=True: payload))
-    try:
-        return client.get(compat_path)
-    finally:
-        setattr(app_mod, "request", request_original)
+    return client.open(path, method="POST", json=payload)
 
 
-def _delete_compat(client, path: str):
+def _delete(client, path: str):
     delete = getattr(client, "delete", None)
     if callable(delete):
         return delete(path)
-    compat_path = f"{path}/clear"
-    return client.get(compat_path)
+    return client.open(path, method="DELETE")
 
 
 def test_operator_presets_endpoint(monkeypatch):
@@ -111,7 +102,7 @@ def test_operator_manual_overrides_post_and_delete(monkeypatch, tmp_path):
     app = create_app()
     client = app.test_client()
 
-    response = _post_json_compat(
+    response = _post_json(
         client,
         "/operator/control-plane/manual-overrides",
         {
@@ -131,7 +122,7 @@ def test_operator_manual_overrides_post_and_delete(monkeypatch, tmp_path):
     persisted = json.loads(toggle_path.read_text(encoding="utf-8"))
     assert persisted["diagnostics"]["operator"] == "ops@example.com"
 
-    delete = _delete_compat(client, "/operator/control-plane/manual-overrides")
+    delete = _delete(client, "/operator/control-plane/manual-overrides")
     assert delete.status_code == 200
     cleared = delete.get_json()
     assert cleared["ok"] is True
@@ -187,7 +178,7 @@ def test_operator_governance_approval_endpoint(monkeypatch):
     monkeypatch.setattr(promotion_mod, "ModelPromotion", _FakePromotion)
     app = create_app()
     client = app.test_client()
-    response = _post_json_compat(
+    response = _post_json(
         client,
         "/operator/governance/approval",
         {
@@ -229,7 +220,7 @@ def test_operator_governance_rollback_endpoint(monkeypatch):
     monkeypatch.setattr(promotion_mod, "ModelPromotion", _FakePromotion)
     app = create_app()
     client = app.test_client()
-    response = _post_json_compat(
+    response = _post_json(
         client,
         "/operator/governance/rollback",
         {"strategy": "momentum", "reason": "manual"},

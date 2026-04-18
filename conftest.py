@@ -1,7 +1,6 @@
 import os
 import random
 import importlib
-import importlib.util
 import sys
 import types
 import gc
@@ -9,7 +8,7 @@ import time as _time
 import unittest.mock as _umock
 from pathlib import Path
 from collections.abc import Generator, Iterator
-from typing import Any
+from typing import Any, cast
 
 from tests.dummy_model_util import _DummyModel, _get_model
 
@@ -17,23 +16,95 @@ import pytest
 
 
 _ORIGINAL_TIME_SLEEP = _time.sleep
+_ORIGINAL_PATCH_DICT = _umock.patch.dict
+_ORIGINAL_CLEAR_DICT = getattr(_umock, "_clear_dict", None)
+_ORIGINAL_MODULES: dict[str, types.ModuleType | None] = dict(sys.modules)
 
 
-def _load_repo_sitecustomize() -> None:
-    """Load repository-local ``sitecustomize.py`` deterministically for tests."""
+def _install_test_mock_runtime_guards() -> None:
+    """Keep ``sys.modules`` stable during aggressive test patching."""
 
-    sitecustomize_path = Path(__file__).with_name("sitecustomize.py")
-    if not sitecustomize_path.exists():
-        return
-    spec = importlib.util.spec_from_file_location("sitecustomize", sitecustomize_path)
-    if spec is None or spec.loader is None:
-        return
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["sitecustomize"] = module
-    spec.loader.exec_module(module)
+    def _safe_patch_dict(
+        in_dict: Any,
+        values: Any = (),
+        clear: bool = False,
+        **kwargs: Any,
+    ) -> Any:  # pragma: no cover
+        ctx = _ORIGINAL_PATCH_DICT(in_dict, values, clear, **kwargs)
+        if clear and in_dict is sys.modules:
+            original_enter = ctx.__enter__
+            original_exit = ctx.__exit__
+
+            def _enter() -> object:
+                result = original_enter()
+                sys.modules.update(
+                    {name: module for name, module in _ORIGINAL_MODULES.items() if module is not None}
+                )
+                return result
+
+            def _exit(exc_type: Any, exc_val: Any, exc_tb: Any) -> Any:
+                try:
+                    return cast(Any, original_exit(exc_type, exc_val, exc_tb))
+                finally:
+                    sys.modules.update(
+                        {name: module for name, module in _ORIGINAL_MODULES.items() if module is not None}
+                    )
+
+            ctx_any = cast(Any, ctx)
+            ctx_any.__enter__ = _enter
+            ctx_any.__exit__ = _exit
+        return ctx
+
+    def _ensure_import_machinery(modules: dict[str, types.ModuleType]) -> None:
+        for name in ("logging.config", "logging.handlers"):
+            if name not in modules:
+                try:
+                    importlib.import_module(name)
+                except Exception:  # pragma: no cover - best effort
+                    continue
+
+    def _safe_clear_dict(target: Any, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - simple wrapper
+        preserved: dict[str, types.ModuleType] | None = None
+        if target is sys.modules:
+            preserved = {
+                name: module
+                for name, module in _ORIGINAL_MODULES.items()
+                if module is not None
+            }
+        if callable(_ORIGINAL_CLEAR_DICT):
+            try:
+                result = _ORIGINAL_CLEAR_DICT(target, *args, **kwargs)
+            finally:
+                if preserved is not None:
+                    target.update(preserved)
+                    _ensure_import_machinery(target)
+            return result
+        target.clear()
+        if preserved is not None:
+            target.update(preserved)
+            _ensure_import_machinery(target)
+        return None
+
+    cast(Any, _umock.patch).dict = _safe_patch_dict
+    setattr(_umock, "_clear_dict", _safe_clear_dict)
+
+    try:  # pragma: no cover - optional dependency
+        import freezegun
+    except Exception:
+        freezegun = None
+    else:
+        _orig_freeze_time = freezegun.freeze_time
+
+        def _freeze_time_with_real_asyncio(*args, **kwargs):
+            kwargs.setdefault("real_asyncio", True)
+            return _orig_freeze_time(*args, **kwargs)
+
+        freezegun.freeze_time = _freeze_time_with_real_asyncio  # type: ignore[assignment]
+        if hasattr(freezegun, "api") and hasattr(freezegun.api, "freeze_time"):
+            freezegun.api.freeze_time = _freeze_time_with_real_asyncio  # type: ignore[attr-defined]
 
 
-_load_repo_sitecustomize()
+_install_test_mock_runtime_guards()
 
 # Ensure optional light-weight stubs are available only when real deps are missing
 def _ensure_test_stubs() -> None:

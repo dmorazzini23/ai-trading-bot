@@ -19,6 +19,7 @@ def test_get_test_client_handles_missing_flask_testing(monkeypatch):
     cast(Any, flask_app_stub).Flask = Flask
     cast(Any, flask_stub).Flask = Flask
     cast(Any, flask_stub).jsonify = lambda *a, **k: {}
+    cast(Any, flask_stub).request = object()
 
     monkeypatch.setitem(sys.modules, "flask", flask_stub)
     monkeypatch.setitem(sys.modules, "flask.app", flask_app_stub)
@@ -26,5 +27,8 @@ def test_get_test_client_handles_missing_flask_testing(monkeypatch):
     monkeypatch.setitem(sys.modules, "testing", types.ModuleType("testing"))
 
     app_module = importlib.reload(importlib.import_module("ai_trading.app"))
-
-    assert app_module.get_test_client() is None
+    try:
+        assert app_module.get_test_client() is None
+    finally:
+        monkeypatch.undo()
+        importlib.reload(app_module)

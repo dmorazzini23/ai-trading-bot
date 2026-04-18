@@ -6,8 +6,7 @@ import sys
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from importlib import import_module
-from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from ai_trading.logging import get_logger
 from ai_trading.health_payload import (
@@ -17,49 +16,27 @@ from ai_trading.health_payload import (
 )
 from ai_trading.services import ControlPlaneService, GovernanceService
 from ai_trading.utils.optional_dep import missing
-
+from ai_trading.config.management import (
+    get_env as _managed_get_env,
+    set_runtime_env_override as _set_runtime_env_override,
+)
 try:
-    from ai_trading.config.management import (
-        get_env as _managed_get_env,
-        set_runtime_env_override as _set_runtime_env_override,
-    )
-except Exception:  # pragma: no cover - fallback for minimal bootstraps
-    _managed_get_env = None
-    _set_runtime_env_override = None
+    from flask import Flask, jsonify, request
+except ImportError:
+    from flask import Flask, jsonify
+
+    request = None  # type: ignore[assignment]
 
 
 def _managed_env(name: str, default: Any = None) -> Any:
     """Read environment values via config management when available."""
 
-    if _managed_get_env is not None:
-        try:
-            if name in {"PYTEST_RUNNING", "PYTEST_CURRENT_TEST", "TESTING"}:
-                return _managed_get_env(name, default, resolve_aliases=False)
-            return _managed_get_env(name, default)
-        except Exception:
-            return default
-    return default
-
-
-_jsonify_import_error: ImportError | None = None
-try:
-    from flask import jsonify as _jsonify
-except ImportError as exc:  # pragma: no cover - exercised via tests
-    _jsonify_import_error = exc
-    jsonify = None  # type: ignore[assignment]
-else:  # pragma: no cover - import path only evaluated once
-    jsonify = _jsonify
-    _jsonify_import_error = None
-
-try:
-    from flask import request as _request
-except ImportError:  # pragma: no cover - exercised via tests
-    request = None  # type: ignore[assignment]
-else:  # pragma: no cover - import path only evaluated once
-    request = _request
-
-if TYPE_CHECKING:  # pragma: no cover - for type checkers only
-    from flask import Flask
+    try:
+        if name in {"PYTEST_RUNNING", "PYTEST_CURRENT_TEST", "TESTING"}:
+            return _managed_get_env(name, default, resolve_aliases=False)
+        return _managed_get_env(name, default)
+    except Exception:
+        return default
 
 _log = get_logger(__name__)
 
@@ -101,6 +78,121 @@ _REQUIRED_TEST_ENV = {
     "ALPACA_SECRET_KEY": _managed_env("ALPACA_SECRET_KEY", "test-secret"),
     "WEBHOOK_SECRET": _managed_env("WEBHOOK_SECRET", "test-webhook-secret"),
 }
+
+
+def _ensure_route_registry(app: Any) -> dict[Any, Any]:
+    """Ensure lightweight Flask stubs can register routes for tests."""
+
+    route_registry_raw = getattr(app, "_routes", None)
+    if not isinstance(route_registry_raw, dict):
+        route_registry_raw = {}
+        setattr(app, "_routes", route_registry_raw)
+    route_registry: dict[Any, Any] = cast(dict[Any, Any], route_registry_raw)
+
+    existing_route = getattr(app, "route", None)
+    if callable(existing_route) and getattr(app, "_ai_trading_route_tracker", False):
+        return route_registry
+
+    def _register(path: str, methods: tuple[str, ...], func: Any) -> Any:
+        for method in methods:
+            route_registry[(path, method)] = func
+        if "GET" in methods:
+            route_registry[path] = func
+        return func
+
+    if callable(existing_route):
+        def _tracked_route(path: str, *args: Any, **kwargs: Any):
+            methods = tuple(str(method).upper() for method in (kwargs.get("methods") or ("GET",)))
+            decorator = existing_route(path, *args, **kwargs)
+
+            def _decorator(func: Any) -> Any:
+                registered = decorator(func)
+                return _register(path, methods, registered)
+
+            return _decorator
+
+        setattr(app, "route", _tracked_route)
+        setattr(app, "_ai_trading_route_tracker", True)
+        return route_registry
+
+    def _fallback_route(path: str, *args: Any, **kwargs: Any):
+        methods = tuple(str(method).upper() for method in (kwargs.get("methods") or ("GET",)))
+
+        def _decorator(func: Any) -> Any:
+            return _register(path, methods, func)
+
+        return _decorator
+
+    setattr(app, "route", _fallback_route)
+    setattr(app, "_ai_trading_route_tracker", True)
+    return route_registry
+
+
+def _ensure_test_client_support(app: Any, route_registry: dict[Any, Any]) -> None:
+    """Provide a minimal ``test_client`` for lightweight Flask stubs."""
+
+    if callable(getattr(app, "test_client", None)):
+        return
+
+    class _StubRequest:
+        def __init__(self) -> None:
+            self._json_payload: Any = None
+
+        def get_json(self, silent: bool = False) -> Any:
+            if self._json_payload is None and not silent:
+                raise RuntimeError("request JSON unavailable")
+            return self._json_payload
+
+    stub_request = _StubRequest()
+
+    class _Response:
+        def __init__(self, data: Any, status: int = 200) -> None:
+            self._data = data
+            self.status_code = status
+
+        def get_json(self) -> Any:
+            return self._data
+
+    class _Client:
+        def _request(self, path: str, *, method: str = "GET", json: Any = None) -> Any:
+            handler = route_registry.get((path, method.upper())) or route_registry.get(path)
+            if handler is None:
+                raise KeyError(f"route not registered: {method} {path}")
+            stub_request._json_payload = json
+            handler_globals = getattr(handler, "__globals__", {})
+            previous_request = handler_globals.get("request")
+            handler_globals["request"] = stub_request
+            try:
+                result = handler()
+            finally:
+                stub_request._json_payload = None
+                if previous_request is None:
+                    handler_globals.pop("request", None)
+                else:
+                    handler_globals["request"] = previous_request
+
+            status = 200
+            payload = result
+            if isinstance(result, tuple):
+                payload = result[0]
+                if len(result) > 1 and isinstance(result[1], int):
+                    status = result[1]
+            return _Response(payload, status)
+
+        def open(self, path: str, method: str = "GET", json: Any = None) -> Any:
+            return self._request(path, method=method, json=json)
+
+        def get(self, path: str, *args: Any, **kwargs: Any) -> Any:
+            json_payload = kwargs.get("json")
+            return self._request(path, method="GET", json=json_payload)
+
+        def post(self, path: str, *args: Any, **kwargs: Any) -> Any:
+            return self._request(path, method="POST", json=kwargs.get("json"))
+
+        def delete(self, path: str, *args: Any, **kwargs: Any) -> Any:
+            return self._request(path, method="DELETE", json=kwargs.get("json"))
+
+    setattr(app, "test_client", lambda *args, **kwargs: _Client())
 
 
 def _pytest_active() -> bool:
@@ -156,103 +248,6 @@ def suppress_flask_startup_noise() -> None:
         _log.debug("FLASK_STARTUP_BANNER_SUPPRESS_FAILED", exc_info=True)
 
 
-class _FallbackResponse:
-    __slots__ = ("status_code", "_payload")
-
-    def __init__(self, payload: Any, status: int = 200) -> None:
-        self.status_code = status
-        self._payload = payload
-
-    def get_json(self) -> Any:
-        return self._payload
-
-
-def _install_route_tracker(app: Any) -> dict[str, Any]:
-    """Ensure we can serve routes even when Flask is stubbed."""
-    existing = getattr(app, "_route_registry", None)
-    if isinstance(existing, dict):
-        return existing
-    registry: dict[str, Any] = {}
-    original_route = getattr(app, "route", None)
-
-    def _simple_register(rule: str, **_options: Any):
-        def _decorator(func):
-            registry[rule] = func
-            return func
-        return _decorator
-
-    if callable(original_route):
-        def _tracked_route(rule: str, **options: Any):
-            decorator = original_route(rule, **options)
-
-            def _wrapper(func):
-                registry[rule] = func
-                return decorator(func)
-
-            return _wrapper
-
-        app.route = _tracked_route  # type: ignore[assignment]
-    else:
-        app.route = _simple_register  # type: ignore[assignment]
-
-    app._route_registry = registry  # type: ignore[attr-defined]
-    return registry
-
-
-def _ensure_test_client(app: Any, registry: Mapping[str, Any]) -> None:
-    """Attach a lightweight test client when Flask's native one is unavailable."""
-    if callable(getattr(app, "test_client", None)):
-        return
-
-    class _Client:
-        def __init__(self, routes: Mapping[str, Any]) -> None:
-            self._routes = routes
-
-        def _dispatch(
-            self,
-            *,
-            method: str,
-            path: str,
-            json_body: Any = None,
-        ) -> Any:
-            handler = self._routes.get(path)
-            if handler is None:
-                return _FallbackResponse({"error": "not_found"}, status=404)
-            request_original = globals().get("request", None)
-            request_replaced = False
-            if method.upper() != "GET":
-                request_replaced = True
-                globals()["request"] = SimpleNamespace(
-                    get_json=lambda silent=True: json_body,
-                )
-            try:
-                result = handler()
-            finally:
-                if request_replaced:
-                    globals()["request"] = request_original
-            if hasattr(result, "get_json"):
-                return result
-            if isinstance(result, tuple) and result:
-                body = result[0]
-                status = result[1] if len(result) > 1 else 200
-                if hasattr(body, "get_json"):
-                    response = body
-                    response.status_code = status  # type: ignore[attr-defined]
-                    return response
-                return _FallbackResponse(body, status=status)
-            if isinstance(result, dict):
-                return _FallbackResponse(result, status=200)
-            return _FallbackResponse(result, status=getattr(result, "status_code", 200))
-
-        def get(self, path: str, **_kwargs: Any) -> Any:
-            return self._dispatch(method="GET", path=path)
-
-        def post(self, path: str, json: Any = None, **_kwargs: Any) -> Any:
-            return self._dispatch(method="POST", path=path, json_body=json)
-
-    app.test_client = lambda: _Client(registry)  # type: ignore[assignment]
-
-
 def _normalise_alpaca_section(raw: Any) -> dict[str, Any]:
     """Return a fresh Alpaca payload seeded with required keys."""
     normalised = dict(_ALPACA_SECTION_DEFAULTS)
@@ -285,9 +280,11 @@ def _normalize_health_payload(raw: Mapping | None) -> dict[str, Any]:
 
 def create_app():
     """Create and configure the Flask application."""
-    # Bypass any mocked Flask import by resolving the class at call time
-    FlaskClass = import_module("flask.app").Flask
-    app: Flask = FlaskClass(__name__)
+    try:
+        FlaskClass = import_module("flask.app").Flask
+    except Exception:
+        FlaskClass = Flask
+    app = FlaskClass(__name__)
     try:
         from ai_trading.diagnostics.http_diag import diag_bp  # type: ignore
     except ImportError:
@@ -312,8 +309,6 @@ def create_app():
         app_config = getattr(app, "config", {})
         app_config_dict = dict(app_config) if isinstance(app_config, Mapping) else {}
         setattr(app, "config", cast(Any, app_config_dict))
-    route_registry = _install_route_tracker(app)
-
     suppress_flask_startup_noise()
 
     # Cache required env validation once during app startup.
@@ -327,6 +322,8 @@ def create_app():
         _log.exception("ENV_VALIDATION_FAILED")
         app.config["_ENV_VALID"] = False
         app.config["_ENV_ERR"] = str(e)
+
+    route_registry = _ensure_route_registry(app)
 
     def _json_response(data: dict, *, status: int = 200, fallback: dict | None = None) -> Any:
         """Return a JSON ``Response`` with a resilient fallback."""
@@ -379,52 +376,37 @@ def create_app():
             dict(merged_payload), used=False, reasons=[],
         )
 
-        func = globals().get("jsonify")
         fallback_used = False
         fallback_reasons: list[str] = []
         serialization_failed = False
-        jsonify_unavailable = False
-        if callable(func):
-            try:
-                response = func(dict(sanitized_payload))
-            except Exception as exc:  # pragma: no cover - defensive fallback
-                serialization_failed = True
-                fallback_used = True
-                reason_candidates = [str(exc).strip(), exc.__class__.__name__]
-                fallback_reasons.extend(
-                    reason
-                    for reason in dict.fromkeys(reason_candidates)
-                    if reason
-                )
-                sanitized_payload = _stamp_fallback_meta(
-                    sanitized_payload, used=True, reasons=fallback_reasons,
-                )
-            else:
-                has_get_data = callable(getattr(response, "get_data", None))
-                has_status = hasattr(response, "status_code")
-                if has_get_data and has_status:
-                    try:
-                        response.status_code = status
-                    except Exception:  # pragma: no cover - defensive
-                        pass
-                    return response
-                response = None
-        else:
+        try:
+            response = jsonify(dict(sanitized_payload))
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            response = None
+            serialization_failed = True
             fallback_used = True
-            fallback_reasons.append("jsonify unavailable")
-            if "_jsonify_import_error" in globals() and _jsonify_import_error is not None:
-                import_reason = str(_jsonify_import_error).strip()
-                if import_reason:
-                    fallback_reasons.append(import_reason)
-                fallback_reasons.append("ImportError")
-            jsonify_unavailable = True
+            reason_candidates = [str(exc).strip(), exc.__class__.__name__]
+            fallback_reasons.extend(
+                reason
+                for reason in dict.fromkeys(reason_candidates)
+                if reason
+            )
             sanitized_payload = _stamp_fallback_meta(
                 sanitized_payload, used=True, reasons=fallback_reasons,
             )
+        else:
+            has_get_data = callable(getattr(response, "get_data", None))
+            has_status = hasattr(response, "status_code")
+            if has_get_data and has_status:
+                try:
+                    response.status_code = status
+                except Exception:  # pragma: no cover - defensive
+                    pass
+                return response
 
         final_payload = _normalize_health_payload(dict(sanitized_payload))
 
-        if serialization_failed or jsonify_unavailable:
+        if serialization_failed:
             final_payload["ok"] = False
 
         message_candidates: list[str] = []
@@ -666,12 +648,6 @@ def create_app():
                 status=503,
             )
 
-    @app.route("/operator/control-plane/manual-overrides/update")
-    def operator_control_plane_update_manual_overrides_compat() -> Any:
-        """Compatibility update path for lightweight test clients without POST routing."""
-
-        return operator_control_plane_update_manual_overrides()
-
     @app.route("/operator/control-plane/manual-overrides", methods=["DELETE"])
     def operator_control_plane_clear_manual_overrides() -> Any:
         """Clear operator manual overrides while preserving the canonical payload shape."""
@@ -685,12 +661,6 @@ def create_app():
                 {"ok": False, "error": "operator manual overrides unavailable"},
                 status=503,
             )
-
-    @app.route("/operator/control-plane/manual-overrides/clear")
-    def operator_control_plane_clear_manual_overrides_compat() -> Any:
-        """Compatibility clear path for lightweight test clients without DELETE routing."""
-
-        return operator_control_plane_clear_manual_overrides()
 
     def _governance_base_path() -> str:
         configured = str(
@@ -773,12 +743,6 @@ def create_app():
                 status=503,
             )
 
-    @app.route("/operator/governance/approval/update")
-    def operator_governance_record_approval_compat() -> Any:
-        """Compatibility approval path for lightweight test clients without POST routing."""
-
-        return operator_governance_record_approval()
-
     @app.route("/operator/governance/rollback", methods=["POST"])
     def operator_governance_manual_rollback() -> Any:
         """Trigger a governance rollback to previous production model."""
@@ -828,12 +792,6 @@ def create_app():
                 {"ok": False, "error": "operator governance rollback unavailable"},
                 status=503,
             )
-
-    @app.route("/operator/governance/rollback/update")
-    def operator_governance_manual_rollback_compat() -> Any:
-        """Compatibility rollback path for lightweight test clients without POST routing."""
-
-        return operator_governance_manual_rollback()
 
     @app.route("/health")
     def health():
@@ -910,7 +868,7 @@ def create_app():
         from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
         return generate_latest(cast(Any, _PROM_REG)), 200, {"Content-Type": CONTENT_TYPE_LATEST}
 
-    _ensure_test_client(app, route_registry)
+    _ensure_test_client_support(app, route_registry)
     original_test_client = getattr(app, "test_client", None)
 
     if callable(original_test_client):  # pragma: no cover - exercised via tests

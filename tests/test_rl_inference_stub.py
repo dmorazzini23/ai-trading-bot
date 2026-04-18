@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 import ai_trading.rl_trading as rl
 from ai_trading.rl_trading.env import ActionSpaceConfig
@@ -14,9 +15,5 @@ def test_unified_inference_handles_stub_agent(monkeypatch, tmp_path):
         action_config=ActionSpaceConfig(action_type="discrete", discrete_actions=3),
     )
 
-    inference = UnifiedRLInference(cfg)
-    signal = inference.predict(np.zeros(6, dtype=np.float32), symbol="AAPL")
-
-    assert signal is None
-    stats = inference.get_stats()
-    assert stats["total_predictions"] == 0
+    with pytest.raises(ImportError):
+        UnifiedRLInference(cfg)

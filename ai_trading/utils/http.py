@@ -4,6 +4,7 @@ import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
+from typing import TYPE_CHECKING
 
 try:  # requests is optional
     import requests  # type: ignore
@@ -20,32 +21,6 @@ except ImportError:  # pragma: no cover - requests missing
 
     REQUESTS_AVAILABLE = False
 
-    class _StubSession:
-        def request(self, *args, **kwargs):
-            raise RuntimeError("requests library is required for HTTP operations")
-
-        def get(self, *args, **kwargs):
-            return self.request(*args, **kwargs)
-
-        def post(self, *args, **kwargs):
-            return self.request(*args, **kwargs)
-
-        def put(self, *args, **kwargs):
-            return self.request(*args, **kwargs)
-
-        def delete(self, *args, **kwargs):
-            return self.request(*args, **kwargs)
-
-    class _StubResponse:
-        pass
-
-    class _RequestsStub:
-        Session = _StubSession
-        Response = _StubResponse
-        exceptions = type("exc", (), {"RequestException": RequestsRequestException})
-
-    requests = _RequestsStub()  # type: ignore
-
 try:  # urllib3 is only needed when requests is available
     from urllib3.util.retry import Retry  # type: ignore
 except ImportError:  # pragma: no cover - fallback when urllib3 missing
@@ -59,6 +34,9 @@ from contextlib import AbstractAsyncContextManager, contextmanager
 from typing import Any, Iterator, cast
 from ai_trading.config.management import get_env
 from ai_trading.exc import TRANSIENT_HTTP_EXC, JSONDecodeError, RequestException
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import requests as requests_types
 
 
 def _strip_inline_comment(value: str) -> str:
@@ -250,16 +228,19 @@ def clamp_request_timeout(
     return float(cast(float, clamp_timeout(timeout)))
 
 
-class HTTPSession(requests.Session):
+_RequestsSessionBase: type[Any] = requests.Session if REQUESTS_AVAILABLE and requests is not None else object
+
+
+class HTTPSession(_RequestsSessionBase):
     """Session with sane connection pooling and timeout defaults."""
 
     def __init__(self, timeout: float | int | None = None) -> None:
+        if not REQUESTS_AVAILABLE:
+            raise RuntimeError("requests library is required for HTTP operations")
         super().__init__()
         if timeout is None:
             timeout = _get_session_timeout()
         self._timeout = clamp_request_timeout(timeout)
-        if not REQUESTS_AVAILABLE:
-            return
         _pool_stats["per_host"] = _int_env("HTTP_MAX_PER_HOST", _pool_stats["per_host"])
         _pool_stats["workers"] = _int_env(
             "HTTP_POOL_WORKERS",
@@ -280,7 +261,7 @@ class HTTPSession(requests.Session):
         self.mount("http://", adapter)
         self.mount("https://", adapter)
 
-    def request(self, method: str, url: str, **kwargs) -> requests.Response:  # type: ignore[override]
+    def request(self, method: str, url: str, **kwargs) -> "requests_types.Response":  # type: ignore[override]
         timeout = kwargs.get("timeout")
         if timeout is None:
             timeout = self._timeout
@@ -334,7 +315,7 @@ def _retry_config() -> tuple[int, float, float, float]:
     return (retries, backoff, max_backoff, jitter)
 
 
-def request(method: str, url: str, **kwargs) -> requests.Response:
+def request(method: str, url: str, **kwargs) -> "requests_types.Response":
     if not REQUESTS_AVAILABLE:
         raise RuntimeError("requests library is required for HTTP operations")
     sess = _get_session()
@@ -345,7 +326,7 @@ def request(method: str, url: str, **kwargs) -> requests.Response:
     attempt = {"n": 0}
     host_key = _host_from_url(url)
 
-    def _do_request() -> requests.Response:
+    def _do_request() -> "requests_types.Response":
         try:
             with host_slot(host_key):
                 return sess.request(method, url, **kwargs)
@@ -368,7 +349,7 @@ def request(method: str, url: str, **kwargs) -> requests.Response:
         raise
 
 
-async def async_request(method: str, url: str, **kwargs) -> requests.Response:
+async def async_request(method: str, url: str, **kwargs) -> "requests_types.Response":
     """Asynchronously execute :func:`request` while honouring host limits."""
 
     if not REQUESTS_AVAILABLE:
@@ -410,7 +391,7 @@ def request_json(
 
     host_key = _host_from_url(url)
 
-    def _fetch() -> requests.Response:
+    def _fetch() -> "requests_types.Response":
         with host_slot(host_key):
             return sess.request(method, url, headers=headers, params=params, timeout=timeout)
 
@@ -425,7 +406,7 @@ def request_json(
             except ValueError:
                 text = resp.text.strip()
                 return {"text": text}
-        except (requests.RequestException, TimeoutError) as exc:
+        except (RequestsRequestException, TimeoutError) as exc:
             key = f"{method}:{url}:{getattr(exc, 'args', '')}"
             log_fn = _log.warning if key not in _ERROR_LOGGED else _log.debug
             log_fn("HTTP_RETRY", extra={"attempt": attempt, "attempts": retries, "error": str(exc)})
@@ -436,27 +417,27 @@ def request_json(
     raise RuntimeError("HTTP request exhausted retries without response")
 
 
-def get(url: str, **kwargs) -> requests.Response:
+def get(url: str, **kwargs) -> "requests_types.Response":
     return request("GET", url, **kwargs)
 
 
-async def async_get(url: str, **kwargs) -> requests.Response:
+async def async_get(url: str, **kwargs) -> "requests_types.Response":
     return await async_request("GET", url, **kwargs)
 
 
-def post(url: str, **kwargs) -> requests.Response:
+def post(url: str, **kwargs) -> "requests_types.Response":
     return request("POST", url, **kwargs)
 
 
-async def async_post(url: str, **kwargs) -> requests.Response:
+async def async_post(url: str, **kwargs) -> "requests_types.Response":
     return await async_request("POST", url, **kwargs)
 
 
-def put(url: str, **kwargs) -> requests.Response:
+def put(url: str, **kwargs) -> "requests_types.Response":
     return request("PUT", url, **kwargs)
 
 
-async def async_put(url: str, **kwargs) -> requests.Response:
+async def async_put(url: str, **kwargs) -> "requests_types.Response":
     return await async_request("PUT", url, **kwargs)
 
 

@@ -16,7 +16,7 @@ def test_finnhub_called_when_alpaca_none(monkeypatch):
 
     # Alpaca returns None
     monkeypatch.setattr(data_fetcher, "_fetch_bars", lambda *a, **k: None)
-    monkeypatch.setattr(data_fetcher.fh_fetcher, "is_stub", False)
+    fetcher = type("DummyFinnhubFetcher", (), {})()
 
     def fail_backup(*args, **kwargs):
         raise AssertionError("backup provider should not be called")
@@ -29,7 +29,8 @@ def test_finnhub_called_when_alpaca_none(monkeypatch):
         called["used"] = True
         return pd.DataFrame({"timestamp": [pd.Timestamp(start)], "close": [1.0]})
 
-    monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", fake_fetch)
+    setattr(fetcher, "fetch", fake_fetch)
+    monkeypatch.setattr(data_fetcher, "fh_fetcher", fetcher, raising=False)
 
     mark_called: dict[str, bool] = {}
     monkeypatch.setattr(data_fetcher, "_mark_fallback", lambda *a, **k: mark_called.setdefault("called", True))

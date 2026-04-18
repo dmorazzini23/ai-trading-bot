@@ -10,19 +10,23 @@ def test_ta_lazy_import(monkeypatch, caplog):
     """TA library loads lazily and updates availability flag."""
     import importlib
     import ai_trading.strategies.imports as imports
+    import pytest
 
     # Ensure fresh state
     importlib.reload(imports)
     assert imports.TA_AVAILABLE is False
 
-    with caplog.at_level("INFO"):
-        ta = imports.get_ta()
+    try:
+        with caplog.at_level("INFO"):
+            ta = imports.get_ta()
+    except ImportError:
+        assert imports.TA_AVAILABLE is False
+        assert any("TA library unavailable" in message for message in caplog.messages)
+        pytest.skip("ta library not installed")
 
     assert imports.TA_AVAILABLE is True
     assert hasattr(ta, "trend")
-    assert any(
-        "TA library loaded successfully" in message for message in caplog.messages
-    )
+    assert any("TA library loaded successfully" in message for message in caplog.messages)
 
 
 def test_audit_file_creation_and_permissions(tmp_path, monkeypatch):

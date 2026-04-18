@@ -4,16 +4,25 @@ from __future__ import annotations
 from ai_trading.logging import get_logger
 from collections.abc import Iterable, Sequence
 from functools import lru_cache
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 import numpy as np
 from ai_trading.utils.lazy_imports import load_pandas
-from ai_trading.utils.pandas_facade import DataFrame as PDDataFrame, Series as PDSeries
 from .manager import IndicatorManager, Indicator
 
 logger = get_logger(__name__)
 
 # Lazy pandas proxy
 pd = load_pandas()
+_PANDAS_DATAFRAME_TYPE = pd.DataFrame
+
+if TYPE_CHECKING:
+    import pandas as _pd
+
+    PDDataFrame: TypeAlias = _pd.DataFrame
+    PDSeries: TypeAlias = _pd.Series
+else:
+    PDDataFrame = Any
+    PDSeries = Any
 
 try:  # optional numba import
     import numba as _numba  # type: ignore
@@ -248,7 +257,7 @@ def calculate_vwap(high: PDSeries, low: PDSeries, close: PDSeries, volume: PDSer
 
 def get_rsi_signal(series: PDSeries | PDDataFrame, period: int=14) -> PDSeries:
     """Return normalized RSI signal handling DataFrame or Series input."""
-    if isinstance(series, PDDataFrame):
+    if isinstance(series, _PANDAS_DATAFRAME_TYPE):
         close_col = series.get('close')
         if close_col is not None:
             series = close_col.astype(float)
@@ -347,7 +356,7 @@ def stochastic_rsi(prices: np.ndarray, period: int=14) -> np.ndarray:
     return cast(np.ndarray, np.array([rsi_val] * len(prices)))
 
 def hurst_exponent(ts):
-    series = ts.iloc[:, 0] if isinstance(ts, PDDataFrame) else ts
+    series = ts.iloc[:, 0] if isinstance(ts, _PANDAS_DATAFRAME_TYPE) else ts
     arr = series.values
     n = len(arr)
     if n > 10000:

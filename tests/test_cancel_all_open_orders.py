@@ -256,7 +256,6 @@ def test_send_exit_order_uses_cancel_order_shim(monkeypatch):
         return SimpleNamespace(id="market-001")
 
     monkeypatch.setattr(bot_engine, "safe_submit_order", fake_safe_submit_order)
-    monkeypatch.setattr(execution_flow, "safe_submit_order", fake_safe_submit_order)
     monkeypatch.setattr(execution_flow.pytime, "sleep", lambda _secs: None)
 
     execution_flow.send_exit_order(runtime, "AAPL", 5, 150.0, "manual_exit")

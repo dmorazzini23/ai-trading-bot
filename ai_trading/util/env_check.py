@@ -151,12 +151,6 @@ def guard_python_dotenv_import() -> None:
     ensure_python_dotenv_is_real_package()
 
 
-def guard_dotenv_shadowing() -> None:
-    """Alias for :func:`guard_python_dotenv_import` for compatibility."""
-
-    ensure_python_dotenv_is_real_package()
-
-
 def assert_dotenv_not_shadowed() -> None:
     global _ASSERT_GUARD_DISABLED, _ASSERT_GUARD_DISABLED_FOR
 
@@ -224,6 +218,5 @@ __all__ = [
     "assert_dotenv_not_shadowed",
     "disable_dotenv_guard",
     "enable_dotenv_guard",
-    "guard_dotenv_shadowing",
     "guard_python_dotenv_import",
 ]

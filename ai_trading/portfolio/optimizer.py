@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from ai_trading.logging import logger
+from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer, MarketRegime
+from ai_trading.risk.kelly import KellyCalculator, KellyCriterion
 
 def optimize_equal_weight(symbols):
     if not symbols:
@@ -18,53 +20,6 @@ def optimize_equal_weight(symbols):
     w = 1.0 / float(len(symbols))
     return {s: w for s in symbols}
 
-
-AdaptivePositionSizer: type[Any]
-MarketRegime: type[Any]
-KellyCriterion: type[Any]
-KellyCalculator: type[Any]
-
-try:
-    from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer as _ImportedAdaptivePositionSizer
-    from ai_trading.risk.adaptive_sizing import MarketRegime as _ImportedMarketRegime
-    from ai_trading.risk.kelly import KellyCalculator as _ImportedKellyCalculator
-    from ai_trading.risk.kelly import KellyCriterion as _ImportedKellyCriterion
-except ImportError:
-    @dataclass
-    class _FallbackAdaptivePositionSizer:
-        """Lightweight fallback when risk modules are unavailable."""
-        risk_level: Any | None = None
-
-        def __post_init__(self):
-            # ensure attributes expected by tests exist
-            self.regime_multipliers = {}
-            self.volatility_adjustments = {}
-
-    class _FallbackMarketRegime(Enum):
-        """Minimal market regime enum used in tests."""
-        NORMAL = "normal"
-
-    class _FallbackKellyCriterion:
-        """Simplified Kelly calculator for environments without full dependency tree."""
-
-        def __init__(self, max_fraction: float = 1.0, *args: Any, **kwargs: Any):
-            self.max_fraction = max_fraction
-
-        def calculate_kelly_fraction(self, *args: Any, **kwargs: Any) -> float:
-            return 0.0
-
-    class _FallbackKellyCalculator(_FallbackKellyCriterion):
-        """Reuse minimal KellyCriterion implementation."""
-        pass
-    AdaptivePositionSizer = _FallbackAdaptivePositionSizer
-    MarketRegime = _FallbackMarketRegime
-    KellyCriterion = _FallbackKellyCriterion
-    KellyCalculator = _FallbackKellyCalculator
-else:
-    AdaptivePositionSizer = _ImportedAdaptivePositionSizer
-    MarketRegime = _ImportedMarketRegime
-    KellyCriterion = _ImportedKellyCriterion
-    KellyCalculator = _ImportedKellyCalculator
 
 class PortfolioDecision(Enum):
     """Portfolio-level decision outcomes."""

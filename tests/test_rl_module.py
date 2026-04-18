@@ -3,6 +3,7 @@ from tests.optdeps import require
 require("numpy")
 import ai_trading.rl_trading.inference as inf
 import numpy as np
+import pytest
 import ai_trading.rl.module as rl_mod
 import ai_trading.rl_trading.train as train_mod
 
@@ -47,14 +48,8 @@ def test_rl_train_module_reload_preserves_train_attr(monkeypatch):
     sys.modules.pop(module_name, None)
     rl_pkg.__dict__.pop("train", None)
 
-    stub_module = rl_pkg._load_train_module()
-    assert stub_module.__spec__ is not None
-    assert sys.modules[module_name] is stub_module
-
-    reloaded = importlib.reload(stub_module)
-    assert hasattr(reloaded, "train")
-    assert callable(reloaded.train)
-    assert getattr(reloaded, "USING_RL_TRAIN_STUB", False)
+    with pytest.raises(ModuleNotFoundError):
+        rl_pkg._load_train_module()
 
     # Restore the real module so subsequent tests see the canonical implementation.
     monkeypatch.setattr(importlib, "import_module", original_import_module)
@@ -125,8 +120,5 @@ def test_rl_agent_stub_mode_is_non_trading(monkeypatch, tmp_path):
     monkeypatch.setattr(rl, "is_rl_available", lambda: False)
 
     agent = rl.RLAgent(tmp_path / "missing.zip")
-    agent.load()
-    signal = agent.predict(np.zeros(4, dtype=float))
-
-    assert agent._using_stub_model is True
-    assert signal is None
+    with pytest.raises(ImportError):
+        agent.load()

@@ -1,12 +1,10 @@
 """Meta-learning utilities."""
 from __future__ import annotations
 
-# Provide a ``pd`` attribute for tests to patch. Fall back to the internal
-# pandas facade when pandas is unavailable.
-try:  # pragma: no cover - exercised in environments with pandas installed
-    import pandas as pd  # type: ignore
-except Exception:  # pragma: no cover - fallback stub
-    from ai_trading.utils import pandas_facade as pd  # type: ignore
+from ai_trading.utils.lazy_imports import load_pandas
+
+# Provide a canonical ``pd`` attribute for tests to patch.
+pd = load_pandas()
 
 from .core import *  # noqa: F401,F403
 from .core import _import_pandas  # re-export for tests

@@ -52,8 +52,6 @@ class ComponentType(Enum):
     """Types of system components to monitor."""
 
     DATABASE = "database"
-    # Back-compat alias expected by some tests
-    SERVICE = "service"
     API_SERVICE = "api_service"
     MARKET_DATA = "market_data"
     TRADING_ENGINE = "trading_engine"

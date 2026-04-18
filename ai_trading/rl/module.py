@@ -30,13 +30,9 @@ def _clone_config(cfg: RLConfig | None) -> RLConfig:
 
 
 def _load_train_module() -> Any:
-    """Return the active training module, ensuring the stub loads when needed."""
+    """Return the active training module."""
 
-    try:
-        module = _rl._load_train_module()
-    except Exception:  # pragma: no cover - defensive guard for legacy paths
-        module = _train_mod
-    return module
+    return _rl._load_train_module()
 
 
 def train(data: Any, model_path: str | Path, cfg: RLConfig | None = None) -> Any:
@@ -60,28 +56,7 @@ def train(data: Any, model_path: str | Path, cfg: RLConfig | None = None) -> Any
     if not callable(train_fn):  # pragma: no cover - defensive guard
         raise AttributeError("RL training module missing callable 'train'")
 
-    model = train_fn(data, model_path, timesteps=cfg_obj.timesteps)
-
-    model_path = Path(model_path)
-    if not model_path.exists():
-        training_config = getattr(train_module, "TrainingConfig", None)
-        model_cls = getattr(train_module, "Model", None)
-        if training_config and model_cls and hasattr(model_cls, "save"):
-            try:
-                stub_model = model_cls(
-                    training_config(
-                        data=data,
-                        model_path=str(model_path),
-                        timesteps=cfg_obj.timesteps,
-                    )
-                )
-                stub_model.save(model_path)
-            except Exception:  # pragma: no cover - safety net for exotic stubs
-                logger.warning(
-                    "Failed to persist RL model via stub; continuing with in-memory model",
-                    exc_info=True,
-                )
-    return model
+    return train_fn(data, model_path, timesteps=cfg_obj.timesteps)
 
 
 def load(model_path: str | Path) -> Any:

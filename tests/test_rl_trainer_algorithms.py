@@ -20,6 +20,10 @@ def test_resolve_algo_config_supports_continuous_algorithms() -> None:
 def test_rl_trainer_uses_continuous_action_space_for_sac(monkeypatch) -> None:
     created_action_types: list[str | None] = []
 
+    class DummyVec(list):
+        def __init__(self, env_fns):
+            super().__init__([fn() for fn in env_fns])
+
     class DummyEnv:
         def __init__(self, _data, **kwargs):
             action_cfg = kwargs.get("action_config")
@@ -27,6 +31,7 @@ def test_rl_trainer_uses_continuous_action_space_for_sac(monkeypatch) -> None:
                 getattr(action_cfg, "action_type", None) if action_cfg is not None else None
             )
 
+    monkeypatch.setattr(train_mod, "DummyVecEnv", DummyVec)
     monkeypatch.setattr(env_mod, "TradingEnv", DummyEnv)
     trainer = train_mod.RLTrainer(algorithm="SAC")
     trainer._create_environments(np.zeros((40, 4), dtype=float), env_params={})

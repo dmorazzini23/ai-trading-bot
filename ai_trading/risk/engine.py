@@ -11,14 +11,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import importlib
 import sys
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import numpy as np
 from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
 from ai_trading.data.bars import safe_get_stock_bars, StockBarsRequest, TimeFrame
 from ai_trading.utils.time import monotonic_time
 from ai_trading.data.fetch import normalize_ohlcv_columns
-from ai_trading.utils.pandas_facade import DataFrame as PDDataFrame
 
 try:
     from alpaca.common.exceptions import APIError as _ImportedAPIError
@@ -62,6 +61,14 @@ if not hasattr(np, "NaN"):
 
 # Lazy pandas proxy
 pd = load_pandas()
+_PANDAS_DATAFRAME_TYPE = pd.DataFrame
+
+if TYPE_CHECKING:
+    import pandas as _pd
+
+    PDDataFrame: TypeAlias = _pd.DataFrame
+else:
+    PDDataFrame = Any
 
 
 DEFAULT_VOLATILITY_FALLBACK = 0.02
@@ -501,7 +508,7 @@ class RiskEngine:
                 if pd is None or candidate is None:
                     return None
                 try:
-                    if isinstance(candidate, PDDataFrame):
+                    if isinstance(candidate, _PANDAS_DATAFRAME_TYPE):
                         df_candidate = candidate.copy()
                     elif isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
                         try:

@@ -10,116 +10,62 @@ underlying model performs validation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
-from typing import Any
+from typing import Any, cast
 
+from ai_trading.alpaca_api import (
+    _data_classes,
+    get_stock_bars_request_cls,
+    get_timeframe_cls,
+    get_timeframe_unit_cls,
+)
 from ai_trading.logging import get_logger
 from ai_trading.timeframe import canonicalize_timeframe
 
-from ._alpaca_guard import should_import_alpaca_sdk
-
 logger = get_logger(__name__)
 
-_USE_ALPACA_REQUESTS = should_import_alpaca_sdk()
 
-if _USE_ALPACA_REQUESTS:
-    try:  # pragma: no cover - exercised when SDK available
-        from ai_trading.alpaca_api import (
-            get_stock_bars_request_cls,
-            get_timeframe_cls,
-            get_timeframe_unit_cls,
-        )
-    except Exception:  # pragma: no cover - fall back when import fails
-        _USE_ALPACA_REQUESTS = False
+def _resolve_data_bindings() -> tuple[type[Any], type[Any], Any]:
+    """Return request/timeframe bindings from the same active Alpaca source."""
 
-if _USE_ALPACA_REQUESTS:
-    TimeFrameType = get_timeframe_cls()
     try:
-        unit_cls = get_timeframe_unit_cls()
+        request_cls, timeframe_cls, timeframe_unit_cls = _data_classes()
+        return (
+            cast(type[Any], request_cls),
+            cast(type[Any], timeframe_cls),
+            timeframe_unit_cls,
+        )
+    except Exception:
+        return (
+            cast(type[Any], get_stock_bars_request_cls()),
+            cast(type[Any], get_timeframe_cls()),
+            get_timeframe_unit_cls(),
+        )
+
+def _resolve_timeframe_type() -> type[Any]:
+    _, timeframe_cls, _ = _resolve_data_bindings()
+    return timeframe_cls
+
+
+def _resolve_timeframe_unit_type() -> Any:
+    try:
+        _, _, timeframe_unit_cls = _resolve_data_bindings()
+        return timeframe_unit_cls
     except Exception:  # pragma: no cover - unit class optional
         logger.debug("TIMEFRAME_UNIT_CLASS_LOAD_FAILED", exc_info=True)
-        unit_cls = None
-    _BaseStockBarsRequestType = get_stock_bars_request_cls()
-else:
-    class TimeFrameUnit(str, Enum):
-        Minute = "Min"
-        Hour = "Hour"
-        Day = "Day"
-        Week = "Week"
-        Month = "Month"
+        return None
 
-    @dataclass
-    class _FallbackTimeFrame:
-        amount: int = 1
-        unit: TimeFrameUnit = TimeFrameUnit.Day
 
-        def __str__(self) -> str:
-            return f"{self.amount}{self.unit.value}"
-
-    _FallbackTimeFrame.Minute = _FallbackTimeFrame(1, TimeFrameUnit.Minute)  # type: ignore[attr-defined]
-    _FallbackTimeFrame.Hour = _FallbackTimeFrame(1, TimeFrameUnit.Hour)  # type: ignore[attr-defined]
-    _FallbackTimeFrame.Day = _FallbackTimeFrame(1, TimeFrameUnit.Day)  # type: ignore[attr-defined]
-    _FallbackTimeFrame.Week = _FallbackTimeFrame(1, TimeFrameUnit.Week)  # type: ignore[attr-defined]
-    _FallbackTimeFrame.Month = _FallbackTimeFrame(1, TimeFrameUnit.Month)  # type: ignore[attr-defined]
-
-    unit_cls = TimeFrameUnit
-
-    class _FallbackStockBarsRequestBase:
-        def __init__(
-            self,
-            symbol_or_symbols: Any,
-            timeframe: Any,
-            *,
-            start: Any | None = None,
-            end: Any | None = None,
-            limit: int | None = None,
-            adjustment: str | None = None,
-            feed: str | None = None,
-            sort: str | None = None,
-            asof: str | None = None,
-            currency: str | None = None,
-            **extra: Any,
-        ) -> None:
-            self.symbol_or_symbols = symbol_or_symbols
-            self.timeframe = timeframe
-            self.start = start
-            self.end = end
-            self.limit = limit
-            self.adjustment = adjustment
-            self.feed = feed
-            self.sort = sort
-            self.asof = asof
-            self.currency = currency
-            for key, value in extra.items():
-                setattr(self, key, value)
-
-    TimeFrameType = _FallbackTimeFrame
-    _BaseStockBarsRequestType = _FallbackStockBarsRequestBase
-
-if _USE_ALPACA_REQUESTS and unit_cls is not None:  # pragma: no cover - attributes set when available
-    try:
-        if not hasattr(TimeFrameType, "Day"):
-            setattr(TimeFrameType, "Day", TimeFrameType(1, getattr(unit_cls, "Day", "Day")))  # type: ignore[arg-type]
-        if not hasattr(TimeFrameType, "Minute"):
-            setattr(TimeFrameType, "Minute", TimeFrameType(1, getattr(unit_cls, "Minute", "Minute")))  # type: ignore[arg-type]
-        if not hasattr(TimeFrameType, "Hour"):
-            setattr(TimeFrameType, "Hour", TimeFrameType(1, getattr(unit_cls, "Hour", "Hour")))  # type: ignore[arg-type]
-        if not hasattr(TimeFrameType, "Week"):
-            setattr(TimeFrameType, "Week", TimeFrameType(1, getattr(unit_cls, "Week", "Week")))  # type: ignore[arg-type]
-        if not hasattr(TimeFrameType, "Month"):
-            setattr(TimeFrameType, "Month", TimeFrameType(1, getattr(unit_cls, "Month", "Month")))  # type: ignore[arg-type]
-    except Exception:
-        logger.debug("TIMEFRAME_ALIAS_ATTACH_FAILED", exc_info=True)
+def _resolve_request_type() -> type[Any]:
+    request_cls, _, _ = _resolve_data_bindings()
+    return request_cls
 
 
 def _coerce_timeframe(tf: Any) -> Any:
     """Return ``tf`` as an instance of the active ``TimeFrame`` class."""
 
+    TimeFrameType = _resolve_timeframe_type()
+    unit_cls = _resolve_timeframe_unit_type()
     coerced = canonicalize_timeframe(tf)
-    if _USE_ALPACA_REQUESTS:
-        return coerced
-
     try:
         if isinstance(coerced, TimeFrameType):
             return coerced
@@ -151,62 +97,32 @@ def _coerce_timeframe(tf: Any) -> Any:
 # ``BaseModel``.  Subclass it so we can attach a validator that normalises the
 # timeframe field.  If the base class is a plain dataclass (our fallback when
 # Alpaca is unavailable) we fall back to a simple constructor wrapper.
-try:  # pragma: no cover - pydantic optional during some tests
-    from pydantic import BaseModel
-    StockBarsRequest: Any
+class StockBarsRequest:
+    symbol_or_symbols: Any
+    timeframe: Any
+    start: Any | None
+    end: Any | None
+    limit: int | None
+    feed: str | None
 
-    if issubclass(_BaseStockBarsRequestType, BaseModel):
-
-        from pydantic import model_validator
-
-        class _StockBarsRequest(_BaseStockBarsRequestType):  # type: ignore[misc,valid-type]
-            """StockBarsRequest accepting flexible timeframe inputs."""
-
-            @model_validator(mode="before")
-            @classmethod
-            def _convert_timeframe(cls, data: Any) -> Any:
-                if isinstance(data, dict):
-                    if "timeframe" in data:
-                        data["timeframe"] = _coerce_timeframe(data["timeframe"])
-                elif hasattr(data, "timeframe"):
-                    try:
-                        setattr(
-                            data,
-                            "timeframe",
-                            _coerce_timeframe(getattr(data, "timeframe")),
-                        )
-                    except Exception:
-                        logger.debug("STOCK_BARS_REQUEST_TIMEFRAME_SET_FAILED", exc_info=True)
-                return data
-
-        _StockBarsRequest.model_rebuild()  # ensure validator is applied
-        StockBarsRequest = _StockBarsRequest
-
-    else:  # pragma: no cover - base class is not a Pydantic model
-
-        def _stock_bars_request(*args: Any, **kwargs: Any) -> Any:
-            args_list = list(args)
-            if len(args_list) >= 2 and "timeframe" not in kwargs:
-                args_list[1] = _coerce_timeframe(args_list[1])
-            elif "timeframe" in kwargs:
-                kwargs["timeframe"] = _coerce_timeframe(kwargs["timeframe"])
-            return _BaseStockBarsRequestType(*args_list, **kwargs)
-
-        StockBarsRequest = _stock_bars_request
-
-except Exception:  # pragma: no cover - pydantic missing entirely
-
-    def _stock_bars_request(*args: Any, **kwargs: Any) -> Any:
+    def __new__(cls, *args: Any, **kwargs: Any) -> Any:
         args_list = list(args)
         if len(args_list) >= 2 and "timeframe" not in kwargs:
             args_list[1] = _coerce_timeframe(args_list[1])
         elif "timeframe" in kwargs:
             kwargs["timeframe"] = _coerce_timeframe(kwargs["timeframe"])
-        return _BaseStockBarsRequestType(*args_list, **kwargs)
+        return _resolve_request_type()(*args_list, **kwargs)
 
-    StockBarsRequest = _stock_bars_request
 
-TimeFrame = TimeFrameType
+class _TimeFrameProxy:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return _resolve_timeframe_type()(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_resolve_timeframe_type(), name)
+
+
+TimeFrame = _TimeFrameProxy()
 
 
 __all__ = ["TimeFrame", "StockBarsRequest"]

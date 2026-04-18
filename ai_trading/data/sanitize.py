@@ -7,12 +7,19 @@ and stale data detection to guard against poor quality market data.
 import logging
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 import numpy as np
 from ai_trading.utils.lazy_imports import load_pandas
-from ai_trading.utils.pandas_facade import DataFrame as PDDataFrame, Series as PDSeries
 
 pd = load_pandas()
+if TYPE_CHECKING:
+    import pandas as _pd
+
+    PDDataFrame: TypeAlias = _pd.DataFrame
+    PDSeries: TypeAlias = _pd.Series
+else:
+    PDDataFrame = Any
+    PDSeries = Any
 logger = get_logger(__name__)
 
 @dataclass

@@ -16,7 +16,7 @@ def test_finnhub_used_when_alpaca_empty(monkeypatch):
 
     # Alpaca returns no bars
     monkeypatch.setattr(data_fetcher, "_fetch_bars", lambda *a, **k: pd.DataFrame())
-    monkeypatch.setattr(data_fetcher.fh_fetcher, "is_stub", False)
+    fetcher = type("DummyFinnhubFetcher", (), {})()
 
     def fail_backup(*args, **kwargs):
         raise AssertionError("backup provider should not be called")
@@ -29,7 +29,8 @@ def test_finnhub_used_when_alpaca_empty(monkeypatch):
         called["used"] = True
         return pd.DataFrame({"timestamp": [pd.Timestamp(start)], "close": [1.0]})
 
-    monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", fake_fetch)
+    setattr(fetcher, "fetch", fake_fetch)
+    monkeypatch.setattr(data_fetcher, "fh_fetcher", fetcher, raising=False)
 
     start = dt.datetime(2023, 1, 1, tzinfo=dt.UTC)
     end = dt.datetime(2023, 1, 2, tzinfo=dt.UTC)

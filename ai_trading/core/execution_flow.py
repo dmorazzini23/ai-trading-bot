@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-"""Execution flow helpers decoupled from bot_engine.
-
-This module provides concrete implementations for selected execution helpers
-and re-exports core entry points for backwards compatibility.
-"""
+"""Execution flow helpers decoupled from bot_engine."""
 
 from json import JSONDecodeError
 from typing import Any, cast
@@ -328,13 +324,7 @@ def vwap_pegged_submit(
             break
 
 
-# Re-export for backwards compatibility
-from .bot_engine import submit_order as submit_order  # noqa: E402,F401
-from .bot_engine import safe_submit_order as safe_submit_order  # noqa: E402,F401
-
 __all__ = [
-    "submit_order",
-    "safe_submit_order",
     "poll_order_fill_status",
     "execute_exit",
     "twap_submit",

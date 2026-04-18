@@ -129,6 +129,16 @@ cast(Any, _mock.patch).dict = _safe_patch_dict
 if "flask" not in _sys.modules:
     flask_mod = cast(Any, types.ModuleType("flask"))
     flask_app_mod = cast(Any, types.ModuleType("flask.app"))
+    request_state = types.SimpleNamespace(_json=None)
+
+    class _StubRequest:
+        def get_json(self, silent: bool = False):
+            payload = request_state._json
+            if payload is None and not silent:
+                raise RuntimeError("request JSON unavailable")
+            return payload
+
+    stub_request = _StubRequest()
 
     class _StubFlask:
         def __init__(self, *a, **k):
@@ -136,8 +146,13 @@ if "flask" not in _sys.modules:
             self.config = {}
 
         def route(self, path, *a, **k):
+            methods = tuple(str(method).upper() for method in (k.get("methods") or ("GET",)))
+
             def decorator(func):
-                self._routes[path] = func
+                for method in methods:
+                    self._routes[(path, method)] = func
+                if "GET" in methods:
+                    self._routes[path] = func
                 return func
 
             return decorator
@@ -157,9 +172,20 @@ if "flask" not in _sys.modules:
                     return self._data
 
             class _Client:
-                def get(self, path):
-                    handler = app._routes[path]
-                    result = handler()
+                def _request(self, path, method="GET", json=None):
+                    handler = app._routes[(path, method.upper())]
+                    request_state._json = json
+                    handler_globals = getattr(handler, "__globals__", {})
+                    previous_request = handler_globals.get("request")
+                    handler_globals["request"] = stub_request
+                    try:
+                        result = handler()
+                    finally:
+                        request_state._json = None
+                        if previous_request is None:
+                            handler_globals.pop("request", None)
+                        else:
+                            handler_globals["request"] = previous_request
                     status = 200
                     data = result
                     if isinstance(result, tuple):
@@ -167,6 +193,18 @@ if "flask" not in _sys.modules:
                         if len(result) > 1:
                             status = result[1]
                     return _Response(data, status)
+
+                def open(self, path, method="GET", json=None):
+                    return self._request(path, method=method, json=json)
+
+                def get(self, path):
+                    return self._request(path, method="GET")
+
+                def post(self, path, json=None):
+                    return self._request(path, method="POST", json=json)
+
+                def delete(self, path):
+                    return self._request(path, method="DELETE")
 
             return _Client()
 
@@ -179,6 +217,7 @@ if "flask" not in _sys.modules:
 
     flask_mod.Flask = _StubFlask
     flask_mod.jsonify = getattr(flask_mod, "jsonify", _jsonify)
+    flask_mod.request = stub_request
     flask_app_mod.Flask = _StubFlask
     flask_app_mod.jsonify = flask_mod.jsonify
     _sys.modules["flask"] = flask_mod

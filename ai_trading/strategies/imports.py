@@ -89,15 +89,13 @@ def get_ta():
                 "TA library loaded successfully for enhanced technical analysis"
             )
             _TA = ta
-        except Exception:
-            # Provide a minimal stub so tests can exercise paths without the dependency
-            class _TAStub:
-                class trend:  # noqa: N801 - match expected attribute name
-                    pass
-
-            logger.info("TA library loaded successfully (stub)")
-            _TA = _TAStub()  # type: ignore[assignment]
-        TA_AVAILABLE = True
+            TA_AVAILABLE = True
+        except Exception as exc:
+            TA_AVAILABLE = False
+            logger.warning("TA library unavailable", extra={"error": str(exc)})
+            raise ImportError(
+                "TA library is required for technical analysis features"
+            ) from exc
     return _TA
 
 

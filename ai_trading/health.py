@@ -12,28 +12,11 @@ from ai_trading.health_payload import (
 )
 from ai_trading.logging import get_logger
 from ai_trading.app import (
-    _install_route_tracker,
-    _ensure_test_client,
+    _ensure_route_registry,
+    _ensure_test_client_support,
     suppress_flask_startup_noise,
 )
-
-try:  # pragma: no cover - optional dependency
-    from flask import Flask, jsonify
-except Exception:  # pragma: no cover - stub for tests when flask missing
-    class Flask:  # type: ignore
-        def __init__(self, *a: Any, **k: Any) -> None:
-            self.config: dict[str, Any] = {}
-
-        def route(self, *a: Any, **k: Any) -> Any:
-            def deco(func: Any) -> Any:
-                return func
-            return deco
-
-        def run(self, *a: Any, **k: Any) -> None:
-            return None
-
-    def jsonify(payload: Any) -> Any:  # type: ignore
-        return payload
+from flask import Flask, jsonify
 
 
 @dataclass(slots=True)
@@ -68,9 +51,9 @@ class HealthCheck:
             setattr(self.app, "config", dict(getattr(self.app, "config", {}) or {}))
         self.app.config.update(self.config)
 
-        route_registry = _install_route_tracker(self.app)
+        route_registry = _ensure_route_registry(self.app)
         self._register_routes()
-        _ensure_test_client(self.app, route_registry)
+        _ensure_test_client_support(self.app, route_registry)
 
     # ------------------------------------------------------------------
     # Internal helpers

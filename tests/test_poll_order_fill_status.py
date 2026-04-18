@@ -93,17 +93,6 @@ if "portalocker" not in sys.modules:
     _set_module_attr(portalocker_stub, "lock", lambda *_args, **_kwargs: None)
     sys.modules["portalocker"] = portalocker_stub
 
-if "ai_trading.core.bot_engine" not in sys.modules:
-    bot_engine_stub = types.ModuleType("ai_trading.core.bot_engine")
-
-    def _noop(*_args, **_kwargs):
-        return None
-
-    _set_module_attr(bot_engine_stub, "submit_order", _noop)
-    _set_module_attr(bot_engine_stub, "safe_submit_order", _noop)
-    _set_module_attr(bot_engine_stub, "execute_exit", _noop)
-    sys.modules["ai_trading.core.bot_engine"] = bot_engine_stub
-
 if "bs4" not in sys.modules:
     bs4_stub = types.ModuleType("bs4")
 

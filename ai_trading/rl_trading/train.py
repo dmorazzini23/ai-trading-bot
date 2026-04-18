@@ -28,30 +28,19 @@ from ai_trading.config.management import get_env
 from ai_trading.logging import logger
 from . import _load_rl_stack, is_rl_available
 
-
-class _SB3Stub:
-    """Minimal stub used when RL stack is unavailable."""
-
-    def __init__(self, *a, **k):
-        pass
-
-    def learn(self, *a, **k):
-        return self
-
-    def save(self, *a, **k):
-        pass
-
-    @classmethod
-    def load(cls, *a, **k):
-        return cls()
+PPO = A2C = DQN = SAC = TD3 = None
 
 
-PPO = A2C = DQN = SAC = TD3 = _SB3Stub
+def _raise_rl_dependency_missing(context: str) -> None:
+    raise ImportError(
+        "Stable-Baselines3, gymnasium, and torch are required for "
+        f"{context}. Install the 'ai-trading-bot[rl]' extras."
+    )
 
 
 class BaseCallback:
     def __init__(self, *a, **k):
-        pass
+        _raise_rl_dependency_missing("RL callbacks")
 
 
 class EvalCallback(BaseCallback):
@@ -60,17 +49,16 @@ class EvalCallback(BaseCallback):
 
 
 def make_vec_env(*a, **k):
-    import types
-
-    return types.SimpleNamespace()
+    _raise_rl_dependency_missing("RL environment creation")
 
 
 class DummyVecEnv(list):
-    pass
+    def __init__(self, *args, **kwargs):
+        _raise_rl_dependency_missing("RL vector environments")
 
 
 def evaluate_policy(*a, **k):
-    return (0.0, 0.0)
+    _raise_rl_dependency_missing("RL evaluation")
 
 
 @dataclass
@@ -200,21 +188,13 @@ def _resolve_algo_config(algorithm: str) -> RLAlgoConfig:
 
 
 class Model:
-    """Minimal stand-in for an RL model used in tests."""
+    """Minimal persisted RL model metadata container used by tests."""
 
     def __init__(self, config: TrainingConfig):
         self.config = config
 
-    def predict(self, state: Any, deterministic: bool = True) -> tuple[int, None]:
-        # Default to hold when running in stub mode to avoid accidental buys.
-        return (0, None)
-
     def save(self, path: str | os.PathLike[str]) -> None:
         Path(path).write_bytes(b"0")
-
-    @classmethod
-    def load(cls, path: str | os.PathLike[str]) -> "Model":
-        return cls(TrainingConfig(model_path=str(path)))
 
 
 def train(
@@ -235,27 +215,32 @@ def train(
     """
 
     config = TrainingConfig(data=data, model_path=str(model_path), timesteps=timesteps)
+    if PPO is None and not _ensure_rl():
+        _raise_rl_dependency_missing("RL training")
+    if PPO is None:
+        _raise_rl_dependency_missing("RL training")
     model = Model(config)
-    algo = PPO("MlpPolicy", data)
+    algo_cls = cast(Any, PPO)
+    algo = algo_cls("MlpPolicy", data)
     algo.learn(total_timesteps=timesteps)
-    # Prefer the algorithm's save method when available; fall back to the
-    # minimal stub model to keep the interface consistent in tests.
     if hasattr(algo, "save"):
         algo.save(str(model_path))
-    elif config.model_path:
-        model.save(config.model_path)
+    else:
+        raise RuntimeError("RL algorithm missing save()")
     return model
 
 
 def _ensure_rl() -> bool:
     """Import the RL stack on demand, replacing global stubs."""
     global PPO, A2C, DQN, SAC, TD3, BaseCallback, EvalCallback, make_vec_env, evaluate_policy, DummyVecEnv
-    if PPO is not _SB3Stub:
+    if PPO is not None:
         _refresh_callback_classes()
         return True
     if not is_rl_available():
         return False
     stack = _load_rl_stack()
+    if stack is None:
+        return False
     sb3 = stack["sb3"]
     PPO = sb3.PPO
     A2C = sb3.A2C

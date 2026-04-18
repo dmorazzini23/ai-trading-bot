@@ -25,16 +25,7 @@ class FinnhubAPIException(Exception):
         super().__init__(str(self.status_code))
 
 
-class _FinnhubFetcherStub:
-    """Minimal stub with a ``fetch`` method; tests may monkeypatch this."""
-
-    is_stub = True
-
-    def fetch(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - defensive
-        raise NotImplementedError
-
-
-def _build_fetcher() -> Any:
+def _build_fetcher() -> Any | None:
     config.reload_trading_config()
     raw_enable = config.get_env("ENABLE_FINNHUB", "1")
     if isinstance(raw_enable, str):
@@ -46,7 +37,7 @@ def _build_fetcher() -> Any:
             log_finnhub_disabled("GLOBAL")
             logger.debug("FINNHUB_DISABLED", extra={"symbol": "GLOBAL"})
             _SENT_DEPS_LOGGED.add("finnhub")
-        return _FinnhubFetcherStub()
+        return None
     try:
         import finnhub  # type: ignore
     except Exception:
@@ -56,7 +47,7 @@ def _build_fetcher() -> Any:
                 extra={"package": "finnhub-python"},
             )
             _SENT_DEPS_LOGGED.add("finnhub")
-        return _FinnhubFetcherStub()
+        return None
     # If finnhub is available, rebind our public exception alias to the real
     # library exception so downstream try/except blocks work uniformly.
     try:  # pragma: no cover - binding depends on optional dependency
@@ -74,7 +65,7 @@ def _build_fetcher() -> Any:
             log_finnhub_disabled("GLOBAL")
             logger.debug("FINNHUB_DISABLED", extra={"symbol": "GLOBAL"})
             _SENT_DEPS_LOGGED.add("finnhub")
-        return _FinnhubFetcherStub()
+        return None
 
     class FinnhubFetcher:
         """Simple wrapper around ``finnhub.Client``."""
@@ -143,6 +134,6 @@ def _build_fetcher() -> Any:
     return FinnhubFetcher(finnhub.Client(api_key))
 
 
-fh_fetcher = _build_fetcher()
+fh_fetcher: Any | None = _build_fetcher()
 
 __all__ = ["fh_fetcher", "FinnhubAPIException", "_SENT_DEPS_LOGGED"]

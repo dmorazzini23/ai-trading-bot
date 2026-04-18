@@ -24,7 +24,7 @@ def test_start_api_with_signal_sets_error_on_failure():
 
 def test_health_checker_run_check_uses_running_loop():
     """run_check should execute a sync check function without raising."""
-    checker = HealthChecker("sync", ComponentType.SERVICE, lambda: True)
+    checker = HealthChecker("sync", ComponentType.API_SERVICE, lambda: True)
 
     async def _run():
         result = await checker.run_check()
