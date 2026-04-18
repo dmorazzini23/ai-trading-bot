@@ -2037,7 +2037,7 @@ def _halt_flag_path() -> str:
     env_path = _runtime_env("AI_TRADING_HALT_FLAG_PATH")
     if env_path:
         return env_path
-    return "halt.flag"
+    return "runtime/halt.flag"
 
 
 def _safe_mode_policy() -> tuple[bool, str]:

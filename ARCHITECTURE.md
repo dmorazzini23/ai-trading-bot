@@ -51,9 +51,9 @@ Current canonical routes from `create_app()`:
   market-regime analysis module used for rich analysis outputs.
 - `ai_trading.strategies.regime_detector` is the dynamic-threshold and
   canonical `MarketRegime` module used by live-ish portfolio and signal flows.
-- `ai_trading.tools.seed_trade_history` uses the checked-in JSON seed file
-  `trade_history.seed.json`, while runtime trade-history persistence is
-  controlled separately through `AI_TRADING_TRADE_HISTORY_PATH`.
+- `ai_trading.tools.seed_trade_history` uses the packaged JSON seed file
+  `ai_trading/defaults/trade_history.seed.json`, while runtime trade-history
+  persistence is controlled separately through `AI_TRADING_TRADE_HISTORY_PATH`.
 
 ## Operational Constraints
 

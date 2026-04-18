@@ -1627,7 +1627,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="halt_flag_path",
         env=("HALT_FLAG_PATH", "AI_TRADING_HALT_FLAG_PATH"),
         cast="str",
-        default="halt.flag",
+        default="runtime/halt.flag",
         description="Filesystem path to the halt flag used to pause live trading.",
     ),
     ConfigSpec(

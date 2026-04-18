@@ -13,7 +13,7 @@ from .low_beta_defensive import LowBetaDefensiveStrategy
 from .time_series_momentum_overlay import TimeSeriesMomentumOverlayStrategy
 MetaLearning: Any | None
 try:
-    from .meta_learning import MetaLearning
+    from .metalearning import MetaLearning
 except (KeyError, ValueError, TypeError):
     MetaLearning = None
 from .base import StrategySignal as TradeSignal

@@ -706,7 +706,7 @@ def _resolve_halt_flag_path() -> str:
     env_path = _env_value("AI_TRADING_HALT_FLAG_PATH")
     if env_path:
         return str(env_path)
-    return "halt.flag"
+    return "runtime/halt.flag"
 
 
 def _write_halt_flag(reason: str, metadata: Mapping[str, Any] | None = None) -> None:

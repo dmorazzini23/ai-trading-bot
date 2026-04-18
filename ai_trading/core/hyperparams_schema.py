@@ -9,6 +9,7 @@ from ai_trading.logging import get_logger
 import os
 from datetime import UTC, datetime
 from typing import Any
+from ai_trading.defaults import has_default, load_default_json
 from pydantic import BaseModel, Field, validator
 PYDANTIC_AVAILABLE = True
 logger = get_logger(__name__)
@@ -71,6 +72,13 @@ def load_hyperparams(file_path: str='hyperparams.json') -> HyperparametersSchema
     """
     global _last_missing_warning
     if not os.path.exists(file_path):
+        if file_path == "hyperparams.json" and has_default("hyperparams.json"):
+            try:
+                data = load_default_json("hyperparams.json")
+                return HyperparametersSchema(**data)
+            except (TypeError, ValueError, json.JSONDecodeError) as e:
+                logger.error(f'Error loading packaged hyperparams defaults: {e}')
+                return HyperparametersSchema()
         current_time = float(datetime.now(UTC).timestamp())
         if current_time - _last_missing_warning > _warning_interval:
             logger.warning(f'Hyperparams file not found: {file_path}. Using defaults.')

@@ -881,7 +881,7 @@ def load_checkpoint(filepath: str) -> dict[str, Any] | None:
         return None
     return obj
 
-def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.pkl', history_path: str='meta_retrain_history.pkl', min_samples: int=10) -> bool:
+def retrain_meta_learner(trade_log_path: str=None, model_path: str='runtime/meta_model.pkl', history_path: str='runtime/meta_retrain_history.pkl', min_samples: int=10) -> bool:
     """Retrain the meta-learner model from trade logs.
 
     Parameters

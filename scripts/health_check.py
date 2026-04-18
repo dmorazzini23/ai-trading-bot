@@ -296,13 +296,24 @@ def _check_trading_system(self) -> HealthCheckResult:
         except ImportError as e:
             issues.append(f'risk_engine import failed: {e}')
             details['risk_engine'] = f'FAILED: {e}'
-        critical_files = ['ai_trading/settings.py', 'hyperparams.json', 'best_hyperparams.json']
+        critical_files = ['ai_trading/settings.py']
         for file_path in critical_files:
             if os.path.exists(file_path):
                 details[f'file_{file_path}'] = 'EXISTS'
             else:
                 issues.append(f'Missing critical file: {file_path}')
                 details[f'file_{file_path}'] = 'MISSING'
+        try:
+            from ai_trading.defaults import has_default
+
+            for name in ('hyperparams.json', 'best_hyperparams.json'):
+                status = 'EXISTS' if has_default(name) else 'MISSING'
+                details[f'packaged_default_{name}'] = status
+                if status != 'EXISTS':
+                    issues.append(f'Missing packaged default: {name}')
+        except ImportError as e:
+            issues.append(f'packaged defaults import failed: {e}')
+            details['packaged_defaults'] = f'FAILED: {e}'
         if issues:
             status = HealthStatus.CRITICAL
             message = f"Trading system issues: {'; '.join(issues)}"

@@ -116,6 +116,9 @@ def test_gap_safe_mode_uses_failsoft_when_backup_available(tmp_path, monkeypatch
     monkeypatch.setattr(pm, "_SAFE_MODE_REASON", None, raising=False)
     monkeypatch.setattr(pm, "_SAFE_MODE_HEALTHY_PASSES", 0, raising=False)
     monkeypatch.setattr(pm, "_SAFE_MODE_DEGRADED_ONLY", False, raising=False)
+    monkeypatch.setattr(pm, "_last_halt_reason", None, raising=False)
+    monkeypatch.setattr(pm, "_last_halt_ts", 0.0, raising=False)
+    monkeypatch.setattr(pm, "_HALT_SUPPRESS_SECONDS", 0.0, raising=False)
 
     halt_path = tmp_path / "halt.flag"
     monkeypatch.setattr(
@@ -165,6 +168,9 @@ def test_gap_failsoft_handles_percent_ratio(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(pm_local, "_SAFE_MODE_REASON", None, raising=False)
     monkeypatch.setattr(pm_local, "_SAFE_MODE_HEALTHY_PASSES", 0, raising=False)
     monkeypatch.setattr(pm_local, "_SAFE_MODE_DEGRADED_ONLY", False, raising=False)
+    monkeypatch.setattr(pm_local, "_last_halt_reason", None, raising=False)
+    monkeypatch.setattr(pm_local, "_last_halt_ts", 0.0, raising=False)
+    monkeypatch.setattr(pm_local, "_HALT_SUPPRESS_SECONDS", 0.0, raising=False)
     times = iter([0.0, 1.0, 2.0, 3.0])
     monkeypatch.setattr(pm_local, "monotonic_time", lambda: next(times), raising=False)
 

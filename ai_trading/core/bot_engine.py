@@ -11009,7 +11009,7 @@ def _log_peak_equity_permission() -> None:
         )
     finally:
         _PEAK_EQUITY_PERMISSION_LOGGED = True
-HALT_FLAG_PATH = abspath(getattr(S, "halt_flag_path", "halt.flag"))  # AI-AGENT-REF: absolute halt flag path
+HALT_FLAG_PATH = abspath(getattr(S, "halt_flag_path", "runtime/halt.flag"))  # AI-AGENT-REF: absolute halt flag path
 SLIPPAGE_LOG_FILE = str(paths.LOG_DIR / "slippage.csv")
 REWARD_LOG_FILE = str(paths.LOG_DIR / "reward_log.csv")
 FEATURE_PERF_FILE = abspath_safe("feature_perf.csv")
@@ -11021,24 +11021,31 @@ BEST_HYPERPARAMS_FILE = abspath_repo_root("best_hyperparams.json")
 
 
 def load_hyperparams() -> dict:
-    """Load hyperparameters from best_hyperparams.json if present, else default."""
-    path = (
-        BEST_HYPERPARAMS_FILE
-        if os.path.exists(BEST_HYPERPARAMS_FILE)
-        else HYPERPARAMS_FILE
-    )
-    if not os.path.exists(path):
-        logger.warning(f"Hyperparameter file {path} not found; using defaults")
-        return {}
+    """Load hyperparameters from local overrides or packaged defaults."""
+    for path in (BEST_HYPERPARAMS_FILE, HYPERPARAMS_FILE):
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                payload = json.load(f)
+            if isinstance(payload, dict):
+                return payload
+            return {}
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to load hyperparameters from %s: %s", path, exc)
+            return {}
     try:
-        with open(path, encoding="utf-8") as f:
-            payload = json.load(f)
-        if isinstance(payload, dict):
-            return payload
-        return {}
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Failed to load hyperparameters from %s: %s", path, exc)
-        return {}
+        from ai_trading.defaults import load_default_json
+
+        for name in ("best_hyperparams.json", "hyperparams.json"):
+            payload = load_default_json(name)
+            if isinstance(payload, dict):
+                logger.info("Loaded hyperparameters from packaged default %s", name)
+                return payload
+    except (ImportError, OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to load packaged hyperparameter defaults: %s", exc)
+    logger.warning("Hyperparameter defaults unavailable; using empty defaults")
+    return {}
 
 
 def _maybe_warm_cache(ctx: BotContext) -> None:

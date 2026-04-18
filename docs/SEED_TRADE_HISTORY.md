@@ -3,8 +3,8 @@
 Meta-learning components rely on historical trade records, but there are two
 different file paths involved:
 
-- the seed helper consumes a JSON file, defaulting to
-  `trade_history.seed.json`
+- the seed helper consumes a JSON file, defaulting to the packaged
+  `ai_trading/defaults/trade_history.seed.json` sample
 - the canonical runtime history path is controlled by
   `AI_TRADING_TRADE_HISTORY_PATH`
 
@@ -18,9 +18,9 @@ Before a new deployment, ensure the seed file exists so each symbol has
 at least one entry. This avoids warnings and lets the bot collect
 statistics from the first trade cycle.
 
-1. Determine the symbols you plan to trade (for example from
-   `symbol_override.json`).
-2. Create or edit `trade_history.seed.json` or pass an alternate JSON path to
+1. Determine the symbols you plan to trade.
+   A sample universe file is available at `ai_trading/defaults/symbol_override.json`.
+2. Create or edit a seed JSON file or pass an alternate JSON path to
    `python -m ai_trading.tools.seed_trade_history <path>` and add a stub
    record for every symbol:
 

@@ -262,14 +262,15 @@ class ChaosEngineer:
         """Check if data integrity is preserved."""
         try:
             import os
-            critical_files = ['ai_trading/settings.py', 'hyperparams.json']
+            critical_files = ['ai_trading/settings.py']
             for file_path in critical_files:
                 if os.path.exists(file_path):
                     with open(file_path) as f:
                         f.read(1)
                 else:
                     return False
-            return True
+            from ai_trading.defaults import has_default
+            return has_default('hyperparams.json')
         except (ValueError, TypeError):
             return False
 
@@ -518,9 +519,16 @@ class ProductionValidator:
     def _check_configuration_compliance(self) -> float:
         """Check configuration compliance."""
         import os
-        required_files = ['ai_trading/settings.py', 'hyperparams.json']
+        required_files = ['ai_trading/settings.py']
         existing_files = sum((1 for f in required_files if os.path.exists(f)))
-        return existing_files / len(required_files) * 100
+        try:
+            from ai_trading.defaults import has_default
+
+            if has_default('hyperparams.json'):
+                existing_files += 1
+        except ImportError:
+            pass
+        return existing_files / 2 * 100
 
     def _check_logging_compliance(self) -> float:
         """Check logging compliance."""

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from ai_trading.tools import seed_trade_history
 
@@ -28,3 +29,12 @@ def test_load_history_uses_default_seed_file(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
     assert seed_trade_history.load_history() == records
+
+
+def test_load_history_uses_packaged_default_when_local_file_missing(monkeypatch) -> None:
+    monkeypatch.chdir(Path("/tmp"))
+
+    records = seed_trade_history.load_history()
+
+    assert isinstance(records, list)
+    assert records

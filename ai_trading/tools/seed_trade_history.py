@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Iterable
+from ai_trading.defaults import load_default_json
 from ai_trading.logging import get_logger
 from ai_trading.database.connection import initialize_database, get_session
 from ai_trading.database.models import Trade
@@ -13,6 +14,16 @@ def load_history(path: str | Path = DEFAULT_PATH) -> list[dict]:
     """Return list of trade records from *path* or empty list when unavailable."""
     p = Path(path)
     if not p.exists():
+        if p.name == DEFAULT_PATH:
+            try:
+                data = load_default_json(DEFAULT_PATH)
+            except (OSError, json.JSONDecodeError):
+                data = []
+            if isinstance(data, list):
+                logger.info(
+                    "TRADE_HISTORY_SEED_DEFAULT_USED", extra={"path": DEFAULT_PATH}
+                )
+                return data
         logger.warning(
             "TRADE_HISTORY_SEED_FILE_MISSING", extra={"path": str(p)}
         )

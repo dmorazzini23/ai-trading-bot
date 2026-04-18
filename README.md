@@ -538,12 +538,16 @@ python3 -m ai_trading.strategies.backtester \
 
 Optimization is a separate workflow from the research backtester. The bot automatically uses optimized parameters when available:
 
-1. **`best_hyperparams.json`** - Optimized parameters (preferred)
-2. **`hyperparams.json`** - Default parameters (fallback)
+1. **Local `best_hyperparams.json` override** - Optimized parameters (preferred)
+2. **Local `hyperparams.json` override** - Default parameters (fallback)
+3. **Packaged defaults in `ai_trading/defaults/`** - Used when local overrides are absent
 
 ```bash
-# View current parameters
-cat best_hyperparams.json
+# Inspect packaged defaults
+python - <<'PY'
+from ai_trading.defaults import load_default_json
+print(load_default_json("best_hyperparams.json"))
+PY
 
 # Manual optimization
 python3 -m ai_trading.algorithm_optimizer --symbols SPY --iterations 100

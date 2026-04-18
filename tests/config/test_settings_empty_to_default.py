@@ -20,7 +20,7 @@ def test_empty_env_uses_default(monkeypatch):
 @pytest.mark.parametrize(
     "env_var, expected",
     [
-        ("AI_TRADING_HALT_FLAG_PATH", "halt.flag"),
+        ("AI_TRADING_HALT_FLAG_PATH", "runtime/halt.flag"),
         ("AI_TRADING_RL_MODEL_PATH", "models/runtime/rl_agent.zip"),
     ],
 )

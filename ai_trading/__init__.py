@@ -116,14 +116,7 @@ def _configure_test_runtime_overrides() -> None:
     if str(model_url or "").strip():
         return
 
-    repo_root = Path(__file__).resolve().parents[1]
-    candidates = (
-        (Path(__file__).resolve().parent / "trained_model.pkl").resolve(),
-        (repo_root / "meta_model.pkl").resolve(),
-        (repo_root / "m.pkl").resolve(),
-        (repo_root / "hist.pkl").resolve(),
-        (repo_root / "x.pkl").resolve(),
-    )
+    candidates = ((Path(__file__).resolve().parent / "trained_model.pkl").resolve(),)
     for fallback_model in candidates:
         if fallback_model.exists():
             fallback_url = fallback_model.as_uri()
