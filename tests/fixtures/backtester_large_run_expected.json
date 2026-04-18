@@ -1,0 +1,109 @@
+{
+  "aggregate": {
+    "symbols": 2,
+    "total_bars": 39,
+    "total_trades": 27
+  },
+  "artifact_type": "backtest_summary",
+  "artifacts": {
+    "manifest_json": "backtest_run_manifest.json",
+    "summary_csv": "backtest_summary.csv",
+    "summary_json": "backtest_summary.json",
+    "trades_csv": "trades.csv"
+  },
+  "config": {
+    "commission": 0.01,
+    "data_dir": "__DATA_DIR__",
+    "end": "2025-01-31",
+    "initial_cash": 100000.0,
+    "latency_bars": 1,
+    "slippage_pips": 0.02,
+    "start": "2025-01-01",
+    "symbols_loaded": [
+      "AAPL",
+      "MSFT"
+    ],
+    "symbols_requested": [
+      "AAPL",
+      "MSFT"
+    ],
+    "timestamp_col": "event_time"
+  },
+  "inputs": {
+    "symbols": {
+      "AAPL": {
+        "duplicate_timestamp_rows": 0,
+        "inferred_range_index": false,
+        "invalid_timestamp_rows": 0,
+        "missing_volume_filled": true,
+        "non_numeric_rows_dropped": 0,
+        "non_positive_rows_dropped": 0,
+        "path": "AAPL.csv",
+        "rows_after_cleanup": 20,
+        "rows_read": 20,
+        "timestamp_column": "event_time"
+      },
+      "MSFT": {
+        "duplicate_timestamp_rows": 2,
+        "inferred_range_index": false,
+        "invalid_timestamp_rows": 0,
+        "missing_volume_filled": true,
+        "non_numeric_rows_dropped": 0,
+        "non_positive_rows_dropped": 0,
+        "path": "MSFT.csv",
+        "rows_after_cleanup": 19,
+        "rows_read": 20,
+        "timestamp_column": "event_time"
+      }
+    }
+  },
+  "schema_version": "1.0.0",
+  "symbols": [
+    {
+      "bars": 20,
+      "cagr": -0.0019411832764690828,
+      "drawdown": 0.0001541999999998822,
+      "load_report": {
+        "duplicate_timestamp_rows": 0,
+        "inferred_range_index": false,
+        "invalid_timestamp_rows": 0,
+        "missing_volume_filled": true,
+        "non_numeric_rows_dropped": 0,
+        "non_positive_rows_dropped": 0,
+        "path": "AAPL.csv",
+        "rows_after_cleanup": 20,
+        "rows_read": 20,
+        "timestamp_column": "event_time"
+      },
+      "net_pnl": -15.419999999983702,
+      "pnl": -15.419999999983702,
+      "sharpe": -5.59957951402381,
+      "symbol": "AAPL",
+      "trades": 14,
+      "turnover": 0.0142508
+    },
+    {
+      "bars": 19,
+      "cagr": -0.0019068853352927073,
+      "drawdown": 0.00014389999999986358,
+      "load_report": {
+        "duplicate_timestamp_rows": 2,
+        "inferred_range_index": false,
+        "invalid_timestamp_rows": 0,
+        "missing_volume_filled": true,
+        "non_numeric_rows_dropped": 0,
+        "non_positive_rows_dropped": 0,
+        "path": "MSFT.csv",
+        "rows_after_cleanup": 19,
+        "rows_read": 20,
+        "timestamp_column": "event_time"
+      },
+      "net_pnl": -14.389999999984866,
+      "pnl": -14.389999999984866,
+      "sharpe": -7.155842884960108,
+      "symbol": "MSFT",
+      "trades": 13,
+      "turnover": 0.0148306
+    }
+  ]
+}

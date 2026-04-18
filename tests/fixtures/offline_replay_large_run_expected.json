@@ -1,0 +1,93 @@
+{
+  "aggregate": {
+    "avg_loss_bps": 14.184420560578028,
+    "avg_win_bps": 34.85985211447031,
+    "churn_trades_per_100_bars": 16.701461377870565,
+    "config": {
+      "allow_shorts": true,
+      "confidence_threshold": 0.08,
+      "entry_score_threshold": 0.03,
+      "fee_bps": 1.0,
+      "max_hold_bars": 45,
+      "min_hold_bars": 3,
+      "slippage_bps": 2.0,
+      "stop_loss_bps": 25.0,
+      "take_profit_bps": 35.0,
+      "trailing_stop_bps": 15.0
+    },
+    "expectancy_bps": 26.89015780477495,
+    "exposure_ratio": 0.9665970772442589,
+    "median_hold_bars": 5.0,
+    "net_pnl_bps": 2151.212624381996,
+    "profit_factor": 12.666172296324461,
+    "symbols": 2,
+    "total_bars": 479,
+    "total_trades": 80,
+    "win_rate": 0.8375
+  },
+  "artifact_type": "offline_replay_summary",
+  "artifacts": {
+    "output_json": "offline_replay.json"
+  },
+  "inputs": {
+    "symbols": {
+      "AAPL": {
+        "duplicate_timestamp_rows": 0,
+        "inferred_range_index": false,
+        "invalid_timestamp_rows": 0,
+        "missing_volume_filled": false,
+        "non_numeric_rows_dropped": 0,
+        "non_positive_rows_dropped": 0,
+        "path": "AAPL.csv",
+        "rows_after_cleanup": 240,
+        "rows_read": 240,
+        "timestamp_column": "timestamp"
+      },
+      "MSFT": {
+        "duplicate_timestamp_rows": 2,
+        "inferred_range_index": false,
+        "invalid_timestamp_rows": 0,
+        "missing_volume_filled": true,
+        "non_numeric_rows_dropped": 0,
+        "non_positive_rows_dropped": 0,
+        "path": "MSFT.csv",
+        "rows_after_cleanup": 239,
+        "rows_read": 240,
+        "timestamp_column": "timestamp"
+      }
+    }
+  },
+  "schema_version": "1.0.0",
+  "symbols": [
+    {
+      "avg_loss_bps": 9.378168041922706,
+      "avg_win_bps": 34.08101142985237,
+      "bars": 240,
+      "churn_trades_per_100_bars": 16.666666666666664,
+      "expectancy_bps": 28.64861399588048,
+      "exposure_ratio": 0.9625,
+      "max_drawdown_bps": 15.085564770811466,
+      "median_hold_bars": 4.0,
+      "net_pnl_bps": 1145.9445598352193,
+      "profit_factor": 25.43855888938152,
+      "symbol": "AAPL",
+      "trades": 40,
+      "win_rate": 0.875
+    },
+    {
+      "avg_loss_bps": 17.188328384737602,
+      "avg_win_bps": 35.71170911327118,
+      "bars": 239,
+      "churn_trades_per_100_bars": 16.736401673640167,
+      "expectancy_bps": 25.13170161366943,
+      "exposure_ratio": 0.9707112970711297,
+      "max_drawdown_bps": 27.429734565939114,
+      "median_hold_bars": 5.0,
+      "net_pnl_bps": 1005.2680645467773,
+      "profit_factor": 8.31068811670632,
+      "symbol": "MSFT",
+      "trades": 40,
+      "win_rate": 0.8
+    }
+  ]
+}

@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from ai_trading.config.management import get_env, reload_env
+from ai_trading.data.historical_bars import HistoricalBarLoadReport, load_historical_bars
 from ai_trading.features.indicators import (
     compute_atr,
     compute_macd,
@@ -28,7 +29,7 @@ from ai_trading.replay.event_loop import ReplayEventLoop
 
 logger = get_logger(__name__)
 
-_REQUIRED_COLUMNS: tuple[str, ...] = ("open", "high", "low", "close")
+OFFLINE_REPLAY_SCHEMA_VERSION = "1.0.0"
 
 
 @dataclass(frozen=True)
@@ -620,50 +621,13 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_frame(csv_path: Path, timestamp_col: str) -> pd.DataFrame:
-    df = pd.read_csv(csv_path)
-    if df.empty:
-        raise ValueError(f"{csv_path} is empty")
-
-    idx: pd.Index | None = None
-    lower_map = {col.lower(): col for col in df.columns}
-    ts_col = lower_map.get(timestamp_col.lower(), None)
-    if ts_col is None:
-        ts_col = lower_map.get("timestamp", None)
-
-    if ts_col is not None:
-        idx = pd.to_datetime(df[ts_col], errors="coerce", utc=True)
-        df = df.drop(columns=[ts_col])
-    else:
-        first_col = df.columns[0]
-        first_series = df[first_col]
-        if pd.api.types.is_numeric_dtype(first_series):
-            idx = pd.RangeIndex(start=0, stop=len(df), step=1)
-        else:
-            candidate = pd.to_datetime(first_series, errors="coerce", utc=True)
-            parse_ratio = float(candidate.notna().mean())
-            if parse_ratio >= 0.95:
-                idx = candidate
-                df = df.drop(columns=[first_col])
-            else:
-                idx = pd.RangeIndex(start=0, stop=len(df), step=1)
-
-    rename_map = {col: col.lower() for col in df.columns}
-    df = df.rename(columns=rename_map)
-    missing = [col for col in _REQUIRED_COLUMNS if col not in df.columns]
-    if missing:
-        raise ValueError(f"{csv_path} missing required columns: {missing}")
-    if "volume" not in df.columns:
-        df["volume"] = 0.0
-
-    out = df[list(_REQUIRED_COLUMNS) + ["volume"]].copy()
-    out.index = idx
-    for col in list(_REQUIRED_COLUMNS) + ["volume"]:
-        out[col] = pd.to_numeric(out[col], errors="coerce")
-    out = out.replace([np.inf, -np.inf], np.nan).dropna(subset=list(_REQUIRED_COLUMNS))
-    if out.empty:
-        raise ValueError(f"{csv_path} has no valid OHLC rows after cleanup")
-    return out.sort_index()
+def _input_report_payload(
+    reports: Mapping[str, HistoricalBarLoadReport],
+) -> dict[str, dict[str, Any]]:
+    return {
+        symbol: report.as_dict()
+        for symbol, report in sorted(reports.items())
+    }
 
 
 def _compute_signal(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
@@ -1055,11 +1019,13 @@ def _run_parity_simulation(
 
     bars: list[dict[str, Any]] = []
     per_symbol: list[dict[str, Any]] = []
+    load_reports: dict[str, HistoricalBarLoadReport] = {}
     order_context_by_client_id: dict[str, dict[str, Any]] = {}
     policy_counters: Counter[str] = Counter()
     synthetic_index = 0
     for symbol, csv_path in symbol_paths.items():
-        frame = _load_frame(csv_path, args.timestamp_col)
+        frame, load_report = load_historical_bars(csv_path, timestamp_col=args.timestamp_col)
+        load_reports[symbol] = load_report
         score_source = "heuristic"
         if model_context is not None:
             score, confidence = _compute_model_signal(
@@ -1296,7 +1262,10 @@ def _run_parity_simulation(
         item["fills"] = int(fill_count_by_symbol.get(symbol, 0))
         item["markout_samples"] = int(markout_samples_by_symbol.get(symbol, 0))
     return {
+        "schema_version": OFFLINE_REPLAY_SCHEMA_VERSION,
+        "artifact_type": "offline_replay_summary",
         "aggregate": aggregate,
+        "inputs": {"symbols": _input_report_payload(load_reports)},
         "symbols": per_symbol,
         "replay": replay,
     }
@@ -1755,8 +1724,10 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--apply-policy-controls requires --simulation-mode")
 
     per_symbol: list[dict[str, Any]] = []
+    load_reports: dict[str, HistoricalBarLoadReport] = {}
     for symbol, csv_path in symbol_paths.items():
-        frame = _load_frame(csv_path, args.timestamp_col)
+        frame, load_report = load_historical_bars(csv_path, timestamp_col=args.timestamp_col)
+        load_reports[symbol] = load_report
         per_symbol.append(_simulate_symbol(symbol, frame, cfg))
 
     all_trades: list[dict[str, Any]] = []
@@ -1798,7 +1769,13 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
             "slippage_bps": cfg.slippage_bps,
         },
     }
-    return {"aggregate": aggregate, "symbols": per_symbol}
+    return {
+        "schema_version": OFFLINE_REPLAY_SCHEMA_VERSION,
+        "artifact_type": "offline_replay_summary",
+        "aggregate": aggregate,
+        "inputs": {"symbols": _input_report_payload(load_reports)},
+        "symbols": per_symbol,
+    }
 
 
 def _load_runtime_env_for_replay(args: argparse.Namespace) -> None:
@@ -1845,6 +1822,10 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.output_json is not None:
+        payload.setdefault("artifacts", {})
+        artifacts = payload.get("artifacts")
+        if isinstance(artifacts, dict):
+            artifacts["output_json"] = str(args.output_json)
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
         args.output_json.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
         logger.info("OFFLINE_REPLAY_JSON_WRITTEN", extra={"path": str(args.output_json)})

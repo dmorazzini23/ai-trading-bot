@@ -169,8 +169,12 @@ def test_offline_replay_writes_summary_json(tmp_path: Path) -> None:
     )
     assert rc == 0
     payload = _load_json(out_path)
+    assert payload["schema_version"] == "1.0.0"
+    assert payload["artifact_type"] == "offline_replay_summary"
     assert payload["aggregate"]["symbols"] == 1
     assert payload["aggregate"]["total_bars"] == 360
+    assert payload["artifacts"]["output_json"] == str(out_path)
+    assert payload["inputs"]["symbols"]["AAPL"]["rows_after_cleanup"] == 360
     assert "total_trades" in payload["aggregate"]
 
 
@@ -234,6 +238,7 @@ def test_offline_replay_simulation_mode_is_deterministic(tmp_path: Path) -> None
 
     first = _load_json(out_first)
     second = _load_json(out_second)
+    assert first["schema_version"] == "1.0.0"
     assert first["aggregate"]["simulation_mode"] is True
     assert second["aggregate"]["simulation_mode"] is True
     assert first["aggregate"]["replay_seed"] == 123

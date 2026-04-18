@@ -453,7 +453,7 @@ def run_backtest() -> None:
     logger.warning(
         "BACKTEST_ENTRYPOINT_LEGACY",
         extra={
-            "detail": "run_backtest executes the live cycle loop; use ai-offline-replay for historical replay backtests",
+            "detail": "run_backtest executes the live cycle loop; use ai_trading.strategies.backtester for research backtests and ai-offline-replay for production-faithful historical replay",
         },
     )
 

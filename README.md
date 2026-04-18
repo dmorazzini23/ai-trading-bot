@@ -532,11 +532,11 @@ python3 -m ai_trading.strategies.backtester \
   --commission 0.001
 ```
 
-**Results:** The backtester performs grid search optimization and saves the best parameters to `best_hyperparams.json`.
+**Artifacts:** The backtester writes `backtest_summary.csv`, `trades.csv`, `backtest_summary.json`, and `backtest_run_manifest.json`. The JSON artifacts are schema-versioned so downstream tooling can validate payload compatibility. Use `--output-dir` to keep runs isolated and `--output-json` to control the JSON summary path.
 
 #### Hyperparameter Optimization
 
-The bot automatically uses optimized parameters when available:
+Optimization is a separate workflow from the research backtester. The bot automatically uses optimized parameters when available:
 
 1. **`best_hyperparams.json`** - Optimized parameters (preferred)
 2. **`hyperparams.json`** - Default parameters (fallback)
@@ -548,6 +548,19 @@ cat best_hyperparams.json
 # Manual optimization
 python3 -m ai_trading.algorithm_optimizer --symbols SPY --iterations 100
 ```
+
+#### Offline Replay
+
+Use offline replay when you want production-faithful historical validation rather than a simplified research backtest:
+
+```bash
+python3 -m ai_trading.tools.offline_replay \
+  --data-dir ./data \
+  --symbols SPY,AAPL \
+  --output-json artifacts/offline_replay.json
+```
+
+Use `python3 -m ai_trading.strategies.backtester` for fast strategy research and `python3 -m ai_trading.tools.offline_replay` for replay-style policy, OMS, and determinism validation. Offline replay JSON outputs are also schema-versioned.
 
 ### 🎛️ Trading Modes
 

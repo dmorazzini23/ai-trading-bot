@@ -48,6 +48,15 @@ python3 -m ai_trading.strategies.backtester \
   --end 2024-12-31
 ```
 
+This backtester is the fast research path. For production-faithful historical validation, use offline replay:
+
+```bash
+python3 -m ai_trading.tools.offline_replay \
+  --data-dir ./data \
+  --symbols SPY,AAPL \
+  --output-json artifacts/offline_replay.json
+```
+
 ## Deployment & Ops
 
 - [Deployment Guide](DEPLOYING.md)

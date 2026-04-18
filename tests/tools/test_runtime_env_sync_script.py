@@ -98,3 +98,47 @@ def test_render_runtime_env_require_managed_fails_when_missing(
     monkeypatch.setattr(runtime_env_sync, "_fetch_aws_secret_payload", lambda *args, **kwargs: {})
     with pytest.raises(RuntimeError, match="managed secret key"):
         runtime_env_sync._render_runtime_env(src, dst)
+
+
+def test_render_runtime_env_excludes_selected_managed_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / ".env"
+    dst = tmp_path / ".env.runtime"
+    src.write_text(
+        "\n".join(
+            [
+                "AI_TRADING_SECRETS_BACKEND=aws-secrets-manager",
+                "AI_TRADING_AWS_SECRET_ID=ai-trading/prod",
+                (
+                    "AI_TRADING_EXCLUDED_MANAGED_SECRET_KEYS="
+                    "AI_TRADING_LINEAR_API_KEY,AI_TRADING_JSM_OPS_API_TOKEN"
+                ),
+                "ALPACA_API_KEY=local-key",
+                "AI_TRADING_LINEAR_API_KEY=",
+                "AI_TRADING_JSM_OPS_API_TOKEN=",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def _fake_fetch(secret_id: str, *, region: str, profile: str) -> dict[str, str]:
+        assert secret_id == "ai-trading/prod"
+        assert region == ""
+        assert profile == ""
+        return {
+            "ALPACA_API_KEY": "remote-key",
+            "AI_TRADING_LINEAR_API_KEY": "remote-linear",
+            "AI_TRADING_JSM_OPS_API_TOKEN": "remote-jsm",
+        }
+
+    monkeypatch.setattr(runtime_env_sync, "_fetch_aws_secret_payload", _fake_fetch)
+    summary = runtime_env_sync._render_runtime_env(src, dst)
+    rendered = dst.read_text(encoding="utf-8")
+    rendered_lines = rendered.splitlines()
+
+    assert "ALPACA_API_KEY=remote-key" in rendered
+    assert not any(line.startswith("AI_TRADING_LINEAR_API_KEY=") for line in rendered_lines)
+    assert not any(line.startswith("AI_TRADING_JSM_OPS_API_TOKEN=") for line in rendered_lines)
+    assert summary["manager_overrides_applied"] == 1

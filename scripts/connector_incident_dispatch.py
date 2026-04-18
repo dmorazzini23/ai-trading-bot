@@ -36,6 +36,18 @@ def _bool_env(value: str | None, *, default: bool) -> bool:
     return default
 
 
+def _float_env(value: str | None) -> float | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def _resolve_runtime_env_path(*, env: Mapping[str, str], repo_root: Path) -> Path:
     raw = str(env.get("AI_TRADING_RUNTIME_ENV_PATH") or "").strip()
     if raw:
@@ -143,6 +155,11 @@ def run_dispatch(
                     default=True,
                 ),
             }
+            health_timeout_s = _float_env(
+                env_map.get("AI_TRADING_CONNECTOR_HEALTH_TIMEOUT_S")
+            )
+            if health_timeout_s is not None:
+                slack_args["health_timeout_s"] = health_timeout_s
             channel = (env_map.get("AI_TRADING_SLACK_CHANNEL") or "").strip()
             if channel:
                 slack_args["channel"] = channel
@@ -212,6 +229,11 @@ def run_dispatch(
                     default=True,
                 ),
             }
+            health_timeout_s = _float_env(
+                env_map.get("AI_TRADING_CONNECTOR_HEALTH_TIMEOUT_S")
+            )
+            if health_timeout_s is not None:
+                slack_eod_args["health_timeout_s"] = health_timeout_s
             eod_channel = (
                 env_map.get("AI_TRADING_SLACK_EOD_CHANNEL")
                 or env_map.get("AI_TRADING_SLACK_CHANNEL")
@@ -264,6 +286,11 @@ def run_dispatch(
                     default=False,
                 ),
             }
+            health_timeout_s = _float_env(
+                env_map.get("AI_TRADING_CONNECTOR_HEALTH_TIMEOUT_S")
+            )
+            if health_timeout_s is not None:
+                linear_args["health_timeout_s"] = health_timeout_s
             linear_state_path = (
                 env_map.get("AI_TRADING_LINEAR_REGRESSION_STATE_PATH") or ""
             ).strip()
@@ -306,6 +333,11 @@ def run_dispatch(
                 default=True,
             ),
         }
+        health_timeout_s = _float_env(
+            env_map.get("AI_TRADING_CONNECTOR_HEALTH_TIMEOUT_S")
+        )
+        if health_timeout_s is not None:
+            oncall_args["health_timeout_s"] = health_timeout_s
         oncall_forward_map = {
             "jsm_ops_base_url": "AI_TRADING_JSM_OPS_BASE_URL",
             "jsm_ops_cloud_id": "AI_TRADING_JSM_OPS_CLOUD_ID",

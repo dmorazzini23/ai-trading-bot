@@ -99,6 +99,12 @@ def _parse_csv_keys(raw: str | None) -> set[str]:
     return keys
 
 
+def _excluded_managed_keys(*, env_map: Mapping[str, str]) -> set[str]:
+    return _parse_csv_keys(
+        _resolve_setting("AI_TRADING_EXCLUDED_MANAGED_SECRET_KEYS", env_map=env_map)
+    )
+
+
 def _infer_secret_key_names(keys: set[str]) -> set[str]:
     inferred: set[str] = set()
     for key in keys:
@@ -241,6 +247,7 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
     explicit_managed_keys = _parse_csv_keys(
         _resolve_setting("AI_TRADING_MANAGED_SECRET_KEYS", env_map=env_map)
     )
+    excluded_managed_keys = _excluded_managed_keys(env_map=env_map)
     managed_keys = set(explicit_managed_keys)
     managed_keys.update(_infer_secret_key_names(set(env_map.keys())))
 
@@ -264,6 +271,7 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
             f"unsupported AI_TRADING_SECRETS_BACKEND '{backend}' "
             "(supported: none, aws-secrets-manager)"
         )
+    managed_keys.difference_update(excluded_managed_keys)
 
     out_entries: list[EnvEntry] = []
     seen: set[str] = set()
@@ -271,6 +279,8 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
     for entry in entries:
         key = entry.key
         if key in DEPRECATED_KEYS:
+            continue
+        if key in excluded_managed_keys:
             continue
         value = entry.value
         if key in managed_keys and backend not in _BACKEND_NONE:

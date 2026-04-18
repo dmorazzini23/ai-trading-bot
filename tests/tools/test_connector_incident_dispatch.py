@@ -154,6 +154,45 @@ def test_run_dispatch_forwards_incident_realism_and_concentration_thresholds() -
     assert oncall_args["min_rejected_records_for_concentration"] == 25
 
 
+def test_run_dispatch_forwards_shared_health_timeout() -> None:
+    calls: dict[str, dict[str, Any]] = {}
+
+    def _slack(args: dict[str, Any]) -> dict[str, Any]:
+        calls["slack"] = args
+        return {"sent": False, "reason": "no_incident_triggered"}
+
+    def _slack_eod(args: dict[str, Any]) -> dict[str, Any]:
+        calls["slack_eod"] = args
+        return {"sent": False, "reason": "market_not_closed"}
+
+    def _linear(args: dict[str, Any]) -> dict[str, Any]:
+        calls["linear"] = args
+        return {"created": False, "reason": "no_runtime_regression_detected"}
+
+    def _oncall(args: dict[str, Any]) -> dict[str, Any]:
+        calls["oncall"] = args
+        return {"sent": False, "reason": "no_incident_triggered"}
+
+    payload = dispatch.run_dispatch(
+        env={
+            "AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc",
+            "AI_TRADING_LINEAR_API_KEY": "lin_key",
+            "AI_TRADING_LINEAR_TEAM_ID": "team123",
+            "AI_TRADING_CONNECTOR_ONCALL_ENABLED": "1",
+            "AI_TRADING_CONNECTOR_HEALTH_TIMEOUT_S": "5.5",
+        },
+        slack_notifier=_slack,
+        slack_eod_notifier=_slack_eod,
+        linear_creator=_linear,
+        oncall_notifier=_oncall,
+    )
+    assert payload["ok"] is True
+    assert calls["slack"]["health_timeout_s"] == 5.5
+    assert calls["slack_eod"]["health_timeout_s"] == 5.5
+    assert calls["linear"]["health_timeout_s"] == 5.5
+    assert calls["oncall"]["health_timeout_s"] == 5.5
+
+
 def test_load_runtime_env_defaults_populates_missing_values(tmp_path: Path) -> None:
     runtime_env = tmp_path / ".env.runtime"
     runtime_env.write_text(

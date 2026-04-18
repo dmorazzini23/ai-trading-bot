@@ -23,6 +23,77 @@ env:
   YF_CACHE_DIR: ${{ github.workspace }}/.ci/cache/yf
 
 jobs:
+  research-backtest-gate:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-22.04
+    env:
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+      AI_TRADING_OFFLINE_TESTS: "1"
+      ALPACA_API_KEY: "test"
+      ALPACA_SECRET_KEY: "test"
+      ALPACA_ENV: "paper"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+            requirements/*.txt
+      - name: Install deps
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Research backtest gate
+        run: |
+          pytest -q \
+            tests/test_backtest_smoke.py \
+            tests/test_backtester_artifacts.py \
+            tests/test_historical_bars.py \
+            tests/test_historical_regression_fixtures.py \
+            tests/test_backtest_script_compat.py \
+            tests/unit/test_backtester_oms_events.py \
+            tests/unit/test_backtest_replay_determinism.py
+
+  offline-replay-gate:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-22.04
+    env:
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+      AI_TRADING_OFFLINE_TESTS: "1"
+      ALPACA_API_KEY: "test"
+      ALPACA_SECRET_KEY: "test"
+      ALPACA_ENV: "paper"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+            requirements/*.txt
+      - name: Install deps
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Offline replay gate
+        run: |
+          pytest -q \
+            tests/test_offline_replay.py \
+            tests/test_historical_bars.py \
+            tests/test_historical_regression_fixtures.py \
+            tests/test_replay_engine_deterministic.py \
+            tests/integration/test_replay_seed_matrix_env.py \
+            tests/integration/test_replay_async_order_events.py \
+            tests/integration/test_parity_invariants.py \
+            tests/test_replay_governance_async_parity.py
+
   ci:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-22.04
