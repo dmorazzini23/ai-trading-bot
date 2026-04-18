@@ -46,7 +46,7 @@ def test_mode_presets(monkeypatch):
     assert cfg.MAX_POSITION_SIZE == pytest.approx(5000.0)
 
     cfg = _reload_config(monkeypatch, MAX_DRAWDOWN_THRESHOLD=0.2)
-    assert cfg.CONF_THRESHOLD == pytest.approx(0.75)
+    assert cfg.CONF_THRESHOLD == pytest.approx(0.52)
     assert cfg.MAX_POSITION_SIZE == pytest.approx(8000.0)
 
     cfg = _reload_config(
@@ -54,7 +54,7 @@ def test_mode_presets(monkeypatch):
         MAX_DRAWDOWN_THRESHOLD=0.2,
         AI_TRADING_TRADING_MODE="aggressive",
     )
-    assert cfg.CONF_THRESHOLD == pytest.approx(0.65)
+    assert cfg.CONF_THRESHOLD == pytest.approx(0.45)
     assert cfg.MAX_POSITION_SIZE == pytest.approx(12000.0)
 
 
@@ -103,7 +103,7 @@ def test_trading_mode_overrides_restore_documented_defaults(monkeypatch):
         },
         "balanced": {
             "kelly_fraction": 0.6,
-            "conf_threshold": 0.75,
+            "conf_threshold": 0.52,
             "daily_loss_limit": 0.05,
             "max_position_size": 8000.0,
             "capital_cap": 0.25,
@@ -111,7 +111,7 @@ def test_trading_mode_overrides_restore_documented_defaults(monkeypatch):
         },
         "aggressive": {
             "kelly_fraction": 0.75,
-            "conf_threshold": 0.65,
+            "conf_threshold": 0.45,
             "daily_loss_limit": 0.08,
             "max_position_size": 12000.0,
             "capital_cap": 0.30,

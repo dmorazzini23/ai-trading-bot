@@ -11,7 +11,8 @@ from typing import Any, cast
 import time as pytime
 from threading import Thread
 import csv
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from ai_trading.config.management import get_env
 from ai_trading.data.feed_roles import get_execution_feed
@@ -754,9 +755,94 @@ def _liquidate_all_positions(runtime: Any) -> None:
     exit_all_positions(runtime)
 
 
+def _should_trigger_eod_flatten(now_et: datetime | None = None) -> tuple[bool, dict[str, Any]]:
+    enabled = bool(get_env("AI_TRADING_EOD_FLATTEN_ENABLED", False, cast=bool))
+    if not enabled:
+        return False, {"enabled": False, "reason": "disabled"}
+
+    lead_seconds = max(
+        0,
+        min(
+            int(get_env("AI_TRADING_EOD_FLATTEN_LEAD_SECONDS", 300, cast=int)),
+            3600,
+        ),
+    )
+    current_et = now_et or datetime.now(ZoneInfo("America/New_York"))
+    if int(current_et.weekday()) >= 5:
+        return False, {"enabled": True, "reason": "weekend", "lead_seconds": lead_seconds}
+
+    session_close_et = current_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    trigger_at = session_close_et - timedelta(seconds=lead_seconds)
+    if current_et < trigger_at:
+        return False, {
+            "enabled": True,
+            "reason": "before_window",
+            "lead_seconds": lead_seconds,
+            "session_close": session_close_et.isoformat(),
+        }
+    if current_et >= session_close_et:
+        return False, {
+            "enabled": True,
+            "reason": "after_close",
+            "lead_seconds": lead_seconds,
+            "session_close": session_close_et.isoformat(),
+        }
+    return True, {
+        "enabled": True,
+        "reason": "session_close_window",
+        "lead_seconds": lead_seconds,
+        "session_close": session_close_et.isoformat(),
+    }
+
+
 def liquidate_positions_if_needed(runtime: Any) -> None:
     from ai_trading.core.bot_engine import check_halt_flag
+
     if check_halt_flag(runtime):
         logger.info("TRADING_HALTED_VIA_FLAG is active: NOT liquidating positions")
         return
-    # normal liquidation logic would be implemented here (intentionally left as stub)
+    should_flatten, context = _should_trigger_eod_flatten()
+    if not should_flatten:
+        return
+
+    api = getattr(runtime, "api", None)
+    if api is None or not hasattr(api, "list_positions"):
+        logger.warning("EOD_FLATTEN_SKIPPED", extra=context | {"detail": "missing_api"})
+        return
+
+    try:
+        raw_positions = list(api.list_positions())
+    except (
+        FileNotFoundError,
+        PermissionError,
+        IsADirectoryError,
+        JSONDecodeError,
+        ValueError,
+        KeyError,
+        TypeError,
+        OSError,
+    ) as exc:
+        logger.warning(
+            "EOD_FLATTEN_LIST_POSITIONS_FAILED",
+            extra=context | {"error": str(exc)},
+        )
+        return
+
+    active_positions = [
+        pos
+        for pos in raw_positions
+        if abs(float(getattr(pos, "qty", 0) or 0.0)) > 0.0
+    ]
+    if not active_positions:
+        return
+
+    now_mono = float(pytime.monotonic())
+    last_attempt = float(getattr(runtime, "_last_eod_flatten_attempt_mono", 0.0) or 0.0)
+    if last_attempt > 0.0 and (now_mono - last_attempt) < 60.0:
+        return
+    setattr(runtime, "_last_eod_flatten_attempt_mono", now_mono)
+    logger.info(
+        "EOD_FLATTEN_TRIGGERED",
+        extra=context | {"positions": len(active_positions)},
+    )
+    exit_all_positions(runtime)

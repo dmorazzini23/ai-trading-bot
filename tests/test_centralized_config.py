@@ -92,7 +92,7 @@ class TestCentralizedConfig:
                 "balanced",
                 {
                     "kelly_fraction": 0.6,
-                    "conf_threshold": 0.75,
+                    "conf_threshold": 0.52,
                     "daily_loss_limit": 0.05,
                     "max_position_size": 8000.0,
                 },
@@ -110,7 +110,7 @@ class TestCentralizedConfig:
                 "aggressive",
                 {
                     "kelly_fraction": 0.75,
-                    "conf_threshold": 0.65,
+                    "conf_threshold": 0.45,
                     "daily_loss_limit": 0.08,
                     "max_position_size": 12000.0,
                 },
@@ -159,7 +159,7 @@ class TestCentralizedConfig:
                 "balanced",
                 {
                     "kelly_fraction": 0.6,
-                    "conf_threshold": 0.75,
+                    "conf_threshold": 0.52,
                     "daily_loss_limit": 0.05,
                     "max_position_size": 8000.0,
                     "capital_cap": 0.25,
@@ -170,7 +170,7 @@ class TestCentralizedConfig:
                 "aggressive",
                 {
                     "kelly_fraction": 0.75,
-                    "conf_threshold": 0.65,
+                    "conf_threshold": 0.45,
                     "daily_loss_limit": 0.08,
                     "max_position_size": 12000.0,
                     "capital_cap": 0.30,
@@ -266,7 +266,7 @@ class TestCentralizedConfig:
                 "balanced",
                 {
                     "kelly_fraction": 0.6,
-                    "conf_threshold": 0.75,
+                    "conf_threshold": 0.52,
                     "daily_loss_limit": 0.05,
                     "max_position_size": 8000.0,
                     "capital_cap": 0.25,
@@ -277,7 +277,7 @@ class TestCentralizedConfig:
                 "aggressive",
                 {
                     "kelly_fraction": 0.75,
-                    "conf_threshold": 0.65,
+                    "conf_threshold": 0.45,
                     "daily_loss_limit": 0.08,
                     "max_position_size": 12000.0,
                     "capital_cap": 0.30,
@@ -361,7 +361,7 @@ class TestCentralizedConfig:
         config = TradingConfig.from_env("balanced")
 
         assert config.kelly_fraction == 0.6
-        assert config.conf_threshold == 0.75
+        assert config.conf_threshold == 0.52
         assert config.daily_loss_limit == 0.05
         assert config.capital_cap == 0.25
         assert config.take_profit_factor == 1.8
@@ -377,7 +377,7 @@ class TestCentralizedConfig:
         config = TradingConfig.from_env("aggressive")
 
         assert config.kelly_fraction == 0.75
-        assert config.conf_threshold == 0.65
+        assert config.conf_threshold == 0.45
         assert config.daily_loss_limit == 0.08
         assert config.capital_cap == 0.30
         assert config.take_profit_factor == 2.5

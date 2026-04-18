@@ -227,11 +227,18 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
     max_trades_per_day: int = Field(default=200, validation_alias="AI_TRADING_MAX_TRADES_PER_DAY")
     max_trades_per_hour: int = Field(default=30, validation_alias="AI_TRADING_MAX_TRADES_PER_HOUR")
     min_position_hold_seconds: int = Field(
-        default=0,
+        default=600,
         validation_alias=AliasChoices(
             "AI_TRADING_MIN_POSITION_HOLD_SECONDS",
             "MIN_POSITION_HOLD_SECONDS",
             "REBALANCE_HOLD_SECONDS",
+        ),
+    )
+    max_position_hold_seconds: int = Field(
+        default=7200,
+        validation_alias=AliasChoices(
+            "AI_TRADING_MAX_POSITION_HOLD_SECONDS",
+            "MAX_POSITION_HOLD_SECONDS",
         ),
     )
     take_profit_exit_fraction: float = Field(
@@ -409,7 +416,7 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
             "ALPHA_DECAY_MAX_TRADES_WINDOW",
         ),
     )
-    conf_threshold: float = Field(default=0.75, validation_alias="AI_TRADING_CONF_THRESHOLD")
+    conf_threshold: float = Field(default=0.52, validation_alias="AI_TRADING_CONF_THRESHOLD")
     ml_confidence_threshold: float = Field(0.75, validation_alias="ML_CONFIDENCE_THRESHOLD")
     volume_spike_threshold: float = Field(1.0, validation_alias="VOLUME_SPIKE_THRESHOLD")
     pyramid_levels: dict[str, int] = Field(
@@ -429,7 +436,28 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
         ge=0.0,
         description="Fallback liquidity multiplier when live quotes are unavailable.",
     )
-    buy_threshold: float = Field(default=0.4, validation_alias="AI_TRADING_BUY_THRESHOLD")
+    buy_threshold: float = Field(default=0.15, validation_alias="AI_TRADING_BUY_THRESHOLD")
+    live_stop_loss_bps: float = Field(
+        default=60.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_LIVE_STOP_LOSS_BPS",
+            "AI_TRADING_STOP_LOSS_BPS",
+        ),
+    )
+    live_take_profit_bps: float = Field(
+        default=160.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_LIVE_TAKE_PROFIT_BPS",
+            "AI_TRADING_TAKE_PROFIT_BPS",
+        ),
+    )
+    live_trailing_stop_bps: float = Field(
+        default=90.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_LIVE_TRAILING_STOP_BPS",
+            "AI_TRADING_TRAILING_STOP_BPS",
+        ),
+    )
     sector_exposure_cap: float = Field(default=0.33, validation_alias="AI_TRADING_SECTOR_EXPOSURE_CAP")
     max_portfolio_positions: int = Field(default=20, validation_alias="AI_TRADING_MAX_PORTFOLIO_POSITIONS")
     disaster_dd_limit: float = Field(default=0.25, validation_alias="AI_TRADING_DISASTER_DD_LIMIT")
@@ -1052,7 +1080,7 @@ def get_daily_loss_limit() -> float:
 
 
 def get_buy_threshold() -> float:
-    return _to_float(getattr(get_settings(), "buy_threshold", 0.4), 0.4)
+    return _to_float(getattr(get_settings(), "buy_threshold", 0.15), 0.15)
 
 
 def get_conf_threshold() -> float:
@@ -1060,10 +1088,10 @@ def get_conf_threshold() -> float:
     s = get_settings()
     val = getattr(s, "conf_threshold", None)
     if val is not None:
-        return _to_float(val, 0.75)
+        return _to_float(val, 0.52)
     mode = str(getattr(s, "trading_mode", "balanced")).lower()
-    defaults = {"conservative": 0.85, "balanced": 0.75, "aggressive": 0.65}
-    return float(defaults.get(mode, 0.75))
+    defaults = {"conservative": 0.85, "balanced": 0.52, "aggressive": 0.45}
+    return float(defaults.get(mode, 0.52))
 
 
 def get_trade_cooldown_min() -> int:
@@ -1072,6 +1100,26 @@ def get_trade_cooldown_min() -> int:
 
 def get_min_position_hold_seconds() -> int:
     return max(0, _to_int(getattr(get_settings(), "min_position_hold_seconds", 0), 0))
+
+
+def get_max_position_hold_seconds() -> int:
+    value = max(0, _to_int(getattr(get_settings(), "max_position_hold_seconds", 7200), 7200))
+    return max(get_min_position_hold_seconds(), value)
+
+
+def get_live_stop_loss_bps() -> float:
+    return max(0.0, _to_float(getattr(get_settings(), "live_stop_loss_bps", 60.0), 60.0))
+
+
+def get_live_take_profit_bps() -> float:
+    return max(0.0, _to_float(getattr(get_settings(), "live_take_profit_bps", 160.0), 160.0))
+
+
+def get_live_trailing_stop_bps() -> float:
+    return max(
+        0.0,
+        _to_float(getattr(get_settings(), "live_trailing_stop_bps", 90.0), 90.0),
+    )
 
 
 def get_take_profit_exit_fraction() -> float:

@@ -24,8 +24,8 @@ REQUIRED_PARAM_DEFAULTS = {
     'DOLLAR_RISK_LIMIT': 0.05,
     'MAX_POSITION_SIZE': 8000.0,
     'KELLY_FRACTION': 0.6,
-    'BUY_THRESHOLD': 0.2,
-    'CONF_THRESHOLD': 0.75,
+    'BUY_THRESHOLD': 0.15,
+    'CONF_THRESHOLD': 0.52,
 }
 
 def _cfg_coalesce(cfg, key, default):

@@ -132,7 +132,7 @@ MODE_DEFAULTS: dict[str, dict[str, float]] = {
     },
     "balanced": {
         "kelly_fraction": 0.60,
-        "conf_threshold": 0.75,
+        "conf_threshold": 0.52,
         "daily_loss_limit": 0.05,
         "max_position_size": 8000.0,
         "capital_cap": 0.25,
@@ -140,7 +140,7 @@ MODE_DEFAULTS: dict[str, dict[str, float]] = {
     },
     "aggressive": {
         "kelly_fraction": 0.75,
-        "conf_threshold": 0.65,
+        "conf_threshold": 0.45,
         "daily_loss_limit": 0.08,
         "max_position_size": 12000.0,
         "capital_cap": 0.30,

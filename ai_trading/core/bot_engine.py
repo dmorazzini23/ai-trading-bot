@@ -1210,8 +1210,12 @@ from ai_trading.settings import (
     get_expectancy_window_trades,
     get_fallback_expected_edge_penalty_bps,
     get_fallback_entry_confidence_bonus,
+    get_live_stop_loss_bps,
+    get_live_take_profit_bps,
+    get_live_trailing_stop_bps,
     get_min_expected_edge_bps,
     get_min_hold_loser_cut_pct,
+    get_max_position_hold_seconds,
     get_min_position_hold_seconds,
     get_max_portfolio_positions,
     get_max_trades_per_day,
@@ -11625,7 +11629,7 @@ ATR_LENGTH = 10
 CONF_THRESHOLD = float(
     params.get(
         "CONF_THRESHOLD",
-        getattr(state.mode_obj.config, "confidence_level", 0.75),
+        getattr(state.mode_obj.config, "confidence_level", get_conf_threshold()),
     )
 )
 
@@ -11884,18 +11888,18 @@ def validate_trading_parameters():
         0.5 <= get_conf_threshold() <= 0.95
     ):
         logger.error(
-            "Invalid get_conf_threshold() %s, using default 0.75", get_conf_threshold()
+            "Invalid get_conf_threshold() %s, using default 0.52", get_conf_threshold()
         )
-        CONF_THRESHOLD = 0.75
+        CONF_THRESHOLD = 0.52
 
     # Validate get_buy_threshold() (should be between 0.1 and 0.9)
     if not isinstance(get_buy_threshold(), int | float) or not (
         0.1 <= get_buy_threshold() <= 0.9
     ):
         logger.error(
-            "Invalid get_buy_threshold() %s, using default 0.2", get_buy_threshold()
+            "Invalid get_buy_threshold() %s, using default 0.15", get_buy_threshold()
         )
-        BUY_THRESHOLD = 0.2
+        BUY_THRESHOLD = 0.15
 
     logger.info(
         "TRADING_PARAMS_VALIDATED",
@@ -21753,6 +21757,87 @@ def _winner_protection_trailing_atr(
     return adjusted_atr
 
 
+def _apply_bps_exit_overlays(
+    *,
+    entry_price: float,
+    side: int,
+    stop: float,
+    take: float,
+) -> tuple[float, float]:
+    if not math.isfinite(entry_price) or entry_price <= 0:
+        return stop, take
+
+    stop_bps = get_live_stop_loss_bps()
+    take_bps = get_live_take_profit_bps()
+    stop_price = float(stop)
+    take_price = float(take)
+
+    if side > 0:
+        bps_stop = entry_price * (1.0 - (stop_bps / 10000.0))
+        bps_take = entry_price * (1.0 + (take_bps / 10000.0))
+        if not math.isfinite(stop_price) or stop_price <= 0:
+            stop_price = bps_stop
+        else:
+            stop_price = max(stop_price, bps_stop)
+        if not math.isfinite(take_price) or take_price <= 0:
+            take_price = bps_take
+        else:
+            take_price = min(take_price, bps_take)
+        return stop_price, take_price
+
+    bps_stop = entry_price * (1.0 + (stop_bps / 10000.0))
+    bps_take = entry_price * (1.0 - (take_bps / 10000.0))
+    if not math.isfinite(stop_price) or stop_price <= 0:
+        stop_price = bps_stop
+    else:
+        stop_price = min(stop_price, bps_stop)
+    if not math.isfinite(take_price) or take_price <= 0:
+        take_price = bps_take
+    else:
+        take_price = max(take_price, bps_take)
+    return stop_price, take_price
+
+
+def _bps_trailing_stop_action(
+    ctx: BotContext,
+    symbol: str,
+    price: float,
+    current_qty: int,
+) -> str:
+    trailing_bps = get_live_trailing_stop_bps()
+    if current_qty == 0 or trailing_bps <= 0 or not math.isfinite(price) or price <= 0:
+        return "hold"
+
+    entry_price = _position_entry_price(ctx, symbol)
+    if entry_price is None or not math.isfinite(entry_price) or entry_price <= 0:
+        return "hold"
+
+    trailing_extremes = getattr(ctx, "trailing_extremes", None)
+    if not isinstance(trailing_extremes, dict):
+        return "hold"
+
+    if current_qty > 0:
+        with targets_lock:
+            prior_peak = _safe_float(trailing_extremes.get(symbol))
+            peak = price if prior_peak is None else max(prior_peak, price)
+            trailing_extremes[symbol] = peak
+        if price <= entry_price:
+            return "hold"
+        if price <= peak * (1.0 - (trailing_bps / 10000.0)):
+            return "exit_long"
+        return "hold"
+
+    with targets_lock:
+        prior_trough = _safe_float(trailing_extremes.get(symbol))
+        trough = price if prior_trough is None else min(prior_trough, price)
+        trailing_extremes[symbol] = trough
+    if price >= entry_price:
+        return "hold"
+    if price >= trough * (1.0 + (trailing_bps / 10000.0)):
+        return "exit_short"
+    return "hold"
+
+
 def should_exit(
     ctx: BotContext, state: BotState, symbol: str, price: float, atr: float
 ) -> tuple[bool, int, str]:
@@ -21792,6 +21877,10 @@ def should_exit(
         exit_qty = max(int(abs(current_qty) * exit_fraction), 1)
         return True, exit_qty, "take_profit"
 
+    max_hold_seconds = get_max_position_hold_seconds()
+    if max_hold_seconds > 0 and age_seconds >= float(max_hold_seconds):
+        return True, abs(current_qty), "max_hold"
+
     if min_hold_active:
         _log_exit_deferred_min_hold(
             symbol=symbol,
@@ -21800,6 +21889,12 @@ def should_exit(
             age_seconds=age_seconds,
         )
         return False, 0, ""
+
+    bps_trailing_action = _bps_trailing_stop_action(ctx, symbol, price, current_qty)
+    if (bps_trailing_action == "exit_long" and current_qty > 0) or (
+        bps_trailing_action == "exit_short" and current_qty < 0
+    ):
+        return True, abs(current_qty), "trailing_stop"
 
     trailing_atr = _winner_protection_trailing_atr(
         ctx, symbol, current_qty, price, atr
@@ -25817,6 +25912,12 @@ def _enter_long(
             max_factor=tp_factor,
             min_factor=0.5,
         )
+        stop, take = _apply_bps_exit_overlays(
+            entry_price=current_price,
+            side=1,
+            stop=stop,
+            take=take,
+        )
         with targets_lock:
             ctx.stop_targets[symbol] = stop
             ctx.take_profit_targets[symbol] = take
@@ -26649,6 +26750,12 @@ def _enter_short(
             min_factor=0.5,
         )
         stop, take = long_take, long_stop
+        stop, take = _apply_bps_exit_overlays(
+            entry_price=current_price,
+            side=-1,
+            stop=stop,
+            take=take,
+        )
         with targets_lock:
             ctx.stop_targets[symbol] = stop
             ctx.take_profit_targets[symbol] = take
@@ -34684,6 +34791,13 @@ def _check_runtime_stops(runtime) -> None:
     except (ValueError, TypeError) as e:  # AI-AGENT-REF: guard trailing stops
         logger.info(
             "TRAILING_STOP_CHECK_SUPPRESSED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
+    try:
+        liquidate_positions_if_needed(runtime)
+    except (ValueError, TypeError) as e:
+        logger.info(
+            "EOD_FLATTEN_CHECK_SUPPRESSED",
             extra={"cause": e.__class__.__name__, "detail": str(e)},
         )
 
