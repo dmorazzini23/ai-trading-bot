@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from ai_trading.oms.event_store import EventStore
+from ai_trading.oms.event_store import (
+    EventStore,
+    _POSTGRES_APPEND_ONLY_GUARD_LOCK_KEY,
+)
 from ai_trading.oms.event_types import DecisionEvent
 
 
@@ -125,3 +129,21 @@ def test_risk_snapshots_table_blocks_update_and_delete(tmp_path: Path) -> None:
     rows = store.list_risk_snapshots(source="unit_test")
     assert len(rows) == 1
     assert int(rows[0]["positions_count"]) == 2
+
+
+def test_postgres_append_only_guard_bootstrap_uses_advisory_lock() -> None:
+    executed: list[str] = []
+
+    class DummyConnection:
+        dialect = SimpleNamespace(name="postgresql")
+
+        def execute(self, stmt: object) -> None:
+            executed.append(str(stmt).strip())
+
+    store = object.__new__(EventStore)
+    store._ensure_append_only_guards(DummyConnection())
+
+    assert executed
+    assert executed[0] == (
+        f"SELECT pg_advisory_xact_lock({_POSTGRES_APPEND_ONLY_GUARD_LOCK_KEY});"
+    )

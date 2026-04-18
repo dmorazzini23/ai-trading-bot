@@ -17,6 +17,9 @@ from .event_types import DecisionEvent, OmsEvent, new_event_uuid
 
 logger = get_logger(__name__)
 
+# Serialize Postgres append-only guard DDL across concurrent bootstrap callers.
+_POSTGRES_APPEND_ONLY_GUARD_LOCK_KEY = 346017647123854219
+
 try:
     from sqlalchemy import (
         Column,
@@ -363,6 +366,7 @@ class EventStore:
             ]
         elif dialect_name in {"postgresql", "postgres"}:
             statements = [
+                f"SELECT pg_advisory_xact_lock({_POSTGRES_APPEND_ONLY_GUARD_LOCK_KEY});",
                 """
                 CREATE OR REPLACE FUNCTION ai_trading_prevent_append_only_mutation()
                 RETURNS trigger AS $$
