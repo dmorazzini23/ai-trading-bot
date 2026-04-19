@@ -106,6 +106,54 @@ execution, persistence, and operator recovery.
 - Replay-quality loading and policy-toggle override setup for ranking now lives in:
   - [ai_trading/core/netting_rank_prelude.py](../ai_trading/core/netting_rank_prelude.py)
   instead of being fully expanded inline in `bot_engine.py`.
+- Learned ranking-state assembly for bandit, realized-edge, expected-capture,
+  execution-learning, rejection-concentration, and portfolio-log-growth inputs
+  now lives in:
+  - [ai_trading/core/netting_learning_state.py](../ai_trading/core/netting_learning_state.py)
+  instead of being fully expanded inline in `bot_engine.py`.
+- Per-symbol candidate ranking and opportunity-quality scoring now live in:
+  - [ai_trading/core/netting_candidate_rank.py](../ai_trading/core/netting_candidate_rank.py)
+  instead of keeping the entire scoring core inline in `bot_engine.py`.
+- Global execution-control context for SLO derisk, rollout/capital ramp,
+  capacity throttle, primary-feed derisk, gate auto-disable, and uncertainty
+  capital setup now lives in:
+  - [ai_trading/core/netting_execution_context.py](../ai_trading/core/netting_execution_context.py)
+  instead of being fully expanded inline in `bot_engine.py`.
+- Per-symbol quantity adjustment controls for adaptive sizing, uncertainty
+  capital scaling, reversal clamps, and symbol/min-notional caps now live in:
+  - [ai_trading/core/netting_symbol_adjustments.py](../ai_trading/core/netting_symbol_adjustments.py)
+  instead of keeping that full mutation block inline in `bot_engine.py`.
+- Pre-submit broker gate orchestration for portfolio-optimizer vetoes,
+  auth cooldown, breaker/ledger dedupe, pretrade validation, quote basis,
+  and NBBO opening checks now lives in:
+  - [ai_trading/core/netting_submit_prelude.py](../ai_trading/core/netting_submit_prelude.py)
+  instead of keeping that whole broker-prelude block inline in `bot_engine.py`.
+- Broker submit outcome handling for exception/`None`/success paths now lives in:
+  - [ai_trading/core/netting_submit_execution.py](../ai_trading/core/netting_submit_execution.py)
+  instead of keeping the whole submit-result branch inline in `bot_engine.py`.
+- Cycle-level analytics flush, reject-summary logging, SLO logging, and
+  quarantine persistence now live in:
+  - [ai_trading/core/netting_cycle_summary.py](../ai_trading/core/netting_cycle_summary.py)
+  instead of keeping that full epilogue inline in `bot_engine.py`.
+- Early symbol-level prelude gating for policy-ablation sleeve blocks, signal
+  age/time-stop handling, opportunity/staleness checks, and capital-ramp
+  scaling now lives in:
+  - [ai_trading/core/netting_symbol_prelude.py](../ai_trading/core/netting_symbol_prelude.py)
+  instead of keeping that whole early pre-submit block inline in `bot_engine.py`.
+- Pre-approval symbol orchestration for sell-qty clipping, opening-trade
+  prechecks, cost-aware edge gating, approval evaluation, and approval-driven
+  delta/side adjustment now lives in:
+  - [ai_trading/core/netting_symbol_approval.py](../ai_trading/core/netting_symbol_approval.py)
+  instead of keeping that full pre-submit approval block inline in `bot_engine.py`.
+- The remaining per-symbol `_run_netting_cycle` glue now flows through:
+  - [ai_trading/core/netting_symbol_cycle.py](../ai_trading/core/netting_symbol_cycle.py)
+  so the hot loop in `bot_engine.py` is mostly setup, dispatch, and summary
+  instead of owning the full symbol-level state machine inline.
+- `run_all_trades_worker` cycle bootstrap for policy/config preflight, market/API
+  gating, startup cleanup, safe-mode cancellation, cache reset, and cycle
+  activation now lives in:
+  - [ai_trading/core/run_all_trades_prelude.py](../ai_trading/core/run_all_trades_prelude.py)
+  instead of keeping that full pre-cycle block inline in `bot_engine.py`.
 - But [ai_trading/core/bot_engine.py](../ai_trading/core/bot_engine.py) still owns too much:
   - strategy orchestration
   - risk gating

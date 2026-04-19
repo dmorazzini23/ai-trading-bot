@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime
 
 from ai_trading.core import bot_engine
+from ai_trading.core import netting_candidate_rank
 
 
 def test_session_bucket_from_ts_uses_market_windows() -> None:
@@ -133,7 +134,7 @@ def test_lookup_execution_learning_bucket_entry_and_penalty() -> None:
         },
     }
 
-    entry, key = bot_engine._lookup_execution_learning_bucket_entry(
+    entry, key = netting_candidate_rank._lookup_execution_learning_bucket_entry(
         state=state,
         symbol="BA",
         session_token="midday",
@@ -141,11 +142,12 @@ def test_lookup_execution_learning_bucket_entry_and_penalty() -> None:
         liquidity_role="balanced",
         side="buy",
         min_samples=2,
+        safe_float=bot_engine._safe_float,
     )
 
     assert key == "BA:midday:unknown:balanced:buy"
     assert entry is not None
-    penalty = bot_engine._compute_execution_learning_rank_penalty(
+    penalty = netting_candidate_rank._compute_execution_learning_rank_penalty(
         entry=entry,
         min_samples=2,
         slippage_floor_bps=4.0,
@@ -155,6 +157,7 @@ def test_lookup_execution_learning_bucket_entry_and_penalty() -> None:
         realization_floor=0.85,
         realization_weight_bps=8.0,
         max_penalty_bps=35.0,
+        safe_float=bot_engine._safe_float,
     )
 
     assert penalty["samples"] == 4
@@ -221,19 +224,21 @@ def test_load_recent_rejection_concentration_by_symbol_counts_recent_rows(
 
 
 def test_compute_rejection_concentration_penalty_bps_respects_thresholds() -> None:
-    low_penalty = bot_engine._compute_rejection_concentration_penalty_bps(
+    low_penalty = netting_candidate_rank._compute_rejection_concentration_penalty_bps(
         counts={"total": 2, "pre_execution": 1, "slippage": 0, "capacity": 0, "portfolio": 0},
         min_count=3,
         scale_bps=0.45,
         max_penalty_bps=24.0,
+        safe_float=bot_engine._safe_float,
     )
     assert low_penalty["penalty_bps"] == 0.0
 
-    high_penalty = bot_engine._compute_rejection_concentration_penalty_bps(
+    high_penalty = netting_candidate_rank._compute_rejection_concentration_penalty_bps(
         counts={"total": 12, "pre_execution": 5, "slippage": 2, "capacity": 3, "portfolio": 6},
         min_count=3,
         scale_bps=0.45,
         max_penalty_bps=24.0,
+        safe_float=bot_engine._safe_float,
     )
     assert high_penalty["weighted_count"] > 0.0
     assert 0.0 < high_penalty["penalty_bps"] <= 24.0

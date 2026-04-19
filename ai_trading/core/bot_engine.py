@@ -1600,24 +1600,6 @@ def _apply_acceptance_rate_governor_symbol_cap(
     return capped
 
 
-def _bandit_ucb_score(
-    *,
-    mean_reward_bps: float,
-    samples: int,
-    total_samples: int,
-    exploration: float,
-) -> float:
-    """Return UCB score in bps for one arm."""
-
-    safe_samples = max(int(samples), 1)
-    safe_total = max(int(total_samples), safe_samples)
-    exploration_term = max(float(exploration), 0.0)
-    bonus = exploration_term * math.sqrt(
-        math.log(float(safe_total) + 1.0) / float(safe_samples)
-    )
-    return float(mean_reward_bps + bonus)
-
-
 def _mean_std(values: Sequence[float]) -> tuple[float, float, int]:
     """Return mean/std/sample-count for finite numeric values."""
 
@@ -1802,49 +1784,6 @@ def _sequential_significance_gate(
         "sprt_llr_reject": float(llr_reject),
         "sprt_effect_bps": float(effect),
     }
-
-
-def _geometric_growth_tiebreak_score(
-    *,
-    expected_edge_bps: float,
-    returns_window: Sequence[float],
-    drawdown: float,
-    variance_penalty: float,
-    downside_penalty: float,
-    drawdown_penalty: float,
-) -> float:
-    """Approximate log-growth score in bps with downside and drawdown penalties."""
-
-    expected_return = float(expected_edge_bps) / 10000.0
-    clean_returns = [
-        float(value)
-        for value in returns_window
-        if isinstance(value, (int, float)) and math.isfinite(float(value))
-    ]
-    if clean_returns:
-        sample_count = float(len(clean_returns))
-        mean_return = float(sum(clean_returns) / sample_count)
-        variance = float(
-            sum((value - mean_return) ** 2 for value in clean_returns) / sample_count
-        )
-        downside = float(
-            math.sqrt(
-                sum((min(value, 0.0) ** 2) for value in clean_returns) / sample_count
-            )
-        )
-    else:
-        mean_return = 0.0
-        variance = 0.0
-        downside = 0.0
-    drawdown_term = max(float(drawdown), 0.0) * abs(expected_return)
-    growth_score = (
-        expected_return
-        + mean_return
-        - (max(float(variance_penalty), 0.0) * variance)
-        - (max(float(downside_penalty), 0.0) * downside)
-        - (max(float(drawdown_penalty), 0.0) * drawdown_term)
-    )
-    return float(growth_score * 10000.0)
 
 
 def _portfolio_optimizer_decision_token(decision: Any) -> str:
@@ -37900,136 +37839,6 @@ def _load_execution_learning_state() -> dict[str, Any]:
     }
 
 
-def _execution_learning_bucket_keys(
-    *,
-    symbol: str,
-    session_token: str,
-    regime_token: str,
-    liquidity_role: str,
-    side: str,
-) -> tuple[str, ...]:
-    symbol_token = str(symbol or "").strip().upper() or "UNKNOWN"
-    session_value = str(session_token or "").strip().lower() or "offhours"
-    regime_value = str(regime_token or "").strip().lower() or "unknown"
-    liquidity_value = str(liquidity_role or "").strip().lower() or "balanced"
-    side_value = str(side or "").strip().lower() or "unknown"
-    return (
-        f"{symbol_token}:{session_value}:{regime_value}:{liquidity_value}:{side_value}",
-        f"{symbol_token}:{session_value}:{regime_value}:{liquidity_value}",
-        f"{symbol_token}:{session_value}:{regime_value}",
-        f"{symbol_token}:{session_value}",
-        f"{symbol_token}",
-    )
-
-
-def _lookup_execution_learning_bucket_entry(
-    *,
-    state: Mapping[str, Any],
-    symbol: str,
-    session_token: str,
-    regime_token: str,
-    liquidity_role: str,
-    side: str,
-    min_samples: int,
-) -> tuple[dict[str, Any] | None, str | None]:
-    buckets_raw = state.get("buckets")
-    buckets = dict(buckets_raw) if isinstance(buckets_raw, Mapping) else {}
-    symbol_buckets_raw = state.get("symbol_buckets")
-    symbol_buckets = (
-        dict(symbol_buckets_raw) if isinstance(symbol_buckets_raw, Mapping) else {}
-    )
-    for key in _execution_learning_bucket_keys(
-        symbol=symbol,
-        session_token=session_token,
-        regime_token=regime_token,
-        liquidity_role=liquidity_role,
-        side=side,
-    ):
-        candidates = (
-            symbol_buckets.get(str(key)),
-            symbol_buckets.get(str(key).lower()),
-            buckets.get(str(key)),
-            buckets.get(str(key).lower()),
-        )
-        for candidate in candidates:
-            if not isinstance(candidate, Mapping):
-                continue
-            samples = int(_safe_float(candidate.get("samples")) or 0.0)
-            if samples < int(min_samples):
-                continue
-            return (dict(candidate), str(key))
-    return (None, None)
-
-
-def _compute_execution_learning_rank_penalty(
-    *,
-    entry: Mapping[str, Any] | None,
-    min_samples: int,
-    slippage_floor_bps: float,
-    slippage_weight: float,
-    negative_edge_weight: float,
-    adverse_weight: float,
-    realization_floor: float,
-    realization_weight_bps: float,
-    max_penalty_bps: float,
-) -> dict[str, Any]:
-    if not isinstance(entry, Mapping):
-        return {
-            "samples": 0,
-            "penalty_bps": 0.0,
-            "blend": 0.0,
-            "slippage_penalty_bps": 0.0,
-            "negative_edge_penalty_bps": 0.0,
-            "adverse_penalty_bps": 0.0,
-            "realization_penalty_bps": 0.0,
-            "mean_fill_probability": None,
-            "fill_rate": None,
-        }
-    samples = max(0, int(_safe_float(entry.get("samples")) or 0.0))
-    blend = min(1.0, float(samples) / float(max(1, 2 * int(min_samples))))
-    mean_slippage = max(0.0, float(_safe_float(entry.get("mean_slippage_bps")) or 0.0))
-    mean_net_edge = float(_safe_float(entry.get("mean_net_edge_bps")) or 0.0)
-    mean_adverse = max(
-        0.0,
-        float(_safe_float(entry.get("mean_adverse_selection_risk_bps")) or 0.0),
-    )
-    realization_ratio = max(
-        0.0,
-        float(_safe_float(entry.get("mean_realization_ratio")) or 1.0),
-    )
-    mean_fill_probability = _safe_float(entry.get("mean_fill_probability"))
-    fill_rate = _safe_float(entry.get("fill_rate"))
-    slippage_penalty = max(0.0, mean_slippage - float(slippage_floor_bps)) * float(
-        slippage_weight
-    )
-    negative_edge_penalty = max(0.0, -mean_net_edge) * float(negative_edge_weight)
-    adverse_penalty = max(0.0, mean_adverse) * float(adverse_weight)
-    realization_penalty = max(
-        0.0,
-        float(realization_floor) - float(realization_ratio),
-    ) * float(realization_weight_bps)
-    penalty = float(blend) * (
-        float(slippage_penalty)
-        + float(negative_edge_penalty)
-        + float(adverse_penalty)
-        + float(realization_penalty)
-    )
-    penalty = max(0.0, min(float(max_penalty_bps), float(penalty)))
-    return {
-        "samples": int(samples),
-        "blend": float(blend),
-        "penalty_bps": float(penalty),
-        "slippage_penalty_bps": float(slippage_penalty * float(blend)),
-        "negative_edge_penalty_bps": float(negative_edge_penalty * float(blend)),
-        "adverse_penalty_bps": float(adverse_penalty * float(blend)),
-        "realization_penalty_bps": float(realization_penalty * float(blend)),
-        "mean_fill_probability": (
-            float(mean_fill_probability) if mean_fill_probability is not None else None
-        ),
-        "fill_rate": float(fill_rate) if fill_rate is not None else None,
-    }
-
-
 def _decision_log_runtime_path() -> Path:
     configured = str(
         get_env(
@@ -38107,50 +37916,6 @@ def _load_recent_rejection_concentration_by_symbol(
         ):
             counts["portfolio"] += 1
     return counts_by_symbol
-
-
-def _compute_rejection_concentration_penalty_bps(
-    *,
-    counts: Mapping[str, Any] | None,
-    min_count: int,
-    scale_bps: float,
-    max_penalty_bps: float,
-) -> dict[str, float]:
-    if not isinstance(counts, Mapping):
-        return {
-            "total": 0.0,
-            "weighted_count": 0.0,
-            "penalty_bps": 0.0,
-            "pre_execution": 0.0,
-            "slippage": 0.0,
-            "capacity": 0.0,
-            "portfolio": 0.0,
-        }
-    total = max(0.0, float(_safe_float(counts.get("total")) or 0.0))
-    pre_execution = max(
-        0.0, float(_safe_float(counts.get("pre_execution")) or 0.0)
-    )
-    slippage = max(0.0, float(_safe_float(counts.get("slippage")) or 0.0))
-    capacity = max(0.0, float(_safe_float(counts.get("capacity")) or 0.0))
-    portfolio = max(0.0, float(_safe_float(counts.get("portfolio")) or 0.0))
-    weighted_count = (
-        (0.25 * float(total))
-        + (1.50 * float(pre_execution))
-        + (2.00 * float(slippage))
-        + (1.00 * float(capacity))
-        + (0.50 * float(portfolio))
-    )
-    effective_excess = max(0.0, float(weighted_count) - float(max(0, int(min_count))))
-    penalty = max(0.0, min(float(max_penalty_bps), effective_excess * float(scale_bps)))
-    return {
-        "total": float(total),
-        "weighted_count": float(weighted_count),
-        "penalty_bps": float(penalty),
-        "pre_execution": float(pre_execution),
-        "slippage": float(slippage),
-        "capacity": float(capacity),
-        "portfolio": float(portfolio),
-    }
 
 
 def _counterfactual_bucket_key_from_observation(observation: Mapping[str, Any]) -> str:
@@ -42515,12 +42280,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         compute_sleeve_proposal,
         net_targets_for_symbol,
     )
-    from ai_trading.core.execution_intent import build_execution_intent_context
-    from ai_trading.core.execution_guards import (
-        build_portfolio_optimizer_positions,
-        build_pretrade_validation_cfg,
-        evaluate_execution_approval,
-    )
+    from ai_trading.core.execution_guards import evaluate_execution_approval
     from ai_trading.core.netting_cycle_setup import (
         NettingPreparationError,
         prepare_netting_cycle_inputs,
@@ -42529,6 +42289,23 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         apply_policy_runtime_overrides,
         load_replay_quality_state,
     )
+    from ai_trading.core.netting_learning_state import (
+        build_netting_learning_state,
+        lookup_learned_execution_cost_components,
+        lookup_learned_fill_probability,
+    )
+    from ai_trading.core.netting_candidate_rank import rank_netting_candidates
+    from ai_trading.core.netting_execution_context import build_netting_execution_context
+    from ai_trading.core.netting_symbol_cycle import (
+        NettingSymbolProcessor,
+        process_netting_symbol,
+    )
+    from ai_trading.core.netting_symbol_prelude import prepare_netting_symbol_prelude
+    from ai_trading.core.netting_symbol_adjustments import apply_symbol_adjustments
+    from ai_trading.core.netting_symbol_approval import prepare_netting_symbol_approval
+    from ai_trading.core.netting_submit_prelude import prepare_netting_submit_prelude
+    from ai_trading.core.netting_submit_execution import execute_netting_submission
+    from ai_trading.core.netting_cycle_summary import finalize_netting_cycle_summary
     from ai_trading.core.execution_outcome import (
         build_order_metrics_and_tca,
         normalize_submitted_order,
@@ -42557,9 +42334,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         state.halt_trading = True
         state.halt_reason = str(exc) or "GOVERNANCE_GUARD_FAILED"
     decision_path = getattr(cfg, "decision_log_path", None)
-    decision_gate_counts: Counter[str] = Counter()
-    decision_records_total = 0
-    decision_observations: list[dict[str, Any]] = []
     write_decision_record_impl = cast(Any, globals().get("_write_decision_record"))
     decision_recorder = DecisionRecorder(
         runtime=runtime,
@@ -44465,1689 +44239,477 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     policy_disabled_gate_roots = set(policy_override_state.disabled_gate_roots)
     policy_disabled_sleeves = set(policy_override_state.disabled_sleeves)
 
-    bandit_rewards_by_symbol: dict[str, list[float]] = {}
-    bandit_rewards_by_symbol_session: dict[str, list[float]] = {}
-    bandit_rewards_by_symbol_session_regime: dict[str, list[float]] = {}
-    realized_edge_by_symbol: dict[str, list[float]] = {}
-    realized_edge_by_symbol_session: dict[str, list[float]] = {}
-    realized_edge_by_symbol_session_regime: dict[str, list[float]] = {}
-    edge_realism_ratio_by_symbol: dict[str, list[float]] = {}
-    edge_realism_ratio_by_symbol_session: dict[str, list[float]] = {}
-    edge_realism_rank_factor_by_symbol: dict[str, float] = {}
-    counterfactual_signal_by_symbol: dict[str, dict[str, Any]] = {}
-    opportunity_quality_by_symbol: dict[str, float] = {}
-    learned_fill_trials_by_bucket: dict[str, float] = {}
-    learned_fill_success_by_bucket: dict[str, float] = {}
-    learned_exec_cost_stats_by_bucket: dict[str, dict[str, float]] = {}
-    expected_capture_observed_values: list[float] = []
-    opportunity_quality_gate: dict[str, Any] = {
-        "enabled": bool(opportunity_quality_enabled),
-        "top_quantile": float(opportunity_top_quantile),
-        "min_symbols": int(opportunity_min_symbols),
-        "openings_only": bool(opportunity_openings_only),
-        "threshold": None,
-        "allowed_symbols": [],
-    }
-    bandit_active_session = _session_bucket_from_ts(now)
-    bandit_active_regime = str(get_regime_signal_profile() or "").strip().lower() or "unknown"
-    counterfactual_state = (
-        _load_counterfactual_learning_state() if counterfactual_enabled else {"global": {}, "buckets": {}}
+    learning_state = build_netting_learning_state(
+        now=now,
+        targets=targets,
+        positions=positions,
+        latest_price=latest_price,
+        symbol_returns=symbol_returns,
+        get_env=get_env,
+        safe_float=_safe_float,
+        session_bucket_from_ts_func=_session_bucket_from_ts,
+        get_regime_signal_profile_func=get_regime_signal_profile,
+        load_counterfactual_learning_state_func=_load_counterfactual_learning_state,
+        load_execution_learning_state_func=_load_execution_learning_state,
+        load_recent_rejection_concentration_by_symbol_func=_load_recent_rejection_concentration_by_symbol,
+        resolved_tca_path_func=_resolved_tca_path,
+        read_jsonl_records_func=_read_jsonl_records,
+        infer_tca_liquidity_role_func=_infer_tca_liquidity_role,
+        extract_tca_fill_success_ratio_func=_extract_tca_fill_success_ratio,
+        mean_std_func=_mean_std,
+        sequential_significance_gate_func=_sequential_significance_gate,
+        build_symbol_return_correlation_matrix_func=_build_symbol_return_correlation_matrix,
+        percentile_linear_func=_percentile_linear,
+        parse_iso_timestamp_func=_parse_iso_timestamp,
+        bandit_enabled=bool(bandit_enabled),
+        bandit_method=str(bandit_method),
+        bandit_min_samples=int(bandit_min_samples),
+        bandit_window_trades=int(bandit_window_trades),
+        bandit_session_bucket_enabled=bool(bandit_session_bucket_enabled),
+        bandit_regime_bucket_enabled=bool(bandit_regime_bucket_enabled),
+        bandit_shadow_only=bool(bandit_shadow_only),
+        bandit_auto_promote=bool(bandit_auto_promote),
+        bandit_promote_min_samples=int(bandit_promote_min_samples),
+        bandit_promote_min_mean_reward_bps=float(bandit_promote_min_mean_reward_bps),
+        bandit_bucket_promotion_enabled=bool(bandit_bucket_promotion_enabled),
+        bandit_bucket_promote_min_samples=int(bandit_bucket_promote_min_samples),
+        bandit_bucket_promote_min_mean_reward_bps=float(
+            bandit_bucket_promote_min_mean_reward_bps
+        ),
+        edge_realism_rank_calibration_enabled=bool(edge_realism_rank_calibration_enabled),
+        edge_realism_rank_calibration_session_enabled=bool(
+            edge_realism_rank_calibration_session_enabled
+        ),
+        edge_realism_rank_calibration_min_samples=int(
+            edge_realism_rank_calibration_min_samples
+        ),
+        edge_realism_rank_calibration_window_trades=int(
+            edge_realism_rank_calibration_window_trades
+        ),
+        edge_realism_rank_calibration_prior_samples=int(
+            edge_realism_rank_calibration_prior_samples
+        ),
+        edge_realism_rank_calibration_ratio_floor=float(
+            edge_realism_rank_calibration_ratio_floor
+        ),
+        edge_realism_rank_calibration_ratio_cap=float(
+            edge_realism_rank_calibration_ratio_cap
+        ),
+        counterfactual_enabled=bool(counterfactual_enabled),
+        counterfactual_shadow_only=bool(counterfactual_shadow_only),
+        counterfactual_auto_promote=bool(counterfactual_auto_promote),
+        counterfactual_min_samples=int(counterfactual_min_samples),
+        counterfactual_promote_min_events=int(counterfactual_promote_min_events),
+        counterfactual_promote_min_dr_mean_bps=float(
+            counterfactual_promote_min_dr_mean_bps
+        ),
+        realized_edge_rank_enabled=bool(realized_edge_rank_enabled),
+        expected_capture_rank_enabled=bool(expected_capture_rank_enabled),
+        expected_capture_learned_fill_model_enabled=bool(
+            expected_capture_learned_fill_model_enabled
+        ),
+        expected_capture_learned_fill_min_samples=int(
+            expected_capture_learned_fill_min_samples
+        ),
+        expected_capture_learned_fill_prior_alpha=float(
+            expected_capture_learned_fill_prior_alpha
+        ),
+        expected_capture_learned_fill_prior_beta=float(
+            expected_capture_learned_fill_prior_beta
+        ),
+        expected_capture_venue_default=str(expected_capture_venue_default),
+        expected_capture_cost_model_enabled=bool(expected_capture_cost_model_enabled),
+        expected_capture_cost_model_min_samples=int(
+            expected_capture_cost_model_min_samples
+        ),
+        expected_capture_latency_bps_per_sec=float(expected_capture_latency_bps_per_sec),
+        expected_capture_floor_bps=float(expected_capture_floor_bps),
+        expected_capture_floor_adaptive_enabled=bool(
+            expected_capture_floor_adaptive_enabled
+        ),
+        expected_capture_floor_adaptive_quantile=float(
+            expected_capture_floor_adaptive_quantile
+        ),
+        execution_learning_rank_enabled=bool(execution_learning_rank_enabled),
+        rejection_concentration_rank_enabled=bool(rejection_concentration_rank_enabled),
+        rejection_concentration_window_records=int(rejection_concentration_window_records),
+        rejection_concentration_lookback_hours=float(
+            rejection_concentration_lookback_hours
+        ),
+        promotion_significance_enabled=bool(promotion_significance_enabled),
+        promotion_significance_method=str(promotion_significance_method),
+        promotion_significance_posterior_prob_min=float(
+            promotion_significance_posterior_prob_min
+        ),
+        promotion_significance_sprt_alpha=float(promotion_significance_sprt_alpha),
+        promotion_significance_sprt_beta=float(promotion_significance_sprt_beta),
+        promotion_significance_sprt_effect_bps=float(
+            promotion_significance_sprt_effect_bps
+        ),
+        opportunity_quality_enabled=bool(opportunity_quality_enabled),
+        opportunity_top_quantile=float(opportunity_top_quantile),
+        opportunity_min_symbols=int(opportunity_min_symbols),
+        opportunity_openings_only=bool(opportunity_openings_only),
+        portfolio_log_growth_rank_enabled=bool(portfolio_log_growth_rank_enabled),
     )
-    counterfactual_global_raw = counterfactual_state.get("global")
-    counterfactual_global = (
-        dict(counterfactual_global_raw)
-        if isinstance(counterfactual_global_raw, Mapping)
-        else {}
+    bandit_rewards_by_symbol = learning_state.bandit_rewards_by_symbol
+    bandit_rewards_by_symbol_session = learning_state.bandit_rewards_by_symbol_session
+    bandit_rewards_by_symbol_session_regime = (
+        learning_state.bandit_rewards_by_symbol_session_regime
     )
-    counterfactual_buckets_raw = counterfactual_state.get("buckets")
-    counterfactual_buckets = (
-        dict(counterfactual_buckets_raw)
-        if isinstance(counterfactual_buckets_raw, Mapping)
-        else {}
+    realized_edge_by_symbol = learning_state.realized_edge_by_symbol
+    realized_edge_by_symbol_session = learning_state.realized_edge_by_symbol_session
+    realized_edge_by_symbol_session_regime = (
+        learning_state.realized_edge_by_symbol_session_regime
     )
-    execution_learning_state = (
-        _load_execution_learning_state()
-        if execution_learning_rank_enabled
-        else {"global": {}, "buckets": {}, "symbol_buckets": {}}
+    edge_realism_ratio_by_symbol = learning_state.edge_realism_ratio_by_symbol
+    edge_realism_ratio_by_symbol_session = (
+        learning_state.edge_realism_ratio_by_symbol_session
     )
-    rejection_concentration_by_symbol = (
-        _load_recent_rejection_concentration_by_symbol(
-            now=now,
-            max_records=int(rejection_concentration_window_records),
-            lookback_hours=float(rejection_concentration_lookback_hours),
-        )
-        if rejection_concentration_rank_enabled
-        else {}
+    edge_realism_rank_factor_by_symbol = learning_state.edge_realism_rank_factor_by_symbol
+    counterfactual_signal_by_symbol = learning_state.counterfactual_signal_by_symbol
+    opportunity_quality_by_symbol = learning_state.opportunity_quality_by_symbol
+    learned_fill_trials_by_bucket = learning_state.learned_fill_trials_by_bucket
+    learned_fill_success_by_bucket = learning_state.learned_fill_success_by_bucket
+    learned_exec_cost_stats_by_bucket = learning_state.learned_exec_cost_stats_by_bucket
+    expected_capture_observed_values = learning_state.expected_capture_observed_values
+    opportunity_quality_gate = learning_state.opportunity_quality_gate
+    bandit_active_session = learning_state.bandit_active_session
+    bandit_active_regime = learning_state.bandit_active_regime
+    counterfactual_global = learning_state.counterfactual_global
+    counterfactual_buckets = learning_state.counterfactual_buckets
+    execution_learning_state = learning_state.execution_learning_state
+    rejection_concentration_by_symbol = learning_state.rejection_concentration_by_symbol
+    bandit_global_samples = learning_state.bandit_global_samples
+    bandit_global_mean_reward_bps = learning_state.bandit_global_mean_reward_bps
+    bandit_significance_context = learning_state.bandit_significance_context
+    bandit_significance_pass = learning_state.bandit_significance_pass
+    bandit_live_promoted = learning_state.bandit_live_promoted
+    bandit_bucket_significance_cache = learning_state.bandit_bucket_significance_cache
+    counterfactual_global_events = learning_state.counterfactual_global_events
+    counterfactual_global_dr_mean_bps = learning_state.counterfactual_global_dr_mean_bps
+    counterfactual_significance_context = learning_state.counterfactual_significance_context
+    counterfactual_significance_pass = learning_state.counterfactual_significance_pass
+    counterfactual_live_promoted = learning_state.counterfactual_live_promoted
+    portfolio_rank_correlation = learning_state.portfolio_rank_correlation
+    portfolio_current_gross_for_rank = learning_state.portfolio_current_gross_for_rank
+    held_notional_weights = learning_state.held_notional_weights
+    expected_capture_floor_bps_effective = (
+        learning_state.expected_capture_floor_bps_effective
     )
-    if (
-        bandit_enabled
-        or edge_realism_rank_calibration_enabled
-        or realized_edge_rank_enabled
-        or expected_capture_rank_enabled
-    ) and targets:
-        bandit_rows = _read_jsonl_records(
-            str(_resolved_tca_path()),
-            max_records=max(
-                500,
-                int(
-                    get_env(
-                        "AI_TRADING_EXEC_BANDIT_MAX_RECORDS",
-                        bandit_window_trades * max(len(targets), 1) * 8,
-                        cast=int,
-                    )
-                ),
-            ),
-        )
-        for row in bandit_rows:
-            symbol = str(row.get("symbol", "")).strip().upper()
-            if not symbol or symbol not in targets:
-                continue
-            status = str(row.get("status", "")).strip().lower()
-            session_token = str(row.get("session_regime", "")).strip().lower()
-            if session_token not in {"opening", "midday", "closing", "offhours"}:
-                ts = _parse_iso_timestamp(row.get("ts"))
-                session_token = _session_bucket_from_ts(ts)
-            bucket_key = f"{symbol}:{session_token}"
-            regime_token = str(
-                row.get("regime_profile")
-                or row.get("regime")
-                or row.get("session_profile")
-                or ""
-            ).strip().lower() or "unknown"
-            bucket_regime_key = f"{symbol}:{session_token}:{regime_token}"
-            liquidity_role = _infer_tca_liquidity_role(row)
-            venue_session_token = str(row.get("venue_session") or "").strip()
-            if not venue_session_token:
-                venue_token = str(
-                    row.get("venue")
-                    or row.get("provider")
-                    or expected_capture_venue_default
-                ).strip().upper() or expected_capture_venue_default
-                venue_session_token = f"{venue_token}:{session_token}"
-            if expected_capture_rank_enabled and expected_capture_learned_fill_model_enabled:
-                fill_success_ratio = _extract_tca_fill_success_ratio(row)
-                if fill_success_ratio is not None:
-                    fill_bucket_keys = (
-                        f"{symbol}:{session_token}:{regime_token}:{liquidity_role}:{venue_session_token}",
-                        f"{symbol}:{session_token}:{regime_token}:{liquidity_role}",
-                        f"{symbol}:{session_token}:{regime_token}",
-                        f"{symbol}:{session_token}",
-                        f"{symbol}",
-                        "__global__",
-                    )
-                    for key in fill_bucket_keys:
-                        learned_fill_trials_by_bucket[str(key)] = float(
-                            learned_fill_trials_by_bucket.get(str(key), 0.0)
-                        ) + 1.0
-                        learned_fill_success_by_bucket[str(key)] = float(
-                            learned_fill_success_by_bucket.get(str(key), 0.0)
-                        ) + float(max(0.0, min(1.0, fill_success_ratio)))
-                spread_cost_bps = max(
-                    0.0,
-                    float(_safe_float(row.get("spread_paid_bps")) or 0.0),
-                )
-                total_cost_bps = max(
-                    0.0,
-                    float(_safe_float(row.get("is_bps")) or spread_cost_bps),
-                )
-                impact_cost_bps = max(
-                    0.0,
-                    float(total_cost_bps) - float(spread_cost_bps),
-                )
-                latency_ms = max(
-                    0.0,
-                    float(_safe_float(row.get("fill_latency_ms")) or 0.0),
-                )
-                observed_latency_drift = max(
-                    0.0,
-                    abs(float(_safe_float(row.get("execution_drift_bps")) or 0.0)),
-                )
-                latency_drift_cost_bps = max(
-                    float(observed_latency_drift),
-                    (float(latency_ms) / 1000.0) * float(expected_capture_latency_bps_per_sec),
-                )
-                expected_edge_for_capture = _safe_float(row.get("expected_net_edge_bps"))
-                if expected_edge_for_capture is None:
-                    expected_edge_for_capture = _safe_float(row.get("edge_bps"))
-                if expected_edge_for_capture is not None and fill_success_ratio is not None:
-                    observed_capture = (
-                        float(expected_edge_for_capture) * float(fill_success_ratio)
-                    ) - (
-                        float(spread_cost_bps)
-                        + float(impact_cost_bps)
-                        + float(latency_drift_cost_bps)
-                    )
-                    if math.isfinite(float(observed_capture)):
-                        expected_capture_observed_values.append(float(observed_capture))
-                cost_bucket_keys = (
-                    f"{symbol}:{session_token}:{regime_token}:{liquidity_role}:{venue_session_token}",
-                    f"{symbol}:{session_token}:{regime_token}:{liquidity_role}",
-                    f"{symbol}:{session_token}:{regime_token}",
-                    f"{symbol}:{session_token}",
-                    f"{symbol}",
-                    "__global__",
-                )
-                for key in cost_bucket_keys:
-                    stats_item = learned_exec_cost_stats_by_bucket.setdefault(
-                        str(key),
-                        {
-                            "samples": 0.0,
-                            "spread_sum_bps": 0.0,
-                            "impact_sum_bps": 0.0,
-                            "latency_sum_bps": 0.0,
-                        },
-                    )
-                    stats_item["samples"] = float(stats_item.get("samples", 0.0) or 0.0) + 1.0
-                    stats_item["spread_sum_bps"] = float(
-                        stats_item.get("spread_sum_bps", 0.0) or 0.0
-                    ) + float(spread_cost_bps)
-                    stats_item["impact_sum_bps"] = float(
-                        stats_item.get("impact_sum_bps", 0.0) or 0.0
-                    ) + float(impact_cost_bps)
-                    stats_item["latency_sum_bps"] = float(
-                        stats_item.get("latency_sum_bps", 0.0) or 0.0
-                    ) + float(latency_drift_cost_bps)
-            if status in {"rejected", "canceled", "cancelled"}:
-                continue
-            realized_edge_bps: float | None = None
-            for key in ("realized_net_edge_bps", "net_edge_bps", "realized_edge_bps"):
-                try:
-                    candidate = float(row.get(key))
-                except (TypeError, ValueError):
-                    continue
-                if math.isfinite(candidate):
-                    realized_edge_bps = float(candidate)
-                    break
-            if realized_edge_bps is not None and realized_edge_rank_enabled:
-                bounded_realized_edge = max(-200.0, min(float(realized_edge_bps), 200.0))
-                realized_edge_by_symbol.setdefault(symbol, []).append(
-                    float(bounded_realized_edge)
-                )
-                realized_edge_by_symbol_session.setdefault(bucket_key, []).append(
-                    float(bounded_realized_edge)
-                )
-                realized_edge_by_symbol_session_regime.setdefault(
-                    bucket_regime_key,
-                    [],
-                ).append(float(bounded_realized_edge))
-            reward_bps: float | None = None
-            if realized_edge_bps is not None:
-                reward_bps = float(realized_edge_bps)
-            if reward_bps is None:
-                expected_net_edge_for_reward = _safe_float(row.get("expected_net_edge_bps"))
-                if expected_net_edge_for_reward is None:
-                    expected_net_edge_for_reward = _safe_float(row.get("expected_edge_bps"))
-                spread_paid_bps = abs(float(_safe_float(row.get("spread_paid_bps")) or 0.0))
-                exec_drift_bps = abs(float(_safe_float(row.get("execution_drift_bps")) or 0.0))
-                try:
-                    is_bps = float(row.get("is_bps"))
-                except (TypeError, ValueError):
-                    is_bps = None
-                if is_bps is not None and math.isfinite(float(is_bps)):
-                    if (
-                        expected_net_edge_for_reward is not None
-                        and math.isfinite(float(expected_net_edge_for_reward))
-                    ):
-                        reward_bps = float(expected_net_edge_for_reward) - (
-                            abs(float(is_bps))
-                            + float(spread_paid_bps)
-                            + float(exec_drift_bps)
-                        )
-                    else:
-                        reward_bps = float(-is_bps)
-            if edge_realism_rank_calibration_enabled and reward_bps is not None:
-                expected_bps: float | None = None
-                for key in (
-                    "expected_net_edge_bps",
-                    "expected_edge_bps",
-                    "edge_bps",
-                    "alpha_edge_bps",
-                ):
-                    try:
-                        candidate = float(row.get(key))
-                    except (TypeError, ValueError):
-                        continue
-                    if math.isfinite(candidate) and candidate > 0.0:
-                        expected_bps = float(candidate)
-                        break
-                if expected_bps is not None and float(expected_bps) > 0.0:
-                    ratio = float(reward_bps) / max(float(expected_bps), 0.1)
-                    ratio = max(0.0, min(ratio, 5.0))
-                    edge_realism_ratio_by_symbol.setdefault(symbol, []).append(float(ratio))
-                    edge_realism_ratio_by_symbol_session.setdefault(
-                        bucket_key,
-                        [],
-                    ).append(float(ratio))
-            if reward_bps is None:
-                continue
-            reward_bps = max(-200.0, min(float(reward_bps), 200.0))
-            if bandit_enabled:
-                bandit_rewards_by_symbol.setdefault(symbol, []).append(float(reward_bps))
-                bandit_rewards_by_symbol_session.setdefault(bucket_key, []).append(
-                    float(reward_bps)
-                )
-                bandit_rewards_by_symbol_session_regime.setdefault(
-                    bucket_regime_key,
-                    [],
-                ).append(float(reward_bps))
-        for symbol, values in list(bandit_rewards_by_symbol.items()):
-            if len(values) > bandit_window_trades:
-                bandit_rewards_by_symbol[symbol] = values[-bandit_window_trades:]
-        for key, values in list(bandit_rewards_by_symbol_session.items()):
-            if len(values) > bandit_window_trades:
-                bandit_rewards_by_symbol_session[key] = values[-bandit_window_trades:]
-        for key, values in list(bandit_rewards_by_symbol_session_regime.items()):
-            if len(values) > bandit_window_trades:
-                bandit_rewards_by_symbol_session_regime[key] = values[-bandit_window_trades:]
-        for symbol, values in list(realized_edge_by_symbol.items()):
-            if len(values) > bandit_window_trades:
-                realized_edge_by_symbol[symbol] = values[-bandit_window_trades:]
-        for key, values in list(realized_edge_by_symbol_session.items()):
-            if len(values) > bandit_window_trades:
-                realized_edge_by_symbol_session[key] = values[-bandit_window_trades:]
-        for key, values in list(realized_edge_by_symbol_session_regime.items()):
-            if len(values) > bandit_window_trades:
-                realized_edge_by_symbol_session_regime[key] = values[-bandit_window_trades:]
-        for symbol, values in list(edge_realism_ratio_by_symbol.items()):
-            if len(values) > edge_realism_rank_calibration_window_trades:
-                edge_realism_ratio_by_symbol[symbol] = values[
-                    -edge_realism_rank_calibration_window_trades:
-                ]
-        for key, values in list(edge_realism_ratio_by_symbol_session.items()):
-            if len(values) > edge_realism_rank_calibration_window_trades:
-                edge_realism_ratio_by_symbol_session[key] = values[
-                    -edge_realism_rank_calibration_window_trades:
-                ]
-    expected_capture_floor_bps_effective = float(expected_capture_floor_bps)
-    if expected_capture_floor_adaptive_enabled and expected_capture_observed_values:
-        adaptive_capture_floor = _percentile_linear(
-            expected_capture_observed_values,
-            expected_capture_floor_adaptive_quantile,
-        )
-        if adaptive_capture_floor is not None:
-            expected_capture_floor_bps_effective = min(
-                float(expected_capture_floor_bps_effective),
-                float(adaptive_capture_floor),
-            )
 
-    if edge_realism_rank_calibration_enabled and targets:
-        all_ratios = [
-            float(value)
-            for values in edge_realism_ratio_by_symbol.values()
-            for value in values
-            if math.isfinite(float(value))
-        ]
-        global_ratio = (
-            float(sum(all_ratios) / max(len(all_ratios), 1))
-            if all_ratios
-            else None
-        )
-        for symbol in targets.keys():
-            selected_ratios = edge_realism_ratio_by_symbol.get(symbol, [])
-            if edge_realism_rank_calibration_session_enabled:
-                session_key = f"{symbol}:{bandit_active_session}"
-                session_ratios = edge_realism_ratio_by_symbol_session.get(session_key, [])
-                if len(session_ratios) >= edge_realism_rank_calibration_min_samples:
-                    selected_ratios = session_ratios
-            symbol_ratio: float | None = None
-            if len(selected_ratios) >= edge_realism_rank_calibration_min_samples:
-                symbol_ratio = float(
-                    sum(float(value) for value in selected_ratios)
-                    / max(len(selected_ratios), 1)
-                )
-            blended_ratio: float | None = symbol_ratio
-            if blended_ratio is None:
-                blended_ratio = global_ratio
-            elif (
-                global_ratio is not None
-                and edge_realism_rank_calibration_prior_samples > 0
-            ):
-                numerator = (
-                    float(blended_ratio) * float(len(selected_ratios))
-                    + float(global_ratio)
-                    * float(edge_realism_rank_calibration_prior_samples)
-                )
-                denom = float(
-                    len(selected_ratios) + edge_realism_rank_calibration_prior_samples
-                )
-                if denom > 0.0:
-                    blended_ratio = float(numerator / denom)
-            if blended_ratio is None:
-                edge_realism_rank_factor_by_symbol[symbol] = 1.0
-                continue
-            edge_realism_rank_factor_by_symbol[symbol] = float(
-                max(
-                    edge_realism_rank_calibration_ratio_floor,
-                    min(edge_realism_rank_calibration_ratio_cap, float(blended_ratio)),
-                )
-            )
-
-    bandit_global_samples = int(sum(len(values) for values in bandit_rewards_by_symbol.values()))
-    bandit_global_mean_reward_bps = (
-        float(sum(sum(values) for values in bandit_rewards_by_symbol.values()))
-        / float(max(1, bandit_global_samples))
-        if bandit_global_samples > 0
-        else 0.0
-    )
-    bandit_global_series = [
-        float(value)
-        for values in bandit_rewards_by_symbol.values()
-        for value in values
-        if isinstance(value, (int, float)) and math.isfinite(float(value))
-    ]
-    bandit_mean_for_significance, bandit_std_for_significance, bandit_samples_for_significance = _mean_std(
-        bandit_global_series
-    )
-    bandit_significance_context = _sequential_significance_gate(
-        mean_reward_bps=float(bandit_mean_for_significance),
-        std_reward_bps=float(bandit_std_for_significance),
-        samples=int(bandit_samples_for_significance),
-        min_samples=int(max(bandit_promote_min_samples, bandit_min_samples)),
-        target_mean_bps=float(bandit_promote_min_mean_reward_bps),
-        method=str(promotion_significance_method),
-        posterior_prob_min=float(promotion_significance_posterior_prob_min),
-        sprt_alpha=float(promotion_significance_sprt_alpha),
-        sprt_beta=float(promotion_significance_sprt_beta),
-        sprt_effect_bps=float(promotion_significance_sprt_effect_bps),
-    )
-    bandit_significance_pass = (
-        bool(bandit_significance_context.get("passed", False))
-        if promotion_significance_enabled
-        else True
-    )
-    bandit_live_promoted = bool(
-        bandit_enabled
-        and (
-            not bandit_shadow_only
-            or (
-                bandit_auto_promote
-                and bandit_global_samples >= bandit_promote_min_samples
-                and bandit_global_mean_reward_bps >= bandit_promote_min_mean_reward_bps
-                and bandit_significance_pass
-            )
-        )
-    )
-    bandit_bucket_significance_cache: dict[str, dict[str, Any]] = {}
-    counterfactual_global_events = int(counterfactual_global.get("events", 0) or 0)
-    counterfactual_global_dr_mean_bps = float(
-        counterfactual_global.get("dr_mean_bps", 0.0) or 0.0
-    )
-    counterfactual_bucket_dr_means = [
-        float(_safe_float(item.get("dr_mean_bps")) or 0.0)
-        for item in counterfactual_buckets.values()
-        if isinstance(item, Mapping)
-        and _safe_float(item.get("dr_mean_bps")) is not None
-    ]
-    _cf_bucket_mean, counterfactual_std_proxy, _cf_bucket_samples = _mean_std(
-        counterfactual_bucket_dr_means
-    )
-    counterfactual_std_proxy = max(
-        float(counterfactual_std_proxy),
-        float(
+    ranking_result = rank_netting_candidates(
+        now=now,
+        targets=targets,
+        net_edge_raw_by_symbol=net_edge_raw_by_symbol,
+        latest_liquidity=latest_liquidity,
+        latest_price=latest_price,
+        positions=positions,
+        symbol_returns=symbol_returns,
+        edge_realism_rank_factor_by_symbol=edge_realism_rank_factor_by_symbol,
+        counterfactual_signal_by_symbol_seed=counterfactual_signal_by_symbol,
+        opportunity_quality_by_symbol_seed=opportunity_quality_by_symbol,
+        learned_fill_trials_by_bucket=learned_fill_trials_by_bucket,
+        learned_fill_success_by_bucket=learned_fill_success_by_bucket,
+        learned_exec_cost_stats_by_bucket=learned_exec_cost_stats_by_bucket,
+        execution_learning_state=execution_learning_state,
+        rejection_concentration_by_symbol=rejection_concentration_by_symbol,
+        realized_edge_by_symbol=realized_edge_by_symbol,
+        realized_edge_by_symbol_session=realized_edge_by_symbol_session,
+        realized_edge_by_symbol_session_regime=realized_edge_by_symbol_session_regime,
+        bandit_rewards_by_symbol=bandit_rewards_by_symbol,
+        bandit_rewards_by_symbol_session=bandit_rewards_by_symbol_session,
+        bandit_rewards_by_symbol_session_regime=bandit_rewards_by_symbol_session_regime,
+        bandit_bucket_significance_cache=bandit_bucket_significance_cache,
+        counterfactual_buckets=counterfactual_buckets,
+        replay_quality_by_symbol=replay_quality_by_symbol,
+        replay_quality_by_symbol_session=replay_quality_by_symbol_session,
+        replay_quality_by_symbol_session_regime=replay_quality_by_symbol_session_regime,
+        replay_quality_context=replay_quality_context,
+        portfolio_rank_correlation=portfolio_rank_correlation,
+        held_notional_weights=held_notional_weights,
+        opportunity_quality_gate=opportunity_quality_gate,
+        safe_float=_safe_float,
+        mean_std_func=_mean_std,
+        sequential_significance_gate_func=_sequential_significance_gate,
+        percentile_linear_func=_percentile_linear,
+        lookup_learned_fill_probability_func=lookup_learned_fill_probability,
+        lookup_learned_execution_cost_components_func=lookup_learned_execution_cost_components,
+        exit_policy_pressure_context_func=_exit_policy_pressure_context,
+        exit_policy_state=state,
+        edge_realism_rank_calibration_enabled=bool(
+            edge_realism_rank_calibration_enabled
+        ),
+        clip_expected_edge_enabled=bool(clip_expected_edge_enabled),
+        edge_clip_cap_bps=float(edge_clip_cap_bps),
+        alpha_time_decay_enabled=bool(alpha_time_decay_enabled),
+        alpha_time_decay_half_life_sec=float(alpha_time_decay_half_life_sec),
+        alpha_time_decay_floor=float(alpha_time_decay_floor),
+        bandit_active_session=str(bandit_active_session),
+        bandit_active_regime=str(bandit_active_regime),
+        expected_capture_rank_enabled=bool(expected_capture_rank_enabled),
+        expected_capture_learned_fill_model_enabled=bool(
+            expected_capture_learned_fill_model_enabled
+        ),
+        expected_capture_learned_fill_min_samples=int(
+            expected_capture_learned_fill_min_samples
+        ),
+        expected_capture_learned_fill_prior_alpha=float(
+            expected_capture_learned_fill_prior_alpha
+        ),
+        expected_capture_learned_fill_prior_beta=float(
+            expected_capture_learned_fill_prior_beta
+        ),
+        expected_capture_liquidity_role_default=str(
+            expected_capture_liquidity_role_default
+        ),
+        expected_capture_venue_default=str(expected_capture_venue_default),
+        execution_learning_rank_enabled=bool(execution_learning_rank_enabled),
+        execution_learning_rank_min_samples=int(
+            execution_learning_rank_min_samples
+        ),
+        execution_learning_rank_slippage_floor_bps=float(
+            execution_learning_rank_slippage_floor_bps
+        ),
+        execution_learning_rank_slippage_weight=float(
+            execution_learning_rank_slippage_weight
+        ),
+        execution_learning_rank_negative_edge_weight=float(
+            execution_learning_rank_negative_edge_weight
+        ),
+        execution_learning_rank_adverse_weight=float(
+            execution_learning_rank_adverse_weight
+        ),
+        execution_learning_rank_realization_floor=float(
+            execution_learning_rank_realization_floor
+        ),
+        execution_learning_rank_realization_weight_bps=float(
+            execution_learning_rank_realization_weight_bps
+        ),
+        execution_learning_rank_max_penalty_bps=float(
+            execution_learning_rank_max_penalty_bps
+        ),
+        expected_capture_fill_prob_floor=float(expected_capture_fill_prob_floor),
+        expected_capture_fill_prob_cap=float(expected_capture_fill_prob_cap),
+        expected_capture_spread_penalty_bps=float(
+            expected_capture_spread_penalty_bps
+        ),
+        expected_capture_participation_penalty_bps=float(
+            expected_capture_participation_penalty_bps
+        ),
+        expected_capture_age_half_life_sec=float(
+            expected_capture_age_half_life_sec
+        ),
+        expected_capture_latency_bps_per_sec=float(
+            expected_capture_latency_bps_per_sec
+        ),
+        expected_capture_cost_model_enabled=bool(
+            expected_capture_cost_model_enabled
+        ),
+        expected_capture_cost_model_min_samples=int(
+            expected_capture_cost_model_min_samples
+        ),
+        expected_capture_cost_spread_weight=float(
+            expected_capture_cost_spread_weight
+        ),
+        expected_capture_cost_impact_weight=float(
+            expected_capture_cost_impact_weight
+        ),
+        expected_capture_cost_latency_weight=float(
+            expected_capture_cost_latency_weight
+        ),
+        rejection_concentration_rank_enabled=bool(
+            rejection_concentration_rank_enabled
+        ),
+        rejection_concentration_min_count=int(rejection_concentration_min_count),
+        rejection_concentration_scale_bps=float(
+            rejection_concentration_scale_bps
+        ),
+        rejection_concentration_max_penalty_bps=float(
+            rejection_concentration_max_penalty_bps
+        ),
+        expected_capture_rank_weight=float(expected_capture_rank_weight),
+        expected_capture_max_adjust_abs=float(expected_capture_max_adjust_abs),
+        expected_capture_floor_bps_effective=float(
+            expected_capture_floor_bps_effective
+        ),
+        expected_capture_constraint_weight=float(
+            expected_capture_constraint_weight
+        ),
+        expected_capture_constraint_max_adjust_abs=float(
+            expected_capture_constraint_max_adjust_abs
+        ),
+        edge_model_v2_enabled=bool(edge_model_v2_enabled),
+        edge_model_v2_weight=float(edge_model_v2_weight),
+        edge_model_v2_min_samples=int(edge_model_v2_min_samples),
+        edge_model_v2_uncertainty_z=float(edge_model_v2_uncertainty_z),
+        edge_model_v2_regime_weight=float(edge_model_v2_regime_weight),
+        edge_model_v2_session_weight=float(edge_model_v2_session_weight),
+        edge_model_v2_global_weight=float(edge_model_v2_global_weight),
+        edge_model_v2_cost_weight=float(edge_model_v2_cost_weight),
+        edge_model_v2_clip_bps=float(edge_model_v2_clip_bps),
+        edge_model_v2_max_rank_uplift_abs=float(
+            edge_model_v2_max_rank_uplift_abs
+        ),
+        edge_model_v2_max_rank_uplift_frac=float(
+            edge_model_v2_max_rank_uplift_frac
+        ),
+        realized_edge_rank_enabled=bool(realized_edge_rank_enabled),
+        realized_edge_rank_weight=float(realized_edge_rank_weight),
+        realized_edge_rank_min_samples=int(realized_edge_rank_min_samples),
+        realized_edge_rank_uncertainty_z=float(realized_edge_rank_uncertainty_z),
+        realized_edge_rank_clip_bps=float(realized_edge_rank_clip_bps),
+        realized_edge_rank_max_rank_uplift_abs=float(
+            realized_edge_rank_max_rank_uplift_abs
+        ),
+        realized_edge_rank_max_rank_uplift_frac=float(
+            realized_edge_rank_max_rank_uplift_frac
+        ),
+        realized_edge_rank_session_bucket_enabled=bool(
+            realized_edge_rank_session_bucket_enabled
+        ),
+        realized_edge_rank_regime_bucket_enabled=bool(
+            realized_edge_rank_regime_bucket_enabled
+        ),
+        bandit_enabled=bool(bandit_enabled),
+        bandit_method=str(bandit_method),
+        bandit_min_samples=int(bandit_min_samples),
+        bandit_session_bucket_enabled=bool(bandit_session_bucket_enabled),
+        bandit_regime_bucket_enabled=bool(bandit_regime_bucket_enabled),
+        bandit_weight=float(bandit_weight),
+        bandit_exploration=float(bandit_exploration),
+        bandit_shadow_only=bool(bandit_shadow_only),
+        bandit_live_promoted=bool(bandit_live_promoted),
+        bandit_bucket_promotion_enabled=bool(
+            bandit_bucket_promotion_enabled
+        ),
+        bandit_bucket_promote_min_samples=int(
+            bandit_bucket_promote_min_samples
+        ),
+        bandit_bucket_promote_min_mean_reward_bps=float(
+            bandit_bucket_promote_min_mean_reward_bps
+        ),
+        bandit_promote_min_mean_reward_bps=float(
+            bandit_promote_min_mean_reward_bps
+        ),
+        bandit_max_rank_uplift_abs=float(bandit_max_rank_uplift_abs),
+        bandit_max_rank_uplift_frac=float(bandit_max_rank_uplift_frac),
+        promotion_significance_enabled=bool(promotion_significance_enabled),
+        promotion_significance_method=str(promotion_significance_method),
+        promotion_significance_posterior_prob_min=float(
+            promotion_significance_posterior_prob_min
+        ),
+        promotion_significance_sprt_alpha=float(
+            promotion_significance_sprt_alpha
+        ),
+        promotion_significance_sprt_beta=float(
+            promotion_significance_sprt_beta
+        ),
+        promotion_significance_sprt_effect_bps=float(
+            promotion_significance_sprt_effect_bps
+        ),
+        counterfactual_enabled=bool(counterfactual_enabled),
+        counterfactual_weight=float(counterfactual_weight),
+        counterfactual_min_samples=int(counterfactual_min_samples),
+        counterfactual_clip_bps=float(counterfactual_clip_bps),
+        counterfactual_max_rank_uplift_abs=float(
+            counterfactual_max_rank_uplift_abs
+        ),
+        counterfactual_max_rank_uplift_frac=float(
+            counterfactual_max_rank_uplift_frac
+        ),
+        counterfactual_live_promoted=bool(counterfactual_live_promoted),
+        geometric_tiebreak_enabled=bool(geometric_tiebreak_enabled),
+        geometric_tiebreak_weight=float(geometric_tiebreak_weight),
+        geometric_variance_penalty=float(geometric_variance_penalty),
+        geometric_downside_penalty=float(geometric_downside_penalty),
+        geometric_drawdown_penalty=float(geometric_drawdown_penalty),
+        portfolio_log_growth_rank_enabled=bool(
+            portfolio_log_growth_rank_enabled
+        ),
+        portfolio_log_growth_rank_weight=float(
+            portfolio_log_growth_rank_weight
+        ),
+        portfolio_log_growth_variance_penalty=float(
+            portfolio_log_growth_variance_penalty
+        ),
+        portfolio_log_growth_corr_penalty_bps=float(
+            portfolio_log_growth_corr_penalty_bps
+        ),
+        portfolio_log_growth_exposure_penalty_bps=float(
+            portfolio_log_growth_exposure_penalty_bps
+        ),
+        portfolio_log_growth_turnover_penalty_bps=float(
+            portfolio_log_growth_turnover_penalty_bps
+        ),
+        portfolio_log_growth_liquidity_penalty_bps=float(
+            portfolio_log_growth_liquidity_penalty_bps
+        ),
+        portfolio_log_growth_max_participation=float(
+            portfolio_log_growth_max_participation
+        ),
+        portfolio_log_growth_max_adjust_abs=float(
+            portfolio_log_growth_max_adjust_abs
+        ),
+        portfolio_current_gross_for_rank=float(
+            portfolio_current_gross_for_rank
+        ),
+        replay_quality_rank_enabled=bool(replay_quality_rank_enabled),
+        replay_quality_weight=float(replay_quality_weight),
+        replay_quality_min_samples=int(replay_quality_min_samples),
+        replay_quality_clip_bps=float(replay_quality_clip_bps),
+        replay_quality_max_rank_uplift_abs=float(
+            replay_quality_max_rank_uplift_abs
+        ),
+        replay_quality_max_rank_uplift_frac=float(
+            replay_quality_max_rank_uplift_frac
+        ),
+        replay_quality_session_bucket_enabled=bool(
+            replay_quality_session_bucket_enabled
+        ),
+        replay_quality_regime_bucket_enabled=bool(
+            replay_quality_regime_bucket_enabled
+        ),
+        replay_quality_fallback_to_edge_model_v2=bool(
+            replay_quality_fallback_to_edge_model_v2
+        ),
+        exit_policy_entry_penalty_enabled=bool(
+            exit_policy_entry_penalty_enabled
+        ),
+        exit_policy_entry_penalty_weight=float(
+            exit_policy_entry_penalty_weight
+        ),
+        exit_policy_entry_penalty_min_pressure=float(
+            exit_policy_entry_penalty_min_pressure
+        ),
+        exit_policy_entry_penalty_max_abs=float(
+            exit_policy_entry_penalty_max_abs
+        ),
+        rank_downside_overlap_cap_enabled=bool(
+            rank_downside_overlap_cap_enabled
+        ),
+        rank_downside_overlap_cap_frac=float(rank_downside_overlap_cap_frac),
+        rank_downside_overlap_cap_abs=float(rank_downside_overlap_cap_abs),
+        opportunity_quality_enabled=bool(opportunity_quality_enabled),
+        opportunity_top_quantile=float(opportunity_top_quantile),
+        opportunity_min_symbols=int(opportunity_min_symbols),
+        opportunity_demote_score=float(
             get_env(
-                "AI_TRADING_EXEC_COUNTERFACTUAL_PROMOTION_STD_PROXY_BPS",
-                15.0,
+                "AI_TRADING_EXEC_OPPORTUNITY_DEMOTE_SCORE",
+                1_000_000.0,
                 cast=float,
             )
         ),
     )
-    counterfactual_significance_context = _sequential_significance_gate(
-        mean_reward_bps=float(counterfactual_global_dr_mean_bps),
-        std_reward_bps=float(counterfactual_std_proxy),
-        samples=int(counterfactual_global_events),
-        min_samples=int(counterfactual_promote_min_events),
-        target_mean_bps=float(counterfactual_promote_min_dr_mean_bps),
-        method=str(promotion_significance_method),
-        posterior_prob_min=float(promotion_significance_posterior_prob_min),
-        sprt_alpha=float(promotion_significance_sprt_alpha),
-        sprt_beta=float(promotion_significance_sprt_beta),
-        sprt_effect_bps=float(promotion_significance_sprt_effect_bps),
+    candidate_expected_net_edge = ranking_result.candidate_expected_net_edge
+    candidate_expected_capture = ranking_result.candidate_expected_capture
+    candidate_rank = ranking_result.candidate_rank
+    counterfactual_signal_by_symbol = (
+        ranking_result.counterfactual_signal_by_symbol
     )
-    counterfactual_significance_pass = (
-        bool(counterfactual_significance_context.get("passed", False))
-        if promotion_significance_enabled
-        else True
-    )
-    counterfactual_live_promoted = bool(
-        counterfactual_enabled
-        and (
-            not counterfactual_shadow_only
-            or (
-                counterfactual_auto_promote
-                and counterfactual_global_events >= counterfactual_promote_min_events
-                and counterfactual_global_dr_mean_bps
-                >= counterfactual_promote_min_dr_mean_bps
-                and counterfactual_significance_pass
-            )
-        )
-    )
-    portfolio_rank_correlation: dict[str, dict[str, float]] = (
-        _build_symbol_return_correlation_matrix(symbol_returns)
-        if portfolio_log_growth_rank_enabled
-        else {}
-    )
-    portfolio_current_gross_for_rank = 0.0
-    held_notional_weights: dict[str, float] = {}
-    if portfolio_log_growth_rank_enabled:
-        for held_symbol, held_qty in positions.items():
-            held_price = _safe_float(latest_price.get(held_symbol))
-            if held_price is None or held_price <= 0.0:
-                continue
-            held_notional = abs(float(held_qty) * float(held_price))
-            if held_notional <= 0.0:
-                continue
-            portfolio_current_gross_for_rank += held_notional
-            held_notional_weights[str(held_symbol)] = held_notional
-        if portfolio_current_gross_for_rank > 0.0:
-            held_notional_weights = {
-                symbol: float(notional) / float(portfolio_current_gross_for_rank)
-                for symbol, notional in held_notional_weights.items()
-            }
-        else:
-            held_notional_weights = {}
-
-    def _expected_capture_bucket_keys(
-        *,
-        symbol: str,
-        session_token: str,
-        regime_token: str,
-        liquidity_role: str,
-        venue_session: str,
-    ) -> tuple[str, ...]:
-        return (
-            f"{symbol}:{session_token}:{regime_token}:{liquidity_role}:{venue_session}",
-            f"{symbol}:{session_token}:{regime_token}:{liquidity_role}",
-            f"{symbol}:{session_token}:{regime_token}",
-            f"{symbol}:{session_token}",
-            f"{symbol}",
-            "__global__",
-        )
-
-    def _lookup_learned_fill_probability(
-        *,
-        symbol: str,
-        session_token: str,
-        regime_token: str,
-        liquidity_role: str,
-        venue_session: str,
-    ) -> tuple[float | None, int, str | None]:
-        for key in _expected_capture_bucket_keys(
-            symbol=symbol,
-            session_token=session_token,
-            regime_token=regime_token,
-            liquidity_role=liquidity_role,
-            venue_session=venue_session,
-        ):
-            trials = float(learned_fill_trials_by_bucket.get(str(key), 0.0) or 0.0)
-            if trials < float(expected_capture_learned_fill_min_samples):
-                continue
-            successes = float(
-                learned_fill_success_by_bucket.get(str(key), 0.0) or 0.0
-            )
-            posterior_prob = (
-                float(successes) + float(expected_capture_learned_fill_prior_alpha)
-            ) / (
-                float(trials)
-                + float(expected_capture_learned_fill_prior_alpha)
-                + float(expected_capture_learned_fill_prior_beta)
-            )
-            return (
-                max(0.0, min(1.0, float(posterior_prob))),
-                int(round(trials)),
-                str(key),
-            )
-        return (None, 0, None)
-
-    def _lookup_learned_execution_cost_components(
-        *,
-        symbol: str,
-        session_token: str,
-        regime_token: str,
-        liquidity_role: str,
-        venue_session: str,
-    ) -> tuple[float | None, float | None, float | None, int, str | None]:
-        for key in _expected_capture_bucket_keys(
-            symbol=symbol,
-            session_token=session_token,
-            regime_token=regime_token,
-            liquidity_role=liquidity_role,
-            venue_session=venue_session,
-        ):
-            stats_item = learned_exec_cost_stats_by_bucket.get(str(key))
-            if not isinstance(stats_item, Mapping):
-                continue
-            samples = float(_safe_float(stats_item.get("samples")) or 0.0)
-            if samples < float(expected_capture_cost_model_min_samples):
-                continue
-            spread_mean = float(
-                (_safe_float(stats_item.get("spread_sum_bps")) or 0.0) / float(samples)
-            )
-            impact_mean = float(
-                (_safe_float(stats_item.get("impact_sum_bps")) or 0.0) / float(samples)
-            )
-            latency_mean = float(
-                (_safe_float(stats_item.get("latency_sum_bps")) or 0.0) / float(samples)
-            )
-            return (
-                max(0.0, spread_mean),
-                max(0.0, impact_mean),
-                max(0.0, latency_mean),
-                int(round(samples)),
-                str(key),
-            )
-        return (None, None, None, 0, None)
-
-    candidate_expected_net_edge: dict[str, float] = {}
-    candidate_expected_capture: dict[str, float] = {}
-    candidate_rank: dict[str, float] = {}
-    for symbol, target in targets.items():
-        raw_net_edge_total = float(net_edge_raw_by_symbol.get(symbol, 0.0) or 0.0)
-        candidate_side = "buy" if float(target.target_dollars) >= 0.0 else "sell"
-        edge_realism_rank_factor = float(
-            edge_realism_rank_factor_by_symbol.get(symbol, 1.0)
-        )
-        adjusted_net_edge_total = float(raw_net_edge_total)
-        if edge_realism_rank_calibration_enabled and adjusted_net_edge_total > 0.0:
-            adjusted_net_edge_total = float(adjusted_net_edge_total) * float(
-                edge_realism_rank_factor
-            )
-        clipped_net_edge_total = (
-            max(
-                -float(edge_clip_cap_bps),
-                min(float(edge_clip_cap_bps), adjusted_net_edge_total),
-            )
-            if clip_expected_edge_enabled
-            else adjusted_net_edge_total
-        )
-        candidate_expected_net_edge[symbol] = float(clipped_net_edge_total)
-        max_conf = max((float(proposal.confidence) for proposal in target.proposals), default=0.0)
-        disagreement = float(target.disagreement_ratio) if target.disagreement_ratio is not None else 1.0
-        if not math.isfinite(disagreement):
-            disagreement = 1.0
-        disagreement = max(0.05, min(disagreement, 1.0))
-        rank_score = (
-            max(clipped_net_edge_total, -1000.0)
-            * max(max_conf, 0.05)
-            * disagreement
-        )
-        signal_age_seconds = max(
-            0.0,
-            (now - target.bar_ts).total_seconds() if isinstance(target.bar_ts, datetime) else 0.0,
-        )
-        time_decay_multiplier = 1.0
-        if alpha_time_decay_enabled and alpha_time_decay_half_life_sec > 0.0:
-            try:
-                decay = math.exp(
-                    -math.log(2.0)
-                    * (float(signal_age_seconds) / float(alpha_time_decay_half_life_sec))
-                )
-            except (ValueError, OverflowError):
-                decay = 1.0
-            time_decay_multiplier = max(
-                float(alpha_time_decay_floor),
-                min(1.0, float(decay)),
-            )
-            rank_score *= float(time_decay_multiplier)
-        rank_score_baseline = float(rank_score)
-        expected_capture_bps = float(clipped_net_edge_total)
-        expected_capture_fill_probability = 0.5
-        expected_capture_spread_bps = 0.0
-        expected_capture_participation = 0.0
-        expected_capture_impact_cost_bps = 0.0
-        expected_capture_latency_drift_bps = 0.0
-        expected_capture_fill_model_source = "heuristic"
-        expected_capture_fill_model_samples = 0
-        expected_capture_cost_model_source = "heuristic"
-        expected_capture_cost_model_samples = 0
-        execution_learning_penalty_bps = 0.0
-        execution_learning_penalty_context: dict[str, Any] = {}
-        execution_learning_source = "none"
-        rejection_penalty_bps = 0.0
-        rejection_penalty_context: dict[str, Any] = {}
-        if expected_capture_rank_enabled:
-            liq_features = latest_liquidity.get(symbol)
-            spread_bps_value = max(
-                0.0,
-                _safe_float(getattr(liq_features, "spread_bps", 0.0)) or 0.0,
-            )
-            rolling_volume = max(
-                0.0,
-                _safe_float(getattr(liq_features, "rolling_volume", 0.0)) or 0.0,
-            )
-            px_for_qty = _safe_float(latest_price.get(symbol))
-            trade_qty = 0.0
-            if px_for_qty is not None and px_for_qty > 0.0:
-                trade_qty = abs(float(target.target_dollars)) / float(px_for_qty)
-            participation = 0.0
-            if rolling_volume > 0.0 and trade_qty > 0.0:
-                participation = min(2.0, float(trade_qty) / float(max(rolling_volume, 1.0)))
-            fill_prob_proxy = 0.65
-            fill_prob_proxy -= min(float(spread_bps_value) / 35.0, 0.50)
-            fill_prob_proxy -= min(float(participation) / 0.08, 0.55)
-            if expected_capture_age_half_life_sec > 0.0:
-                try:
-                    age_decay = math.exp(
-                        -math.log(2.0)
-                        * (float(signal_age_seconds) / float(expected_capture_age_half_life_sec))
-                    )
-                except (ValueError, OverflowError):
-                    age_decay = 1.0
-                fill_prob_proxy *= max(0.20, min(1.0, float(age_decay)))
-            assumed_liquidity_role = str(expected_capture_liquidity_role_default)
-            venue_session = f"{expected_capture_venue_default}:{bandit_active_session}"
-            if expected_capture_learned_fill_model_enabled:
-                learned_fill_prob, learned_fill_samples, learned_fill_key = (
-                    _lookup_learned_fill_probability(
-                        symbol=str(symbol),
-                        session_token=str(bandit_active_session),
-                        regime_token=str(bandit_active_regime),
-                        liquidity_role=str(assumed_liquidity_role),
-                        venue_session=str(venue_session),
-                    )
-                )
-                if learned_fill_prob is not None:
-                    fill_prob_proxy = float(learned_fill_prob)
-                    expected_capture_fill_model_source = str(
-                        learned_fill_key or "learned"
-                    )
-                    expected_capture_fill_model_samples = int(learned_fill_samples)
-            if execution_learning_rank_enabled:
-                execution_learning_entry, execution_learning_source_key = (
-                    _lookup_execution_learning_bucket_entry(
-                        state=execution_learning_state,
-                        symbol=str(symbol),
-                        session_token=str(bandit_active_session),
-                        regime_token=str(bandit_active_regime),
-                        liquidity_role=str(assumed_liquidity_role),
-                        side=str(candidate_side),
-                        min_samples=int(execution_learning_rank_min_samples),
-                    )
-                )
-                execution_learning_source = str(
-                    execution_learning_source_key or "none"
-                )
-                execution_learning_penalty_context = dict(
-                    _compute_execution_learning_rank_penalty(
-                        entry=execution_learning_entry,
-                        min_samples=int(execution_learning_rank_min_samples),
-                        slippage_floor_bps=float(
-                            execution_learning_rank_slippage_floor_bps
-                        ),
-                        slippage_weight=float(
-                            execution_learning_rank_slippage_weight
-                        ),
-                        negative_edge_weight=float(
-                            execution_learning_rank_negative_edge_weight
-                        ),
-                        adverse_weight=float(
-                            execution_learning_rank_adverse_weight
-                        ),
-                        realization_floor=float(
-                            execution_learning_rank_realization_floor
-                        ),
-                        realization_weight_bps=float(
-                            execution_learning_rank_realization_weight_bps
-                        ),
-                        max_penalty_bps=float(
-                            execution_learning_rank_max_penalty_bps
-                        ),
-                    )
-                )
-                execution_fill_cap = _safe_float(
-                    execution_learning_penalty_context.get("mean_fill_probability")
-                )
-                if execution_fill_cap is None or execution_fill_cap <= 0.0:
-                    execution_fill_cap = _safe_float(
-                        execution_learning_penalty_context.get("fill_rate")
-                    )
-                if execution_fill_cap is not None and execution_fill_cap > 0.0:
-                    fill_prob_proxy = min(
-                        float(fill_prob_proxy),
-                        max(
-                            float(expected_capture_fill_prob_floor),
-                            min(1.0, float(execution_fill_cap)),
-                        ),
-                    )
-            expected_capture_fill_probability = max(
-                float(expected_capture_fill_prob_floor),
-                min(float(expected_capture_fill_prob_cap), float(fill_prob_proxy)),
-            )
-            spread_cost_bps = float(expected_capture_spread_penalty_bps) * float(
-                spread_bps_value
-            )
-            impact_cost_bps = float(
-                expected_capture_participation_penalty_bps
-            ) * float(participation)
-            latency_drift_cost_bps = (
-                max(
-                    0.0,
-                    float(signal_age_seconds) / max(float(expected_capture_age_half_life_sec), 1.0),
-                )
-                * float(expected_capture_latency_bps_per_sec)
-            )
-            if expected_capture_cost_model_enabled:
-                (
-                    learned_spread_cost,
-                    learned_impact_cost,
-                    learned_latency_cost,
-                    learned_cost_samples,
-                    learned_cost_key,
-                ) = _lookup_learned_execution_cost_components(
-                    symbol=str(symbol),
-                    session_token=str(bandit_active_session),
-                    regime_token=str(bandit_active_regime),
-                    liquidity_role=str(assumed_liquidity_role),
-                    venue_session=str(venue_session),
-                )
-                if learned_cost_samples > 0:
-                    blend = min(
-                        1.0,
-                        float(learned_cost_samples)
-                        / float(max(1, 2 * expected_capture_cost_model_min_samples)),
-                    )
-                    if learned_spread_cost is not None:
-                        spread_cost_bps = (
-                            (1.0 - float(blend)) * float(spread_cost_bps)
-                        ) + (float(blend) * float(learned_spread_cost))
-                    if learned_impact_cost is not None:
-                        impact_cost_bps = (
-                            (1.0 - float(blend)) * float(impact_cost_bps)
-                        ) + (float(blend) * float(learned_impact_cost))
-                    if learned_latency_cost is not None:
-                        latency_drift_cost_bps = (
-                            (1.0 - float(blend)) * float(latency_drift_cost_bps)
-                        ) + (float(blend) * float(learned_latency_cost))
-                    expected_capture_cost_model_source = str(
-                        learned_cost_key or "learned"
-                    )
-                    expected_capture_cost_model_samples = int(learned_cost_samples)
-            modeled_execution_cost_bps = (
-                (float(expected_capture_cost_spread_weight) * float(spread_cost_bps))
-                + (float(expected_capture_cost_impact_weight) * float(impact_cost_bps))
-                + (
-                    float(expected_capture_cost_latency_weight)
-                    * float(latency_drift_cost_bps)
-                )
-            )
-            execution_learning_penalty_bps = float(
-                execution_learning_penalty_context.get("penalty_bps", 0.0) or 0.0
-            )
-            modeled_execution_cost_bps += float(execution_learning_penalty_bps)
-            if rejection_concentration_rank_enabled:
-                rejection_penalty_context = dict(
-                    _compute_rejection_concentration_penalty_bps(
-                        counts=rejection_concentration_by_symbol.get(str(symbol)),
-                        min_count=int(rejection_concentration_min_count),
-                        scale_bps=float(rejection_concentration_scale_bps),
-                        max_penalty_bps=float(
-                            rejection_concentration_max_penalty_bps
-                        ),
-                    )
-                )
-                rejection_penalty_bps = float(
-                    rejection_penalty_context.get("penalty_bps", 0.0) or 0.0
-                )
-                modeled_execution_cost_bps += float(rejection_penalty_bps)
-            expected_capture_bps = (
-                float(clipped_net_edge_total) * float(expected_capture_fill_probability)
-            ) - float(modeled_execution_cost_bps)
-            capture_bonus = (
-                float(expected_capture_rank_weight)
-                * float(expected_capture_bps)
-                * max(max_conf, 0.05)
-                * disagreement
-            )
-            if expected_capture_max_adjust_abs > 0.0:
-                capture_bonus = max(
-                    -float(expected_capture_max_adjust_abs),
-                    min(float(expected_capture_max_adjust_abs), float(capture_bonus)),
-                )
-            rank_score += float(capture_bonus)
-            capture_constraint_penalty = max(
-                0.0,
-                float(expected_capture_floor_bps_effective) - float(expected_capture_bps),
-            )
-            if capture_constraint_penalty > 0.0 and expected_capture_constraint_weight > 0.0:
-                constraint_adjust = (
-                    float(capture_constraint_penalty)
-                    * float(expected_capture_constraint_weight)
-                    * max(max_conf, 0.05)
-                    * disagreement
-                )
-                if expected_capture_constraint_max_adjust_abs > 0.0:
-                    constraint_adjust = min(
-                        float(expected_capture_constraint_max_adjust_abs),
-                        float(constraint_adjust),
-                    )
-                rank_score -= float(constraint_adjust)
-            target.reasons.append("EXPECTED_CAPTURE_OPTIMIZER")
-            if (
-                expected_capture_fill_model_source != "heuristic"
-                or expected_capture_cost_model_source != "heuristic"
-            ):
-                target.reasons.append("EXPECTED_CAPTURE_MODEL_LEARNED")
-            if execution_learning_penalty_bps > 0.0:
-                target.reasons.append("EXECUTION_LEARNING_DEWEIGHT")
-            if rejection_penalty_bps > 0.0:
-                target.reasons.append("REJECTION_CONCENTRATION_DEWEIGHT")
-            expected_capture_spread_bps = float(spread_bps_value)
-            expected_capture_participation = float(participation)
-            expected_capture_impact_cost_bps = float(impact_cost_bps)
-            expected_capture_latency_drift_bps = float(latency_drift_cost_bps)
-            counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
-                {
-                    "expected_capture_bps": float(expected_capture_bps),
-                    "expected_capture_fill_probability": float(
-                        expected_capture_fill_probability
-                    ),
-                    "expected_capture_spread_bps": float(expected_capture_spread_bps),
-                    "expected_capture_participation": float(
-                        expected_capture_participation
-                    ),
-                    "expected_capture_impact_cost_bps": float(
-                        expected_capture_impact_cost_bps
-                    ),
-                    "expected_capture_latency_drift_bps": float(
-                        expected_capture_latency_drift_bps
-                    ),
-                    "expected_capture_cost_model_source": str(
-                        expected_capture_cost_model_source
-                    ),
-                    "expected_capture_cost_model_samples": int(
-                        expected_capture_cost_model_samples
-                    ),
-                    "expected_capture_fill_model_source": str(
-                        expected_capture_fill_model_source
-                    ),
-                    "expected_capture_fill_model_samples": int(
-                        expected_capture_fill_model_samples
-                    ),
-                    "expected_capture_floor_bps": float(
-                        expected_capture_floor_bps_effective
-                    ),
-                    "execution_learning_source": str(execution_learning_source),
-                    "execution_learning_penalty_bps": float(
-                        execution_learning_penalty_bps
-                    ),
-                    "execution_learning_penalty_context": dict(
-                        execution_learning_penalty_context
-                    ),
-                    "rejection_concentration_penalty_bps": float(
-                        rejection_penalty_bps
-                    ),
-                    "rejection_concentration_penalty_context": dict(
-                        rejection_penalty_context
-                    ),
-                }
-            )
-        candidate_expected_capture[symbol] = float(expected_capture_bps)
-        edge_model_v2_source = "none"
-        edge_model_v2_samples = 0
-        edge_model_v2_expected_bps = 0.0
-        edge_model_v2_uncertainty_bps = 0.0
-        edge_model_v2_cost_penalty_bps = 0.0
-        edge_model_v2_target_bps = 0.0
-        if edge_model_v2_enabled and edge_model_v2_weight > 0.0:
-            global_series = realized_edge_by_symbol.get(symbol, [])
-            session_series = realized_edge_by_symbol_session.get(
-                f"{symbol}:{bandit_active_session}",
-                [],
-            )
-            regime_series = realized_edge_by_symbol_session_regime.get(
-                f"{symbol}:{bandit_active_session}:{bandit_active_regime}",
-                [],
-            )
-            global_mean, global_std, global_n = _mean_std(global_series)
-            session_mean, session_std, session_n = _mean_std(session_series)
-            regime_mean, regime_std, regime_n = _mean_std(regime_series)
-            blend_terms: list[tuple[str, float, float, int, float]] = []
-            if regime_n >= edge_model_v2_min_samples:
-                blend_terms.append(
-                    (
-                        "regime",
-                        float(edge_model_v2_regime_weight),
-                        float(regime_mean),
-                        int(regime_n),
-                        float(regime_std),
-                    )
-                )
-            if session_n >= edge_model_v2_min_samples:
-                blend_terms.append(
-                    (
-                        "session",
-                        float(edge_model_v2_session_weight),
-                        float(session_mean),
-                        int(session_n),
-                        float(session_std),
-                    )
-                )
-            if global_n >= edge_model_v2_min_samples:
-                blend_terms.append(
-                    (
-                        "global",
-                        float(edge_model_v2_global_weight),
-                        float(global_mean),
-                        int(global_n),
-                        float(global_std),
-                    )
-                )
-            total_weight = float(sum(max(term[1], 0.0) for term in blend_terms))
-            if blend_terms and total_weight > 0.0:
-                blended_mean = float(
-                    sum((max(weight, 0.0) / total_weight) * mean for _, weight, mean, _n, _std in blend_terms)
-                )
-                blended_stderr = float(
-                    sum(
-                        (max(weight, 0.0) / total_weight)
-                        * (max(float(std), 0.0) / math.sqrt(float(max(samples, 1))))
-                        for _, weight, _mean, samples, std in blend_terms
-                    )
-                )
-                edge_model_v2_expected_bps = float(blended_mean)
-                edge_model_v2_uncertainty_bps = float(
-                    float(edge_model_v2_uncertainty_z) * float(blended_stderr)
-                )
-                edge_model_v2_cost_penalty_bps = float(
-                    float(edge_model_v2_cost_weight)
-                    * (
-                        max(0.0, float(expected_capture_impact_cost_bps))
-                        + max(0.0, float(expected_capture_latency_drift_bps))
-                        + (0.50 * max(0.0, float(expected_capture_spread_bps)))
-                    )
-                )
-                edge_model_v2_target_bps = max(
-                    -float(edge_model_v2_clip_bps),
-                    min(
-                        float(edge_model_v2_clip_bps),
-                        float(edge_model_v2_expected_bps)
-                        - float(edge_model_v2_uncertainty_bps)
-                        - float(edge_model_v2_cost_penalty_bps),
-                    ),
-                )
-                edge_model_v2_samples = int(max(regime_n, session_n, global_n))
-                edge_model_v2_source = "+".join(term[0] for term in blend_terms)
-                edge_model_v2_bonus = (
-                    float(edge_model_v2_weight)
-                    * float(edge_model_v2_target_bps)
-                    * max(max_conf, 0.05)
-                    * disagreement
-                )
-                edge_model_v2_bonus_cap = float(edge_model_v2_max_rank_uplift_abs)
-                if edge_model_v2_max_rank_uplift_frac > 0.0:
-                    edge_model_v2_bonus_cap = min(
-                        edge_model_v2_bonus_cap,
-                        abs(float(rank_score)) * float(edge_model_v2_max_rank_uplift_frac),
-                    )
-                if edge_model_v2_bonus_cap > 0.0:
-                    edge_model_v2_bonus = max(
-                        -float(edge_model_v2_bonus_cap),
-                        min(float(edge_model_v2_bonus_cap), float(edge_model_v2_bonus)),
-                    )
-                rank_score += float(edge_model_v2_bonus)
-                target.reasons.append("EDGE_MODEL_V2")
-                if "regime" in edge_model_v2_source or "session" in edge_model_v2_source:
-                    target.reasons.append("EDGE_MODEL_V2_REGIME_BLEND")
-                counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
-                    {
-                        "edge_model_v2_source": str(edge_model_v2_source),
-                        "edge_model_v2_samples": int(edge_model_v2_samples),
-                        "edge_model_v2_expected_bps": float(edge_model_v2_expected_bps),
-                        "edge_model_v2_uncertainty_bps": float(edge_model_v2_uncertainty_bps),
-                        "edge_model_v2_cost_penalty_bps": float(edge_model_v2_cost_penalty_bps),
-                        "edge_model_v2_target_bps": float(edge_model_v2_target_bps),
-                        "edge_model_v2_weight": float(edge_model_v2_weight),
-                    }
-                )
-        realized_rank_source = "none"
-        realized_rank_samples = 0
-        realized_rank_mean_bps = 0.0
-        realized_rank_uncertainty_penalty_bps = 0.0
-        realized_rank_target_bps = 0.0
-        replay_quality_source = "none"
-        replay_quality_samples = 0
-        replay_quality_net_edge_bps = 0.0
-        replay_quality_target_bps = 0.0
-        replay_quality_bonus = 0.0
-        exit_policy_entry_penalty_bps = 0.0
-        exit_policy_entry_context: dict[str, Any] = {"enabled": False}
-        if realized_edge_rank_enabled and realized_edge_rank_weight > 0.0:
-            realized_series = realized_edge_by_symbol.get(symbol, [])
-            realized_rank_source = "symbol"
-            if realized_edge_rank_regime_bucket_enabled:
-                regime_series = realized_edge_by_symbol_session_regime.get(
-                    f"{symbol}:{bandit_active_session}:{bandit_active_regime}",
-                    [],
-                )
-                if len(regime_series) >= realized_edge_rank_min_samples:
-                    realized_series = regime_series
-                    realized_rank_source = "symbol_session_regime"
-            if realized_edge_rank_session_bucket_enabled:
-                session_series = realized_edge_by_symbol_session.get(
-                    f"{symbol}:{bandit_active_session}",
-                    [],
-                )
-                if len(session_series) >= realized_edge_rank_min_samples:
-                    realized_series = session_series
-                    realized_rank_source = "symbol_session"
-            realized_mean, realized_std, realized_samples = _mean_std(realized_series)
-            if realized_samples >= realized_edge_rank_min_samples:
-                realized_rank_samples = int(realized_samples)
-                realized_rank_mean_bps = float(realized_mean)
-                realized_rank_uncertainty_penalty_bps = float(
-                    float(realized_edge_rank_uncertainty_z)
-                    * (float(realized_std) / math.sqrt(float(max(realized_samples, 1))))
-                )
-                realized_rank_target_bps = max(
-                    -float(realized_edge_rank_clip_bps),
-                    min(
-                        float(realized_edge_rank_clip_bps),
-                        float(realized_rank_mean_bps) - float(realized_rank_uncertainty_penalty_bps),
-                    ),
-                )
-                realized_bonus = (
-                    float(realized_edge_rank_weight)
-                    * float(realized_rank_target_bps)
-                    * max(max_conf, 0.05)
-                    * disagreement
-                )
-                realized_bonus_cap = float(realized_edge_rank_max_rank_uplift_abs)
-                if realized_edge_rank_max_rank_uplift_frac > 0.0:
-                    realized_bonus_cap = min(
-                        realized_bonus_cap,
-                        abs(float(rank_score)) * float(realized_edge_rank_max_rank_uplift_frac),
-                    )
-                if realized_bonus_cap > 0.0:
-                    realized_bonus = max(
-                        -realized_bonus_cap,
-                        min(realized_bonus_cap, float(realized_bonus)),
-                    )
-                rank_score += float(realized_bonus)
-                counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
-                    {
-                        "realized_rank_enabled": True,
-                        "realized_rank_source": str(realized_rank_source),
-                        "realized_rank_samples": int(realized_rank_samples),
-                        "realized_rank_mean_bps": float(realized_rank_mean_bps),
-                        "realized_rank_uncertainty_penalty_bps": float(
-                            realized_rank_uncertainty_penalty_bps
-                        ),
-                        "realized_rank_target_bps": float(realized_rank_target_bps),
-                        "realized_rank_weight": float(realized_edge_rank_weight),
-                    }
-                )
-        if bandit_enabled:
-            reward_series = bandit_rewards_by_symbol.get(symbol, [])
-            bandit_source = "symbol"
-            if bandit_regime_bucket_enabled:
-                session_regime_series = bandit_rewards_by_symbol_session_regime.get(
-                    f"{symbol}:{bandit_active_session}:{bandit_active_regime}",
-                    [],
-                )
-                if len(session_regime_series) >= bandit_min_samples:
-                    reward_series = session_regime_series
-                    bandit_source = "symbol_session_regime"
-            if bandit_session_bucket_enabled:
-                session_series = bandit_rewards_by_symbol_session.get(
-                    f"{symbol}:{bandit_active_session}",
-                    [],
-                )
-                if len(session_series) >= bandit_min_samples:
-                    reward_series = session_series
-                    bandit_source = "symbol_session"
-            if len(reward_series) >= bandit_min_samples:
-                sample_count = int(len(reward_series))
-                mean_reward = float(sum(reward_series) / max(sample_count, 1))
-                bucket_gate_key = f"{symbol}:{bandit_source}:{bandit_active_session}:{bandit_active_regime}"
-                bucket_significance_context = bandit_bucket_significance_cache.get(
-                    bucket_gate_key
-                )
-                if bucket_significance_context is None:
-                    bucket_mean, bucket_std, bucket_samples = _mean_std(reward_series)
-                    bucket_significance_context = _sequential_significance_gate(
-                        mean_reward_bps=float(bucket_mean),
-                        std_reward_bps=float(bucket_std),
-                        samples=int(bucket_samples),
-                        min_samples=int(
-                            max(
-                                bandit_min_samples,
-                                bandit_bucket_promote_min_samples,
-                            )
-                        ),
-                        target_mean_bps=float(
-                            bandit_bucket_promote_min_mean_reward_bps
-                        ),
-                        method=str(promotion_significance_method),
-                        posterior_prob_min=float(
-                            promotion_significance_posterior_prob_min
-                        ),
-                        sprt_alpha=float(promotion_significance_sprt_alpha),
-                        sprt_beta=float(promotion_significance_sprt_beta),
-                        sprt_effect_bps=float(promotion_significance_sprt_effect_bps),
-                    )
-                    bandit_bucket_significance_cache[bucket_gate_key] = dict(
-                        bucket_significance_context
-                    )
-                bucket_significance_pass = (
-                    bool(bucket_significance_context.get("passed", False))
-                    if promotion_significance_enabled
-                    else True
-                )
-                bandit_bucket_live_promoted = bool(
-                    bandit_live_promoted
-                    and (
-                        not bandit_bucket_promotion_enabled
-                        or (
-                            sample_count >= bandit_bucket_promote_min_samples
-                            and mean_reward
-                            >= bandit_bucket_promote_min_mean_reward_bps
-                            and bucket_significance_pass
-                        )
-                    )
-                )
-                if bandit_method == "thompson":
-                    variance = float(
-                        sum((value - mean_reward) ** 2 for value in reward_series)
-                        / max(sample_count, 1)
-                    )
-                    std_error = math.sqrt(max(variance, 0.0) / max(sample_count, 1))
-                    digest = hashlib.blake2b(
-                        f"{symbol}:{bandit_active_session}:{now.isoformat()}".encode("utf-8"),
-                        digest_size=8,
-                    ).digest()
-                    u01 = int.from_bytes(digest, byteorder="big", signed=False) / float(
-                        2**64
-                    )
-                    u01 = min(max(u01, 1e-6), 1.0 - 1e-6)
-                    sampled_z = float(NormalDist().inv_cdf(u01))
-                    sampled_z = max(-3.0, min(3.0, sampled_z))
-                    bandit_score = float(
-                        mean_reward + sampled_z * float(bandit_exploration) * float(std_error)
-                    )
-                else:
-                    total_samples = int(
-                        sum(
-                            len(values)
-                            for key, values in bandit_rewards_by_symbol_session.items()
-                            if key.endswith(f":{bandit_active_session}")
-                        )
-                    )
-                    if total_samples <= 0:
-                        total_samples = int(
-                            sum(len(values) for values in bandit_rewards_by_symbol.values())
-                        )
-                    bandit_score = _bandit_ucb_score(
-                        mean_reward_bps=mean_reward,
-                        samples=sample_count,
-                        total_samples=total_samples,
-                        exploration=bandit_exploration,
-                    )
-                bandit_bonus = (
-                    float(bandit_weight)
-                    * float(bandit_score)
-                    * max(max_conf, 0.05)
-                    * disagreement
-                )
-                bandit_bonus_cap = float(bandit_max_rank_uplift_abs)
-                if bandit_max_rank_uplift_frac > 0.0:
-                    bandit_bonus_cap = min(
-                        bandit_bonus_cap,
-                        abs(float(rank_score)) * float(bandit_max_rank_uplift_frac),
-                    )
-                if bandit_bonus_cap > 0.0:
-                    bandit_bonus = max(-bandit_bonus_cap, min(bandit_bonus_cap, bandit_bonus))
-                if bandit_bucket_live_promoted:
-                    rank_score += float(bandit_bonus)
-                    target.reasons.append(
-                        f"BANDIT_{bandit_method.upper()}_{bandit_source.upper()}"
-                    )
-                else:
-                    target.reasons.append(
-                        f"BANDIT_SHADOW_{bandit_method.upper()}_{bandit_source.upper()}"
-                    )
-                counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
-                    {
-                        "bandit_source": str(bandit_source),
-                        "bandit_samples": int(sample_count),
-                        "bandit_mean_reward_bps": float(mean_reward),
-                        "bandit_score_bps": float(bandit_score),
-                        "bandit_bonus": float(bandit_bonus),
-                        "bandit_live_promoted": bool(bandit_live_promoted),
-                        "bandit_bucket_live_promoted": bool(
-                            bandit_bucket_live_promoted
-                        ),
-                        "bandit_bucket_significance": dict(
-                            bucket_significance_context
-                        ),
-                    }
-                )
-        if counterfactual_enabled and counterfactual_weight > 0.0:
-            counterfactual_bucket_key = f"{symbol}:{bandit_active_session}"
-            counterfactual_bucket_raw = counterfactual_buckets.get(counterfactual_bucket_key)
-            if not isinstance(counterfactual_bucket_raw, Mapping):
-                counterfactual_bucket_raw = counterfactual_buckets.get(f"{symbol}:offhours")
-            if not isinstance(counterfactual_bucket_raw, Mapping):
-                counterfactual_bucket_raw = {}
-            cf_events = int(counterfactual_bucket_raw.get("events", 0) or 0)
-            cf_dr_mean_bps = _safe_float(counterfactual_bucket_raw.get("dr_mean_bps"))
-            if cf_dr_mean_bps is None:
-                cf_sum = _safe_float(counterfactual_bucket_raw.get("dr_sum_bps"))
-                if cf_sum is not None and cf_events > 0:
-                    cf_dr_mean_bps = float(cf_sum) / float(cf_events)
-            if cf_dr_mean_bps is not None and cf_events >= counterfactual_min_samples:
-                bounded_cf = max(
-                    -float(counterfactual_clip_bps),
-                    min(float(counterfactual_clip_bps), float(cf_dr_mean_bps)),
-                )
-                cf_bonus = (
-                    float(counterfactual_weight)
-                    * float(bounded_cf)
-                    * max(max_conf, 0.05)
-                    * disagreement
-                )
-                cf_bonus_cap = float(counterfactual_max_rank_uplift_abs)
-                if counterfactual_max_rank_uplift_frac > 0.0:
-                    cf_bonus_cap = min(
-                        cf_bonus_cap,
-                        abs(float(rank_score)) * float(counterfactual_max_rank_uplift_frac),
-                    )
-                if cf_bonus_cap > 0.0:
-                    cf_bonus = max(-cf_bonus_cap, min(cf_bonus_cap, cf_bonus))
-                counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
-                    {
-                        "counterfactual_bucket": str(counterfactual_bucket_key),
-                        "counterfactual_events": int(cf_events),
-                        "counterfactual_dr_mean_bps": float(cf_dr_mean_bps),
-                        "counterfactual_bonus": float(cf_bonus),
-                        "counterfactual_live_promoted": bool(counterfactual_live_promoted),
-                    }
-                )
-                if counterfactual_live_promoted:
-                    rank_score += float(cf_bonus)
-                    target.reasons.append("COUNTERFACTUAL_DR")
-                else:
-                    target.reasons.append("COUNTERFACTUAL_DR_SHADOW")
-        if geometric_tiebreak_enabled and geometric_tiebreak_weight > 0.0:
-            returns_window = symbol_returns.get(symbol, [])
-            cumulative = 0.0
-            peak = 0.0
-            max_drawdown = 0.0
-            for value in returns_window:
-                cumulative += float(value)
-                peak = max(peak, cumulative)
-                max_drawdown = max(max_drawdown, peak - cumulative)
-            growth_score = _geometric_growth_tiebreak_score(
-                expected_edge_bps=float(clipped_net_edge_total),
-                returns_window=returns_window,
-                drawdown=float(max_drawdown),
-                variance_penalty=float(geometric_variance_penalty),
-                downside_penalty=float(geometric_downside_penalty),
-                drawdown_penalty=float(geometric_drawdown_penalty),
-            )
-            rank_score += (
-                float(geometric_tiebreak_weight)
-                * float(growth_score)
-                * max(max_conf, 0.05)
-                * disagreement
-            )
-        if portfolio_log_growth_rank_enabled and portfolio_log_growth_rank_weight > 0.0:
-            returns_window = symbol_returns.get(symbol, [])
-            if returns_window:
-                mean_return = float(sum(float(value) for value in returns_window)) / float(
-                    max(1, len(returns_window))
-                )
-                variance = float(
-                    sum((float(value) - mean_return) ** 2 for value in returns_window)
-                    / float(max(1, len(returns_window)))
-                )
-            else:
-                variance = 0.0
-            corr_penalty = 0.0
-            corr_row = portfolio_rank_correlation.get(symbol, {})
-            if isinstance(corr_row, Mapping) and held_notional_weights:
-                for held_symbol, held_weight in held_notional_weights.items():
-                    corr_value = _safe_float(corr_row.get(held_symbol))
-                    if corr_value is None:
-                        continue
-                    corr_penalty += abs(float(corr_value)) * float(held_weight)
-            exposure_penalty = 0.0
-            current_notional = abs(
-                float(positions.get(symbol, 0.0) or 0.0)
-                * float(latest_price.get(symbol, 0.0) or 0.0)
-            )
-            target_notional = abs(float(target.target_dollars))
-            if portfolio_current_gross_for_rank > 0.0:
-                post_notional = max(current_notional, target_notional)
-                exposure_penalty = post_notional / float(
-                    max(portfolio_current_gross_for_rank, 1.0)
-                )
-            turnover_penalty = 0.0
-            if portfolio_current_gross_for_rank > 0.0:
-                turnover_penalty = abs(float(target_notional) - float(current_notional)) / float(
-                    max(portfolio_current_gross_for_rank, 1.0)
-                )
-            liquidity_impact_penalty = 0.0
-            liq_features = latest_liquidity.get(symbol)
-            spread_bps_for_impact = max(
-                _safe_float(getattr(liq_features, "spread_bps", 0.0)) or 0.0,
-                0.0,
-            )
-            rolling_volume_for_impact = max(
-                _safe_float(getattr(liq_features, "rolling_volume", 0.0)) or 0.0,
-                0.0,
-            )
-            if rolling_volume_for_impact > 0.0:
-                trade_qty = abs(
-                    float(target.target_dollars)
-                    / max(float(latest_price.get(symbol, 0.0) or 0.0), 1e-9)
-                )
-                participation = float(trade_qty) / float(max(rolling_volume_for_impact, 1.0))
-                participation_ratio = min(
-                    2.0,
-                    float(participation) / float(portfolio_log_growth_max_participation),
-                )
-                liquidity_impact_penalty = (
-                    (float(spread_bps_for_impact) / 10.0) * float(participation_ratio)
-                )
-            portfolio_log_growth_base_bps = (
-                min(float(clipped_net_edge_total), float(expected_capture_bps))
-                if expected_capture_rank_enabled
-                else float(clipped_net_edge_total)
-            )
-            marginal_log_growth_bps = float(portfolio_log_growth_base_bps) - (
-                float(portfolio_log_growth_variance_penalty) * float(variance) * 10_000.0
-            )
-            marginal_log_growth_bps -= (
-                float(portfolio_log_growth_corr_penalty_bps) * float(corr_penalty)
-            )
-            marginal_log_growth_bps -= (
-                float(portfolio_log_growth_exposure_penalty_bps) * float(exposure_penalty)
-            )
-            marginal_log_growth_bps -= (
-                float(portfolio_log_growth_turnover_penalty_bps) * float(turnover_penalty)
-            )
-            marginal_log_growth_bps -= (
-                float(portfolio_log_growth_liquidity_penalty_bps)
-                * float(liquidity_impact_penalty)
-            )
-            portfolio_bonus = (
-                float(portfolio_log_growth_rank_weight)
-                * float(marginal_log_growth_bps)
-                * max(max_conf, 0.05)
-                * disagreement
-            )
-            if portfolio_log_growth_max_adjust_abs > 0.0:
-                portfolio_bonus = max(
-                    -float(portfolio_log_growth_max_adjust_abs),
-                    min(float(portfolio_log_growth_max_adjust_abs), float(portfolio_bonus)),
-                )
-            rank_score += float(portfolio_bonus)
-            target.reasons.append("PORTFOLIO_LOG_GROWTH")
-            counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
-                {
-                    "portfolio_log_growth_base_bps": float(
-                        portfolio_log_growth_base_bps
-                    ),
-                    "portfolio_log_growth_bps": float(marginal_log_growth_bps),
-                    "portfolio_corr_penalty": float(corr_penalty),
-                    "portfolio_exposure_penalty": float(exposure_penalty),
-                    "portfolio_turnover_penalty": float(turnover_penalty),
-                    "portfolio_liquidity_impact_penalty": float(
-                        liquidity_impact_penalty
-                    ),
-                    "portfolio_rank_bonus": float(portfolio_bonus),
-                }
-            )
-        if replay_quality_rank_enabled and replay_quality_weight > 0.0:
-            replay_metrics = replay_quality_by_symbol.get(symbol)
-            replay_bucket_source = "symbol"
-            replay_session_key = f"{symbol}:{bandit_active_session}"
-            replay_regime_key = (
-                f"{symbol}:{bandit_active_session}:{bandit_active_regime}"
-            )
-            if replay_quality_regime_bucket_enabled:
-                replay_regime_metrics = replay_quality_by_symbol_session_regime.get(
-                    replay_regime_key
-                )
-                if isinstance(replay_regime_metrics, Mapping):
-                    replay_regime_samples = int(
-                        _safe_float(replay_regime_metrics.get("sample_count")) or 0.0
-                    )
-                    if replay_regime_samples >= replay_quality_min_samples:
-                        replay_metrics = replay_regime_metrics
-                        replay_bucket_source = "symbol_session_regime"
-            if (
-                replay_bucket_source == "symbol"
-                and replay_quality_session_bucket_enabled
-            ):
-                replay_session_metrics = replay_quality_by_symbol_session.get(
-                    replay_session_key
-                )
-                if isinstance(replay_session_metrics, Mapping):
-                    replay_session_samples = int(
-                        _safe_float(replay_session_metrics.get("sample_count")) or 0.0
-                    )
-                    if replay_session_samples >= replay_quality_min_samples:
-                        replay_metrics = replay_session_metrics
-                        replay_bucket_source = "symbol_session"
-            if (
-                not isinstance(replay_metrics, Mapping)
-                and replay_quality_fallback_to_edge_model_v2
-                and edge_model_v2_samples >= edge_model_v2_min_samples
-            ):
-                replay_metrics = {
-                    "sample_count": float(edge_model_v2_samples),
-                    "net_edge_bps": float(edge_model_v2_target_bps),
-                    "win_rate": 0.0,
-                    "profit_factor": 0.0,
-                }
-                replay_bucket_source = "edge_model_v2_fallback"
-            if isinstance(replay_metrics, Mapping):
-                replay_quality_samples = int(
-                    _safe_float(replay_metrics.get("sample_count")) or 0.0
-                )
-                replay_net_edge = _safe_float(replay_metrics.get("net_edge_bps"))
-                if (
-                    replay_quality_samples >= replay_quality_min_samples
-                    and replay_net_edge is not None
-                ):
-                    replay_quality_source = str(
-                        f"{replay_quality_context.get('source') or 'unknown'}:{replay_bucket_source}"
-                    )
-                    replay_quality_net_edge_bps = float(replay_net_edge)
-                    replay_quality_target_bps = max(
-                        -float(replay_quality_clip_bps),
-                        min(
-                            float(replay_quality_clip_bps),
-                            float(replay_quality_net_edge_bps),
-                        ),
-                    )
-                    replay_quality_bonus = (
-                        float(replay_quality_weight)
-                        * float(replay_quality_target_bps)
-                        * max(max_conf, 0.05)
-                        * disagreement
-                    )
-                    replay_quality_bonus_cap = float(replay_quality_max_rank_uplift_abs)
-                    if replay_quality_max_rank_uplift_frac > 0.0:
-                        replay_quality_bonus_cap = min(
-                            replay_quality_bonus_cap,
-                            abs(float(rank_score))
-                            * float(replay_quality_max_rank_uplift_frac),
-                        )
-                    if replay_quality_bonus_cap > 0.0:
-                        replay_quality_bonus = max(
-                            -float(replay_quality_bonus_cap),
-                            min(float(replay_quality_bonus_cap), float(replay_quality_bonus)),
-                        )
-                    rank_score += float(replay_quality_bonus)
-                    if replay_quality_bonus >= 0.0:
-                        target.reasons.append("REPLAY_QUALITY_UPLIFT")
-                    else:
-                        target.reasons.append("REPLAY_QUALITY_DEWEIGHT")
-                    counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
-                        {
-                            "replay_quality_source": str(replay_quality_source),
-                            "replay_quality_samples": int(replay_quality_samples),
-                            "replay_quality_net_edge_bps": float(
-                                replay_quality_net_edge_bps
-                            ),
-                            "replay_quality_target_bps": float(
-                                replay_quality_target_bps
-                            ),
-                            "replay_quality_bonus": float(replay_quality_bonus),
-                        }
-                    )
-        if exit_policy_entry_penalty_enabled and exit_policy_entry_penalty_weight > 0.0:
-            target_side = "long" if float(target.target_dollars) >= 0.0 else "short"
-            exit_policy_entry_context = _exit_policy_pressure_context(
-                state,
-                symbol=symbol,
-                regime=bandit_active_regime,
-                side=target_side,
-                now=now,
-                position_age_seconds=0.0,
-                expected_edge_bps=float(clipped_net_edge_total),
-            )
-            pressure_score = _safe_float(exit_policy_entry_context.get("pressure_score"))
-            if (
-                bool(exit_policy_entry_context.get("active", False))
-                and pressure_score is not None
-                and float(pressure_score) >= float(exit_policy_entry_penalty_min_pressure)
-            ):
-                exit_policy_entry_penalty_bps = (
-                    float(exit_policy_entry_penalty_weight)
-                    * float(pressure_score)
-                    * max(max_conf, 0.05)
-                    * disagreement
-                )
-                if exit_policy_entry_penalty_max_abs > 0.0:
-                    exit_policy_entry_penalty_bps = min(
-                        float(exit_policy_entry_penalty_max_abs),
-                        float(exit_policy_entry_penalty_bps),
-                    )
-                rank_score -= float(exit_policy_entry_penalty_bps)
-                target.reasons.append("EXIT_POLICY_ENTRY_PENALTY")
-                counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
-                    {
-                        "exit_policy_entry_penalty_bps": float(
-                            exit_policy_entry_penalty_bps
-                        ),
-                        "exit_policy_entry_pressure": float(pressure_score),
-                        "exit_policy_entry_context": dict(exit_policy_entry_context),
-                    }
-                )
-        rank_downside_before_cap = 0.0
-        rank_downside_cap_applied = False
-        rank_downside_cap_limit: float | None = None
-        if bool(rank_downside_overlap_cap_enabled) and float(rank_score_baseline) > 0.0:
-            rank_downside_before_cap = max(
-                float(rank_score_baseline) - float(rank_score),
-                0.0,
-            )
-            cap_candidates: list[float] = []
-            if float(rank_downside_overlap_cap_abs) > 0.0:
-                cap_candidates.append(float(rank_downside_overlap_cap_abs))
-            if float(rank_downside_overlap_cap_frac) > 0.0:
-                cap_candidates.append(
-                    abs(float(rank_score_baseline)) * float(rank_downside_overlap_cap_frac)
-                )
-            if cap_candidates:
-                rank_downside_cap_limit = min(float(value) for value in cap_candidates)
-            if (
-                rank_downside_cap_limit is not None
-                and math.isfinite(float(rank_downside_cap_limit))
-                and float(rank_downside_cap_limit) > 0.0
-                and float(rank_downside_before_cap) > float(rank_downside_cap_limit)
-            ):
-                rank_score = float(rank_score_baseline) - float(rank_downside_cap_limit)
-                rank_downside_cap_applied = True
-                target.reasons.append("RANK_DOWNSIDE_OVERLAP_CAP")
-        counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
-            {
-                "rank_score_baseline": float(rank_score_baseline),
-                "rank_score_post_adjustments": float(rank_score),
-                "rank_downside_before_cap": float(rank_downside_before_cap),
-                "rank_downside_overlap_cap_applied": bool(rank_downside_cap_applied),
-                "rank_downside_overlap_cap_limit": (
-                    float(rank_downside_cap_limit)
-                    if rank_downside_cap_limit is not None
-                    else None
-                ),
-            }
-        )
-        quality_edge_denom = max(float(edge_clip_cap_bps), 1.0)
-        quality_realized_denom = max(float(realized_edge_rank_clip_bps), 1.0)
-        quality_edge = 0.5 + (
-            0.5 * math.tanh(float(clipped_net_edge_total) / float(quality_edge_denom))
-        )
-        quality_realized = 0.5 + (
-            0.5 * math.tanh(float(realized_rank_target_bps) / float(quality_realized_denom))
-        )
-        opportunity_quality = max(
-            0.0,
-            min(
-                1.0,
-                (
-                    (0.38 * float(quality_edge))
-                    + (0.24 * float(quality_realized))
-                    + (0.22 * float(max_conf))
-                    + (0.16 * float(disagreement))
-                ),
-            ),
-        )
-        opportunity_quality_by_symbol[symbol] = float(opportunity_quality)
-        counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
-            {
-                "opportunity_quality_score": float(opportunity_quality),
-                "signal_age_seconds": float(signal_age_seconds),
-                "time_decay_multiplier": float(time_decay_multiplier),
-            }
-        )
-        candidate_rank[symbol] = rank_score
-
-    opportunity_allowed_symbols: set[str] = set()
-    if (
-        opportunity_quality_enabled
-        and len(opportunity_quality_by_symbol) >= max(2, opportunity_min_symbols)
-    ):
-        quality_values = list(opportunity_quality_by_symbol.values())
-        quality_threshold = _percentile_linear(
-            quality_values,
-            float(opportunity_top_quantile),
-        )
-        if quality_threshold is not None:
-            opportunity_allowed_symbols = {
-                symbol
-                for symbol, score in opportunity_quality_by_symbol.items()
-                if float(score) >= float(quality_threshold)
-            }
-            if len(opportunity_allowed_symbols) < int(opportunity_min_symbols):
-                ranked_quality = sorted(
-                    opportunity_quality_by_symbol.items(),
-                    key=lambda item: (-float(item[1]), item[0]),
-                )
-                for symbol, _score in ranked_quality[:opportunity_min_symbols]:
-                    opportunity_allowed_symbols.add(str(symbol))
-            demote_value = float(
-                get_env(
-                    "AI_TRADING_EXEC_OPPORTUNITY_DEMOTE_SCORE",
-                    1_000_000.0,
-                    cast=float,
-                )
-            )
-            for symbol in list(candidate_rank.keys()):
-                if symbol not in opportunity_allowed_symbols:
-                    candidate_rank[symbol] = float(candidate_rank[symbol]) - abs(
-                        float(demote_value)
-                    )
-            opportunity_quality_gate.update(
-                {
-                    "threshold": float(quality_threshold),
-                    "allowed_symbols": sorted(opportunity_allowed_symbols),
-                    "active": True,
-                    "demote_score": float(abs(float(demote_value))),
-                }
-            )
+    opportunity_quality_by_symbol = ranking_result.opportunity_quality_by_symbol
+    opportunity_allowed_symbols = ranking_result.opportunity_allowed_symbols
+    opportunity_quality_gate = ranking_result.opportunity_quality_gate
     setattr(
         runtime,
         "execution_opportunity_quality_by_symbol",
@@ -46567,17 +45129,46 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 float(getattr(cfg, "ledger_lookback_hours", 24.0)),
             )
             setattr(state, "_oms_ledger", ledger)
-    decision_snapshot_template = _decision_record_config_snapshot(
+    execution_context = build_netting_execution_context(
         cfg=cfg,
         state=state,
+        runtime=runtime,
+        now=now,
+        targets=targets,
+        positions=positions,
+        latest_price=latest_price,
+        blocked_symbols=blocked_symbols,
+        candidate_expected_net_edge=candidate_expected_net_edge,
         allocation_weights=allocation_weights,
         learned_overrides=learned_overrides,
-        sleeve_configs=sleeve_snapshot,
-        liquidity_regime=None,
+        sleeve_snapshot=sleeve_snapshot,
+        effective_policy=effective_policy,
+        kill_switch=kill_switch,
+        logger=logger,
+        policy_disabled_gate_roots=policy_disabled_gate_roots,
+        decision_record_config_snapshot_func=_decision_record_config_snapshot,
+        execution_model_lineage_func=_execution_model_lineage,
+        pretrade_rate_limiter_func=_pretrade_rate_limiter,
+        tca_stale_block_reason_func=_tca_stale_block_reason,
+        resolve_slo_derisk_effective_mode_func=_resolve_slo_derisk_effective_mode,
+        resolve_operational_safety_tier_func=resolve_operational_safety_tier,
+        apply_operational_safety_hysteresis_func=_apply_operational_safety_hysteresis,
+        update_rollout_governance_state_func=_update_rollout_governance_state,
+        resolve_capacity_throttle_adaptive_params_func=_resolve_capacity_throttle_adaptive_params,
+        resolve_primary_feed_derisk_state_func=_resolve_primary_feed_derisk_state,
+        resolve_runtime_info_log_ttl_seconds_func=_resolve_runtime_info_log_ttl_seconds,
+        should_emit_runtime_info_log_func=_should_emit_runtime_info_log,
+        read_jsonl_records_func=_read_jsonl_records,
+        gate_effectiveness_log_path_func=_gate_effectiveness_log_path,
+        apply_gate_auto_disable_hysteresis_func=_apply_gate_auto_disable_hysteresis,
+        symbol_adaptive_sizing_profiles_func=_symbol_adaptive_sizing_profiles,
+        get_sector_func=get_sector,
+        load_uncertainty_capital_state_func=_load_uncertainty_capital_state,
     )
-    execution_model_lineage = _execution_model_lineage()
-    rate_limiter = _pretrade_rate_limiter(state)
-    tca_stale_reason = _tca_stale_block_reason(now)
+    decision_snapshot_template = execution_context.decision_snapshot_template
+    execution_model_lineage = execution_context.execution_model_lineage
+    rate_limiter = execution_context.rate_limiter
+    tca_stale_reason = execution_context.tca_stale_reason
     if tca_stale_reason:
         for symbol, net_target in targets.items():
             symbol_snapshot = dict(decision_snapshot_template)
@@ -46591,2577 +45182,204 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             )
             _write_decision_record(record, decision_path)
         return
-
-    slo_derisk_scale = 1.0
-    slo_derisk_details: dict[str, Any] = {}
-    if bool(get_env("AI_TRADING_DERISK_ON_SLO_BREACH_ENABLED", True, cast=bool)):
-        mode = str(get_env("AI_TRADING_DERISK_SLO_MODE", "adaptive", cast=str) or "adaptive").strip().lower()
-        if mode not in {"block", "scale", "adaptive"}:
-            mode = "block"
-        min_samples = max(1, int(get_env("AI_TRADING_DERISK_SLO_MIN_SAMPLES", 5, cast=int)))
-        max_reject_rate_pct = float(
-            get_env("AI_TRADING_DERISK_SLO_MAX_REJECT_RATE_PCT", 5.0, cast=float)
-        )
-        max_execution_drift_bps = float(
-            get_env("AI_TRADING_DERISK_SLO_MAX_EXEC_DRIFT_BPS", 35.0, cast=float)
-        )
-        max_slippage_bps = float(
-            get_env("AI_TRADING_DERISK_SLO_MAX_SLIPPAGE_BPS", 25.0, cast=float)
-        )
-        max_calibration_ece = float(
-            get_env("AI_TRADING_DERISK_SLO_MAX_CALIB_ECE", 0.15, cast=float)
-        )
-        max_calibration_brier = float(
-            get_env("AI_TRADING_DERISK_SLO_MAX_CALIB_BRIER", 0.35, cast=float)
-        )
-        max_feature_drift_psi = float(
-            get_env("AI_TRADING_DERISK_SLO_MAX_FEATURE_DRIFT_PSI", 0.30, cast=float)
-        )
-        max_label_drift_psi = float(
-            get_env("AI_TRADING_DERISK_SLO_MAX_LABEL_DRIFT_PSI", 0.30, cast=float)
-        )
-        max_residual_drift_psi = float(
-            get_env("AI_TRADING_DERISK_SLO_MAX_RESIDUAL_DRIFT_PSI", 0.30, cast=float)
-        )
-        max_pacing_cap_hit_rate_pct = float(
-            get_env("AI_TRADING_DERISK_SLO_MAX_PACING_CAP_HIT_RATE_PCT", 40.0, cast=float)
-        )
-        max_pending_oldest_age_sec = float(
-            get_env("AI_TRADING_DERISK_SLO_MAX_PENDING_OLDEST_AGE_SEC", 300.0, cast=float)
-        )
-        pending_min_samples = max(
-            1,
-            int(
-                get_env(
-                    "AI_TRADING_DERISK_SLO_PENDING_MIN_SAMPLES",
-                    1,
-                    cast=int,
-                )
-            ),
-        )
-        reject_rate_pct = 0.0
-        execution_drift_bps = 0.0
-        slippage_bps = 0.0
-        calibration_ece = 0.0
-        calibration_brier = 0.0
-        feature_drift_psi = 0.0
-        label_drift_psi = 0.0
-        residual_drift_psi = 0.0
-        pacing_cap_hit_rate_pct = 0.0
-        pending_oldest_age_sec = 0.0
-        reject_samples = 0
-        drift_samples = 0
-        slippage_samples = 0
-        calibration_ece_samples = 0
-        calibration_brier_samples = 0
-        feature_drift_samples = 0
-        label_drift_samples = 0
-        residual_drift_samples = 0
-        pacing_samples = 0
-        pending_samples = 0
-        try:
-            from ai_trading.monitoring.slo import get_slo_monitor
-
-            monitor = get_slo_monitor()
-            reject_status = monitor.get_slo_status("order_reject_rate_pct")
-            drift_status = monitor.get_slo_status("execution_drift_bps")
-            slippage_status = monitor.get_slo_status("realized_slippage_bps")
-            calibration_ece_status = monitor.get_slo_status("live_calibration_ece")
-            calibration_brier_status = monitor.get_slo_status("live_calibration_brier")
-            feature_drift_status = monitor.get_slo_status("drift_psi")
-            label_drift_status = monitor.get_slo_status("label_drift_psi")
-            residual_drift_status = monitor.get_slo_status("residual_drift_psi")
-            pacing_status = monitor.get_slo_status("order_pacing_cap_hit_rate_pct")
-            pending_status = monitor.get_slo_status("pending_oldest_age_sec")
-
-            def _extract_metric(status: Any) -> tuple[float, int]:
-                if not isinstance(status, MappingABC):
-                    return (0.0, 0)
-                try:
-                    value = float(status.get("current_value") or 0.0)
-                except (TypeError, ValueError):
-                    value = 0.0
-                try:
-                    samples = int(status.get("sample_count") or 0)
-                except (TypeError, ValueError):
-                    samples = 0
-                return (value, max(samples, 0))
-
-            reject_rate_pct, reject_samples = _extract_metric(reject_status)
-            execution_drift_bps, drift_samples = _extract_metric(drift_status)
-            slippage_bps, slippage_samples = _extract_metric(slippage_status)
-            calibration_ece, calibration_ece_samples = _extract_metric(calibration_ece_status)
-            calibration_brier, calibration_brier_samples = _extract_metric(calibration_brier_status)
-            feature_drift_psi, feature_drift_samples = _extract_metric(feature_drift_status)
-            label_drift_psi, label_drift_samples = _extract_metric(label_drift_status)
-            residual_drift_psi, residual_drift_samples = _extract_metric(residual_drift_status)
-            pacing_cap_hit_rate_pct, pacing_samples = _extract_metric(pacing_status)
-            pending_oldest_age_sec, pending_samples = _extract_metric(pending_status)
-        except Exception:
-            logger.debug("SLO_DERISK_SNAPSHOT_FAILED", exc_info=True)
-        reject_breached = reject_samples >= min_samples and reject_rate_pct >= max_reject_rate_pct
-        drift_breached = drift_samples >= min_samples and execution_drift_bps >= max_execution_drift_bps
-        slippage_breached = slippage_samples >= min_samples and slippage_bps >= max_slippage_bps
-        calibration_ece_breached = (
-            calibration_ece_samples >= min_samples and calibration_ece >= max_calibration_ece
-        )
-        calibration_brier_breached = (
-            calibration_brier_samples >= min_samples
-            and calibration_brier >= max_calibration_brier
-        )
-        feature_drift_breached = (
-            feature_drift_samples >= min_samples and feature_drift_psi >= max_feature_drift_psi
-        )
-        label_drift_breached = (
-            label_drift_samples >= min_samples and label_drift_psi >= max_label_drift_psi
-        )
-        residual_drift_breached = (
-            residual_drift_samples >= min_samples
-            and residual_drift_psi >= max_residual_drift_psi
-        )
-        pacing_breached = (
-            pacing_samples >= min_samples
-            and pacing_cap_hit_rate_pct >= max_pacing_cap_hit_rate_pct
-        )
-        pending_breached = (
-            pending_samples >= pending_min_samples
-            and pending_oldest_age_sec >= max_pending_oldest_age_sec
-        )
-        drift_calibration_guard_enabled = bool(
-            get_env("AI_TRADING_DRIFT_CALIBRATION_GUARD_ENABLED", True, cast=bool)
-        )
-        stale_required_cycles = max(
-            1,
-            int(
-                get_env(
-                    "AI_TRADING_DRIFT_CALIBRATION_STALE_CYCLES",
-                    3,
-                    cast=int,
-                )
-            ),
-        )
-        stale_derisk_scale = max(
-            0.05,
-            min(
-                1.0,
-                float(
-                    get_env(
-                        "AI_TRADING_DRIFT_CALIBRATION_STALE_DERISK_SCALE",
-                        0.50,
-                        cast=float,
-                    )
-                ),
-            ),
-        )
-        stale_detected = bool(
-            drift_samples < min_samples
-            or calibration_ece_samples < min_samples
-            or calibration_brier_samples < min_samples
-            or feature_drift_samples < min_samples
-            or label_drift_samples < min_samples
-            or residual_drift_samples < min_samples
-        )
-        stale_cycles = int(getattr(state, "_drift_calibration_stale_cycles", 0) or 0)
-        if drift_calibration_guard_enabled:
-            stale_cycles = stale_cycles + 1 if stale_detected else max(0, stale_cycles - 1)
-        else:
-            stale_cycles = 0
-        setattr(state, "_drift_calibration_stale_cycles", stale_cycles)
-        drift_calibration_stale_triggered = bool(
-            drift_calibration_guard_enabled and stale_cycles >= stale_required_cycles
-        )
-        breached = bool(
-            reject_breached
-            or drift_breached
-            or slippage_breached
-            or calibration_ece_breached
-            or calibration_brier_breached
-            or feature_drift_breached
-            or label_drift_breached
-            or residual_drift_breached
-            or pacing_breached
-            or pending_breached
-        )
-        slo_derisk_details = {
-            "mode": mode,
-            "reject_rate_pct": reject_rate_pct,
-            "execution_drift_bps": execution_drift_bps,
-            "slippage_bps": slippage_bps,
-            "calibration_ece": calibration_ece,
-            "calibration_brier": calibration_brier,
-            "drift_psi": feature_drift_psi,
-            "label_drift_psi": label_drift_psi,
-            "residual_drift_psi": residual_drift_psi,
-            "order_pacing_cap_hit_rate_pct": pacing_cap_hit_rate_pct,
-            "pending_oldest_age_sec": pending_oldest_age_sec,
-            "reject_samples": reject_samples,
-            "drift_samples": drift_samples,
-            "slippage_samples": slippage_samples,
-            "calibration_ece_samples": calibration_ece_samples,
-            "calibration_brier_samples": calibration_brier_samples,
-            "feature_drift_samples": feature_drift_samples,
-            "label_drift_samples": label_drift_samples,
-            "residual_drift_samples": residual_drift_samples,
-            "pacing_samples": pacing_samples,
-            "pending_samples": pending_samples,
-            "max_reject_rate_pct": max_reject_rate_pct,
-            "max_execution_drift_bps": max_execution_drift_bps,
-            "max_slippage_bps": max_slippage_bps,
-            "max_calibration_ece": max_calibration_ece,
-            "max_calibration_brier": max_calibration_brier,
-            "max_feature_drift_psi": max_feature_drift_psi,
-            "max_label_drift_psi": max_label_drift_psi,
-            "max_residual_drift_psi": max_residual_drift_psi,
-            "max_pacing_cap_hit_rate_pct": max_pacing_cap_hit_rate_pct,
-            "max_pending_oldest_age_sec": max_pending_oldest_age_sec,
-            "pending_min_samples": pending_min_samples,
-            "drift_calibration_guard_enabled": drift_calibration_guard_enabled,
-            "drift_calibration_stale_detected": stale_detected,
-            "drift_calibration_stale_cycles": int(stale_cycles),
-            "drift_calibration_stale_required_cycles": int(stale_required_cycles),
-            "drift_calibration_stale_derisk_scale": float(stale_derisk_scale),
-            "drift_calibration_stale_triggered": bool(drift_calibration_stale_triggered),
-            "reject_breached": reject_breached,
-            "drift_breached": drift_breached,
-            "slippage_breached": slippage_breached,
-            "calibration_ece_breached": calibration_ece_breached,
-            "calibration_brier_breached": calibration_brier_breached,
-            "feature_drift_breached": feature_drift_breached,
-            "label_drift_breached": label_drift_breached,
-            "residual_drift_breached": residual_drift_breached,
-            "pacing_breached": pacing_breached,
-            "pending_breached": pending_breached,
-            "breached": breached,
-        }
-        if drift_calibration_stale_triggered:
-            slo_derisk_scale = min(slo_derisk_scale, float(stale_derisk_scale))
-            slo_derisk_details["stale_scale_applied"] = float(stale_derisk_scale)
-            logger.warning(
-                "DRIFT_CALIBRATION_STALE_DERISK",
-                extra={
-                    "stale_cycles": int(stale_cycles),
-                    "required_cycles": int(stale_required_cycles),
-                    "scale": float(stale_derisk_scale),
-                },
-            )
-        if breached:
-            effective_mode, effective_scale_mult, mode_details = _resolve_slo_derisk_effective_mode(
-                configured_mode=mode,
-                reject_breached=reject_breached,
-                drift_breached=drift_breached,
-                slippage_breached=slippage_breached,
-                calibration_ece_breached=calibration_ece_breached,
-                calibration_brier_breached=calibration_brier_breached,
-                feature_drift_breached=feature_drift_breached,
-                label_drift_breached=label_drift_breached,
-                residual_drift_breached=residual_drift_breached,
-                pacing_breached=pacing_breached,
-                pending_breached=pending_breached,
-                pacing_hit_rate_pct=pacing_cap_hit_rate_pct,
-                pending_oldest_age_sec=pending_oldest_age_sec,
-            )
-            slo_derisk_details.update(mode_details)
-            slo_derisk_details["effective_mode"] = effective_mode
-            if effective_mode == "block":
-                state.halt_trading = True
-                state.halt_reason = "DERISK_SLO_BREACH_BLOCK"
-            else:
-                effective_scale_mult = max(0.05, min(float(effective_scale_mult), 1.0))
-                slo_derisk_scale = min(slo_derisk_scale, effective_scale_mult)
-                slo_derisk_details["scale_mult"] = effective_scale_mult
-            logger.warning("DERISK_SLO_BREACH", extra=slo_derisk_details)
-
-    expected_net_edge_cycle = 0.0
-    if candidate_expected_net_edge:
-        try:
-            expected_net_edge_cycle = float(max(candidate_expected_net_edge.values()))
-        except Exception:
-            expected_net_edge_cycle = 0.0
-    pending_symbol_count = len(blocked_symbols)
-    previous_tier_raw = str(getattr(state, "operational_safety_tier", SafetyTier.NORMAL.value) or SafetyTier.NORMAL.value)
-    try:
-        previous_tier = SafetyTier(previous_tier_raw)
-    except ValueError:
-        previous_tier = SafetyTier.NORMAL
-    operational_tier, tier_reasons = resolve_operational_safety_tier(
-        effective_policy,
-        {
-            "pending_oldest_age_sec": float(slo_derisk_details.get("pending_oldest_age_sec", 0.0) or 0.0),
-            "order_pacing_cap_hit_rate_pct": float(
-                slo_derisk_details.get("order_pacing_cap_hit_rate_pct", 0.0) or 0.0
-            ),
-            "live_calibration_ece": float(slo_derisk_details.get("calibration_ece", 0.0) or 0.0),
-            "live_calibration_brier": float(slo_derisk_details.get("calibration_brier", 0.0) or 0.0),
-            "pending_orders_count": int(max(pending_symbol_count, 0)),
-            "expected_net_edge_bps": float(expected_net_edge_cycle),
-            "kill_switch": bool(kill_switch),
-        },
-        previous=previous_tier,
-    )
-    operational_tier, tier_reasons = _apply_operational_safety_hysteresis(
+    slo_derisk_scale = execution_context.slo_derisk_scale
+    slo_derisk_details = execution_context.slo_derisk_details
+    ramp_summary = execution_context.ramp_summary
+    ramp_live_multiplier = execution_context.ramp_live_multiplier
+    burn_in_live_ready = execution_context.burn_in_live_ready
+    burn_in_live_reason = execution_context.burn_in_live_reason
+    live_execution_mode = execution_context.live_execution_mode
+    liq_regime_enabled = execution_context.liq_regime_enabled
+    event_blackout_enabled = execution_context.event_blackout_enabled
+    event_blackout_days = execution_context.event_blackout_days
+    event_blackout_cache = execution_context.event_blackout_cache
+    alpha_decay_deweight_enabled = execution_context.alpha_decay_deweight_enabled
+    alpha_decay_qty_step = execution_context.alpha_decay_qty_step
+    alpha_decay_qty_max_deweight = execution_context.alpha_decay_qty_max_deweight
+    capacity_throttle_enabled = execution_context.capacity_throttle_enabled
+    capacity_spread_soft_bps = execution_context.capacity_spread_soft_bps
+    capacity_spread_hard_bps = execution_context.capacity_spread_hard_bps
+    capacity_volume_soft_participation = execution_context.capacity_volume_soft_participation
+    capacity_volume_hard_participation = execution_context.capacity_volume_hard_participation
+    capacity_min_scale = execution_context.capacity_min_scale
+    thin_spread_bps = execution_context.thin_spread_bps
+    thin_vol_mult = execution_context.thin_vol_mult
+    primary_feed_derisk = execution_context.primary_feed_derisk
+    portfolio_current_gross = execution_context.portfolio_current_gross
+    sector_gross = execution_context.sector_gross
+    symbol_adaptive_profiles = execution_context.symbol_adaptive_profiles
+    ineffective_gate_blocklist = execution_context.ineffective_gate_blocklist
+    uncertainty_capital_state = execution_context.uncertainty_capital_state
+    uncertainty_cycle_events = execution_context.uncertainty_cycle_events
+    penalty_overlap_coordination_enabled = execution_context.penalty_overlap_coordination_enabled
+    penalty_overlap_weight_dampen = execution_context.penalty_overlap_weight_dampen
+    penalty_overlap_min_scale_floor = execution_context.penalty_overlap_min_scale_floor
+    symbol_processor = NettingSymbolProcessor(
         state=state,
-        previous_tier=previous_tier,
-        candidate_tier=operational_tier,
-        candidate_reasons=tier_reasons,
-        now=now,
-    )
-    state.operational_safety_tier = operational_tier.value
-    if operational_tier != previous_tier:
-        log_level = logging.WARNING if operational_tier is SafetyTier.SAFE else logging.INFO
-        logger.log(
-            log_level,
-            "OPERATIONAL_SAFETY_TIER_CHANGED",
-            extra={
-                "previous": previous_tier.value,
-                "current": operational_tier.value,
-                "reasons": list(tier_reasons),
-            },
-        )
-
-    rollout_summary = _update_rollout_governance_state(
-        state=state,
+        runtime=runtime,
         cfg=cfg,
-        effective_policy=effective_policy,
-        slo_derisk_details=slo_derisk_details,
         now=now,
-    )
-    ramp_summary = rollout_summary.get("capital_ramp", {})
-    if not isinstance(ramp_summary, MappingABC):
-        ramp_summary = {}
-    ramp_live_multiplier = float(getattr(state, "capital_ramp_multiplier", 1.0) or 1.0)
-    burn_in_live_ready = bool(getattr(state, "burn_in_ready", True))
-    burn_in_live_reason = str(getattr(state, "burn_in_block_reason", "") or "")
-    execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
-    live_execution_mode = execution_mode == "live"
-
-    liq_regime_enabled = bool(get_env("AI_TRADING_LIQ_REGIME_ENABLED", True, cast=bool))
-    event_blackout_enabled = bool(get_env("AI_TRADING_EVENT_RISK_BLACKOUT_ENABLED", True, cast=bool))
-    event_blackout_days = max(0, int(get_env("AI_TRADING_EVENT_BLACKOUT_DAYS", 3, cast=int)))
-    event_blackout_cache: dict[str, bool] = {}
-    alpha_decay_deweight_enabled = bool(
-        get_env("AI_TRADING_ALPHA_DECAY_DEWEIGHT_ENABLED", True, cast=bool)
-    )
-    alpha_decay_qty_step = float(get_env("AI_TRADING_ALPHA_DECAY_QTY_STEP", 0.15, cast=float))
-    alpha_decay_qty_max_deweight = float(
-        get_env("AI_TRADING_ALPHA_DECAY_QTY_MAX_DEWEIGHT", 0.75, cast=float)
-    )
-    alpha_decay_qty_step = max(0.0, min(alpha_decay_qty_step, 1.0))
-    alpha_decay_qty_max_deweight = max(0.0, min(alpha_decay_qty_max_deweight, 0.95))
-    capacity_throttle_enabled = bool(
-        get_env("AI_TRADING_CAPACITY_AWARE_THROTTLE_ENABLED", True, cast=bool)
-    )
-    capacity_spread_soft_bps = float(
-        get_env("AI_TRADING_CAPACITY_SPREAD_SOFT_BPS", 12.0, cast=float)
-    )
-    capacity_spread_hard_bps = float(
-        get_env("AI_TRADING_CAPACITY_SPREAD_HARD_BPS", 30.0, cast=float)
-    )
-    capacity_volume_soft_participation = float(
-        get_env("AI_TRADING_CAPACITY_SOFT_PARTICIPATION", 0.05, cast=float)
-    )
-    capacity_volume_hard_participation = float(
-        get_env("AI_TRADING_CAPACITY_HARD_PARTICIPATION", 0.20, cast=float)
-    )
-    capacity_min_scale = float(get_env("AI_TRADING_CAPACITY_MIN_SCALE", 0.25, cast=float))
-    capacity_min_scale = max(0.05, min(capacity_min_scale, 1.0))
-    (
-        capacity_spread_soft_bps,
-        capacity_spread_hard_bps,
-        capacity_volume_soft_participation,
-        capacity_volume_hard_participation,
-        capacity_min_scale,
-        capacity_adaptive_details,
-    ) = _resolve_capacity_throttle_adaptive_params(
-        spread_soft_bps=float(capacity_spread_soft_bps),
-        spread_hard_bps=float(capacity_spread_hard_bps),
-        volume_soft_participation=float(capacity_volume_soft_participation),
-        volume_hard_participation=float(capacity_volume_hard_participation),
-        min_scale=float(capacity_min_scale),
+        logger=logger,
+        decision_snapshot_template=decision_snapshot_template,
+        latest_price=latest_price,
+        latest_liquidity=latest_liquidity,
+        positions=positions,
+        skip_reasons=skip_reasons,
+        kill_switch=kill_switch,
+        policy_disabled_sleeves=policy_disabled_sleeves,
+        policy_rollback_disabled_slices=policy_rollback_disabled_slices,
+        sleeve_configs_map=sleeve_configs_map,
+        candidate_expected_net_edge=candidate_expected_net_edge,
+        candidate_expected_capture=candidate_expected_capture,
+        alpha_time_stop_enabled=alpha_time_stop_enabled,
+        alpha_time_stop_sec=alpha_time_stop_sec,
+        alpha_time_stop_max_expected_edge_bps=alpha_time_stop_max_expected_edge_bps,
+        opportunity_quality_enabled=opportunity_quality_enabled,
+        opportunity_allowed_symbols=opportunity_allowed_symbols,
+        opportunity_openings_only=opportunity_openings_only,
+        opportunity_quality_by_symbol=opportunity_quality_by_symbol,
+        opportunity_quality_gate=opportunity_quality_gate,
+        opportunity_top_quantile=opportunity_top_quantile,
+        alpha_time_decay_enabled=alpha_time_decay_enabled,
+        alpha_stale_signal_sec=alpha_stale_signal_sec,
+        live_execution_mode=live_execution_mode,
+        burn_in_live_ready=burn_in_live_ready,
+        burn_in_live_reason=burn_in_live_reason,
+        ramp_live_multiplier=ramp_live_multiplier,
+        ramp_summary=ramp_summary,
+        liq_regime_enabled=liq_regime_enabled,
+        thin_spread_bps=thin_spread_bps,
+        thin_vol_mult=thin_vol_mult,
+        primary_feed_derisk=primary_feed_derisk,
+        quarantine_enabled=quarantine_enabled,
+        quarantine_manager=quarantine_manager,
+        quarantine_apply_sleeve=quarantine_apply_sleeve,
+        quarantine_apply_symbol=quarantine_apply_symbol,
+        quarantine_mode=quarantine_mode,
+        event_blackout_enabled=event_blackout_enabled,
+        event_blackout_days=event_blackout_days,
+        event_blackout_cache=event_blackout_cache,
+        alpha_decay_deweight_enabled=alpha_decay_deweight_enabled,
+        alpha_decay_qty_step=alpha_decay_qty_step,
+        alpha_decay_qty_max_deweight=alpha_decay_qty_max_deweight,
+        capacity_throttle_enabled=capacity_throttle_enabled,
+        capacity_spread_soft_bps=capacity_spread_soft_bps,
+        capacity_spread_hard_bps=capacity_spread_hard_bps,
+        capacity_volume_soft_participation=capacity_volume_soft_participation,
+        capacity_volume_hard_participation=capacity_volume_hard_participation,
+        capacity_min_scale=capacity_min_scale,
+        slo_derisk_scale=slo_derisk_scale,
         slo_derisk_details=slo_derisk_details,
-    )
-    capacity_adaptive_signature = (
-        str(capacity_adaptive_details.get("mode") or "steady"),
-        round(float(capacity_adaptive_details.get("spread_soft_bps", capacity_spread_soft_bps) or capacity_spread_soft_bps), 3),
-        round(float(capacity_adaptive_details.get("spread_hard_bps", capacity_spread_hard_bps) or capacity_spread_hard_bps), 3),
-        round(float(capacity_adaptive_details.get("volume_soft_participation", capacity_volume_soft_participation) or capacity_volume_soft_participation), 5),
-        round(float(capacity_adaptive_details.get("volume_hard_participation", capacity_volume_hard_participation) or capacity_volume_hard_participation), 5),
-        round(float(capacity_adaptive_details.get("min_scale", capacity_min_scale) or capacity_min_scale), 3),
-    )
-    if capacity_adaptive_signature != getattr(state, "_last_capacity_throttle_adaptive_signature", None):
-        if bool(capacity_adaptive_details.get("enabled", False)):
-            logger.info("CAPACITY_THROTTLE_ADAPTIVE_PARAMS", extra=dict(capacity_adaptive_details))
-        state._last_capacity_throttle_adaptive_signature = capacity_adaptive_signature
-    thin_spread_bps = float(get_env("AI_TRADING_LIQ_THIN_SPREAD_BPS", 25, cast=float))
-    thin_vol_mult = float(get_env("AI_TRADING_LIQ_THIN_VOL_MULT", 1.8, cast=float))
-    primary_feed_derisk = _resolve_primary_feed_derisk_state(runtime)
-    if primary_feed_derisk.get("triggered"):
-        derisk_log_ttl_s = _resolve_runtime_info_log_ttl_seconds(
-            "AI_TRADING_PRIMARY_FEED_DERISK_LOG_TTL_SEC",
-            120.0,
-        )
-        derisk_signature = (
-            f"{primary_feed_derisk.get('mode')}:{int(primary_feed_derisk.get('duration_s', 0.0) // 30)}:"
-            f"{int(bool(primary_feed_derisk.get('fallback_active')))}:"
-            f"{int(bool(primary_feed_derisk.get('quote_quality_failed')))}"
-        )
-        if _should_emit_runtime_info_log(
-            runtime,
-            f"PRIMARY_FEED_DERISK_ACTIVE:{derisk_signature}",
-            ttl_seconds=derisk_log_ttl_s,
-        ):
-            logger.warning("PRIMARY_FEED_DERISK_ACTIVE", extra=dict(primary_feed_derisk))
-
-    portfolio_current_gross = 0.0
-    sector_gross: dict[str, float] = {}
-    symbols_for_exposure = set(positions.keys()) | set(latest_price.keys())
-    for exposure_symbol in symbols_for_exposure:
-        px = float(latest_price.get(exposure_symbol, 0.0) or 0.0)
-        qty = float(positions.get(exposure_symbol, 0.0) or 0.0)
-        notional = abs(qty * px)
-        if notional <= 0.0:
-            continue
-        portfolio_current_gross += notional
-        sector = str(get_sector(exposure_symbol) or "UNKNOWN").upper()
-        sector_gross[sector] = sector_gross.get(sector, 0.0) + notional
-
-    symbol_adaptive_profiles = _symbol_adaptive_sizing_profiles(
-        state,
-        symbols=list(targets.keys()),
-    )
-    gate_auto_disable_enabled = bool(
-        get_env(
-            "AI_TRADING_GATE_AUTO_DISABLE_NON_POSITIVE_ENABLED",
-            True,
-            cast=bool,
-        )
-    )
-    gate_auto_disable_lookback_cycles = max(
-        10,
-        int(
-            get_env(
-                "AI_TRADING_GATE_AUTO_DISABLE_LOOKBACK_CYCLES",
-                240,
-                cast=int,
-            )
-        ),
-    )
-    gate_auto_disable_min_blocked = max(
-        10,
-        int(
-            get_env(
-                "AI_TRADING_GATE_AUTO_DISABLE_MIN_BLOCKED",
-                100,
-                cast=int,
-            )
-        ),
-    )
-    gate_auto_disable_min_contribution_bps = float(
-        get_env(
-            "AI_TRADING_GATE_AUTO_DISABLE_MIN_CONTRIBUTION_BPS",
-            0.0,
-            cast=float,
-        )
-    )
-    critical_gates = {
-        "KILL_SWITCH_BLOCK",
-        "AUTH_BROKER_HALT_FORBIDDEN_COOLDOWN",
-        "DERISK_PRIMARY_FEED_BLOCK",
-        "PAPER_BURN_IN_BLOCK",
-        "BURN_IN_POLICY_HASH_MISMATCH",
-        "BURN_IN_CONFIG_HASH_MISMATCH",
-        "RECON_MISMATCH_HALT",
-        "PRE_SUBMIT_INSUFFICIENT_POSITION_AVAILABLE",
-    }
-    ineffective_gate_blocklist: set[str] = set()
-    ineffective_gate_diagnostics: dict[str, dict[str, float]] = {}
-    gate_auto_disable_hysteresis_context: dict[str, Any] = {
-        "min_on_dwell_sec": 0.0,
-        "min_off_dwell_sec": 0.0,
-        "min_disabled_hold_sec": 0.0,
-        "max_transitions_per_hour": 0,
-        "transitions_used_in_window": 0,
-        "transitions": [],
-        "holds": [],
-        "candidate_count": 0,
-        "effective_count": 0,
-    }
-    if gate_auto_disable_enabled:
-        try:
-            gate_rows = _read_jsonl_records(
-                str(_gate_effectiveness_log_path()),
-                max_records=max(gate_auto_disable_lookback_cycles * 2, 200),
-            )
-            gate_agg: dict[str, dict[str, float]] = {}
-            for row in gate_rows[-gate_auto_disable_lookback_cycles:]:
-                raw_attr = row.get("gate_attribution")
-                if not isinstance(raw_attr, Mapping):
-                    continue
-                for gate_name_raw, payload in raw_attr.items():
-                    if not isinstance(payload, Mapping):
-                        continue
-                    gate_name = str(gate_name_raw or "").strip().upper()
-                    if not gate_name:
-                        continue
-                    blocked = _safe_float(payload.get("blocked_records")) or 0.0
-                    edge_sum = _safe_float(payload.get("edge_proxy_bps_sum")) or 0.0
-                    stats = gate_agg.setdefault(
-                        gate_name,
-                        {"blocked": 0.0, "edge_sum": 0.0},
-                    )
-                    stats["blocked"] = float(stats["blocked"]) + float(blocked)
-                    stats["edge_sum"] = float(stats["edge_sum"]) + float(edge_sum)
-            for gate_name, stats in gate_agg.items():
-                blocked_count = int(max(stats.get("blocked", 0.0), 0.0))
-                if blocked_count < gate_auto_disable_min_blocked:
-                    continue
-                if gate_name in critical_gates:
-                    continue
-                marginal_contribution_bps = float(
-                    -float(stats.get("edge_sum", 0.0)) / float(max(blocked_count, 1))
-                )
-                ineffective_gate_diagnostics[gate_name] = {
-                    "blocked_records": float(blocked_count),
-                    "marginal_contribution_bps": float(marginal_contribution_bps),
-                }
-                if marginal_contribution_bps < float(gate_auto_disable_min_contribution_bps):
-                    ineffective_gate_blocklist.add(str(gate_name))
-        except Exception:
-            logger.debug("GATE_AUTO_DISABLE_EVALUATION_FAILED", exc_info=True)
-        (
-            ineffective_gate_blocklist,
-            ineffective_gate_diagnostics,
-            gate_auto_disable_hysteresis_context,
-        ) = _apply_gate_auto_disable_hysteresis(
-            state=state,
-            candidate_disabled_gates=ineffective_gate_blocklist,
-            candidate_diagnostics=ineffective_gate_diagnostics,
-            now=now,
-        )
-        if ineffective_gate_blocklist:
-            logger.warning(
-                "GATE_AUTO_DISABLE_APPLIED",
-                extra={
-                    "disabled_gates": sorted(ineffective_gate_blocklist),
-                    "diagnostics": {
-                        gate_name: ineffective_gate_diagnostics.get(gate_name, {})
-                        for gate_name in sorted(ineffective_gate_blocklist)[:20]
-                    },
-                    "min_blocked": int(gate_auto_disable_min_blocked),
-                    "min_contribution_bps": float(
-                        gate_auto_disable_min_contribution_bps
-                    ),
-                    "lookback_cycles": int(gate_auto_disable_lookback_cycles),
-                    "hysteresis": {
-                        "min_on_dwell_sec": float(
-                            gate_auto_disable_hysteresis_context.get(
-                                "min_on_dwell_sec", 0.0
-                            )
-                            or 0.0
-                        ),
-                        "min_off_dwell_sec": float(
-                            gate_auto_disable_hysteresis_context.get(
-                                "min_off_dwell_sec", 0.0
-                            )
-                            or 0.0
-                        ),
-                        "min_disabled_hold_sec": float(
-                            gate_auto_disable_hysteresis_context.get(
-                                "min_disabled_hold_sec", 0.0
-                            )
-                            or 0.0
-                        ),
-                        "max_transitions_per_hour": int(
-                            gate_auto_disable_hysteresis_context.get(
-                                "max_transitions_per_hour", 0
-                            )
-                            or 0
-                        ),
-                        "transitions_used_in_window": int(
-                            gate_auto_disable_hysteresis_context.get(
-                                "transitions_used_in_window", 0
-                            )
-                            or 0
-                        ),
-                    },
-                },
-            )
-        elif bool(gate_auto_disable_hysteresis_context.get("transitions")):
-            logger.info(
-                "GATE_AUTO_DISABLE_HYSTERESIS_TRANSITION",
-                extra={
-                    "transitions": list(
-                        gate_auto_disable_hysteresis_context.get("transitions", [])
-                    )[:20],
-                    "holds": list(
-                        gate_auto_disable_hysteresis_context.get("holds", [])
-                    )[:20],
-                    "transitions_used_in_window": int(
-                        gate_auto_disable_hysteresis_context.get(
-                            "transitions_used_in_window", 0
-                        )
-                        or 0
-                    ),
-                    "max_transitions_per_hour": int(
-                        gate_auto_disable_hysteresis_context.get(
-                            "max_transitions_per_hour", 0
-                        )
-                        or 0
-                    ),
-                },
-            )
-    if policy_disabled_gate_roots:
-        for gate_root in sorted(policy_disabled_gate_roots):
-            ineffective_gate_blocklist.add(str(gate_root))
-            ineffective_gate_diagnostics.setdefault(
-                str(gate_root),
-                {
-                    "blocked_records": 0.0,
-                    "marginal_contribution_bps": 0.0,
-                },
-            )
-        logger.warning(
-            "POLICY_ROLLBACK_GATES_APPLIED",
-            extra={"disabled_gate_roots": sorted(policy_disabled_gate_roots)},
-        )
-
-    def _gate_blocks(candidate_gate: str) -> bool:
-        gate_name = str(candidate_gate or "").strip().upper()
-        if not gate_name:
-            return True
-        if gate_name in ineffective_gate_blocklist:
-            return False
-        return _gate_root_cause(gate_name) not in ineffective_gate_blocklist
-
-    uncertainty_capital_state = _load_uncertainty_capital_state()
-    uncertainty_cycle_events: list[dict[str, Any]] = []
-    penalty_overlap_coordination_enabled = bool(
-        get_env(
-            "AI_TRADING_MULTI_PENALTY_COORDINATION_ENABLED",
-            True,
-            cast=bool,
-        )
-    )
-    penalty_overlap_weight_dampen = max(
-        0.0,
-        min(
-            1.0,
-            float(
-                get_env(
-                    "AI_TRADING_MULTI_PENALTY_COORDINATION_WEIGHT_DAMPEN",
-                    0.50,
-                    cast=float,
-                )
-            ),
-        ),
-    )
-    penalty_overlap_min_scale_floor = max(
-        0.05,
-        min(
-            1.0,
-            float(
-                get_env(
-                    "AI_TRADING_MULTI_PENALTY_COORDINATION_MIN_SCALE_FLOOR",
-                    0.55,
-                    cast=float,
-                )
-            ),
-        ),
+        execution_model_lineage=execution_model_lineage,
+        exec_engine=exec_engine,
+        effective_policy=effective_policy,
+        edge_realism_rank_factor_by_symbol=edge_realism_rank_factor_by_symbol,
+        edge_realism_apply_to_approval_enabled=edge_realism_apply_to_approval_enabled,
+        portfolio_current_gross=portfolio_current_gross,
+        sector_gross=sector_gross,
+        max_new_orders_per_cycle=max_new_orders_per_cycle,
+        portfolio_optimizer_enabled=bool(portfolio_optimizer_enabled),
+        portfolio_optimizer=portfolio_optimizer,
+        portfolio_optimizer_openings_only=bool(portfolio_optimizer_openings_only),
+        portfolio_optimizer_market_data=portfolio_optimizer_market_data,
+        portfolio_optimizer_context=portfolio_optimizer_context,
+        ledger=ledger,
+        rate_limiter=rate_limiter,
+        breakers=breakers,
+        symbol_adaptive_profiles=symbol_adaptive_profiles,
+        uncertainty_capital_state=uncertainty_capital_state,
+        uncertainty_cycle_events=uncertainty_cycle_events,
+        penalty_overlap_coordination_enabled=penalty_overlap_coordination_enabled,
+        penalty_overlap_weight_dampen=penalty_overlap_weight_dampen,
+        penalty_overlap_min_scale_floor=penalty_overlap_min_scale_floor,
+        ineffective_gate_blocklist=ineffective_gate_blocklist,
+        gate_root_cause_func=_gate_root_cause,
+        position_opened_at_func=_position_opened_at,
+        exit_policy_pressure_context_func=_exit_policy_pressure_context,
+        is_near_event_func=is_near_event,
+        enforce_participation_cap_func=enforce_participation_cap,
+        alpha_decay_entry_guard_func=_alpha_decay_entry_guard,
+        safe_float=_safe_float,
+        resolve_uncertainty_capital_auto_controls_func=_resolve_uncertainty_capital_auto_controls,
+        clip_delta_to_symbol_notional_cap_func=_clip_delta_to_symbol_notional_cap,
+        clip_sell_qty_to_available_position_func=_clip_sell_qty_to_available_position,
+        percentile_linear_func=_percentile_linear,
+        slippage_setting_bps_func=_slippage_setting_bps,
+        get_sector_func=get_sector,
+        evaluate_execution_approval_func=evaluate_execution_approval,
+        approve_execution_candidate_func=approve_execution_candidate,
+        gate_name_is_halt_noise_func=_gate_name_is_halt_noise,
+        resolve_order_quote_basis_func=_resolve_order_quote_basis,
+        portfolio_optimizer_allows_trade_func=_portfolio_optimizer_allows_trade,
+        auth_forbidden_cooldown_remaining_seconds_func=_auth_forbidden_cooldown_remaining_seconds,
+        safe_validate_pretrade_func=safe_validate_pretrade,
+        extract_order_value_func=_extract_order_value,
+        extract_order_fill_timestamp_func=_extract_order_fill_timestamp,
+        normalize_order_status_token_func=_normalize_order_status_token,
+        has_persistable_fill_func=_has_persistable_fill,
+        normalize_submitted_order_func=normalize_submitted_order,
+        record_successful_submission_func=record_successful_submission,
+        build_order_metrics_and_tca_func=build_order_metrics_and_tca,
+        submit_order_func=submit_order,
+        classify_exception_func=classify_exception,
+        handle_error_func=_handle_error,
+        trigger_quarantine_func=_trigger_quarantine,
+        cancel_all_open_orders_oms_func=cancel_all_open_orders_oms,
+        resolve_submit_none_reason_func=_resolve_submit_none_reason,
+        record_auth_forbidden_cooldown_func=_record_auth_forbidden_cooldown,
+        get_regime_signal_profile_func=get_regime_signal_profile,
+        normalize_quote_source_token_func=_normalize_quote_source_token,
+        resolve_quote_proxy_source_func=_resolve_quote_proxy_source,
+        resolved_tca_path_func=_resolved_tca_path,
+        write_tca_record_func=write_tca_record,
+        session_bucket_from_ts_func=_session_bucket_from_ts,
+        compute_attribution_metrics_func=compute_attribution_metrics,
+        record_decision_func=_record_decision,
+        prepare_symbol_prelude_func=prepare_netting_symbol_prelude,
+        apply_symbol_adjustments_func=apply_symbol_adjustments,
+        prepare_symbol_approval_func=prepare_netting_symbol_approval,
+        prepare_submit_prelude_func=prepare_netting_submit_prelude,
+        execute_submission_func=execute_netting_submission,
     )
 
     for symbol, net_target in targets.items():
-        liq_features = latest_liquidity.get(
-            symbol,
-            LiquidityFeatures(rolling_volume=0.0, spread_bps=0.0, volatility_proxy=0.0),
-        )
-        liq_regime = (
-            classify_liquidity_regime(
-                liq_features,
-                thin_spread_bps=thin_spread_bps,
-                thin_vol_mult=thin_vol_mult,
-            )
-            if liq_regime_enabled
-            else LiquidityRegime.NORMAL
-        )
-        symbol_snapshot = dict(decision_snapshot_template)
-        if "liquidity_regime" in symbol_snapshot:
-            symbol_snapshot["liquidity_regime"] = liq_regime.value
-        if state.halt_trading:
-            reason = state.halt_reason or "HALT_TRADING"
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=[reason],
-                config_snapshot=symbol_snapshot,
-            )
-            continue
-        price = latest_price.get(symbol, 0.0)
-        current_shares = int(positions.get(symbol, 0) or 0)
-        if price <= 0:
-            net_target.reasons.append("BAD_DATA_CONTRACT")
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=skip_reasons.get(symbol, []),
-                config_snapshot=symbol_snapshot,
-            )
-            continue
-        net_target.target_shares = int(round(net_target.target_dollars / price))
-        delta_shares = net_target.target_shares - current_shares
-        initial_requested_delta_shares = int(delta_shares)
-        gates: list[str] = []
-        gates.extend(skip_reasons.get(symbol, []))
-        gates.extend(net_target.reasons)
-        for proposal in net_target.proposals:
-            if proposal.reason_code:
-                gates.append(proposal.reason_code)
-        if policy_disabled_sleeves:
-            disabled_for_symbol = sorted(
-                {
-                    str(proposal.sleeve).strip().lower()
-                    for proposal in net_target.proposals
-                    if str(proposal.sleeve).strip().lower() in policy_disabled_sleeves
-                }
-            )
-            if disabled_for_symbol:
-                gates.append("POLICY_ABLATION_SLEEVE_BLOCK")
-                symbol_snapshot["policy_rollback"] = {
-                    "disabled_sleeves_for_symbol": disabled_for_symbol,
-                    "disabled_slices": sorted(policy_rollback_disabled_slices),
-                }
-                _record_decision(
-                    symbol=symbol,
-                    bar_ts=net_target.bar_ts,
-                    sleeves=net_target.proposals,
-                    net_target=net_target,
-                    gates=gates,
-                    config_snapshot=symbol_snapshot,
-                )
-                continue
-        symbol_snapshot["sleeve_configs"] = {
-            proposal.sleeve: {
-                "thresholds": {
-                    "entry": float(getattr(sleeve_configs_map.get(proposal.sleeve), "entry_threshold", 0.0)),
-                    "exit": float(getattr(sleeve_configs_map.get(proposal.sleeve), "exit_threshold", 0.0)),
-                    "flip": float(getattr(sleeve_configs_map.get(proposal.sleeve), "flip_threshold", 0.0)),
-                    "reentry": float(getattr(sleeve_configs_map.get(proposal.sleeve), "reentry_threshold", 0.0)),
-                },
-                "deadband_dollars": float(
-                    getattr(sleeve_configs_map.get(proposal.sleeve), "deadband_dollars", 0.0)
-                ),
-                "cost_k": float(getattr(sleeve_configs_map.get(proposal.sleeve), "cost_k", 0.0)),
-                "edge_scale_bps": float(
-                    getattr(sleeve_configs_map.get(proposal.sleeve), "edge_scale_bps", 0.0)
-                ),
-                "turnover_cap_dollars": float(
-                    getattr(sleeve_configs_map.get(proposal.sleeve), "turnover_cap_dollars", 0.0)
-                ),
-            }
-            for proposal in net_target.proposals
-        }
-        signal_age_seconds = max(
-            0.0,
-            (now - net_target.bar_ts).total_seconds()
-            if isinstance(net_target.bar_ts, datetime)
-            else 0.0,
-        )
-        symbol_snapshot["signal_age_seconds"] = float(signal_age_seconds)
-        if (
-            alpha_time_stop_enabled
-            and alpha_time_stop_sec > 0.0
-            and current_shares != 0
-        ):
-            opened_at = _position_opened_at(state, symbol)
-            if isinstance(opened_at, datetime):
-                position_age_seconds = max(
-                    0.0, (now - opened_at).total_seconds()
-                )
-                expected_edge_now = float(
-                    candidate_expected_net_edge.get(symbol, 0.0) or 0.0
-                )
-                side_for_exit_policy = "long" if current_shares > 0 else "short"
-                exit_policy_context = _exit_policy_pressure_context(
-                    state,
-                    symbol=symbol,
-                    regime=str(getattr(state, "current_regime", "sideways") or "sideways"),
-                    side=side_for_exit_policy,
-                    now=now,
-                    position_age_seconds=float(position_age_seconds),
-                    expected_edge_bps=float(expected_edge_now),
-                )
-                effective_time_stop_sec = float(alpha_time_stop_sec)
-                pressure_score = _safe_float(exit_policy_context.get("pressure_score")) or 0.0
-                pressure_min = max(
-                    0.0,
-                    min(
-                        1.0,
-                        float(
-                            get_env(
-                                "AI_TRADING_EXEC_EXIT_POLICY_PRESSURE_MIN",
-                                0.55,
-                                cast=float,
-                            )
-                        ),
-                    ),
-                )
-                suggested_age_seconds = _safe_float(
-                    exit_policy_context.get("suggested_max_age_seconds")
-                )
-                if (
-                    bool(exit_policy_context.get("active", False))
-                    and suggested_age_seconds is not None
-                    and pressure_score >= pressure_min
-                ):
-                    effective_time_stop_sec = min(
-                        float(effective_time_stop_sec),
-                        max(60.0, float(suggested_age_seconds)),
-                    )
-                exit_policy_edge_buffer_bps = max(
-                    0.0,
-                    float(
-                        get_env(
-                            "AI_TRADING_EXEC_EXIT_POLICY_EDGE_BUFFER_BPS",
-                            0.5,
-                            cast=float,
-                        )
-                    ),
-                )
-                if position_age_seconds >= float(effective_time_stop_sec):
-                    if expected_edge_now <= (
-                        float(alpha_time_stop_max_expected_edge_bps)
-                        + float(exit_policy_edge_buffer_bps)
-                    ):
-                        net_target.target_shares = 0
-                        net_target.target_dollars = 0.0
-                        delta_shares = -current_shares
-                        if (
-                            bool(exit_policy_context.get("active", False))
-                            and pressure_score >= pressure_min
-                        ):
-                            if "EXIT_POLICY_HAZARD_TIME_STOP" not in gates:
-                                gates.append("EXIT_POLICY_HAZARD_TIME_STOP")
-                        elif "ALPHA_TIME_STOP_EXIT" not in gates:
-                            gates.append("ALPHA_TIME_STOP_EXIT")
-                        symbol_snapshot["alpha_time_stop"] = {
-                            "enabled": True,
-                            "position_age_seconds": float(position_age_seconds),
-                            "time_stop_sec": float(alpha_time_stop_sec),
-                            "effective_time_stop_sec": float(effective_time_stop_sec),
-                            "expected_edge_bps": float(expected_edge_now),
-                            "max_expected_edge_bps": float(
-                                alpha_time_stop_max_expected_edge_bps
-                            ),
-                            "exit_policy": dict(exit_policy_context),
-                        }
-        post_trade_shares = current_shares + delta_shares
-        expanding_exposure = abs(post_trade_shares) > abs(current_shares)
-        if (
-            expanding_exposure
-            and opportunity_quality_enabled
-            and opportunity_allowed_symbols
-            and symbol not in opportunity_allowed_symbols
-            and (not opportunity_openings_only or current_shares == 0)
-        ):
-            gates.append("OPPORTUNITY_QUALITY_QUANTILE_BLOCK")
-            symbol_snapshot["opportunity_quality"] = {
-                "score": float(opportunity_quality_by_symbol.get(symbol, 0.0) or 0.0),
-                "threshold": opportunity_quality_gate.get("threshold"),
-                "top_quantile": float(opportunity_top_quantile),
-                "allowed_symbols_count": int(len(opportunity_allowed_symbols)),
-                "openings_only": bool(opportunity_openings_only),
-            }
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                config_snapshot=symbol_snapshot,
-            )
-            continue
-        if (
-            expanding_exposure
-            and alpha_time_decay_enabled
-            and alpha_stale_signal_sec > 0.0
-            and signal_age_seconds > float(alpha_stale_signal_sec)
-        ):
-            gates.append("STALE_SIGNAL_BLOCK")
-            symbol_snapshot["stale_signal"] = {
-                "signal_age_seconds": float(signal_age_seconds),
-                "stale_signal_sec": float(alpha_stale_signal_sec),
-            }
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                config_snapshot=symbol_snapshot,
-            )
-            continue
-        if live_execution_mode and not burn_in_live_ready and expanding_exposure:
-            gates.append(burn_in_live_reason or "PAPER_BURN_IN_BLOCK")
-            symbol_snapshot["rollout"] = {
-                "burn_in_ready": burn_in_live_ready,
-                "burn_in_reason": burn_in_live_reason,
-                "capital_ramp": dict(ramp_summary),
-            }
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                config_snapshot=symbol_snapshot,
-            )
-            continue
-        if live_execution_mode and expanding_exposure and ramp_live_multiplier < 0.999:
-            scaled_qty = int(round(float(delta_shares) * ramp_live_multiplier))
-            if scaled_qty == 0:
-                scaled_qty = 1 if delta_shares > 0 else -1
-            if abs(scaled_qty) > abs(delta_shares):
-                scaled_qty = int(delta_shares)
-            if scaled_qty != int(delta_shares):
-                delta_shares = int(scaled_qty)
-                net_target.target_shares = current_shares + delta_shares
-                net_target.target_dollars = net_target.target_shares * price
-                gates.append("CAPITAL_RAMP_SCALE")
-                symbol_snapshot["capital_ramp"] = {
-                    "multiplier": ramp_live_multiplier,
-                    "phase_index": ramp_summary.get("phase_index"),
-                    "phase_cycles": ramp_summary.get("phase_cycles"),
-                    "breached": ramp_summary.get("breached"),
-                    "transition": ramp_summary.get("transition"),
-                }
-        feed_derisk_scale = 1.0
-        if delta_shares != 0 and bool(primary_feed_derisk.get("triggered", False)):
-            post_trade_shares = current_shares + delta_shares
-            reducing_exposure = abs(post_trade_shares) < abs(current_shares)
-            if bool(primary_feed_derisk.get("block", False)) and not reducing_exposure:
-                gates.append("DERISK_PRIMARY_FEED_BLOCK")
-                symbol_snapshot["primary_feed_derisk"] = dict(primary_feed_derisk)
-                _record_decision(
-                    symbol=symbol,
-                    bar_ts=net_target.bar_ts,
-                    sleeves=net_target.proposals,
-                    net_target=net_target,
-                    gates=gates,
-                    config_snapshot=symbol_snapshot,
-                )
-                continue
-            if not reducing_exposure:
-                feed_derisk_scale = float(primary_feed_derisk.get("scale", 1.0) or 1.0)
-                feed_derisk_scale = max(0.05, min(feed_derisk_scale, 1.0))
-                if feed_derisk_scale < 1.0:
-                    gates.append("DERISK_PRIMARY_FEED_SCALE")
-                    symbol_snapshot["primary_feed_derisk"] = dict(primary_feed_derisk)
-        if quarantine_enabled and quarantine_manager is not None:
-            reason_sleeve = None
-            if quarantine_apply_sleeve:
-                for proposal in net_target.proposals:
-                    q_active, q_reason = quarantine_manager.is_quarantined(
-                        sleeve=proposal.sleeve,
-                        now=net_target.bar_ts,
-                    )
-                    if q_active:
-                        reason_sleeve = q_reason or "SLEEVE_QUARANTINED"
-                        break
-            q_symbol = False
-            reason_symbol = None
-            if quarantine_apply_symbol:
-                q_symbol, reason_symbol = quarantine_manager.is_quarantined(
-                    symbol=symbol,
-                    now=net_target.bar_ts,
-                )
-            if reason_sleeve or q_symbol:
-                quarantine_reason = reason_symbol or reason_sleeve or "SLEEVE_QUARANTINED"
-                if quarantine_reason not in gates:
-                    gates.append(quarantine_reason)
-                symbol_snapshot["quarantine_mode"] = quarantine_mode
-                if quarantine_mode == "zero_targets":
-                    net_target.target_dollars = 0.0
-                    net_target.target_shares = 0
-                    delta_shares = -current_shares
-                else:
-                    _record_decision(
-                        symbol=symbol,
-                        bar_ts=net_target.bar_ts,
-                        sleeves=net_target.proposals,
-                        net_target=net_target,
-                        gates=gates,
-                        config_snapshot=symbol_snapshot,
-                    )
-                    continue
-
-        lock = state.stop_lock.get(symbol)
-        if lock:
-            lock_ts = lock.get("bar_ts")
-            lock_dir = str(lock.get("direction", "")).lower()
-            net_score = sum(p.score for p in net_target.proposals)
-            net_conf = max((p.confidence for p in net_target.proposals), default=0.0)
-            reentry_threshold = max((s.reentry_threshold for s in sleeves), default=0.6)
-            if lock_ts and isinstance(lock_ts, datetime) and net_target.bar_ts <= lock_ts:
-                net_target.target_dollars = 0.0
-                net_target.target_shares = 0
-                delta_shares = -current_shares
-                gates.append("STOP_LOCK")
-            else:
-                if abs(net_score) < reentry_threshold or net_conf < reentry_threshold:
-                    net_target.target_dollars = 0.0
-                    net_target.target_shares = 0
-                    delta_shares = -current_shares
-                    gates.append("STOP_LOCK")
-                else:
-                    if lock_dir:
-                        state.stop_lock.pop(symbol, None)
-
-        if delta_shares == 0:
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                config_snapshot=symbol_snapshot,
-            )
-            continue
-
-        if kill_switch:
-            gates.append("KILL_SWITCH_BLOCK")
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                config_snapshot=symbol_snapshot,
-            )
-            continue
-
-        event_risk_near = False
-        if event_blackout_enabled:
-            cached_event_risk = event_blackout_cache.get(symbol)
-            if cached_event_risk is None:
-                try:
-                    cached_event_risk = bool(is_near_event(symbol, days=event_blackout_days))
-                except Exception:
-                    cached_event_risk = False
-                    logger.debug(
-                        "EVENT_BLACKOUT_CHECK_FAILED",
-                        extra={"symbol": symbol, "days": event_blackout_days},
-                        exc_info=True,
-                    )
-                event_blackout_cache[symbol] = cached_event_risk
-            event_risk_near = bool(cached_event_risk)
-            symbol_snapshot["event_risk_near"] = event_risk_near
-            if event_risk_near:
-                gates.append("EVENT_RISK_BLACKOUT_BLOCK")
-                _record_decision(
-                    symbol=symbol,
-                    bar_ts=net_target.bar_ts,
-                    sleeves=net_target.proposals,
-                    net_target=net_target,
-                    gates=gates,
-                    config_snapshot=symbol_snapshot,
-                )
-                continue
-
-        if state.last_order_bar_ts.get(symbol) == net_target.bar_ts:
-            gates.append("BAR_DEDUP")
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                config_snapshot=symbol_snapshot,
-            )
-            continue
-
-        if bool(get_env("AI_TRADING_PARTICIPATION_CAP_ENABLED", True, cast=bool)):
-            allowed_participation, adjusted_qty, liq_reason = enforce_participation_cap(
-                order_qty=float(delta_shares),
-                rolling_volume=liq_features.rolling_volume,
-                max_participation_pct=float(
-                    get_env("AI_TRADING_MAX_PARTICIPATION_PCT", 0.015, cast=float)
-                ),
-                mode=str(get_env("AI_TRADING_PARTICIPATION_BLOCK_MODE", "block")),
-                scale_min=float(get_env("AI_TRADING_PARTICIPATION_SCALE_MIN", 0.25, cast=float)),
-            )
-            participation_block_bypassed = False
-            if not allowed_participation:
-                participation_gate = liq_reason or "LIQ_PARTICIPATION_BLOCK"
-                if _gate_blocks(str(participation_gate)):
-                    gates.append(str(participation_gate))
-                    _record_decision(
-                        symbol=symbol,
-                        bar_ts=net_target.bar_ts,
-                        sleeves=net_target.proposals,
-                        net_target=net_target,
-                        gates=gates,
-                        config_snapshot=symbol_snapshot,
-                    )
-                    continue
-                adjusted_qty_int = int(round(float(adjusted_qty)))
-                if adjusted_qty_int == 0:
-                    adjusted_qty_int = 1 if delta_shares > 0 else -1
-                delta_shares = adjusted_qty_int
-                net_target.target_shares = current_shares + delta_shares
-                net_target.target_dollars = net_target.target_shares * price
-                gates.append("LIQ_PARTICIPATION_BLOCK_BYPASSED")
-                participation_block_bypassed = True
-                symbol_snapshot["gate_auto_disable"] = {
-                    "gate": str(participation_gate),
-                    "reason": "non_positive_marginal_contribution",
-                }
-            if not participation_block_bypassed:
-                adjusted_qty_int = int(round(adjusted_qty))
-                if adjusted_qty_int != delta_shares:
-                    delta_shares = adjusted_qty_int
-                    net_target.target_shares = current_shares + delta_shares
-                    net_target.target_dollars = net_target.target_shares * price
-                    if liq_reason:
-                        gates.append(liq_reason)
-            if liq_regime is LiquidityRegime.THIN and "LIQ_REGIME_THIN_SCALE" not in gates:
-                gates.append("LIQ_REGIME_THIN_SCALE")
-
-        if liq_regime is LiquidityRegime.THIN:
-            thin_cost_mult = float(get_env("AI_TRADING_LIQ_THIN_COST_MULT", 1.3, cast=float))
-            if thin_cost_mult > 1.0:
-                scaled_qty = int(round(delta_shares / thin_cost_mult))
-                if scaled_qty != 0 and scaled_qty != delta_shares:
-                    delta_shares = scaled_qty
-                    net_target.target_shares = current_shares + delta_shares
-                    net_target.target_dollars = net_target.target_shares * price
-                    gates.append("LIQ_THIN_COST_MULT_SCALE")
-            thin_max_order_dollars = float(
-                get_env("AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS", 5000, cast=float)
-            )
-            if thin_max_order_dollars > 0 and abs(delta_shares) * price > thin_max_order_dollars:
-                if _gate_blocks("LIQ_THIN_MAX_ORDER_BLOCK"):
-                    gates.append("LIQ_THIN_MAX_ORDER_BLOCK")
-                    _record_decision(
-                        symbol=symbol,
-                        bar_ts=net_target.bar_ts,
-                        sleeves=net_target.proposals,
-                        net_target=net_target,
-                        gates=gates,
-                        config_snapshot=symbol_snapshot,
-                    )
-                    continue
-                thin_cap_qty = int(
-                    math.copysign(
-                        max(1, int(thin_max_order_dollars // max(price, 1e-9))),
-                        delta_shares,
-                    )
-                )
-                delta_shares = thin_cap_qty
-                net_target.target_shares = current_shares + delta_shares
-                net_target.target_dollars = net_target.target_shares * price
-                gates.append("LIQ_THIN_MAX_ORDER_BLOCK_BYPASSED")
-
-        if current_shares == 0 and alpha_decay_deweight_enabled:
-            alpha_guard = _alpha_decay_entry_guard(state, symbol, now)
-            if alpha_guard.get("blocked"):
-                if _gate_blocks("ALPHA_DECAY_BLOCK"):
-                    gates.append("ALPHA_DECAY_BLOCK")
-                    record = _make_decision_record(
-                        symbol=symbol,
-                        bar_ts=net_target.bar_ts,
-                        sleeves=net_target.proposals,
-                        net_target=net_target,
-                        gates=gates,
-                        metrics={"alpha_decay": alpha_guard},
-                        config_snapshot=symbol_snapshot,
-                    )
-                    _write_decision_record(record, decision_path)
-                    continue
-                gates.append("ALPHA_DECAY_BLOCK_BYPASSED")
-            trades_in_window = int(alpha_guard.get("trades_in_window", 0) or 0)
-            start_trades = int(alpha_guard.get("start_trades", 0) or 0)
-            over_start = max(0, trades_in_window - max(0, start_trades) + 1)
-            if over_start > 0 and alpha_decay_qty_step > 0:
-                deweight = min(alpha_decay_qty_max_deweight, over_start * alpha_decay_qty_step)
-                multiplier = max(0.05, 1.0 - deweight)
-                scaled_qty = int(round(float(delta_shares) * multiplier))
-                if scaled_qty == 0:
-                    if _gate_blocks("ALPHA_DECAY_ZERO_QTY_BLOCK"):
-                        gates.append("ALPHA_DECAY_ZERO_QTY_BLOCK")
-                        record = _make_decision_record(
-                            symbol=symbol,
-                            bar_ts=net_target.bar_ts,
-                            sleeves=net_target.proposals,
-                            net_target=net_target,
-                            gates=gates,
-                            metrics={"alpha_decay": alpha_guard | {"multiplier": multiplier}},
-                            config_snapshot=symbol_snapshot,
-                        )
-                        _write_decision_record(record, decision_path)
-                        continue
-                    scaled_qty = 1 if delta_shares > 0 else -1
-                if scaled_qty != delta_shares:
-                    delta_shares = scaled_qty
-                    net_target.target_shares = current_shares + delta_shares
-                    net_target.target_dollars = net_target.target_shares * price
-                    gates.append("ALPHA_DECAY_DEWEIGHT")
-                    symbol_snapshot["alpha_decay"] = {
-                        "trades_in_window": trades_in_window,
-                        "start_trades": start_trades,
-                        "multiplier": multiplier,
-                    }
-
-        if capacity_throttle_enabled and delta_shares != 0:
-            capacity_scale = 1.0
-            spread_bps_now = max(float(liq_features.spread_bps), 0.0)
-            if capacity_spread_hard_bps > capacity_spread_soft_bps and spread_bps_now > capacity_spread_soft_bps:
-                if spread_bps_now >= capacity_spread_hard_bps:
-                    spread_scale = capacity_min_scale
-                else:
-                    spread_progress = (spread_bps_now - capacity_spread_soft_bps) / (
-                        capacity_spread_hard_bps - capacity_spread_soft_bps
-                    )
-                    spread_scale = 1.0 - spread_progress * (1.0 - capacity_min_scale)
-                capacity_scale = min(capacity_scale, max(capacity_min_scale, spread_scale))
-            rolling_volume = max(float(liq_features.rolling_volume), 0.0)
-            if (
-                rolling_volume > 0
-                and capacity_volume_hard_participation > capacity_volume_soft_participation
-            ):
-                participation = abs(float(delta_shares)) / rolling_volume
-                if participation > capacity_volume_soft_participation:
-                    if participation >= capacity_volume_hard_participation:
-                        volume_scale = capacity_min_scale
-                    else:
-                        participation_progress = (
-                            participation - capacity_volume_soft_participation
-                        ) / (capacity_volume_hard_participation - capacity_volume_soft_participation)
-                        volume_scale = 1.0 - participation_progress * (1.0 - capacity_min_scale)
-                    capacity_scale = min(capacity_scale, max(capacity_min_scale, volume_scale))
-            if slo_derisk_scale < 1.0:
-                capacity_scale = min(capacity_scale, slo_derisk_scale)
-            if feed_derisk_scale < 1.0:
-                capacity_scale = min(capacity_scale, feed_derisk_scale)
-            if capacity_scale < 1.0:
-                throttled_qty = int(round(float(delta_shares) * capacity_scale))
-                if throttled_qty == 0:
-                    gates.append("CAPACITY_THROTTLE_BLOCK")
-                    record = _make_decision_record(
-                        symbol=symbol,
-                        bar_ts=net_target.bar_ts,
-                        sleeves=net_target.proposals,
-                        net_target=net_target,
-                        gates=gates,
-                        metrics={
-                            "capacity_scale": capacity_scale,
-                            "spread_bps": spread_bps_now,
-                            "rolling_volume": rolling_volume,
-                            "slo_derisk": slo_derisk_details,
-                            "primary_feed_derisk": primary_feed_derisk,
-                        },
-                        config_snapshot=symbol_snapshot,
-                    )
-                    _write_decision_record(record, decision_path)
-                    continue
-                if throttled_qty != delta_shares:
-                    delta_shares = throttled_qty
-                    net_target.target_shares = current_shares + delta_shares
-                    net_target.target_dollars = net_target.target_shares * price
-                    gates.append("CAPACITY_THROTTLE_SCALE")
-                    symbol_snapshot["capacity_throttle"] = {
-                        "scale": capacity_scale,
-                        "spread_bps": spread_bps_now,
-                        "rolling_volume": rolling_volume,
-                        "slo_derisk": slo_derisk_details,
-                        "primary_feed_derisk": primary_feed_derisk,
-                    }
-
-        adaptive_profile = symbol_adaptive_profiles.get(symbol)
-        if adaptive_profile and delta_shares != 0:
-            adaptive_scale = _safe_float(adaptive_profile.get("scale")) or 1.0
-            adaptive_scale = max(0.05, min(adaptive_scale, 1.0))
-            if adaptive_scale < 1.0:
-                scaled_qty = int(round(float(delta_shares) * adaptive_scale))
-                if scaled_qty == 0:
-                    gates.append("SYMBOL_EXPECTANCY_SLIPPAGE_BLOCK")
-                    record = _make_decision_record(
-                        symbol=symbol,
-                        bar_ts=net_target.bar_ts,
-                        sleeves=net_target.proposals,
-                        net_target=net_target,
-                        gates=gates,
-                        metrics={"symbol_adaptive_sizing": dict(adaptive_profile)},
-                        config_snapshot=symbol_snapshot,
-                    )
-                    _write_decision_record(record, decision_path)
-                    continue
-                if scaled_qty != delta_shares:
-                    delta_shares = int(scaled_qty)
-                    net_target.target_shares = current_shares + delta_shares
-                    net_target.target_dollars = net_target.target_shares * price
-                    gates.append("SYMBOL_EXPECTANCY_SLIPPAGE_SCALE")
-                    symbol_snapshot["symbol_adaptive_sizing"] = dict(adaptive_profile)
-
-        if (
-            delta_shares != 0
-            and expanding_exposure
-            and bool(get_env("AI_TRADING_UNCERTAINTY_CAPITAL_SCALING_ENABLED", True, cast=bool))
-        ):
-            ece_value = max(0.0, float(slo_derisk_details.get("calibration_ece", 0.0) or 0.0))
-            brier_value = max(
-                0.0, float(slo_derisk_details.get("calibration_brier", 0.0) or 0.0)
-            )
-            execution_drift_bps = max(
-                0.0, float(slo_derisk_details.get("execution_drift_bps", 0.0) or 0.0)
-            )
-            feature_drift_psi = max(
-                0.0, float(slo_derisk_details.get("drift_psi", 0.0) or 0.0)
-            )
-            label_drift_psi = max(
-                0.0, float(slo_derisk_details.get("label_drift_psi", 0.0) or 0.0)
-            )
-            residual_drift_psi = max(
-                0.0, float(slo_derisk_details.get("residual_drift_psi", 0.0) or 0.0)
-            )
-            min_samples_required = max(
-                1,
-                int(
-                    get_env(
-                        "AI_TRADING_UNCERTAINTY_CAPITAL_MIN_SAMPLES",
-                        10,
-                        cast=int,
-                    )
-                ),
-            )
-            sample_counts = [
-                int(slo_derisk_details.get("calibration_ece_samples", 0) or 0),
-                int(slo_derisk_details.get("calibration_brier_samples", 0) or 0),
-                int(slo_derisk_details.get("drift_samples", 0) or 0),
-            ]
-            sample_shortfall = max(
-                0.0,
-                float(min_samples_required - min(sample_counts or [0]))
-                / float(max(1, min_samples_required)),
-            )
-            data_quality_penalty = 0.0
-            if bool(primary_feed_derisk.get("triggered", False)):
-                data_quality_penalty += 0.4
-            degraded_count = len(getattr(state, "degraded_providers", set()) or set())
-            if degraded_count > 0:
-                data_quality_penalty += min(float(degraded_count) * 0.2, 0.6)
-            uncertainty_components = {
-                "epistemic": min(
-                    1.0,
-                    max(
-                        ece_value / max(1e-6, float(get_env("AI_TRADING_DERISK_SLO_MAX_CALIB_ECE", 0.15, cast=float))),
-                        brier_value / max(1e-6, float(get_env("AI_TRADING_DERISK_SLO_MAX_CALIB_BRIER", 0.35, cast=float))),
-                    ),
-                ),
-                "drift": min(
-                    1.0,
-                    max(
-                        execution_drift_bps / max(1e-6, float(get_env("AI_TRADING_DERISK_SLO_MAX_EXEC_DRIFT_BPS", 35.0, cast=float))),
-                        feature_drift_psi / max(1e-6, float(get_env("AI_TRADING_DERISK_SLO_MAX_FEATURE_DRIFT_PSI", 0.30, cast=float))),
-                        label_drift_psi / max(1e-6, float(get_env("AI_TRADING_DERISK_SLO_MAX_LABEL_DRIFT_PSI", 0.30, cast=float))),
-                        residual_drift_psi / max(1e-6, float(get_env("AI_TRADING_DERISK_SLO_MAX_RESIDUAL_DRIFT_PSI", 0.30, cast=float))),
-                    ),
-                ),
-                "data_quality": min(1.0, float(data_quality_penalty)),
-                "sample_shortfall": min(1.0, float(sample_shortfall)),
-            }
-            uncertainty_score = min(
-                1.0,
-                (0.40 * float(uncertainty_components["epistemic"]))
-                + (0.30 * float(uncertainty_components["drift"]))
-                + (0.20 * float(uncertainty_components["data_quality"]))
-                + (0.10 * float(uncertainty_components["sample_shortfall"])),
-            )
-            base_uncertainty_weight = max(
-                0.0,
-                min(
-                    1.0,
-                    float(
-                        get_env(
-                            "AI_TRADING_UNCERTAINTY_CAPITAL_SCALING_WEIGHT",
-                            0.60,
-                            cast=float,
-                        )
-                    ),
-                ),
-            )
-            base_uncertainty_min_scale = max(
-                0.05,
-                min(
-                    1.0,
-                    float(
-                        get_env(
-                            "AI_TRADING_UNCERTAINTY_CAPITAL_SCALING_MIN_SCALE",
-                            0.35,
-                            cast=float,
-                        )
-                    ),
-                ),
-            )
-            if penalty_overlap_coordination_enabled and initial_requested_delta_shares != 0:
-                prior_scale_ratio = min(
-                    1.0,
-                    abs(float(delta_shares))
-                    / float(max(1, abs(int(initial_requested_delta_shares)))),
-                )
-                if prior_scale_ratio < 0.999:
-                    prior_reduction = max(0.0, 1.0 - float(prior_scale_ratio))
-                    damp_mult = max(
-                        0.0,
-                        1.0
-                        - (
-                            float(penalty_overlap_weight_dampen)
-                            * float(prior_reduction)
-                        ),
-                    )
-                    base_uncertainty_weight = max(
-                        0.0,
-                        min(1.0, float(base_uncertainty_weight) * float(damp_mult)),
-                    )
-                    coordinated_floor = max(
-                        float(base_uncertainty_min_scale),
-                        float(penalty_overlap_min_scale_floor)
-                        - (0.25 * float(prior_reduction)),
-                    )
-                    base_uncertainty_min_scale = max(
-                        0.05,
-                        min(1.0, float(coordinated_floor)),
-                    )
-            uncertainty_auto_controls = _resolve_uncertainty_capital_auto_controls(
-                base_weight=float(base_uncertainty_weight),
-                base_min_scale=float(base_uncertainty_min_scale),
-                raw_score=float(uncertainty_score),
-                state_payload=uncertainty_capital_state,
-            )
-            uncertainty_weight = float(
-                _safe_float(uncertainty_auto_controls.get("weight"))
-                or base_uncertainty_weight
-            )
-            uncertainty_min_scale = float(
-                _safe_float(uncertainty_auto_controls.get("min_scale"))
-                or base_uncertainty_min_scale
-            )
-            effective_uncertainty_score = float(
-                _safe_float(uncertainty_auto_controls.get("effective_score"))
-                or uncertainty_score
-            )
-            uncertainty_scale = max(
-                float(uncertainty_min_scale),
-                1.0 - (float(uncertainty_weight) * float(effective_uncertainty_score)),
-            )
-            uncertainty_event = {
-                "symbol": str(symbol),
-                "score": float(uncertainty_score),
-                "effective_score": float(effective_uncertainty_score),
-                "scale": float(uncertainty_scale),
-                "components": dict(uncertainty_components),
-                "auto_tune": dict(uncertainty_auto_controls),
-                "scaled": False,
-                "blocked": False,
-            }
-            if uncertainty_scale < 0.999:
-                adjusted_qty = int(round(float(delta_shares) * float(uncertainty_scale)))
-                if adjusted_qty == 0:
-                    gates.append("UNCERTAINTY_CAPITAL_BLOCK")
-                    uncertainty_event["blocked"] = True
-                    uncertainty_cycle_events.append(dict(uncertainty_event))
-                    record = _make_decision_record(
-                        symbol=symbol,
-                        bar_ts=net_target.bar_ts,
-                        sleeves=net_target.proposals,
-                        net_target=net_target,
-                        gates=gates,
-                        metrics={
-                            "uncertainty_capital_scaling": {
-                                "scale": float(uncertainty_scale),
-                                "score": float(uncertainty_score),
-                                "effective_score": float(effective_uncertainty_score),
-                                "components": uncertainty_components,
-                                "auto_tune": dict(uncertainty_auto_controls),
-                            }
-                        },
-                        config_snapshot=symbol_snapshot,
-                    )
-                    _write_decision_record(record, decision_path)
-                    continue
-                if adjusted_qty != int(delta_shares):
-                    delta_shares = int(adjusted_qty)
-                    net_target.target_shares = current_shares + delta_shares
-                    net_target.target_dollars = net_target.target_shares * price
-                    gates.append("UNCERTAINTY_CAPITAL_SCALE")
-                    uncertainty_event["scaled"] = True
-                    symbol_snapshot["uncertainty_capital_scaling"] = {
-                        "scale": float(uncertainty_scale),
-                        "score": float(uncertainty_score),
-                        "effective_score": float(effective_uncertainty_score),
-                        "components": uncertainty_components,
-                        "auto_tune": dict(uncertainty_auto_controls),
-                    }
-            uncertainty_cycle_events.append(dict(uncertainty_event))
-
-        requested_delta_shares = int(delta_shares)
-        reversal_clamp_reason: str | None = None
-        if current_shares > 0 and delta_shares < 0 and abs(delta_shares) > current_shares:
-            delta_shares = -current_shares
-            net_target.target_shares = 0
-            net_target.target_dollars = 0.0
-            reversal_clamp_reason = "FLAT_BEFORE_REVERSAL"
-        elif current_shares < 0 and delta_shares > 0 and abs(delta_shares) > abs(current_shares):
-            delta_shares = abs(current_shares)
-            net_target.target_shares = 0
-            net_target.target_dollars = 0.0
-            reversal_clamp_reason = "FLAT_BEFORE_REVERSAL"
-        if reversal_clamp_reason:
-            gates.append(reversal_clamp_reason)
-            logger.info(
-                "POSITION_REVERSAL_CLAMP",
-                extra={
-                    "symbol": symbol,
-                    "current_shares": int(current_shares),
-                    "requested_delta_shares": requested_delta_shares,
-                    "adjusted_delta_shares": int(delta_shares),
-                    "target_shares": int(net_target.target_shares),
-                    "reason": reversal_clamp_reason,
-                },
-            )
-
-        try:
-            max_symbol_notional = float(
-                getattr(
-                    cfg,
-                    "global_max_symbol_dollars",
-                    get_env("GLOBAL_MAX_SYMBOL_DOLLARS", 25000.0, cast=float),
-                )
-                or 0.0
-            )
-        except (TypeError, ValueError):
-            max_symbol_notional = float(
-                get_env("GLOBAL_MAX_SYMBOL_DOLLARS", 25000.0, cast=float)
-            )
-        delta_shares_capped, symbol_cap_details = _clip_delta_to_symbol_notional_cap(
+        symbol_result = process_netting_symbol(
+            processor=symbol_processor,
             symbol=symbol,
-            current_shares=int(current_shares),
-            delta_shares=int(delta_shares),
-            price=float(price),
-            max_symbol_notional=max_symbol_notional,
-        )
-        if symbol_cap_details is not None:
-            if int(delta_shares_capped) == 0:
-                gates.append("RISK_CAP_SYMBOL")
-                record = _make_decision_record(
-                    symbol=symbol,
-                    bar_ts=net_target.bar_ts,
-                    sleeves=net_target.proposals,
-                    net_target=net_target,
-                    gates=gates,
-                    metrics={"symbol_cap": symbol_cap_details},
-                    config_snapshot=symbol_snapshot,
-                )
-                _write_decision_record(record, decision_path)
-                continue
-            delta_shares = int(delta_shares_capped)
-            net_target.target_shares = current_shares + delta_shares
-            net_target.target_dollars = net_target.target_shares * price
-            gates.append("RISK_CAP_SYMBOL_CLIP")
-            symbol_snapshot["symbol_cap_clip"] = symbol_cap_details
-            logger.info("SYMBOL_NOTIONAL_CAP_CLIP", extra=symbol_cap_details)
-
-        min_qty = int(getattr(cfg, "execution_min_qty", 1))
-        min_notional = float(getattr(cfg, "execution_min_notional", 1.0))
-        if abs(delta_shares) < min_qty or abs(delta_shares) * price < min_notional:
-            gates.append("RISK_CAP_SYMBOL")
-            record = _make_decision_record(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                config_snapshot=symbol_snapshot,
-            )
-            _write_decision_record(record, decision_path)
-            continue
-
-        side = "buy" if delta_shares > 0 else "sell"
-        if side == "sell":
-            requested_sell_qty = abs(int(delta_shares))
-            adjusted_sell_qty, sell_qty_clip_context = _clip_sell_qty_to_available_position(
-                symbol=symbol,
-                current_shares=int(current_shares),
-                requested_qty=requested_sell_qty,
-                exec_engine=exec_engine,
-            )
-            if adjusted_sell_qty <= 0:
-                gates.append("PRE_SUBMIT_INSUFFICIENT_POSITION_AVAILABLE")
-                record = _make_decision_record(
-                    symbol=symbol,
-                    bar_ts=net_target.bar_ts,
-                    sleeves=net_target.proposals,
-                    net_target=net_target,
-                    gates=gates,
-                    metrics={"pre_submit_sell_qty_clip": sell_qty_clip_context or {}},
-                    config_snapshot=symbol_snapshot,
-                )
-                _write_decision_record(record, decision_path)
-                continue
-            if adjusted_sell_qty != requested_sell_qty:
-                delta_shares = -int(adjusted_sell_qty)
-                net_target.target_shares = current_shares + delta_shares
-                net_target.target_dollars = net_target.target_shares * price
-                gates.append("PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION")
-                if sell_qty_clip_context:
-                    symbol_snapshot["pre_submit_sell_qty_clip"] = dict(sell_qty_clip_context)
-        opening_trade = abs(current_shares + delta_shares) > abs(current_shares)
-        if exec_engine is not None:
-            if opening_trade:
-                min_notional_precheck_fn = getattr(
-                    exec_engine,
-                    "_opening_min_notional_allows_order",
-                    None,
-                )
-                if callable(min_notional_precheck_fn):
-                    precheck_order_payload: dict[str, Any] = {
-                        "symbol": symbol,
-                        "side": side,
-                        "quantity": abs(int(delta_shares)),
-                        "qty": abs(int(delta_shares)),
-                        "price_hint": float(price),
-                    }
-                    try:
-                        opening_notional_allowed, opening_notional_context = (
-                            min_notional_precheck_fn(precheck_order_payload)
-                        )
-                    except Exception:
-                        opening_notional_allowed, opening_notional_context = True, {}
-                    opening_notional_context = (
-                        dict(opening_notional_context)
-                        if isinstance(opening_notional_context, Mapping)
-                        else {}
-                    )
-                    if not bool(opening_notional_allowed):
-                        gates.append("ENTRY_CONSTRAINED_MIN_NOTIONAL_PRECHECK")
-                        record = _make_decision_record(
-                            symbol=symbol,
-                            bar_ts=net_target.bar_ts,
-                            sleeves=net_target.proposals,
-                            net_target=net_target,
-                            gates=gates,
-                            metrics={"opening_min_notional": opening_notional_context},
-                            config_snapshot=symbol_snapshot,
-                        )
-                        _write_decision_record(record, decision_path)
-                        continue
-                    autosized_qty: int | None = None
-                    try:
-                        autosized_qty = int(precheck_order_payload.get("quantity"))  # type: ignore[arg-type]
-                    except (TypeError, ValueError):
-                        try:
-                            autosized_qty = int(precheck_order_payload.get("qty"))  # type: ignore[arg-type]
-                        except (TypeError, ValueError):
-                            autosized_qty = None
-                    if autosized_qty is not None and autosized_qty > 0:
-                        signed_autosized_qty = (
-                            int(autosized_qty)
-                            if int(delta_shares) > 0
-                            else -int(autosized_qty)
-                        )
-                        if signed_autosized_qty != int(delta_shares):
-                            delta_shares = int(signed_autosized_qty)
-                            net_target.target_shares = current_shares + delta_shares
-                            net_target.target_dollars = net_target.target_shares * price
-                            gates.append("ENTRY_CONSTRAINED_MIN_NOTIONAL_AUTOSIZE_PRECHECK")
-                            symbol_snapshot["opening_min_notional_precheck"] = {
-                                **opening_notional_context,
-                                "autosized_qty": int(abs(delta_shares)),
-                            }
-                else:
-                    min_notional_fn = getattr(exec_engine, "_opening_min_notional_dollars", None)
-                    if callable(min_notional_fn):
-                        try:
-                            opening_min_notional = float(
-                                min_notional_fn(symbol=symbol) or 0.0
-                            )
-                        except TypeError:
-                            opening_min_notional = float(min_notional_fn() or 0.0)
-                        except Exception:
-                            opening_min_notional = 0.0
-                        if opening_min_notional > 0.0:
-                            opening_notional = abs(float(delta_shares) * float(price))
-                            if opening_notional < opening_min_notional:
-                                gates.append("ENTRY_CONSTRAINED_MIN_NOTIONAL_PRECHECK")
-                                record = _make_decision_record(
-                                    symbol=symbol,
-                                    bar_ts=net_target.bar_ts,
-                                    sleeves=net_target.proposals,
-                                    net_target=net_target,
-                                    gates=gates,
-                                    metrics={
-                                        "opening_min_notional": {
-                                            "order_notional": float(opening_notional),
-                                            "min_notional": float(opening_min_notional),
-                                        }
-                                    },
-                                    config_snapshot=symbol_snapshot,
-                                )
-                                _write_decision_record(record, decision_path)
-                                continue
-
-                cooldown_fn = getattr(exec_engine, "_symbol_reentry_cooldown_allows_opening", None)
-                if callable(cooldown_fn):
-                    try:
-                        cooldown_allowed, cooldown_context = cooldown_fn(symbol=symbol, side=side)
-                    except Exception:
-                        cooldown_allowed, cooldown_context = True, {}
-                    if not bool(cooldown_allowed):
-                        gates.append("ENTRY_CONSTRAINED_SYMBOL_REENTRY_COOLDOWN_PRECHECK")
-                        record = _make_decision_record(
-                            symbol=symbol,
-                            bar_ts=net_target.bar_ts,
-                            sleeves=net_target.proposals,
-                            net_target=net_target,
-                            gates=gates,
-                            metrics={"symbol_reentry_cooldown": cooldown_context},
-                            config_snapshot=symbol_snapshot,
-                        )
-                        _write_decision_record(record, decision_path)
-                        continue
-
-            duplicate_fn = getattr(exec_engine, "_should_suppress_duplicate_intent", None)
-            if callable(duplicate_fn):
-                try:
-                    duplicate_suppressed = bool(duplicate_fn(symbol, side))
-                except Exception:
-                    duplicate_suppressed = False
-                if duplicate_suppressed:
-                    gates.append("DUPLICATE_INTENT_PRECHECK")
-                    record = _make_decision_record(
-                        symbol=symbol,
-                        bar_ts=net_target.bar_ts,
-                        sleeves=net_target.proposals,
-                        net_target=net_target,
-                        gates=gates,
-                        config_snapshot=symbol_snapshot,
-                    )
-                    _write_decision_record(record, decision_path)
-                    continue
-
-        expected_edge_total_raw = sum(
-            max(float(proposal.expected_edge_bps), 0.0) for proposal in net_target.proposals
-        )
-        expected_edge_realism_factor = float(
-            edge_realism_rank_factor_by_symbol.get(symbol, 1.0)
-        )
-        expected_edge_total = float(expected_edge_total_raw)
-        if (
-            edge_realism_apply_to_approval_enabled
-            and float(expected_edge_total) > 0.0
-        ):
-            expected_edge_total = float(expected_edge_total) * float(
-                expected_edge_realism_factor
-            )
-        expected_cost_total = sum(
-            max(float(proposal.expected_cost_bps), 0.0) for proposal in net_target.proposals
-        )
-        cost_aware_guard_enabled = bool(
-            get_env("AI_TRADING_EXECUTION_COST_AWARE_ENTRY_GUARD_ENABLED", True, cast=bool)
-        )
-        if cost_aware_guard_enabled and opening_trade:
-            adaptive_cost_context: dict[str, Any] = {}
-            adaptive_cost_add_bps = 0.0
-            opening_ramp_context: dict[str, Any] = {}
-            opening_ramp_add_bps = 0.0
-            if exec_engine is not None:
-                adaptive_cost_hook = getattr(exec_engine, "_cost_aware_entry_adaptive_context", None)
-                if callable(adaptive_cost_hook):
-                    try:
-                        adaptive_cost_result = adaptive_cost_hook()
-                    except Exception:
-                        adaptive_cost_result = {}
-                    if isinstance(adaptive_cost_result, Mapping):
-                        adaptive_cost_context = dict(adaptive_cost_result)
-                        try:
-                            adaptive_cost_add_bps = max(
-                                0.0,
-                                float(
-                                    adaptive_cost_context.get("additional_required_edge_bps", 0.0)
-                                    or 0.0
-                                ),
-                            )
-                        except (TypeError, ValueError):
-                            adaptive_cost_add_bps = 0.0
-                opening_ramp_hook = getattr(exec_engine, "_opening_ramp_context", None)
-                if callable(opening_ramp_hook):
-                    try:
-                        opening_ramp_result = opening_ramp_hook()
-                    except Exception:
-                        opening_ramp_result = {}
-                    if isinstance(opening_ramp_result, Mapping):
-                        opening_ramp_context = dict(opening_ramp_result)
-                        try:
-                            opening_ramp_add_bps = max(
-                                0.0,
-                                float(
-                                    opening_ramp_context.get("required_edge_add_bps", 0.0)
-                                    or 0.0
-                                ),
-                            )
-                        except (TypeError, ValueError):
-                            opening_ramp_add_bps = 0.0
-            spread_bps_est = max(float(liq_features.spread_bps), 0.0)
-            slippage_bps_est = max(
-                0.0,
-                float(
-                    get_env(
-                        "AI_TRADING_EXECUTION_COST_AWARE_SLIPPAGE_BPS",
-                        _slippage_setting_bps(),
-                        cast=float,
-                    )
-                ),
-            )
-            fee_bps_est = max(0.0, float(effective_policy.objective.fee_bps))
-            borrow_bps_est = max(0.0, float(effective_policy.objective.borrow_bps))
-            edge_margin_bps = max(
-                0.0,
-                float(
-                    get_env(
-                        "AI_TRADING_EXECUTION_COST_AWARE_EDGE_MARGIN_BPS",
-                        2.0,
-                        cast=float,
-                    )
-                ),
-            )
-            cost_multiplier = max(
-                1.0,
-                float(
-                    get_env(
-                        "AI_TRADING_EXECUTION_COST_AWARE_COST_MULTIPLIER",
-                        1.15,
-                        cast=float,
-                    )
-                ),
-            )
-            min_edge_to_cost_ratio = max(
-                0.0,
-                float(
-                    get_env(
-                        "AI_TRADING_EXECUTION_COST_AWARE_MIN_EDGE_TO_COST_RATIO",
-                        1.2,
-                        cast=float,
-                    )
-                ),
-            )
-            quote_cost_bps = spread_bps_est + slippage_bps_est + fee_bps_est + borrow_bps_est
-            effective_cost_floor = (
-                max(float(expected_cost_total), float(quote_cost_bps))
-                * float(cost_multiplier)
-            )
-            required_edge_bps = max(
-                float(effective_cost_floor + edge_margin_bps),
-                float(effective_cost_floor * min_edge_to_cost_ratio),
-            )
-            required_edge_bps += float(adaptive_cost_add_bps + opening_ramp_add_bps)
-            adaptive_edge_floor_enabled = bool(
-                get_env(
-                    "AI_TRADING_EXECUTION_COST_AWARE_ADAPTIVE_EDGE_FLOOR_ENABLED",
-                    True,
-                    cast=bool,
-                )
-            )
-            adaptive_edge_floor_percentile = max(
-                0.05,
-                min(
-                    0.95,
-                    float(
-                        get_env(
-                            "AI_TRADING_EXECUTION_COST_AWARE_ADAPTIVE_EDGE_FLOOR_PERCENTILE",
-                            0.60,
-                            cast=float,
-                        )
-                    ),
-                ),
-            )
-            adaptive_edge_floor_value = None
-            if adaptive_edge_floor_enabled and candidate_expected_net_edge:
-                adaptive_edge_floor_value = _percentile_linear(
-                    list(candidate_expected_net_edge.values()),
-                    adaptive_edge_floor_percentile,
-                )
-                if adaptive_edge_floor_value is not None:
-                    required_edge_bps = max(
-                        float(required_edge_bps),
-                        float(adaptive_edge_floor_value),
-                    )
-            if float(expected_edge_total) < required_edge_bps and _gate_blocks(
-                "COST_AWARE_ENTRY_GUARD"
-            ):
-                gates.append("COST_AWARE_ENTRY_GUARD")
-                _record_decision(
-                    symbol=symbol,
-                    bar_ts=net_target.bar_ts,
-                    sleeves=net_target.proposals,
-                    net_target=net_target,
-                    gates=gates,
-                    metrics={
-                        "cost_aware_entry_guard": {
-                            "expected_edge_bps_raw": float(expected_edge_total_raw),
-                            "expected_edge_bps": float(expected_edge_total),
-                            "expected_edge_realism_factor": float(
-                                expected_edge_realism_factor
-                            ),
-                            "expected_edge_realism_applied": bool(
-                                edge_realism_apply_to_approval_enabled
-                            ),
-                            "expected_cost_bps": float(expected_cost_total),
-                            "spread_bps": float(spread_bps_est),
-                            "slippage_bps": float(slippage_bps_est),
-                            "fee_bps": float(fee_bps_est),
-                            "borrow_bps": float(borrow_bps_est),
-                            "edge_margin_bps": float(edge_margin_bps),
-                            "cost_multiplier": float(cost_multiplier),
-                            "edge_to_cost_min_ratio": float(min_edge_to_cost_ratio),
-                            "effective_cost_floor_bps": float(effective_cost_floor),
-                            "adaptive_cost_add_bps": float(adaptive_cost_add_bps),
-                            "opening_ramp_add_bps": float(opening_ramp_add_bps),
-                            "required_edge_bps": float(required_edge_bps),
-                            "adaptive_edge_floor_enabled": bool(
-                                adaptive_edge_floor_enabled
-                            ),
-                            "adaptive_edge_floor_percentile": float(
-                                adaptive_edge_floor_percentile
-                            ),
-                            "adaptive_edge_floor_bps": (
-                                float(adaptive_edge_floor_value)
-                                if adaptive_edge_floor_value is not None
-                                else None
-                            ),
-                            "adaptive_cost_context": adaptive_cost_context,
-                            "opening_ramp_context": opening_ramp_context,
-                        }
-                    },
-                    config_snapshot=symbol_snapshot,
-                )
-                continue
-        calibration_samples = int(
-            max(
-                float(slo_derisk_details.get("calibration_ece_samples", 0) or 0.0),
-                float(slo_derisk_details.get("calibration_brier_samples", 0) or 0.0),
-            )
-        )
-        ece_value = float(slo_derisk_details.get("calibration_ece", 0.0) or 0.0)
-        brier_value = float(slo_derisk_details.get("calibration_brier", 0.0) or 0.0)
-        if liq_regime is LiquidityRegime.THIN:
-            ece_limit = float(effective_policy.calibration.max_ece_stress)
-            brier_limit = float(effective_policy.calibration.max_brier_stress)
-        else:
-            ece_limit = float(effective_policy.calibration.max_ece_normal)
-            brier_limit = float(effective_policy.calibration.max_brier_normal)
-        calibration_ok = (
-            calibration_samples < int(effective_policy.calibration.min_samples)
-            or (ece_value <= ece_limit and brier_value <= brier_limit)
-        )
-        sector_name = str(get_sector(symbol) or "UNKNOWN").upper()
-        safety_tier_raw = str(getattr(state, "operational_safety_tier", SafetyTier.NORMAL.value) or SafetyTier.NORMAL.value)
-        approval_context = evaluate_execution_approval(
-            effective_policy=effective_policy,
-            symbol=symbol,
-            side=side,
-            delta_shares=int(delta_shares),
-            current_shares=float(current_shares),
-            price=float(price),
-            expected_edge_total=float(expected_edge_total),
-            expected_cost_total=float(expected_cost_total),
-            proposals=net_target.proposals,
-            spread_bps=float(liq_features.spread_bps),
-            rolling_volume=float(liq_features.rolling_volume),
-            pending_oldest_age_sec=float(
-                slo_derisk_details.get("pending_oldest_age_sec", 0.0) or 0.0
-            ),
-            calibration_ok=calibration_ok,
-            reject_rate_pct=float(slo_derisk_details.get("reject_rate_pct", 0.0) or 0.0),
-            portfolio_current_gross=float(portfolio_current_gross),
-            sector_gross=sector_gross,
-            sector_name=sector_name,
-            max_new_orders_per_cycle=max_new_orders_per_cycle,
-            orders_submitted=int(orders_submitted),
-            engine_cycle_new_orders_submitted=(
-                getattr(exec_engine, "_cycle_new_orders_submitted", orders_submitted)
-                if exec_engine is not None
-                else orders_submitted
-            ),
-            safety_tier_raw=safety_tier_raw,
-            approval_func=approve_execution_candidate,
-        )
-        approval = approval_context.approval
-        if approval.reasons:
-            for reason in approval.reasons:
-                if reason not in gates:
-                    gates.append(reason)
-        if not approval.allowed:
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                metrics={"expected_net_edge_bps": approval.expected_net_edge_bps},
-                config_snapshot=symbol_snapshot,
-            )
-            continue
-        if int(approval_context.adjusted_delta_shares) != int(delta_shares):
-            delta_shares = int(approval_context.adjusted_delta_shares)
-            net_target.target_shares = current_shares + delta_shares
-            net_target.target_dollars = net_target.target_shares * price
-        side = approval_context.adjusted_side
-        if (
-            portfolio_optimizer_enabled
-            and portfolio_optimizer is not None
-            and (
-                not bool(portfolio_optimizer_openings_only)
-                or bool(opening_trade)
-            )
-        ):
-            current_positions_for_optimizer = build_portfolio_optimizer_positions(
-                positions,
-                symbol=symbol,
-                current_shares=float(current_shares),
-            )
-            proposed_position = float(current_shares + delta_shares)
-            opt_allowed, opt_context = _portfolio_optimizer_allows_trade(
-                optimizer=portfolio_optimizer,
-                symbol=symbol,
-                proposed_position=float(proposed_position),
-                current_positions=current_positions_for_optimizer,
-                market_data=portfolio_optimizer_market_data,
-            )
-            symbol_snapshot["portfolio_optimizer"] = dict(
-                portfolio_optimizer_context | opt_context
-            )
-            if not opt_allowed:
-                decision_token = str(opt_context.get("decision") or "reject").strip().lower()
-                gate_token = "".join(
-                    ch if ch.isalnum() else "_"
-                    for ch in decision_token.upper()
-                ).strip("_") or "REJECT"
-                gates.append(f"PORTFOLIO_OPTIMIZER_{gate_token}")
-                _record_decision(
-                    symbol=symbol,
-                    bar_ts=net_target.bar_ts,
-                    sleeves=net_target.proposals,
-                    net_target=net_target,
-                    gates=gates,
-                    metrics={"portfolio_optimizer": dict(opt_context)},
-                    config_snapshot=symbol_snapshot,
-                )
-                continue
-        auth_forbidden_retry_after = _auth_forbidden_cooldown_remaining_seconds(
-            state,
-            symbol=symbol,
-            side=side,
-            now=now,
-        )
-        if auth_forbidden_retry_after > 0.0:
-            gates.append("AUTH_BROKER_HALT_FORBIDDEN_COOLDOWN")
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                metrics={"auth_forbidden_retry_after_sec": round(auth_forbidden_retry_after, 3)},
-                config_snapshot=symbol_snapshot,
-            )
-            continue
-        execution_intent_context = build_execution_intent_context(
-            salt=str(getattr(cfg, "seed", "seed")),
-            symbol=symbol,
-            side=side,
-            delta_shares=int(delta_shares),
-            price=float(price),
-            bar_ts=net_target.bar_ts,
-            spread_bps=float(liq_features.spread_bps),
-            liquidity_bucket=liq_regime.value.upper(),
-            quote_quality_ok=not bool(state.halt_trading),
-            sector=get_sector(symbol),
-            event_risk=event_risk_near,
-            slo_derisk_details={
-                **dict(slo_derisk_details),
-                "rolling_volume": float(liq_features.rolling_volume),
-            },
-            config_snapshot=symbol_snapshot,
-            execution_model_lineage=execution_model_lineage,
-            submit_quote_source=None,
-            submit_bid_at_arrival=None,
-            submit_ask_at_arrival=None,
-            submit_mid_at_arrival=None,
-        )
-        client_order_id = execution_intent_context.client_order_id
-        if not breakers.allow("broker_submit"):
-            reason = breakers.open_reason("broker_submit") or "CIRCUIT_OPEN_broker_submit"
-            gates.append(reason)
-            state.halt_reason = reason
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                config_snapshot=symbol_snapshot,
-            )
-            continue
-        if ledger is not None and ledger.seen_client_order_id(client_order_id):
-            gates.append("BAR_DEDUP")
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                config_snapshot=symbol_snapshot,
-            )
-            continue
-
-        intent = execution_intent_context.pretrade_intent
-        pretrade_cfg, effective_collar_pct, collar_mult = build_pretrade_validation_cfg(
-            cfg,
-            thin_liquidity=liq_regime is LiquidityRegime.THIN,
-        )
-        if effective_collar_pct is not None and collar_mult is not None:
-            symbol_snapshot["liquidity_collar_multiplier"] = collar_mult
-            symbol_snapshot["price_collar_pct_effective"] = effective_collar_pct
-        allowed, pretrade_reason, pretrade_details = safe_validate_pretrade(
-            intent,
-            cfg=pretrade_cfg,
-            ledger=ledger,
-            rate_limiter=rate_limiter,
-        )
-        if not allowed:
-            if effective_collar_pct is not None:
-                pretrade_details.setdefault("price_collar_pct", effective_collar_pct)
-            gates.append(pretrade_reason)
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                metrics={"pretrade": pretrade_details},
-                config_snapshot=symbol_snapshot,
-                order_intent=intent.to_contract(),
-            )
-            continue
-
-        try:
-            require_realtime_nbbo = bool(
-                getattr(cfg, "execution_require_realtime_nbbo", True)
-            )
-        except Exception:
-            require_realtime_nbbo = True
-        enforce_opening_nbbo = bool(
-            get_env("AI_TRADING_ENFORCE_NBBO_FOR_OPENINGS", True, cast=bool)
-        )
-        (
-            submit_quote_source,
-            submit_bid_at_arrival,
-            submit_ask_at_arrival,
-            submit_mid_at_arrival,
-            submit_arrival_price,
-        ) = _resolve_order_quote_basis(
-            runtime,
-            symbol=symbol,
-            side=side,
-            fallback_price=price,
-        )
-        if (
-            bool(opening_trade)
-            and require_realtime_nbbo
-            and enforce_opening_nbbo
-            and submit_mid_at_arrival is None
-        ):
-            gates.append("NBBO_REQUIRED_OPENING_SKIP")
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                metrics={
-                    "nbbo_guard": {
-                        "required": True,
-                        "opening_trade": True,
-                        "price_source": submit_quote_source,
-                        "bid_at_arrival": submit_bid_at_arrival,
-                        "ask_at_arrival": submit_ask_at_arrival,
-                    }
-                },
-                config_snapshot=symbol_snapshot,
-            )
-            continue
-
-        execution_intent_context = build_execution_intent_context(
-            salt=str(getattr(cfg, "seed", "seed")),
-            symbol=symbol,
-            side=side,
-            delta_shares=int(delta_shares),
-            price=float(price),
-            bar_ts=net_target.bar_ts,
-            spread_bps=float(liq_features.spread_bps),
-            liquidity_bucket=liq_regime.value.upper(),
-            quote_quality_ok=not bool(state.halt_trading),
-            sector=get_sector(symbol),
-            event_risk=event_risk_near,
-            slo_derisk_details={
-                **dict(slo_derisk_details),
-                "rolling_volume": float(liq_features.rolling_volume),
-            },
-            config_snapshot=symbol_snapshot,
-            execution_model_lineage=execution_model_lineage,
-            submit_quote_source=submit_quote_source,
-            submit_bid_at_arrival=submit_bid_at_arrival,
-            submit_ask_at_arrival=submit_ask_at_arrival,
-            submit_mid_at_arrival=submit_mid_at_arrival,
-        )
-        client_order_id = execution_intent_context.client_order_id
-        intent = execution_intent_context.pretrade_intent
-        order_lineage_metadata = dict(execution_intent_context.order_lineage_metadata)
-        order_annotations = dict(execution_intent_context.order_annotations)
-        model_id_for_order = str(execution_model_lineage.get("model_id") or "").strip()
-        model_version_for_order = str(execution_model_lineage.get("model_version") or "").strip()
-        dataset_hash_for_order = str(execution_model_lineage.get("dataset_hash") or "").strip()
-        feature_version_for_order = str(
-            execution_model_lineage.get("feature_version") or ""
-        ).strip()
-        model_artifact_hash_for_order = str(
-            execution_model_lineage.get("model_artifact_hash") or ""
-        ).strip()
-        config_snapshot_hash_for_order = str(
-            symbol_snapshot.get("config_snapshot_hash") or ""
-        ).strip()
-        policy_hash_for_order = str(symbol_snapshot.get("effective_policy_hash") or "").strip()
-        decision_trace_id_for_order = execution_intent_context.decision_trace_id
-        try:
-            order = submit_order(
-                runtime,
-                symbol,
-                abs(delta_shares),
-                side,
-                price=price,
-                client_order_id=client_order_id,
-                expected_net_edge_bps=float(approval.expected_net_edge_bps),
-                model_id=model_id_for_order or None,
-                model_version=model_version_for_order or None,
-                config_snapshot_hash=config_snapshot_hash_for_order or None,
-                dataset_hash=dataset_hash_for_order or None,
-                feature_version=feature_version_for_order or None,
-                model_artifact_hash=model_artifact_hash_for_order or None,
-                policy_hash=policy_hash_for_order or None,
-                decision_trace_id=decision_trace_id_for_order or None,
-                annotations=(order_annotations or None),
-                price_hint=(
-                    float(submit_arrival_price)
-                    if submit_arrival_price is not None
-                    else float(price)
-                ),
-                metadata=(order_lineage_metadata or None),
-            )
-            breakers.record_success("broker_submit")
-        except Exception as exc:
-            error_info = classify_exception(exc, dependency="broker_submit", symbol=symbol)
-            breakers.record_failure("broker_submit", error_info)
-            _handle_error(error_info, state=state, ctx=runtime, symbol=symbol)
-            submit_open_reason = breakers.open_reason("broker_submit")
-            if quarantine_enabled and quarantine_manager is not None:
-                reject_counts = getattr(state, "_quarantine_reject_counts", None)
-                if not isinstance(reject_counts, dict):
-                    reject_counts = {}
-                    setattr(state, "_quarantine_reject_counts", reject_counts)
-                if error_info.category is ErrorCategory.ORDER_REJECTED:
-                    reject_counts[symbol] = int(reject_counts.get(symbol, 0)) + 1
-                    reject_trigger = float(
-                        get_env("AI_TRADING_QUARANTINE_REJECT_RATE_TRIGGER", 0.15, cast=float)
-                    )
-                    min_trades = int(get_env("AI_TRADING_QUARANTINE_MIN_TRADES", 12, cast=int))
-                    reject_threshold = max(1, int(round(reject_trigger * min_trades)))
-                    if reject_counts[symbol] >= reject_threshold:
-                        _trigger_quarantine(
-                            manager=quarantine_manager,
-                            symbol=symbol,
-                            sleeve=net_target.proposals[0].sleeve if net_target.proposals else None,
-                            reason="ORDER_REJECT_RATE",
-                            metrics_snapshot={
-                                "reject_count": reject_counts[symbol],
-                                "threshold": reject_threshold,
-                                "trigger": reject_trigger,
-                            },
-                        )
-                breaker_threshold = int(
-                    get_env("AI_TRADING_QUARANTINE_BREAKER_OPEN_COUNT", 2, cast=int)
-                )
-                if submit_open_reason and breaker_threshold > 0:
-                    breaker_counts = getattr(state, "_quarantine_breaker_open_counts", None)
-                    if not isinstance(breaker_counts, dict):
-                        breaker_counts = {}
-                        setattr(state, "_quarantine_breaker_open_counts", breaker_counts)
-                    breaker_counts[symbol] = int(breaker_counts.get(symbol, 0)) + 1
-                    if breaker_counts[symbol] >= breaker_threshold:
-                        _trigger_quarantine(
-                            manager=quarantine_manager,
-                            symbol=symbol,
-                            sleeve=net_target.proposals[0].sleeve if net_target.proposals else None,
-                            reason="BREAKER_OPEN_COUNT",
-                            metrics_snapshot={
-                                "breaker_open_count": breaker_counts[symbol],
-                                "threshold": breaker_threshold,
-                                "breaker_reason": submit_open_reason,
-                            },
-                        )
-            if submit_open_reason and bool(
-                get_env("AI_TRADING_CANCEL_ALL_ON_SUBMIT_BREAKER", False, cast=bool)
-            ):
-                cancel_result = cancel_all_open_orders_oms(runtime)
-                logger.warning(
-                    "CANCEL_ALL_TRIGGERED",
-                    extra={
-                        "reason_code": submit_open_reason,
-                        "cancelled": cancel_result.cancelled,
-                        "failed": cancel_result.failed,
-                    },
-                )
-            gates.append(error_info.reason_code)
-            _record_auth_forbidden_cooldown(
-                state,
-                symbol=symbol,
-                side=side,
-                reason=error_info.reason_code,
-                now=now,
-            )
-            orders_attempted += 1
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                config_snapshot=symbol_snapshot,
-                order_intent=intent.to_contract(),
-            )
-            continue
-        if order is None:
-            submit_none_reason = _resolve_submit_none_reason(runtime)
-            gates.append(submit_none_reason)
-            _record_auth_forbidden_cooldown(
-                state,
-                symbol=symbol,
-                side=side,
-                reason=submit_none_reason,
-                now=now,
-            )
-            if submit_none_reason not in {"CYCLE_DUPLICATE_INTENT", "DUPLICATE_INTENT"}:
-                orders_attempted += 1
-            _record_decision(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                config_snapshot=symbol_snapshot,
-                order_intent=intent.to_contract(),
-            )
-            continue
-        orders_attempted += 1
-        order_state = normalize_submitted_order(
-            order,
-            delta_shares=int(delta_shares),
-            extract_order_value=_extract_order_value,
-            extract_order_fill_timestamp=_extract_order_fill_timestamp,
-            normalize_order_status_token=_normalize_order_status_token,
-            safe_float=_safe_float,
-            has_persistable_fill=_has_persistable_fill,
-        )
-        record_successful_submission(
-            ledger=ledger,
-            state=state,
-            symbol=symbol,
-            client_order_id=client_order_id,
-            bar_ts=net_target.bar_ts,
-            delta_shares=int(delta_shares),
-            side=side,
-            price=float(price),
-            now=now,
-            order_state=order_state,
-            proposals=net_target.proposals,
-        )
-        orders_submitted += 1
-        metrics, tca_record = build_order_metrics_and_tca(
-            symbol=symbol,
-            side=side,
-            price=float(price),
-            delta_shares=int(delta_shares),
-            now=now,
             net_target=net_target,
-            order=order,
-            order_state=order_state,
-            submit_arrival_price=submit_arrival_price,
-            submit_bid_at_arrival=submit_bid_at_arrival,
-            submit_ask_at_arrival=submit_ask_at_arrival,
-            submit_mid_at_arrival=submit_mid_at_arrival,
-            submit_quote_source=submit_quote_source,
-            candidate_expected_net_edge=candidate_expected_net_edge,
-            candidate_expected_capture=candidate_expected_capture,
-            get_regime_signal_profile_func=get_regime_signal_profile,
-            normalize_quote_source_token_func=_normalize_quote_source_token,
-            resolve_quote_proxy_source_func=_resolve_quote_proxy_source,
-            resolved_tca_path_func=_resolved_tca_path,
-            write_tca_record_func=write_tca_record,
-            session_bucket_from_ts_func=_session_bucket_from_ts,
-            compute_attribution_metrics_func=compute_attribution_metrics,
-            safe_float=_safe_float,
-            logger=logger,
+            orders_submitted=orders_submitted,
         )
-        gates.append("OK_TRADE")
-        _record_decision(
-            symbol=symbol,
-            bar_ts=net_target.bar_ts,
-            sleeves=net_target.proposals,
-            net_target=net_target,
-            gates=gates,
-            order={
-                "client_order_id": client_order_id,
-                "side": side,
-                "qty": abs(delta_shares),
-                "price": price,
-                "status": order_state.status_text if order_state.status_text else None,
-            },
-            metrics=metrics,
-            config_snapshot=symbol_snapshot,
-            tca=tca_record,
-            decision_trace_id=decision_trace_id_for_order,
-            order_intent=intent.to_contract(),
-        )
-    decision_gate_counts = decision_recorder.decision_gate_counts
-    decision_records_total = decision_recorder.decision_records_total
-    decision_observations = decision_recorder.decision_observations
-    accepted_decisions = int(decision_gate_counts.get("OK_TRADE", 0))
-    _update_acceptance_rate_governor_state(
-        state,
-        decision_records_total=int(decision_records_total),
-        accepted_decisions=accepted_decisions,
-    )
-    if _gate_effectiveness_exclude_global_halts() and decision_observations:
-        filtered_reject_counts: Counter[str] = Counter()
-        for observation in decision_observations:
-            if not isinstance(observation, Mapping):
-                continue
-            symbol_value = str(observation.get("symbol", "") or "").strip().upper()
-            gates_raw = observation.get("gates")
-            if isinstance(gates_raw, (str, bytes, bytearray)):
-                gates_iterable: list[Any] = [gates_raw]
-            elif isinstance(gates_raw, Sequence):
-                gates_iterable = list(gates_raw)
-            else:
-                gates_iterable = []
-            gates = [str(gate).strip() for gate in gates_iterable if str(gate).strip()]
-            if (
-                symbol_value == "ALL"
-                and any(_gate_name_is_halt_noise(gate) for gate in gates)
-            ):
-                continue
-            if "OK_TRADE" in gates or bool(observation.get("accepted")):
-                continue
-            for gate in gates:
-                if gate != "OK_TRADE":
-                    filtered_reject_counts[gate] += 1
-        reject_gate_counts = {
-            gate: int(count)
-            for gate, count in filtered_reject_counts.items()
-            if int(count) > 0
-        }
-    else:
-        reject_gate_counts = {
-            gate: int(count)
-            for gate, count in decision_gate_counts.items()
-            if gate != "OK_TRADE" and int(count) > 0
-        }
-    _update_gate_effectiveness_analytics(
-        decision_gate_counts={gate: int(count) for gate, count in decision_gate_counts.items()},
-        decision_records_total=int(decision_records_total),
-        accepted_decisions=accepted_decisions,
-        decision_observations=decision_observations,
-    )
-    _update_counterfactual_learning_analytics(
-        observations=decision_observations,
+        orders_attempted += int(symbol_result.attempted_increment)
+        orders_submitted += int(symbol_result.submitted_increment)
+    finalize_netting_cycle_summary(
+        runtime=runtime,
+        state=state,
         now=now,
+        loop_start=loop_start,
+        symbols=symbols,
+        targets=targets,
+        proposals_total=proposals_total,
+        proposals_blocked=proposals_blocked,
+        orders_attempted=orders_attempted,
+        orders_submitted=orders_submitted,
+        decision_recorder=decision_recorder,
+        uncertainty_cycle_events=uncertainty_cycle_events,
+        quarantine_enabled=quarantine_enabled,
+        update_acceptance_rate_governor_state_func=_update_acceptance_rate_governor_state,
+        gate_effectiveness_exclude_global_halts_func=_gate_effectiveness_exclude_global_halts,
+        gate_name_is_halt_noise_func=_gate_name_is_halt_noise,
+        update_gate_effectiveness_analytics_func=_update_gate_effectiveness_analytics,
+        update_counterfactual_learning_analytics_func=_update_counterfactual_learning_analytics,
+        update_policy_ablation_analytics_func=_update_policy_ablation_analytics,
+        update_uncertainty_capital_analytics_func=_update_uncertainty_capital_analytics,
+        resolve_runtime_info_log_ttl_seconds_func=_resolve_runtime_info_log_ttl_seconds,
+        should_emit_runtime_info_log_func=_should_emit_runtime_info_log,
+        log_throttled_event_func=log_throttled_event,
+        persist_quarantine_manager_func=_persist_quarantine_manager,
+        monotonic_time_func=monotonic_time,
+        logger=logger,
+        netting_cycle_slo_log_ttl_default=_NETTING_CYCLE_SLO_LOG_TTL_SEC_DEFAULT,
     )
-    _update_policy_ablation_analytics(
-        observations=decision_observations,
-        now=now,
-    )
-    _update_uncertainty_capital_analytics(
-        events=uncertainty_cycle_events,
-        now=now,
-    )
-    if reject_gate_counts:
-        top_reasons = sorted(
-            reject_gate_counts.items(),
-            key=lambda item: (-item[1], item[0]),
-        )[:5]
-        summary_payload = {
-            "records_total": int(decision_records_total),
-            "accepted_records": accepted_decisions,
-            "rejected_records": max(int(decision_records_total) - accepted_decisions, 0),
-            "top_reasons": [{"reason": reason, "count": count} for reason, count in top_reasons],
-            "unique_reasons": len(reject_gate_counts),
-        }
-        reject_ttl_s = _resolve_runtime_info_log_ttl_seconds(
-            "AI_TRADING_DECISION_REJECT_SUMMARY_LOG_TTL_SEC",
-            60.0,
-        )
-        reject_signature = "|".join(f"{reason}:{count}" for reason, count in top_reasons) or "none"
-        if _should_emit_runtime_info_log(
-            runtime,
-            f"DECISION_REJECT_REASON_SUMMARY:{reject_signature}",
-            ttl_seconds=reject_ttl_s,
-        ):
-            logger.info("DECISION_REJECT_REASON_SUMMARY", extra=summary_payload)
-    cycle_elapsed_ms = int(max((monotonic_time() - float(loop_start)) * 1000.0, 0.0))
-    slo_payload = {
-        "symbols_requested": len(symbols),
-        "targets": len(targets),
-        "proposals_total": proposals_total,
-        "proposals_blocked": proposals_blocked,
-        "orders_attempted": orders_attempted,
-        "orders_submitted": orders_submitted,
-        "orders_skipped": max(orders_attempted - orders_submitted, 0),
-        "compute_ms": cycle_elapsed_ms,
-    }
-    slo_ttl_s = _resolve_runtime_info_log_ttl_seconds(
-        "AI_TRADING_NETTING_CYCLE_SLO_LOG_TTL_SEC",
-        _NETTING_CYCLE_SLO_LOG_TTL_SEC_DEFAULT,
-    )
-    slo_signature = (
-        f"{int(slo_payload['orders_submitted'])}:"
-        f"{int(slo_payload['orders_skipped'])}:"
-        f"{int(slo_payload['proposals_blocked'])}:"
-        f"{int(slo_payload['targets'])}"
-    )
-    if _should_emit_runtime_info_log(
-        runtime,
-        f"NETTING_CYCLE_SLO:{slo_signature}",
-        ttl_seconds=slo_ttl_s,
-    ):
-        log_throttled_event(
-            logger,
-            f"NETTING_CYCLE_SLO_{slo_signature}",
-            level=logging.INFO,
-            extra=slo_payload,
-            message="NETTING_CYCLE_SLO",
-        )
-    if quarantine_enabled:
-        _persist_quarantine_manager(state)
 
 
 @memory_profile  # AI-AGENT-REF: Monitor memory usage of main trading function
@@ -49293,6 +45511,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         return
     _init_metrics()
     import uuid
+    from ai_trading.core.run_all_trades_prelude import prepare_run_all_trades_cycle
 
     loop_id = str(uuid.uuid4())
     execution_stage_start: float | None = None
@@ -49305,266 +45524,65 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         _emit_pytest_capture(logging.INFO, "RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
     try:  # AI-AGENT-REF: ensure lock released on every exit
-        try:
-            risk_engine.wait_for_exposure_update(0.5)
-        except (
-            TimeoutError,
-            ConnectionError,
-            RuntimeError,
-        ) as e:  # AI-AGENT-REF: tighten risk update errors
-            logger.warning(
-                "RISK_EXPOSURE_UPDATE_FAILED",
-                extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )
-        _ensure_execution_engine(runtime)
-        _enforce_dependency_preflight(runtime)
-        cfg_runtime = _resolve_trading_config(runtime)
-        try:
-            effective_policy = _active_effective_policy(state, cfg_runtime)
-        except PolicyConfigError as exc:
-            logger.error("EFFECTIVE_POLICY_INVALID", extra={"error": str(exc)})
-            state.halt_trading = True
-            state.halt_reason = "EFFECTIVE_POLICY_INVALID"
+        prelude = prepare_run_all_trades_cycle(
+            state=state,
+            runtime=runtime,
+            risk_engine=risk_engine,
+            logger=logger,
+            loop_id=loop_id,
+            run_interval_seconds=RUN_INTERVAL_SECONDS,
+            ensure_execution_engine_func=_ensure_execution_engine,
+            enforce_dependency_preflight_func=_enforce_dependency_preflight,
+            resolve_trading_config_func=_resolve_trading_config,
+            active_effective_policy_func=_active_effective_policy,
+            policy_config_error_type=PolicyConfigError,
+            write_run_manifest_func=write_run_manifest,
+            restore_exit_policy_state_func=_restore_exit_policy_state,
+            ensure_exit_policy_state_func=_ensure_exit_policy_state,
+            get_trade_cooldown_min_func=get_trade_cooldown_min,
+            is_market_open_func=is_market_open,
+            log_market_closed_func=_log_market_closed,
+            record_broker_sync_metrics_func=_record_broker_sync_metrics,
+            utc_now_func=lambda: datetime.now(UTC),
+            monotonic_time_func=monotonic_time,
+            persist_effective_policy_snapshot_func=_persist_effective_policy_snapshot,
+            execution_metrics_factory=ExecutionCycleMetrics,
+            ensure_alpaca_attached_func=ensure_alpaca_attached,
+            validate_trading_api_func=_validate_trading_api,
+            startup_cancel_mode_func=_startup_cancel_mode,
+            list_open_orders_func=list_open_orders,
+            startup_cancel_decision_func=_startup_cancel_decision,
+            cancel_open_orders_subset_func=_cancel_open_orders_subset,
+            select_startup_stale_orders_func=_select_startup_stale_orders,
+            cancel_all_open_orders_oms_func=cancel_all_open_orders_oms,
+            arm_pending_cleanup_warmup_func=_arm_pending_cleanup_warmup,
+            provider_monitor=provider_monitor,
+            safe_mode_blocks_trading_func=_safe_mode_blocks_trading,
+            safe_mode_reason_func=safe_mode_reason,
+            cancel_all_open_orders_func=cancel_all_open_orders,
+            reset_cycle_cache_func=_reset_cycle_cache,
+            get_strategies_func=get_strategies,
+            log_loop_heartbeat_func=_log_loop_heartbeat,
+            emit_test_capture_func=_emit_test_capture,
+            common_exceptions=COMMON_EXC,
+        )
+        if not prelude.ready:
             return
-        if not state.run_manifest_written:
-            try:
-                write_run_manifest(
-                    cfg_runtime,
-                    runtime_contract={"stubs_enabled": False},
-                    effective_policy_hash=str(getattr(state, "effective_policy_hash", "") or ""),
-                    effective_policy={
-                        "trading_mode": effective_policy.trading_mode,
-                        "objective": effective_policy.objective.objective_name,
-                    },
-                )
-            except Exception as exc:
-                logger.warning(
-                    "RUN_MANIFEST_WRITE_FAILED error=%s",
-                    str(exc),
-                    extra={"error": str(exc)},
-                )
-            else:
-                state.run_manifest_written = True
-        if not hasattr(state, "trade_cooldowns"):
-            state.trade_cooldowns = {}
-        if not hasattr(state, "last_trade_direction"):
-            state.last_trade_direction = {}
-        if not hasattr(state, "entry_flip_signal_streak"):
-            state.entry_flip_signal_streak = {}
-        if not hasattr(state, "last_entry_side"):
-            state.last_entry_side = {}
-        if not hasattr(state, "entry_expectancy_context"):
-            state.entry_expectancy_context = {}
-        if not hasattr(state, "expectancy_history"):
-            state.expectancy_history = {}
-        if not hasattr(state, "exit_policy_state"):
-            state.exit_policy_state = {}
-        if not hasattr(state, "policy_rollback_disabled_slices"):
-            state.policy_rollback_disabled_slices = []
-        if not hasattr(state, "gate_auto_disable_hysteresis_state"):
-            state.gate_auto_disable_hysteresis_state = {}
-        if not hasattr(state, "gate_auto_disable_transition_ts"):
-            state.gate_auto_disable_transition_ts = []
-        if not hasattr(state, "last_policy_ablation_run_date"):
-            state.last_policy_ablation_run_date = None
-        if _restore_exit_policy_state(state):
-            logger.info(
-                "EXIT_POLICY_STATE_RESTORED",
-                extra={"bucket_count": len(_ensure_exit_policy_state(state))},
-            )
-        if state.running:
-            logger.warning(
-                "RUN_ALL_TRADES_SKIPPED_OVERLAP",
-                extra={"last_duration": getattr(state, "last_loop_duration", 0.0)},
-            )
-            logging.getLogger("ai_trading.core.bot_engine").warning(
-                "RUN_ALL_TRADES_SKIPPED_OVERLAP"
-            )
-            _emit_pytest_capture(logging.WARNING, "RUN_ALL_TRADES_SKIPPED_OVERLAP")
-            return
-        now = datetime.now(UTC)
-        for sym, ts in list(state.trade_cooldowns.items()):
-            if (now - ts).total_seconds() > get_trade_cooldown_min() * 60:
-                state.trade_cooldowns.pop(sym, None)
-        if (
-            state.last_run_at
-            and (now - state.last_run_at).total_seconds() < RUN_INTERVAL_SECONDS
-        ):
-            logger.warning("RUN_ALL_TRADES_SKIPPED_RECENT")
-            return
-        cfg_for_market = cfg_runtime
-        rth_only = bool(getattr(cfg_for_market, "rth_only", True))
-        allow_extended = bool(getattr(cfg_for_market, "allow_extended", False))
-        if (rth_only or not allow_extended) and not is_market_open():
-            _log_market_closed("MARKET_CLOSED_NO_FETCH")
-            try:
-                post_sync_enabled = bool(getattr(cfg_for_market, "post_submit_broker_sync", True))
-            except (TypeError, ValueError):
-                post_sync_enabled = True
-            if post_sync_enabled:
-                engine_obj = getattr(runtime, "execution_engine", None)
-                if engine_obj is not None and hasattr(engine_obj, "synchronize_broker_state"):
-                    try:
-                        broker_snapshot = engine_obj.synchronize_broker_state()
-                    except Exception:
-                        logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
-                    else:
-                        _record_broker_sync_metrics(state, broker_snapshot)
-            return  # skip work when market closed
-        loop_start = monotonic_time()
-        _persist_effective_policy_snapshot(state, effective_policy, loop_id=loop_id)
-        state.execution_metrics = ExecutionCycleMetrics()
-        api = getattr(runtime, "api", None)
-        if api is None and get_env("PYTEST_RUNNING"):
-            logger.warning("ALPACA_CLIENT_MISSING")
-            logging.getLogger("tests.test_broker_unavailable_paths").warning(
-                "ALPACA_CLIENT_MISSING"
-            )
-            _emit_test_capture("ALPACA_CLIENT_MISSING", logging.WARNING)
-            logging.warning("ALPACA_CLIENT_MISSING")
-            _log_loop_heartbeat(loop_id, loop_start)
-            return
-        ensure_alpaca_attached(runtime)
-        api = getattr(runtime, "api", None)
-        if api is None:
-            logger.warning("ALPACA_CLIENT_MISSING")
-            logging.getLogger("tests.test_broker_unavailable_paths").warning(
-                "ALPACA_CLIENT_MISSING"
-            )
-            _emit_test_capture("ALPACA_CLIENT_MISSING", logging.WARNING)
-            logging.warning("ALPACA_CLIENT_MISSING")
-            _log_loop_heartbeat(loop_id, loop_start)
-            return
-        if not _validate_trading_api(api):
-            logger.warning("ALPACA_CLIENT_MISSING")
-            logging.getLogger("tests.test_broker_unavailable_paths").warning(
-                "ALPACA_CLIENT_MISSING"
-            )
-            _emit_test_capture("ALPACA_CLIENT_MISSING", logging.WARNING)
-            logging.warning("ALPACA_CLIENT_MISSING")
-            _log_loop_heartbeat(loop_id, loop_start)
-            return
-        if not state.startup_cleanup_done:
-            startup_mode = _startup_cancel_mode()
-            if startup_mode != "off":
-                startup_open_orders: list[Any] = []
-                startup_should_cancel = True
-                startup_details: dict[str, Any] = {"mode": startup_mode}
-                try:
-                    startup_open_orders = list_open_orders(api)
-                    startup_should_cancel, startup_details = _startup_cancel_decision(
-                        startup_open_orders,
-                        mode=startup_mode,
-                    )
-                except COMMON_EXC as exc:
-                    startup_should_cancel = False
-                    startup_details = {
-                        "mode": startup_mode,
-                        "reason": "evaluation_failed",
-                        "detail": str(exc),
-                    }
-                    logger.warning(
-                        "STARTUP_CLEANUP_EVALUATION_FAILED",
-                        extra=startup_details,
-                        exc_info=True,
-                    )
-                if startup_should_cancel:
-                    if startup_mode == "stale_only":
-                        startup_result = _cancel_open_orders_subset(
-                            runtime,
-                            orders=_select_startup_stale_orders(startup_open_orders),
-                            reason_code="STARTUP_STALE_PENDING",
-                        )
-                    else:
-                        startup_result = cancel_all_open_orders_oms(runtime)
-                    startup_log = logger.warning if startup_result.failed else logger.info
-                    try:
-                        startup_open_count = int(
-                            startup_details.get("open_count", len(startup_open_orders))
-                        )
-                    except (TypeError, ValueError):
-                        startup_open_count = len(startup_open_orders)
-                    try:
-                        startup_pending_count = int(startup_details.get("stale_count", 0))
-                    except (TypeError, ValueError):
-                        startup_pending_count = 0
-                    startup_log(
-                        "STARTUP_CLEANUP",
-                        extra={
-                            **startup_details,
-                            "cancel_scope": startup_mode,
-                            "targeted_orders": int(startup_result.total_open),
-                            "cancelled": startup_result.cancelled,
-                            "failed": startup_result.failed,
-                        },
-                    )
-                    _arm_pending_cleanup_warmup(
-                        runtime,
-                        source="startup_cleanup",
-                        open_count=startup_open_count,
-                        pending_count=startup_pending_count,
-                    )
-                else:
-                    logger.info("STARTUP_CLEANUP_SKIPPED", extra=startup_details)
-            state.startup_cleanup_done = True
-        try:
-            safe_mode_live = provider_monitor.is_safe_mode_active()
-        except Exception:
-            safe_mode_live = False
-        if safe_mode_live and _safe_mode_blocks_trading():
-            try:
-                version, reason = provider_monitor.safe_mode_cycle_marker()
-            except Exception:
-                version, reason = (None, safe_mode_reason() if callable(safe_mode_reason) else None)
-            last_cleared = getattr(state, "_safe_mode_cancel_version", None)
-            if version is None or version != last_cleared:
-                try:
-                    cancel_all_open_orders(runtime)
-                except COMMON_EXC as exc:  # pragma: no cover - defensive cancel
-                    logger.warning(
-                        "SAFE_MODE_CANCEL_OPEN_ORDERS_FAILED",
-                        extra={
-                            "reason": reason or safe_mode_reason() or "provider_safe_mode",
-                            "cause": exc.__class__.__name__,
-                            "detail": str(exc),
-                        },
-                    )
-                else:
-                    logger.warning(
-                        "SAFE_MODE_CANCEL_OPEN_ORDERS",
-                        extra={
-                            "reason": reason or safe_mode_reason() or "provider_safe_mode",
-                            "version": version,
-                        },
-                    )
-                setattr(state, "_safe_mode_cancel_version", version)
-        feed_cache = getattr(state, "minute_feed_cache", None)
-        if isinstance(feed_cache, dict):
-            feed_cache.clear()
-        else:
-            state.minute_feed_cache = {}
-        _reset_cycle_cache()
-        previous_last_run_at = state.last_run_at
-        state.running = True
-        state.last_run_at = now
-        intents = getattr(state, "cycle_order_intents", None)
-        if isinstance(intents, dict):
-            intents.clear()
-        else:
-            state.cycle_order_intents = {}
-        submit_compaction = getattr(state, "cycle_submit_compaction", None)
-        if isinstance(submit_compaction, set):
-            submit_compaction.clear()
-        else:
-            state.cycle_submit_compaction = set()
+        cfg_runtime = prelude.cfg_runtime
+        effective_policy = prelude.effective_policy
+        now = prelude.now
+        loop_start = prelude.loop_start
+        api = prelude.api
+        previous_last_run_at = prelude.previous_last_run_at
+        assert cfg_runtime is not None
+        assert effective_policy is not None
+        assert now is not None
+        assert loop_start is not None
 
         def _restore_last_run_timestamp() -> None:
             """Revert ``state.last_run_at`` to its pre-cycle value."""
 
             state.last_run_at = previous_last_run_at
-        if not getattr(state, "_strategies_loaded", False):
-            runtime.strategies = get_strategies()
-            state._strategies_loaded = True
         try:
             # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
             can_list_orders = hasattr(api, "list_orders") and callable(
