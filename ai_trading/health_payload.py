@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.telemetry import runtime_state
+from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
 
 
 def _safe_observe(observer: Callable[[], Any], default: Any) -> Any:
@@ -233,6 +234,18 @@ def _oms_lifecycle_parity_snapshot() -> dict[str, Any]:
         payload = dict(summary)
         payload["enabled"] = True
         return payload
+    except Exception as exc:
+        return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
+
+
+def _replay_live_parity_gate_snapshot(
+    *,
+    oms_lifecycle_parity: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        return summarize_replay_live_parity_gate(
+            oms_lifecycle_parity=oms_lifecycle_parity,
+        )
     except Exception as exc:
         return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
 
@@ -514,6 +527,9 @@ def build_runtime_health_payload(
     database_readiness = _database_readiness_snapshot()
     oms_invariants = _oms_invariants_snapshot()
     oms_lifecycle_parity = _oms_lifecycle_parity_snapshot()
+    replay_live_parity_gate = _replay_live_parity_gate_snapshot(
+        oms_lifecycle_parity=oms_lifecycle_parity,
+    )
 
     raw_provider_status = provider_state.get("status")
     provider_status = raw_provider_status or (
@@ -686,6 +702,17 @@ def build_runtime_health_payload(
     ):
         overall_ok = False
         degraded = True
+    require_replay_live_parity_gate = _env_bool(
+        "AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE",
+        False,
+    )
+    if (
+        require_replay_live_parity_gate
+        and replay_live_parity_gate.get("enabled", False)
+        and not bool(replay_live_parity_gate.get("ok"))
+    ):
+        overall_ok = False
+        degraded = True
     if not overall_ok:
         degraded = True
 
@@ -723,6 +750,7 @@ def build_runtime_health_payload(
         "database": database_readiness,
         "oms_invariants": oms_invariants,
         "oms_lifecycle_parity": oms_lifecycle_parity,
+        "replay_live_parity_gate": replay_live_parity_gate,
         "attention_flags": attention_flags,
     }
     if offhours_market_closed_ready:
@@ -760,6 +788,13 @@ def build_runtime_health_payload(
         and not payload.get("reason")
     ):
         payload["reason"] = "oms_lifecycle_parity_failed"
+    if (
+        require_replay_live_parity_gate
+        and replay_live_parity_gate.get("enabled", False)
+        and not bool(replay_live_parity_gate.get("ok"))
+        and not payload.get("reason")
+    ):
+        payload["reason"] = "replay_live_parity_gate_failed"
     if force_ok_for_pytest:
         payload["ok"] = True
         payload.setdefault("status", payload.get("status") or "healthy")
@@ -783,6 +818,9 @@ def build_control_plane_snapshot(
     database_readiness = _database_readiness_snapshot()
     oms_invariants = _oms_invariants_snapshot()
     oms_lifecycle_parity = _oms_lifecycle_parity_snapshot()
+    replay_live_parity_gate = _replay_live_parity_gate_snapshot(
+        oms_lifecycle_parity=oms_lifecycle_parity,
+    )
     runtime_performance = _runtime_performance_snapshot()
     manual_overrides = _manual_override_snapshot()
     governance = _governance_snapshot()
@@ -935,6 +973,7 @@ def build_control_plane_snapshot(
         "database": database_readiness,
         "oms_invariants": oms_invariants,
         "oms_lifecycle_parity": oms_lifecycle_parity,
+        "replay_live_parity_gate": replay_live_parity_gate,
         "runtime_performance": runtime_performance,
         "manual_overrides": manual_overrides,
         "governance": governance,

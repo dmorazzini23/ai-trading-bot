@@ -7,6 +7,13 @@ from functools import lru_cache
 import math
 from typing import Any, Iterable
 
+from ai_trading.contracts import (
+    OrderIntent as CanonicalOrderIntent,
+    RiskDecision,
+    Signal,
+    build_decision_journal,
+)
+
 
 DECISION_RECORD_SCHEMA_VERSION = "2.0.0"
 
@@ -69,6 +76,10 @@ class DecisionRecord:
     config_snapshot: dict[str, Any] = field(default_factory=dict)
     tca: dict[str, Any] | None = None
     schema_version: str = DECISION_RECORD_SCHEMA_VERSION
+    signal: Signal | None = None
+    risk_decision: RiskDecision | None = None
+    order_intent: CanonicalOrderIntent | None = None
+    decision_trace_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         sleeves = [asdict(s) for s in self.sleeves]
@@ -79,6 +90,7 @@ class DecisionRecord:
         net_target = asdict(self.net_target)
         if isinstance(net_target.get("bar_ts"), datetime):
             net_target["bar_ts"] = net_target["bar_ts"].isoformat()
+        decision_journal = build_decision_journal(self).to_dict()
         return {
             "schema_version": str(self.schema_version or DECISION_RECORD_SCHEMA_VERSION),
             "symbol": self.symbol,
@@ -91,7 +103,57 @@ class DecisionRecord:
             "metrics": dict(self.metrics),
             "config_snapshot": dict(self.config_snapshot),
             "tca": dict(self.tca) if isinstance(self.tca, dict) else self.tca,
+            "decision_journal": decision_journal,
         }
+
+
+def build_decision_record(
+    *,
+    symbol: str,
+    bar_ts: datetime,
+    net_target: NettedTarget,
+    sleeves: Iterable[SleeveProposal] | None = None,
+    gates: Iterable[str] | None = None,
+    order: dict[str, Any] | None = None,
+    fills: Iterable[dict[str, Any]] | None = None,
+    metrics: dict[str, Any] | None = None,
+    config_snapshot: dict[str, Any] | None = None,
+    tca: dict[str, Any] | None = None,
+    schema_version: str = DECISION_RECORD_SCHEMA_VERSION,
+    decision_trace_id: str | None = None,
+    order_intent: CanonicalOrderIntent | None = None,
+    signal: Signal | None = None,
+    risk_decision: RiskDecision | None = None,
+) -> DecisionRecord:
+    """Build a decision record with canonical contracts populated."""
+    record = DecisionRecord(
+        symbol=symbol,
+        bar_ts=bar_ts,
+        sleeves=list(sleeves) if sleeves is not None else list(net_target.proposals),
+        net_target=net_target,
+        gates=list(gates) if gates is not None else [],
+        order=dict(order) if isinstance(order, dict) else None,
+        fills=list(fills) if fills is not None else [],
+        metrics=dict(metrics) if isinstance(metrics, dict) else {},
+        config_snapshot=(
+            dict(config_snapshot) if isinstance(config_snapshot, dict) else {}
+        ),
+        tca=dict(tca) if isinstance(tca, dict) else tca,
+        schema_version=schema_version,
+        decision_trace_id=decision_trace_id,
+        signal=signal,
+        risk_decision=risk_decision,
+        order_intent=order_intent,
+    )
+    decision_journal = build_decision_journal(record)
+    if record.signal is None:
+        record.signal = decision_journal.signal
+    if record.risk_decision is None:
+        record.risk_decision = decision_journal.risk_decision
+    if record.order_intent is None:
+        record.order_intent = decision_journal.order_intent
+    record.decision_trace_id = decision_journal.decision_trace_id
+    return record
 
 
 @dataclass(frozen=True)

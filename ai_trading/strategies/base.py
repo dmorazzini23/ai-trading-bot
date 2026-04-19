@@ -115,6 +115,12 @@ class StrategySignal:
         """Convert signal to dictionary representation."""
         return {'id': self.id, 'symbol': self.symbol, 'side': self.side, 'strength': self.strength, 'confidence': self.confidence, 'weighted_strength': self.weighted_strength, 'score': self.score, 'timestamp': self.timestamp.isoformat(), 'strategy_id': self.strategy_id, 'timeframe': self.timeframe, 'price_target': self.price_target, 'stop_loss': self.stop_loss, 'expected_return': self.expected_return, 'risk_score': self.risk_score, 'signal_type': self.signal_type, 'metadata': self.metadata}
 
+    def to_contract(self):
+        """Return the canonical signal contract for downstream journals."""
+        from ai_trading.contracts import Signal
+
+        return Signal.from_strategy_signal(self)
+
 
 # Backwards-compatible alias used by tests.
 TradeSignal = StrategySignal

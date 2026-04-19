@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from ai_trading.config.management import get_env, is_test_runtime
 from ai_trading.env import ensure_dotenv_loaded
+from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 _DEFAULT_TRADE_HISTORY_PATH = "runtime/trade_history.parquet"
@@ -919,6 +920,19 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 cast=int,
             )
         )
+    require_replay_live_parity_gate = get_env(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE",
+        None,
+        cast=bool,
+    )
+    if require_replay_live_parity_gate is None:
+        require_replay_live_parity_gate = bool(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE",
+                False,
+                cast=bool,
+            )
+        )
     max_event_tca_submit_reject_rate_pct = _as_float(
         get_env(
             "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_EVENT_TCA_SUBMIT_REJECT_RATE_PCT",
@@ -1149,6 +1163,7 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
             )
         ),
         "require_oms_event_tca": bool(require_oms_event_tca),
+        "require_replay_live_parity_gate": bool(require_replay_live_parity_gate),
         "min_event_tca_filled_events": int(
             max(
                 0,
@@ -4111,6 +4126,7 @@ def build_report(
     )
     if expected_edge_per_filled_trade_bps is None:
         expected_edge_per_filled_trade_bps = expected_edge_for_realism_bps
+    oms_lifecycle_parity = summarize_oms_lifecycle_parity()
     report_payload = {
         "generated_at": datetime.now(UTC).isoformat(),
         "report_schema_version": 3,
@@ -4120,7 +4136,10 @@ def build_report(
         "post_trade_attribution_ledger": post_trade_attribution_ledger,
         "oms_event_tca": summarize_oms_event_tca(),
         "oms_invariants": summarize_oms_invariants(),
-        "oms_lifecycle_parity": summarize_oms_lifecycle_parity(),
+        "oms_lifecycle_parity": oms_lifecycle_parity,
+        "replay_live_parity_gate": summarize_replay_live_parity_gate(
+            oms_lifecycle_parity=oms_lifecycle_parity,
+        ),
         "edge_realism": summarize_edge_realism_state(resolved_edge_realism_path),
         "policy_ablation": summarize_policy_ablation_state(
             resolved_policy_ablation_path
@@ -4350,6 +4369,9 @@ def evaluate_go_no_go(
     max_oms_invariant_violations = max(0, int(max_oms_invariant_violations))
     require_oms_lifecycle_parity = bool(
         threshold_map.get("require_oms_lifecycle_parity", False)
+    )
+    require_replay_live_parity_gate = bool(
+        threshold_map.get("require_replay_live_parity_gate", False)
     )
     max_oms_lifecycle_parity_violations = _as_int(
         threshold_map.get("max_oms_lifecycle_parity_violations")
@@ -4998,6 +5020,24 @@ def evaluate_go_no_go(
         and event_tca_fill_count_ok
         and event_tca_parent_execution_consistent
     )
+    replay_live_parity_gate_raw = report.get("replay_live_parity_gate")
+    replay_live_parity_gate = (
+        dict(replay_live_parity_gate_raw)
+        if isinstance(replay_live_parity_gate_raw, Mapping)
+        else {}
+    )
+    replay_live_parity_gate_enabled = bool(
+        replay_live_parity_gate.get("enabled", bool(replay_live_parity_gate))
+    )
+    replay_live_parity_gate_available = bool(
+        replay_live_parity_gate.get("available", replay_live_parity_gate_enabled)
+    )
+    replay_live_parity_gate_ok = bool(
+        replay_live_parity_gate.get("ok", replay_live_parity_gate_available)
+    )
+    replay_live_parity_gate_reason = str(
+        replay_live_parity_gate.get("reason") or ""
+    ).strip()
     confidence_enabled = bool(
         float(min_win_rate_confidence_floor) > 0.0 and float(win_rate_confidence_z) > 0.0
     )
@@ -5148,6 +5188,16 @@ def evaluate_go_no_go(
             if (oms_lifecycle_parity_available and require_oms_lifecycle_parity)
             else (not require_oms_lifecycle_parity)
         ),
+        "replay_live_parity_gate_available": (
+            replay_live_parity_gate_available
+            if require_replay_live_parity_gate
+            else True
+        ),
+        "replay_live_parity_gate_consistent": (
+            replay_live_parity_gate_ok
+            if (replay_live_parity_gate_available and require_replay_live_parity_gate)
+            else (not require_replay_live_parity_gate)
+        ),
         "oms_event_tca_available": (
             oms_event_tca_available
             if require_oms_event_tca
@@ -5219,6 +5269,9 @@ def evaluate_go_no_go(
             "require_oms_invariants": bool(require_oms_invariants),
             "max_oms_invariant_violations": int(max_oms_invariant_violations),
             "require_oms_lifecycle_parity": bool(require_oms_lifecycle_parity),
+            "require_replay_live_parity_gate": bool(
+                require_replay_live_parity_gate
+            ),
             "max_oms_lifecycle_parity_violations": int(
                 max_oms_lifecycle_parity_violations
             ),
@@ -5309,6 +5362,14 @@ def evaluate_go_no_go(
             "oms_lifecycle_parity_total_violations": int(
                 oms_lifecycle_parity_total_violations
             ),
+            "replay_live_parity_gate_enabled": bool(
+                replay_live_parity_gate_enabled
+            ),
+            "replay_live_parity_gate_available": bool(
+                replay_live_parity_gate_available
+            ),
+            "replay_live_parity_gate_ok": bool(replay_live_parity_gate_ok),
+            "replay_live_parity_gate_reason": replay_live_parity_gate_reason,
             "oms_event_tca_enabled": bool(oms_event_tca_enabled),
             "oms_event_tca_available": bool(oms_event_tca_available),
             "oms_event_tca_consistent": bool(oms_event_tca_consistent),

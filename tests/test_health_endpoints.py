@@ -494,3 +494,46 @@ def test_runtime_health_payload_oms_lifecycle_parity_requirement_marks_degraded(
     assert payload["ok"] is False
     assert payload["status"] == "degraded"
     assert payload.get("reason") == "oms_lifecycle_parity_failed"
+
+
+def test_runtime_health_payload_includes_replay_live_parity_gate(monkeypatch):
+    monkeypatch.setattr(
+        health_payload_module,
+        "_replay_live_parity_gate_snapshot",
+        lambda **_kwargs: {
+            "enabled": True,
+            "available": True,
+            "ok": True,
+            "status": "pass",
+            "reason": "ok",
+        },
+    )
+    payload = health_payload_module.build_runtime_health_payload()
+    assert "replay_live_parity_gate" in payload
+    assert payload["replay_live_parity_gate"]["ok"] is True
+    assert payload["replay_live_parity_gate"]["status"] == "pass"
+
+
+def test_runtime_health_payload_replay_live_parity_requirement_marks_degraded(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
+    monkeypatch.setattr(
+        health_payload_module,
+        "_replay_live_parity_gate_snapshot",
+        lambda **_kwargs: {
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "status": "fail",
+            "reason": "replay_counterfactual",
+        },
+    )
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload.get("reason") == "replay_live_parity_gate_failed"

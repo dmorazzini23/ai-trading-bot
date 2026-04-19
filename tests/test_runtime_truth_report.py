@@ -72,6 +72,7 @@ def test_runtime_truth_report_writes_daily_artifact(
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["date"] == "2026-03-10"
     assert "go_no_go" in payload
+    assert "replay_live_parity_gate" in payload["report"]
     assert payload["paths"]["trade_history"] == str(trade_history)
     assert payload["paths"]["gate_summary"] == str(gate_summary)
     assert state.last_runtime_truth_report_date == now.date()

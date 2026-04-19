@@ -2663,6 +2663,52 @@ def test_evaluate_go_no_go_fails_on_oms_lifecycle_parity_when_required() -> None
     assert observed["oms_lifecycle_parity_total_violations"] == 2
 
 
+def test_evaluate_go_no_go_fails_on_replay_live_parity_gate_when_required() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 30,
+            "profit_factor": 1.4,
+            "win_rate": 0.6,
+            "pnl_sum": 80.0,
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 12.0,
+        },
+        "replay_live_parity_gate": {
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "reason": "replay_violations",
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 10,
+            "min_profit_factor": 1.0,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.01,
+            "min_expected_net_edge_bps": -50.0,
+            "require_gate_valid": True,
+            "require_pnl_available": True,
+            "require_open_position_reconciliation": False,
+            "require_replay_live_parity_gate": True,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "replay_live_parity_gate_consistent" in decision["failed_checks"]
+    observed = decision["observed"]
+    assert observed["replay_live_parity_gate_available"] is True
+    assert observed["replay_live_parity_gate_ok"] is False
+    assert observed["replay_live_parity_gate_reason"] == "replay_violations"
+
+
 def test_evaluate_go_no_go_fails_on_event_tca_when_required() -> None:
     report = {
         "trade_history": {

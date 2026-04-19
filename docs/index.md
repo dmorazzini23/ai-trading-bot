@@ -61,6 +61,7 @@ python3 -m ai_trading.tools.offline_replay \
 
 - [Deployment Guide](DEPLOYING.md)
 - [Operations](OPERATIONS.md)
+- [Trading System Checklist](TRADING_SYSTEM_CHECKLIST.md)
 - [Provider Configuration](provider_configuration.md)
 - [Data Providers](data-providers.md)
 - [SLO Alerts](slo_alerts.md)

@@ -41496,6 +41496,13 @@ def _runtime_truth_report_thresholds() -> dict[str, Any]:
         "require_gate_valid": bool(
             get_env("AI_TRADING_RUNTIME_GONOGO_REQUIRE_GATE_VALID", False, cast=bool)
         ),
+        "require_replay_live_parity_gate": bool(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE",
+                False,
+                cast=bool,
+            )
+        ),
     }
 
 
@@ -42498,8 +42505,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     from ai_trading.analytics.attribution import compute_attribution_metrics
     from ai_trading.core.data_contract import normalize_bars, validate_bars
     from ai_trading.core.horizons import build_sleeve_configs
+    from ai_trading.core.decision_log import DecisionRecorder
     from ai_trading.core.netting import (
-        DecisionRecord,
         NettedTarget,
         SleeveProposal,
         apply_cost_gate,
@@ -42507,6 +42514,25 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         apply_turnover_gate,
         compute_sleeve_proposal,
         net_targets_for_symbol,
+    )
+    from ai_trading.core.execution_intent import build_execution_intent_context
+    from ai_trading.core.execution_guards import (
+        build_portfolio_optimizer_positions,
+        build_pretrade_validation_cfg,
+        evaluate_execution_approval,
+    )
+    from ai_trading.core.netting_cycle_setup import (
+        NettingPreparationError,
+        prepare_netting_cycle_inputs,
+    )
+    from ai_trading.core.netting_rank_prelude import (
+        apply_policy_runtime_overrides,
+        load_replay_quality_state,
+    )
+    from ai_trading.core.execution_outcome import (
+        build_order_metrics_and_tca,
+        normalize_submitted_order,
+        record_successful_submission,
     )
     from ai_trading.data.fetch import get_bars_batch
     from ai_trading.oms.ledger import LedgerEntry, OrderLedger, deterministic_client_order_id
@@ -42535,99 +42561,23 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     decision_records_total = 0
     decision_observations: list[dict[str, Any]] = []
     write_decision_record_impl = cast(Any, globals().get("_write_decision_record"))
+    decision_recorder = DecisionRecorder(
+        runtime=runtime,
+        path=decision_path,
+        write_impl=write_decision_record_impl,
+        dedupe_gate_root_causes=_dedupe_gate_root_causes,
+        session_bucket_from_ts=_session_bucket_from_ts,
+        safe_float=_safe_float,
+    )
 
-    def _write_decision_record(record: DecisionRecord, path: str | None) -> None:  # type: ignore[no-redef]
-        nonlocal decision_records_total
+    def _make_decision_record(**kwargs: Any) -> Any:
+        return decision_recorder.build_record(**kwargs)
 
-        decision_records_total += 1
-        gates_raw = getattr(record, "gates", None)
-        gates: list[str] = []
-        if isinstance(gates_raw, Sequence):
-            for gate in gates_raw:
-                gate_text = str(gate or "").strip()
-                if gate_text:
-                    gates.append(gate_text)
-        gates = _dedupe_gate_root_causes(gates)
-        try:
-            setattr(record, "gates", list(gates))
-        except Exception:
-            pass
-        for gate_text in gates:
-            decision_gate_counts[gate_text] += 1
-        symbol_value = str(getattr(record, "symbol", "") or "").strip().upper() or "UNKNOWN"
-        config_snapshot_raw = getattr(record, "config_snapshot", None)
-        config_snapshot = (
-            dict(config_snapshot_raw)
-            if isinstance(config_snapshot_raw, Mapping)
-            else {}
-        )
-        regime_value = (
-            str(config_snapshot.get("liquidity_regime", "") or "").strip().upper() or "UNKNOWN"
-        )
-        metrics_raw = getattr(record, "metrics", None)
-        metrics = dict(metrics_raw) if isinstance(metrics_raw, Mapping) else {}
-        tca_raw = getattr(record, "tca", None)
-        tca = dict(tca_raw) if isinstance(tca_raw, Mapping) else {}
-        expected_net_edge_bps = _safe_float(metrics.get("expected_net_edge_bps"))
-        if expected_net_edge_bps is None:
-            expected_net_edge_bps = _safe_float(tca.get("expected_net_edge_bps"))
-        if expected_net_edge_bps is None:
-            candidate_rank_raw = getattr(runtime, "execution_candidate_rank_expected_edge_bps", {})
-            candidate_rank = (
-                dict(candidate_rank_raw)
-                if isinstance(candidate_rank_raw, Mapping)
-                else {}
-            )
-            expected_net_edge_bps = _safe_float(candidate_rank.get(symbol_value))
-        if expected_net_edge_bps is None:
-            expected_net_edge_bps = 0.0
-        try:
-            realized_is_bps = float(tca.get("is_bps", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            realized_is_bps = 0.0
-        accepted = "OK_TRADE" in gates
-        realized_net_edge_bps = _safe_float(tca.get("realized_net_edge_bps"))
-        if realized_net_edge_bps is None and accepted:
-            realized_net_edge_bps = float(expected_net_edge_bps - abs(realized_is_bps))
-        edge_proxy_bps = (
-            float(realized_net_edge_bps)
-            if accepted and realized_net_edge_bps is not None
-            else float(expected_net_edge_bps)
-        )
-        bar_ts_value = getattr(record, "bar_ts", None)
-        session_bucket = (
-            _session_bucket_from_ts(bar_ts_value)
-            if isinstance(bar_ts_value, datetime)
-            else "offhours"
-        )
-        sleeves_raw = getattr(record, "sleeves", None)
-        sleeves: list[str] = []
-        if isinstance(sleeves_raw, Sequence):
-            for sleeve in sleeves_raw:
-                sleeve_name = str(getattr(sleeve, "sleeve", "") or "").strip().lower()
-                if not sleeve_name:
-                    sleeve_name = str(getattr(sleeve, "name", "") or "").strip().lower()
-                if sleeve_name:
-                    sleeves.append(sleeve_name)
-        decision_observations.append(
-            {
-                "symbol": symbol_value,
-                "gates": list(gates),
-                "sleeves": list(sorted(set(sleeves))),
-                "accepted": bool(accepted),
-                "regime": regime_value,
-                "session_bucket": session_bucket,
-                "expected_net_edge_bps": float(expected_net_edge_bps),
-                "realized_is_bps": float(realized_is_bps),
-                "realized_net_edge_bps": (
-                    float(realized_net_edge_bps)
-                    if realized_net_edge_bps is not None
-                    else None
-                ),
-                "edge_proxy_bps": float(edge_proxy_bps),
-            }
-        )
-        write_decision_record_impl(record, path)
+    def _write_decision_record(record: Any, _path: str | None) -> None:  # type: ignore[no-redef]
+        decision_recorder.write(record)
+
+    def _record_decision(**kwargs: Any) -> Any:
+        return decision_recorder.record(**kwargs)
 
     allocation_weights: dict[str, float] = {}
     learned_overrides: dict[str, Any] = {}
@@ -42637,6 +42587,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     quarantine_apply_sleeve = False
     quarantine_apply_symbol = False
     quarantine_mode = "block"
+    exec_engine = getattr(runtime, "execution_engine", None)
     if quarantine_enabled:
         quarantine_apply_sleeve, quarantine_apply_symbol = _quarantine_targets_from_env()
         raw_mode = str(get_env("AI_TRADING_QUARANTINE_MODE", "block") or "").strip().lower()
@@ -42655,20 +42606,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 learned_overrides=learned_overrides,
                 sleeve_configs=sleeve_snapshot,
             )
-            record = DecisionRecord(
-                symbol="ALL",
+            decision_recorder.record_global_block(
                 bar_ts=now,
-                sleeves=[],
-                net_target=NettedTarget(
-                    symbol="ALL",
-                    bar_ts=now,
-                    target_dollars=0.0,
-                    target_shares=0.0,
-                ),
                 gates=[reason],
                 config_snapshot=base_snapshot,
             )
-            _write_decision_record(record, decision_path)
             return
     _clear_transient_halt_state(state)
     if state.halt_trading:
@@ -42680,15 +42622,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             learned_overrides=learned_overrides,
             sleeve_configs=sleeve_snapshot,
         )
-        record = DecisionRecord(
-            symbol="ALL",
+        decision_recorder.record_global_block(
             bar_ts=now,
-            sleeves=[],
-            net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
             gates=[reason],
             config_snapshot=base_snapshot,
         )
-        _write_decision_record(record, decision_path)
         return
 
     rth_only = bool(getattr(cfg, "rth_only", True))
@@ -42745,15 +42683,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             learned_overrides=learned_overrides,
             sleeve_configs=sleeve_snapshot,
         )
-        record = DecisionRecord(
-            symbol="ALL",
+        decision_recorder.record_global_block(
             bar_ts=now,
-            sleeves=[],
-            net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
             gates=["MARKET_CLOSED_BLOCK", "IDLE_MARKET_CLOSED"],
             config_snapshot=base_snapshot,
         )
-        _write_decision_record(record, decision_path)
         return
 
     if not _run_reconciliation_if_due(state, runtime, cfg, now):
@@ -42764,15 +42698,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             learned_overrides=learned_overrides,
             sleeve_configs=sleeve_snapshot,
         )
-        record = DecisionRecord(
-            symbol="ALL",
+        decision_recorder.record_global_block(
             bar_ts=now,
-            sleeves=[],
-            net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
             gates=[state.halt_reason or "RECON_MISMATCH_HALT"],
             config_snapshot=base_snapshot,
         )
-        _write_decision_record(record, decision_path)
         return
 
     kill_switch, kill_reason = _kill_switch_active(cfg)
@@ -42810,159 +42740,47 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             learned_overrides=learned_overrides,
             sleeve_configs=sleeve_snapshot,
         )
-        record = DecisionRecord(
-            symbol="ALL",
+        decision_recorder.record_global_block(
             bar_ts=now,
-            sleeves=[],
-            net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
             gates=[reason],
             config_snapshot=base_snapshot,
         )
-        _write_decision_record(record, decision_path)
         return
 
-    sleeves = [s for s in build_sleeve_configs(cfg) if s.enabled]
-    sleeve_whitelist = _resolve_runtime_sleeve_whitelist()
-    if sleeve_whitelist:
-        sleeves_before = list(sleeves)
-        sleeves = [s for s in sleeves if str(getattr(s, "name", "") or "") in sleeve_whitelist]
-        logger.info(
-            "RUNTIME_SLEEVE_WHITELIST_APPLIED",
-            extra={
-                "requested": sorted(sleeve_whitelist),
-                "before": [str(getattr(s, "name", "") or "") for s in sleeves_before],
-                "after": [str(getattr(s, "name", "") or "") for s in sleeves],
-            },
-        )
-    if not sleeves:
-        if sleeve_whitelist:
-            logger.warning(
-                "RUNTIME_SLEEVE_WHITELIST_EMPTY",
-                extra={"requested": sorted(sleeve_whitelist)},
-            )
-        else:
-            logger.warning("HORIZONS_EMPTY")
-        return
-    sleeve_configs_map = {str(s.name): s for s in sleeves}
-    sleeve_snapshot = {
-        str(name): {
-            "timeframe": str(getattr(sleeve_cfg, "timeframe", "")),
-            "entry_threshold": float(getattr(sleeve_cfg, "entry_threshold", 0.0)),
-            "exit_threshold": float(getattr(sleeve_cfg, "exit_threshold", 0.0)),
-            "flip_threshold": float(getattr(sleeve_cfg, "flip_threshold", 0.0)),
-            "reentry_threshold": float(getattr(sleeve_cfg, "reentry_threshold", 0.0)),
-            "deadband_dollars": float(getattr(sleeve_cfg, "deadband_dollars", 0.0)),
-            "deadband_shares": float(getattr(sleeve_cfg, "deadband_shares", 0.0)),
-            "cost_k": float(getattr(sleeve_cfg, "cost_k", 0.0)),
-            "edge_scale_bps": float(getattr(sleeve_cfg, "edge_scale_bps", 0.0)),
-            "turnover_cap_dollars": float(getattr(sleeve_cfg, "turnover_cap_dollars", 0.0)),
-            "max_symbol_dollars": float(getattr(sleeve_cfg, "max_symbol_dollars", 0.0)),
-            "max_gross_dollars": float(getattr(sleeve_cfg, "max_gross_dollars", 0.0)),
-        }
-        for name, sleeve_cfg in sleeve_configs_map.items()
-    }
-    _maybe_update_allocation_state(
-        state,
-        now=now,
-        market_open_now=market_open_now,
-        sleeves=sleeves,
-    )
-    allocation_weights = _allocation_weights_for_sleeves(cfg, sleeves)
-    learned_overrides = _load_learned_overrides(cfg)
-
-    symbols = list(getattr(runtime, "tickers", []) or [])
-    if not symbols:
-        symbols = list(getattr(runtime, "universe_tickers", []) or [])
-    if not symbols:
-        try:
-            symbols = load_candidate_universe(runtime)
-        except Exception as exc:
-            logger.warning(
-                "NETTING_UNIVERSE_LOAD_FAILED",
-                extra={"error": str(exc)},
-            )
-            symbols = []
-    if not symbols:
-        if bool(get_env("AI_TRADING_WARMUP_MODE", False, cast=bool)):
-            logger.debug("NETTING_NO_SYMBOLS")
-        else:
-            logger.warning("NETTING_NO_SYMBOLS")
-        return
-    canary_raw = str(get_env("AI_TRADING_CANARY_SYMBOLS", "") or "").strip()
-    canary_percent = max(
-        0.0,
-        min(
-            1.0,
-            float(get_env("AI_TRADING_CANARY_PERCENT", 0.0, cast=float)),
-        ),
-    )
-    if canary_raw or (0.0 < canary_percent < 1.0):
-        selected_symbols = list(symbols)
-        if canary_raw:
-            canary_symbols = {
-                token.strip().upper()
-                for token in canary_raw.split(",")
-                if token and token.strip()
-            }
-            selected_symbols = [
-                symbol for symbol in selected_symbols if str(symbol).upper() in canary_symbols
-            ]
-        if 0.0 < canary_percent < 1.0:
-            selected_symbols = [
-                symbol
-                for symbol in selected_symbols
-                if (
-                    int.from_bytes(
-                        hashlib.blake2b(
-                            str(symbol).upper().encode("utf-8"),
-                            digest_size=8,
-                        ).digest(),
-                        byteorder="big",
-                        signed=False,
-                    )
-                    / float(2**64)
-                )
-                < canary_percent
-            ]
-        symbols = selected_symbols
-        if not state.canary_mode_logged:
-            logger.warning(
-                "CANARY_MODE_ACTIVE",
-                extra={
-                    "symbols": sorted(str(symbol).upper() for symbol in symbols),
-                    "canary_percent": float(canary_percent),
-                    "explicit_canary_symbols": bool(canary_raw),
-                },
-            )
-            state.canary_mode_logged = True
-        if not symbols:
-            logger.warning("CANARY_MODE_EMPTY_UNIVERSE")
-            return
-    symbols = _pre_rank_execution_candidates(symbols, runtime=runtime)
-    if not symbols:
-        if bool(get_env("AI_TRADING_WARMUP_MODE", False, cast=bool)):
-            logger.debug("NETTING_NO_SYMBOLS")
-        else:
-            logger.warning("NETTING_NO_SYMBOLS")
-        return
-
-    ensure_data_fetcher(runtime)
     try:
-        positions_raw = retry_idempotent(
-            lambda: compute_current_positions(runtime),
-            dep="broker_positions",
+        prepared_inputs = prepare_netting_cycle_inputs(
+            state=state,
+            runtime=runtime,
+            cfg=cfg,
+            now=now,
+            market_open_now=market_open_now,
             breakers=breakers,
-            classify_exception=classify_exception,
-            max_attempts=3,
-            max_total_seconds=5.0,
-            base_delay=0.2,
-            jitter=0.1,
-            context={"scope": "netting"},
+            logger=logger,
+            get_env=get_env,
+            build_sleeve_configs_func=build_sleeve_configs,
+            resolve_runtime_sleeve_whitelist_func=_resolve_runtime_sleeve_whitelist,
+            maybe_update_allocation_state_func=_maybe_update_allocation_state,
+            allocation_weights_for_sleeves_func=_allocation_weights_for_sleeves,
+            load_learned_overrides_func=_load_learned_overrides,
+            load_candidate_universe_func=load_candidate_universe,
+            pre_rank_execution_candidates_func=lambda items: _pre_rank_execution_candidates(
+                items,
+                runtime=runtime,
+            ),
+            ensure_data_fetcher_func=ensure_data_fetcher,
+            retry_idempotent_func=retry_idempotent,
+            compute_current_positions_func=compute_current_positions,
+            classify_exception_func=classify_exception,
+            handle_error_func=_handle_error,
+            merge_managed_position_symbols_func=_merge_managed_position_symbols,
+            pending_orders_block_scope_func=_pending_orders_block_scope,
+            get_cycle_budget_context_func=get_cycle_budget_context,
+            resolve_adaptive_order_cap_func=_resolve_adaptive_order_cap,
+            select_symbols_with_budget_rotation_func=_select_symbols_with_budget_rotation,
+            pending_order_blocked_symbols_attr=_PENDING_ORDER_BLOCKED_SYMBOLS_ATTR,
+            pending_order_sample_limit=_PENDING_ORDER_SAMPLE_LIMIT,
         )
-    except Exception as exc:
-        error_info = classify_exception(exc, dependency="broker_positions")
-        breakers.record_failure("broker_positions", error_info)
-        _handle_error(error_info, state=state, ctx=runtime)
+    except NettingPreparationError as exc:
         base_snapshot = _decision_record_config_snapshot(
             cfg=cfg,
             state=state,
@@ -42970,160 +42788,29 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             learned_overrides=learned_overrides,
             sleeve_configs=sleeve_snapshot,
         )
-        record = DecisionRecord(
-            symbol="ALL",
+        decision_recorder.record_global_block(
             bar_ts=now,
-            sleeves=[],
-            net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
-            gates=[error_info.reason_code],
+            gates=[str(exc.reason_code)],
             config_snapshot=base_snapshot,
         )
-        _write_decision_record(record, decision_path)
         return
 
-    positions: dict[str, float] = {}
-    for raw_symbol, raw_position in dict(positions_raw or {}).items():
-        symbol_key = str(raw_symbol).strip().upper()
-        if not symbol_key:
-            continue
-        try:
-            positions[symbol_key] = float(raw_position or 0.0)
-        except (TypeError, ValueError):
-            positions[symbol_key] = 0.0
-    baseline_symbols = {str(sym).strip().upper() for sym in symbols if str(sym).strip()}
-    symbols = _merge_managed_position_symbols(symbols, positions)
-    managed_symbols_added = [sym for sym in symbols if sym not in baseline_symbols]
-    if managed_symbols_added:
-        logger.info(
-            "NETTING_MANAGED_POSITIONS_INCLUDED",
-            extra={
-                "added": len(managed_symbols_added),
-                "sample": managed_symbols_added[:10],
-                "positions_total": len(positions),
-                "symbols_total": len(symbols),
-            },
-        )
+    if prepared_inputs is None:
+        return
 
+    sleeves = prepared_inputs.sleeves
+    sleeve_configs_map = {str(s.name): s for s in sleeves}
+    sleeve_snapshot = prepared_inputs.sleeve_snapshot
+    allocation_weights = prepared_inputs.allocation_weights
+    learned_overrides = prepared_inputs.learned_overrides
+    symbols = prepared_inputs.symbols
+    positions = prepared_inputs.positions
+    max_new_orders_per_cycle = prepared_inputs.max_new_orders_per_cycle
     blocked_symbols = {
         str(sym).strip().upper()
         for sym in getattr(runtime, _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, ())
         if str(sym).strip()
     }
-    if blocked_symbols and _pending_orders_block_scope() == "symbol":
-        pre_filter_count = len(symbols)
-        symbols = [sym for sym in symbols if sym not in blocked_symbols]
-        if len(symbols) != pre_filter_count:
-            logger.info(
-                "NETTING_PENDING_SYMBOL_FILTER_APPLIED",
-                extra={
-                    "before": pre_filter_count,
-                    "after": len(symbols),
-                    "blocked_symbols_count": len(blocked_symbols),
-                    "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
-                },
-            )
-        if not symbols:
-            logger.info(
-                "NETTING_NO_ACTIONABLE_SYMBOLS",
-                extra={
-                    "reason": "pending_symbol_block",
-                    "blocked_symbols_count": len(blocked_symbols),
-                },
-            )
-            return
-
-    exec_engine = getattr(runtime, "execution_engine", None)
-    if exec_engine is not None:
-        cycle_budget = get_cycle_budget_context()
-        adaptive_cap, adaptive_details = _resolve_adaptive_order_cap(
-            cycle_budget=cycle_budget,
-            last_loop_duration_s=getattr(state, "last_loop_duration", 0.0),
-        )
-        try:
-            setattr(exec_engine, "_adaptive_new_orders_cap", adaptive_cap)
-            setattr(exec_engine, "_adaptive_new_orders_details", adaptive_details)
-        except Exception:
-            logger.debug("ADAPTIVE_ORDER_CAP_SET_FAILED", exc_info=True)
-        adaptive_signature = (
-            adaptive_cap,
-            str(adaptive_details.get("mode") or "none"),
-            round(float(adaptive_details.get("headroom_ratio", 1.0) or 1.0), 3),
-        )
-        if adaptive_signature != getattr(state, "_last_adaptive_order_cap_signature", None):
-            if adaptive_cap is not None:
-                logger.info(
-                    "ADAPTIVE_ORDER_CAP_APPLIED",
-                    extra={
-                        "cap": int(adaptive_cap),
-                        "mode": adaptive_details.get("mode"),
-                        "headroom_ratio": adaptive_details.get("headroom_ratio"),
-                        "loop_headroom_ratio": adaptive_details.get("loop_headroom_ratio"),
-                        "budget_headroom_ratio": adaptive_details.get("budget_headroom_ratio"),
-                    },
-                )
-            state._last_adaptive_order_cap_signature = adaptive_signature
-
-    max_new_orders_per_cycle: int | None = None
-    cap_source = "none"
-    if exec_engine is not None:
-        resolve_submit_cap = getattr(exec_engine, "_resolve_order_submit_cap", None)
-        if callable(resolve_submit_cap):
-            try:
-                max_new_orders_per_cycle, cap_source = resolve_submit_cap()
-            except Exception:
-                logger.debug("NETTING_ORDER_CAP_RESOLVE_FAILED", exc_info=True)
-                max_new_orders_per_cycle = None
-                cap_source = "error"
-    try:
-        symbols_per_order = int(get_env("AI_TRADING_EXEC_SYMBOLS_PER_ORDER", 6, cast=int))
-    except Exception:
-        symbols_per_order = 6
-    try:
-        symbol_budget_min = int(get_env("AI_TRADING_EXEC_SYMBOL_BUDGET_MIN", 12, cast=int))
-    except Exception:
-        symbol_budget_min = 12
-    try:
-        symbol_budget_max = int(get_env("AI_TRADING_EXEC_SYMBOL_BUDGET_MAX", 120, cast=int))
-    except Exception:
-        symbol_budget_max = 120
-    symbols_per_order = max(1, min(symbols_per_order, 50))
-    symbol_budget_min = max(1, min(symbol_budget_min, 500))
-    symbol_budget_max = max(symbol_budget_min, min(symbol_budget_max, 500))
-    if max_new_orders_per_cycle is not None:
-        try:
-            order_cap_value = max(1, int(max_new_orders_per_cycle))
-        except (TypeError, ValueError):
-            order_cap_value = 1
-        symbol_budget_target = order_cap_value * symbols_per_order
-        symbol_budget = max(symbol_budget_min, min(symbol_budget_target, symbol_budget_max))
-        if len(symbols) > symbol_budget:
-            selected_symbols, held_cursor_start, held_symbols_kept = (
-                _select_symbols_with_budget_rotation(
-                    symbols,
-                    positions,
-                    symbol_budget=symbol_budget,
-                    state=state,
-                )
-            )
-            dropped_count = max(0, len(symbols) - len(selected_symbols))
-            if dropped_count > 0:
-                logger.info(
-                    "NETTING_SYMBOL_BUDGET_APPLIED",
-                    extra={
-                        "before": len(symbols),
-                        "after": len(selected_symbols),
-                        "dropped": dropped_count,
-                        "symbol_budget": symbol_budget,
-                        "order_cap": order_cap_value,
-                        "symbols_per_order": symbols_per_order,
-                        "cap_source": cap_source,
-                        "held_symbols_kept": held_symbols_kept,
-                        "held_cursor_start": held_cursor_start,
-                        "held_cursor_next": int(getattr(state, "netting_symbol_budget_cursor", 0)),
-                        "selected_sample": selected_symbols[:10],
-                    },
-                )
-            symbols = selected_symbols
 
     proposals_by_symbol: dict[str, list[SleeveProposal]] = {sym: [] for sym in symbols}
     latest_bar_ts: dict[str, datetime] = {}
@@ -43181,7 +42868,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     learned_overrides=learned_overrides,
                     sleeve_configs=sleeve_snapshot,
                 )
-                record = DecisionRecord(
+                record = _make_decision_record(
                     symbol="ALL",
                     bar_ts=now,
                     sleeves=[],
@@ -44734,228 +44421,49 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             cast=bool,
         )
     )
-    replay_quality_by_symbol: dict[str, dict[str, float]] = {}
-    replay_quality_by_symbol_session: dict[str, dict[str, float]] = {}
-    replay_quality_by_symbol_session_regime: dict[str, dict[str, float]] = {}
-    replay_quality_context: dict[str, Any] = {"source": "none"}
-    if replay_quality_rank_enabled:
-        def _normalize_symbol_quality_map(raw: Any) -> dict[str, dict[str, float]]:
-            out: dict[str, dict[str, float]] = {}
-            if not isinstance(raw, Mapping):
-                return out
-            for raw_key, raw_metrics in raw.items():
-                symbol = str(raw_key or "").strip().upper()
-                if not symbol or not isinstance(raw_metrics, Mapping):
-                    continue
-                sample_count = int(_safe_float(raw_metrics.get("sample_count")) or 0.0)
-                net_edge_bps = _safe_float(raw_metrics.get("net_edge_bps"))
-                if sample_count <= 0 or net_edge_bps is None:
-                    continue
-                out[symbol] = {
-                    "sample_count": float(sample_count),
-                    "net_edge_bps": float(net_edge_bps),
-                    "win_rate": float(_safe_float(raw_metrics.get("win_rate")) or 0.0),
-                    "profit_factor": float(
-                        _safe_float(raw_metrics.get("profit_factor")) or 0.0
-                    ),
-                }
-            return out
+    replay_quality_state = load_replay_quality_state(
+        state=state,
+        now=now,
+        enabled=bool(replay_quality_rank_enabled),
+        weight=float(replay_quality_weight),
+        max_age_hours=float(replay_quality_max_age_hours),
+        auto_disable_if_stale=bool(replay_quality_auto_disable_if_stale),
+        get_env=get_env,
+        safe_float=_safe_float,
+        parse_iso_timestamp=_parse_iso_timestamp,
+        resolve_runtime_artifact_path_func=resolve_runtime_artifact_path,
+        load_latest_replay_quality_summaries_func=_load_latest_replay_quality_summaries,
+    )
+    replay_quality_by_symbol = replay_quality_state.by_symbol
+    replay_quality_by_symbol_session = replay_quality_state.by_symbol_session
+    replay_quality_by_symbol_session_regime = replay_quality_state.by_symbol_session_regime
+    replay_quality_context = replay_quality_state.context
+    replay_quality_weight = replay_quality_state.effective_weight
 
-        def _normalize_bucket_quality_map(
-            raw: Any,
-            *,
-            with_regime: bool,
-        ) -> dict[str, dict[str, float]]:
-            out: dict[str, dict[str, float]] = {}
-            if not isinstance(raw, Mapping):
-                return out
-            expected_parts = 3 if with_regime else 2
-            for raw_key, raw_metrics in raw.items():
-                key = str(raw_key or "").strip()
-                if not key or not isinstance(raw_metrics, Mapping):
-                    continue
-                parts = key.split(":")
-                if len(parts) < expected_parts:
-                    continue
-                symbol = str(parts[0] or "").strip().upper()
-                session_token = str(parts[1] or "").strip().lower() or "offhours"
-                if with_regime:
-                    regime_token = str(parts[2] or "").strip().lower() or "unknown"
-                    normalized_key = f"{symbol}:{session_token}:{regime_token}"
-                else:
-                    normalized_key = f"{symbol}:{session_token}"
-                sample_count = int(_safe_float(raw_metrics.get("sample_count")) or 0.0)
-                net_edge_bps = _safe_float(raw_metrics.get("net_edge_bps"))
-                if sample_count <= 0 or net_edge_bps is None:
-                    continue
-                out[normalized_key] = {
-                    "sample_count": float(sample_count),
-                    "net_edge_bps": float(net_edge_bps),
-                    "win_rate": float(_safe_float(raw_metrics.get("win_rate")) or 0.0),
-                    "profit_factor": float(
-                        _safe_float(raw_metrics.get("profit_factor")) or 0.0
-                    ),
-                }
-            return out
-
-        state_replay_raw = getattr(state, "replay_symbol_summary", None)
-        state_replay_buckets_raw = getattr(state, "replay_bucket_summary", None)
-        state_replay_ts = _parse_iso_timestamp(
-            getattr(state, "replay_symbol_summary_updated_at", None)
-        )
-        if isinstance(state_replay_raw, Mapping) or isinstance(
-            state_replay_buckets_raw,
-            Mapping,
-        ):
-            age_seconds: float | None = None
-            if state_replay_ts is not None:
-                age_seconds = max(0.0, (now - state_replay_ts).total_seconds())
-            if age_seconds is None or age_seconds <= float(replay_quality_max_age_hours) * 3600.0:
-                replay_quality_by_symbol = _normalize_symbol_quality_map(
-                    state_replay_raw
-                )
-                buckets = (
-                    dict(state_replay_buckets_raw)
-                    if isinstance(state_replay_buckets_raw, Mapping)
-                    else {}
-                )
-                replay_quality_by_symbol_session = _normalize_bucket_quality_map(
-                    buckets.get("by_symbol_session"),
-                    with_regime=False,
-                )
-                replay_quality_by_symbol_session_regime = _normalize_bucket_quality_map(
-                    buckets.get("by_symbol_session_regime"),
-                    with_regime=True,
-                )
-                if (
-                    replay_quality_by_symbol
-                    or replay_quality_by_symbol_session
-                    or replay_quality_by_symbol_session_regime
-                ):
-                    replay_quality_context = {
-                        "source": "state",
-                        "updated_at": (
-                            state_replay_ts.isoformat() if state_replay_ts is not None else None
-                        ),
-                        "symbols": int(len(replay_quality_by_symbol)),
-                        "symbol_sessions": int(len(replay_quality_by_symbol_session)),
-                        "symbol_session_regimes": int(
-                            len(replay_quality_by_symbol_session_regime)
-                        ),
-                    }
-        if (
-            not replay_quality_by_symbol
-            and not replay_quality_by_symbol_session
-            and not replay_quality_by_symbol_session_regime
-        ):
-            replay_output_dir = resolve_runtime_artifact_path(
-                str(
-                    get_env(
-                        "AI_TRADING_REPLAY_OUTPUT_DIR",
-                        "runtime/replay_outputs",
-                        cast=str,
-                    )
-                    or ""
-                ).strip()
-                or "runtime/replay_outputs",
-                default_relative="runtime/replay_outputs",
-            )
-            (
-                replay_quality_by_symbol,
-                replay_quality_by_symbol_session,
-                replay_quality_by_symbol_session_regime,
-                replay_quality_context,
-            ) = _load_latest_replay_quality_summaries(
-                replay_output_dir,
-                max_age_hours=float(replay_quality_max_age_hours),
-            )
-            replay_quality_by_symbol = _normalize_symbol_quality_map(
-                replay_quality_by_symbol
-            )
-            replay_quality_by_symbol_session = _normalize_bucket_quality_map(
-                replay_quality_by_symbol_session,
-                with_regime=False,
-            )
-            replay_quality_by_symbol_session_regime = _normalize_bucket_quality_map(
-                replay_quality_by_symbol_session_regime,
-                with_regime=True,
-            )
-        if (
-            replay_quality_rank_enabled
-            and replay_quality_auto_disable_if_stale
-            and not replay_quality_by_symbol
-            and not replay_quality_by_symbol_session
-            and not replay_quality_by_symbol_session_regime
-        ):
-            replay_quality_weight = 0.0
-            replay_quality_context = {
-                **dict(replay_quality_context),
-                "source": "none",
-                "auto_disabled": True,
-                "auto_disabled_reason": "stale_or_missing_data",
-            }
-    policy_runtime_payload = _load_policy_runtime_toggles()
+    policy_override_state = apply_policy_runtime_overrides(
+        load_policy_runtime_toggles_func=_load_policy_runtime_toggles,
+        bandit_enabled=bool(bandit_enabled),
+        counterfactual_enabled=bool(counterfactual_enabled),
+        geometric_tiebreak_enabled=bool(geometric_tiebreak_enabled),
+        portfolio_log_growth_rank_enabled=bool(portfolio_log_growth_rank_enabled),
+    )
+    bandit_enabled = policy_override_state.bandit_enabled
+    counterfactual_enabled = policy_override_state.counterfactual_enabled
+    geometric_tiebreak_enabled = policy_override_state.geometric_tiebreak_enabled
+    portfolio_log_growth_rank_enabled = (
+        policy_override_state.portfolio_log_growth_rank_enabled
+    )
+    policy_runtime_payload = dict(policy_override_state.payload)
+    toggles_raw = policy_runtime_payload.get("toggles")
+    toggles = dict(toggles_raw) if isinstance(toggles_raw, Mapping) else {}
     policy_rollback_disabled_slices = {
         str(item).strip().upper()
         for item in policy_runtime_payload.get("disabled_slices", [])
         if str(item).strip()
     }
-    toggles_raw = policy_runtime_payload.get("toggles")
-    toggles = dict(toggles_raw) if isinstance(toggles_raw, Mapping) else {}
-    ranker_toggles_raw = toggles.get("rankers")
-    ranker_toggles = (
-        dict(ranker_toggles_raw) if isinstance(ranker_toggles_raw, Mapping) else {}
-    )
-    if policy_rollback_disabled_slices:
-        state.policy_rollback_disabled_slices = sorted(policy_rollback_disabled_slices)
-    else:
-        state.policy_rollback_disabled_slices = []
-    if "RANKER:BANDIT" in policy_rollback_disabled_slices or not bool(
-        ranker_toggles.get("bandit_enabled", True)
-    ):
-        bandit_enabled = False
-    if "RANKER:COUNTERFACTUAL" in policy_rollback_disabled_slices or not bool(
-        ranker_toggles.get("counterfactual_enabled", True)
-    ):
-        counterfactual_enabled = False
-    if "RANKER:GEOMETRIC" in policy_rollback_disabled_slices or not bool(
-        ranker_toggles.get("geometric_enabled", True)
-    ):
-        geometric_tiebreak_enabled = False
-    if "RANKER:PORTFOLIO_LOG_GROWTH" in policy_rollback_disabled_slices or not bool(
-        ranker_toggles.get("portfolio_log_growth_enabled", True)
-    ):
-        portfolio_log_growth_rank_enabled = False
-    disabled_gate_roots_raw = toggles.get("disabled_gate_roots")
-    if isinstance(disabled_gate_roots_raw, Sequence) and not isinstance(
-        disabled_gate_roots_raw, (str, bytes, bytearray)
-    ):
-        policy_disabled_gate_roots = {
-            str(item).strip().upper()
-            for item in disabled_gate_roots_raw
-            if str(item).strip()
-        }
-    else:
-        policy_disabled_gate_roots = {
-            str(item).split(":", 1)[1].strip().upper()
-            for item in policy_rollback_disabled_slices
-            if str(item).startswith("GATE:") and ":" in str(item)
-        }
-    disabled_sleeves_raw = toggles.get("disabled_sleeves")
-    if isinstance(disabled_sleeves_raw, Sequence) and not isinstance(
-        disabled_sleeves_raw, (str, bytes, bytearray)
-    ):
-        policy_disabled_sleeves = {
-            str(item).strip().lower()
-            for item in disabled_sleeves_raw
-            if str(item).strip()
-        }
-    else:
-        policy_disabled_sleeves = {
-            str(item).split(":", 1)[1].strip().lower()
-            for item in policy_rollback_disabled_slices
-            if str(item).startswith("SLEEVE:") and ":" in str(item)
-        }
+    state.policy_rollback_disabled_slices = sorted(policy_rollback_disabled_slices)
+    policy_disabled_gate_roots = set(policy_override_state.disabled_gate_roots)
+    policy_disabled_sleeves = set(policy_override_state.disabled_sleeves)
 
     bandit_rewards_by_symbol: dict[str, list[float]] = {}
     bandit_rewards_by_symbol_session: dict[str, list[float]] = {}
@@ -47073,7 +46581,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     if tca_stale_reason:
         for symbol, net_target in targets.items():
             symbol_snapshot = dict(decision_snapshot_template)
-            record = DecisionRecord(
+            record = _make_decision_record(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -47779,7 +47287,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             symbol_snapshot["liquidity_regime"] = liq_regime.value
         if state.halt_trading:
             reason = state.halt_reason or "HALT_TRADING"
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -47787,13 +47295,12 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 gates=[reason],
                 config_snapshot=symbol_snapshot,
             )
-            _write_decision_record(record, decision_path)
             continue
         price = latest_price.get(symbol, 0.0)
         current_shares = int(positions.get(symbol, 0) or 0)
         if price <= 0:
             net_target.reasons.append("BAD_DATA_CONTRACT")
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -47801,7 +47308,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 gates=skip_reasons.get(symbol, []),
                 config_snapshot=symbol_snapshot,
             )
-            _write_decision_record(record, decision_path)
             continue
         net_target.target_shares = int(round(net_target.target_dollars / price))
         delta_shares = net_target.target_shares - current_shares
@@ -47826,7 +47332,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     "disabled_sleeves_for_symbol": disabled_for_symbol,
                     "disabled_slices": sorted(policy_rollback_disabled_slices),
                 }
-                record = DecisionRecord(
+                _record_decision(
                     symbol=symbol,
                     bar_ts=net_target.bar_ts,
                     sleeves=net_target.proposals,
@@ -47834,7 +47340,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     gates=gates,
                     config_snapshot=symbol_snapshot,
                 )
-                _write_decision_record(record, decision_path)
                 continue
         symbol_snapshot["sleeve_configs"] = {
             proposal.sleeve: {
@@ -47968,7 +47473,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 "allowed_symbols_count": int(len(opportunity_allowed_symbols)),
                 "openings_only": bool(opportunity_openings_only),
             }
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -47976,7 +47481,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 gates=gates,
                 config_snapshot=symbol_snapshot,
             )
-            _write_decision_record(record, decision_path)
             continue
         if (
             expanding_exposure
@@ -47989,7 +47493,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 "signal_age_seconds": float(signal_age_seconds),
                 "stale_signal_sec": float(alpha_stale_signal_sec),
             }
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -47997,7 +47501,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 gates=gates,
                 config_snapshot=symbol_snapshot,
             )
-            _write_decision_record(record, decision_path)
             continue
         if live_execution_mode and not burn_in_live_ready and expanding_exposure:
             gates.append(burn_in_live_reason or "PAPER_BURN_IN_BLOCK")
@@ -48006,7 +47509,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 "burn_in_reason": burn_in_live_reason,
                 "capital_ramp": dict(ramp_summary),
             }
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -48014,7 +47517,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 gates=gates,
                 config_snapshot=symbol_snapshot,
             )
-            _write_decision_record(record, decision_path)
             continue
         if live_execution_mode and expanding_exposure and ramp_live_multiplier < 0.999:
             scaled_qty = int(round(float(delta_shares) * ramp_live_multiplier))
@@ -48041,7 +47543,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             if bool(primary_feed_derisk.get("block", False)) and not reducing_exposure:
                 gates.append("DERISK_PRIMARY_FEED_BLOCK")
                 symbol_snapshot["primary_feed_derisk"] = dict(primary_feed_derisk)
-                record = DecisionRecord(
+                _record_decision(
                     symbol=symbol,
                     bar_ts=net_target.bar_ts,
                     sleeves=net_target.proposals,
@@ -48049,7 +47551,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     gates=gates,
                     config_snapshot=symbol_snapshot,
                 )
-                _write_decision_record(record, decision_path)
                 continue
             if not reducing_exposure:
                 feed_derisk_scale = float(primary_feed_derisk.get("scale", 1.0) or 1.0)
@@ -48085,7 +47586,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     net_target.target_shares = 0
                     delta_shares = -current_shares
                 else:
-                    record = DecisionRecord(
+                    _record_decision(
                         symbol=symbol,
                         bar_ts=net_target.bar_ts,
                         sleeves=net_target.proposals,
@@ -48093,7 +47594,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         gates=gates,
                         config_snapshot=symbol_snapshot,
                     )
-                    _write_decision_record(record, decision_path)
                     continue
 
         lock = state.stop_lock.get(symbol)
@@ -48119,7 +47619,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         state.stop_lock.pop(symbol, None)
 
         if delta_shares == 0:
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -48127,12 +47627,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 gates=gates,
                 config_snapshot=symbol_snapshot,
             )
-            _write_decision_record(record, decision_path)
             continue
 
         if kill_switch:
             gates.append("KILL_SWITCH_BLOCK")
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -48140,7 +47639,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 gates=gates,
                 config_snapshot=symbol_snapshot,
             )
-            _write_decision_record(record, decision_path)
             continue
 
         event_risk_near = False
@@ -48161,7 +47659,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             symbol_snapshot["event_risk_near"] = event_risk_near
             if event_risk_near:
                 gates.append("EVENT_RISK_BLACKOUT_BLOCK")
-                record = DecisionRecord(
+                _record_decision(
                     symbol=symbol,
                     bar_ts=net_target.bar_ts,
                     sleeves=net_target.proposals,
@@ -48169,12 +47667,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     gates=gates,
                     config_snapshot=symbol_snapshot,
                 )
-                _write_decision_record(record, decision_path)
                 continue
 
         if state.last_order_bar_ts.get(symbol) == net_target.bar_ts:
             gates.append("BAR_DEDUP")
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -48182,7 +47679,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 gates=gates,
                 config_snapshot=symbol_snapshot,
             )
-            _write_decision_record(record, decision_path)
             continue
 
         if bool(get_env("AI_TRADING_PARTICIPATION_CAP_ENABLED", True, cast=bool)):
@@ -48200,7 +47696,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 participation_gate = liq_reason or "LIQ_PARTICIPATION_BLOCK"
                 if _gate_blocks(str(participation_gate)):
                     gates.append(str(participation_gate))
-                    record = DecisionRecord(
+                    _record_decision(
                         symbol=symbol,
                         bar_ts=net_target.bar_ts,
                         sleeves=net_target.proposals,
@@ -48208,7 +47704,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         gates=gates,
                         config_snapshot=symbol_snapshot,
                     )
-                    _write_decision_record(record, decision_path)
                     continue
                 adjusted_qty_int = int(round(float(adjusted_qty)))
                 if adjusted_qty_int == 0:
@@ -48248,7 +47743,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             if thin_max_order_dollars > 0 and abs(delta_shares) * price > thin_max_order_dollars:
                 if _gate_blocks("LIQ_THIN_MAX_ORDER_BLOCK"):
                     gates.append("LIQ_THIN_MAX_ORDER_BLOCK")
-                    record = DecisionRecord(
+                    _record_decision(
                         symbol=symbol,
                         bar_ts=net_target.bar_ts,
                         sleeves=net_target.proposals,
@@ -48256,7 +47751,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         gates=gates,
                         config_snapshot=symbol_snapshot,
                     )
-                    _write_decision_record(record, decision_path)
                     continue
                 thin_cap_qty = int(
                     math.copysign(
@@ -48274,7 +47768,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             if alpha_guard.get("blocked"):
                 if _gate_blocks("ALPHA_DECAY_BLOCK"):
                     gates.append("ALPHA_DECAY_BLOCK")
-                    record = DecisionRecord(
+                    record = _make_decision_record(
                         symbol=symbol,
                         bar_ts=net_target.bar_ts,
                         sleeves=net_target.proposals,
@@ -48296,7 +47790,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 if scaled_qty == 0:
                     if _gate_blocks("ALPHA_DECAY_ZERO_QTY_BLOCK"):
                         gates.append("ALPHA_DECAY_ZERO_QTY_BLOCK")
-                        record = DecisionRecord(
+                        record = _make_decision_record(
                             symbol=symbol,
                             bar_ts=net_target.bar_ts,
                             sleeves=net_target.proposals,
@@ -48354,7 +47848,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 throttled_qty = int(round(float(delta_shares) * capacity_scale))
                 if throttled_qty == 0:
                     gates.append("CAPACITY_THROTTLE_BLOCK")
-                    record = DecisionRecord(
+                    record = _make_decision_record(
                         symbol=symbol,
                         bar_ts=net_target.bar_ts,
                         sleeves=net_target.proposals,
@@ -48392,7 +47886,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 scaled_qty = int(round(float(delta_shares) * adaptive_scale))
                 if scaled_qty == 0:
                     gates.append("SYMBOL_EXPECTANCY_SLIPPAGE_BLOCK")
-                    record = DecisionRecord(
+                    record = _make_decision_record(
                         symbol=symbol,
                         bar_ts=net_target.bar_ts,
                         sleeves=net_target.proposals,
@@ -48577,7 +48071,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     gates.append("UNCERTAINTY_CAPITAL_BLOCK")
                     uncertainty_event["blocked"] = True
                     uncertainty_cycle_events.append(dict(uncertainty_event))
-                    record = DecisionRecord(
+                    record = _make_decision_record(
                         symbol=symbol,
                         bar_ts=net_target.bar_ts,
                         sleeves=net_target.proposals,
@@ -48660,7 +48154,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         if symbol_cap_details is not None:
             if int(delta_shares_capped) == 0:
                 gates.append("RISK_CAP_SYMBOL")
-                record = DecisionRecord(
+                record = _make_decision_record(
                     symbol=symbol,
                     bar_ts=net_target.bar_ts,
                     sleeves=net_target.proposals,
@@ -48682,7 +48176,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         min_notional = float(getattr(cfg, "execution_min_notional", 1.0))
         if abs(delta_shares) < min_qty or abs(delta_shares) * price < min_notional:
             gates.append("RISK_CAP_SYMBOL")
-            record = DecisionRecord(
+            record = _make_decision_record(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -48704,7 +48198,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             )
             if adjusted_sell_qty <= 0:
                 gates.append("PRE_SUBMIT_INSUFFICIENT_POSITION_AVAILABLE")
-                record = DecisionRecord(
+                record = _make_decision_record(
                     symbol=symbol,
                     bar_ts=net_target.bar_ts,
                     sleeves=net_target.proposals,
@@ -48751,7 +48245,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     )
                     if not bool(opening_notional_allowed):
                         gates.append("ENTRY_CONSTRAINED_MIN_NOTIONAL_PRECHECK")
-                        record = DecisionRecord(
+                        record = _make_decision_record(
                             symbol=symbol,
                             bar_ts=net_target.bar_ts,
                             sleeves=net_target.proposals,
@@ -48800,7 +48294,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                             opening_notional = abs(float(delta_shares) * float(price))
                             if opening_notional < opening_min_notional:
                                 gates.append("ENTRY_CONSTRAINED_MIN_NOTIONAL_PRECHECK")
-                                record = DecisionRecord(
+                                record = _make_decision_record(
                                     symbol=symbol,
                                     bar_ts=net_target.bar_ts,
                                     sleeves=net_target.proposals,
@@ -48825,7 +48319,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         cooldown_allowed, cooldown_context = True, {}
                     if not bool(cooldown_allowed):
                         gates.append("ENTRY_CONSTRAINED_SYMBOL_REENTRY_COOLDOWN_PRECHECK")
-                        record = DecisionRecord(
+                        record = _make_decision_record(
                             symbol=symbol,
                             bar_ts=net_target.bar_ts,
                             sleeves=net_target.proposals,
@@ -48845,7 +48339,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     duplicate_suppressed = False
                 if duplicate_suppressed:
                     gates.append("DUPLICATE_INTENT_PRECHECK")
-                    record = DecisionRecord(
+                    record = _make_decision_record(
                         symbol=symbol,
                         bar_ts=net_target.bar_ts,
                         sleeves=net_target.proposals,
@@ -49006,7 +48500,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 "COST_AWARE_ENTRY_GUARD"
             ):
                 gates.append("COST_AWARE_ENTRY_GUARD")
-                record = DecisionRecord(
+                _record_decision(
                     symbol=symbol,
                     bar_ts=net_target.bar_ts,
                     sleeves=net_target.proposals,
@@ -49051,7 +48545,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     },
                     config_snapshot=symbol_snapshot,
                 )
-                _write_decision_record(record, decision_path)
                 continue
         calibration_samples = int(
             max(
@@ -49071,68 +48564,45 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             calibration_samples < int(effective_policy.calibration.min_samples)
             or (ece_value <= ece_limit and brier_value <= brier_limit)
         )
-        pacing_headroom = 999999
-        if max_new_orders_per_cycle is not None:
-            pacing_used = max(0, int(orders_submitted))
-            if exec_engine is not None:
-                try:
-                    engine_submits = int(
-                        getattr(exec_engine, "_cycle_new_orders_submitted", orders_submitted)
-                    )
-                except (TypeError, ValueError):
-                    engine_submits = int(orders_submitted)
-                pacing_used = max(pacing_used, max(engine_submits, 0))
-            pacing_headroom = max(0, int(max_new_orders_per_cycle) - pacing_used)
-        stale_orders_present = bool(
-            float(slo_derisk_details.get("pending_oldest_age_sec", 0.0) or 0.0) > 0.0
-        )
-        current_notional = abs(float(current_shares) * float(price))
-        post_notional = abs(float(current_shares + delta_shares) * float(price))
-        portfolio_post_gross = max(0.0, portfolio_current_gross - current_notional + post_notional)
         sector_name = str(get_sector(symbol) or "UNKNOWN").upper()
-        sector_current_gross = float(sector_gross.get(sector_name, 0.0) or 0.0)
-        sector_post_gross = max(0.0, sector_current_gross - current_notional + post_notional)
-        factor_post_ratio = sector_post_gross / max(portfolio_post_gross, 1.0)
         safety_tier_raw = str(getattr(state, "operational_safety_tier", SafetyTier.NORMAL.value) or SafetyTier.NORMAL.value)
-        try:
-            safety_tier = SafetyTier(safety_tier_raw)
-        except ValueError:
-            safety_tier = SafetyTier.NORMAL
-        approval = approve_execution_candidate(
-            effective_policy,
-            ExecutionCandidate(
-                symbol=symbol,
-                side=side,
-                proposed_delta_shares=int(delta_shares),
-                current_shares=int(current_shares),
-                price=float(price),
-                expected_edge_bps=float(expected_edge_total),
-                expected_cost_bps=float(expected_cost_total),
-                confidence=max((float(p.confidence) for p in net_target.proposals), default=0.0),
-                spread_bps=float(liq_features.spread_bps),
-                rolling_volume=float(liq_features.rolling_volume),
-                pending_oldest_age_sec=float(
-                    slo_derisk_details.get("pending_oldest_age_sec", 0.0) or 0.0
-                ),
-                pacing_headroom=int(pacing_headroom),
-                stale_orders_present=stale_orders_present,
-                calibration_ok=calibration_ok,
-                portfolio_post_gross_dollars=float(portfolio_post_gross),
-                sleeve_post_notional_dollars=max(
-                    (abs(float(p.target_dollars)) for p in net_target.proposals),
-                    default=0.0,
-                ),
-                factor_post_ratio=float(factor_post_ratio),
-                reject_rate_pct=float(slo_derisk_details.get("reject_rate_pct", 0.0) or 0.0),
-                safety_tier=safety_tier,
+        approval_context = evaluate_execution_approval(
+            effective_policy=effective_policy,
+            symbol=symbol,
+            side=side,
+            delta_shares=int(delta_shares),
+            current_shares=float(current_shares),
+            price=float(price),
+            expected_edge_total=float(expected_edge_total),
+            expected_cost_total=float(expected_cost_total),
+            proposals=net_target.proposals,
+            spread_bps=float(liq_features.spread_bps),
+            rolling_volume=float(liq_features.rolling_volume),
+            pending_oldest_age_sec=float(
+                slo_derisk_details.get("pending_oldest_age_sec", 0.0) or 0.0
             ),
+            calibration_ok=calibration_ok,
+            reject_rate_pct=float(slo_derisk_details.get("reject_rate_pct", 0.0) or 0.0),
+            portfolio_current_gross=float(portfolio_current_gross),
+            sector_gross=sector_gross,
+            sector_name=sector_name,
+            max_new_orders_per_cycle=max_new_orders_per_cycle,
+            orders_submitted=int(orders_submitted),
+            engine_cycle_new_orders_submitted=(
+                getattr(exec_engine, "_cycle_new_orders_submitted", orders_submitted)
+                if exec_engine is not None
+                else orders_submitted
+            ),
+            safety_tier_raw=safety_tier_raw,
+            approval_func=approve_execution_candidate,
         )
+        approval = approval_context.approval
         if approval.reasons:
             for reason in approval.reasons:
                 if reason not in gates:
                     gates.append(reason)
         if not approval.allowed:
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -49141,13 +48611,12 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 metrics={"expected_net_edge_bps": approval.expected_net_edge_bps},
                 config_snapshot=symbol_snapshot,
             )
-            _write_decision_record(record, decision_path)
             continue
-        if int(approval.adjusted_delta_shares) != int(delta_shares):
-            delta_shares = int(approval.adjusted_delta_shares)
+        if int(approval_context.adjusted_delta_shares) != int(delta_shares):
+            delta_shares = int(approval_context.adjusted_delta_shares)
             net_target.target_shares = current_shares + delta_shares
             net_target.target_dollars = net_target.target_shares * price
-        side = "buy" if delta_shares > 0 else "sell"
+        side = approval_context.adjusted_side
         if (
             portfolio_optimizer_enabled
             and portfolio_optimizer is not None
@@ -49156,16 +48625,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 or bool(opening_trade)
             )
         ):
-            current_positions_for_optimizer: dict[str, float] = {}
-            for sym, pos in positions.items():
-                try:
-                    parsed_pos = float(pos)
-                except (TypeError, ValueError):
-                    continue
-                if not math.isfinite(parsed_pos):
-                    continue
-                current_positions_for_optimizer[str(sym)] = float(parsed_pos)
-            current_positions_for_optimizer[str(symbol)] = float(current_shares)
+            current_positions_for_optimizer = build_portfolio_optimizer_positions(
+                positions,
+                symbol=symbol,
+                current_shares=float(current_shares),
+            )
             proposed_position = float(current_shares + delta_shares)
             opt_allowed, opt_context = _portfolio_optimizer_allows_trade(
                 optimizer=portfolio_optimizer,
@@ -49184,7 +48648,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     for ch in decision_token.upper()
                 ).strip("_") or "REJECT"
                 gates.append(f"PORTFOLIO_OPTIMIZER_{gate_token}")
-                record = DecisionRecord(
+                _record_decision(
                     symbol=symbol,
                     bar_ts=net_target.bar_ts,
                     sleeves=net_target.proposals,
@@ -49193,7 +48657,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     metrics={"portfolio_optimizer": dict(opt_context)},
                     config_snapshot=symbol_snapshot,
                 )
-                _write_decision_record(record, decision_path)
                 continue
         auth_forbidden_retry_after = _auth_forbidden_cooldown_remaining_seconds(
             state,
@@ -49203,7 +48666,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         )
         if auth_forbidden_retry_after > 0.0:
             gates.append("AUTH_BROKER_HALT_FORBIDDEN_COOLDOWN")
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -49212,84 +48675,64 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 metrics={"auth_forbidden_retry_after_sec": round(auth_forbidden_retry_after, 3)},
                 config_snapshot=symbol_snapshot,
             )
-            _write_decision_record(record, decision_path)
             continue
-        client_order_id = deterministic_client_order_id(
+        execution_intent_context = build_execution_intent_context(
             salt=str(getattr(cfg, "seed", "seed")),
             symbol=symbol,
-            bar_ts=net_target.bar_ts.isoformat(),
             side=side,
-            qty=abs(delta_shares),
-            limit_price=price,
-        )
-        if not breakers.allow("broker_submit"):
-            reason = breakers.open_reason("broker_submit") or "CIRCUIT_OPEN_broker_submit"
-            gates.append(reason)
-            state.halt_reason = reason
-            record = DecisionRecord(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                config_snapshot=symbol_snapshot,
-            )
-            _write_decision_record(record, decision_path)
-            continue
-        if ledger is not None and ledger.seen_client_order_id(client_order_id):
-            gates.append("BAR_DEDUP")
-            record = DecisionRecord(
-                symbol=symbol,
-                bar_ts=net_target.bar_ts,
-                sleeves=net_target.proposals,
-                net_target=net_target,
-                gates=gates,
-                config_snapshot=symbol_snapshot,
-            )
-            _write_decision_record(record, decision_path)
-            continue
-
-        intent = PretradeOrderIntent(
-            symbol=symbol,
-            side=side,
-            qty=abs(delta_shares),
-            notional=abs(delta_shares) * price,
-            limit_price=price,
+            delta_shares=int(delta_shares),
+            price=float(price),
             bar_ts=net_target.bar_ts,
-            client_order_id=client_order_id,
-            last_price=price,
-            mid=price,
-            spread=(float(liq_features.spread_bps) / 10_000.0) * float(price),
-            avg_daily_volume=max(float(liq_features.rolling_volume) * 390.0, 0.0),
-            minute_volume=max(float(liq_features.rolling_volume), 0.0),
+            spread_bps=float(liq_features.spread_bps),
             liquidity_bucket=liq_regime.value.upper(),
             quote_quality_ok=not bool(state.halt_trading),
             sector=get_sector(symbol),
             event_risk=event_risk_near,
-            event_type="earnings" if event_risk_near else None,
-            execution_drift_bps=float(slo_derisk_details.get("execution_drift_bps", 0.0) or 0.0),
-            reject_rate_pct=float(slo_derisk_details.get("reject_rate_pct", 0.0) or 0.0),
+            slo_derisk_details={
+                **dict(slo_derisk_details),
+                "rolling_volume": float(liq_features.rolling_volume),
+            },
+            config_snapshot=symbol_snapshot,
+            execution_model_lineage=execution_model_lineage,
+            submit_quote_source=None,
+            submit_bid_at_arrival=None,
+            submit_ask_at_arrival=None,
+            submit_mid_at_arrival=None,
         )
-        pretrade_cfg: Any = cfg
-        effective_collar_pct: float | None = None
-        if liq_regime is LiquidityRegime.THIN:
-            collar_mult = float(get_env("AI_TRADING_LIQ_THIN_COLLAR_MULT", 0.8, cast=float))
-            if collar_mult > 0:
-                raw_collar = getattr(cfg, "price_collar_pct", None)
-                if raw_collar is None:
-                    raw_collar = get_env("PRICE_COLLAR_PCT", 0.03, cast=float)
-                try:
-                    base_collar_pct = float(raw_collar)
-                except (TypeError, ValueError):
-                    base_collar_pct = float(get_env("PRICE_COLLAR_PCT", 0.03, cast=float))
-                effective_collar_pct = max(0.0, base_collar_pct * collar_mult)
-                pretrade_cfg = SimpleNamespace(
-                    max_order_dollars=getattr(cfg, "max_order_dollars", None),
-                    max_order_shares=getattr(cfg, "max_order_shares", None),
-                    price_collar_pct=effective_collar_pct,
-                )
-                symbol_snapshot["liquidity_collar_multiplier"] = collar_mult
-                symbol_snapshot["price_collar_pct_effective"] = effective_collar_pct
+        client_order_id = execution_intent_context.client_order_id
+        if not breakers.allow("broker_submit"):
+            reason = breakers.open_reason("broker_submit") or "CIRCUIT_OPEN_broker_submit"
+            gates.append(reason)
+            state.halt_reason = reason
+            _record_decision(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                config_snapshot=symbol_snapshot,
+            )
+            continue
+        if ledger is not None and ledger.seen_client_order_id(client_order_id):
+            gates.append("BAR_DEDUP")
+            _record_decision(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                config_snapshot=symbol_snapshot,
+            )
+            continue
+
+        intent = execution_intent_context.pretrade_intent
+        pretrade_cfg, effective_collar_pct, collar_mult = build_pretrade_validation_cfg(
+            cfg,
+            thin_liquidity=liq_regime is LiquidityRegime.THIN,
+        )
+        if effective_collar_pct is not None and collar_mult is not None:
+            symbol_snapshot["liquidity_collar_multiplier"] = collar_mult
+            symbol_snapshot["price_collar_pct_effective"] = effective_collar_pct
         allowed, pretrade_reason, pretrade_details = safe_validate_pretrade(
             intent,
             cfg=pretrade_cfg,
@@ -49300,7 +48743,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             if effective_collar_pct is not None:
                 pretrade_details.setdefault("price_collar_pct", effective_collar_pct)
             gates.append(pretrade_reason)
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -49308,8 +48751,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 gates=gates,
                 metrics={"pretrade": pretrade_details},
                 config_snapshot=symbol_snapshot,
+                order_intent=intent.to_contract(),
             )
-            _write_decision_record(record, decision_path)
             continue
 
         try:
@@ -49340,7 +48783,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             and submit_mid_at_arrival is None
         ):
             gates.append("NBBO_REQUIRED_OPENING_SKIP")
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -49357,10 +48800,35 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 },
                 config_snapshot=symbol_snapshot,
             )
-            _write_decision_record(record, decision_path)
             continue
 
-        order_lineage_metadata: dict[str, Any] = {}
+        execution_intent_context = build_execution_intent_context(
+            salt=str(getattr(cfg, "seed", "seed")),
+            symbol=symbol,
+            side=side,
+            delta_shares=int(delta_shares),
+            price=float(price),
+            bar_ts=net_target.bar_ts,
+            spread_bps=float(liq_features.spread_bps),
+            liquidity_bucket=liq_regime.value.upper(),
+            quote_quality_ok=not bool(state.halt_trading),
+            sector=get_sector(symbol),
+            event_risk=event_risk_near,
+            slo_derisk_details={
+                **dict(slo_derisk_details),
+                "rolling_volume": float(liq_features.rolling_volume),
+            },
+            config_snapshot=symbol_snapshot,
+            execution_model_lineage=execution_model_lineage,
+            submit_quote_source=submit_quote_source,
+            submit_bid_at_arrival=submit_bid_at_arrival,
+            submit_ask_at_arrival=submit_ask_at_arrival,
+            submit_mid_at_arrival=submit_mid_at_arrival,
+        )
+        client_order_id = execution_intent_context.client_order_id
+        intent = execution_intent_context.pretrade_intent
+        order_lineage_metadata = dict(execution_intent_context.order_lineage_metadata)
+        order_annotations = dict(execution_intent_context.order_annotations)
         model_id_for_order = str(execution_model_lineage.get("model_id") or "").strip()
         model_version_for_order = str(execution_model_lineage.get("model_version") or "").strip()
         dataset_hash_for_order = str(execution_model_lineage.get("dataset_hash") or "").strip()
@@ -49374,49 +48842,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             symbol_snapshot.get("config_snapshot_hash") or ""
         ).strip()
         policy_hash_for_order = str(symbol_snapshot.get("effective_policy_hash") or "").strip()
-        decision_trace_id_for_order = str(client_order_id or "").strip()
-        if not decision_trace_id_for_order:
-            decision_trace_id_for_order = (
-                f"{symbol}:{net_target.bar_ts.isoformat()}:decision_trace"
-            )
-        if model_id_for_order:
-            order_lineage_metadata["model_id"] = model_id_for_order
-        if model_version_for_order:
-            order_lineage_metadata["model_version"] = model_version_for_order
-        if dataset_hash_for_order:
-            order_lineage_metadata["dataset_hash"] = dataset_hash_for_order
-        if feature_version_for_order:
-            order_lineage_metadata["feature_version"] = feature_version_for_order
-        if model_artifact_hash_for_order:
-            order_lineage_metadata["model_artifact_hash"] = model_artifact_hash_for_order
-        if config_snapshot_hash_for_order:
-            order_lineage_metadata["config_snapshot_hash"] = config_snapshot_hash_for_order
-        if policy_hash_for_order:
-            order_lineage_metadata["policy_hash"] = policy_hash_for_order
-        if decision_trace_id_for_order:
-            order_lineage_metadata["decision_trace_id"] = decision_trace_id_for_order
-        if submit_quote_source:
-            order_lineage_metadata["price_source"] = submit_quote_source
-        order_annotations: dict[str, Any] = {}
-        if submit_quote_source:
-            order_annotations["price_source"] = submit_quote_source
-        if policy_hash_for_order:
-            order_annotations["policy_hash"] = policy_hash_for_order
-        if decision_trace_id_for_order:
-            order_annotations["decision_trace_id"] = decision_trace_id_for_order
-        if (
-            submit_bid_at_arrival is not None
-            and submit_ask_at_arrival is not None
-            and submit_mid_at_arrival is not None
-        ):
-            order_annotations["quote_source"] = "broker_nbbo"
-            order_annotations["quote"] = {
-                "bid": float(submit_bid_at_arrival),
-                "ask": float(submit_ask_at_arrival),
-                "midpoint": float(submit_mid_at_arrival),
-                "source": "broker_nbbo",
-                "synthetic": False,
-            }
+        decision_trace_id_for_order = execution_intent_context.decision_trace_id
         try:
             order = submit_order(
                 runtime,
@@ -49514,15 +48940,15 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 now=now,
             )
             orders_attempted += 1
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
                 net_target=net_target,
                 gates=gates,
                 config_snapshot=symbol_snapshot,
+                order_intent=intent.to_contract(),
             )
-            _write_decision_record(record, decision_path)
             continue
         if order is None:
             submit_none_reason = _resolve_submit_none_reason(runtime)
@@ -49536,251 +48962,68 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             )
             if submit_none_reason not in {"CYCLE_DUPLICATE_INTENT", "DUPLICATE_INTENT"}:
                 orders_attempted += 1
-            record = DecisionRecord(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
                 net_target=net_target,
                 gates=gates,
                 config_snapshot=symbol_snapshot,
+                order_intent=intent.to_contract(),
             )
-            _write_decision_record(record, decision_path)
             continue
         orders_attempted += 1
-        order_status = _extract_order_value(order, "status") if order is not None else None
-        status_value = getattr(order_status, "value", order_status)
-        order_status_text = (
-            str(status_value).strip() if status_value not in (None, "") else "submitted"
+        order_state = normalize_submitted_order(
+            order,
+            delta_shares=int(delta_shares),
+            extract_order_value=_extract_order_value,
+            extract_order_fill_timestamp=_extract_order_fill_timestamp,
+            normalize_order_status_token=_normalize_order_status_token,
+            safe_float=_safe_float,
+            has_persistable_fill=_has_persistable_fill,
         )
-        order_status_token = _normalize_order_status_token(status_value)
-        broker_order_id = (
-            _extract_order_value(order, "id", "order_id", "client_order_id")
-            if order is not None
-            else None
+        record_successful_submission(
+            ledger=ledger,
+            state=state,
+            symbol=symbol,
+            client_order_id=client_order_id,
+            bar_ts=net_target.bar_ts,
+            delta_shares=int(delta_shares),
+            side=side,
+            price=float(price),
+            now=now,
+            order_state=order_state,
+            proposals=net_target.proposals,
         )
-        filled_qty = _safe_float(
-            _extract_order_value(order, "filled_quantity", "filled_qty")
-        )
-        if filled_qty is None:
-            filled_qty = 0.0
-        requested_qty = _safe_float(
-            _extract_order_value(order, "requested_quantity", "qty", "quantity")
-        )
-        if requested_qty is None:
-            requested_qty = float(abs(delta_shares))
-        fill_price = _safe_float(
-            _extract_order_value(
-                order,
-                "filled_avg_price",
-                "fill_price",
-                "average_fill_price",
-                "average_price",
-            )
-        )
-        fill_timestamp = _extract_order_fill_timestamp(order)
-        raw_fees = _safe_float(
-            _extract_order_value(
-                order,
-                "fees",
-                "fee",
-                "commission",
-                "filled_fee",
-                "filled_fees",
-                "total_fees",
-            )
-        )
-        fill_fees = abs(float(raw_fees)) if raw_fees is not None else 0.0
-        persistable_fill = _has_persistable_fill(
-            status_token=order_status_token,
-            filled_qty=float(filled_qty),
-            fill_price=fill_price,
-        )
-        if ledger is not None:
-            ledger.record(
-                LedgerEntry(
-                    client_order_id=client_order_id,
-                    symbol=symbol,
-                    bar_ts=net_target.bar_ts.isoformat(),
-                    qty=float(abs(delta_shares)),
-                    side=side,
-                    limit_price=price,
-                    ts=now.isoformat(),
-                    broker_order_id=str(broker_order_id) if broker_order_id is not None else None,
-                    status=order_status_text if order_status_text else None,
-                )
-            )
-        state.last_order_bar_ts[symbol] = net_target.bar_ts
-        state.last_order_client_id[symbol] = client_order_id
         orders_submitted += 1
-
-        total_target = sum(abs(p.target_dollars) for p in net_target.proposals)
-        if total_target > 0:
-            trade_notional = abs(delta_shares) * price
-            for proposal in net_target.proposals:
-                ratio = abs(proposal.target_dollars) / total_target
-                turnover_key = (now.date(), proposal.sleeve, symbol)
-                state.turnover_dollars[turnover_key] = state.turnover_dollars.get(turnover_key, 0.0) + trade_notional * ratio
-
-        metrics = {}
-        tca_record: dict[str, Any] | None = None
-        arrival_price_for_metrics = (
-            float(submit_arrival_price)
-            if submit_arrival_price is not None
-            else float(price)
+        metrics, tca_record = build_order_metrics_and_tca(
+            symbol=symbol,
+            side=side,
+            price=float(price),
+            delta_shares=int(delta_shares),
+            now=now,
+            net_target=net_target,
+            order=order,
+            order_state=order_state,
+            submit_arrival_price=submit_arrival_price,
+            submit_bid_at_arrival=submit_bid_at_arrival,
+            submit_ask_at_arrival=submit_ask_at_arrival,
+            submit_mid_at_arrival=submit_mid_at_arrival,
+            submit_quote_source=submit_quote_source,
+            candidate_expected_net_edge=candidate_expected_net_edge,
+            candidate_expected_capture=candidate_expected_capture,
+            get_regime_signal_profile_func=get_regime_signal_profile,
+            normalize_quote_source_token_func=_normalize_quote_source_token,
+            resolve_quote_proxy_source_func=_resolve_quote_proxy_source,
+            resolved_tca_path_func=_resolved_tca_path,
+            write_tca_record_func=write_tca_record,
+            session_bucket_from_ts_func=_session_bucket_from_ts,
+            compute_attribution_metrics_func=compute_attribution_metrics,
+            safe_float=_safe_float,
+            logger=logger,
         )
-        try:
-            metrics = compute_attribution_metrics(
-                arrival_price=arrival_price_for_metrics,
-                fill_price=float(fill_price) if fill_price is not None else None,
-                side=side,
-                bid=submit_bid_at_arrival,
-                ask=submit_ask_at_arrival,
-                order_ts=now,
-                fill_ts=fill_timestamp if persistable_fill else None,
-            )
-        except Exception:
-            metrics = {}
-            fill_price = None
-            persistable_fill = False
-        if bool(get_env("AI_TRADING_TCA_ENABLED", False, cast=bool)):
-            fill_vwap = float(fill_price) if fill_price is not None else None
-            arrival_benchmark = str(
-                get_env("AI_TRADING_TCA_ARRIVAL_BENCHMARK", "decision")
-            ).strip().lower()
-            if arrival_benchmark not in {"decision", "submit"}:
-                arrival_benchmark = "decision"
-            allow_proxy_quotes = bool(
-                get_env("AI_TRADING_TCA_ALLOW_PROXY_QUOTES", True, cast=bool)
-            )
-            arrival_ts = net_target.bar_ts if arrival_benchmark == "decision" else now
-            first_fill_ts = fill_timestamp if persistable_fill else None
-            if first_fill_ts is None and persistable_fill:
-                first_fill_ts = now
-            partial_fill = order_status_token == "partially_filled"
-            if (
-                not partial_fill
-                and persistable_fill
-                and float(requested_qty) > 0
-                and float(filled_qty) < float(requested_qty)
-            ):
-                partial_fill = True
-            tca_qty = float(filled_qty) if persistable_fill and filled_qty > 0 else float(abs(delta_shares))
-            mid_at_arrival = submit_mid_at_arrival
-            if mid_at_arrival is None and allow_proxy_quotes:
-                mid_at_arrival = float(arrival_price_for_metrics)
-            benchmark = ExecutionBenchmark(
-                arrival_price=float(arrival_price_for_metrics),
-                mid_at_arrival=mid_at_arrival if allow_proxy_quotes else None,
-                bid_at_arrival=submit_bid_at_arrival,
-                ask_at_arrival=submit_ask_at_arrival,
-                bar_close_price=float(price),
-                decision_ts=arrival_ts,
-                submit_ts=now,
-                first_fill_ts=first_fill_ts,
-            )
-            fill_summary = FillSummary(
-                fill_vwap=fill_vwap,
-                total_qty=tca_qty,
-                fees=float(fill_fees) if persistable_fill else 0.0,
-                status=order_status_text,
-                partial_fill=partial_fill,
-            )
-            tca_record = build_tca_record(
-                client_order_id=client_order_id,
-                symbol=symbol,
-                side=side,
-                benchmark=benchmark,
-                fill=fill_summary,
-                sleeve=net_target.proposals[0].sleeve if net_target.proposals else None,
-                regime_profile=get_regime_signal_profile(),
-                provider="alpaca",
-                order_type="limit",
-                quote_proxy=allow_proxy_quotes,
-            )
-            session_regime_token = _session_bucket_from_ts(now)
-            spread_paid_for_role = _safe_float(tca_record.get("spread_paid_bps"))
-            liquidity_role_token = "maker"
-            if str(side).strip().lower() in {"buy", "sell"} and spread_paid_for_role is not None:
-                if float(spread_paid_for_role) >= 0.75:
-                    liquidity_role_token = "taker"
-                elif float(spread_paid_for_role) > 0.05:
-                    liquidity_role_token = "mixed"
-            venue_token = str(
-                getattr(order, "exchange", None)
-                or getattr(order, "venue", None)
-                or "ALPACA"
-            ).strip().upper() or "ALPACA"
-            tca_record["liquidity_role"] = str(liquidity_role_token)
-            tca_record["venue"] = str(venue_token)
-            tca_record["session_regime"] = str(session_regime_token)
-            tca_record["venue_session"] = f"{venue_token}:{session_regime_token}"
-            expected_edge_for_tca = _safe_float(candidate_expected_net_edge.get(symbol))
-            if expected_edge_for_tca is not None:
-                tca_record["expected_net_edge_bps"] = float(expected_edge_for_tca)
-            expected_capture_for_tca = _safe_float(candidate_expected_capture.get(symbol))
-            if expected_capture_for_tca is not None:
-                tca_record["expected_capture_bps"] = float(expected_capture_for_tca)
-            if not persistable_fill:
-                tca_record["fill_price"] = None
-                tca_record["fill_vwap"] = None
-                tca_record["is_bps"] = None
-                tca_record["spread_paid_bps"] = None
-                tca_record["fill_latency_ms"] = None
-            tca_record["arrival_benchmark"] = arrival_benchmark
-            tca_record["pending_write_sec"] = int(
-                get_env("AI_TRADING_TCA_PENDING_WRITE_SEC", 60, cast=int)
-            )
-            if allow_proxy_quotes:
-                resolved_proxy_source = _normalize_quote_source_token(submit_quote_source)
-                if resolved_proxy_source is not None:
-                    tca_record["quote_proxy_source"] = resolved_proxy_source
-                else:
-                    proxy_default = str(
-                        get_env("AI_TRADING_TCA_PROXY_MID_SOURCE", "last_trade")
-                    )
-                    tca_record["quote_proxy_source"] = _resolve_quote_proxy_source(
-                        order,
-                        symbol=symbol,
-                        default_source=proxy_default,
-                    )
-            metrics["tca"] = {
-                "is_bps": tca_record.get("is_bps"),
-                "spread_paid_bps": tca_record.get("spread_paid_bps"),
-                "fill_latency_ms": tca_record.get("fill_latency_ms"),
-            }
-            tca_update_on_fill = bool(
-                get_env("AI_TRADING_TCA_UPDATE_ON_FILL", True, cast=bool)
-            )
-            tca_write_pending = bool(
-                get_env("AI_TRADING_TCA_WRITE_PENDING_EVENTS", True, cast=bool)
-            )
-            should_write_tca = bool(
-                (tca_update_on_fill and persistable_fill)
-                or (tca_write_pending and not persistable_fill)
-            )
-            if should_write_tca:
-                resolved_tca_path = str(
-                    get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")
-                )
-                try:
-                    resolved_tca_path = str(_resolved_tca_path())
-                    tca_payload = dict(tca_record)
-                    if not persistable_fill:
-                        tca_payload["pending_event"] = True
-                        tca_payload["pending_reason"] = (
-                            order_status_token or "no_fill"
-                        )
-                        tca_payload["order_status"] = order_status_text
-                    write_tca_record(resolved_tca_path, tca_payload)
-                except Exception as exc:
-                    logger.warning(
-                        "TCA_WRITE_FAILED path=%s error=%s",
-                        resolved_tca_path,
-                        str(exc),
-                        extra={"error": str(exc), "path": resolved_tca_path},
-                    )
         gates.append("OK_TRADE")
-        record = DecisionRecord(
+        _record_decision(
             symbol=symbol,
             bar_ts=net_target.bar_ts,
             sleeves=net_target.proposals,
@@ -49791,13 +49034,17 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 "side": side,
                 "qty": abs(delta_shares),
                 "price": price,
-                "status": order_status_text if order_status_text else None,
+                "status": order_state.status_text if order_state.status_text else None,
             },
             metrics=metrics,
             config_snapshot=symbol_snapshot,
             tca=tca_record,
+            decision_trace_id=decision_trace_id_for_order,
+            order_intent=intent.to_contract(),
         )
-        _write_decision_record(record, decision_path)
+    decision_gate_counts = decision_recorder.decision_gate_counts
+    decision_records_total = decision_recorder.decision_records_total
+    decision_observations = decision_recorder.decision_observations
     accepted_decisions = int(decision_gate_counts.get("OK_TRADE", 0))
     _update_acceptance_rate_governor_state(
         state,

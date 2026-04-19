@@ -40,6 +40,12 @@ class OrderIntent:
     reject_rate_pct: float | None = None
     session_regime: str | None = None
 
+    def to_contract(self):
+        """Return the canonical order intent contract for downstream journals."""
+        from ai_trading.contracts import OrderIntent as CanonicalOrderIntent
+
+        return CanonicalOrderIntent.from_pretrade(self)
+
 
 class SlidingWindowRateLimiter:
     """Rate limiter for order and cancel message budgets."""
