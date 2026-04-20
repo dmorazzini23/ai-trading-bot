@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+import time as pytime
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock, Thread
 from typing import Any, Callable, Mapping
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.config.management import get_env
 from ai_trading.telemetry import runtime_state
 from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
+
+_HEALTH_SNAPSHOT_CACHE_LOCK = Lock()
+_HEALTH_SNAPSHOT_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def _safe_observe(observer: Callable[[], Any], default: Any) -> Any:
@@ -68,6 +73,81 @@ def _env_float(name: str, default: float) -> float:
         return float(raw if raw is not None else default)
     except Exception:
         return float(default)
+
+
+def _health_snapshot_cache_enabled() -> bool:
+    if bool(
+        str(get_env("PYTEST_CURRENT_TEST", "", cast=str) or "").strip()
+        or bool(get_env("PYTEST_RUNNING", False, cast=bool))
+    ):
+        return False
+    return _env_bool("AI_TRADING_HEALTH_ASYNC_CACHE_ENABLED", True)
+
+
+def _health_snapshot_ttl_seconds(name: str, default: float) -> float:
+    env_name = f"AI_TRADING_HEALTH_{name.upper()}_TTL_SEC"
+    return max(0.0, min(_env_float(env_name, default), 300.0))
+
+
+def _cached_background_snapshot(
+    *,
+    name: str,
+    ttl_seconds: float,
+    placeholder: Mapping[str, Any],
+    builder: Callable[[], dict[str, Any]],
+) -> dict[str, Any]:
+    now_mono = float(pytime.monotonic())
+    cached_value: dict[str, Any] | None = None
+    should_refresh = False
+
+    with _HEALTH_SNAPSHOT_CACHE_LOCK:
+        entry = _HEALTH_SNAPSHOT_CACHE.setdefault(name, {})
+        cached_raw = entry.get("value")
+        updated_mono = float(entry.get("updated_mono", 0.0) or 0.0)
+        refreshing = bool(entry.get("refreshing", False))
+
+        if isinstance(cached_raw, dict):
+            cached_value = dict(cached_raw)
+            if ttl_seconds > 0.0 and (now_mono - updated_mono) <= ttl_seconds:
+                cached_value["refreshing"] = False
+                return cached_value
+
+        if not refreshing:
+            entry["refreshing"] = True
+            should_refresh = True
+
+    if should_refresh:
+        def _refresh() -> None:
+            try:
+                snapshot = dict(builder())
+            except Exception as exc:  # pragma: no cover - defensive
+                snapshot = {
+                    **dict(placeholder),
+                    "ok": False,
+                    "available": False,
+                    "error": str(exc),
+                }
+            with _HEALTH_SNAPSHOT_CACHE_LOCK:
+                entry = _HEALTH_SNAPSHOT_CACHE.setdefault(name, {})
+                entry["value"] = snapshot
+                entry["updated_mono"] = float(pytime.monotonic())
+                entry["refreshing"] = False
+
+        Thread(
+            target=_refresh,
+            name=f"health-snapshot-{name}",
+            daemon=True,
+        ).start()
+
+    if cached_value is not None:
+        cached_value["refreshing"] = True
+        cached_value["stale"] = True
+        return cached_value
+
+    payload = dict(placeholder)
+    payload["refreshing"] = True
+    payload.setdefault("reason", "warming_up")
+    return payload
 
 
 def _market_is_closed_now() -> bool:
@@ -168,6 +248,23 @@ def _database_readiness_snapshot() -> dict[str, Any]:
                 pass
 
 
+def _database_readiness_snapshot_cached() -> dict[str, Any]:
+    if not _health_snapshot_cache_enabled():
+        return _database_readiness_snapshot()
+    return _cached_background_snapshot(
+        name="database_readiness",
+        ttl_seconds=_health_snapshot_ttl_seconds("db_readiness", 15.0),
+        placeholder={
+            "enabled": True,
+            "configured": True,
+            "ok": False,
+            "connected": False,
+            "reason": "warming_up",
+        },
+        builder=_database_readiness_snapshot,
+    )
+
+
 def _oms_invariants_snapshot() -> dict[str, Any]:
     enabled = _env_bool(
         "AI_TRADING_HEALTH_OMS_INVARIANTS_ENABLED",
@@ -208,6 +305,23 @@ def _oms_invariants_snapshot() -> dict[str, Any]:
         return payload
     except Exception as exc:
         return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
+
+
+def _oms_invariants_snapshot_cached() -> dict[str, Any]:
+    if not _health_snapshot_cache_enabled():
+        return _oms_invariants_snapshot()
+    return _cached_background_snapshot(
+        name="oms_invariants",
+        ttl_seconds=_health_snapshot_ttl_seconds("oms_invariants", 15.0),
+        placeholder={
+            "enabled": True,
+            "available": False,
+            "ok": False,
+            "reason": "warming_up",
+            "total_violations": 0,
+        },
+        builder=_oms_invariants_snapshot,
+    )
 
 
 def _oms_lifecycle_parity_snapshot() -> dict[str, Any]:
@@ -252,6 +366,23 @@ def _oms_lifecycle_parity_snapshot() -> dict[str, Any]:
         return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
 
 
+def _oms_lifecycle_parity_snapshot_cached() -> dict[str, Any]:
+    if not _health_snapshot_cache_enabled():
+        return _oms_lifecycle_parity_snapshot()
+    return _cached_background_snapshot(
+        name="oms_lifecycle_parity",
+        ttl_seconds=_health_snapshot_ttl_seconds("oms_lifecycle_parity", 15.0),
+        placeholder={
+            "enabled": True,
+            "available": False,
+            "ok": False,
+            "reason": "warming_up",
+            "total_violations": 0,
+        },
+        builder=_oms_lifecycle_parity_snapshot,
+    )
+
+
 def _replay_live_parity_gate_snapshot(
     *,
     oms_lifecycle_parity: Mapping[str, Any] | None = None,
@@ -262,6 +393,34 @@ def _replay_live_parity_gate_snapshot(
         )
     except Exception as exc:
         return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
+
+
+def _replay_live_parity_gate_snapshot_cached(
+    *,
+    oms_lifecycle_parity: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not _health_snapshot_cache_enabled():
+        return _replay_live_parity_gate_snapshot(
+            oms_lifecycle_parity=oms_lifecycle_parity,
+        )
+    return _cached_background_snapshot(
+        name="replay_live_parity_gate",
+        ttl_seconds=_health_snapshot_ttl_seconds("replay_live_parity_gate", 15.0),
+        placeholder={
+            "enabled": True,
+            "available": False,
+            "ok": False,
+            "status": "degraded",
+            "reason": "warming_up",
+            "failed_checks": [],
+            "checks": {},
+            "observed": {},
+            "thresholds": {},
+        },
+        builder=lambda: _replay_live_parity_gate_snapshot(
+            oms_lifecycle_parity=oms_lifecycle_parity,
+        ),
+    )
 
 
 def _read_json_mapping_artifact(
@@ -538,10 +697,10 @@ def build_runtime_health_payload(
     )
     quote_state: dict[str, Any] = _safe_observe(runtime_state.observe_quote_status, {})
     model_liveness = _model_liveness_snapshot()
-    database_readiness = _database_readiness_snapshot()
-    oms_invariants = _oms_invariants_snapshot()
-    oms_lifecycle_parity = _oms_lifecycle_parity_snapshot()
-    replay_live_parity_gate = _replay_live_parity_gate_snapshot(
+    database_readiness = _database_readiness_snapshot_cached()
+    oms_invariants = _oms_invariants_snapshot_cached()
+    oms_lifecycle_parity = _oms_lifecycle_parity_snapshot_cached()
+    replay_live_parity_gate = _replay_live_parity_gate_snapshot_cached(
         oms_lifecycle_parity=oms_lifecycle_parity,
     )
 

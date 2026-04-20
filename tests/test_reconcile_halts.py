@@ -85,3 +85,34 @@ def test_reconcile_ignores_invalid_last_recon_ts_and_non_mapping_cache(monkeypat
     assert ok is True
     assert state.recon_halt is False
     assert isinstance(state.last_recon_ts, datetime)
+
+
+def test_reconcile_circuit_open_logs_skip(monkeypatch):
+    cfg = TradingConfig.from_env(allow_missing_drawdown=True)
+    cfg.update(recon_enabled=True, recon_interval_seconds=300)
+    runtime = SimpleNamespace(cfg=cfg, api=None)
+    state = bot_engine.BotState()
+    warnings: list[tuple[str, dict[str, object] | None]] = []
+
+    class _Breakers:
+        def allow(self, _dependency: str) -> bool:
+            return False
+
+        def open_reason(self, _dependency: str) -> str:
+            return "breaker_open"
+
+    monkeypatch.setattr(bot_engine, "_dependency_breakers", lambda _state: _Breakers())
+    monkeypatch.setattr(
+        bot_engine.logger,
+        "warning",
+        lambda event, extra=None: warnings.append((event, extra)),
+    )
+
+    ok = bot_engine._run_reconciliation_if_due(state, runtime, cfg, datetime.now(UTC))
+
+    assert ok is False
+    assert state.recon_halt is True
+    assert state.halt_reason == "breaker_open"
+    assert warnings == [
+        ("RECONCILIATION_SKIPPED_CIRCUIT_OPEN", {"reason_code": "breaker_open"})
+    ]

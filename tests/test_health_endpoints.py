@@ -501,6 +501,7 @@ def test_runtime_health_payload_requires_oms_invariants_by_default_outside_pytes
 ):
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(health_payload_module, "_health_snapshot_cache_enabled", lambda: False)
     monkeypatch.setattr(
         health_payload_module,
         "_oms_invariants_snapshot",
@@ -535,6 +536,7 @@ def test_runtime_health_payload_requires_oms_lifecycle_parity_by_default_outside
 ):
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(health_payload_module, "_health_snapshot_cache_enabled", lambda: False)
     monkeypatch.setattr(
         health_payload_module,
         "_oms_invariants_snapshot",
@@ -587,6 +589,39 @@ def test_runtime_health_payload_includes_replay_live_parity_gate(monkeypatch):
     assert payload["replay_live_parity_gate"]["status"] == "pass"
 
 
+def test_cached_background_snapshot_returns_placeholder_then_cached(monkeypatch):
+    health_payload_module._HEALTH_SNAPSHOT_CACHE.clear()
+
+    class _ImmediateThread:
+        def __init__(self, *, target, name=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr(health_payload_module, "Thread", _ImmediateThread)
+
+    first = health_payload_module._cached_background_snapshot(
+        name="demo_snapshot",
+        ttl_seconds=30.0,
+        placeholder={"enabled": True, "ok": False},
+        builder=lambda: {"enabled": True, "ok": True, "value": 7},
+    )
+    second = health_payload_module._cached_background_snapshot(
+        name="demo_snapshot",
+        ttl_seconds=30.0,
+        placeholder={"enabled": True, "ok": False},
+        builder=lambda: {"enabled": True, "ok": True, "value": 7},
+    )
+
+    assert first["enabled"] is True
+    assert first["ok"] is False
+    assert first["refreshing"] is True
+    assert second["ok"] is True
+    assert second["value"] == 7
+    assert second["refreshing"] is False
+
+
 def test_runtime_health_payload_replay_live_parity_requirement_marks_degraded(
     monkeypatch,
 ) -> None:
@@ -623,6 +658,7 @@ def test_runtime_health_payload_requires_replay_live_parity_by_default_outside_p
         return default
 
     monkeypatch.setattr(health_payload_module, "get_env", _fake_get_env)
+    monkeypatch.setattr(health_payload_module, "_health_snapshot_cache_enabled", lambda: False)
     monkeypatch.setattr(
         health_payload_module,
         "_oms_invariants_snapshot",

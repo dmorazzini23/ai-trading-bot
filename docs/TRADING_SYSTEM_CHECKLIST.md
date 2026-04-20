@@ -369,11 +369,17 @@ Recent engine-thinning completions now include:
   - [ai_trading/core/position_risk_runtime.py](../ai_trading/core/position_risk_runtime.py)
 - remaining startup/scheduler/control-plane glue through:
   - [ai_trading/core/startup_runtime.py](../ai_trading/core/startup_runtime.py)
+- bounded runtime incident-drill hardening across:
+  - restart/reconciliation and OMS durability recovery
+  - fail-closed governance hook guarding
+  - startup rebalance partial-failure handling
+  - scheduler/bootstrap idempotence
+  - trade-update stream degraded-state surfacing
 
 What remains highest-value now:
-- continued fail-closed cleanup for degraded runtime paths
 - further reduction of loose `dict[str, Any]` payload flow in orchestration/runtime state
-- incremental metrics/ops hardening around broker degradation, exposure drift, and restart recovery
+- optional longer-run operational soak exercises around broker degradation, exposure drift, and restart recovery
+- incremental metrics/ops polish rather than missing core safety boundaries
 
 ## 4. Recommended Next Order
 

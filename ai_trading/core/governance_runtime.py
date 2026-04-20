@@ -49,24 +49,31 @@ def run_netting_cycle_governance(state: Any) -> NettingGovernanceSnapshot:
 
     be = _bot_engine()
     now = datetime.now(UTC)
-    market_open_now = be.market_is_open(now)
-    be._run_post_trade_learning_update(
-        state,
-        now=now,
-        market_open_now=market_open_now,
-    )
-    be._run_tca_cost_calibration(
-        state,
-        now=now,
-        market_open_now=market_open_now,
-    )
-    be._run_policy_ablation_rollback(
-        state,
-        now=now,
-        market_open_now=market_open_now,
-    )
+    market_open_now = False
+    step = "market_is_open"
     try:
+        market_open_now = bool(be.market_is_open(now))
+        step = "post_trade_learning_update"
+        be._run_post_trade_learning_update(
+            state,
+            now=now,
+            market_open_now=market_open_now,
+        )
+        step = "tca_cost_calibration"
+        be._run_tca_cost_calibration(
+            state,
+            now=now,
+            market_open_now=market_open_now,
+        )
+        step = "policy_ablation_rollback"
+        be._run_policy_ablation_rollback(
+            state,
+            now=now,
+            market_open_now=market_open_now,
+        )
+        step = "replay_governance"
         be._run_replay_governance(state, now=now, market_open_now=market_open_now)
+        step = "walk_forward_governance"
         be._run_walk_forward_governance(
             state,
             now=now,
@@ -80,6 +87,7 @@ def run_netting_cycle_governance(state: Any) -> NettingGovernanceSnapshot:
             extra={
                 "error_type": exc.__class__.__name__,
                 "detail": str(exc),
+                "step": step,
             },
         )
     return NettingGovernanceSnapshot(now=now, market_open_now=market_open_now)
@@ -106,6 +114,10 @@ def run_reconciliation_if_due(
         state.recon_halt = True
         state.halt_reason = breakers.open_reason("broker_positions") or "CIRCUIT_OPEN_broker_positions"
         state.last_recon_ts = now
+        be.logger.warning(
+            "RECONCILIATION_SKIPPED_CIRCUIT_OPEN",
+            extra={"reason_code": state.halt_reason},
+        )
         return False
 
     try:

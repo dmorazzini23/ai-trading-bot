@@ -117,7 +117,12 @@ class HealthCheck:
         port = int(self._get_ctx_attr("port", 9001))
         try:
             suppress_flask_startup_noise()
-            self.app.run(host=host, port=port)
+            self.app.run(
+                host=host,
+                port=port,
+                threaded=True,
+                use_reloader=False,
+            )
         except OSError as exc:
             logger.warning(
                 "HEALTHCHECK_PORT_CONFLICT",
