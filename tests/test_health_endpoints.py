@@ -326,6 +326,108 @@ def test_health_payload_does_not_report_healthy_when_ok_is_false(monkeypatch):
     assert payload["reason"] == "runtime_health_pending"
 
 
+def test_health_payload_service_degraded_marks_unhealthy(monkeypatch):
+    provider_state = {
+        "primary": "alpaca",
+        "active": "alpaca",
+        "using_backup": False,
+        "status": "healthy",
+        "safe_mode": False,
+    }
+    broker_state = {
+        "status": "reachable",
+        "connected": True,
+    }
+    service_state = {
+        "status": "degraded",
+        "reason": "trade_updates_stream_failed",
+        "phase": "active",
+        "phase_since": datetime.now(UTC).isoformat(),
+    }
+    quote_state = {"status": "aligned"}
+    monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
+    monkeypatch.setattr(runtime_state, "observe_service_status", lambda: service_state)
+    monkeypatch.setattr(runtime_state, "observe_quote_status", lambda: quote_state)
+    monkeypatch.setattr(app_module, "_pytest_active", lambda: False)
+
+    app = create_app()
+    client = app.test_client()
+    response = client.get("/healthz")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["reason"] == "trade_updates_stream_failed"
+    assert payload["service_state"]["status"] == "degraded"
+    assert "service_degraded" in payload["attention_flags"]
+    assert "trade_updates_stream_degraded" in payload["attention_flags"]
+
+
+def test_control_plane_snapshot_surfaces_runtime_attention_flags(monkeypatch):
+    provider_state = {
+        "primary": "alpaca",
+        "active": "alpaca",
+        "using_backup": True,
+        "status": "degraded",
+        "reason": "provider_fallback_active",
+        "safe_mode": True,
+    }
+    broker_state = {
+        "status": "reachable",
+        "connected": True,
+        "open_orders_count": 1,
+        "positions_count": 2,
+    }
+    service_state = {
+        "status": "degraded",
+        "reason": "trade_updates_stream_failed",
+        "phase": "active",
+    }
+    quote_state = {"status": "aligned"}
+    monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
+    monkeypatch.setattr(runtime_state, "observe_service_status", lambda: service_state)
+    monkeypatch.setattr(runtime_state, "observe_quote_status", lambda: quote_state)
+    monkeypatch.setattr(health_payload_module, "_model_liveness_snapshot", lambda: {})
+    monkeypatch.setattr(
+        health_payload_module,
+        "_database_readiness_snapshot",
+        lambda: {"enabled": True, "configured": True, "ok": False},
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_invariants_snapshot",
+        lambda: {"enabled": True, "ok": False},
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_lifecycle_parity_snapshot",
+        lambda: {"enabled": True, "ok": False},
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_replay_live_parity_gate_snapshot",
+        lambda **_kwargs: {"enabled": True, "ok": False},
+    )
+    monkeypatch.setattr(health_payload_module, "_runtime_performance_snapshot", lambda: {})
+    monkeypatch.setattr(health_payload_module, "_manual_override_snapshot", lambda: {})
+    monkeypatch.setattr(health_payload_module, "_governance_snapshot", lambda: {})
+
+    snapshot = health_payload_module.build_control_plane_snapshot()
+
+    assert snapshot["service_state"]["reason"] == "trade_updates_stream_failed"
+    assert "provider_backup_active" in snapshot["attention_flags"]
+    assert "provider_safe_mode" in snapshot["attention_flags"]
+    assert "service_degraded" in snapshot["attention_flags"]
+    assert "trade_updates_stream_degraded" in snapshot["attention_flags"]
+    assert "database_unhealthy" in snapshot["attention_flags"]
+    assert "oms_invariants_failed" in snapshot["attention_flags"]
+    assert "oms_lifecycle_parity_failed" in snapshot["attention_flags"]
+    assert "replay_live_parity_gate_failed" in snapshot["attention_flags"]
+
+
 def test_pytest_detection_silent_without_hints(monkeypatch, caplog):
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)

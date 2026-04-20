@@ -58,6 +58,27 @@ exits with status `98`, and the packaged systemd unit uses
 4. Check environment diagnostics:
    `curl -s http://127.0.0.1:9001/diag | jq .`
 
+### Health and Control-Plane Signals
+
+When investigating a degraded runtime, check:
+
+1. `/healthz` top-level fields:
+   `status`, `ok`, `reason`, `service_state`, and `attention_flags`
+2. `/operator/control-plane` top-level fields:
+   `rollout`, `service_state`, `attention_flags`, `broker_health`, and `data_provider`
+
+Important `attention_flags` include:
+
+- `service_degraded`
+- `service_halt_active`
+- `trade_updates_stream_degraded`
+- `provider_backup_active`
+- `provider_safe_mode`
+- `replay_live_parity_gate_failed`
+- `database_unhealthy`
+- `oms_invariants_failed`
+- `oms_lifecycle_parity_failed`
+
 ### Provider Safe-Mode
 
 Repeated Alpaca failures can trigger provider safe-mode:

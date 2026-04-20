@@ -301,6 +301,10 @@ Verdict:
 
 - Reconciliation logic, controls, and runbooks are present.
 - Health/control-plane visibility is present.
+- Health/control-plane payloads now surface canonical `service_state` and
+  operator-facing `attention_flags` for runtime degradations like stream
+  failure, service halt/degraded state, provider fallback/safe-mode, database
+  readiness issues, and OMS parity/invariant failures.
 - OMS invariant checks, OMS lifecycle parity, and replay/live parity are now
   required by default outside tests across:
   - [ai_trading/health_payload.py](../ai_trading/health_payload.py)

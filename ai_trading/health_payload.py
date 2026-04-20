@@ -49,6 +49,114 @@ def _safe_nonnegative_int(value: Any) -> int:
         return 0
 
 
+def _normalized_token(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _dedupe_flags(flags: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw_flag in flags:
+        flag = str(raw_flag or "").strip()
+        if not flag or flag in seen:
+            continue
+        seen.add(flag)
+        out.append(flag)
+    return out
+
+
+def _build_runtime_attention_flags(
+    *,
+    provider_state: Mapping[str, Any],
+    broker_state: Mapping[str, Any],
+    service_state: Mapping[str, Any],
+    database_readiness: Mapping[str, Any] | None = None,
+    oms_invariants: Mapping[str, Any] | None = None,
+    oms_lifecycle_parity: Mapping[str, Any] | None = None,
+    replay_live_parity_gate: Mapping[str, Any] | None = None,
+    require_database_ready: bool = False,
+    require_oms_invariants: bool = False,
+    require_oms_lifecycle_parity: bool = False,
+    require_replay_live_parity_gate: bool = False,
+    include_optional_contract_failures: bool = False,
+) -> list[str]:
+    flags: list[str] = []
+    provider_reason_normalized = _normalized_token(provider_state.get("reason"))
+    service_reason_normalized = _normalized_token(service_state.get("reason"))
+    service_status_normalized = _normalized_token(service_state.get("status"))
+    market_closed_mode = (
+        provider_reason_normalized == "market_closed"
+        or service_reason_normalized == "market_closed"
+    )
+    open_orders_count = _safe_nonnegative_int(broker_state.get("open_orders_count"))
+    positions_count = _safe_nonnegative_int(broker_state.get("positions_count"))
+
+    if market_closed_mode and positions_count > 0:
+        flags.append("market_closed_non_flat_positions")
+    if market_closed_mode and open_orders_count > 0:
+        flags.append("market_closed_open_orders")
+    if bool(provider_state.get("using_backup")):
+        flags.append("provider_backup_active")
+    if bool(provider_state.get("safe_mode")):
+        flags.append("provider_safe_mode")
+    if service_status_normalized in {"degraded", "failed", "error", "halted", "stopped"}:
+        flags.append("service_degraded")
+    if service_status_normalized in {"halted", "stopped"} or any(
+        token in service_reason_normalized for token in ("halt", "hard_stop")
+    ):
+        flags.append("service_halt_active")
+    if service_reason_normalized in {
+        "trade_updates_stream_failed",
+        "trade_updates_stream_exited",
+    }:
+        flags.append("trade_updates_stream_degraded")
+    if (
+        service_reason_normalized == "replay_live_parity_gate_failed"
+        or (
+            isinstance(replay_live_parity_gate, Mapping)
+            and (
+                include_optional_contract_failures
+                or require_replay_live_parity_gate
+            )
+            and replay_live_parity_gate.get("enabled", False)
+            and not bool(replay_live_parity_gate.get("ok"))
+        )
+    ):
+        flags.append("replay_live_parity_gate_failed")
+    if (
+        isinstance(database_readiness, Mapping)
+        and (
+            include_optional_contract_failures
+            or require_database_ready
+        )
+        and bool(database_readiness.get("configured"))
+        and not bool(database_readiness.get("ok"))
+    ):
+        flags.append("database_unhealthy")
+    if (
+        isinstance(oms_invariants, Mapping)
+        and (
+            include_optional_contract_failures
+            or require_oms_invariants
+        )
+        and oms_invariants.get("enabled", False)
+        and not bool(oms_invariants.get("ok"))
+    ):
+        flags.append("oms_invariants_failed")
+    if (
+        isinstance(oms_lifecycle_parity, Mapping)
+        and (
+            include_optional_contract_failures
+            or require_oms_lifecycle_parity
+        )
+        and oms_lifecycle_parity.get("enabled", False)
+        and not bool(oms_lifecycle_parity.get("ok"))
+    ):
+        flags.append("oms_lifecycle_parity_failed")
+
+    return _dedupe_flags(flags)
+
+
 def _env_bool(name: str, default: bool) -> bool:
     try:
         from ai_trading.config.management import get_env
@@ -762,28 +870,39 @@ def build_runtime_health_payload(
     }
 
     service_status = service_state.get("status", "unknown")
+    service_status_normalized = _normalized_token(service_status)
     service_reason = service_state.get("reason")
     provider_reason_normalized = str(provider_state.get("reason") or "").strip().lower()
     service_reason_normalized = str(service_reason or "").strip().lower()
     service_phase_normalized = str(service_state.get("phase") or "").strip().lower()
     service_phase_age_s = _timestamp_age_seconds(service_state.get("phase_since"))
+    service_payload = {
+        "status": service_status,
+        "reason": service_reason,
+        "phase": service_state.get("phase"),
+        "phase_since": service_state.get("phase_since"),
+        "cycle_index": service_state.get("cycle_index"),
+        "updated": service_state.get("updated"),
+    }
     market_closed_mode = (
         provider_reason_normalized == "market_closed"
         or service_reason_normalized == "market_closed"
     )
-    attention_flags: list[str] = []
     open_orders_count = _safe_nonnegative_int(broker_state.get("open_orders_count"))
     positions_count = _safe_nonnegative_int(broker_state.get("positions_count"))
-    if market_closed_mode and positions_count > 0:
-        attention_flags.append("market_closed_non_flat_positions")
-    if market_closed_mode and open_orders_count > 0:
-        attention_flags.append("market_closed_open_orders")
     provider_disabled = provider_status_normalized in {"down", "disabled", "failed", "unreachable"}
     provider_unknown = provider_status_normalized in {"", "unknown"}
     broker_down = broker_status_normalized in {"unreachable", "down", "failed"}
     broker_degraded = broker_status_normalized in {"degraded"}
     broker_unknown = broker_status_normalized in {"", "unknown"}
     data_degraded = data_status_normalized in {"empty", "degraded"}
+    service_degraded = service_status_normalized in {
+        "degraded",
+        "failed",
+        "error",
+        "halted",
+        "stopped",
+    }
 
     degraded = provider_disabled or provider_payload.get("using_backup") or (
         provider_status_normalized not in {"healthy", "ready"}
@@ -793,6 +912,8 @@ def build_runtime_health_payload(
     if provider_unknown or broker_unknown:
         degraded = True
     if data_degraded:
+        degraded = True
+    if service_degraded:
         degraded = True
 
     provider_healthy = provider_status_normalized in {"healthy", "ready"} and not data_degraded
@@ -810,6 +931,7 @@ def build_runtime_health_payload(
         and broker_healthy
         and not broker_down
         and not broker_degraded
+        and not service_degraded
         and not data_degraded
         and not provider_disabled
         and not bool(provider_payload.get("using_backup"))
@@ -838,6 +960,7 @@ def build_runtime_health_payload(
         and not bool(provider_payload.get("using_backup"))
         and not broker_down
         and not broker_degraded
+        and not service_degraded
         and (broker_healthy or broker_unknown)
         and (
             service_phase_age_s is None
@@ -889,8 +1012,24 @@ def build_runtime_health_payload(
     ):
         overall_ok = False
         degraded = True
+    if service_degraded:
+        overall_ok = False
     if not overall_ok:
         degraded = True
+
+    attention_flags = _build_runtime_attention_flags(
+        provider_state=provider_state,
+        broker_state=broker_state,
+        service_state=service_state,
+        database_readiness=database_readiness,
+        oms_invariants=oms_invariants,
+        oms_lifecycle_parity=oms_lifecycle_parity,
+        replay_live_parity_gate=replay_live_parity_gate,
+        require_database_ready=require_database_ready,
+        require_oms_invariants=require_oms_invariants,
+        require_oms_lifecycle_parity=require_oms_lifecycle_parity,
+        require_replay_live_parity_gate=require_replay_live_parity_gate,
+    )
 
     if offhours_market_closed_ready:
         resolved_status = "healthy"
@@ -909,6 +1048,7 @@ def build_runtime_health_payload(
         "timestamp": timestamp,
         "service": service_name,
         "status": resolved_status,
+        "service_state": service_payload,
         "data_provider": provider_payload,
         "broker": broker_payload,
         "broker_connectivity": broker_payload,
@@ -948,6 +1088,8 @@ def build_runtime_health_payload(
         payload["reason"] = "provider_status_unknown"
     if broker_unknown and not payload.get("reason"):
         payload["reason"] = "broker_status_unknown"
+    if service_degraded and not payload.get("reason"):
+        payload["reason"] = "service_degraded"
     if require_database_ready and database_configured and not database_ok and not payload.get("reason"):
         payload["reason"] = "database_unhealthy"
     if (
@@ -1050,6 +1192,17 @@ def build_control_plane_snapshot(
         else {}
     )
 
+    attention_flags = _build_runtime_attention_flags(
+        provider_state=provider_state,
+        broker_state=broker_state,
+        service_state=service_state,
+        database_readiness=database_readiness,
+        oms_invariants=oms_invariants,
+        oms_lifecycle_parity=oms_lifecycle_parity,
+        replay_live_parity_gate=replay_live_parity_gate,
+        include_optional_contract_failures=True,
+    )
+
     return {
         "service": service_name,
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -1060,25 +1213,9 @@ def build_control_plane_snapshot(
             "status": service_state.get("status"),
             "reason": service_state.get("reason"),
         },
+        "service_state": service_state,
         "broker_health": broker_state,
-        "attention_flags": [
-            flag
-            for flag in (
-                (
-                    "market_closed_non_flat_positions"
-                    if str(provider_state.get("reason") or "").strip().lower() == "market_closed"
-                    and _safe_nonnegative_int(broker_state.get("positions_count")) > 0
-                    else None
-                ),
-                (
-                    "market_closed_open_orders"
-                    if str(provider_state.get("reason") or "").strip().lower() == "market_closed"
-                    and _safe_nonnegative_int(broker_state.get("open_orders_count")) > 0
-                    else None
-                ),
-            )
-            if flag
-        ],
+        "attention_flags": attention_flags,
         "data_provider": provider_state,
         "quotes": quote_state,
         "positions": {
