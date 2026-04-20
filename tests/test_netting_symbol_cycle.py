@@ -229,7 +229,7 @@ def _make_processor(**overrides: Any) -> tuple[NettingSymbolProcessor, list[dict
         evaluate_execution_approval_func=lambda **k: None,
         approve_execution_candidate_func=lambda **k: None,
         gate_name_is_halt_noise_func=lambda gate: False,
-        resolve_order_quote_basis_func=lambda *a, **k: ("nbbo", 9.9, 10.1, 10.0, 10.0),
+        resolve_order_quote_basis_func=lambda *a, **k: ("nbbo", 9.9, 10.1, 10.0, 10.0, None),
         portfolio_optimizer_allows_trade_func=lambda **k: (True, {}),
         auth_forbidden_cooldown_remaining_seconds_func=lambda **k: 0.0,
         safe_validate_pretrade_func=lambda *a, **k: (True, "OK", {}),

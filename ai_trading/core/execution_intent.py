@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Mapping
 
 from ai_trading.oms.ledger import deterministic_client_order_id
@@ -27,6 +27,7 @@ class ExecutionIntentContext:
 
 def build_execution_intent_context(
     *,
+    now: datetime,
     salt: str,
     symbol: str,
     side: str,
@@ -45,6 +46,14 @@ def build_execution_intent_context(
     submit_bid_at_arrival: float | None,
     submit_ask_at_arrival: float | None,
     submit_mid_at_arrival: float | None,
+    submit_quote_ts: datetime | None,
+    opening_trade: bool,
+    require_realtime_nbbo: bool,
+    kill_switch_active: bool,
+    kill_switch_reason: str | None,
+    broker_ready: bool,
+    broker_ready_reason: str | None,
+    broker_cooldown_remaining_sec: float | None,
 ) -> ExecutionIntentContext:
     """Build pretrade intent and broker annotation context for a candidate."""
     client_order_id = deterministic_client_order_id(
@@ -56,6 +65,31 @@ def build_execution_intent_context(
         limit_price=price,
     )
     decision_trace_id = str(client_order_id or "").strip() or f"{symbol}:{bar_ts.isoformat()}:decision_trace"
+    now_utc = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    quote_ts = submit_quote_ts if submit_quote_ts is None else (
+        submit_quote_ts if submit_quote_ts.tzinfo is not None else submit_quote_ts.replace(tzinfo=UTC)
+    )
+    quote_age_ms = None
+    if quote_ts is not None:
+        quote_age_ms = max(
+            (now_utc.astimezone(UTC) - quote_ts.astimezone(UTC)).total_seconds() * 1000.0,
+            0.0,
+        )
+    derived_mid = submit_mid_at_arrival if submit_mid_at_arrival is not None else float(price)
+    derived_last = (
+        submit_ask_at_arrival
+        if str(side or "").strip().lower() in {"buy", "cover"} and submit_ask_at_arrival is not None
+        else submit_bid_at_arrival
+        if submit_bid_at_arrival is not None
+        else float(price)
+    )
+    derived_spread = None
+    if submit_bid_at_arrival is not None and submit_ask_at_arrival is not None:
+        spread_candidate = float(submit_ask_at_arrival) - float(submit_bid_at_arrival)
+        if spread_candidate >= 0.0:
+            derived_spread = spread_candidate
+    if derived_spread is None:
+        derived_spread = (float(spread_bps) / 10_000.0) * float(price)
 
     pretrade_intent = PretradeOrderIntent(
         symbol=symbol,
@@ -65,9 +99,14 @@ def build_execution_intent_context(
         limit_price=price,
         bar_ts=bar_ts,
         client_order_id=client_order_id,
-        last_price=price,
-        mid=price,
-        spread=(float(spread_bps) / 10_000.0) * float(price),
+        last_price=derived_last,
+        mid=derived_mid,
+        bid=submit_bid_at_arrival,
+        ask=submit_ask_at_arrival,
+        spread=derived_spread,
+        quote_ts=quote_ts,
+        quote_age_ms=quote_age_ms,
+        submit_quote_source=submit_quote_source,
         avg_daily_volume=max(
             float(_safe_float(slo_derisk_details.get("rolling_volume")) or 0.0) * 390.0,
             0.0,
@@ -85,6 +124,13 @@ def build_execution_intent_context(
             _safe_float(slo_derisk_details.get("execution_drift_bps")) or 0.0
         ),
         reject_rate_pct=float(_safe_float(slo_derisk_details.get("reject_rate_pct")) or 0.0),
+        opening_trade=bool(opening_trade),
+        require_realtime_nbbo=bool(require_realtime_nbbo),
+        kill_switch_active=bool(kill_switch_active),
+        kill_switch_reason=kill_switch_reason,
+        broker_ready=bool(broker_ready),
+        broker_ready_reason=broker_ready_reason,
+        broker_cooldown_remaining_sec=broker_cooldown_remaining_sec,
     )
 
     order_lineage_metadata: dict[str, Any] = {}
@@ -129,6 +175,16 @@ def build_execution_intent_context(
             "midpoint": float(submit_mid_at_arrival),
             "source": "broker_nbbo",
             "synthetic": False,
+        }
+        if quote_ts is not None:
+            order_annotations["quote"]["ts"] = quote_ts.isoformat()
+        if quote_age_ms is not None:
+            order_annotations["quote"]["quote_age_ms"] = float(quote_age_ms)
+    elif quote_ts is not None or quote_age_ms is not None:
+        order_annotations["quote"] = {
+            "source": submit_quote_source or "unknown",
+            "ts": quote_ts.isoformat() if quote_ts is not None else None,
+            "quote_age_ms": float(quote_age_ms) if quote_age_ms is not None else None,
         }
 
     return ExecutionIntentContext(

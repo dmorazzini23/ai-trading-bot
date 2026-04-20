@@ -158,6 +158,20 @@ def build_pretrade_validation_cfg(
     pretrade_cfg = SimpleNamespace(
         max_order_dollars=getattr(cfg, "max_order_dollars", None),
         max_order_shares=getattr(cfg, "max_order_shares", None),
+        max_symbol_notional=getattr(cfg, "max_symbol_notional", None),
+        max_gross_notional=getattr(cfg, "max_gross_notional", None),
+        max_sector_notional=getattr(cfg, "max_sector_notional", None),
+        max_factor_exposure=getattr(cfg, "max_factor_exposure", None),
+        intraday_var_limit=getattr(cfg, "intraday_var_limit", None),
+        intraday_cvar_limit=getattr(cfg, "intraday_cvar_limit", None),
+        intraday_drawdown_limit=getattr(cfg, "intraday_drawdown_limit", None),
+        daily_loss_limit_pct=getattr(cfg, "daily_loss_limit_pct", None),
+        daily_loss_limit_abs=getattr(cfg, "daily_loss_limit_abs", None),
+        quote_max_age_ms=getattr(cfg, "quote_max_age_ms", None),
+        min_quote_freshness_ms=getattr(cfg, "min_quote_freshness_ms", None),
+        rth_only=getattr(cfg, "rth_only", None),
+        allow_extended=getattr(cfg, "allow_extended", None),
+        kill_switch=getattr(cfg, "kill_switch", None),
         price_collar_pct=effective_collar_pct,
     )
     return pretrade_cfg, effective_collar_pct, collar_mult

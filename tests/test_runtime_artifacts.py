@@ -87,3 +87,30 @@ def test_resolve_runtime_artifact_path_prefers_newest_existing_candidate(
     )
 
     assert resolved == secondary_target
+
+
+def test_resolve_runtime_artifact_path_prefers_existing_secondary_root_when_data_dir_empty(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "preferred-data-root"
+    secondary_root = tmp_path / "secondary-root"
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_dir))
+    monkeypatch.setattr(runtime_artifacts, "is_test_runtime", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        runtime_artifacts,
+        "_iter_runtime_roots",
+        lambda: [data_dir, secondary_root],
+    )
+
+    relative_path = "runtime/runtime_performance_report_latest.json"
+    secondary_target = (secondary_root / relative_path).resolve()
+    secondary_target.parent.mkdir(parents=True, exist_ok=True)
+    secondary_target.write_text("{}", encoding="utf-8")
+
+    resolved = resolve_runtime_artifact_path(
+        relative_path,
+        default_relative=relative_path,
+    )
+
+    assert resolved == secondary_target

@@ -67,6 +67,27 @@ def test_quarantine_state_relative_path_uses_data_dir(
     assert reason == "SYMBOL_QUARANTINED"
 
 
+def test_quarantine_load_uses_backup_when_primary_is_corrupt(tmp_path: Path) -> None:
+    manager = QuarantineManager()
+    manager.quarantine_symbol(
+        "AAPL",
+        duration=timedelta(hours=1),
+        trigger_reason="SYMBOL_QUARANTINED",
+        metrics_snapshot={"expectancy": -0.01},
+    )
+
+    path = tmp_path / "quarantine.json"
+    save_quarantine_state(str(path), manager)
+    path.write_text('{"symbols": ', encoding="utf-8")
+
+    loaded = load_quarantine_state(str(path))
+    active_loaded, reason = loaded.is_quarantined(symbol="AAPL", now=datetime.now(UTC))
+
+    assert active_loaded is True
+    assert reason == "SYMBOL_QUARANTINED"
+    assert '"AAPL"' in path.read_text(encoding="utf-8")
+
+
 def test_persist_quarantine_manager_fail_soft(monkeypatch, caplog) -> None:
     state = bot_engine.BotState()
     setattr(state, "_quarantine_manager", QuarantineManager())

@@ -13,7 +13,7 @@ def test_resolve_order_quote_basis_prefers_nbbo_for_buy(monkeypatch) -> None:
     )
     monkeypatch.setattr(bot_engine, "get_price_source", lambda _symbol: "last_trade")
 
-    source, bid, ask, mid, arrival = bot_engine._resolve_order_quote_basis(  # type: ignore[attr-defined]
+    source, bid, ask, mid, arrival, quote_ts = bot_engine._resolve_order_quote_basis(  # type: ignore[attr-defined]
         types.SimpleNamespace(),
         symbol="AAPL",
         side="buy",
@@ -25,6 +25,7 @@ def test_resolve_order_quote_basis_prefers_nbbo_for_buy(monkeypatch) -> None:
     assert ask == 100.2
     assert mid == 100.1
     assert arrival == 100.2
+    assert quote_ts is None
 
 
 def test_resolve_order_quote_basis_prefers_nbbo_for_sell(monkeypatch) -> None:
@@ -35,7 +36,7 @@ def test_resolve_order_quote_basis_prefers_nbbo_for_sell(monkeypatch) -> None:
     )
     monkeypatch.setattr(bot_engine, "get_price_source", lambda _symbol: "alpaca_last")
 
-    source, bid, ask, mid, arrival = bot_engine._resolve_order_quote_basis(  # type: ignore[attr-defined]
+    source, bid, ask, mid, arrival, quote_ts = bot_engine._resolve_order_quote_basis(  # type: ignore[attr-defined]
         types.SimpleNamespace(),
         symbol="MSFT",
         side="sell",
@@ -47,13 +48,14 @@ def test_resolve_order_quote_basis_prefers_nbbo_for_sell(monkeypatch) -> None:
     assert ask == 55.3
     assert mid == 55.2
     assert arrival == 55.1
+    assert quote_ts is None
 
 
 def test_resolve_order_quote_basis_falls_back_to_price_source(monkeypatch) -> None:
     monkeypatch.setattr(bot_engine, "_fetch_quote", lambda *_a, **_k: None)
     monkeypatch.setattr(bot_engine, "get_price_source", lambda _symbol: "last_trade")
 
-    source, bid, ask, mid, arrival = bot_engine._resolve_order_quote_basis(  # type: ignore[attr-defined]
+    source, bid, ask, mid, arrival, quote_ts = bot_engine._resolve_order_quote_basis(  # type: ignore[attr-defined]
         types.SimpleNamespace(),
         symbol="TSLA",
         side="buy",
@@ -65,3 +67,4 @@ def test_resolve_order_quote_basis_falls_back_to_price_source(monkeypatch) -> No
     assert ask is None
     assert mid is None
     assert arrival == 222.5
+    assert quote_ts is None

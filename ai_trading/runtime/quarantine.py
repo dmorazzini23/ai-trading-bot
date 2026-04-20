@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -149,23 +151,91 @@ def _resolve_state_path(path: str | Path) -> Path:
     return (repo_root / target).resolve()
 
 
+def _backup_state_path(path: Path) -> Path:
+    return path.with_suffix(f"{path.suffix}.bak")
+
+
+def _write_json_atomically(dest: Path, payload: str) -> None:
+    fd: int | None = None
+    tmp_path: Path | None = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{dest.name}.",
+            suffix=".tmp",
+            dir=str(dest.parent),
+            text=True,
+        )
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = None
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, dest)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if tmp_path is not None and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                logger.warning(
+                    "QUARANTINE_STATE_TMP_CLEANUP_FAILED",
+                    extra={"path": str(tmp_path)},
+                )
+
+
+def _load_quarantine_payload(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "QUARANTINE_STATE_CORRUPT",
+            extra={"error": str(exc), "path": str(path)},
+        )
+        return None
+    except OSError as exc:
+        logger.warning("QUARANTINE_STATE_READ_FAILED", extra={"error": str(exc), "path": str(path)})
+        return None
+    if not isinstance(payload, dict):
+        logger.warning("QUARANTINE_STATE_INVALID", extra={"path": str(path)})
+        return None
+    return payload
+
+
 def save_quarantine_state(path: str, manager: QuarantineManager) -> None:
     dest = _resolve_state_path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(manager.to_dict(), sort_keys=True), encoding="utf-8")
+    payload = json.dumps(manager.to_dict(), sort_keys=True)
+    _write_json_atomically(dest, payload)
+    backup = _backup_state_path(dest)
+    try:
+        _write_json_atomically(backup, payload)
+    except OSError as exc:
+        logger.warning(
+            "QUARANTINE_STATE_BACKUP_WRITE_FAILED",
+            extra={"error": str(exc), "path": str(backup)},
+        )
 
 
 def load_quarantine_state(path: str) -> QuarantineManager:
     src = _resolve_state_path(path)
-    if not src.exists():
-        return QuarantineManager()
-    try:
-        payload = json.loads(src.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return QuarantineManager()
-    except OSError as exc:
-        logger.warning("QUARANTINE_STATE_READ_FAILED", extra={"error": str(exc), "path": str(src)})
-        return QuarantineManager()
-    if not isinstance(payload, dict):
+    backup = _backup_state_path(src)
+
+    payload: dict[str, Any] | None = None
+    if src.exists():
+        payload = _load_quarantine_payload(src)
+    if payload is None and backup.exists():
+        payload = _load_quarantine_payload(backup)
+        if payload is not None:
+            try:
+                src.parent.mkdir(parents=True, exist_ok=True)
+                _write_json_atomically(src, json.dumps(payload, sort_keys=True))
+            except OSError as exc:
+                logger.warning(
+                    "QUARANTINE_STATE_RESTORE_FAILED",
+                    extra={"error": str(exc), "path": str(src), "backup_path": str(backup)},
+                )
+    if payload is None:
         return QuarantineManager()
     return QuarantineManager.from_dict(payload)

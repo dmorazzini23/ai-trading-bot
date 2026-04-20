@@ -333,3 +333,124 @@ def test_pretrade_blocks_on_slo_derisk_breach(monkeypatch: pytest.MonkeyPatch) -
     assert allowed is False
     assert reason == "DERISK_SLO_BREACH_BLOCK"
     assert details["execution_drift_bps"] == pytest.approx(25.0)
+
+
+def test_pretrade_blocks_kill_switch_at_final_boundary() -> None:
+    cfg = SimpleNamespace(
+        max_order_dollars=0.0,
+        max_order_shares=0,
+        price_collar_pct=0.10,
+        kill_switch=False,
+    )
+    ledger = _ExposureLedger()
+    intent = _intent(
+        symbol="AAPL",
+        side="buy",
+        qty=1,
+        price=100.0,
+        bar_ts=datetime(2026, 4, 20, 14, 0, tzinfo=UTC),
+        kill_switch_active=True,
+        kill_switch_reason="operator_toggle",
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "KILL_SWITCH_BLOCK"
+    assert details["reason"] == "operator_toggle"
+
+
+def test_pretrade_blocks_broker_readiness_at_final_boundary() -> None:
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    ledger = _ExposureLedger()
+    intent = _intent(
+        symbol="MSFT",
+        side="buy",
+        qty=1,
+        price=100.0,
+        bar_ts=datetime(2026, 4, 20, 14, 0, tzinfo=UTC),
+        broker_ready=False,
+        broker_ready_reason="AUTH_BROKER_HALT_FORBIDDEN_COOLDOWN",
+        broker_cooldown_remaining_sec=12.345,
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "AUTH_BROKER_HALT_FORBIDDEN_COOLDOWN"
+    assert details["auth_forbidden_retry_after_sec"] == pytest.approx(12.345, abs=1e-3)
+
+
+def test_pretrade_blocks_outside_market_hours_at_final_boundary() -> None:
+    cfg = SimpleNamespace(
+        max_order_dollars=0.0,
+        max_order_shares=0,
+        price_collar_pct=0.10,
+        rth_only=True,
+        allow_extended=False,
+    )
+    ledger = _ExposureLedger()
+    intent = _intent(
+        symbol="NVDA",
+        side="buy",
+        qty=1,
+        price=100.0,
+        bar_ts=datetime(2026, 4, 19, 14, 0, tzinfo=UTC),
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "MARKET_HOURS_BLOCK"
+    assert details["rth_only"] is True
+
+
+def test_pretrade_blocks_stale_quote_at_final_boundary() -> None:
+    cfg = SimpleNamespace(
+        max_order_dollars=0.0,
+        max_order_shares=0,
+        price_collar_pct=0.10,
+        quote_max_age_ms=500,
+    )
+    ledger = _ExposureLedger()
+    intent = _intent(
+        symbol="TSLA",
+        side="buy",
+        qty=1,
+        price=100.0,
+        bar_ts=datetime(2026, 4, 20, 14, 0, tzinfo=UTC),
+        submit_quote_source="broker_nbbo",
+        quote_age_ms=750.0,
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "STALE_QUOTE_BLOCK"
+    assert details["max_quote_age_ms"] == 500
+
+
+def test_pretrade_blocks_opening_without_realtime_nbbo() -> None:
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    ledger = _ExposureLedger()
+    intent = _intent(
+        symbol="SPY",
+        side="buy",
+        qty=1,
+        price=100.0,
+        bar_ts=datetime(2026, 4, 20, 14, 0, tzinfo=UTC),
+        opening_trade=True,
+        require_realtime_nbbo=True,
+        submit_quote_source="last_trade",
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "NBBO_REQUIRED_OPENING_SKIP"
+    assert details["opening_trade"] is True

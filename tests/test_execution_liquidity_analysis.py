@@ -268,3 +268,20 @@ def test_get_liquidity_trend_and_manager_empty_paths() -> None:
     manager = LiquidityManager()
     assert manager.get_portfolio_liquidity_summary()["error"] == "No liquidity data available"
     assert manager.update_symbol_liquidity("AAPL", None)["error"] == "No market data"
+
+
+def test_liquidity_manager_pre_trade_check_returns_analysis() -> None:
+    manager = LiquidityManager()
+    analysis = manager.pre_trade_check(
+        {"symbol": "AAPL", "qty": 10, "side": "buy", "price": 101.0},
+        {
+            "volume": [1_000_000 + i * 10_000 for i in range(20)],
+            "close": [100.0 + i * 0.2 for i in range(20)],
+            "bid": [99.9 + i * 0.2 for i in range(20)],
+            "ask": [100.1 + i * 0.2 for i in range(20)],
+        },
+    )
+
+    assert analysis["symbol"] == "AAPL"
+    assert "error" not in analysis
+    assert "execution_recommendations" in analysis

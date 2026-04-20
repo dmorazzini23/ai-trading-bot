@@ -92,3 +92,26 @@ def test_build_pretrade_validation_cfg_for_thin_liquidity(monkeypatch) -> None:
     assert collar_mult == 0.5
     assert effective_collar_pct == 0.02
     assert getattr(pretrade_cfg, "price_collar_pct") == 0.02
+
+
+def test_build_pretrade_validation_cfg_preserves_non_collar_limits(monkeypatch) -> None:
+    monkeypatch.setenv("AI_TRADING_LIQ_THIN_COLLAR_MULT", "0.5")
+    cfg = SimpleNamespace(
+        max_order_dollars=10000.0,
+        max_order_shares=50,
+        max_symbol_notional=25000.0,
+        quote_max_age_ms=800,
+        rth_only=True,
+        allow_extended=False,
+        price_collar_pct=0.04,
+    )
+
+    pretrade_cfg, effective_collar_pct, _collar_mult = execution_guards.build_pretrade_validation_cfg(
+        cfg,
+        thin_liquidity=True,
+    )
+
+    assert effective_collar_pct == 0.02
+    assert getattr(pretrade_cfg, "max_symbol_notional") == 25000.0
+    assert getattr(pretrade_cfg, "quote_max_age_ms") == 800
+    assert getattr(pretrade_cfg, "rth_only") is True

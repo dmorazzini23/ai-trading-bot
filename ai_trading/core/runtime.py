@@ -6,11 +6,10 @@ access to trading parameters and configuration across the system.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from .protocols import AllocatorProtocol
 from ai_trading.position_sizing import (
     resolve_max_position_size,
-    _get_equity_from_alpaca,
     _CACHE as _POSITION_SIZING_CACHE,
     _now_utc as _position_sizing_now,
 )
@@ -27,6 +26,7 @@ REQUIRED_PARAM_DEFAULTS = {
     'BUY_THRESHOLD': 0.15,
     'CONF_THRESHOLD': 0.52,
 }
+_MISSING = object()
 
 def _cfg_coalesce(cfg, key, default):
     """
@@ -123,40 +123,47 @@ def build_runtime(cfg: Any, **kwargs: Any) -> BotRuntime:
         except Exception:
             logger.debug("CAPITAL_CAP_DEFAULT_ASSIGN_FAILED", exc_info=True)
 
-    # Ensure equity is populated so downstream sizing uses a cached value.
-    eq = getattr(cfg, "equity", None)
-    if eq in (None, 0.0):
-        fetched = _get_equity_from_alpaca(cfg, force_refresh=True)
-        eq = fetched if (fetched is not None and fetched > 0) else None
-        try:
-            object.__setattr__(cfg, "equity", eq)
-        except Exception:
-            try:
-                setattr(cfg, "equity", eq)
-            except Exception:  # pragma: no cover - defensive
-                logger.debug("EQUITY_ASSIGN_FAILED", exc_info=True)
-
     mode = str(getattr(cfg, "max_position_mode", "STATIC")).upper()
-    raw_cfg_value = getattr(cfg, "max_position_size", object())
-    explicit_none = raw_cfg_value is None
+    raw_cfg_value = getattr(cfg, "max_position_size", _MISSING)
+    explicit_none = raw_cfg_value is _MISSING or raw_cfg_value is None
     val = _cfg_coalesce(cfg, "MAX_POSITION_SIZE", None)
     sizing_meta: dict[str, Any] = {}
-    if mode == "AUTO":
-        try:
-            resolved, sizing_meta = resolve_max_position_size(cfg, cfg, force_refresh=True)
-        except RuntimeError as exc:
-            fallback_value = _cfg_coalesce(
-                cfg, "MAX_POSITION_SIZE", REQUIRED_PARAM_DEFAULTS["MAX_POSITION_SIZE"]
-            )
-            if fallback_value in (None, 0):
-                fallback_value = REQUIRED_PARAM_DEFAULTS["MAX_POSITION_SIZE"]
-            resolved = float(fallback_value)
-            sizing_meta = {
+
+    def _fallback_sizing(reason: str) -> tuple[float, dict[str, Any]]:
+        fallback_value = _cfg_coalesce(
+            cfg,
+            "MAX_POSITION_SIZE",
+            REQUIRED_PARAM_DEFAULTS["MAX_POSITION_SIZE"],
+        )
+        if fallback_value in (None, 0):
+            fallback_value = REQUIRED_PARAM_DEFAULTS["MAX_POSITION_SIZE"]
+        return (
+            float(fallback_value),
+            {
                 "mode": mode,
                 "source": "fallback",
-                "reason": str(exc),
+                "reason": reason,
                 "capital_cap": getattr(cfg, "capital_cap", 0.0),
-            }
+            },
+        )
+
+    def _resolve_sizing_with_fallback() -> tuple[float, dict[str, Any]]:
+        try:
+            return cast(
+                tuple[float, dict[str, Any]],
+                resolve_max_position_size(cfg, cfg, force_refresh=True),
+            )
+        except RuntimeError as exc:
+            return _fallback_sizing(str(exc))
+        except Exception as exc:
+            logger.warning(
+                "POSITION_SIZING_RESOLVE_FAILED",
+                extra={"mode": mode, "error": str(exc), "error_type": type(exc).__name__},
+            )
+            return _fallback_sizing(f"unexpected_error:{type(exc).__name__}")
+
+    if mode == "AUTO":
+        resolved, sizing_meta = _resolve_sizing_with_fallback()
     else:
         if val is None and not explicit_none:
             try:
@@ -174,7 +181,7 @@ def build_runtime(cfg: Any, **kwargs: Any) -> BotRuntime:
                 "capital_cap": getattr(cfg, "capital_cap", 0.0),
             }
         elif val is None:
-            resolved, sizing_meta = resolve_max_position_size(cfg, cfg, force_refresh=True)
+            resolved, sizing_meta = _resolve_sizing_with_fallback()
         else:
             resolved = float(val)
             sizing_meta = {

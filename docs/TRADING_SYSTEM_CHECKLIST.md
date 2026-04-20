@@ -157,11 +157,48 @@ execution, persistence, and operator recovery.
 - The remaining live execution body of `run_all_trades_worker` now lives in:
   - [ai_trading/core/run_all_trades_execution.py](../ai_trading/core/run_all_trades_execution.py)
   instead of keeping the whole post-bootstrap worker cycle inline in `bot_engine.py`.
+- The lock/worker-boundary orchestration and teardown for `run_all_trades_worker`
+  now also live in:
+  - [ai_trading/core/run_all_trades_worker.py](../ai_trading/core/run_all_trades_worker.py)
+  instead of keeping the remaining cycle shell and teardown path inline in
+  `bot_engine.py`.
 - The legacy non-netting symbol decision flow now also lives outside the main
   engine file in:
   - [ai_trading/core/legacy_trade_cycle.py](../ai_trading/core/legacy_trade_cycle.py)
   instead of keeping the older `trade_logic(...)` state machine fully expanded
   inline in `bot_engine.py`.
+- The legacy/non-netting submit runtime now also lives outside the main engine
+  file in:
+  - [ai_trading/core/legacy_submit_runtime.py](../ai_trading/core/legacy_submit_runtime.py)
+  and now reuses the shared execution-intent and OMS pretrade boundary instead
+  of keeping submit-time gates as an inline special case in `bot_engine.py`.
+- The remaining legacy runtime health and reconciliation helpers now also live
+  outside the main engine file in:
+  - [ai_trading/core/runtime_services.py](../ai_trading/core/runtime_services.py)
+  instead of keeping startup health probes, legacy health payload assembly, the
+  standalone healthcheck runner, and reconciliation warning-state plumbing
+  inline in `bot_engine.py`.
+- The pending-order backlog/stale-sweep/symbol-decay runtime now also lives
+  outside the main engine file in:
+  - [ai_trading/core/pending_order_runtime.py](../ai_trading/core/pending_order_runtime.py)
+  instead of keeping the runtime-state mutation and backlog-control flow
+  expanded inline in `bot_engine.py`.
+- The pre-run candidate-universe/degraded-provider runtime now also lives
+  outside the main engine file in:
+  - [ai_trading/core/prepare_run_runtime.py](../ai_trading/core/prepare_run_runtime.py)
+  instead of keeping `_prepare_run(...)` and degraded candidate truncation
+  expanded inline in `bot_engine.py`.
+- The execution runtime metadata helpers now also live outside the main engine
+  file in:
+  - [ai_trading/core/execution_runtime_metadata.py](../ai_trading/core/execution_runtime_metadata.py)
+  instead of keeping order-type capability resolution, prerank runtime
+  bookkeeping, and execution-rank runtime metadata persistence inline in
+  `bot_engine.py`.
+- The netting target/runtime orchestration for execution rank-state persistence,
+  portfolio-optimizer runtime setup, and post-ranking portfolio-limit
+  application now also lives outside the main engine file in:
+  - [ai_trading/core/netting_target_runtime.py](../ai_trading/core/netting_target_runtime.py)
+  instead of keeping that target-construction glue inline in `bot_engine.py`.
 - The remaining legacy multi-strategy allocation/execution loop and symbol
   screening cycle now also live outside the engine file in:
   - [ai_trading/core/legacy_strategy_cycle.py](../ai_trading/core/legacy_strategy_cycle.py)
@@ -294,9 +331,30 @@ Verdict:
 Verdict:
 - `Completed`
 
-## 3. Highest-Priority Gaps To Fix Next
+### Final OMS boundary now enforces the last-line submit gates
+
+- The pretrade/OMS boundary now owns the final checks for:
+  - duplicate prevention
+  - quote staleness
+  - realtime opening-NBBO requirements
+  - market-hours restriction
+  - quote sanity
+  - kill switch
+  - broker readiness / auth cooldown
+  - symbol and gross exposure caps
+- The execution-intent builder now carries quote and broker context into that
+  final boundary instead of relying on upstream orchestration alone:
+  - [ai_trading/core/execution_intent.py](../ai_trading/core/execution_intent.py)
+  - [ai_trading/core/netting_submit_prelude.py](../ai_trading/core/netting_submit_prelude.py)
+  - [ai_trading/oms/pretrade.py](../ai_trading/oms/pretrade.py)
+
+Verdict:
+- `Completed`
+
+## 3. Highest-Priority Follow-on Work
 
 These are the next upgrades that would most improve production robustness.
+They are no longer checklist blockers for the core production architecture.
 
 ### 1. Thin `bot_engine.py` by responsibility, not by file count
 
@@ -305,27 +363,12 @@ Target:
   into clearer modules such as:
   - market-data evaluation
   - signal-to-intent translation
-  - final OMS risk gate
-  - execution result handling
   - reconciliation scheduling
+  - runtime health/reconcile helpers
+  - legacy health/control-plane helpers
 
 Why it matters:
 - this is the biggest remaining "hard to reason about under stress" risk
-
-### 2. Tighten the final OMS boundary
-
-Target:
-- ensure the final execution boundary always owns:
-  - duplicate prevention
-  - quote freshness
-  - market-hours restriction
-  - spread / price sanity
-  - symbol/gross/net exposure
-  - kill switch
-  - broker readiness
-
-Why it matters:
-- upstream correctness is never enough in a live trading system
 
 ## 4. Recommended Next Order
 
@@ -358,10 +401,9 @@ This repo is already ahead of many trading bots in:
 The biggest remaining risks are not "missing a few helper functions."
 They are:
 
-- the remaining final-OMS-boundary tightening work
 - remaining non-netting runtime simplification and boundary tightening work
 - continued operational hardening around final execution controls and exposure gates
 
 That is a good place to be. The system no longer looks underbuilt.
-It now mostly needs sharper final OMS boundaries and continued simplification
+It now mostly needs continued simplification and steady operational hardening
 outside the primary checklist milestones.

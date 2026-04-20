@@ -9,6 +9,7 @@ from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from ai_trading.config.management import get_env
+from ai_trading.utils.market_calendar import is_trading_day, session_info
 
 
 @dataclass
@@ -22,7 +23,12 @@ class OrderIntent:
     client_order_id: str
     last_price: float | None = None
     mid: float | None = None
+    bid: float | None = None
+    ask: float | None = None
     spread: float | None = None
+    quote_ts: datetime | None = None
+    quote_age_ms: float | None = None
+    submit_quote_source: str | None = None
     sleeve: str | None = None
     liquidity_bucket: str | None = None
     avg_daily_volume: float | None = None
@@ -39,6 +45,13 @@ class OrderIntent:
     execution_drift_bps: float | None = None
     reject_rate_pct: float | None = None
     session_regime: str | None = None
+    opening_trade: bool | None = None
+    require_realtime_nbbo: bool | None = None
+    kill_switch_active: bool | None = None
+    kill_switch_reason: str | None = None
+    broker_ready: bool | None = None
+    broker_ready_reason: str | None = None
+    broker_cooldown_remaining_sec: float | None = None
 
     def to_contract(self):
         """Return the canonical order intent contract for downstream journals."""
@@ -167,6 +180,46 @@ def _cfg_value(
             continue
         return cast(get_env(env_key, default, cast=cast))
     return cast(default)
+
+
+def _coerce_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _intent_regular_hours_open(intent: OrderIntent) -> bool:
+    ts = _coerce_utc_datetime(intent.bar_ts)
+    if ts is None:
+        return False
+    session_date = ts.astimezone(ZoneInfo("America/New_York")).date()
+    if not is_trading_day(session_date):
+        return False
+    try:
+        session = session_info(session_date)
+    except Exception:
+        ts_et = ts.astimezone(ZoneInfo("America/New_York"))
+        minute_of_day = (ts_et.hour * 60) + ts_et.minute
+        return ts_et.weekday() < 5 and ((9 * 60) + 30) <= minute_of_day < (16 * 60)
+    return session.start_utc <= ts < session.end_utc
+
+
+def _effective_quote_age_ms(intent: OrderIntent) -> float | None:
+    if intent.quote_age_ms is not None:
+        try:
+            return max(0.0, float(intent.quote_age_ms))
+        except (TypeError, ValueError):
+            return None
+    quote_ts = _coerce_utc_datetime(intent.quote_ts)
+    if quote_ts is None:
+        return None
+    return max((datetime.now(UTC) - quote_ts.astimezone(UTC)).total_seconds() * 1000.0, 0.0)
 
 
 def _ledger_fingerprints(ledger: Any) -> set[tuple[str, str, int, str]]:
@@ -560,6 +613,113 @@ def validate_pretrade(
             cast=float,
         )
     )
+    quote_max_age_ms = int(
+        _cfg_value(
+            cfg,
+            field="quote_max_age_ms",
+            env_keys=("QUOTE_MAX_AGE_MS",),
+            default=0,
+            cast=int,
+        )
+    )
+    if quote_max_age_ms <= 0:
+        quote_max_age_ms = int(
+            _cfg_value(
+                cfg,
+                field="min_quote_freshness_ms",
+                env_keys=("TRADING__MIN_QUOTE_FRESHNESS_MS",),
+                default=0,
+                cast=int,
+            )
+        )
+    rth_only = _coerce_bool(getattr(cfg, "rth_only", get_env("RTH_ONLY", True, cast=bool)))
+    allow_extended = _coerce_bool(
+        getattr(cfg, "allow_extended", get_env("ALLOW_EXTENDED", False, cast=bool))
+    )
+
+    if bool(intent.kill_switch_active):
+        return (
+            False,
+            "KILL_SWITCH_BLOCK",
+            {
+                "reason": str(intent.kill_switch_reason or "kill_switch"),
+            },
+        )
+
+    if intent.broker_ready is False:
+        details: dict[str, Any] = {
+            "reason": str(intent.broker_ready_reason or "broker_not_ready"),
+        }
+        if intent.broker_cooldown_remaining_sec is not None:
+            details["auth_forbidden_retry_after_sec"] = round(
+                float(intent.broker_cooldown_remaining_sec),
+                3,
+            )
+        return False, str(intent.broker_ready_reason or "BROKER_NOT_READY_BLOCK"), details
+
+    if (rth_only or not allow_extended) and not _intent_regular_hours_open(intent):
+        return (
+            False,
+            "MARKET_HOURS_BLOCK",
+            {
+                "bar_ts": intent.bar_ts.isoformat(),
+                "rth_only": bool(rth_only),
+                "allow_extended": bool(allow_extended),
+            },
+        )
+
+    if intent.bid is not None and intent.ask is not None:
+        try:
+            bid = float(intent.bid)
+            ask = float(intent.ask)
+        except (TypeError, ValueError):
+            bid = 0.0
+            ask = 0.0
+        if bid <= 0.0 or ask <= 0.0 or ask < bid:
+            return (
+                False,
+                "QUOTE_SANITY_BLOCK",
+                {
+                    "bid": intent.bid,
+                    "ask": intent.ask,
+                    "source": intent.submit_quote_source,
+                },
+            )
+
+    effective_quote_age_ms = _effective_quote_age_ms(intent)
+    if quote_max_age_ms > 0 and effective_quote_age_ms is not None:
+        if effective_quote_age_ms > float(quote_max_age_ms):
+            return (
+                False,
+                "STALE_QUOTE_BLOCK",
+                {
+                    "quote_age_ms": round(float(effective_quote_age_ms), 3),
+                    "max_quote_age_ms": int(quote_max_age_ms),
+                    "quote_source": intent.submit_quote_source,
+                    "quote_ts": (
+                        _coerce_utc_datetime(intent.quote_ts).isoformat()
+                        if _coerce_utc_datetime(intent.quote_ts) is not None
+                        else None
+                    ),
+                },
+            )
+
+    require_realtime_nbbo = bool(intent.require_realtime_nbbo)
+    if (
+        require_realtime_nbbo
+        and bool(intent.opening_trade)
+        and str(intent.submit_quote_source or "").strip().lower() != "broker_nbbo"
+    ):
+        return (
+            False,
+            "NBBO_REQUIRED_OPENING_SKIP",
+            {
+                "required": True,
+                "opening_trade": True,
+                "quote_source": intent.submit_quote_source,
+                "quote_age_ms": effective_quote_age_ms,
+            },
+        )
 
     qty_abs = abs(int(intent.qty))
     notional_abs = abs(float(intent.notional))

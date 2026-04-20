@@ -2,9 +2,12 @@ from __future__ import annotations
 
 """Lightweight runtime telemetry state shared across health surfaces."""
 
+from copy import deepcopy
 from datetime import UTC, datetime
 from threading import RLock
-from typing import Any
+from typing import Any, TypeVar, cast
+
+T = TypeVar("T")
 
 __all__ = [
     "update_data_provider_state",
@@ -70,11 +73,7 @@ _DEFAULT_BROKER_STATE: dict[str, Any] = {
     "open_orders_count": None,
     "positions_count": None,
 }
-
-_provider_state: dict[str, Any] = dict(_DEFAULT_PROVIDER_STATE)
-_quote_status: dict[str, Any] = dict(_DEFAULT_QUOTE_STATE)
-_broker_status: dict[str, Any] = dict(_DEFAULT_BROKER_STATE)
-_service_status: dict[str, Any] = {
+_DEFAULT_SERVICE_STATUS: dict[str, Any] = {
     "status": "unknown",
     "phase": "unknown",
     "phase_since": _now_iso(),
@@ -82,9 +81,39 @@ _service_status: dict[str, Any] = {
 }
 
 
+def _clone_state(value: T) -> T:
+    return cast(T, deepcopy(value))
+
+
+def _fresh_provider_state() -> dict[str, Any]:
+    return _clone_state(_DEFAULT_PROVIDER_STATE)
+
+
+def _fresh_quote_state() -> dict[str, Any]:
+    return _clone_state(_DEFAULT_QUOTE_STATE)
+
+
+def _fresh_broker_state() -> dict[str, Any]:
+    return _clone_state(_DEFAULT_BROKER_STATE)
+
+
+def _fresh_service_status() -> dict[str, Any]:
+    snapshot = _clone_state(_DEFAULT_SERVICE_STATUS)
+    now_iso = _now_iso()
+    snapshot["phase_since"] = now_iso
+    snapshot["updated"] = now_iso
+    return snapshot
+
+
+_provider_state: dict[str, Any] = _fresh_provider_state()
+_quote_status: dict[str, Any] = _fresh_quote_state()
+_broker_status: dict[str, Any] = _fresh_broker_state()
+_service_status: dict[str, Any] = _fresh_service_status()
+
+
 def _merge_state(target: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(target)
-    merged.update({k: v for k, v in updates.items() if v is not None or k not in merged})
+    merged = _clone_state(target)
+    merged.update({k: _clone_state(v) for k, v in updates.items()})
     merged["updated"] = _now_iso()
     return merged
 
@@ -236,7 +265,7 @@ def update_data_provider_state(
 
 def observe_data_provider_state() -> dict[str, Any]:
     with _LOCK:
-        return dict(_provider_state)
+        return _clone_state(_provider_state)
 
 
 def reset_data_provider_state() -> None:
@@ -244,7 +273,7 @@ def reset_data_provider_state() -> None:
 
     with _LOCK:
         global _provider_state
-        _provider_state = dict(_DEFAULT_PROVIDER_STATE)
+        _provider_state = _fresh_provider_state()
 
 
 def update_service_status(
@@ -277,7 +306,7 @@ def update_service_status(
 
 def observe_service_status() -> dict[str, Any]:
     with _LOCK:
-        return dict(_service_status)
+        return _clone_state(_service_status)
 
 
 def reset_service_status() -> None:
@@ -285,13 +314,7 @@ def reset_service_status() -> None:
 
     with _LOCK:
         global _service_status
-        now_iso = _now_iso()
-        _service_status = {
-            "status": "unknown",
-            "phase": "unknown",
-            "phase_since": now_iso,
-            "updated": now_iso,
-        }
+        _service_status = _fresh_service_status()
 
 
 def update_quote_status(
@@ -343,7 +366,7 @@ def update_quote_status(
 
 def observe_quote_status() -> dict[str, Any]:
     with _LOCK:
-        return dict(_quote_status)
+        return _clone_state(_quote_status)
 
 
 def reset_quote_status() -> None:
@@ -351,7 +374,7 @@ def reset_quote_status() -> None:
 
     with _LOCK:
         global _quote_status
-        _quote_status = dict(_DEFAULT_QUOTE_STATE)
+        _quote_status = _fresh_quote_state()
 
 
 def update_broker_status(
@@ -367,6 +390,7 @@ def update_broker_status(
     """Record recent broker connectivity observations."""
 
     updates: dict[str, Any] = {}
+    status_token: str | None = None
     if connected is not None:
         updates["connected"] = bool(connected)
     if latency_ms is not None:
@@ -378,6 +402,11 @@ def update_broker_status(
         updates["last_error"] = last_error
     if status is not None:
         updates["status"] = status
+        status_token = str(status).strip().lower()
+    if last_error is None and (
+        connected is True or status_token in {"reachable", "healthy", "ok", "connected"}
+    ):
+        updates["last_error"] = None
     if last_order_ack_ms is not None:
         try:
             updates["last_order_ack_ms"] = max(0.0, float(last_order_ack_ms))
@@ -400,7 +429,7 @@ def update_broker_status(
 
 def observe_broker_status() -> dict[str, Any]:
     with _LOCK:
-        return dict(_broker_status)
+        return _clone_state(_broker_status)
 
 
 def reset_broker_status() -> None:
@@ -408,7 +437,7 @@ def reset_broker_status() -> None:
 
     with _LOCK:
         global _broker_status
-        _broker_status = dict(_DEFAULT_BROKER_STATE)
+        _broker_status = _fresh_broker_state()
 
 
 def reset_all_states() -> None:
@@ -416,13 +445,7 @@ def reset_all_states() -> None:
 
     with _LOCK:
         global _provider_state, _quote_status, _broker_status, _service_status
-        _provider_state = dict(_DEFAULT_PROVIDER_STATE)
-        _quote_status = dict(_DEFAULT_QUOTE_STATE)
-        _broker_status = dict(_DEFAULT_BROKER_STATE)
-        now_iso = _now_iso()
-        _service_status = {
-            "status": "unknown",
-            "phase": "unknown",
-            "phase_since": now_iso,
-            "updated": now_iso,
-        }
+        _provider_state = _fresh_provider_state()
+        _quote_status = _fresh_quote_state()
+        _broker_status = _fresh_broker_state()
+        _service_status = _fresh_service_status()

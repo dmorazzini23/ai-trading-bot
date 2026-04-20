@@ -31,7 +31,7 @@ def test_max_position_size_consistency(monkeypatch, caplog):
     monkeypatch.setattr(main, "_interruptible_sleep", lambda s: None)
     monkeypatch.setattr(main, "_get_equity_from_alpaca", lambda cfg: 100000, raising=False)
     monkeypatch.setattr(
-        "ai_trading.core.runtime._get_equity_from_alpaca", lambda cfg, force_refresh=True: 100000
+        "ai_trading.position_sizing._get_equity_from_alpaca", lambda cfg, force_refresh=True: 100000
     )
     monkeypatch.setattr("ai_trading.utils.device.get_device", lambda: None)
 
@@ -78,10 +78,6 @@ def test_auto_max_position_mode_overrides_provided_size(monkeypatch, caplog):
     monkeypatch.setenv("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", "99999")
     monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.15")
 
-    monkeypatch.setattr(
-        "ai_trading.core.runtime._get_equity_from_alpaca",
-        lambda cfg, force_refresh=True: equity,
-    )
     monkeypatch.setattr(
         "ai_trading.position_sizing._get_equity_from_alpaca",
         lambda cfg, force_refresh=True: equity,

@@ -55,7 +55,13 @@ def test_prepare_run_cancels_open_orders_only_once(monkeypatch):
 
 
 def test_prepare_run_hard_block_skips_cycle_when_degraded(monkeypatch):
-    runtime = types.SimpleNamespace(params={}, cfg=None)
+    runtime = types.SimpleNamespace(
+        params={},
+        cfg=None,
+        _data_degraded=False,
+        _data_degraded_reason=None,
+        _data_degraded_fatal=False,
+    )
     state = eng.BotState()
 
     mock_acct = types.SimpleNamespace(equity="1000", buying_power="1000", cash="1000")
@@ -95,3 +101,6 @@ def test_prepare_run_hard_block_skips_cycle_when_degraded(monkeypatch):
     assert current_cash == 1000.0
     assert regime_ok is False
     assert symbols == []
+    assert runtime._data_degraded is True
+    assert runtime._data_degraded_reason == "upstream_unavailable"
+    assert runtime._data_degraded_fatal is False

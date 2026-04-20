@@ -161,6 +161,31 @@ def test_handle_pending_orders_creates_state(monkeypatch):
     assert tracker[be._PENDING_ORDER_FIRST_SEEN_KEY] == 10.0
 
 
+def test_handle_pending_orders_tolerates_invalid_tracker_values(monkeypatch):
+    runtime = types.SimpleNamespace(
+        state={
+            be._PENDING_ORDER_TRACKER_KEY: {
+                be._PENDING_ORDER_FIRST_SEEN_KEY: "bad-first-seen",
+                be._PENDING_ORDER_LAST_LOG_KEY: "bad-last-log",
+            },
+            be._PENDING_BACKLOG_ACTIVE_KEY: True,
+            be._PENDING_BACKLOG_LAST_WARN_TS_KEY: "bad-last-warn",
+        }
+    )
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=15),
+    )
+    monkeypatch.setattr(be.time, "time", lambda: 50.0)
+    orders = [_order("pending_new", "o-invalid", symbol="AAPL")]
+
+    assert be._handle_pending_orders(orders, runtime) is True
+    tracker = runtime.state[be._PENDING_ORDER_TRACKER_KEY]
+    assert tracker[be._PENDING_ORDER_FIRST_SEEN_KEY] == 50.0
+    assert tracker[be._PENDING_ORDER_LAST_LOG_KEY] == 50.0
+
+
 def test_handle_pending_orders_force_cleanup_for_stuck_pending(monkeypatch):
     runtime = types.SimpleNamespace(state={})
     cancel_mock = MagicMock()

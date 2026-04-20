@@ -9,6 +9,7 @@ def test_build_execution_intent_context_builds_intent_and_annotations() -> None:
     bar_ts = datetime(2026, 4, 19, 14, 30, tzinfo=UTC)
 
     context = build_execution_intent_context(
+        now=bar_ts,
         salt="seed-1",
         symbol="AAPL",
         side="buy",
@@ -40,6 +41,14 @@ def test_build_execution_intent_context_builds_intent_and_annotations() -> None:
         submit_bid_at_arrival=99.9,
         submit_ask_at_arrival=100.1,
         submit_mid_at_arrival=100.0,
+        submit_quote_ts=bar_ts,
+        opening_trade=True,
+        require_realtime_nbbo=True,
+        kill_switch_active=False,
+        kill_switch_reason=None,
+        broker_ready=True,
+        broker_ready_reason=None,
+        broker_cooldown_remaining_sec=None,
     )
 
     assert context.client_order_id
@@ -48,6 +57,8 @@ def test_build_execution_intent_context_builds_intent_and_annotations() -> None:
     assert context.pretrade_intent.qty == 5
     assert context.pretrade_intent.event_type == "earnings"
     assert context.pretrade_intent.quote_quality_ok is True
+    assert context.pretrade_intent.quote_age_ms == 0.0
+    assert context.pretrade_intent.opening_trade is True
     assert context.order_lineage_metadata["model_id"] == "ml-main"
     assert context.order_lineage_metadata["policy_hash"] == "policy-1"
     assert context.order_lineage_metadata["price_source"] == "iex"

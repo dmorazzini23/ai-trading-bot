@@ -110,7 +110,17 @@ class NettingSymbolProcessor:
     evaluate_execution_approval_func: Callable[..., Any]
     approve_execution_candidate_func: Callable[..., Any]
     gate_name_is_halt_noise_func: Callable[[str], bool]
-    resolve_order_quote_basis_func: Callable[..., tuple[str | None, float | None, float | None, float | None, float | None]]
+    resolve_order_quote_basis_func: Callable[
+        ...,
+        tuple[
+            str | None,
+            float | None,
+            float | None,
+            float | None,
+            float | None,
+            datetime | None,
+        ],
+    ]
     portfolio_optimizer_allows_trade_func: Callable[..., tuple[bool, dict[str, Any]]]
     auth_forbidden_cooldown_remaining_seconds_func: Callable[..., float]
     safe_validate_pretrade_func: Callable[..., tuple[bool, str, dict[str, Any]]]
@@ -763,6 +773,7 @@ def process_netting_symbol(
         ledger=processor.ledger,
         rate_limiter=processor.rate_limiter,
         breakers=processor.breakers,
+        kill_switch_active=bool(processor.kill_switch),
         gate_name_is_halt_noise_func=processor.gate_name_is_halt_noise_func,
         resolve_order_quote_basis_func=processor.resolve_order_quote_basis_func,
         portfolio_optimizer_allows_trade_func=processor.portfolio_optimizer_allows_trade_func,

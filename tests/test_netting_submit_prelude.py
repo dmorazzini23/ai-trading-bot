@@ -40,6 +40,7 @@ def _base_kwargs() -> dict[str, Any]:
             allow=lambda dep: True,
             open_reason=lambda dep: None,
         ),
+        "kill_switch_active": False,
         "gate_name_is_halt_noise_func": lambda gate: False,
         "resolve_order_quote_basis_func": lambda runtime, symbol, side, fallback_price: (
             "nbbo",
@@ -47,6 +48,7 @@ def _base_kwargs() -> dict[str, Any]:
             100.5,
             100.0,
             100.0,
+            None,
         ),
         "portfolio_optimizer_allows_trade_func": lambda **kwargs: (True, {"decision": "allow"}),
         "auth_forbidden_cooldown_remaining_seconds_func": lambda *args, **kwargs: 0.0,

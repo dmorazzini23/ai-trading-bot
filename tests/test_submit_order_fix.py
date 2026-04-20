@@ -40,6 +40,17 @@ def _ensure_env(monkeypatch):
     reload_trading_config()
 
 
+@pytest.fixture(autouse=True)
+def _reset_submit_runtime_state():
+    from ai_trading.core import bot_engine
+
+    setattr(bot_engine.state, "_oms_ledger", None)
+    setattr(bot_engine.state, "auth_forbidden_cooldowns", {})
+    yield
+    setattr(bot_engine.state, "_oms_ledger", None)
+    setattr(bot_engine.state, "auth_forbidden_cooldowns", {})
+
+
 def test_submit_order_with_uninitialized_exec_engine():
     """Test that submit_order raises proper error when _exec_engine is None."""
     # Import after setting environment

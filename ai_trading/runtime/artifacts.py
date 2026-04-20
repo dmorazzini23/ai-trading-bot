@@ -6,7 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from ai_trading.config.management import get_env
+from ai_trading.config.management import get_env, is_test_runtime
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -99,7 +99,9 @@ def resolve_runtime_artifact_path(
     if not for_write:
         preferred_data_dir = str(get_env("AI_TRADING_DATA_DIR", "", cast=str) or "").strip()
         if preferred_data_dir:
-            return candidates[0]
+            preferred_candidate = candidates[0]
+            if preferred_candidate.exists() or is_test_runtime():
+                return preferred_candidate
         existing: list[Path] = [candidate for candidate in candidates if candidate.exists()]
         canonical_root = (Path("/var/lib") / _APP_NAME).resolve()
         preferred_existing = [

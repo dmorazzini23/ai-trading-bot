@@ -688,7 +688,7 @@ def _resolve_order_quote_basis(
     symbol: str,
     side: str,
     fallback_price: float | None = None,
-) -> tuple[str, float | None, float | None, float | None, float | None]:
+) -> tuple[str, float | None, float | None, float | None, float | None, datetime | None]:
     """Return quote-source and NBBO basis for order submit/TCA attribution."""
 
     price_source = _normalize_quote_source_token(get_price_source(symbol))
@@ -698,6 +698,7 @@ def _resolve_order_quote_basis(
     mid_at_arrival: float | None = None
 
     quote_obj = _fetch_quote(ctx, symbol)
+    quote_ts = _quote_timestamp(quote_obj)
     mid_candidate, bid_candidate, ask_candidate = _quote_to_mid(quote_obj)
     if bid_candidate > 0:
         bid_at_arrival = float(bid_candidate)
@@ -720,7 +721,14 @@ def _resolve_order_quote_basis(
         if math.isfinite(fallback_value) and fallback_value > 0.0:
             arrival_price = fallback_value
 
-    return quote_source, bid_at_arrival, ask_at_arrival, mid_at_arrival, arrival_price
+    return (
+        quote_source,
+        bid_at_arrival,
+        ask_at_arrival,
+        mid_at_arrival,
+        arrival_price,
+        quote_ts,
+    )
 
 
 def _has_persistable_fill(
@@ -2026,6 +2034,10 @@ def _pre_rank_execution_candidates(
     runtime: Any | None,
 ) -> list[str]:
     """Pre-rank symbols before broker calls and optionally truncate to top-N."""
+    from ai_trading.core.execution_runtime_metadata import (
+        load_execution_prerank_runtime_state,
+        store_execution_prerank_runtime_state,
+    )
 
     normalized = [str(sym).strip().upper() for sym in symbols if str(sym).strip()]
     if not normalized:
@@ -2126,36 +2138,12 @@ def _pre_rank_execution_candidates(
     prerank_cycle = 0
     last_selected_cycles: dict[str, int] = {}
     if runtime is not None:
-        candidate = getattr(runtime, "portfolio_weights", None)
-        if isinstance(candidate, Mapping):
-            weights = candidate
-        rank_candidate = getattr(runtime, "execution_candidate_rank", None)
-        if isinstance(rank_candidate, Mapping):
-            runtime_rank = rank_candidate
-        quality_candidate = getattr(runtime, "execution_opportunity_quality_by_symbol", None)
-        if isinstance(quality_candidate, Mapping):
-            opportunity_quality = quality_candidate
-        cycle_candidate = getattr(runtime, "_execution_prerank_cycle_idx", 0)
-        try:
-            prerank_cycle = max(int(cycle_candidate), 0) + 1
-        except (TypeError, ValueError):
-            prerank_cycle = 1
-        try:
-            setattr(runtime, "_execution_prerank_cycle_idx", prerank_cycle)
-        except Exception:
-            logger.debug("EXECUTION_CANDIDATE_PRERANK_CYCLE_SET_FAILED", exc_info=True)
-        history_candidate = getattr(runtime, "_execution_candidate_last_selected_cycle", None)
-        if isinstance(history_candidate, Mapping):
-            for raw_symbol, raw_cycle in history_candidate.items():
-                symbol = str(raw_symbol).strip().upper()
-                if not symbol:
-                    continue
-                try:
-                    parsed_cycle = int(raw_cycle)
-                except (TypeError, ValueError):
-                    continue
-                if parsed_cycle > 0:
-                    last_selected_cycles[symbol] = parsed_cycle
+        prerank_runtime_state = load_execution_prerank_runtime_state(runtime)
+        weights = prerank_runtime_state.weights or None
+        runtime_rank = prerank_runtime_state.runtime_rank or None
+        opportunity_quality = prerank_runtime_state.opportunity_quality or None
+        prerank_cycle = int(prerank_runtime_state.prerank_cycle)
+        last_selected_cycles = dict(prerank_runtime_state.last_selected_cycles)
 
     if quality_filter_enabled and opportunity_quality and len(deduped) > quality_min_keep:
         quality_pairs = []
@@ -2327,12 +2315,12 @@ def _pre_rank_execution_candidates(
                     dropped = [sym for sym in ranked if sym not in selected_set]
 
     if runtime is not None and prerank_cycle > 0:
-        for symbol in selected:
-            last_selected_cycles[str(symbol).strip().upper()] = int(prerank_cycle)
-        try:
-            setattr(runtime, "_execution_candidate_last_selected_cycle", last_selected_cycles)
-        except Exception:
-            logger.debug("EXECUTION_CANDIDATE_PRERANK_HISTORY_SET_FAILED", exc_info=True)
+        store_execution_prerank_runtime_state(
+            runtime,
+            selected_symbols=selected,
+            prerank_cycle=prerank_cycle,
+            last_selected_cycles=last_selected_cycles,
+        )
     logger.info(
         "EXECUTION_CANDIDATE_PRERANK",
         extra={
@@ -10697,19 +10685,11 @@ def cancel_all_open_orders(runtime) -> None:
         )
 
 
-_reconcile_warned = False
-
-
 def reconcile_positions(ctx: BotContext) -> None:
     """On startup, fetch live positions and prune stale stop/take targets."""
+    from ai_trading.core.runtime_services import reconcile_positions_runtime
 
-    global _reconcile_warned
-    _reconcile_warned = _reconcile_position_targets_service(
-        ctx,
-        logger=logger,
-        targets_lock=targets_lock,
-        warned=_reconcile_warned,
-    )
+    reconcile_positions_runtime(ctx)
 
 
 import warnings
@@ -18359,138 +18339,9 @@ def data_source_health_check(ctx: Any, symbols: Sequence[str]) -> None:
 def pre_trade_health_check(
     ctx: BotContext, symbols: Sequence[str], min_rows: int | None = None
 ) -> dict:
-    """
-    Validate symbol data sufficiency, required columns, and timezone sanity using chunked batch.
+    from ai_trading.core.runtime_services import pre_trade_health_check_runtime
 
-    Robust min_rows resolution:
-      1) explicit param
-      2) ctx.min_rows if present
-      3) default 120
-    Avoids `'BotContext' object has no attribute 'min_rows'` hard failures.
-    """
-    # Robust min_rows resolution with precedence
-    if min_rows is None:
-        min_rows = getattr(ctx, "min_rows", 120)
-    min_rows = int(min_rows)
-
-    results: dict[str, Any] = {
-        "checked": 0,
-        "failures": [],
-        "insufficient_rows": [],
-        "missing_columns": [],
-        "timezone_issues": [],
-    }
-    if not symbols:
-        return results
-    # Compute start/end with fallbacks so this function is safe to call early in the loop
-    settings = get_settings()
-    _now = datetime.now(UTC)
-    _fallback_days = int(getattr(settings, "pretrade_lookback_days", 120))
-    _start = getattr(ctx, "lookback_start", _now - timedelta(days=_fallback_days))
-    _end = getattr(ctx, "lookback_end", _now)
-    frames: dict[str, pd.DataFrame] | None = None
-    for sym in symbols:
-        df = None
-        # Prefer ctx.data_fetcher path in tests and injectable contexts
-        try:
-            fetcher = getattr(ctx, "data_fetcher", None)
-            if fetcher is not None and hasattr(fetcher, "get_daily_df"):
-                df = fetcher.get_daily_df(ctx, sym)
-        except (AttributeError, TypeError):
-            df = None
-        except (ImportError, RuntimeError) as exc:
-            message = str(exc).lower()
-            if "alpaca stub" in message or "external network blocked in tests" in message:
-                df = None
-            else:
-                raise
-        if df is None:
-            if frames is None:
-                try:
-                    frames = _fetch_universe_bars_chunked(
-                        symbols=list(symbols),
-                        timeframe="1D",
-                        start=_start,
-                        end=_end,
-                        feed=getattr(ctx, "data_feed", None),
-                    )
-                except RuntimeError as exc:
-                    if "external network blocked in tests" in str(exc).lower():
-                        frames = {}
-                    else:
-                        raise
-            df = (frames or {}).get(sym)
-        if df is None or getattr(df, "empty", False):
-            # Test contract expects bare symbol on failures
-            results["failures"].append(sym)
-            continue
-        results["checked"] += 1
-        try:
-            # Use the function parameter, not a non-existent ctx attribute
-            if len(df) < min_rows:
-                results["insufficient_rows"].append(sym)
-                continue
-            _validate_columns(
-                df,
-                required=["timestamp", "open", "high", "low", "close", "volume"],
-                results=results,
-                symbol=sym,
-            )
-            _validate_timezones(df, results, sym)
-        except (
-            APIError,
-            TimeoutError,
-            ConnectionError,
-            KeyError,
-            ValueError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: tighten health probe error handling
-            results["failures"].append((sym, str(e)))
-            logger.warning(
-                "HEALTH_CHECK_FAILED",
-                extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )
-    return results
-
-
-def _validate_columns(df, required, results, symbol):
-    """Helper to validate required columns are present."""
-    try:
-        df = data_fetcher_module.normalize_ohlcv_columns(df)
-    except AttributeError:
-        pass
-    columns = getattr(df, "columns", [])
-    missing: list[str] = []
-    idx = getattr(df, "index", None)
-    has_datetime_index = False
-    if idx is not None:
-        pd_mod = sys.modules.get("pandas")
-        if pd_mod is None:
-            try:
-                import pandas as pd_mod  # type: ignore
-            except ImportError:
-                pd_mod = None  # type: ignore[assignment]
-        if pd_mod is not None:
-            try:
-                has_datetime_index = isinstance(idx, pd_mod.DatetimeIndex)
-            except AttributeError:
-                has_datetime_index = False
-        elif getattr(idx, "__class__", None) is not None:
-            has_datetime_index = idx.__class__.__name__ == "DatetimeIndex"
-    for column in required:
-        if column == "timestamp" and has_datetime_index and column not in columns:
-            continue
-        if column not in columns:
-            missing.append(column)
-    if missing:
-        results["missing_columns"].append(symbol)
-
-
-def _validate_timezones(df, results, symbol):
-    """Helper to validate timezone information."""
-    if hasattr(df, "index") and hasattr(df.index, "tz") and df.index.tz is None:
-        results["timezone_issues"].append(symbol)
+    return pre_trade_health_check_runtime(ctx, symbols, min_rows=min_rows)
 
 
 # ─── H. MARKET HOURS GUARD ────────────────────────────────────────────────────
@@ -20543,192 +20394,18 @@ def submit_order(
     **exec_kwargs: Any,
 ) -> Any | None:
     """Submit an order using the institutional execution engine."""
-    exec_kwargs = dict(exec_kwargs)
 
-    annotations_raw = exec_kwargs.get("annotations")
-    if isinstance(annotations_raw, MappingABC):
-        annotations: dict[str, Any] = dict(annotations_raw)
-    elif annotations_raw is None:
-        annotations = {}
-    else:
-        try:
-            annotations = dict(annotations_raw)
-        except Exception:
-            annotations = {}
-
-    annotation_price_source = (
-        annotations.get("price_source")
-        or annotations.get("quote_source")
-        or annotations.get("fallback_source")
-    )
-    price_source_label = annotation_price_source
-    if price_source_label in (None, ""):
-        try:
-            price_source_label = get_price_source(symbol)
-        except Exception:
-            price_source_label = None
-
-    if annotation_price_source in (None, "") and price_source_label not in (None, ""):
-        annotations["price_source"] = price_source_label
-
-    fallback_flag = bool(
-        exec_kwargs.get("using_fallback_price")
-        or annotations.get("using_fallback_price")
-    )
-    normalized_price_source = _normalize_quote_source_token(price_source_label)
-    if not fallback_flag and normalized_price_source is not None:
-        try:
-            fallback_flag = not _is_primary_price_source(normalized_price_source)
-        except Exception:
-            logger.debug("PRICE_SOURCE_FALLBACK_FLAG_PARSE_FAILED", exc_info=True)
-    if fallback_flag:
-        annotations["using_fallback_price"] = True
-        exec_kwargs["using_fallback_price"] = True
-
-    if annotations:
-        exec_kwargs["annotations"] = annotations
-    else:
-        exec_kwargs.pop("annotations", None)
-
-    if exec_kwargs.get("expected_net_edge_bps") is None:
-        for candidate_key in (
-            "expected_net_edge_bps",
-            "expected_edge_bps",
-            "edge_bps",
-            "alpha_edge_bps",
-        ):
-            candidate = annotations.get(candidate_key)
-            if candidate in (None, ""):
-                continue
-            try:
-                parsed = float(candidate)
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(parsed):
-                exec_kwargs["expected_net_edge_bps"] = float(parsed)
-                break
-
-    if exec_kwargs.get("price_hint") is None and price is not None:
-        exec_kwargs["price_hint"] = price
-
-    cfg = _resolve_trading_config(ctx)
-    kill_switch, kill_reason = _kill_switch_active(cfg)
-    if kill_switch:
-        logger.warning(
-            "KILL_SWITCH_BLOCK",
-            extra={"symbol": symbol, "reason": kill_reason or "kill_switch"},
-        )
-        return None
-    rth_only = bool(getattr(cfg, "rth_only", True))
-    allow_extended = bool(getattr(cfg, "allow_extended", False))
-    if (rth_only or not allow_extended) and not market_is_open():
-        logger.warning(
-            "MARKET_CLOSED_ORDER_SKIP",
-            extra={"symbol": symbol, "reason": "MARKET_CLOSED_BLOCK"},
-        )
-        return None
-
-    # AI-AGENT-REF: Add validation for execution engine initialization
-    if _exec_engine is None:
-        logger.error(
-            "EXEC_ENGINE_NOT_INITIALIZED",
-            extra={"symbol": symbol, "qty": qty, "side": side},
-        )
-        raise RuntimeError("Execution engine not initialized. Cannot execute orders.")
-
-    # AI-AGENT-REF: Liquidity checks before order submission (gated by flag)
-    if hasattr(S, "liquidity_checks_enabled") and CFG.liquidity_checks_enabled:
-        try:
-            from ai_trading.execution.liquidity import LiquidityManager
-
-            lm = LiquidityManager()
-            lm.pre_trade_check(
-                {"symbol": symbol, "qty": qty, "side": side},
-                getattr(ctx, "market_data", None),
-            )
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").lower()
-            if execution_mode in {"paper", "live"} and not bool(
-                get_env("PYTEST_RUNNING", "0", cast=bool)
-            ):
-                logger.error(
-                    "LIQUIDITY_PRECHECK_FAILED_BLOCK",
-                    extra={
-                        "symbol": symbol,
-                        "qty": qty,
-                        "side": side,
-                        "mode": execution_mode,
-                        "error": str(e),
-                    },
-                )
-                return None
-            logger.warning("Liquidity checks failed open-loop: %s", e)
+    from ai_trading.core.legacy_submit_runtime import submit_order_runtime
 
     try:
-        # Map side to core enums, supporting sell_short/short explicitly
-        side_norm = str(side).lower().strip()
-        if side_norm in ("sell_short", "short"):
-            core_side = CoreOrderSide.SELL_SHORT
-        elif side_norm in ("sell", "exit"):
-            core_side = CoreOrderSide.SELL
-        else:
-            core_side = CoreOrderSide.BUY
-
-        cycle_intent_compaction_enabled = bool(
-            get_env("AI_TRADING_CYCLE_INTENT_COMPACTION_ENABLED", True, cast=bool)
+        return submit_order_runtime(
+            ctx,
+            symbol,
+            qty,
+            side,
+            price=price,
+            **exec_kwargs,
         )
-        if cycle_intent_compaction_enabled and bool(getattr(state, "running", False)):
-            if not _reserve_cycle_submit_intent(
-                state,
-                symbol=symbol,
-                side=side_norm,
-            ):
-                skip_handler = getattr(_exec_engine, "_skip_submit", None)
-                normalized_side = _normalize_submit_side(side_norm) or side_norm
-                compaction = getattr(state, "cycle_submit_compaction", None)
-                reserved_count = len(compaction) if isinstance(compaction, set) else 0
-                if callable(skip_handler):
-                    try:
-                        skip_handler(
-                            symbol=symbol,
-                            side=normalized_side,
-                            reason="cycle_duplicate_intent",
-                            context={
-                                "source": "bot_cycle_compaction",
-                                "reserved_intents": int(reserved_count),
-                            },
-                        )
-                    except Exception:
-                        logger.debug("CYCLE_INTENT_PRECHECK_SKIP_HANDLER_FAILED", exc_info=True)
-                return None
-
-        # If caller didn't supply a price, fetch the most recent quote.
-        if price is None:
-            price = get_latest_price(symbol)
-            if not isinstance(price, (int, float)) or price <= 0:
-                md = getattr(ctx, "market_data", None)
-                price = get_latest_close(md) if md is not None else 0.0
-        # Pass through computed price so the execution engine can simulate
-        # fills around the actual market price rather than a generic fallback.
-        engine_kwargs = dict(exec_kwargs)
-        timing_meta = {"symbol": symbol, "side": side_norm, "qty": int(max(qty, 0))}
-        with execution_span(None, **timing_meta):
-            return _exec_engine.execute_order(
-                symbol,
-                core_side,
-                qty,
-                price=price,
-                **engine_kwargs,
-            )
     except (APIError, TimeoutError, ConnectionError, AlpacaOrderHTTPError) as e:
         logger.error(
             "BROKER_OP_FAILED",
@@ -26215,6 +25892,9 @@ def _enter_long(
         )
     else:
         broker_order_id = str(getattr(order_id, "id", order_id) or "").strip() or None
+        client_order_id = (
+            str(getattr(order_id, "client_order_id", "") or "").strip() or broker_order_id
+        )
         logger.debug(
             f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={broker_order_id}"
         )
@@ -26224,7 +25904,7 @@ def _enter_long(
             event="legacy_order_submitted",
             submitted=True,
             qty=float(adj_qty),
-            client_order_id=broker_order_id,
+            client_order_id=client_order_id,
             broker_order_id=broker_order_id,
             broker_status=str(getattr(order_id, "status", None) or "").strip() or None,
             price=float(current_price),
@@ -27186,6 +26866,9 @@ def _enter_short(
         )
     else:
         broker_order_id = str(getattr(order_id, "id", order_id) or "").strip() or None
+        client_order_id = (
+            str(getattr(order_id, "client_order_id", "") or "").strip() or broker_order_id
+        )
         logger.debug(
             f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={broker_order_id}"
         )
@@ -27195,7 +26878,7 @@ def _enter_short(
             event="legacy_order_submitted",
             submitted=True,
             qty=float(adj_qty),
-            client_order_id=broker_order_id,
+            client_order_id=client_order_id,
             broker_order_id=broker_order_id,
             broker_status=str(getattr(order_id, "status", None) or "").strip() or None,
             price=float(current_price),
@@ -30954,44 +30637,9 @@ app = Flask(__name__)
 
 
 def _legacy_health_payload() -> dict[str, Any]:
-    """Health endpoint payload exposing basic runtime metrics."""
+    from ai_trading.core.runtime_services import legacy_health_payload_runtime
 
-    try:
-        runtime = (
-            _get_runtime_context_or_none()
-        )  # AI-AGENT-REF: runtime-aware health check
-        if runtime is None:
-            raise RuntimeError("runtime not ready")
-        pre_trade_health_check(runtime, runtime.tickers or REGIME_SYMBOLS)
-        payload = build_canonical_healthz_payload(
-            service_name="ai-trading",
-            force_ok_for_pytest=False,
-            healthy_status_mode="healthy",
-            ok_mode="connectivity",
-        )
-    except (
-        APIError,
-        TimeoutError,
-        ConnectionError,
-        KeyError,
-        ValueError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: tighten health probe error handling
-        payload = build_canonical_healthz_payload(
-            service_name="ai-trading",
-            force_ok_for_pytest=False,
-            healthy_status_mode="healthy",
-            ok_mode="connectivity",
-            error=str(e),
-        )
-        logger.warning(
-            "HEALTH_CHECK_FAILED",
-            extra={"cause": e.__class__.__name__, "detail": str(e)},
-        )
-    payload["no_signal_events"] = state.no_signal_events
-    payload["indicator_failures"] = state.indicator_failures
-    return payload
+    return legacy_health_payload_runtime()
 
 
 def _legacy_health_response(payload: dict[str, Any], status: int) -> Any:
@@ -31010,23 +30658,9 @@ register_healthz_routes(
 
 
 def start_healthcheck() -> None:
-    port = CFG.healthcheck_port
-    try:
-        app.run(host="0.0.0.0", port=port)
-    except OSError as e:
-        logger.warning(f"Healthcheck port {port} in use: {e}. Skipping health-endpoint.")
-    except (
-        APIError,
-        TimeoutError,
-        ConnectionError,
-        KeyError,
-        ValueError,
-        TypeError,
-    ) as e:  # AI-AGENT-REF: tighten health probe error handling
-        logger.warning(
-            "HEALTH_CHECK_FAILED",
-            extra={"cause": e.__class__.__name__, "detail": str(e)},
-        )
+    from ai_trading.core.runtime_services import start_healthcheck_runtime
+
+    start_healthcheck_runtime()
 
 
 def start_metrics_server(default_port: int = 9200) -> None:
@@ -31165,6 +30799,35 @@ def _quote_to_mid(quote: Any | None) -> tuple[float | None, float, float]:
     if bid > 0 and ask > 0:
         return (bid + ask) / 2.0, bid, ask
     return None, bid, ask
+
+
+def _quote_timestamp(quote: Any | None) -> datetime | None:
+    """Return best-effort UTC timestamp for a quote payload."""
+
+    if quote is None:
+        return None
+    for field_name in (
+        "timestamp",
+        "ts",
+        "t",
+        "time",
+        "quote_timestamp",
+    ):
+        if isinstance(quote, Mapping):
+            raw_value = quote.get(field_name)
+        else:
+            raw_value = getattr(quote, field_name, None)
+        if raw_value in (None, ""):
+            continue
+        if isinstance(raw_value, datetime):
+            parsed = raw_value
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+        parsed = _parse_iso_timestamp(raw_value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _apply_slippage_limit(
@@ -32899,51 +32562,9 @@ def _pre_trade_gate() -> bool:
 
 
 def _truncate_degraded_candidates(symbols: list[str], runtime, *, reason: str | None = None) -> list[str]:
-    """Limit candidate list when the primary provider is degraded."""
+    from ai_trading.core.prepare_run_runtime import truncate_degraded_candidates
 
-    if not symbols:
-        return symbols
-    cfg_limit = None
-    try:
-        cfg_obj = getattr(runtime, "cfg", None)
-        if cfg_obj is not None:
-            cfg_limit = getattr(cfg_obj, "degraded_max_candidates", None)
-    except Exception:
-        cfg_limit = None
-
-    max_candidates: int | None = None
-    if cfg_limit not in (None, "", 0):
-        try:
-            max_candidates = int(cfg_limit)
-        except (TypeError, ValueError):
-            max_candidates = None
-    if max_candidates is None:
-        try:
-            max_candidates = int(get_env("TRADING__DEGRADED_MAX_CANDIDATES", "3", cast=int))
-        except Exception:
-            max_candidates = 3
-    if max_candidates <= 0:
-        max_candidates = 1
-    if len(symbols) <= max_candidates:
-        return symbols
-    penalty_factor = round(max_candidates / len(symbols), 4)
-    logger.warning(
-        "SCREEN_DEGRADED_INPUTS",
-        extra={
-            "penalty_factor": penalty_factor,
-            "reason": reason or "provider_degraded",
-        },
-    )
-    logger.warning(
-        "DEGRADED_CANDIDATES_TRUNCATED",
-        extra={
-            "original": len(symbols),
-            "truncated": max_candidates,
-            "penalty_factor": penalty_factor,
-            "reason": reason or "provider_degraded",
-        },
-    )
-    return symbols[:max_candidates]
+    return truncate_degraded_candidates(symbols, runtime, reason=reason)
 
 
 def ensure_data_fetcher(runtime) -> DataFetcher:
@@ -32983,194 +32604,9 @@ def ensure_data_fetcher(runtime) -> DataFetcher:
 def _prepare_run(
     runtime, state: BotState, tickers: list[str] | None
 ) -> tuple[float, bool, list[str]]:
-    from ai_trading import portfolio
-    from ai_trading.utils import portfolio_lock
+    from ai_trading.core.prepare_run_runtime import prepare_run
 
-    """Prepare trading run by syncing positions and generating symbols."""
-    try:
-        ensure_data_fetcher(runtime)
-        cleanup_done = getattr(state, "_open_order_cleanup_done", False)
-        if not cleanup_done:
-            cancel_all_open_orders(runtime)
-            try:
-                setattr(state, "_open_order_cleanup_done", True)
-            except Exception:
-                # Best effort bookkeeping; do not block startup if state is immutable.
-                logger.debug("OPEN_ORDER_CLEANUP_BOOKKEEPING_FAILED", exc_info=True)
-        audit_positions(runtime)
-    except APIError as e:
-        logger.warning(
-            "PREPARE_RUN_API_ERROR",
-            extra={"cause": e.__class__.__name__, "detail": str(e)},
-        )
-        raise DataFetchError("api error during pre-run") from e
-    try:
-        acct = safe_alpaca_get_account(runtime)
-        if acct:
-            current_cash = float(
-                getattr(acct, "buying_power", getattr(acct, "cash", 0.0))
-            )
-            equity = float(getattr(acct, "equity", current_cash))
-        else:
-            current_cash = 0.0
-            equity = 0.0
-    except (
-        APIError,
-        TimeoutError,
-        ConnectionError,
-    ) as e:  # AI-AGENT-REF: narrow account fetch errors
-        logger.warning(
-            "ACCOUNT_INFO_FAILED",
-            extra={"cause": e.__class__.__name__, "detail": str(e)},
-        )
-        current_cash = 0.0
-        equity = 0.0
-    update_if_present(runtime, equity)
-    params["get_capital_cap()"] = _param(runtime, "get_capital_cap()", 0.25)
-    compute_spy_vol_stats(runtime)
-
-    from ai_trading.data.dynamic_universe import build_dynamic_universe
-
-    base_watchlist = load_candidate_universe(runtime, tickers)
-    setattr(runtime, "base_universe_tickers", list(base_watchlist))
-    dynamic_result = build_dynamic_universe(runtime, list(base_watchlist))
-    full_watchlist = list(dynamic_result.merged_symbols)
-    setattr(runtime, "universe_tickers", list(full_watchlist))
-    setattr(runtime, "dynamic_universe_metadata", dict(dynamic_result.metadata))
-    degraded_snapshot = _resolve_data_provider_degraded()
-    degraded_cycle, degrade_reason, degrade_fatal = _degrade_state(degraded_snapshot)
-    try:
-        cfg_obj = get_trading_config()
-        skip_on_disabled = bool(getattr(cfg_obj, "skip_compute_when_provider_disabled", False))
-        degraded_mode = str(getattr(cfg_obj, "degraded_feed_mode", "block") or "block").strip().lower()
-        if degraded_mode not in {"block", "widen", "hard_block"}:
-            degraded_mode = "block"
-        failsoft_enabled = bool(getattr(cfg_obj, "safe_mode_failsoft", True))
-        if not failsoft_enabled and degraded_mode not in {"block", "hard_block"}:
-            degraded_mode = "block"
-    except Exception:
-        skip_on_disabled = False
-        degraded_mode = "block"
-    failsoft_cycle = _failsoft_mode_active()
-    hard_block_cycle = degraded_cycle and degraded_mode == "hard_block"
-    fatal_skip_cycle = degraded_cycle and skip_on_disabled and not failsoft_cycle and (
-        _reason_implies_fatal(degrade_reason) or degrade_fatal
-    )
-    if hard_block_cycle or fatal_skip_cycle:
-        reason_label = degrade_reason or safe_mode_reason() or "provider_disabled"
-        if hard_block_cycle and not degrade_reason:
-            reason_label = "degraded_feed_hard_block"
-        logger.warning(
-            "PRIMARY_PROVIDER_DISABLED_CYCLE_SKIP",
-            extra={
-                "reason": reason_label,
-                "symbol_budget": len(full_watchlist),
-                "degraded_mode": degraded_mode,
-                "hard_block": bool(hard_block_cycle),
-            },
-        )
-        return current_cash, False, []
-    try:
-        pretrade_data_health(runtime, full_watchlist)
-    except DataFetchError:
-        time.sleep(1.0)
-        return current_cash, False, []
-    symbols = screen_candidates(runtime, full_watchlist)
-    logger.info(
-        "Number of screened candidates: %s", len(symbols)
-    )  # AI-AGENT-REF: log candidate count
-    logger.info(
-        "CANDIDATE_PIPELINE",
-        extra={
-            "base_universe_count": len(base_watchlist),
-            "universe_count": len(full_watchlist),
-            "screened_count": len(symbols),
-            "dynamic_overlay_count": len(dynamic_result.additions),
-            "degraded_cycle": bool(degraded_cycle),
-            "degraded_reason": degrade_reason,
-        },
-    )
-    if not symbols:
-        logger.warning(
-            "No candidates found after filtering, using top 5 tickers fallback."
-        )
-        if not full_watchlist:
-            full_watchlist = load_universe() or FALLBACK_SYMBOLS
-        symbols = full_watchlist[:5]
-    logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
-    runtime.tickers = symbols  # AI-AGENT-REF: store screened tickers on runtime
-    if degraded_cycle and symbols:
-        symbols = _truncate_degraded_candidates(symbols, runtime, reason=degrade_reason)
-        runtime.tickers = symbols
-    if symbols:
-        pre_ranked_symbols = _pre_rank_execution_candidates(symbols, runtime=runtime)
-        pre_ranked_symbols = _apply_acceptance_rate_governor_symbol_cap(
-            state,
-            pre_ranked_symbols,
-        )
-        prepare_limit = _resolve_prepare_symbol_limit()
-        if prepare_limit is not None and len(pre_ranked_symbols) > prepare_limit:
-            dropped_count = len(pre_ranked_symbols) - prepare_limit
-            symbols = pre_ranked_symbols[:prepare_limit]
-            logger.info(
-                "PREPARE_SYMBOL_LIMIT_APPLIED",
-                extra={
-                    "before": len(pre_ranked_symbols),
-                    "after": len(symbols),
-                    "limit": prepare_limit,
-                    "dropped": dropped_count,
-                    "selected_sample": symbols[:10],
-                },
-            )
-        else:
-            symbols = pre_ranked_symbols
-        runtime.tickers = symbols
-    setattr(runtime, "_data_degraded", bool(degraded_cycle))
-    if degrade_reason:
-        setattr(runtime, "_data_degraded_reason", degrade_reason)
-    else:
-        if hasattr(runtime, "_data_degraded_reason"):
-            delattr(runtime, "_data_degraded_reason")
-    if degraded_cycle:
-        setattr(runtime, "_data_degraded_fatal", bool(degrade_fatal))
-    elif hasattr(runtime, "_data_degraded_fatal"):
-        delattr(runtime, "_data_degraded_fatal")
-    guard_begin_cycle(universe_size=len(symbols), degraded=degraded_cycle)
-    try:
-        summary = pre_trade_health_check(runtime, symbols)
-        logger.info("PRE_TRADE_HEALTH", extra=summary)
-        if _pre_trade_gate():
-            return current_cash, False, []
-    except (
-        APIError,
-        TimeoutError,
-        ConnectionError,
-        KeyError,
-        ValueError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: explicit error logging for data health
-        logger.warning(
-            "HEALTH_CHECK_FAILED",
-            extra={"cause": e.__class__.__name__, "detail": str(e)},
-        )
-        return current_cash, False, []
-    with portfolio_lock:
-        runtime.portfolio_weights = portfolio.compute_portfolio_weights(
-            runtime, symbols
-        )
-    acct = safe_alpaca_get_account(runtime)
-    if acct:
-        current_cash = float(
-            getattr(acct, "buying_power", getattr(acct, "cash", 0.0))
-        )
-    else:
-        logger.error("Failed to get account information from Alpaca")
-        return current_cash, False, []
-    regime_ok = check_market_regime(
-        runtime, state
-    )  # AI-AGENT-REF: runtime flows into regime check
-    return current_cash, regime_ok, symbols
+    return prepare_run(runtime, state, tickers)
 
 
 def _process_symbols(
@@ -34160,19 +33596,12 @@ def _record_pending_order_slo_metrics(
     pending_count: int,
     oldest_pending_age_s: float | None,
 ) -> None:
-    """Record pending backlog SLO metrics without raising."""
+    from ai_trading.core.pending_order_runtime import record_pending_order_slo_metrics
 
-    try:
-        from ai_trading.monitoring.slo import get_slo_monitor
-
-        monitor = get_slo_monitor()
-        monitor.record_metric("pending_orders_count", float(max(int(pending_count), 0)))
-        monitor.record_metric(
-            "pending_oldest_age_sec",
-            float(max(float(oldest_pending_age_s or 0.0), 0.0)),
-        )
-    except Exception:
-        logger.debug("PENDING_ORDER_SLO_RECORD_FAILED", exc_info=True)
+    return record_pending_order_slo_metrics(
+        pending_count=pending_count,
+        oldest_pending_age_s=oldest_pending_age_s,
+    )
 
 
 def _maybe_apply_pending_stale_sweep(
@@ -34182,120 +33611,29 @@ def _maybe_apply_pending_stale_sweep(
     now_dt: datetime,
     now_ts: float,
 ) -> dict[str, Any] | None:
-    """Attempt bounded cancellation of stale pending orders."""
+    from ai_trading.core.pending_order_runtime import maybe_apply_pending_stale_sweep
 
-    if not _pending_stale_sweep_enabled():
-        return None
-    max_cancels = _pending_stale_sweep_max_cancels()
-    if max_cancels <= 0:
-        return None
-
-    runtime_state_map = _ensure_runtime_state(runtime)
-    cooldown_s = _pending_stale_sweep_cooldown_seconds()
-    last_run_raw = runtime_state_map.get(_PENDING_STALE_SWEEP_LAST_TS_KEY)
-    try:
-        last_run_ts = float(last_run_raw) if last_run_raw not in (None, "") else 0.0
-    except (TypeError, ValueError):
-        last_run_ts = 0.0
-    if cooldown_s > 0.0 and last_run_ts > 0.0 and (now_ts - last_run_ts) < cooldown_s:
-        return None
-
-    stale_after_s = _pending_stale_sweep_age_seconds()
-    include_partial_fills = _pending_stale_sweep_include_partially_filled()
-    partial_fill_stale_after_s = _pending_stale_sweep_partial_fill_age_seconds(
-        stale_after_s
+    return maybe_apply_pending_stale_sweep(
+        runtime=runtime,
+        pending_orders=pending_orders,
+        now_dt=now_dt,
+        now_ts=now_ts,
     )
-    stale_candidates: list[tuple[float, Any]] = []
-    for order in pending_orders:
-        status = _normalize_broker_order_status(getattr(order, "status", None))
-        age_s = _pending_order_broker_age_seconds(order, now_dt)
-        if age_s is None:
-            continue
-        if status in _PENDING_ORDER_STUCK_STATUSES:
-            if age_s < stale_after_s:
-                continue
-        elif bool(include_partial_fills) and status == "partially_filled":
-            if age_s < partial_fill_stale_after_s:
-                continue
-        else:
-            continue
-        stale_candidates.append((float(age_s), order))
-    if not stale_candidates:
-        return None
-
-    stale_candidates.sort(key=lambda item: item[0], reverse=True)
-    selected_orders = [order for _age, order in stale_candidates[:max_cancels]]
-    cancel_result = _cancel_open_orders_subset(
-        runtime,
-        orders=selected_orders,
-        reason_code="PENDING_STALE_SWEEP",
-    )
-    runtime_state_map[_PENDING_STALE_SWEEP_LAST_TS_KEY] = float(now_ts)
-    selected_ids: list[str] = []
-    for order in selected_orders:
-        order_id = _extract_order_identifier(order)
-        if order_id:
-            selected_ids.append(order_id)
-    return {
-        "stale_after_s": int(stale_after_s),
-        "partial_fill_stale_after_s": int(partial_fill_stale_after_s),
-        "include_partial_fills": bool(include_partial_fills),
-        "attempted": int(len(selected_orders)),
-        "cancelled": int(cancel_result.cancelled),
-        "failed": int(cancel_result.failed),
-        "selected_ids": selected_ids[:_PENDING_ORDER_SAMPLE_LIMIT],
-        "oldest_candidate_age_s": int(max(stale_candidates[0][0], 0.0)),
-        "errors": list(cancel_result.errors or []),
-    }
-
-
-def _extract_pending_order_symbol(order: Any) -> str | None:
-    """Extract normalized symbol from a broker order payload."""
-
-    symbol_raw: Any = None
-    if isinstance(order, Mapping):
-        symbol_raw = order.get("symbol")
-    if symbol_raw in (None, ""):
-        symbol_raw = getattr(order, "symbol", None)
-    if symbol_raw in (None, ""):
-        return None
-    symbol = str(symbol_raw).strip().upper()
-    return symbol or None
-
-
-def _collect_pending_blocked_symbols(orders: Iterable[Any]) -> set[str]:
-    blocked: set[str] = set()
-    for order in orders:
-        symbol = _extract_pending_order_symbol(order)
-        if symbol:
-            blocked.add(symbol)
-    return blocked
 
 
 def _set_pending_blocked_symbols(runtime: Any, symbols: Iterable[str]) -> None:
-    normalized = sorted({str(sym).strip().upper() for sym in symbols if str(sym).strip()})
-    setattr(runtime, _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, tuple(normalized))
-    state_obj = globals().get("state")
-    if state_obj is not None:
-        try:
-            setattr(state_obj, _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, tuple(normalized))
-        except Exception:
-            logger.debug("PENDING_BLOCKED_SYMBOLS_STATE_SET_FAILED", exc_info=True)
+    from ai_trading.core.pending_order_runtime import set_pending_blocked_symbols
+
+    return set_pending_blocked_symbols(runtime, symbols)
 
 
 def _resolve_runtime_info_log_ttl_seconds(
     env_name: str,
     default_seconds: float,
 ) -> float:
-    """Resolve throttled INFO cadence from managed environment config."""
+    from ai_trading.core.pending_order_runtime import resolve_runtime_info_log_ttl_seconds
 
-    try:
-        ttl = float(get_env(env_name, default_seconds, cast=float))
-    except COMMON_EXC:
-        ttl = float(default_seconds)
-    if not math.isfinite(ttl):
-        ttl = float(default_seconds)
-    return max(0.0, min(ttl, 3600.0))
+    return resolve_runtime_info_log_ttl_seconds(env_name, default_seconds)
 
 
 def _should_emit_runtime_info_log(
@@ -34305,126 +33643,14 @@ def _should_emit_runtime_info_log(
     ttl_seconds: float,
     now_mono: float | None = None,
 ) -> bool:
-    """Return ``True`` when INFO log ``key`` should emit under TTL coalescing."""
+    from ai_trading.core.pending_order_runtime import should_emit_runtime_info_log
 
-    ttl = max(float(ttl_seconds), 0.0)
-    if ttl <= 0.0:
-        return True
-    state = _ensure_runtime_state(runtime)
-    tracker_raw = state.get(_RUNTIME_INFO_LOG_TRACKER_KEY)
-    tracker: dict[str, float]
-    if isinstance(tracker_raw, dict):
-        tracker = tracker_raw
-    else:
-        tracker = {}
-        state[_RUNTIME_INFO_LOG_TRACKER_KEY] = tracker
-    now_value = float(now_mono if now_mono is not None else monotonic_time())
-    try:
-        last_value = float(tracker.get(key, 0.0) or 0.0)
-    except (TypeError, ValueError):
-        last_value = 0.0
-    if last_value <= 0.0 or now_value - last_value >= ttl:
-        tracker[key] = now_value
-        return True
-    return False
-
-
-def _get_pending_symbol_decay_tracker(runtime: Any) -> dict[str, dict[str, Any]]:
-    """Return per-symbol pending block decay state."""
-
-    state = _ensure_runtime_state(runtime)
-    tracker = state.get(_PENDING_SYMBOL_DECAY_TRACKER_KEY)
-    if not isinstance(tracker, dict):
-        tracker = {}
-        state[_PENDING_SYMBOL_DECAY_TRACKER_KEY] = tracker
-    return cast(dict[str, dict[str, Any]], tracker)
-
-
-def _pending_symbol_decay_config(*, force_cleanup_after: float) -> dict[str, Any]:
-    """Resolve per-symbol pending block decay configuration."""
-
-    try:
-        enabled = bool(get_env("AI_TRADING_PENDING_SYMBOL_DECAY_ENABLED", False, cast=bool))
-    except COMMON_EXC:
-        enabled = False
-
-    try:
-        ack_timeout_s = float(get_env("ORDER_ACK_TIMEOUT_SECONDS", 20.0, cast=float))
-    except COMMON_EXC:
-        ack_timeout_s = 20.0
-    ack_timeout_s = max(1.0, min(ack_timeout_s, 3600.0))
-
-    try:
-        ack_mult = float(
-            get_env(
-                "AI_TRADING_PENDING_SYMBOL_DECAY_ACK_MULT",
-                _PENDING_SYMBOL_DECAY_ACK_MULT_DEFAULT,
-                cast=float,
-            )
-        )
-    except COMMON_EXC:
-        ack_mult = _PENDING_SYMBOL_DECAY_ACK_MULT_DEFAULT
-    ack_mult = max(1.0, min(ack_mult, 100.0))
-
-    try:
-        min_sec = float(
-            get_env(
-                "AI_TRADING_PENDING_SYMBOL_DECAY_MIN_SEC",
-                _PENDING_SYMBOL_DECAY_MIN_SEC_DEFAULT,
-                cast=float,
-            )
-        )
-    except COMMON_EXC:
-        min_sec = _PENDING_SYMBOL_DECAY_MIN_SEC_DEFAULT
-    min_sec = max(1.0, min(min_sec, 86400.0))
-
-    try:
-        max_sec = float(
-            get_env(
-                "AI_TRADING_PENDING_SYMBOL_DECAY_MAX_SEC",
-                force_cleanup_after,
-                cast=float,
-            )
-        )
-    except COMMON_EXC:
-        max_sec = float(force_cleanup_after)
-    max_sec = max(min_sec, min(max_sec, 86400.0))
-
-    release_after_s = max(min_sec, ack_timeout_s * ack_mult)
-    release_after_s = min(release_after_s, max_sec)
-
-    try:
-        min_cycles = int(
-            get_env(
-                "AI_TRADING_PENDING_SYMBOL_DECAY_MIN_CYCLES",
-                _PENDING_SYMBOL_DECAY_MIN_CYCLES_DEFAULT,
-                cast=int,
-            )
-        )
-    except COMMON_EXC:
-        min_cycles = _PENDING_SYMBOL_DECAY_MIN_CYCLES_DEFAULT
-    min_cycles = max(1, min(min_cycles, 120))
-
-    try:
-        release_cooldown_s = float(
-            get_env(
-                "AI_TRADING_PENDING_SYMBOL_RELEASE_COOLDOWN_SEC",
-                _PENDING_SYMBOL_RELEASE_COOLDOWN_SEC_DEFAULT,
-                cast=float,
-            )
-        )
-    except COMMON_EXC:
-        release_cooldown_s = _PENDING_SYMBOL_RELEASE_COOLDOWN_SEC_DEFAULT
-    release_cooldown_s = max(0.0, min(release_cooldown_s, 86400.0))
-
-    return {
-        "enabled": enabled,
-        "ack_timeout_s": ack_timeout_s,
-        "ack_mult": ack_mult,
-        "release_after_s": release_after_s,
-        "min_cycles": min_cycles,
-        "release_cooldown_s": release_cooldown_s,
-    }
+    return should_emit_runtime_info_log(
+        runtime,
+        key,
+        ttl_seconds=ttl_seconds,
+        now_mono=now_mono,
+    )
 
 
 def _apply_pending_symbol_block_decay(
@@ -34439,486 +33665,11 @@ def _apply_pending_symbol_block_decay(
     block_scope: str,
     force_cleanup_after: float,
 ) -> tuple[set[str], dict[str, Any] | None]:
-    """Return effective blocked symbols after optional stale-age decay."""
+    from ai_trading.core.pending_order_runtime import apply_pending_symbol_block_decay
 
-    raw_blocked = sorted(
-        {str(symbol).strip().upper() for symbol in raw_symbols if str(symbol).strip()}
-    )
-    if block_scope != "symbol":
-        return set(raw_blocked), None
-
-    tracker = _get_pending_symbol_decay_tracker(runtime)
-    config = _pending_symbol_decay_config(force_cleanup_after=force_cleanup_after)
-    decay_enabled = bool(config["enabled"])
-    release_after_s = float(config["release_after_s"])
-    min_cycles_required = int(config["min_cycles"])
-    try:
-        sample_limit = int(
-            get_env(
-                "AI_TRADING_PENDING_SYMBOL_COOLDOWN_TELEMETRY_SAMPLE_LIMIT",
-                _PENDING_SYMBOL_COOLDOWN_TELEMETRY_SAMPLE_LIMIT_DEFAULT,
-                cast=int,
-            )
-        )
-    except COMMON_EXC:
-        sample_limit = _PENDING_SYMBOL_COOLDOWN_TELEMETRY_SAMPLE_LIMIT_DEFAULT
-    sample_limit = max(1, min(sample_limit, _PENDING_ORDER_SAMPLE_LIMIT))
-
-    effective_blocked: set[str] = set()
-    released_symbols: list[str] = []
-    cooldown_symbols: list[str] = []
-    symbol_states: list[dict[str, Any]] = []
-    now_s = float(now)
-
-    for symbol in raw_blocked:
-        raw_entry = tracker.get(symbol)
-        entry = raw_entry if isinstance(raw_entry, dict) else {}
-
-        raw_first_seen = entry.get("first_seen_ts", now_s)
-        try:
-            first_seen_ts = float(raw_first_seen)
-        except (TypeError, ValueError):
-            first_seen_ts = now_s
-        if first_seen_ts <= 0.0:
-            first_seen_ts = now_s
-
-        raw_cycles = entry.get("cycles_seen", 0)
-        try:
-            cycles_seen = int(raw_cycles)
-        except (TypeError, ValueError):
-            cycles_seen = 0
-        cycles_seen = max(cycles_seen + 1, 1)
-
-        raw_prev_age = entry.get("max_age_s", 0.0)
-        try:
-            prev_max_age_s = float(raw_prev_age)
-        except (TypeError, ValueError):
-            prev_max_age_s = 0.0
-        prev_max_age_s = max(prev_max_age_s, 0.0)
-
-        current_age_s = max(float(symbol_oldest_age_s.get(symbol, 0.0) or 0.0), 0.0)
-        max_age_s = max(prev_max_age_s, current_age_s)
-        open_orders_count = int(symbol_open_order_count.get(symbol, 0) or 0)
-        oldest_open_age_s = float(symbol_oldest_open_age_s.get(symbol, 0.0) or 0.0)
-
-        statuses = {
-            str(status).strip().lower()
-            for status in symbol_statuses.get(symbol, set())
-            if str(status).strip()
-        }
-        statuses_stuck = (not statuses) or statuses.issubset(_PENDING_ORDER_STUCK_STATUSES)
-
-        raw_released_until = entry.get("released_until_ts", 0.0)
-        try:
-            released_until_ts = float(raw_released_until)
-        except (TypeError, ValueError):
-            released_until_ts = 0.0
-
-        entry.update(
-            {
-                "first_seen_ts": first_seen_ts,
-                "last_seen_ts": now_s,
-                "cycles_seen": cycles_seen,
-                "max_age_s": max_age_s,
-                "statuses": sorted(statuses),
-            }
-        )
-        statuses_sample = sorted(statuses)[:4]
-
-        if released_until_ts > now_s:
-            cooldown_symbols.append(symbol)
-            tracker[symbol] = entry
-            if len(symbol_states) < sample_limit:
-                symbol_states.append(
-                    {
-                        "symbol": symbol,
-                        "state": "cooldown",
-                        "cycles_seen": cycles_seen,
-                        "max_age_s": round(max_age_s, 3),
-                        "release_after_s": round(release_after_s, 3),
-                        "age_to_release_s": round(max(release_after_s - max_age_s, 0.0), 3),
-                        "cooldown_remaining_s": round(max(released_until_ts - now_s, 0.0), 3),
-                        "statuses": statuses_sample,
-                        "statuses_stuck": bool(statuses_stuck),
-                        "eligible_for_release": False,
-                    }
-                )
-            continue
-
-        if (
-            decay_enabled
-            and statuses_stuck
-            and cycles_seen >= min_cycles_required
-            and max_age_s >= release_after_s
-            and open_orders_count <= 0
-        ):
-            released_symbols.append(symbol)
-            release_count_raw = entry.get("release_count", 0)
-            try:
-                release_count = int(release_count_raw)
-            except (TypeError, ValueError):
-                release_count = 0
-            entry["release_count"] = max(release_count + 1, 1)
-            entry["last_released_ts"] = now_s
-            cooldown_s = float(config["release_cooldown_s"])
-            entry["released_until_ts"] = now_s + cooldown_s if cooldown_s > 0.0 else now_s
-            tracker[symbol] = entry
-            if len(symbol_states) < sample_limit:
-                symbol_states.append(
-                    {
-                        "symbol": symbol,
-                        "state": "released",
-                        "cycles_seen": cycles_seen,
-                        "max_age_s": round(max_age_s, 3),
-                        "release_after_s": round(release_after_s, 3),
-                        "age_to_release_s": 0.0,
-                        "cooldown_remaining_s": round(
-                            max(float(entry["released_until_ts"]) - now_s, 0.0),
-                            3,
-                        ),
-                        "statuses": statuses_sample,
-                        "statuses_stuck": bool(statuses_stuck),
-                        "eligible_for_release": True,
-                    }
-                )
-            continue
-
-        if (
-            decay_enabled
-            and statuses_stuck
-            and cycles_seen >= min_cycles_required
-            and max_age_s >= release_after_s
-            and open_orders_count > 0
-        ):
-            logger.warning(
-                "PENDING_SYMBOL_BLOCK_DECAY_DEFERRED",
-                extra={
-                    "symbol": symbol,
-                    "open_orders_count": open_orders_count,
-                    "oldest_open_order_age_s": round(max(oldest_open_age_s, 0.0), 3),
-                },
-            )
-            entry["released_until_ts"] = 0.0
-            tracker[symbol] = entry
-            effective_blocked.add(symbol)
-            if len(symbol_states) < sample_limit:
-                symbol_states.append(
-                    {
-                        "symbol": symbol,
-                        "state": "deferred",
-                        "cycles_seen": cycles_seen,
-                        "max_age_s": round(max_age_s, 3),
-                        "release_after_s": round(release_after_s, 3),
-                        "age_to_release_s": 0.0,
-                        "cooldown_remaining_s": 0.0,
-                        "statuses": statuses_sample,
-                        "statuses_stuck": bool(statuses_stuck),
-                        "eligible_for_release": False,
-                        "open_orders_count": open_orders_count,
-                        "oldest_open_order_age_s": round(max(oldest_open_age_s, 0.0), 3),
-                    }
-                )
-            continue
-
-        entry["released_until_ts"] = 0.0
-        tracker[symbol] = entry
-        effective_blocked.add(symbol)
-        if len(symbol_states) < sample_limit:
-            eligible_for_release = (
-                decay_enabled
-                and statuses_stuck
-                and cycles_seen >= min_cycles_required
-                and max_age_s >= release_after_s
-            )
-            symbol_states.append(
-                {
-                    "symbol": symbol,
-                    "state": "blocked",
-                    "cycles_seen": cycles_seen,
-                    "max_age_s": round(max_age_s, 3),
-                    "release_after_s": round(release_after_s, 3),
-                    "age_to_release_s": round(max(release_after_s - max_age_s, 0.0), 3),
-                    "cooldown_remaining_s": 0.0,
-                    "statuses": statuses_sample,
-                    "statuses_stuck": bool(statuses_stuck),
-                    "eligible_for_release": bool(eligible_for_release),
-                }
-            )
-
-    for symbol in list(tracker.keys()):
-        if symbol in raw_blocked:
-            continue
-        entry = tracker.get(symbol)
-        if not isinstance(entry, dict):
-            tracker.pop(symbol, None)
-            continue
-        raw_released_until = entry.get("released_until_ts", 0.0)
-        try:
-            released_until_ts = float(raw_released_until)
-        except (TypeError, ValueError):
-            released_until_ts = 0.0
-        if released_until_ts > now_s:
-            continue
-        tracker.pop(symbol, None)
-
-    if not raw_blocked:
-        return set(), None
-
-    telemetry: dict[str, Any] = {
-        "raw_blocked_count": len(raw_blocked),
-        "effective_blocked_count": len(effective_blocked),
-        "released_count": len(released_symbols),
-        "cooldown_active_count": len(cooldown_symbols),
-        "release_after_s": round(float(config["release_after_s"]), 3),
-        "min_cycles": int(config["min_cycles"]),
-        "cooldown_s": round(float(config["release_cooldown_s"]), 3),
-        "ack_timeout_s": round(float(config["ack_timeout_s"]), 3),
-        "ack_mult": round(float(config["ack_mult"]), 3),
-        "telemetry_sample_limit": sample_limit,
-    }
-    if released_symbols:
-        telemetry["released_symbols"] = released_symbols[:_PENDING_ORDER_SAMPLE_LIMIT]
-    if cooldown_symbols:
-        telemetry["cooldown_symbols"] = cooldown_symbols[:_PENDING_ORDER_SAMPLE_LIMIT]
-    if symbol_states:
-        telemetry["symbol_states"] = symbol_states
-    return effective_blocked, telemetry
-
-
-def _apply_pending_new_timeout_policy(runtime: Any) -> bool:
-    """Best-effort per-order pending policy action using execution engine hooks."""
-
-    engine = getattr(runtime, "execution_engine", None) or getattr(runtime, "exec_engine", None)
-    if engine is None:
-        return False
-    policy_hook = getattr(engine, "_apply_pending_new_timeout_policy", None)
-    if not callable(policy_hook):
-        return False
-    try:
-        result = policy_hook()
-    except COMMON_EXC as exc:
-        logger.warning(
-            "PENDING_NEW_POLICY_APPLY_FAILED",
-            extra={"cause": exc.__class__.__name__, "detail": str(exc)},
-            exc_info=True,
-        )
-        return False
-    if isinstance(result, bool):
-        return result
-    return True
-
-
-def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
-    """Handle pending orders and decide whether to skip the current cycle.
-
-    Returns ``True`` when the trade cycle should be skipped and ``False`` when
-    it may proceed. Pending orders trigger a configurable grace window before
-    stale orders are automatically cancelled to unstick the run loop.
-    """
-
-    if isinstance(open_orders, list):
-        open_list = open_orders
-    else:
-        open_list = list(open_orders)
-
-    api = getattr(runtime, "api", None)
-    confirmed_pending = (
-        get_confirmed_pending_orders(
-            api,
-            open_list,
-            require_confirmation=False,
-        )
-        if api is not None
-        else []
-    )
-
-    if not confirmed_pending and open_list:
-        confirmed_pending = open_list
-
-    blocked_symbols = _collect_pending_blocked_symbols(confirmed_pending)
-
-    now = time.time()
-    now_dt = datetime.fromtimestamp(now, tz=UTC)
-
-    open_count = 0
-    counts_by_status: dict[str, int] = {}
-    oldest_open_age_s: float | None = None
-    symbol_open_order_count: dict[str, int] = {}
-    symbol_oldest_open_age_s: dict[str, float] = {}
-    sample_candidates: list[dict[str, Any]] = []
-    for order in open_list:
-        if isinstance(order, Mapping):
-            status_raw = order.get("status")
-        else:
-            status_raw = getattr(order, "status", None)
-        status = _normalize_broker_order_status(status_raw)
-        if status in _OPEN_ORDER_TERMINAL_STATUSES:
-            continue
-        open_count += 1
-        status_key = status or "unknown"
-        counts_by_status[status_key] = int(counts_by_status.get(status_key, 0)) + 1
-
-        symbol = _extract_pending_order_symbol(order)
-        if symbol:
-            symbol_open_order_count[symbol] = int(symbol_open_order_count.get(symbol, 0)) + 1
-
-        age_s = _pending_order_broker_age_seconds(order, now_dt)
-        if age_s is not None:
-            if oldest_open_age_s is None or age_s > oldest_open_age_s:
-                oldest_open_age_s = age_s
-            if symbol:
-                symbol_oldest_open_age_s[symbol] = max(
-                    symbol_oldest_open_age_s.get(symbol, 0.0),
-                    float(age_s),
-                )
-
-        order_id = None
-        if isinstance(order, Mapping):
-            order_id = order.get("id") or order.get("order_id") or order.get("client_order_id")
-            submitted_at = order.get("submitted_at")
-            updated_at = order.get("updated_at")
-        else:
-            order_id = (
-                getattr(order, "id", None)
-                or getattr(order, "order_id", None)
-                or getattr(order, "client_order_id", None)
-            )
-            submitted_at = getattr(order, "submitted_at", None)
-            updated_at = getattr(order, "updated_at", None)
-        sample_candidates.append(
-            {
-                "order_id": str(order_id) if order_id not in (None, "") else None,
-                "symbol": symbol,
-                "status": status_key,
-                "submitted_at": str(submitted_at) if submitted_at not in (None, "") else None,
-                "updated_at": str(updated_at) if updated_at not in (None, "") else None,
-                "age_s": age_s,
-            }
-        )
-
-    def _sample_sort_key(entry: Mapping[str, Any]) -> tuple[int, float, str]:
-        age_val = entry.get("age_s")
-        if isinstance(age_val, (int, float)):
-            return (0, -float(age_val), str(entry.get("order_id") or ""))
-        return (1, 0.0, str(entry.get("order_id") or ""))
-
-    sample_orders: list[dict[str, Any]] = []
-    for entry in sorted(sample_candidates, key=_sample_sort_key)[:5]:
-        sample_orders.append(
-            {
-                "order_id": entry.get("order_id"),
-                "symbol": entry.get("symbol"),
-                "status": entry.get("status"),
-                "submitted_at": entry.get("submitted_at"),
-                "updated_at": entry.get("updated_at"),
-                "age_s": (
-                    round(float(entry["age_s"]), 3)
-                    if isinstance(entry.get("age_s"), (int, float))
-                    else None
-                ),
-            }
-        )
-    affected_symbols_count = len({sym for sym in symbol_open_order_count if sym})
-
-    pending_ids: list[str] = []
-    pending_statuses: set[str] = set()
-    oldest_pending_age_s: float | None = None
-    oldest_stuck_age_s: float | None = None
-    stuck_pending_count = 0
-    symbol_oldest_age_s: dict[str, float] = {}
-    symbol_statuses: dict[str, set[str]] = {}
-    for order in confirmed_pending:
-        status = _normalize_broker_order_status(getattr(order, "status", None))
-        symbol = _extract_pending_order_symbol(order)
-        pending_ids.append(str(getattr(order, "id", "?")))
-        if status:
-            pending_statuses.add(status)
-            if symbol:
-                symbol_statuses.setdefault(symbol, set()).add(status)
-            if status in _PENDING_ORDER_STUCK_STATUSES:
-                stuck_pending_count += 1
-        broker_age_s = _pending_order_broker_age_seconds(order, now_dt)
-        if broker_age_s is not None:
-            if oldest_pending_age_s is None or broker_age_s > oldest_pending_age_s:
-                oldest_pending_age_s = broker_age_s
-            if status in _PENDING_ORDER_STUCK_STATUSES and (
-                oldest_stuck_age_s is None or broker_age_s > oldest_stuck_age_s
-            ):
-                oldest_stuck_age_s = broker_age_s
-            if symbol:
-                symbol_oldest_age_s[symbol] = max(
-                    symbol_oldest_age_s.get(symbol, 0.0),
-                    float(broker_age_s),
-                )
-
-    tracker = _get_pending_tracker(runtime)
-    first_seen = tracker.get(_PENDING_ORDER_FIRST_SEEN_KEY)
-    last_log = tracker.get(_PENDING_ORDER_LAST_LOG_KEY)
-    runtime_state_map = _ensure_runtime_state(runtime)
-    backlog_active = bool(runtime_state_map.get(_PENDING_BACKLOG_ACTIVE_KEY, False))
-    last_warn_ts_raw = runtime_state_map.get(_PENDING_BACKLOG_LAST_WARN_TS_KEY)
-    try:
-        last_warn_ts = (
-            float(last_warn_ts_raw)
-            if last_warn_ts_raw not in (None, "")
-            else None
-        )
-    except (TypeError, ValueError):
-        last_warn_ts = None
-
-    if not pending_ids:
-        _record_pending_order_slo_metrics(pending_count=0, oldest_pending_age_s=0.0)
-        _set_pending_blocked_symbols(runtime, ())
-        if backlog_active or first_seen is not None:
-            resolved_age = 0.0
-            if first_seen is not None:
-                resolved_age = time.time() - float(first_seen)
-            logger.info(
-                "PENDING_ORDERS_CLEARED",
-                extra={
-                    "open_count": int(open_count),
-                    "pending_count": 0,
-                    "counts_by_status": counts_by_status,
-                    "oldest_open_age_s": None,
-                    "affected_symbols_count": 0,
-                    "sample_orders": [],
-                    "resolved_age_s": int(max(resolved_age, 0)),
-                },
-            )
-        tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = None
-        tracker[_PENDING_ORDER_LAST_LOG_KEY] = None
-        runtime_state_map[_PENDING_BACKLOG_ACTIVE_KEY] = False
-        runtime_state_map[_PENDING_BACKLOG_LAST_WARN_TS_KEY] = None
-        if _consume_pending_cleanup_warmup(runtime, open_count=len(open_list)):
-            return True
-        return False
-
-    try:
-        cfg = get_trading_config()
-    except COMMON_EXC:
-        cfg = None
-    cfg_interval = getattr(cfg, "order_stale_cleanup_interval", 120)
-    warn_after_s = _pending_orders_warn_after_seconds()
-    warn_every_s = _pending_orders_warn_every_seconds()
-    block_scope = _pending_orders_block_scope()
-    try:
-        cleanup_after = float(cfg_interval)
-    except (TypeError, ValueError):  # pragma: no cover - defensive
-        cleanup_after = 120.0
-    cleanup_after = max(5.0, min(cleanup_after, 3600.0))
-    force_cleanup_after = _pending_order_force_cleanup_seconds()
-    if pending_statuses and pending_statuses.issubset(_PENDING_ORDER_STUCK_STATUSES):
-        cleanup_after = min(cleanup_after, force_cleanup_after)
-    stale_stuck_detected = (
-        oldest_stuck_age_s is not None and oldest_stuck_age_s >= force_cleanup_after
-    )
-    if stale_stuck_detected:
-        cleanup_after = min(cleanup_after, force_cleanup_after)
-
-    had_blocked_symbols = bool(blocked_symbols)
-    blocked_symbols, decay_telemetry = _apply_pending_symbol_block_decay(
+    return apply_pending_symbol_block_decay(
         runtime,
-        blocked_symbols,
+        raw_symbols,
         symbol_oldest_age_s=symbol_oldest_age_s,
         symbol_open_order_count=symbol_open_order_count,
         symbol_oldest_open_age_s=symbol_oldest_open_age_s,
@@ -34927,264 +33678,18 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         block_scope=block_scope,
         force_cleanup_after=force_cleanup_after,
     )
-    _set_pending_blocked_symbols(runtime, blocked_symbols)
-    if decay_telemetry is not None:
-        decay_payload = dict(decay_telemetry)
-        if decay_payload.get("released_count", 0) > 0:
-            logger.warning(
-                "PENDING_SYMBOL_BLOCK_DECAY_RELEASED",
-                extra=decay_payload,
-            )
-        else:
-            log_throttled_event(
-                logger,
-                "PENDING_SYMBOL_BLOCK_DECAY_METRIC",
-                level=logging.INFO,
-                extra=decay_payload,
-                message="PENDING_SYMBOL_BLOCK_DECAY_METRIC",
-            )
-        symbol_states = decay_payload.get("symbol_states")
-        if isinstance(symbol_states, list) and symbol_states:
-            cooldown_ttl_s = _resolve_runtime_info_log_ttl_seconds(
-                "AI_TRADING_PENDING_SYMBOL_COOLDOWN_TELEMETRY_LOG_TTL_SEC",
-                _PENDING_SYMBOL_COOLDOWN_TELEMETRY_LOG_TTL_SEC_DEFAULT,
-            )
-            signature_states: list[str] = []
-            for entry in symbol_states[:3]:
-                if not isinstance(entry, dict):
-                    continue
-                symbol_token = str(entry.get("symbol") or "?").strip().upper() or "?"
-                state_token = str(entry.get("state") or "unknown").strip().lower() or "unknown"
-                signature_states.append(f"{symbol_token}:{state_token}")
-            cooldown_signature = (
-                f"{int(decay_payload.get('raw_blocked_count', 0))}:"
-                f"{int(decay_payload.get('effective_blocked_count', 0))}:"
-                f"{int(decay_payload.get('released_count', 0))}:"
-                f"{int(decay_payload.get('cooldown_active_count', 0))}"
-            )
-            if signature_states:
-                cooldown_signature = f"{cooldown_signature}:{','.join(signature_states)}"
-            if _should_emit_runtime_info_log(
-                runtime,
-                f"PENDING_SYMBOL_COOLDOWN_TELEMETRY:{cooldown_signature}",
-                ttl_seconds=cooldown_ttl_s,
-            ):
-                log_throttled_event(
-                    logger,
-                    f"PENDING_SYMBOL_COOLDOWN_TELEMETRY_{cooldown_signature}",
-                    level=logging.INFO,
-                    extra=decay_payload,
-                    message="PENDING_SYMBOL_COOLDOWN_TELEMETRY",
-                )
 
-    sample_ids = pending_ids[:_PENDING_ORDER_SAMPLE_LIMIT]
-    statuses = sorted(pending_statuses)
-    allow_symbol_scope_continue = (
-        block_scope == "symbol" and had_blocked_symbols and not blocked_symbols
-    )
-    payload_base: dict[str, Any] = {
-        "open_count": int(open_count),
-        "pending_count": len(pending_ids),
-        "pending_stuck_count": int(max(stuck_pending_count, 0)),
-        "counts_by_status": dict(sorted(counts_by_status.items())),
-        "oldest_open_age_s": (
-            round(float(oldest_open_age_s), 3) if oldest_open_age_s is not None else None
-        ),
-        "affected_symbols_count": int(affected_symbols_count),
-        "sample_orders": sample_orders,
-        "pending_ids": sample_ids,
-        "pending_statuses": statuses,
-        "cleanup_after_s": int(cleanup_after),
-        "warn_after_s": int(warn_after_s),
-        "warn_every_s": int(warn_every_s),
-        "oldest_pending_age_s": (
-            int(max(oldest_pending_age_s, 0))
-            if oldest_pending_age_s is not None
-            else None
-        ),
-        "oldest_stuck_age_s": (
-            int(max(oldest_stuck_age_s, 0))
-            if oldest_stuck_age_s is not None
-            else None
-        ),
-        "stale_stuck_detected": bool(stale_stuck_detected),
-        "blocked_symbols_count": len(blocked_symbols),
-        "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
-        "open_count_definition": "broker-active non-terminal orders",
-        "pending_count_definition": "confirmed pending-ack/stuck orders under policy tracking",
-    }
-    slo_pending_oldest_age_s = (
-        float(oldest_stuck_age_s)
-        if oldest_stuck_age_s is not None
-        else 0.0
-    )
-    _record_pending_order_slo_metrics(
-        pending_count=int(max(stuck_pending_count, 0)),
-        oldest_pending_age_s=slo_pending_oldest_age_s,
-    )
 
-    if first_seen is None:
-        first_seen_ts = now
-        if stale_stuck_detected:
-            first_seen_ts = now - cleanup_after
-        tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = first_seen_ts
-        tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
-        logger.info(
-            "PENDING_ORDERS_DETECTED",
-            extra=payload_base
-            | {
-                "transition": "started",
-                "age_s": int(max(float(oldest_pending_age_s or 0.0), 0.0)),
-            },
-        )
-        first_seen = first_seen_ts
+def _apply_pending_new_timeout_policy(runtime: Any) -> bool:
+    from ai_trading.core.pending_order_runtime import apply_pending_new_timeout_policy
 
-    age = now - float(first_seen)
+    return apply_pending_new_timeout_policy(runtime)
 
-    if not backlog_active:
-        runtime_state_map[_PENDING_BACKLOG_ACTIVE_KEY] = True
-        backlog_level = (
-            logging.WARNING
-            if oldest_open_age_s is not None and float(oldest_open_age_s) >= warn_after_s
-            else logging.INFO
-        )
-        logger.log(
-            backlog_level,
-            "PENDING_ORDERS_BACKLOG_STARTED",
-            extra=payload_base
-            | {
-                "transition": "started",
-                "age_s": int(max(age, 0)),
-            },
-        )
-        tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
-        if backlog_level >= logging.WARNING:
-            runtime_state_map[_PENDING_BACKLOG_LAST_WARN_TS_KEY] = now
-        else:
-            runtime_state_map[_PENDING_BACKLOG_LAST_WARN_TS_KEY] = None
-    else:
-        should_warn = (
-            oldest_open_age_s is not None
-            and float(oldest_open_age_s) >= warn_after_s
-            and (
-                last_warn_ts is None
-                or warn_every_s <= 0.0
-                or (now - float(last_warn_ts)) >= warn_every_s
-            )
-        )
-        if should_warn:
-            logger.warning(
-                "PENDING_ORDERS_STILL_PRESENT",
-                extra=payload_base
-                | {
-                    "transition": "heartbeat",
-                    "age_s": int(max(age, 0)),
-                },
-            )
-            tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
-            runtime_state_map[_PENDING_BACKLOG_LAST_WARN_TS_KEY] = now
-        elif (
-            last_log is None
-            or now - float(last_log) >= _PENDING_ORDER_LOG_INTERVAL_SECONDS
-        ):
-            logger.info(
-                "PENDING_ORDERS_STILL_PRESENT",
-                extra=payload_base
-                | {
-                    "transition": "heartbeat_info",
-                    "age_s": int(max(age, 0)),
-                },
-            )
-            tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
 
-    stale_sweep_result = _maybe_apply_pending_stale_sweep(
-        runtime=runtime,
-        pending_orders=confirmed_pending,
-        now_dt=now_dt,
-        now_ts=now,
-    )
-    if stale_sweep_result is not None:
-        stale_sweep_payload = payload_base | {
-            "age_s": int(max(age, 0)),
-            "stale_sweep": stale_sweep_result,
-        }
-        if stale_sweep_result.get("cancelled", 0) > 0:
-            logger.warning("PENDING_STALE_SWEEP_APPLIED", extra=stale_sweep_payload)
-            tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
-            return True
-        if stale_sweep_result.get("failed", 0) > 0:
-            logger.warning("PENDING_STALE_SWEEP_FAILED", extra=stale_sweep_payload)
-            tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
+def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
+    from ai_trading.core.pending_order_runtime import handle_pending_orders
 
-    if age < cleanup_after and not stale_stuck_detected:
-        if allow_symbol_scope_continue:
-            return False
-        return True
-
-    if block_scope == "symbol":
-        if _apply_pending_new_timeout_policy(runtime):
-            tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
-            policy_payload = payload_base | {"age_s": int(max(age, 0))}
-            policy_ttl_s = _resolve_runtime_info_log_ttl_seconds(
-                "AI_TRADING_PENDING_POLICY_APPLIED_LOG_TTL_SEC",
-                _PENDING_POLICY_APPLIED_LOG_TTL_SEC_DEFAULT,
-            )
-            policy_signature = (
-                f"{policy_payload['pending_count']}:"
-                f"{policy_payload['blocked_symbols_count']}:"
-                f"{','.join(statuses[:3])}"
-            )
-            if _should_emit_runtime_info_log(
-                runtime,
-                f"PENDING_ORDERS_POLICY_APPLIED:{policy_signature}",
-                ttl_seconds=policy_ttl_s,
-            ):
-                log_throttled_event(
-                    logger,
-                    "PENDING_ORDERS_POLICY_APPLIED",
-                    level=logging.INFO,
-                    message="PENDING_ORDERS_POLICY_APPLIED",
-                    extra=policy_payload,
-                )
-            if allow_symbol_scope_continue:
-                return False
-            return True
-
-    try:
-        cancel_all_open_orders(runtime)
-    except COMMON_EXC as exc:  # pragma: no cover - network/API failure
-        tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
-        logger.warning(
-            "PENDING_ORDERS_CLEANUP_FAILED",
-            extra=payload_base
-            | {
-                "age_s": int(max(age, 0)),
-                "detail": str(exc),
-            },
-            exc_info=True,
-        )
-        return True
-
-    logger.info(
-        "PENDING_ORDERS_CANCELED",
-        extra=payload_base
-        | {
-            "canceled_ids": sample_ids,
-            "age_s": int(max(age, 0)),
-        },
-    )
-    tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = None
-    tracker[_PENDING_ORDER_LAST_LOG_KEY] = None
-    runtime_state_map[_PENDING_BACKLOG_ACTIVE_KEY] = False
-    runtime_state_map[_PENDING_BACKLOG_LAST_WARN_TS_KEY] = None
-    if _arm_pending_cleanup_warmup(
-        runtime,
-        source="pending_cleanup",
-        open_count=len(open_list),
-        pending_count=len(pending_ids),
-    ):
-        return True
-    return False
+    return handle_pending_orders(open_orders, runtime)
 
 
 def _resolve_trading_config(runtime) -> TradingConfig:
@@ -35291,69 +33796,9 @@ def _enforce_order_type_failfast(
 
 
 def _resolve_order_type_capabilities(runtime: Any) -> Mapping[str, bool] | None:
-    raw_caps = getattr(runtime, "broker_order_type_capabilities", None)
-    if isinstance(raw_caps, Mapping):
-        return {str(key).strip().lower(): bool(value) for key, value in raw_caps.items()}
+    from ai_trading.core.execution_runtime_metadata import resolve_order_type_capabilities
 
-    exec_engine = getattr(runtime, "execution_engine", None) or getattr(runtime, "exec_engine", None)
-    for attr in ("broker_order_type_capabilities", "order_type_capabilities"):
-        candidate = getattr(exec_engine, attr, None)
-        if isinstance(candidate, Mapping):
-            normalized = {
-                str(key).strip().lower(): bool(value) for key, value in candidate.items()
-            }
-            setattr(runtime, "broker_order_type_capabilities", normalized)
-            return normalized
-
-    env_caps: dict[str, bool] = {}
-    env_defined = False
-    env_map = {
-        "limit": "AI_TRADING_BROKER_SUPPORTS_LIMIT",
-        "market": "AI_TRADING_BROKER_SUPPORTS_MARKET",
-        "stop": "AI_TRADING_BROKER_SUPPORTS_STOP",
-        "stop_limit": "AI_TRADING_BROKER_SUPPORTS_STOP_LIMIT",
-        "trailing_stop": "AI_TRADING_BROKER_SUPPORTS_TRAILING_STOP",
-        "bracket": "AI_TRADING_BROKER_SUPPORTS_BRACKET",
-        "oco": "AI_TRADING_BROKER_SUPPORTS_OCO",
-        "oto": "AI_TRADING_BROKER_SUPPORTS_OTO",
-    }
-    for capability, env_key in env_map.items():
-        raw_value = get_env(env_key, None)
-        if raw_value is None:
-            continue
-        env_defined = True
-        env_caps[capability] = bool(get_env(env_key, "0", cast=bool))
-    if env_defined:
-        setattr(runtime, "broker_order_type_capabilities", env_caps)
-        logger.info("ORDER_TYPE_CAPABILITIES_CONFIGURED", extra={"capabilities": env_caps})
-        return env_caps
-
-    engine_module = ""
-    if exec_engine is not None:
-        engine_module = str(getattr(exec_engine.__class__, "__module__", "") or "")
-    if engine_module.startswith("ai_trading.execution.live_trading"):
-        inferred_caps = {
-            "limit": True,
-            "market": True,
-            "stop": True,
-            "stop_limit": True,
-            "trailing_stop": True,
-            "bracket": False,
-            "oco": False,
-            "oto": False,
-        }
-        setattr(runtime, "broker_order_type_capabilities", inferred_caps)
-        logger.warning(
-            "ORDER_TYPE_CAPABILITIES_INFERRED",
-            extra={
-                "engine_module": engine_module,
-                "capabilities": inferred_caps,
-                "note": "Set AI_TRADING_BROKER_SUPPORTS_* for explicit capability config.",
-            },
-        )
-        return inferred_caps
-
-    return None
+    return resolve_order_type_capabilities(runtime)
 
 
 def _get_pretrade_limit_env(
@@ -40966,6 +39411,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     )
     from ai_trading.core.netting_candidate_rank import rank_netting_candidates
     from ai_trading.core.netting_execution_context import build_netting_execution_context
+    from ai_trading.core.netting_target_runtime import (
+        apply_target_construction_controls,
+        prepare_portfolio_optimizer_runtime,
+        store_candidate_ranking_runtime_state,
+    )
     from ai_trading.core.netting_symbol_cycle import (
         NettingSymbolProcessor,
         process_netting_symbol,
@@ -43380,390 +41830,32 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     opportunity_quality_by_symbol = ranking_result.opportunity_quality_by_symbol
     opportunity_allowed_symbols = ranking_result.opportunity_allowed_symbols
     opportunity_quality_gate = ranking_result.opportunity_quality_gate
-    setattr(
-        runtime,
-        "execution_opportunity_quality_by_symbol",
-        {
-            str(symbol): float(score)
-            for symbol, score in opportunity_quality_by_symbol.items()
-        },
+    store_candidate_ranking_runtime_state(
+        runtime=runtime,
+        ranking_result=ranking_result,
+        edge_realism_rank_factor_by_symbol=edge_realism_rank_factor_by_symbol,
+        context_values=locals(),
     )
-    setattr(
-        runtime,
-        "execution_opportunity_quality_allowed_symbols",
-        sorted(opportunity_allowed_symbols),
+    portfolio_optimizer_runtime = prepare_portfolio_optimizer_runtime(
+        latest_price=latest_price,
+        symbol_returns=symbol_returns,
+        rollout_toggle_func=_rollout_toggle,
+        get_env_func=get_env,
+        build_symbol_return_correlation_matrix_func=_build_symbol_return_correlation_matrix,
+        logger=logger,
     )
-    setattr(runtime, "execution_opportunity_quality_gate", dict(opportunity_quality_gate))
-    setattr(runtime, "execution_candidate_rank", candidate_rank)
-    setattr(
-        runtime,
-        "execution_candidate_rank_expected_edge_bps",
-        candidate_expected_net_edge,
+    apply_target_construction_controls(
+        targets=targets,
+        cfg=cfg,
+        normalized_symbol_returns=cast(
+            Mapping[str, Sequence[float]],
+            portfolio_optimizer_runtime.market_data["returns"],
+        ),
+        apply_global_caps_func=apply_global_caps,
+        apply_portfolio_limits_func=apply_portfolio_limits,
+        get_env_func=get_env,
+        logger=logger,
     )
-    setattr(
-        runtime,
-        "execution_candidate_rank_expected_capture_bps",
-        candidate_expected_capture,
-    )
-    setattr(
-        runtime,
-        "execution_candidate_rank_realism_factor",
-        edge_realism_rank_factor_by_symbol,
-    )
-    setattr(
-        runtime,
-        "execution_candidate_rank_learning_signals",
-        counterfactual_signal_by_symbol,
-    )
-    setattr(
-        runtime,
-        "execution_candidate_rank_context",
-        {
-            "expected_edge_clip_enabled": bool(clip_expected_edge_enabled),
-            "expected_edge_clip_cap_bps": float(edge_clip_cap_bps),
-            "expected_edge_clip_median_abs_bps": float(median_abs_edge_bps),
-            "bandit_enabled": bool(bandit_enabled),
-            "bandit_method": str(bandit_method),
-            "bandit_active_session": str(bandit_active_session),
-            "bandit_active_regime": str(bandit_active_regime),
-            "bandit_session_bucket_enabled": bool(bandit_session_bucket_enabled),
-            "bandit_regime_bucket_enabled": bool(bandit_regime_bucket_enabled),
-            "bandit_shadow_only": bool(bandit_shadow_only),
-            "bandit_live_promoted": bool(bandit_live_promoted),
-            "bandit_bucket_promotion_enabled": bool(
-                bandit_bucket_promotion_enabled
-            ),
-            "bandit_bucket_promote_min_samples": int(
-                bandit_bucket_promote_min_samples
-            ),
-            "bandit_bucket_promote_min_mean_reward_bps": float(
-                bandit_bucket_promote_min_mean_reward_bps
-            ),
-            "bandit_promote_min_samples": int(bandit_promote_min_samples),
-            "bandit_promote_min_mean_reward_bps": float(
-                bandit_promote_min_mean_reward_bps
-            ),
-            "bandit_global_samples": int(bandit_global_samples),
-            "bandit_global_mean_reward_bps": float(bandit_global_mean_reward_bps),
-            "bandit_max_rank_uplift_abs": float(bandit_max_rank_uplift_abs),
-            "bandit_max_rank_uplift_frac": float(bandit_max_rank_uplift_frac),
-            "promotion_significance_enabled": bool(promotion_significance_enabled),
-            "promotion_significance_method": str(promotion_significance_method),
-            "bandit_promotion_significance": dict(bandit_significance_context),
-            "counterfactual_enabled": bool(counterfactual_enabled),
-            "counterfactual_shadow_only": bool(counterfactual_shadow_only),
-            "counterfactual_live_promoted": bool(counterfactual_live_promoted),
-            "counterfactual_weight": float(counterfactual_weight),
-            "counterfactual_min_samples": int(counterfactual_min_samples),
-            "counterfactual_clip_bps": float(counterfactual_clip_bps),
-            "counterfactual_global_events": int(counterfactual_global_events),
-            "counterfactual_global_dr_mean_bps": float(
-                counterfactual_global_dr_mean_bps
-            ),
-            "counterfactual_promotion_significance": dict(
-                counterfactual_significance_context
-            ),
-            "realized_edge_rank_enabled": bool(realized_edge_rank_enabled),
-            "realized_edge_rank_weight": float(realized_edge_rank_weight),
-            "realized_edge_rank_min_samples": int(realized_edge_rank_min_samples),
-            "realized_edge_rank_uncertainty_z": float(
-                realized_edge_rank_uncertainty_z
-            ),
-            "realized_edge_rank_clip_bps": float(realized_edge_rank_clip_bps),
-            "edge_model_v2_enabled": bool(edge_model_v2_enabled),
-            "edge_model_v2_weight": float(edge_model_v2_weight),
-            "edge_model_v2_min_samples": int(edge_model_v2_min_samples),
-            "edge_model_v2_uncertainty_z": float(edge_model_v2_uncertainty_z),
-            "edge_model_v2_regime_weight": float(edge_model_v2_regime_weight),
-            "edge_model_v2_session_weight": float(edge_model_v2_session_weight),
-            "edge_model_v2_global_weight": float(edge_model_v2_global_weight),
-            "edge_model_v2_cost_weight": float(edge_model_v2_cost_weight),
-            "edge_model_v2_clip_bps": float(edge_model_v2_clip_bps),
-            "replay_quality_rank_enabled": bool(replay_quality_rank_enabled),
-            "replay_quality_session_bucket_enabled": bool(
-                replay_quality_session_bucket_enabled
-            ),
-            "replay_quality_regime_bucket_enabled": bool(
-                replay_quality_regime_bucket_enabled
-            ),
-            "replay_quality_auto_disable_if_stale": bool(
-                replay_quality_auto_disable_if_stale
-            ),
-            "replay_quality_fallback_to_edge_model_v2": bool(
-                replay_quality_fallback_to_edge_model_v2
-            ),
-            "replay_quality_weight": float(replay_quality_weight),
-            "replay_quality_min_samples": int(replay_quality_min_samples),
-            "replay_quality_clip_bps": float(replay_quality_clip_bps),
-            "replay_quality_max_age_hours": float(replay_quality_max_age_hours),
-            "replay_quality_symbol_count": int(len(replay_quality_by_symbol)),
-            "replay_quality_symbol_session_count": int(
-                len(replay_quality_by_symbol_session)
-            ),
-            "replay_quality_symbol_session_regime_count": int(
-                len(replay_quality_by_symbol_session_regime)
-            ),
-            "replay_quality_context": (
-                dict(replay_quality_context)
-                if isinstance(replay_quality_context, Mapping)
-                else {}
-            ),
-            "expected_capture_rank_enabled": bool(expected_capture_rank_enabled),
-            "expected_capture_rank_weight": float(expected_capture_rank_weight),
-            "expected_capture_floor_bps": float(expected_capture_floor_bps_effective),
-            "expected_capture_floor_bps_configured": float(expected_capture_floor_bps),
-            "expected_capture_learned_fill_model_enabled": bool(
-                expected_capture_learned_fill_model_enabled
-            ),
-            "expected_capture_learned_fill_min_samples": int(
-                expected_capture_learned_fill_min_samples
-            ),
-            "expected_capture_cost_model_enabled": bool(
-                expected_capture_cost_model_enabled
-            ),
-            "expected_capture_cost_model_min_samples": int(
-                expected_capture_cost_model_min_samples
-            ),
-            "execution_learning_rank_enabled": bool(
-                execution_learning_rank_enabled
-            ),
-            "execution_learning_rank_min_samples": int(
-                execution_learning_rank_min_samples
-            ),
-            "execution_learning_rank_slippage_floor_bps": float(
-                execution_learning_rank_slippage_floor_bps
-            ),
-            "execution_learning_rank_max_penalty_bps": float(
-                execution_learning_rank_max_penalty_bps
-            ),
-            "rejection_concentration_rank_enabled": bool(
-                rejection_concentration_rank_enabled
-            ),
-            "rejection_concentration_lookback_hours": float(
-                rejection_concentration_lookback_hours
-            ),
-            "rejection_concentration_window_records": int(
-                rejection_concentration_window_records
-            ),
-            "rejection_concentration_max_penalty_bps": float(
-                rejection_concentration_max_penalty_bps
-            ),
-            "expected_capture_fill_prob_floor": float(
-                expected_capture_fill_prob_floor
-            ),
-            "exit_policy_entry_penalty_enabled": bool(
-                exit_policy_entry_penalty_enabled
-            ),
-            "exit_policy_entry_penalty_weight": float(
-                exit_policy_entry_penalty_weight
-            ),
-            "exit_policy_entry_penalty_min_pressure": float(
-                exit_policy_entry_penalty_min_pressure
-            ),
-            "expected_capture_fill_prob_cap": float(
-                expected_capture_fill_prob_cap
-            ),
-            "expected_capture_spread_penalty_bps": float(
-                expected_capture_spread_penalty_bps
-            ),
-            "expected_capture_participation_penalty_bps": float(
-                expected_capture_participation_penalty_bps
-            ),
-            "expected_capture_age_half_life_sec": float(
-                expected_capture_age_half_life_sec
-            ),
-            "rank_downside_overlap_cap_enabled": bool(
-                rank_downside_overlap_cap_enabled
-            ),
-            "rank_downside_overlap_cap_frac": float(rank_downside_overlap_cap_frac),
-            "rank_downside_overlap_cap_abs": float(rank_downside_overlap_cap_abs),
-            "opportunity_quality_gate": dict(opportunity_quality_gate),
-            "alpha_time_decay_enabled": bool(alpha_time_decay_enabled),
-            "alpha_time_decay_half_life_sec": float(alpha_time_decay_half_life_sec),
-            "alpha_time_decay_floor": float(alpha_time_decay_floor),
-            "alpha_stale_signal_sec": float(alpha_stale_signal_sec),
-            "alpha_time_stop_enabled": bool(alpha_time_stop_enabled),
-            "alpha_time_stop_sec": float(alpha_time_stop_sec),
-            "alpha_time_stop_max_expected_edge_bps": float(
-                alpha_time_stop_max_expected_edge_bps
-            ),
-            "portfolio_log_growth_rank_enabled": bool(
-                portfolio_log_growth_rank_enabled
-            ),
-            "portfolio_log_growth_rank_weight": float(
-                portfolio_log_growth_rank_weight
-            ),
-            "portfolio_log_growth_turnover_penalty_bps": float(
-                portfolio_log_growth_turnover_penalty_bps
-            ),
-            "portfolio_log_growth_liquidity_penalty_bps": float(
-                portfolio_log_growth_liquidity_penalty_bps
-            ),
-            "portfolio_log_growth_max_participation": float(
-                portfolio_log_growth_max_participation
-            ),
-            "geometric_tiebreak_enabled": bool(geometric_tiebreak_enabled),
-            "geometric_tiebreak_weight": float(geometric_tiebreak_weight),
-            "edge_realism_rank_calibration_enabled": bool(
-                edge_realism_rank_calibration_enabled
-            ),
-            "edge_realism_rank_calibration_session_enabled": bool(
-                edge_realism_rank_calibration_session_enabled
-            ),
-            "edge_realism_rank_calibration_min_samples": int(
-                edge_realism_rank_calibration_min_samples
-            ),
-            "edge_realism_rank_calibration_prior_samples": int(
-                edge_realism_rank_calibration_prior_samples
-            ),
-            "edge_realism_rank_calibration_ratio_floor": float(
-                edge_realism_rank_calibration_ratio_floor
-            ),
-            "edge_realism_rank_calibration_ratio_cap": float(
-                edge_realism_rank_calibration_ratio_cap
-            ),
-            "edge_realism_apply_to_approval_enabled": bool(
-                edge_realism_apply_to_approval_enabled
-            ),
-            "policy_rollback_disabled_slices": sorted(policy_rollback_disabled_slices),
-            "policy_disabled_gate_roots": sorted(policy_disabled_gate_roots),
-            "policy_disabled_sleeves": sorted(policy_disabled_sleeves),
-            "policy_runtime_toggles_updated_at": policy_runtime_payload.get(
-                "updated_at"
-            ),
-            "policy_runtime_toggles_source_updated_at": policy_runtime_payload.get(
-                "source_updated_at"
-            ),
-            "policy_runtime_toggles": (
-                dict(toggles) if isinstance(toggles, Mapping) else {}
-            ),
-        },
-    )
-    portfolio_optimizer_enabled = _rollout_toggle(
-        "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_ENABLED",
-        False,
-    )
-    portfolio_optimizer_openings_only = bool(
-        get_env(
-            "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_OPENINGS_ONLY",
-            True,
-            cast=bool,
-        )
-    )
-    portfolio_optimizer: Any | None = None
-    portfolio_optimizer_context: dict[str, Any] = {
-        "enabled": bool(portfolio_optimizer_enabled),
-        "openings_only": bool(portfolio_optimizer_openings_only),
-    }
-    if portfolio_optimizer_enabled:
-        try:
-            from ai_trading.portfolio import create_portfolio_optimizer
-
-            portfolio_optimizer = create_portfolio_optimizer(
-                {
-                    "improvement_threshold": float(
-                        get_env(
-                            "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_IMPROVEMENT_THRESHOLD",
-                            0.02,
-                            cast=float,
-                        )
-                    ),
-                    "max_correlation_penalty": float(
-                        get_env(
-                            "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_MAX_CORRELATION_PENALTY",
-                            0.15,
-                            cast=float,
-                        )
-                    ),
-                    "rebalance_drift_threshold": float(
-                        get_env(
-                            "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_REBALANCE_DRIFT_THRESHOLD",
-                            0.05,
-                            cast=float,
-                        )
-                    ),
-                    "turnover_penalty": float(
-                        get_env(
-                            "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_TURNOVER_PENALTY",
-                            0.01,
-                            cast=float,
-                        )
-                    ),
-                    "mode": str(
-                        get_env(
-                            "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_MODE",
-                            "execution_live",
-                            cast=str,
-                        )
-                        or "execution_live"
-                    ).strip(),
-                }
-            )
-            portfolio_optimizer_context["active"] = True
-        except Exception as exc:
-            portfolio_optimizer = None
-            portfolio_optimizer_enabled = False
-            portfolio_optimizer_context["active"] = False
-            portfolio_optimizer_context["init_failed"] = True
-            portfolio_optimizer_context["error_type"] = exc.__class__.__name__
-            portfolio_optimizer_context["error"] = str(exc)
-            logger.warning(
-                "PORTFOLIO_OPTIMIZER_INIT_FAILED",
-                extra=dict(portfolio_optimizer_context),
-            )
-    portfolio_optimizer_market_data: dict[str, Any] = {
-        "prices": {
-            str(symbol): float(price)
-            for symbol, price in latest_price.items()
-            if isinstance(price, (int, float)) and math.isfinite(float(price)) and float(price) > 0.0
-        },
-        "returns": {
-            str(symbol): [
-                float(value)
-                for value in values
-                if isinstance(value, (int, float)) and math.isfinite(float(value))
-            ]
-            for symbol, values in symbol_returns.items()
-            if isinstance(values, Sequence)
-        },
-    }
-    portfolio_optimizer_market_data["correlations"] = _build_symbol_return_correlation_matrix(
-        cast(Mapping[str, Sequence[float]], portfolio_optimizer_market_data["returns"])
-    )
-
-    apply_global_caps(
-        targets,
-        float(getattr(cfg, "global_max_symbol_dollars", 0.0)),
-        float(getattr(cfg, "global_max_gross_dollars", 0.0)),
-        float(getattr(cfg, "global_max_net_dollars", 0.0)),
-    )
-    if bool(get_env("AI_TRADING_PORTFOLIO_LIMITS_ENABLED", False, cast=bool)):
-        limits = apply_portfolio_limits(
-            targets={symbol: target.target_dollars for symbol, target in targets.items()},
-            symbol_returns=symbol_returns,
-            vol_targeting_enabled=bool(
-                get_env("AI_TRADING_VOL_TARGETING_ENABLED", True, cast=bool)
-            ),
-            target_annual_vol=float(get_env("AI_TRADING_TARGET_ANNUAL_VOL", 0.18, cast=float)),
-            vol_lookback_days=int(get_env("AI_TRADING_VOL_LOOKBACK_DAYS", 20, cast=int)),
-            vol_min_scale=float(get_env("AI_TRADING_VOL_MIN_SCALE", 0.25, cast=float)),
-            vol_max_scale=float(get_env("AI_TRADING_VOL_MAX_SCALE", 1.25, cast=float)),
-            concentration_cap_enabled=bool(
-                get_env("AI_TRADING_CONCENTRATION_CAP_ENABLED", True, cast=bool)
-            ),
-            max_symbol_weight=float(get_env("AI_TRADING_MAX_SYMBOL_WEIGHT", 0.12, cast=float)),
-            max_cluster_weight=float(get_env("AI_TRADING_MAX_CLUSTER_WEIGHT", 0.25, cast=float)),
-            corr_cap_enabled=bool(get_env("AI_TRADING_CORR_CAP_ENABLED", True, cast=bool)),
-            corr_lookback_days=int(get_env("AI_TRADING_CORR_LOOKBACK_DAYS", 30, cast=int)),
-            corr_threshold=float(get_env("AI_TRADING_CORR_THRESHOLD", 0.80, cast=float)),
-            corr_group_gross_cap=float(get_env("AI_TRADING_CORR_GROUP_GROSS_CAP", 0.35, cast=float)),
-        )
-        for symbol, dollars in limits.scaled_targets.items():
-            if symbol in targets:
-                targets[symbol].target_dollars = dollars
-                for reason in limits.reasons:
-                    if reason not in targets[symbol].reasons:
-                        targets[symbol].reasons.append(reason)
 
     ledger: OrderLedger | None = None
     execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
@@ -43948,11 +42040,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         portfolio_current_gross=portfolio_current_gross,
         sector_gross=sector_gross,
         max_new_orders_per_cycle=max_new_orders_per_cycle,
-        portfolio_optimizer_enabled=bool(portfolio_optimizer_enabled),
-        portfolio_optimizer=portfolio_optimizer,
-        portfolio_optimizer_openings_only=bool(portfolio_optimizer_openings_only),
-        portfolio_optimizer_market_data=portfolio_optimizer_market_data,
-        portfolio_optimizer_context=portfolio_optimizer_context,
+        portfolio_optimizer_enabled=bool(portfolio_optimizer_runtime.enabled),
+        portfolio_optimizer=portfolio_optimizer_runtime.optimizer,
+        portfolio_optimizer_openings_only=bool(portfolio_optimizer_runtime.openings_only),
+        portfolio_optimizer_market_data=portfolio_optimizer_runtime.market_data,
+        portfolio_optimizer_context=portfolio_optimizer_runtime.context,
         ledger=ledger,
         rate_limiter=rate_limiter,
         breakers=breakers,
@@ -44054,290 +42146,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
 
 @memory_profile  # AI-AGENT-REF: Monitor memory usage of main trading function
 def run_all_trades_worker(state: BotState, runtime) -> None:
-    """
-    Execute the complete trading cycle for all candidate symbols.
+    """Execute the main worker cycle for all candidate symbols."""
 
-    This is the core trading function that orchestrates the entire algorithmic
-    trading process. It fetches market data, calculates technical indicators,
-    generates trading signals, applies risk management, and executes trades
-    based on the configured strategy parameters.
+    from ai_trading.core.run_all_trades_worker import run_all_trades_worker_cycle
 
-    The function implements comprehensive safety checks including market hours
-    validation, risk limit enforcement, and overlap prevention to ensure safe
-    and reliable trading operations.
-
-    Parameters
-    ----------
-    state : BotState
-        Current bot state containing position information, risk metrics,
-        trading history, and operational flags. This object is modified
-        during execution to track state changes.
-
-    Returns
-    -------
-    None
-        This function modifies the state object in-place and executes trades
-        as side effects. Trading results are logged and stored in the state
-        for subsequent analysis.
-
-    Raises
-    ------
-    RuntimeError
-        If critical trading conditions are not met or system is unhealthy
-    ConnectionError
-        If API connections fail during critical operations
-    ValueError
-        If invalid trading parameters or data quality issues are detected
-
-    Trading Process Flow
-    -------------------
-    1. **Pre-flight Checks**
-       - Verify market is open for trading
-       - Check for overlapping execution (prevents race conditions)
-       - Validate system health and API connectivity
-       - Ensure risk limits are within acceptable ranges
-
-    2. **Data Acquisition**
-       - Fetch real-time and historical market data
-       - Validate data quality and completeness
-       - Handle data provider failover if needed
-       - Cache data for performance optimization
-
-    3. **Technical Analysis**
-       - Calculate technical indicators across multiple timeframes
-       - Generate trading signals using configured strategies
-       - Apply machine learning predictions and meta-learning
-       - Aggregate signals with confidence scoring
-
-    4. **Risk Management**
-       - Calculate optimal position sizes using Kelly criterion
-       - Check portfolio heat and individual position limits
-       - Apply drawdown protection and loss streak controls
-       - Validate trades against broker margin and risk rules
-
-    5. **Trade Execution**
-       - Generate order instructions for qualified signals
-       - Execute trades through broker API with retry logic
-       - Monitor fill status and handle partial fills
-       - Update position tracking and performance metrics
-
-    6. **State Management**
-       - Update bot state with new positions and metrics
-       - Record trade history and performance statistics
-       - Set cooldown periods to prevent overtrading
-       - Log results for monitoring and analysis
-
-    Safety Features
-    ---------------
-    - **Overlap Prevention**: Uses locking to prevent concurrent execution
-    - **Market Hours**: Only trades during official market hours
-    - **Risk Limits**: Enforces position size and portfolio heat limits
-    - **Health Checks**: Validates system health before trading
-    - **Error Handling**: Graceful handling of API and data failures
-    - **Cooldown Periods**: Prevents rapid-fire trading on same symbols
-    - **Emergency Stops**: Automatic halt on critical errors or high losses
-
-    Examples
-    --------
-    >>> import asyncio
-    >>> from bot_engine import BotState, run_all_trades_worker
-    >>>
-    >>> state = BotState()
-    >>> run_all_trades_worker(state, runtime)
-    >>>
-    >>> # Check results
-    >>> logging.info(f"Trades executed: {len(state.position_cache)}")
-    >>> logging.info(f"Last loop duration: {state.last_loop_duration:.2f}s")
-
-    Performance Considerations
-    -------------------------
-    - Uses parallel processing for indicator calculations
-    - Implements data caching to reduce API calls
-    - Optimizes database queries for position tracking
-    - Monitors memory usage and performs cleanup
-    - Tracks execution time for performance optimization
-
-    Notes
-    -----
-    - This function should only be called when markets are open
-    - Execution is thread-safe and prevents overlapping runs
-    - All trades are logged for audit and compliance purposes
-    - Performance metrics are automatically collected and stored
-    - The function will gracefully handle API rate limits and failures
-
-    See Also
-    --------
-    BotState : Central state management
-    pre_trade_health_check : System health validation
-    BotContext : Global context and configuration
-    trade_execution : Order execution and monitoring
-    """
-    _ensure_alpaca_classes()
-    if _ALPACA_IMPORT_ERROR is not None:
-        raise RuntimeError("Alpaca SDK is required") from _ALPACA_IMPORT_ERROR
-    risk_engine = getattr(runtime, "risk_engine", None)
-    if risk_engine is None:
-        logger.error("RISK_ENGINE_MISSING")
-        return
-    _init_metrics()
-    import uuid
-    from ai_trading.core.run_all_trades_execution import execute_run_all_trades_cycle
-    from ai_trading.core.run_all_trades_prelude import prepare_run_all_trades_cycle
-
-    loop_id = str(uuid.uuid4())
-    execution_stage_start: float | None = None
-    acquired = run_lock.acquire(blocking=False)
-    if not acquired:
-        logger.info("RUN_ALL_TRADES_SKIPPED_OVERLAP")
-        logging.getLogger("ai_trading.core.bot_engine").info(
-            "RUN_ALL_TRADES_SKIPPED_OVERLAP"
-        )
-        _emit_pytest_capture(logging.INFO, "RUN_ALL_TRADES_SKIPPED_OVERLAP")
-        return
-    try:  # AI-AGENT-REF: ensure lock released on every exit
-        prelude = prepare_run_all_trades_cycle(
-            state=state,
-            runtime=runtime,
-            risk_engine=risk_engine,
-            logger=logger,
-            loop_id=loop_id,
-            run_interval_seconds=RUN_INTERVAL_SECONDS,
-            ensure_execution_engine_func=_ensure_execution_engine,
-            enforce_dependency_preflight_func=_enforce_dependency_preflight,
-            resolve_trading_config_func=_resolve_trading_config,
-            active_effective_policy_func=_active_effective_policy,
-            policy_config_error_type=PolicyConfigError,
-            write_run_manifest_func=write_run_manifest,
-            restore_exit_policy_state_func=_restore_exit_policy_state,
-            ensure_exit_policy_state_func=_ensure_exit_policy_state,
-            get_trade_cooldown_min_func=get_trade_cooldown_min,
-            is_market_open_func=is_market_open,
-            log_market_closed_func=_log_market_closed,
-            record_broker_sync_metrics_func=_record_broker_sync_metrics,
-            utc_now_func=lambda: datetime.now(UTC),
-            monotonic_time_func=monotonic_time,
-            persist_effective_policy_snapshot_func=_persist_effective_policy_snapshot,
-            execution_metrics_factory=ExecutionCycleMetrics,
-            ensure_alpaca_attached_func=ensure_alpaca_attached,
-            validate_trading_api_func=_validate_trading_api,
-            startup_cancel_mode_func=_startup_cancel_mode,
-            list_open_orders_func=list_open_orders,
-            startup_cancel_decision_func=_startup_cancel_decision,
-            cancel_open_orders_subset_func=_cancel_open_orders_subset,
-            select_startup_stale_orders_func=_select_startup_stale_orders,
-            cancel_all_open_orders_oms_func=cancel_all_open_orders_oms,
-            arm_pending_cleanup_warmup_func=_arm_pending_cleanup_warmup,
-            provider_monitor=provider_monitor,
-            safe_mode_blocks_trading_func=_safe_mode_blocks_trading,
-            safe_mode_reason_func=safe_mode_reason,
-            cancel_all_open_orders_func=cancel_all_open_orders,
-            reset_cycle_cache_func=_reset_cycle_cache,
-            get_strategies_func=get_strategies,
-            log_loop_heartbeat_func=_log_loop_heartbeat,
-            emit_test_capture_func=_emit_test_capture,
-            common_exceptions=COMMON_EXC,
-        )
-        if not prelude.ready:
-            return
-        cfg_runtime = prelude.cfg_runtime
-        effective_policy = prelude.effective_policy
-        now = prelude.now
-        loop_start = prelude.loop_start
-        api = prelude.api
-        previous_last_run_at = prelude.previous_last_run_at
-        assert cfg_runtime is not None
-        assert effective_policy is not None
-        assert now is not None
-        assert loop_start is not None
-
-        def _restore_last_run_timestamp() -> None:
-            """Revert ``state.last_run_at`` to its pre-cycle value."""
-
-            state.last_run_at = previous_last_run_at
-        try:
-            execute_run_all_trades_cycle(
-                state=state,
-                runtime=runtime,
-                cfg_runtime=cfg_runtime,
-                loop_id=loop_id,
-                loop_start=loop_start,
-                api=api,
-                restore_last_run_timestamp=_restore_last_run_timestamp,
-            )
-        except APIError as e:  # AI-AGENT-REF: skip cycle on Alpaca API errors
-            logger.warning(
-                "TRADING_CYCLE_API_ERROR",
-                extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )
-            _restore_last_run_timestamp()
-            return
-        except (
-            TimeoutError,
-            ConnectionError,
-            ValueError,
-            KeyError,
-            TypeError,
-        ) as e:  # AI-AGENT-REF: tighten trading cycle boundary
-            logger.error(
-                "TRADING_CYCLE_FAILED",
-                extra={"cause": e.__class__.__name__, "detail": str(e)},
-                exc_info=True,
-            )
-            _restore_last_run_timestamp()
-            raise
-        finally:
-            try:
-                if execution_stage_start is not None:
-                    try:
-                        record_cycle_wall(
-                            max(0.0, monotonic_time() - execution_stage_start),
-                            {"stage": "cycle_execute"},
-                        )
-                    except Exception:
-                        logger.debug("CYCLE_EXECUTE_LATENCY_OBSERVE_FAILED", exc_info=True)
-                    execution_stage_start = None
-                cfg = get_trading_config()
-                stale_ratio = float(getattr(cfg, "execution_stale_ratio_shadow", 0.30))
-            except COMMON_EXC:
-                stale_ratio = 0.30
-            guard_end_cycle(stale_threshold_ratio=stale_ratio)
-            logger.info(
-                "CYCLE_GATES",
-                extra={
-                    "shadow": guard_shadow_active(),
-                    "stale": getattr(EXEC_GUARD_STATE, "stale_symbols", "na"),
-                    "universe": getattr(EXEC_GUARD_STATE, "universe_size", "na"),
-                },
-            )
-            # Always reset running flag
-            state.running = False
-            state._strategies_loaded = False
-            state.last_loop_duration = monotonic_time() - loop_start
-            _log_loop_heartbeat(loop_id, loop_start)
-            flush_log_throttle_summaries()
-
-            _check_runtime_stops(runtime)
-
-            # AI-AGENT-REF: Perform memory cleanup after trading cycle
-            if MEMORY_OPTIMIZATION_AVAILABLE:
-                try:
-                    gc_result = optimize_memory()
-                    if gc_result.get("objects_collected", 0) > 50:
-                        logger.info(
-                            f"Post-cycle GC: {gc_result['objects_collected']} objects collected"
-                        )
-                except (
-                    RuntimeError,
-                    ValueError,
-                    TypeError,
-                ) as e:  # AI-AGENT-REF: tighten memory optimization errors
-                    logger.warning(
-                        "MEMORY_OPTIMIZATION_FAILED",
-                        extra={"cause": e.__class__.__name__, "detail": str(e)},
-                    )
-    finally:
-        if acquired:
-            run_lock.release()
+    run_all_trades_worker_cycle(state=state, runtime=runtime)
 
 
 def schedule_run_all_trades(runtime):

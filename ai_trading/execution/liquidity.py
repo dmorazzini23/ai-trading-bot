@@ -433,6 +433,36 @@ class LiquidityManager:
             logger.error(f'Error updating symbol liquidity: {e}')
             return {'error': str(e)}
 
+    def pre_trade_check(
+        self,
+        order: dict[str, Any],
+        market_data: Any,
+    ) -> dict[str, Any]:
+        """Run the canonical liquidity check for a pending order."""
+        symbol = str(order.get("symbol") or "").strip()
+        if not symbol:
+            raise ValueError("Missing symbol for liquidity pre-trade check")
+
+        current_price: float | None = None
+        try:
+            raw_price = order.get("price")
+            if raw_price is not None:
+                parsed_price = float(raw_price)
+                if parsed_price > 0:
+                    current_price = parsed_price
+        except (TypeError, ValueError):
+            current_price = None
+
+        analysis = self.update_symbol_liquidity(symbol, market_data, current_price)
+        error = analysis.get("error")
+        if error:
+            logger.error(
+                "LIQUIDITY_PRE_TRADE_CHECK_FAILED",
+                extra={"symbol": symbol, "detail": str(error)},
+            )
+            raise ValueError(str(error))
+        return analysis
+
     def get_portfolio_liquidity_summary(self) -> dict[str, Any]:
         """Get portfolio-wide liquidity summary."""
         try:

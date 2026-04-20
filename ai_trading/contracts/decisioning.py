@@ -200,8 +200,16 @@ class OrderIntent:
             metadata={
                 "last_price": _safe_float(getattr(intent, "last_price", None)),
                 "mid": _safe_float(getattr(intent, "mid", None)),
+                "bid": _safe_float(getattr(intent, "bid", None)),
+                "ask": _safe_float(getattr(intent, "ask", None)),
                 "spread": _safe_float(getattr(intent, "spread", None)),
+                "quote_age_ms": _safe_float(getattr(intent, "quote_age_ms", None)),
+                "submit_quote_source": _safe_text(getattr(intent, "submit_quote_source", None)),
                 "quote_quality_ok": getattr(intent, "quote_quality_ok", None),
+                "opening_trade": getattr(intent, "opening_trade", None),
+                "require_realtime_nbbo": getattr(intent, "require_realtime_nbbo", None),
+                "kill_switch_active": getattr(intent, "kill_switch_active", None),
+                "broker_ready": getattr(intent, "broker_ready", None),
             },
         )
 
