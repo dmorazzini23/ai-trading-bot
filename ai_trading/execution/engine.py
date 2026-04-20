@@ -850,6 +850,16 @@ class OrderManager:
         except (TypeError, ValueError):
             filled_total = None
         reported_qty = float(self._intent_reported_fill_qty.get(resolved_intent_id, 0.0) or 0.0)
+        if reported_qty <= 0.0:
+            try:
+                persisted_fills = store.list_fills(resolved_intent_id)
+            except Exception:
+                persisted_fills = []
+            if persisted_fills:
+                reported_qty = float(
+                    sum(float(getattr(fill, "fill_qty", 0.0) or 0.0) for fill in persisted_fills)
+                )
+                self._intent_reported_fill_qty[resolved_intent_id] = reported_qty
         if filled_total is not None and filled_total > reported_qty:
             fill_delta = max(0.0, filled_total - reported_qty)
             parsed_fill_price: float | None
@@ -1128,9 +1138,45 @@ class OrderManager:
                     )
                     if terminal_status is not None:
                         try:
-                            self._intent_store.close_intent(
-                                intent.intent_id,
-                                final_status=terminal_status,
+                            resolved_order_id = self._extract_payload_value(
+                                recovered_order,
+                                "id",
+                                "order_id",
+                            )
+                            resolved_client_order_id = self._extract_payload_value(
+                                recovered_order,
+                                "client_order_id",
+                            )
+                            recovered_filled_qty = self._extract_payload_value(
+                                recovered_order,
+                                "filled_qty",
+                            )
+                            if (
+                                terminal_status == "FILLED"
+                                and recovered_filled_qty in (None, "")
+                            ):
+                                recovered_filled_qty = intent.quantity
+                            recovered_fill_price = self._extract_payload_value(
+                                recovered_order,
+                                "filled_avg_price",
+                                "fill_price",
+                                "average_fill_price",
+                            )
+                            self.sync_external_order_state(
+                                intent_id=intent.intent_id,
+                                order_id=(
+                                    str(resolved_order_id)
+                                    if resolved_order_id not in (None, "")
+                                    else None
+                                ),
+                                client_order_id=(
+                                    str(resolved_client_order_id)
+                                    if resolved_client_order_id not in (None, "")
+                                    else intent.intent_id
+                                ),
+                                status=status_token,
+                                filled_qty=recovered_filled_qty,
+                                fill_price=recovered_fill_price,
                             )
                         except Exception:
                             logger.debug(

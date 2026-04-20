@@ -150,3 +150,32 @@ def test_config_disables_shorts(monkeypatch, caplog) -> None:
 
     assert result is None
     assert any(rec.msg == "SHORT_ORDER_SKIPPED_LONG_ONLY_MODE" for rec in caplog.records)
+
+
+def test_existing_long_sell_is_not_blocked_by_long_only_short_guard(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("TRADING__ALLOW_SHORTS", "0")
+    engine = DummyLiveEngine()
+    engine.trading_client = SimpleNamespace(
+        get_asset=lambda _symbol: _asset_payload(),
+        get_position=lambda symbol: SimpleNamespace(
+            symbol=symbol,
+            qty="2",
+            side="long",
+        ),
+    )
+    engine._cycle_account.update({"shorting_enabled": True, "margin_enabled": True})
+    monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
+
+    caplog.set_level(logging.INFO, logger="ai_trading.execution.live_trading")
+    result = engine.execute_order(
+        "AAPL",
+        "sell",
+        2,
+        order_type="market",
+        quote=_quote_payload(),
+    )
+
+    assert result is not None
+    assert engine.last_submitted is not None
+    assert engine.last_submitted.get("side") == "sell"
+    assert not any(rec.msg == "SHORT_ORDER_SKIPPED_LONG_ONLY_MODE" for rec in caplog.records)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -122,3 +123,23 @@ def test_short_precheck_sets_long_only_for_cash_account(caplog):
     assert long_only_reason in {"account_margin_disabled", "account_shorting_disabled"}
     logged_msgs = {record.msg for record in caplog.records}
     assert ("ACCOUNT_MARGIN_DISABLED" in logged_msgs) or ("ACCOUNT_SHORTING_DISABLED" in logged_msgs)
+
+
+def test_short_precheck_allows_sell_that_closes_existing_long():
+    client = _client_for(_shortable_asset())
+    account = _margin_account()
+    engine: Any = SimpleNamespace(_position_quantity=lambda symbol: 2 if symbol == "AAPL" else 0)
+
+    ok, extras, reason = live_trading._short_sale_precheck(
+        engine,
+        client,
+        symbol="AAPL",
+        side="sell",
+        quantity=2,
+        closing_position=False,
+        account_snapshot=account,
+    )
+
+    assert ok is True
+    assert extras is None
+    assert reason is None

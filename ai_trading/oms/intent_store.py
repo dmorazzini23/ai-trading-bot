@@ -13,6 +13,7 @@ from typing import Any, cast
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
+from ai_trading.oms.engine_registry import resolve_shared_engine
 from ai_trading.oms.lifecycle import (
     PENDING_SUBMIT_STATUS,
     SUBMITTING_STATUS,
@@ -64,6 +65,8 @@ except Exception as exc:  # pragma: no cover - exercised in environments missing
 
 
 _TERMINAL_STATUSES: frozenset[str] = TERMINAL_INTENT_STATUSES
+_BOOTSTRAPPED_DATABASE_URLS: set[str] = set()
+_BOOTSTRAP_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -208,6 +211,7 @@ class IntentStore:
         }
         if database_url.startswith("sqlite:"):
             connect_args["check_same_thread"] = False
+            shared_registry_key: str | None = None
         else:
             pool_size = max(1, int(get_env("AI_TRADING_OMS_DB_POOL_SIZE", 5, cast=int)))
             max_overflow = max(0, int(get_env("AI_TRADING_OMS_DB_MAX_OVERFLOW", 10, cast=int)))
@@ -235,10 +239,14 @@ class IntentStore:
                     "pool_recycle": pool_recycle,
                 }
             )
-        self._engine: Engine = create_engine(
-            database_url,
-            connect_args=connect_args,
-            **engine_kwargs,
+            shared_registry_key = database_url
+        self._engine, self._owns_engine = resolve_shared_engine(
+            registry_key=shared_registry_key,
+            factory=lambda: create_engine(
+                database_url,
+                connect_args=connect_args,
+                **engine_kwargs,
+            ),
         )
         self._session_factory = sessionmaker(
             bind=self._engine,
@@ -314,11 +322,20 @@ class IntentStore:
 
     def _bootstrap(self) -> None:
         assert _METADATA is not None
+        shared_bootstrap_key = None if self._database_url.startswith("sqlite:") else self._database_url
+        if shared_bootstrap_key:
+            with _BOOTSTRAP_LOCK:
+                if shared_bootstrap_key in _BOOTSTRAPPED_DATABASE_URLS:
+                    return
+                with self._engine.begin() as conn:
+                    _METADATA.create_all(conn, checkfirst=True)
+                _BOOTSTRAPPED_DATABASE_URLS.add(shared_bootstrap_key)
+            return
         with self._engine.begin() as conn:
             if self._database_url.startswith("sqlite:"):
                 conn.execute(text("PRAGMA journal_mode=WAL;"))
                 conn.execute(text("PRAGMA synchronous=NORMAL;"))
-            _METADATA.create_all(conn)
+            _METADATA.create_all(conn, checkfirst=True)
 
     @staticmethod
     def _event_idempotency_key(*parts: Any) -> str:
@@ -445,28 +462,30 @@ class IntentStore:
                 with self._session_factory.begin() as session:
                     session.execute(insert(_INTENTS_TABLE).values(**payload))
             except IntegrityError:
-                with self._session_factory() as session:
-                    row = (
-                        session.execute(
-                            select(_INTENTS_TABLE).where(
-                                _INTENTS_TABLE.c.idempotency_key == idempotency_key
-                            )
+                with self._engine.connect() as conn:
+                    result = conn.execute(
+                        select(_INTENTS_TABLE).where(
+                            _INTENTS_TABLE.c.idempotency_key == idempotency_key
                         )
-                        .mappings()
-                        .first()
                     )
+                    try:
+                        row = result.mappings().first()
+                    finally:
+                        result.close()
+                        conn.rollback()
                 if row is None:  # pragma: no cover - defensive
                     raise
                 return (self._row_to_intent(cast(Mapping[str, Any], row)), False)
 
-            with self._session_factory() as session:
-                row = (
-                    session.execute(
-                        select(_INTENTS_TABLE).where(_INTENTS_TABLE.c.intent_id == intent_id)
-                    )
-                    .mappings()
-                    .first()
+            with self._engine.connect() as conn:
+                result = conn.execute(
+                    select(_INTENTS_TABLE).where(_INTENTS_TABLE.c.intent_id == intent_id)
                 )
+                try:
+                    row = result.mappings().first()
+                finally:
+                    result.close()
+                    conn.rollback()
             if row is None:  # pragma: no cover - defensive
                 raise RuntimeError("intent_insert_missing_row")
             inserted_record = self._row_to_intent(cast(Mapping[str, Any], row))
@@ -495,14 +514,15 @@ class IntentStore:
         """Return intent by ID."""
 
         assert _INTENTS_TABLE is not None
-        with self._lock, self._session_factory() as session:
-            row = (
-                session.execute(
-                    select(_INTENTS_TABLE).where(_INTENTS_TABLE.c.intent_id == intent_id)
-                )
-                .mappings()
-                .first()
+        with self._lock, self._engine.connect() as conn:
+            result = conn.execute(
+                select(_INTENTS_TABLE).where(_INTENTS_TABLE.c.intent_id == intent_id)
             )
+            try:
+                row = result.mappings().first()
+            finally:
+                result.close()
+                conn.rollback()
         if row is None:
             return None
         return self._row_to_intent(cast(Mapping[str, Any], row))
@@ -511,16 +531,17 @@ class IntentStore:
         """Return intent by idempotency key."""
 
         assert _INTENTS_TABLE is not None
-        with self._lock, self._session_factory() as session:
-            row = (
-                session.execute(
-                    select(_INTENTS_TABLE).where(
-                        _INTENTS_TABLE.c.idempotency_key == idempotency_key
-                    )
+        with self._lock, self._engine.connect() as conn:
+            result = conn.execute(
+                select(_INTENTS_TABLE).where(
+                    _INTENTS_TABLE.c.idempotency_key == idempotency_key
                 )
-                .mappings()
-                .first()
             )
+            try:
+                row = result.mappings().first()
+            finally:
+                result.close()
+                conn.rollback()
         if row is None:
             return None
         return self._row_to_intent(cast(Mapping[str, Any], row))
@@ -535,8 +556,13 @@ class IntentStore:
             .where(_INTENTS_TABLE.c.status.not_in(ordered_terminal))
             .order_by(_INTENTS_TABLE.c.updated_at.asc())
         )
-        with self._lock, self._session_factory() as session:
-            rows = session.execute(stmt).mappings().all()
+        with self._lock, self._engine.connect() as conn:
+            result = conn.execute(stmt)
+            try:
+                rows = result.mappings().all()
+            finally:
+                result.close()
+                conn.rollback()
         return [self._row_to_intent(cast(Mapping[str, Any], row)) for row in rows]
 
     def list_intents(self, *, limit: int = 5000) -> list[IntentRecord]:
@@ -546,8 +572,13 @@ class IntentStore:
         stmt = select(_INTENTS_TABLE).order_by(_INTENTS_TABLE.c.created_at.asc()).limit(
             max(1, int(limit))
         )
-        with self._lock, self._session_factory() as session:
-            rows = session.execute(stmt).mappings().all()
+        with self._lock, self._engine.connect() as conn:
+            result = conn.execute(stmt)
+            try:
+                rows = result.mappings().all()
+            finally:
+                result.close()
+                conn.rollback()
         return [self._row_to_intent(cast(Mapping[str, Any], row)) for row in rows]
 
     def claim_for_submit(
@@ -754,8 +785,13 @@ class IntentStore:
             .where(_INTENT_FILLS_TABLE.c.intent_id == intent_id)
             .order_by(_INTENT_FILLS_TABLE.c.fill_id.asc())
         )
-        with self._lock, self._session_factory() as session:
-            rows = session.execute(stmt).mappings().all()
+        with self._lock, self._engine.connect() as conn:
+            result = conn.execute(stmt)
+            try:
+                rows = result.mappings().all()
+            finally:
+                result.close()
+                conn.rollback()
         return [self._row_to_fill(cast(Mapping[str, Any], row)) for row in rows]
 
     def close_intent(
@@ -823,6 +859,8 @@ class IntentStore:
                     logger.debug("INTENT_STORE_EVENT_STORE_CLOSE_FAILED", exc_info=True)
                 finally:
                     self._event_store = None
+            if not self._owns_engine:
+                return
             try:
                 self._engine.dispose()
             except Exception:

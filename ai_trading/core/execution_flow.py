@@ -357,11 +357,23 @@ def send_exit_order(
     ):
         logger.info("SKIP_NO_POSITION", extra={"symbol": symbol})
         return
+    snapshot_qty = 0
+    if raw_positions is not None:
+        for raw_pos in raw_positions:
+            if getattr(raw_pos, "symbol", "") != symbol:
+                continue
+            try:
+                snapshot_qty = abs(int(float(getattr(raw_pos, "qty", 0) or 0.0)))
+            except Exception:
+                snapshot_qty = 0
+            break
     try:
         pos = ctx.api.get_position(symbol)
-        held_qty = int(pos.qty)
+        held_qty = abs(int(float(getattr(pos, "qty", 0) or 0.0)))
     except Exception:
-        held_qty = 0
+        held_qty = snapshot_qty
+    if held_qty <= 0 and snapshot_qty > 0:
+        held_qty = snapshot_qty
     if held_qty < exit_qty:
         logger.warning(
             f"No shares available to exit for {symbol} (requested {exit_qty}, have {held_qty})"

@@ -3,7 +3,9 @@ from __future__ import annotations
 import pytest
 
 from ai_trading.execution.engine import OrderManager
+from ai_trading.oms.event_store import EventStore
 from ai_trading.oms.intent_store import IntentStore
+from ai_trading.oms.invariants import evaluate_oms_lifecycle_parity_invariants
 
 pytest.importorskip("sqlalchemy")
 
@@ -45,8 +47,11 @@ def test_reconcile_missing_open_orders_does_not_fail_open_intent(
 
 
 def test_reconcile_missing_open_orders_closes_intent_on_terminal_broker_lookup(
+    monkeypatch,
     tmp_path,
 ) -> None:
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_DUAL_WRITE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
     store = IntentStore(path=str(tmp_path / "reconcile_terminal_lookup.db"))
     manager = OrderManager()
     manager.configure_intent_store(store)
@@ -80,6 +85,19 @@ def test_reconcile_missing_open_orders_closes_intent_on_terminal_broker_lookup(
     assert refreshed.status == "FILLED"
     open_intent_ids = {record.intent_id for record in store.get_open_intents()}
     assert intent.intent_id not in open_intent_ids
+
+    event_store = EventStore(path=str(tmp_path / "reconcile_terminal_lookup.db"))
+    rows = event_store.list_oms_events(intent_id=intent.intent_id, limit=5000)
+    event_store.close()
+    event_types = [str(row.get("event_type") or "").strip().upper() for row in rows]
+    assert "ORDER_PARTIALLY_FILLED" in event_types
+    assert "ORDER_FILLED" in event_types
+    assert "INTENT_CLOSED" in event_types
+
+    parity = evaluate_oms_lifecycle_parity_invariants(
+        intent_store_path=str(tmp_path / "reconcile_terminal_lookup.db")
+    )
+    assert int(parity["violations"]["filled_missing_partial_fill"]) == 0
 
 
 def test_reconcile_terminal_lookup_maps_done_for_day_to_expired(

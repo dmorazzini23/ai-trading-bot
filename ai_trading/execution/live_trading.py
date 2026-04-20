@@ -547,6 +547,50 @@ def _market_is_open_now(now_utc: datetime | None = None) -> bool:
         return False
 
 
+def _eod_flatten_window_active(now_et: datetime | None = None) -> tuple[bool, dict[str, Any]]:
+    """Return whether the runtime is inside the configured EOD flatten window."""
+
+    enabled = _resolve_bool_env("AI_TRADING_EOD_FLATTEN_ENABLED")
+    if enabled is None:
+        enabled = False
+    if not enabled:
+        return False, {"enabled": False, "reason": "disabled"}
+
+    lead_seconds = max(
+        0,
+        min(
+            int(_config_int("AI_TRADING_EOD_FLATTEN_LEAD_SECONDS", 300) or 300),
+            3600,
+        ),
+    )
+    current_et = now_et or datetime.now(ZoneInfo("America/New_York"))
+    if int(current_et.weekday()) >= 5:
+        return False, {"enabled": True, "reason": "weekend", "lead_seconds": lead_seconds}
+
+    session_close_et = current_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    trigger_at = session_close_et - timedelta(seconds=lead_seconds)
+    if current_et < trigger_at:
+        return False, {
+            "enabled": True,
+            "reason": "before_window",
+            "lead_seconds": lead_seconds,
+            "session_close": session_close_et.isoformat(),
+        }
+    if current_et >= session_close_et:
+        return False, {
+            "enabled": True,
+            "reason": "after_close",
+            "lead_seconds": lead_seconds,
+            "session_close": session_close_et.isoformat(),
+        }
+    return True, {
+        "enabled": True,
+        "reason": "session_close_window",
+        "lead_seconds": lead_seconds,
+        "session_close": session_close_et.isoformat(),
+    }
+
+
 def _runtime_trading_config() -> Any | None:
     """Resolve trading config via the canonical module binding."""
     live_mod = sys.modules.get("ai_trading.execution.live_trading")
@@ -869,19 +913,62 @@ def _bool_from_record(record: Any, *names: str) -> bool | None:
         return None
 
 
+def _effective_closing_position(
+    engine: "ExecutionEngine" | None,
+    *,
+    symbol: str,
+    side: Any,
+    quantity: Any,
+    closing_position: bool,
+) -> bool:
+    """Infer closing sells from live inventory when callers omit the flag."""
+
+    if bool(closing_position):
+        return True
+    try:
+        side_token = str(side).strip().lower() if side is not None else ""
+    except Exception:
+        side_token = ""
+    if side_token != "sell" or engine is None:
+        return False
+    try:
+        requested_qty = max(int(quantity), 0)
+    except Exception:
+        requested_qty = 0
+    if requested_qty <= 0:
+        return False
+    try:
+        return int(engine._position_quantity(symbol)) > 0
+    except Exception:
+        logger.debug(
+            "EFFECTIVE_CLOSING_POSITION_LOOKUP_FAILED",
+            extra={"symbol": symbol, "side": side_token},
+            exc_info=True,
+        )
+        return False
+
+
 def _short_sale_precheck(
     engine: "ExecutionEngine" | None,
     trading_client: Any,
     *,
     symbol: str,
     side: str,
+    quantity: Any | None = None,
     closing_position: bool,
     account_snapshot: Any | None,
 ) -> tuple[bool, dict[str, Any] | None, str | None]:
     """Validate short-sale prerequisites for Alpaca before submission."""
 
     side_token = str(side).strip().lower() if side is not None else ""
-    if closing_position or side_token != "sell":
+    effective_closing_position = _effective_closing_position(
+        engine,
+        symbol=symbol,
+        side=side_token,
+        quantity=quantity,
+        closing_position=closing_position,
+    )
+    if effective_closing_position or side_token != "sell":
         return True, None, None
 
     asset = None
@@ -4308,7 +4395,25 @@ class ExecutionEngine:
         )
         if provider_guard_blocked:
             return False, provider_guard_detail
+        flatten_window_blocked, flatten_window_detail = (
+            self._eod_flatten_window_blocks_openings()
+        )
+        if flatten_window_blocked:
+            return False, flatten_window_detail
         return True, None
+
+    def _eod_flatten_window_blocks_openings(self) -> tuple[bool, str | None]:
+        active, context = _eod_flatten_window_active()
+        if not active:
+            return False, None
+        lead_seconds = context.get("lead_seconds")
+        session_close = context.get("session_close")
+        detail = (
+            "eod_flatten_window"
+            f" lead_seconds={lead_seconds}"
+            f" session_close={session_close}"
+        )
+        return True, detail
 
     def _bootstrap_new_orders_cap(self) -> int | None:
         enabled = _resolve_bool_env("AI_TRADING_BOOTSTRAP_ORDER_CAP_ENABLED")
@@ -17741,6 +17846,13 @@ class ExecutionEngine:
             or kwargs.get("close_position")
             or kwargs.get("reduce_only")
         )
+        closing_position = _effective_closing_position(
+            self,
+            symbol=symbol,
+            side=side_lower,
+            quantity=quantity,
+            closing_position=closing_position,
+        )
         kwargs.pop("closing_position", None)
         kwargs.pop("close_position", None)
         kwargs.pop("reduce_only", None)
@@ -17935,6 +18047,7 @@ class ExecutionEngine:
             trading_client,
             symbol=symbol,
             side=side_lower,
+            quantity=quantity,
             closing_position=closing_position,
             account_snapshot=account_snapshot,
         )
@@ -18457,6 +18570,13 @@ class ExecutionEngine:
             or kwargs.get("close_position")
             or kwargs.get("reduce_only")
         )
+        closing_position = _effective_closing_position(
+            self,
+            symbol=symbol,
+            side=side_lower,
+            quantity=quantity,
+            closing_position=closing_position,
+        )
         kwargs.pop("closing_position", None)
         kwargs.pop("close_position", None)
         kwargs.pop("reduce_only", None)
@@ -18641,6 +18761,7 @@ class ExecutionEngine:
             trading_client,
             symbol=symbol,
             side=side_lower,
+            quantity=quantity,
             closing_position=closing_position,
             account_snapshot=account_snapshot,
         )
@@ -19147,6 +19268,13 @@ class ExecutionEngine:
             quantity = int(qty)
         except Exception:
             quantity = qty
+        closing_position = _effective_closing_position(
+            self,
+            symbol=symbol,
+            side=mapped_side,
+            quantity=quantity,
+            closing_position=closing_position,
+        )
         trading_client = getattr(self, "trading_client", None)
         account_snapshot: Any | None = None
         client = trading_client

@@ -964,6 +964,45 @@ def test_execution_phase_gate_allows_closing_orders(monkeypatch):
     assert detail is None
 
 
+def test_execution_phase_gate_blocks_open_orders_during_eod_flatten_window(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "active"})
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "1")
+    monkeypatch.setattr(
+        engine,
+        "_eod_flatten_window_blocks_openings",
+        lambda: (
+            True,
+            "eod_flatten_window lead_seconds=300 session_close=2026-04-20T16:00:00-04:00",
+        ),
+    )
+
+    allowed, detail = engine._execution_phase_allows_submits(closing_position=False)
+
+    assert allowed is False
+    assert detail is not None
+    assert detail.startswith("eod_flatten_window")
+
+
+def test_execution_phase_gate_allows_closing_orders_during_eod_flatten_window(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "active"})
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "1")
+    monkeypatch.setattr(
+        engine,
+        "_eod_flatten_window_blocks_openings",
+        lambda: (
+            True,
+            "eod_flatten_window lead_seconds=300 session_close=2026-04-20T16:00:00-04:00",
+        ),
+    )
+
+    allowed, detail = engine._execution_phase_allows_submits(closing_position=True)
+
+    assert allowed is True
+    assert detail is None
+
+
 def test_opening_provider_guard_blocks_openings_when_provider_degraded(monkeypatch):
     engine = _engine_stub()
     engine.ctx = SimpleNamespace(state={"service_phase": "active"})

@@ -262,3 +262,56 @@ def test_send_exit_order_uses_cancel_order_shim(monkeypatch):
 
     assert api.cancelled == ["limit-001"]
     assert market_calls == ["AAPL"]
+
+
+def test_send_exit_order_uses_raw_positions_snapshot_when_get_position_fails(monkeypatch):
+    class DummyAPI:
+        def __init__(self):
+            self.orders = {}
+
+        def list_orders(self, status=None):
+            return []
+
+        def get_position(self, symbol):
+            raise RuntimeError("position lookup failed")
+
+        def get_order(self, order_id):
+            return self.orders[order_id]
+
+        def cancel_order_by_id(self, order_id):
+            self.orders[order_id].status = "canceled"
+
+    api = DummyAPI()
+    alpaca_client._validate_trading_api(api)
+    runtime = _Runtime(api=api)
+
+    submissions = []
+
+    def fake_safe_submit_order(_api, req):
+        submissions.append(
+            {
+                "symbol": getattr(req, "symbol", None),
+                "qty": getattr(req, "qty", None),
+                "side": getattr(req, "side", None),
+                "limit_price": getattr(req, "limit_price", None),
+            }
+        )
+        return SimpleNamespace(id=f"order-{len(submissions)}")
+
+    monkeypatch.setattr(bot_engine, "safe_submit_order", fake_safe_submit_order)
+    monkeypatch.setattr(execution_flow.pytime, "sleep", lambda _secs: None)
+
+    raw_positions = [SimpleNamespace(symbol="AAPL", qty="7")]
+
+    execution_flow.send_exit_order(
+        runtime,
+        "AAPL",
+        7,
+        0.0,
+        "eod_exit",
+        raw_positions=raw_positions,
+    )
+
+    assert submissions
+    assert submissions[0]["symbol"] == "AAPL"
+    assert submissions[0]["qty"] == 7

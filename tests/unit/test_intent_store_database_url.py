@@ -66,7 +66,11 @@ def test_intent_store_postgres_pool_settings_from_env(monkeypatch: pytest.Monkey
     monkeypatch.setattr(intent_store_mod, "create_engine", _fake_create_engine)
     monkeypatch.setattr(intent_store_mod, "sessionmaker", lambda **_kwargs: object())
     assert intent_store_mod._METADATA is not None
-    monkeypatch.setattr(intent_store_mod._METADATA, "create_all", lambda _conn: None)
+    monkeypatch.setattr(
+        intent_store_mod._METADATA,
+        "create_all",
+        lambda _conn, **_kwargs: None,
+    )
 
     store = IntentStore()
     assert store.database_url.startswith("postgresql+psycopg://")

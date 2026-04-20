@@ -13,12 +13,15 @@ from typing import Any
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 
+from .engine_registry import resolve_shared_engine
 from .event_types import DecisionEvent, OmsEvent, new_event_uuid
 
 logger = get_logger(__name__)
 
 # Serialize Postgres append-only guard DDL across concurrent bootstrap callers.
 _POSTGRES_APPEND_ONLY_GUARD_LOCK_KEY = 346017647123854219
+_BOOTSTRAPPED_DATABASE_URLS: set[str] = set()
+_BOOTSTRAP_LOCK = RLock()
 
 try:
     from sqlalchemy import (
@@ -223,6 +226,7 @@ class EventStore:
 
         if engine is not None:
             self._engine = engine
+            self._owns_engine = False
         else:
             connect_args: dict[str, Any] = {}
             engine_kwargs: dict[str, Any] = {
@@ -261,11 +265,17 @@ class EventStore:
                         "pool_recycle": pool_recycle,
                     }
                 )
-            self._engine = create_engine(
-                database_url,
-                connect_args=connect_args,
-                **engine_kwargs,
+            shared_registry_key = None if database_url.startswith("sqlite:") else database_url
+            resolved_engine, owns_engine = resolve_shared_engine(
+                registry_key=shared_registry_key,
+                factory=lambda: create_engine(
+                    database_url,
+                    connect_args=connect_args,
+                    **engine_kwargs,
+                ),
             )
+            self._engine = resolved_engine
+            self._owns_engine = owns_engine
 
         self._session_factory = sessionmaker(
             bind=self._engine,
@@ -293,6 +303,16 @@ class EventStore:
 
     def _bootstrap(self) -> None:
         assert _EVENT_METADATA is not None
+        shared_bootstrap_key = None if self._database_url.startswith("sqlite:") else self._database_url
+        if shared_bootstrap_key:
+            with _BOOTSTRAP_LOCK:
+                if shared_bootstrap_key in _BOOTSTRAPPED_DATABASE_URLS:
+                    return
+                with self._engine.begin() as conn:
+                    _EVENT_METADATA.create_all(conn, checkfirst=True)
+                    self._ensure_append_only_guards(conn)
+                _BOOTSTRAPPED_DATABASE_URLS.add(shared_bootstrap_key)
+            return
         with self._engine.begin() as conn:
             if self._database_url.startswith("sqlite:"):
                 conn.execute(text("PRAGMA journal_mode=WAL;"))
@@ -505,8 +525,13 @@ class EventStore:
         stmt = select(func.max(_OMS_EVENTS_TABLE.c.sequence_no)).where(
             _OMS_EVENTS_TABLE.c.intent_id == str(intent_id)
         )
-        with self._session_factory() as session:
-            current = session.execute(stmt).scalar_one_or_none()
+        with self._engine.connect() as conn:
+            result = conn.execute(stmt)
+            try:
+                current = result.scalar_one_or_none()
+            finally:
+                result.close()
+                conn.rollback()
         if current is None:
             return 1
         try:
@@ -832,8 +857,13 @@ class EventStore:
             stmt = stmt.where(
                 _OMS_EVENTS_TABLE.c.event_type == str(event_type).strip().upper()
             )
-        with self._session_factory() as session:
-            rows = session.execute(stmt).mappings().all()
+        with self._engine.connect() as conn:
+            result = conn.execute(stmt)
+            try:
+                rows = result.mappings().all()
+            finally:
+                result.close()
+                conn.rollback()
         return [dict(row) for row in rows]
 
     def list_decision_events(self, *, symbol: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
@@ -845,8 +875,13 @@ class EventStore:
         ).limit(max(1, int(limit)))
         if symbol not in (None, ""):
             stmt = stmt.where(_DECISION_EVENTS_TABLE.c.symbol == str(symbol).upper())
-        with self._session_factory() as session:
-            rows = session.execute(stmt).mappings().all()
+        with self._engine.connect() as conn:
+            result = conn.execute(stmt)
+            try:
+                rows = result.mappings().all()
+            finally:
+                result.close()
+                conn.rollback()
         return [dict(row) for row in rows]
 
     def list_position_snapshots(
@@ -863,8 +898,13 @@ class EventStore:
         ).limit(max(1, int(limit)))
         if symbol not in (None, ""):
             stmt = stmt.where(_POSITION_SNAPSHOTS_TABLE.c.symbol == str(symbol).upper())
-        with self._session_factory() as session:
-            rows = session.execute(stmt).mappings().all()
+        with self._engine.connect() as conn:
+            result = conn.execute(stmt)
+            try:
+                rows = result.mappings().all()
+            finally:
+                result.close()
+                conn.rollback()
         return [dict(row) for row in rows]
 
     def list_risk_snapshots(
@@ -883,8 +923,13 @@ class EventStore:
             stmt = stmt.where(
                 _RISK_SNAPSHOTS_TABLE.c.snapshot_source == str(source).strip()
             )
-        with self._session_factory() as session:
-            rows = session.execute(stmt).mappings().all()
+        with self._engine.connect() as conn:
+            result = conn.execute(stmt)
+            try:
+                rows = result.mappings().all()
+            finally:
+                result.close()
+                conn.rollback()
         return [dict(row) for row in rows]
 
     def migration_status(self, expected_revision: str | None = None) -> dict[str, Any]:
