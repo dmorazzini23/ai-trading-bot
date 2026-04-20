@@ -45,6 +45,108 @@ def _normalize_timestamp(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
+def bar_from_frame(
+    symbol: str,
+    frame: Any,
+    *,
+    timeframe: str | None = None,
+    provider: str | None = None,
+    feed: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> Bar | None:
+    try:
+        if bool(getattr(frame, "empty", True)):
+            return None
+        index = getattr(frame, "index", None)
+        iloc = getattr(frame, "iloc", None)
+        if index is None or iloc is None:
+            return None
+        ts_value = index[-1]
+        row = iloc[-1]
+    except Exception:
+        return None
+    row_map = row.to_dict() if hasattr(row, "to_dict") else {}
+    payload: dict[str, Any] = dict(row_map) if isinstance(row_map, Mapping) else {}
+    if metadata:
+        payload.update(dict(metadata))
+    payload["symbol"] = symbol
+    payload["ts"] = ts_value
+    payload["timeframe"] = timeframe
+    payload["provider"] = provider
+    payload["feed"] = feed
+    return Bar.from_mapping(payload)
+
+
+def broker_order_snapshot_from_order(
+    order: Any,
+    *,
+    venue: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> BrokerOrderSnapshot | None:
+    payload: dict[str, Any]
+    if isinstance(order, Mapping):
+        payload = dict(order)
+    else:
+        payload = {
+            "client_order_id": getattr(order, "client_order_id", None),
+            "broker_order_id": getattr(order, "id", None)
+            or getattr(order, "order_id", None),
+            "side": getattr(order, "side", None),
+            "qty": getattr(order, "qty", None),
+            "filled_qty": getattr(order, "filled_qty", None),
+            "limit_price": getattr(order, "limit_price", None)
+            or getattr(order, "price", None),
+            "fill_price": getattr(order, "filled_avg_price", None)
+            or getattr(order, "fill_price", None),
+            "status": getattr(order, "status", None),
+            "timestamp": getattr(order, "submitted_at", None)
+            or getattr(order, "updated_at", None),
+            "symbol": getattr(order, "symbol", None),
+            "order_type": getattr(order, "type", None),
+            "time_in_force": getattr(order, "time_in_force", None),
+        }
+    if metadata:
+        payload.update(dict(metadata))
+    if venue:
+        payload.setdefault("venue", venue)
+    snapshot = BrokerOrderSnapshot.from_mapping(payload)
+    if not snapshot.client_order_id and not snapshot.broker_order_id:
+        return None
+    return snapshot
+
+
+def position_snapshot_from_position(
+    position: Any,
+    *,
+    provider: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> PositionSnapshot | None:
+    payload: dict[str, Any]
+    if isinstance(position, Mapping):
+        payload = dict(position)
+    else:
+        payload = {
+            "symbol": getattr(position, "symbol", None),
+            "qty": getattr(position, "qty", None),
+            "market_value": getattr(position, "market_value", None),
+            "avg_entry_price": getattr(position, "avg_entry_price", None)
+            or getattr(position, "avg_cost", None),
+            "timestamp": getattr(position, "updated_at", None)
+            or getattr(position, "timestamp", None),
+        }
+    if metadata:
+        payload.update(dict(metadata))
+    if provider:
+        payload.setdefault("provider", provider)
+    try:
+        snapshot = PositionSnapshot.from_mapping(payload)
+    except (TypeError, ValueError):
+        return None
+    if not snapshot.symbol or snapshot.qty == 0.0:
+        return None
+    return snapshot
+
+
 @dataclass(frozen=True, slots=True)
 class Bar:
     symbol: str
@@ -276,4 +378,7 @@ __all__ = [
     "ExecutionResult",
     "PositionSnapshot",
     "Quote",
+    "bar_from_frame",
+    "broker_order_snapshot_from_order",
+    "position_snapshot_from_position",
 ]

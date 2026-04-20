@@ -118,6 +118,7 @@ def test_reconcile_position_targets_prunes_stale_entries() -> None:
     assert "MSFT" not in ctx.stop_targets
     assert "MSFT" not in ctx.take_profit_targets
     assert "AAPL" in ctx.stop_targets
+    assert ctx._reconciliation_position_snapshots["AAPL"]["qty"] == 2.0
 
 
 def test_risk_approval_service_bootstraps_and_updates_runtime_toggles(

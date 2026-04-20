@@ -113,6 +113,7 @@ def test_decision_record_includes_canonical_decision_journal() -> None:
     assert journal["schema_version"] == "1.0.0"
     assert journal["event"] == "decision_record"
     assert journal["symbol"] == "AAPL"
+    assert journal["data_freshness_sec"] is not None
     assert journal["accepted"] is True
     assert journal["submitted"] is True
     assert journal["client_order_id"] == "coid-aapl-1"
@@ -229,11 +230,36 @@ def test_decision_journal_exposes_provider_feed_and_broker_result() -> None:
     assert journal["provider"] == "alpaca"
     assert journal["feed"] == "iex"
     assert journal["event"] == "decision_record"
+    assert journal["data_freshness_sec"] is not None
     assert journal["client_order_id"] == "coid-nvda-1"
     assert journal["target_delta_shares"] == -3.0
     assert "BROKER_REJECTED" in journal["reasons"]
     assert journal["broker_result"]["status"] == "rejected"
     assert journal["broker_result"]["error_reason"] == "BROKER_REJECTED"
+
+
+def test_decision_journal_uses_explicit_event_and_freshness_metrics() -> None:
+    bar_ts = datetime.now(UTC)
+    record = build_decision_record(
+        symbol="TSLA",
+        bar_ts=bar_ts,
+        net_target=NettedTarget(
+            symbol="TSLA",
+            bar_ts=bar_ts,
+            target_dollars=0.0,
+            target_shares=0.0,
+        ),
+        gates=["LOW_OR_NO_SIGNAL"],
+        metrics={
+            "event": "legacy_low_signal_hold",
+            "data_freshness_sec": 17.5,
+        },
+    )
+
+    journal = record.to_dict()["decision_journal"]
+
+    assert journal["event"] == "legacy_low_signal_hold"
+    assert journal["data_freshness_sec"] == 17.5
 
 
 def test_market_and_execution_contracts_serialize() -> None:

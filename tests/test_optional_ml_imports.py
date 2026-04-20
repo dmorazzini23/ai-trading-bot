@@ -3,6 +3,7 @@ import sys
 
 
 def test_optional_ml_imports(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_SENTIMENT_FAIL_CLOSED", "0")
     for mod in ("bs4", "transformers"):
         sys.modules.pop(mod, None)
 

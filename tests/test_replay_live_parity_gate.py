@@ -67,3 +67,33 @@ def test_replay_live_parity_gate_fails_on_stale_replay(monkeypatch, tmp_path: Pa
     assert payload["ok"] is False
     assert "replay_fresh" in payload["failed_checks"]
     assert payload["status"] == "fail"
+
+
+def test_replay_live_parity_gate_requires_lifecycle_parity_by_default_outside_pytest(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data-root"
+    now = datetime.now(UTC)
+    artifact = data_root / "runtime" / "replay_outputs" / f"replay_hash_{now.strftime('%Y%m%d')}.json"
+    _write_replay_artifact(artifact, ts=now, violations_count=0, counterfactual_passed=True)
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_root))
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv(
+        "AI_TRADING_REPLAY_LIVE_PARITY_REQUIRE_OMS_LIFECYCLE_PARITY",
+        raising=False,
+    )
+
+    payload = summarize_replay_live_parity_gate(
+        oms_lifecycle_parity={
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "total_violations": 2,
+        }
+    )
+
+    assert payload["ok"] is False
+    assert "oms_lifecycle_parity_consistent" in payload["failed_checks"]

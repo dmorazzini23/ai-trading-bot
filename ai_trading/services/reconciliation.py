@@ -3,6 +3,8 @@ from __future__ import annotations
 from json import JSONDecodeError
 from typing import Any
 
+from ai_trading.contracts import position_snapshot_from_position
+
 
 def reconcile_position_targets(
     ctx: Any,
@@ -19,9 +21,29 @@ def reconcile_position_targets(
             return True
         return warned
     try:
-        live_positions = {
-            pos.symbol: int(pos.qty) for pos in ctx.api.list_positions()
+        live_position_snapshots = {
+            snapshot.symbol: snapshot
+            for snapshot in (
+                position_snapshot_from_position(pos, provider="alpaca")
+                for pos in ctx.api.list_positions()
+            )
+            if snapshot is not None
         }
+        live_positions = {
+            symbol: int(snapshot.qty)
+            for symbol, snapshot in live_position_snapshots.items()
+        }
+        try:
+            setattr(
+                ctx,
+                "_reconciliation_position_snapshots",
+                {
+                    symbol: snapshot.to_dict()
+                    for symbol, snapshot in live_position_snapshots.items()
+                },
+            )
+        except Exception:
+            logger.debug("RECONCILIATION_POSITION_SNAPSHOT_SET_FAILED", exc_info=True)
         with targets_lock:
             symbols_with_targets = list(getattr(ctx, "stop_targets", {}).keys()) + list(
                 getattr(ctx, "take_profit_targets", {}).keys()

@@ -16,6 +16,7 @@ from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from ai_trading.config.management import get_env, is_test_runtime
+from ai_trading.contracts import position_snapshot_from_position
 from ai_trading.env import ensure_dotenv_loaded
 from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
@@ -46,6 +47,13 @@ _NON_BLOCKING_REJECTION_GATES = frozenset(
 _NON_BLOCKING_REJECTION_PREFIXES = ("BANDIT_",)
 
 _NY_TZ = ZoneInfo("America/New_York")
+
+
+def _default_fail_closed_outside_tests() -> bool:
+    return not bool(
+        str(get_env("PYTEST_CURRENT_TEST", "", cast=str) or "").strip()
+        or bool(get_env("PYTEST_RUNNING", False, cast=bool))
+    )
 
 
 def _as_float(value: Any) -> float | None:
@@ -845,7 +853,7 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
         require_oms_invariants = bool(
             get_env(
                 "AI_TRADING_RUNTIME_GONOGO_REQUIRE_OMS_INVARIANTS",
-                False,
+                _default_fail_closed_outside_tests(),
                 cast=bool,
             )
         )
@@ -873,7 +881,7 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
         require_oms_lifecycle_parity = bool(
             get_env(
                 "AI_TRADING_RUNTIME_GONOGO_REQUIRE_OMS_LIFECYCLE_PARITY",
-                False,
+                _default_fail_closed_outside_tests(),
                 cast=bool,
             )
         )
@@ -929,7 +937,7 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
         require_replay_live_parity_gate = bool(
             get_env(
                 "AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE",
-                False,
+                _default_fail_closed_outside_tests(),
                 cast=bool,
             )
         )
@@ -1258,6 +1266,7 @@ def _summarize_broker_open_positions() -> dict[str, Any]:
             "broker_open_positions_available": False,
             "broker_open_position_count": 0,
             "broker_open_positions": {},
+            "broker_open_position_snapshots": {},
             "broker_open_positions_error": "disabled_in_test_runtime",
         }
 
@@ -1275,28 +1284,26 @@ def _summarize_broker_open_positions() -> dict[str, Any]:
                 "broker_open_positions_available": False,
                 "broker_open_position_count": 0,
                 "broker_open_positions": {},
+                "broker_open_position_snapshots": {},
                 "broker_open_positions_error": "positions_method_unavailable",
             }
 
         broker_positions: dict[str, float] = {}
+        broker_position_snapshots: dict[str, dict[str, Any]] = {}
         for row in positions_raw:
-            if isinstance(row, Mapping):
-                symbol_raw = row.get("symbol")
-                qty_raw = row.get("qty")
-            else:
-                symbol_raw = getattr(row, "symbol", None)
-                qty_raw = getattr(row, "qty", None)
-            symbol = str(symbol_raw or "").strip().upper()
-            qty = _as_float(qty_raw)
-            if not symbol or qty is None or qty == 0:
+            snapshot = position_snapshot_from_position(row, provider="alpaca")
+            if snapshot is None:
                 continue
-            broker_positions[symbol] = qty
+            broker_positions[snapshot.symbol] = float(snapshot.qty)
+            broker_position_snapshots[snapshot.symbol] = snapshot.to_dict()
 
         broker_positions = dict(sorted(broker_positions.items()))
+        broker_position_snapshots = dict(sorted(broker_position_snapshots.items()))
         return {
             "broker_open_positions_available": True,
             "broker_open_position_count": len(broker_positions),
             "broker_open_positions": broker_positions,
+            "broker_open_position_snapshots": broker_position_snapshots,
             "broker_open_positions_error": None,
         }
     except Exception as exc:
@@ -1304,6 +1311,7 @@ def _summarize_broker_open_positions() -> dict[str, Any]:
             "broker_open_positions_available": False,
             "broker_open_position_count": 0,
             "broker_open_positions": {},
+            "broker_open_position_snapshots": {},
             "broker_open_positions_error": str(exc),
         }
 
@@ -3924,7 +3932,7 @@ def summarize_oms_invariants() -> dict[str, Any]:
     enabled = bool(
         get_env(
             "AI_TRADING_RUNTIME_PERF_OMS_INVARIANTS_ENABLED",
-            False,
+            _default_fail_closed_outside_tests(),
             cast=bool,
         )
     )
@@ -3972,7 +3980,7 @@ def summarize_oms_lifecycle_parity() -> dict[str, Any]:
     enabled = bool(
         get_env(
             "AI_TRADING_RUNTIME_PERF_OMS_LIFECYCLE_PARITY_ENABLED",
-            False,
+            _default_fail_closed_outside_tests(),
             cast=bool,
         )
     )

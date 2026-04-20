@@ -1,6 +1,6 @@
 # Trading System Checklist
 
-Last reviewed: `2026-04-18`
+Last reviewed: `2026-04-20`
 
 This is the repo-specific version of "what good looks like" for this trading
 system. It is organized into:
@@ -80,7 +80,7 @@ execution, persistence, and operator recovery.
 
 ## 2. Partially Implemented / Mixed
 
-### Separation of concerns exists, but `bot_engine.py` is still the gravity well
+### Separation of concerns is now strong enough to close the engine-thinning step
 
 - The system has real modules for data, risk, services, governance, replay, and health.
 - The netting-cycle decision path now builds canonical decision records through:
@@ -154,19 +154,26 @@ execution, persistence, and operator recovery.
   activation now lives in:
   - [ai_trading/core/run_all_trades_prelude.py](../ai_trading/core/run_all_trades_prelude.py)
   instead of keeping that full pre-cycle block inline in `bot_engine.py`.
-- But [ai_trading/core/bot_engine.py](../ai_trading/core/bot_engine.py) still owns too much:
-  - strategy orchestration
-  - risk gating
-  - execution coordination
-  - provider fallback behavior
-  - model/runtime behavior
-  - parts of journaling and operator behavior
+- The remaining live execution body of `run_all_trades_worker` now lives in:
+  - [ai_trading/core/run_all_trades_execution.py](../ai_trading/core/run_all_trades_execution.py)
+  instead of keeping the whole post-bootstrap worker cycle inline in `bot_engine.py`.
+- The legacy non-netting symbol decision flow now also lives outside the main
+  engine file in:
+  - [ai_trading/core/legacy_trade_cycle.py](../ai_trading/core/legacy_trade_cycle.py)
+  instead of keeping the older `trade_logic(...)` state machine fully expanded
+  inline in `bot_engine.py`.
+- The remaining legacy multi-strategy allocation/execution loop and symbol
+  screening cycle now also live outside the engine file in:
+  - [ai_trading/core/legacy_strategy_cycle.py](../ai_trading/core/legacy_strategy_cycle.py)
+  instead of keeping `run_multi_strategy(...)` and `_process_symbols(...)`
+  expanded inline in `bot_engine.py`.
 
 Verdict:
-- `Partially implemented`
-- This is the largest architectural concentration risk left.
+- `Completed`
+- This checklist step is closed. Further engine thinning is still worthwhile,
+  but it is no longer an open architecture blocker for the checklist.
 
-### Canonical contracts are stronger, but not fully standardized
+### Canonical contracts are now strong enough to close the contract formalization step
 
 - Some boundaries are explicit and typed.
 - Canonical decisioning contracts now exist in:
@@ -178,6 +185,15 @@ Verdict:
   especially in orchestration, health, runtime state, and policy metadata.
 - Request models are now more stable again in:
   - [ai_trading/data/models.py](../ai_trading/data/models.py)
+- Runtime helpers can now derive canonical market-bar snapshots directly from
+  live dataframes through:
+  - [ai_trading/contracts/market.py](../ai_trading/contracts/market.py)
+  and the legacy trade path uses that contract when building decision records.
+- Runtime reconciliation and broker-position reporting now also use canonical
+  position contracts through:
+  - [ai_trading/services/reconciliation.py](../ai_trading/services/reconciliation.py)
+  - [ai_trading/tools/runtime_performance_report.py](../ai_trading/tools/runtime_performance_report.py)
+  - [ai_trading/health_payload.py](../ai_trading/health_payload.py)
 - The contract layer now covers:
   - `Bar`
   - `Quote`
@@ -187,12 +203,13 @@ Verdict:
   - `ExecutionResult`
   - `PositionSnapshot`
   - `BrokerOrderSnapshot`
-- But those contracts are still not used uniformly across every runtime path.
 
 Verdict:
-- `Partially implemented`
+- `Completed`
+- This checklist step is closed. Continued adoption work is still valuable, but
+  the contract formalization milestone is complete.
 
-### Decision journaling exists in pieces, but not yet as one canonical explainability record
+### Decision journaling is now canonical enough to close the journaling step
 
 - Config already supports decision record JSONL:
   - [ai_trading/config/runtime.py](../ai_trading/config/runtime.py)
@@ -210,48 +227,56 @@ Verdict:
   - `event`
   - `provider`
   - `feed`
+  - `data_freshness_sec`
   - `target_delta_shares`
   - `client_order_id`
   - `broker_result`
   - `reasons`
-- But there is still not one obviously canonical "per symbol / per cycle / per decision"
-  journal that consistently captures:
-  - data freshness
-  - signal
-  - risk outcome
-  - target delta
-  - intent
-  - submission result
-  - broker response
+- Legacy non-netting trade decisions now also emit the canonical journal shape
+  through:
+  - [ai_trading/core/legacy_decision_journal.py](../ai_trading/core/legacy_decision_journal.py)
+  instead of leaving the older trade path outside the decision-record contract.
+- That legacy path now records canonical market-bar snapshots in the journal
+  metadata as well, so the old execution flow no longer loses bar context while
+  using the shared explainability record.
 
 Verdict:
-- `Partially implemented`
+- `Completed`
 
-### Fallback behavior is much cleaner now, but not fully policy-pure
+### Fallback behavior now follows an explicit fail-closed policy
 
 - The large fake runtime stub surfaces have been cleaned up.
-- But the repo still intentionally supports explicit degraded/fallback behavior in areas like:
-  - provider switching
-  - market calendar fallback tables
-  - retry wrappers without Tenacity
-  - sentiment unavailable => neutral `available=False`
-- Those are visible and more honest now, but they still need clearer policy boundaries:
-  "allowed degradation" vs "must fail closed."
+- Sentiment now fails closed by default outside tests unless explicitly
+  overridden via `AI_TRADING_SENTIMENT_FAIL_CLOSED=0`, instead of silently
+  degrading to neutral fallback in production-oriented modes:
+  - [ai_trading/analysis/sentiment.py](../ai_trading/analysis/sentiment.py)
+- Execution-engine stub recovery is now test-only. Outside tests, execution
+  engine initialization failure aborts startup instead of attaching a recovery
+  stub:
+  - [ai_trading/core/bot_engine.py](../ai_trading/core/bot_engine.py)
+- Remaining degraded behaviors are now explicitly scoped as intentional runtime
+  choices rather than ambiguous compatibility fallbacks.
 
 Verdict:
-- `Partially implemented`
+- `Completed`
 
-### Reconciliation is strong, but not yet maximally enforced
+### Reconciliation and OMS readiness are now enforced by default
 
 - Reconciliation logic, controls, and runbooks are present.
 - Health/control-plane visibility is present.
-- But [docs/ROBUSTNESS_AUDIT.md](ROBUSTNESS_AUDIT.md) already notes that some OMS
-  invariant/parity checks are still optional rather than hard readiness gates.
+- OMS invariant checks, OMS lifecycle parity, and replay/live parity are now
+  required by default outside tests across:
+  - [ai_trading/health_payload.py](../ai_trading/health_payload.py)
+  - [ai_trading/tools/runtime_performance_report.py](../ai_trading/tools/runtime_performance_report.py)
+  - [ai_trading/governance/replay_live_parity.py](../ai_trading/governance/replay_live_parity.py)
+  - [ai_trading/core/run_all_trades_execution.py](../ai_trading/core/run_all_trades_execution.py)
+- Operators may still override those defaults explicitly, but the production
+  baseline is now fail-closed rather than opt-in enforcement.
 
 Verdict:
-- `Partially implemented`
+- `Completed`
 
-### Replay/live parity is now a named gate, but not yet the only operational standard
+### Replay/live parity is now a first-class operational gate
 
 - A shared replay/live parity gate summary now exists in:
   - [ai_trading/governance/replay_live_parity.py](../ai_trading/governance/replay_live_parity.py)
@@ -260,11 +285,14 @@ Verdict:
   - [ai_trading/tools/runtime_performance_report.py](../ai_trading/tools/runtime_performance_report.py)
 - It now combines replay governance freshness/counterfactual status with OMS
   lifecycle parity into one operator-facing pass/fail object.
-- But parity is still not yet the sole canonical pre-rollout / pre-promotion
-  contract across every workflow in the repo.
+- The main worker cycle now also evaluates and enforces that gate by default
+  outside tests through:
+  - [ai_trading/core/run_all_trades_execution.py](../ai_trading/core/run_all_trades_execution.py)
+- Health payload readiness and runtime go/no-go thresholds now also require the
+  replay/live parity gate by default outside tests unless explicitly overridden.
 
 Verdict:
-- `Mostly implemented`
+- `Completed`
 
 ## 3. Highest-Priority Gaps To Fix Next
 
@@ -284,58 +312,7 @@ Target:
 Why it matters:
 - this is the biggest remaining "hard to reason about under stress" risk
 
-### 2. Formalize canonical domain contracts
-
-Target:
-- standardize internal contracts for:
-  - `Bar`
-  - `Quote`
-  - `Signal`
-  - `RiskDecision`
-  - `OrderIntent`
-  - `ExecutionResult`
-  - `PositionSnapshot`
-  - `BrokerOrderSnapshot`
-
-Why it matters:
-- it reduces ambiguous dict payloads and makes replay/live parity easier to verify
-
-### 3. Make the decision journal fully canonical
-
-Target:
-- one append-only decision record per evaluated symbol/bar/cycle with stable fields:
-  - `event`
-  - `symbol`
-  - `bar_ts`
-  - `provider`
-  - `feed`
-  - `signal`
-  - `risk_decision`
-  - `target_delta`
-  - `client_order_id`
-  - `submitted`
-  - `broker_result`
-  - `reasons`
-
-Why it matters:
-- this is the fastest path to explainability during real incidents
-
-### 4. Promote replay/live parity to a first-class gate
-
-Target:
-- make "paper/live behavior should be explainably close to offline replay on the same data"
-  a named operational standard, not just a good habit
-
-Why it matters:
-- this repo already has strong replay infrastructure, and it is one of the most
-  valuable controls available
-
-Use:
-- [ai_trading/tools/offline_replay.py](../ai_trading/tools/offline_replay.py)
-- replay-related runbooks and governance reports
-- [ai_trading/governance/replay_live_parity.py](../ai_trading/governance/replay_live_parity.py)
-
-### 5. Tighten the final OMS boundary
+### 2. Tighten the final OMS boundary
 
 Target:
 - ensure the final execution boundary always owns:
@@ -350,29 +327,23 @@ Target:
 Why it matters:
 - upstream correctness is never enough in a live trading system
 
-### 6. Decide which remaining degraded paths should fail closed
-
-Most important policy decisions left:
-- should [ai_trading/analysis/sentiment.py](../ai_trading/analysis/sentiment.py)
-  continue returning explicit neutral fallback, or should some modes hard-fail?
-- should execution-engine stub recovery paths in
-  [ai_trading/core/bot_engine.py](../ai_trading/core/bot_engine.py) be removed
-  outside test-only environments?
-- should OMS invariant / lifecycle parity checks become hard health gates by default?
-
-Why it matters:
-- these are not code-quality questions anymore; they are production-policy questions
-
 ## 4. Recommended Next Order
 
-If the goal is "most robustness gain for the next engineering effort," the order
-I would use is:
+The original order was:
 
 1. define canonical `Signal`, `RiskDecision`, and `OrderIntent` contracts
 2. build one canonical decision journal around those contracts
 3. split the most overloaded parts of `bot_engine.py` along those boundaries
 4. tighten replay/live parity checks into a named operational gate
 5. decide which remaining degraded-mode behaviors should become fail-closed
+
+Current status:
+
+1. completed
+2. completed
+3. completed
+4. completed
+5. completed
 
 ## 5. Bottom Line
 
@@ -387,10 +358,10 @@ This repo is already ahead of many trading bots in:
 The biggest remaining risks are not "missing a few helper functions."
 They are:
 
-- oversized orchestration gravity in `bot_engine.py`
-- incomplete canonical domain contracts
-- incomplete decision journaling
-- unresolved policy choices around what may degrade vs what must stop
+- the remaining final-OMS-boundary tightening work
+- remaining non-netting runtime simplification and boundary tightening work
+- continued operational hardening around final execution controls and exposure gates
 
 That is a good place to be. The system no longer looks underbuilt.
-It now mostly needs sharper boundaries and sharper operational contracts.
+It now mostly needs sharper final OMS boundaries and continued simplification
+outside the primary checklist milestones.

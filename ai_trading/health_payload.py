@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.config.management import get_env
 from ai_trading.telemetry import runtime_state
 from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
 
@@ -50,6 +51,13 @@ def _env_bool(name: str, default: bool) -> bool:
         return bool(get_env(name, default, cast=bool))
     except Exception:
         return bool(default)
+
+
+def _default_fail_closed_outside_tests() -> bool:
+    return not bool(
+        str(get_env("PYTEST_CURRENT_TEST", "", cast=str) or "").strip()
+        or bool(get_env("PYTEST_RUNNING", False, cast=bool))
+    )
 
 
 def _env_float(name: str, default: float) -> float:
@@ -161,7 +169,10 @@ def _database_readiness_snapshot() -> dict[str, Any]:
 
 
 def _oms_invariants_snapshot() -> dict[str, Any]:
-    enabled = _env_bool("AI_TRADING_HEALTH_OMS_INVARIANTS_ENABLED", False)
+    enabled = _env_bool(
+        "AI_TRADING_HEALTH_OMS_INVARIANTS_ENABLED",
+        _default_fail_closed_outside_tests(),
+    )
     if not enabled:
         return {"enabled": False}
     try:
@@ -200,7 +211,10 @@ def _oms_invariants_snapshot() -> dict[str, Any]:
 
 
 def _oms_lifecycle_parity_snapshot() -> dict[str, Any]:
-    enabled = _env_bool("AI_TRADING_HEALTH_OMS_LIFECYCLE_PARITY_ENABLED", False)
+    enabled = _env_bool(
+        "AI_TRADING_HEALTH_OMS_LIFECYCLE_PARITY_ENABLED",
+        _default_fail_closed_outside_tests(),
+    )
     if not enabled:
         return {"enabled": False}
     try:
@@ -685,7 +699,10 @@ def build_runtime_health_payload(
     if require_database_ready and database_configured and not database_ok:
         overall_ok = False
         degraded = True
-    require_oms_invariants = _env_bool("AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS", False)
+    require_oms_invariants = _env_bool(
+        "AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS",
+        _default_fail_closed_outside_tests(),
+    )
     if require_oms_invariants and oms_invariants.get("enabled", False) and not bool(
         oms_invariants.get("ok")
     ):
@@ -693,7 +710,7 @@ def build_runtime_health_payload(
         degraded = True
     require_oms_lifecycle_parity = _env_bool(
         "AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY",
-        False,
+        _default_fail_closed_outside_tests(),
     )
     if (
         require_oms_lifecycle_parity
@@ -704,7 +721,7 @@ def build_runtime_health_payload(
         degraded = True
     require_replay_live_parity_gate = _env_bool(
         "AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE",
-        False,
+        _default_fail_closed_outside_tests(),
     )
     if (
         require_replay_live_parity_gate
@@ -920,6 +937,10 @@ def build_control_plane_snapshot(
             ),
             "max_abs_delta_qty": go_no_go_observed.get(
                 "open_position_reconciliation_max_abs_delta_qty"
+            ),
+            "broker_position_snapshots": runtime_performance.get(
+                "broker_open_position_snapshots",
+                {},
             ),
         },
         "open_orders": {

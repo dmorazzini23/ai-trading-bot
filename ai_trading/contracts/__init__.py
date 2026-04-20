@@ -14,6 +14,9 @@ from .market import (
     ExecutionResult,
     PositionSnapshot,
     Quote,
+    bar_from_frame,
+    broker_order_snapshot_from_order,
+    position_snapshot_from_position,
 )
 
 __all__ = [
@@ -28,4 +31,7 @@ __all__ = [
     "RiskDecision",
     "Signal",
     "build_decision_journal",
+    "bar_from_frame",
+    "broker_order_snapshot_from_order",
+    "position_snapshot_from_position",
 ]

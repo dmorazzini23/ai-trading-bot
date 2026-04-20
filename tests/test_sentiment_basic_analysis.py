@@ -56,12 +56,24 @@ def test_fetch_sentiment_weighting(monkeypatch):
 
 
 def test_analyze_text_neutral(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_SENTIMENT_FAIL_CLOSED", "0")
     monkeypatch.setattr(sentiment, "_load_transformers", lambda log=None: None)
     res = sentiment.analyze_text("anything")
     assert res == {"available": False, "pos": 0.0, "neg": 0.0, "neu": 1.0}
 
 
+def test_analyze_text_fails_closed_outside_pytest(monkeypatch):
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("AI_TRADING_SENTIMENT_FAIL_CLOSED", raising=False)
+    monkeypatch.setattr(sentiment, "_load_transformers", lambda log=None: None)
+
+    with pytest.raises(RuntimeError, match="Sentiment unavailable"):
+        sentiment.analyze_text("anything")
+
+
 def test_neutral_caching_after_failure(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_SENTIMENT_FAIL_CLOSED", "0")
     class DummySettings:
         sentiment_api_url = "http://example.com"
 
@@ -88,6 +100,23 @@ def test_neutral_caching_after_failure(monkeypatch):
     assert score1 == 0.0
     assert score2 == 0.0
     assert calls["count"] == 1
+
+
+def test_fetch_sentiment_missing_api_key_fails_closed_outside_pytest(monkeypatch):
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("AI_TRADING_SENTIMENT_FAIL_CLOSED", raising=False)
+    monkeypatch.setattr(sentiment, "SENTIMENT_API_KEY", "", raising=False)
+
+    class DummySettings:
+        sentiment_api_url = "http://example.com"
+        sentiment_api_key = None
+
+    monkeypatch.setattr(sentiment, "get_settings", lambda: DummySettings())
+    monkeypatch.setattr(sentiment, "get_news_api_key", lambda: "")
+
+    with pytest.raises(RuntimeError, match="missing_api_key"):
+        sentiment.fetch_sentiment(None, "AAPL")
 
 
 def test_circuit_breaker_recovers(monkeypatch):
@@ -131,4 +160,3 @@ def test_circuit_breaker_recovers(monkeypatch):
     cb = sentiment._sentiment_circuit_breaker
     assert cb["state"] == "closed"
     assert cb["failures"] == 0
-

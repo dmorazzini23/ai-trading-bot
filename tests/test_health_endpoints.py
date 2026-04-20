@@ -496,6 +496,79 @@ def test_runtime_health_payload_oms_lifecycle_parity_requirement_marks_degraded(
     assert payload.get("reason") == "oms_lifecycle_parity_failed"
 
 
+def test_runtime_health_payload_requires_oms_invariants_by_default_outside_pytest(
+    monkeypatch,
+):
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_invariants_snapshot",
+        lambda: {
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "total_violations": 2,
+        },
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_lifecycle_parity_snapshot",
+        lambda: {"enabled": False},
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_replay_live_parity_gate_snapshot",
+        lambda **_kwargs: {"enabled": False, "available": False, "ok": True},
+    )
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+    assert payload["ok"] is False
+    assert payload.get("reason") == "oms_invariants_failed"
+
+
+def test_runtime_health_payload_requires_oms_lifecycle_parity_by_default_outside_pytest(
+    monkeypatch,
+):
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_invariants_snapshot",
+        lambda: {
+            "enabled": True,
+            "available": True,
+            "ok": True,
+            "total_violations": 0,
+        },
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_lifecycle_parity_snapshot",
+        lambda: {
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "total_violations": 1,
+        },
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_replay_live_parity_gate_snapshot",
+        lambda **_kwargs: {"enabled": False, "available": False, "ok": True},
+    )
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+    assert payload["ok"] is False
+    assert payload.get("reason") == "oms_lifecycle_parity_failed"
+
+
 def test_runtime_health_payload_includes_replay_live_parity_gate(monkeypatch):
     monkeypatch.setattr(
         health_payload_module,
@@ -518,6 +591,48 @@ def test_runtime_health_payload_replay_live_parity_requirement_marks_degraded(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
+    monkeypatch.setattr(
+        health_payload_module,
+        "_replay_live_parity_gate_snapshot",
+        lambda **_kwargs: {
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "status": "fail",
+            "reason": "replay_counterfactual",
+        },
+    )
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload.get("reason") == "replay_live_parity_gate_failed"
+
+
+def test_runtime_health_payload_requires_replay_live_parity_by_default_outside_pytest(
+    monkeypatch,
+) -> None:
+    def _fake_get_env(key, default=None, cast=None, **_kwargs):
+        if key == "PYTEST_CURRENT_TEST":
+            return ""
+        if key == "PYTEST_RUNNING":
+            return False
+        return default
+
+    monkeypatch.setattr(health_payload_module, "get_env", _fake_get_env)
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_invariants_snapshot",
+        lambda **_kwargs: {"enabled": True, "available": True, "ok": True},
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_lifecycle_parity_snapshot",
+        lambda **_kwargs: {"enabled": True, "available": True, "ok": True},
+    )
     monkeypatch.setattr(
         health_payload_module,
         "_replay_live_parity_gate_snapshot",

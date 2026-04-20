@@ -54,6 +54,36 @@ _transformers_bundle = None
 _SENT_DEPS_LOGGED: set[str] = set()
 _SENTIMENT_STUB_LOGGED = False
 
+
+def _default_fail_closed_outside_tests() -> bool:
+    return not bool(
+        str(get_env("PYTEST_CURRENT_TEST", "", cast=str) or "").strip()
+        or bool(get_env("PYTEST_RUNNING", False, cast=bool))
+    )
+
+
+def _sentiment_fail_closed() -> bool:
+    return bool(
+        get_env(
+            "AI_TRADING_SENTIMENT_FAIL_CLOSED",
+            _default_fail_closed_outside_tests(),
+            cast=bool,
+        )
+    )
+
+
+def _raise_sentiment_unavailable(reason: str) -> None:
+    raise RuntimeError(
+        "Sentiment unavailable: "
+        f"{reason}. Set AI_TRADING_SENTIMENT_FAIL_CLOSED=0 to allow neutral fallback."
+    )
+
+
+def _neutral_sentiment_payload(reason: str) -> dict[str, float | bool]:
+    if _sentiment_fail_closed():
+        _raise_sentiment_unavailable(reason)
+    return {"available": False, "pos": 0.0, "neg": 0.0, "neu": 1.0}
+
 def _load_bs4(log=logger):
     global _bs4, _SENT_DEPS_LOGGED
     if _bs4 is not None:
@@ -217,12 +247,18 @@ def _record_sentiment_failure(reason: str = 'error', error: str | None = None) -
     sentiment_cb_state.set(state_val)
     provider_monitor.record_failure('sentiment', reason, error)
 
-@retry(stop=stop_after_attempt(SENTIMENT_MAX_RETRIES), wait=_SENTIMENT_WAIT, retry=retry_if_exception_type((Exception,)))
+@retry(
+    stop=stop_after_attempt(SENTIMENT_MAX_RETRIES),
+    wait=_SENTIMENT_WAIT,
+    retry=retry_if_exception_type((Exception,)),
+    reraise=True,
+)
 def fetch_sentiment(ctx, ticker: str) -> float:
     """
     Fetch sentiment via NewsAPI + FinBERT + Form 4 signal.
     Uses a simple in-memory TTL cache to avoid hitting NewsAPI too often.
-    If FinBERT isn't available, return neutral 0.0.
+    If sentiment is unavailable, cached sentiment may still be used. Neutral
+    fallback is allowed only when explicit degraded mode is enabled.
 
     Args:
         ctx: BotContext (for compatibility with bot_engine)
@@ -240,7 +276,10 @@ def fetch_sentiment(ctx, ticker: str) -> float:
     )
     if not api_key:
         logger.debug('No sentiment API key configured (checked settings.sentiment_api_key and news API key)')
-        return 0.0
+        return _get_cached_or_neutral_sentiment(
+            ticker,
+            reason="missing_api_key",
+        )
     now_ts = pytime.time()
     with sentiment_lock:
         cached = _sentiment_cache.get(ticker)
@@ -258,14 +297,18 @@ def fetch_sentiment(ctx, ticker: str) -> float:
                 return last_score
     if not _check_sentiment_circuit_breaker():
         logger.info(f'Sentiment circuit breaker open, returning cached/neutral for {ticker}')
+        fallback_score = _get_cached_or_neutral_sentiment(
+            ticker,
+            reason="circuit_breaker_open_without_cache",
+        )
         with sentiment_lock:
             cached = _sentiment_cache.get(ticker)
             if cached:
                 _, last_score = cached
                 logger.debug(f'Using stale cached sentiment {last_score} for {ticker}')
                 return last_score
-            _sentiment_cache[ticker] = (now_ts, 0.0)
-            return 0.0
+            _sentiment_cache[ticker] = (now_ts, fallback_score)
+        return fallback_score
     try:
         url = f'{settings.sentiment_api_url}?q={ticker}&sortBy=publishedAt&language=en&pageSize=5&apiKey={api_key}'
         resp = _http_session.get(url, timeout=clamp_request_timeout(HTTP_TIMEOUT))
@@ -275,11 +318,14 @@ def fetch_sentiment(ctx, ticker: str) -> float:
         elif resp.status_code == 403:
             logger.warning(f'fetch_sentiment({ticker}) forbidden (403) - possible API key issue → using fallback')
             _record_sentiment_failure('forbidden')
-            return _get_cached_or_neutral_sentiment(ticker)
+            return _get_cached_or_neutral_sentiment(ticker, reason="http_403")
         elif resp.status_code >= 500:
             logger.warning(f'fetch_sentiment({ticker}) server error ({resp.status_code}) → using fallback')
             _record_sentiment_failure('server_error', str(resp.status_code))
-            return _get_cached_or_neutral_sentiment(ticker)
+            return _get_cached_or_neutral_sentiment(
+                ticker,
+                reason=f"http_{resp.status_code}",
+            )
         resp.raise_for_status()
         payload = resp.json()
         articles = payload.get('articles', [])
@@ -322,8 +368,12 @@ def fetch_sentiment(ctx, ticker: str) -> float:
                 _, last_score = cached
                 logger.debug(f'Using cached sentiment fallback {last_score} for {ticker}')
                 return last_score
-            _sentiment_cache[ticker] = (now_ts, 0.0)
-            return 0.0
+            fallback_score = _get_cached_or_neutral_sentiment(
+                ticker,
+                reason="api_error_without_cache",
+            )
+            _sentiment_cache[ticker] = (now_ts, fallback_score)
+            return fallback_score
     except (ValueError, TypeError) as e:
         logger.error(f'Unexpected error fetching sentiment for {ticker}: {e}')
         _record_sentiment_failure('unexpected_error', str(e))
@@ -349,7 +399,7 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
             result = fallback_func(ticker)
             if result is not None:
                 logger.info(f'SENTIMENT_FALLBACK_SUCCESS | ticker={ticker} source={fallback_func.__name__} value={result}')
-                return result
+                return float(result)
         except (ValueError, TypeError) as e:
             logger.debug(f'SENTIMENT_FALLBACK_FAILED | ticker={ticker} source={fallback_func.__name__} error={e}')
             continue
@@ -442,22 +492,24 @@ def _try_sector_sentiment_proxy(ticker: str) -> float | None:
                         return sector_sentiment
     return None
 
-def _get_cached_or_neutral_sentiment(ticker: str) -> float:
-    """Get cached sentiment or return neutral if no cache available."""
+def _get_cached_or_neutral_sentiment(ticker: str, *, reason: str) -> float:
+    """Get cached sentiment or fail closed / return neutral if no cache exists."""
     with sentiment_lock:
         cached = _sentiment_cache.get(ticker)
         if cached:
             cache_ts, sentiment_val = cached
             if pytime.time() - cache_ts < SENTIMENT_RATE_LIMITED_TTL_SEC:
                 return sentiment_val
+    if _sentiment_fail_closed():
+        _raise_sentiment_unavailable(reason)
     return 0.0
 
 def analyze_text(text: str, logger=logger) -> dict:
     """Return sentiment probabilities for ``text``.
 
-    Falls back to neutral if transformers are unavailable. Raises a
-    ``RuntimeError`` with offline instructions if an SSL handshake fails
-    while fetching model weights.
+    Fails closed by default outside tests if transformers/model weights are
+    unavailable. Raises a ``RuntimeError`` with offline instructions if an SSL
+    handshake fails while fetching model weights.
     """
     _init_sentiment()
     global _SENTIMENT_STUB_LOGGED
@@ -472,12 +524,12 @@ def analyze_text(text: str, logger=logger) -> dict:
         if not _SENTIMENT_STUB_LOGGED:
             logger.warning('SENTIMENT_FALLBACK_STUB', extra={'error': type(exc).__name__})
             _SENTIMENT_STUB_LOGGED = True
-        return {'available': False, 'pos': 0.0, 'neg': 0.0, 'neu': 1.0}
+        return _neutral_sentiment_payload(type(exc).__name__)
     if deps is None:
         if not _SENTIMENT_STUB_LOGGED:
             logger.warning('SENTIMENT_FALLBACK_STUB', extra={'error': 'missing_dependencies'})
             _SENTIMENT_STUB_LOGGED = True
-        return {'available': False, 'pos': 0.0, 'neg': 0.0, 'neu': 1.0}
+        return _neutral_sentiment_payload("missing_dependencies")
     torch, tokenizer, model = deps
     try:
         inputs = tokenizer(text, return_tensors='pt', truncation=True, max_length=128)
@@ -493,7 +545,7 @@ def analyze_text(text: str, logger=logger) -> dict:
         if not _SENTIMENT_STUB_LOGGED:
             logger.warning('SENTIMENT_FALLBACK_STUB', extra={'error': type(exc).__name__})
             _SENTIMENT_STUB_LOGGED = True
-        return {'available': False, 'pos': 0.0, 'neg': 0.0, 'neu': 1.0}
+        return _neutral_sentiment_payload(type(exc).__name__)
 
 def fetch_form4_filings(ticker: str) -> list[dict]:
     """

@@ -92,6 +92,7 @@ if TYPE_CHECKING:  # pragma: no cover - type hints only
     from ai_trading.risk.engine import RiskEngine, TradeSignal
     import pandas as pd
 from ai_trading.utils.time import last_market_session
+from ai_trading.contracts import bar_from_frame
 try:
     from ai_trading.capital_scaling import capital_scale, update_if_present
 except (ImportError, AttributeError):
@@ -25271,6 +25272,66 @@ def _enter_long(
     conf: float,
     strat: str,
 ) -> bool:
+    legacy_recorder = getattr(state, "_legacy_decision_recorder", None)
+    bar_ts_value: datetime | None = None
+    testing_mode = False
+    price_source = ""
+    if isinstance(feat_df, pd.DataFrame) and not feat_df.empty:
+        try:
+            raw_bar_ts = feat_df.index[-1]
+        except Exception:
+            raw_bar_ts = None
+        if isinstance(raw_bar_ts, datetime):
+            bar_ts_value = (
+                raw_bar_ts if raw_bar_ts.tzinfo is not None else raw_bar_ts.replace(tzinfo=UTC)
+            )
+
+    def _record_legacy_order(
+        *,
+        accepted: bool,
+        gates: Sequence[str],
+        event: str,
+        reasons: Sequence[str] | None = None,
+        submitted: bool = False,
+        qty: float | None = None,
+        client_order_id: str | None = None,
+        broker_order_id: str | None = None,
+        broker_status: str | None = None,
+        price: float | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        if legacy_recorder is None or not hasattr(legacy_recorder, "record"):
+            return
+        freshness: float | None = None
+        if isinstance(bar_ts_value, datetime):
+            freshness = max((datetime.now(UTC) - bar_ts_value).total_seconds(), 0.0)
+        try:
+            legacy_recorder.record(
+                symbol=symbol,
+                bar_ts=bar_ts_value,
+                signal_side="buy",
+                final_score=float(final_score),
+                confidence=float(conf),
+                strategy_id=str(strat or ""),
+                accepted=accepted,
+                gates=gates,
+                reasons=reasons or gates,
+                target_delta_shares=qty,
+                submitted=submitted,
+                client_order_id=client_order_id,
+                broker_order_id=broker_order_id,
+                broker_status=broker_status,
+                provider="alpaca",
+                feed=None if testing_mode else str(price_source or ""),
+                reference_price=price,
+                limit_price=price,
+                event=event,
+                data_freshness_sec=freshness,
+                metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
+            )
+        except Exception:
+            logger.debug("LEGACY_ORDER_DECISION_RECORD_FAILED", exc_info=True)
+
     prefer_backup_quote = bool(getattr(state, "prefer_backup_quotes", False))
     account_obj: Any | None = None
     api_obj = getattr(ctx, "api", None)
@@ -25322,6 +25383,12 @@ def _enter_long(
                     "block_reason": "provider_disabled",
                 },
             )
+            _record_legacy_order(
+                accepted=False,
+                gates=["SAFE_MODE_BLOCK"],
+                event="legacy_order_safe_mode_block",
+                reasons=[reason],
+            )
             return True
         prefer_backup_quote = True
         setattr(state, "prefer_backup_quotes", True)
@@ -25334,6 +25401,12 @@ def _enter_long(
     logger.debug(f"Computed price for {symbol}: {current_price}")
     if current_price <= 0 or pd.isna(current_price):
         logger.critical(f"Invalid price computed for {symbol}: {current_price}")
+        _record_legacy_order(
+            accepted=False,
+            gates=["INVALID_PRICE"],
+            event="legacy_invalid_price_block",
+            price=_safe_float(current_price),
+        )
         return True
 
     testing_mode = bool(
@@ -25342,7 +25415,6 @@ def _enter_long(
         or get_env("DRY_RUN")
     )
     quote_price: float | None
-    price_source: str
     quote_metadata: dict[str, Any] = {}
     fallback_active = False
     if testing_mode:
@@ -25391,6 +25463,11 @@ def _enter_long(
                 "side": "buy",
             },
         )
+        _record_legacy_order(
+            accepted=False,
+            gates=["LAST_CLOSE_ONLY_BLOCK"],
+            event="legacy_last_close_only_block",
+        )
         return True
 
     if quote_price is None:
@@ -25420,6 +25497,11 @@ def _enter_long(
                 },
             )
             guard_mark_symbol_stale()
+            _record_legacy_order(
+                accepted=False,
+                gates=["DEGRADED_QUOTE_BLOCK"],
+                event="legacy_degraded_quote_block",
+            )
             return True
         fallback_price = current_price if np.isfinite(current_price) and current_price > 0 else None
         if fallback_price is not None:
@@ -25443,6 +25525,11 @@ def _enter_long(
                     "quote": quote_price,
                 },
             )
+            _record_legacy_order(
+                accepted=False,
+                gates=["INVALID_QUOTE_BLOCK"],
+                event="legacy_invalid_quote_block",
+            )
             return True
 
     fallback_active = (
@@ -25455,6 +25542,11 @@ def _enter_long(
         logger.warning(
             "SKIP_ORDER_PRICE_SOURCE",
             extra={"symbol": symbol, "price_source": price_source},
+        )
+        _record_legacy_order(
+            accepted=False,
+            gates=["PRICE_SOURCE_BLOCK"],
+            event="legacy_price_source_block",
         )
         return True
     gate = _evaluate_data_gating(
@@ -25563,6 +25655,12 @@ def _enter_long(
         reason_label = ";".join(gate.reasons) if gate.reasons else "unreliable_price"
         _log_unreliable(reason_label, reasons=gate.reasons)
         guard_mark_symbol_stale()
+        _record_legacy_order(
+            accepted=False,
+            gates=["UNRELIABLE_PRICE_BLOCK"],
+            event="legacy_unreliable_price_block",
+            reasons=gate.reasons,
+        )
         return True
     nbbo_available = _is_primary_price_source(price_source)
     gap_exceeds = bool(gap_value is not None and gap_limit is not None and gap_value > gap_limit)
@@ -25661,6 +25759,12 @@ def _enter_long(
         reason_label = "gap_ratio>limit" if gap_exceeds else (skip_reasons[0] if skip_reasons else "unreliable_price")
         _log_unreliable(reason_label, reasons=skip_reasons or gate.reasons)
         guard_mark_symbol_stale()
+        _record_legacy_order(
+            accepted=False,
+            gates=["NBBO_MISSING_BLOCK"],
+            event="legacy_nbbo_block",
+            reasons=skip_reasons or gate.reasons,
+        )
         return True
 
     normalized_source = str(price_source or "").strip().lower()
@@ -25682,6 +25786,12 @@ def _enter_long(
             extra={"skip_reason": skip_reason},
         )
         guard_mark_symbol_stale()
+        _record_legacy_order(
+            accepted=False,
+            gates=["NBBO_TERMINAL_FALLBACK_BLOCK"],
+            event="legacy_nbbo_block",
+            reasons=skip_reasons or gate.reasons,
+        )
         return True
 
     reasons_to_log: tuple[str, ...] | None = None
@@ -25809,6 +25919,11 @@ def _enter_long(
                     symbol,
                 )
                 guard_mark_symbol_stale()
+                _record_legacy_order(
+                    accepted=False,
+                    gates=["STALE_QUOTE_BLOCK"],
+                    event="legacy_stale_quote_block",
+                )
                 return True
         return True
 
@@ -25837,6 +25952,16 @@ def _enter_long(
                 "sample_count": int(feed_reliability.get("sample_count", 0) or 0),
                 "min_score": _safe_float(feed_reliability.get("min_score")),
             },
+        )
+        _record_legacy_order(
+            accepted=False,
+            gates=["FEED_RELIABILITY_BLOCK"],
+            event="legacy_feed_reliability_block",
+        )
+        _record_legacy_order(
+            accepted=False,
+            gates=["FEED_RELIABILITY_BLOCK"],
+            event="legacy_feed_reliability_block",
         )
         return True
 
@@ -25983,6 +26108,11 @@ def _enter_long(
                 "stage": "precheck",
             },
         )
+        _record_legacy_order(
+            accepted=False,
+            gates=["INSUFFICIENT_BUYING_POWER"],
+            event="legacy_buying_power_block",
+        )
         return True
     if raw_qty < prescale_requested_qty:
         logger.info(
@@ -26010,6 +26140,11 @@ def _enter_long(
                 "price": current_price,
                 "available_buying_power": None if available_bp is None else round(available_bp, 2),
             },
+        )
+        _record_legacy_order(
+            accepted=False,
+            gates=["INSUFFICIENT_BUYING_POWER"],
+            event="legacy_buying_power_block",
         )
         return True
     if adj_qty < requested_qty:
@@ -26071,10 +26206,28 @@ def _enter_long(
     )
     if order_id is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
+        _record_legacy_order(
+            accepted=False,
+            gates=["ORDER_SUBMIT_SKIPPED"],
+            event="legacy_order_submit_skipped",
+            qty=float(adj_qty),
+            price=float(current_price),
+        )
     else:
-        order_id = getattr(order_id, "id", order_id)
+        broker_order_id = str(getattr(order_id, "id", order_id) or "").strip() or None
         logger.debug(
-            f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order_id}"
+            f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={broker_order_id}"
+        )
+        _record_legacy_order(
+            accepted=True,
+            gates=["OK_TRADE"],
+            event="legacy_order_submitted",
+            submitted=True,
+            qty=float(adj_qty),
+            client_order_id=broker_order_id,
+            broker_order_id=broker_order_id,
+            broker_status=str(getattr(order_id, "status", None) or "").strip() or None,
+            price=float(current_price),
         )
         ctx.trade_logger.log_entry(
             symbol,
@@ -26138,6 +26291,66 @@ def _enter_short(
     conf: float,
     strat: str,
 ) -> bool:
+    legacy_recorder = getattr(state, "_legacy_decision_recorder", None)
+    bar_ts_value: datetime | None = None
+    testing_mode = False
+    price_source = ""
+    if isinstance(feat_df, pd.DataFrame) and not feat_df.empty:
+        try:
+            raw_bar_ts = feat_df.index[-1]
+        except Exception:
+            raw_bar_ts = None
+        if isinstance(raw_bar_ts, datetime):
+            bar_ts_value = (
+                raw_bar_ts if raw_bar_ts.tzinfo is not None else raw_bar_ts.replace(tzinfo=UTC)
+            )
+
+    def _record_legacy_order(
+        *,
+        accepted: bool,
+        gates: Sequence[str],
+        event: str,
+        reasons: Sequence[str] | None = None,
+        submitted: bool = False,
+        qty: float | None = None,
+        client_order_id: str | None = None,
+        broker_order_id: str | None = None,
+        broker_status: str | None = None,
+        price: float | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        if legacy_recorder is None or not hasattr(legacy_recorder, "record"):
+            return
+        freshness: float | None = None
+        if isinstance(bar_ts_value, datetime):
+            freshness = max((datetime.now(UTC) - bar_ts_value).total_seconds(), 0.0)
+        try:
+            legacy_recorder.record(
+                symbol=symbol,
+                bar_ts=bar_ts_value,
+                signal_side="sell",
+                final_score=float(final_score),
+                confidence=float(conf),
+                strategy_id=str(strat or ""),
+                accepted=accepted,
+                gates=gates,
+                reasons=reasons or gates,
+                target_delta_shares=(-float(qty) if qty is not None else None),
+                submitted=submitted,
+                client_order_id=client_order_id,
+                broker_order_id=broker_order_id,
+                broker_status=broker_status,
+                provider="alpaca",
+                feed=None if testing_mode else str(price_source or ""),
+                reference_price=price,
+                limit_price=price,
+                event=event,
+                data_freshness_sec=freshness,
+                metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
+            )
+        except Exception:
+            logger.debug("LEGACY_ORDER_DECISION_RECORD_FAILED", exc_info=True)
+
     prefer_backup_quote = bool(getattr(state, "prefer_backup_quotes", False))
     feed_reliability = _get_symbol_feed_reliability(symbol)
     account_obj: Any | None = None
@@ -26160,6 +26373,11 @@ def _enter_short(
                     "shorting_power": None if shorting_power is None else round(shorting_power, 2),
                     "shorting_enabled": shorting_enabled,
                 },
+            )
+            _record_legacy_order(
+                accepted=False,
+                gates=["SHORTING_UNAVAILABLE"],
+                event="legacy_shorting_unavailable_block",
             )
             return True
 
@@ -26203,6 +26421,12 @@ def _enter_short(
                     "block_reason": "provider_disabled",
                 },
             )
+            _record_legacy_order(
+                accepted=False,
+                gates=["SAFE_MODE_BLOCK"],
+                event="legacy_order_safe_mode_block",
+                reasons=[reason],
+            )
             return True
         prefer_backup_quote = True
         setattr(state, "prefer_backup_quotes", True)
@@ -26215,6 +26439,12 @@ def _enter_short(
     logger.debug(f"Computed price for {symbol}: {current_price}")
     if current_price <= 0 or pd.isna(current_price):
         logger.critical(f"Invalid price computed for {symbol}: {current_price}")
+        _record_legacy_order(
+            accepted=False,
+            gates=["INVALID_PRICE"],
+            event="legacy_invalid_price_block",
+            price=_safe_float(current_price),
+        )
         return True
 
     testing_mode = bool(
@@ -26223,7 +26453,6 @@ def _enter_short(
         or get_env("DRY_RUN")
     )
     quote_price: float | None
-    price_source: str
     quote_metadata: dict[str, Any] = {}
     fallback_active = False
     if testing_mode:
@@ -26272,6 +26501,11 @@ def _enter_short(
                 "symbol": symbol,
                 "side": "sell",
             },
+        )
+        _record_legacy_order(
+            accepted=False,
+            gates=["LAST_CLOSE_ONLY_BLOCK"],
+            event="legacy_last_close_only_block",
         )
         return True
     nbbo_available = _is_primary_price_source(price_source)
@@ -26701,10 +26935,20 @@ def _enter_short(
         # Basic shortable flag
         if _attr_disabled(asset, ("shortable",)):
             logger.info(f"SKIP_NOT_SHORTABLE | symbol={symbol}")
+            _record_legacy_order(
+                accepted=False,
+                gates=["NOT_SHORTABLE"],
+                event="legacy_shorting_unavailable_block",
+            )
             return True
         # Easy-to-borrow requirement
         if _attr_disabled(asset, ("easy_to_borrow", "easy_to_borrow_flag")):
             logger.info("SKIP_NOT_EASY_TO_BORROW", extra={"symbol": symbol})
+            _record_legacy_order(
+                accepted=False,
+                gates=["NOT_EASY_TO_BORROW"],
+                event="legacy_shorting_unavailable_block",
+            )
             return True
         # Marginable requirement
         if _attr_disabled(asset, ("marginable", "is_marginable", "marginable_flag")):
@@ -26741,6 +26985,11 @@ def _enter_short(
             if _attr_disabled(acct, ("shorting_enabled", "shorting")):
                 # Preserve legacy log key used in tests
                 logger.info("SKIP_SHORTING_UNAVAILABLE", extra={"symbol": symbol})
+                _record_legacy_order(
+                    accepted=False,
+                    gates=["SHORTING_UNAVAILABLE"],
+                    event="legacy_shorting_unavailable_block",
+                )
                 return True
             if _attr_disabled(acct, ("margin_enabled", "marginable")):
                 logger.info(
@@ -26772,6 +27021,11 @@ def _enter_short(
         raise
     if qty is None or not np.isfinite(qty) or qty <= 0:
         logger.warning(f"Skipping {symbol}: computed qty <= 0")
+        _record_legacy_order(
+            accepted=False,
+            gates=["INVALID_QTY"],
+            event="legacy_invalid_qty_block",
+        )
         return True
     qty = _apply_feed_reliability_size_adjustment(
         symbol=symbol,
@@ -26798,6 +27052,11 @@ def _enter_short(
                 "available_short_capacity": None if precheck_bp is None else round(precheck_bp, 2),
                 "stage": "precheck",
             },
+        )
+        _record_legacy_order(
+            accepted=False,
+            gates=["INSUFFICIENT_BUYING_POWER"],
+            event="legacy_buying_power_block",
         )
         return True
     if qty < prescale_requested_qty:
@@ -26826,6 +27085,11 @@ def _enter_short(
                 "price": current_price,
                 "available_short_capacity": None if available_bp is None else round(available_bp, 2),
             },
+        )
+        _record_legacy_order(
+            accepted=False,
+            gates=["INSUFFICIENT_BUYING_POWER"],
+            event="legacy_buying_power_block",
         )
         return True
     if adj_qty < requested_qty:
@@ -26894,6 +27158,11 @@ def _enter_short(
     )
     if not intent_decision_short:
         _log_order_intent_blocked(intent_decision_short)
+        _record_legacy_order(
+            accepted=False,
+            gates=["ORDER_INTENT_BLOCKED"],
+            event="legacy_order_intent_blocked",
+        )
         return True
 
     order_id = _call_submit_order(
@@ -26908,10 +27177,28 @@ def _enter_short(
     )  # AI-AGENT-REF: Use sell_short for short signals
     if order_id is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
+        _record_legacy_order(
+            accepted=False,
+            gates=["ORDER_SUBMIT_SKIPPED"],
+            event="legacy_order_submit_skipped",
+            qty=float(adj_qty),
+            price=float(current_price),
+        )
     else:
-        order_id = getattr(order_id, "id", order_id)
+        broker_order_id = str(getattr(order_id, "id", order_id) or "").strip() or None
         logger.debug(
-            f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order_id}"
+            f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={broker_order_id}"
+        )
+        _record_legacy_order(
+            accepted=True,
+            gates=["OK_TRADE"],
+            event="legacy_order_submitted",
+            submitted=True,
+            qty=float(adj_qty),
+            client_order_id=broker_order_id,
+            broker_order_id=broker_order_id,
+            broker_status=str(getattr(order_id, "status", None) or "").strip() or None,
+            price=float(current_price),
         )
         ctx.trade_logger.log_entry(
             symbol,
@@ -27390,354 +27677,18 @@ def trade_logic(
     Core per-symbol logic: fetch data, compute features, evaluate signals, enter/exit orders.
     """
     logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
+    from ai_trading.core.legacy_trade_cycle import execute_legacy_trade_logic
 
-    if not pre_trade_checks(ctx, state, symbol, balance, regime_ok):
-        logger.debug("SKIP_PRE_TRADE_CHECKS", extra={"symbol": symbol})
-        return False
-
-    provider_enabled = True
-    primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
-    if callable(primary_provider_fn):
-        try:
-            provider_enabled = bool(primary_provider_fn())
-        except COMMON_EXC as exc:  # pragma: no cover - defensive logging
-            logger.warning(
-                "PRIMARY_PROVIDER_STATUS_ERROR",
-                extra={"symbol": symbol, "detail": str(exc)},
-            )
-            provider_enabled = True
-    if not provider_enabled:
-        _mark_primary_provider_fallback(
-            state, symbol, reason="primary_provider_disabled"
-        )
-        logger.warning(
-            "PRIMARY_PROVIDER_DEGRADED",
-            extra={"symbol": symbol, "provider": "alpaca"},
-        )
-    else:
-        _clear_primary_provider_fallback(state, symbol, provider="alpaca")
-
-    if is_safe_mode_active():
-        reason = safe_mode_reason() or "provider_safe_mode"
-        if _safe_mode_blocks_trading():
-            logger.warning(
-                "SAFE_MODE_BLOCK",
-                extra={
-                    "symbol": symbol,
-                    "reason": reason,
-                    "block_reason": "provider_disabled",
-                },
-            )
-            return False
-        setattr(state, "prefer_backup_quotes", True)
-        _mark_ctx_degraded(ctx, reason)
-        _log_safe_mode_continue(ctx, stage="trade_logic", reason=reason, symbol=symbol)
-
-    with StageTimer(logger, "DATA_FETCH_TOTAL_MS", symbol=symbol):
-        raw_df, feat_df, skip_flag = _fetch_feature_data(
-            ctx, state, symbol, price_df=price_df
-        )
-    if is_safe_mode_active() and _safe_mode_blocks_trading():
-        reason = safe_mode_reason() or "provider_safe_mode"
-        logger.warning(
-            "SAFE_MODE_BLOCK",
-            extra={
-                "symbol": symbol,
-                "reason": reason,
-                "block_reason": "provider_disabled_midcycle",
-            },
-        )
-        return False
-    if feat_df is None:
-        return skip_flag if skip_flag is not None else False
-
-    default_feature_values = {
-        "macd": 0.0,
-        "atr": 0.0,
-        "vwap": 0.0,
-        "macds": 0.0,
-        "sma_50": 0.0,
-        "sma_200": 0.0,
-        "rsi": 50.0,
-        "ichimoku_conv": 0.0,
-        "ichimoku_base": 0.0,
-        "stochrsi": 0.5,
-    }
-    for col, neutral_value in default_feature_values.items():
-        if col not in feat_df.columns:
-            feat_df[col] = neutral_value
-
-    feature_names = _model_feature_names(model)
-    missing = [f for f in feature_names if f not in feat_df.columns]
-    if missing:
-        logger.debug(
-            f"Feature snapshot for {symbol}: macd={feat_df['macd'].iloc[-1]}, atr={feat_df['atr'].iloc[-1]}, vwap={feat_df['vwap'].iloc[-1]}, macds={feat_df['macds'].iloc[-1]}, sma_50={feat_df['sma_50'].iloc[-1]}, sma_200={feat_df['sma_200'].iloc[-1]}"
-        )
-        logger.info("SKIP_MISSING_FEATURES | symbol=%s  missing=%s", symbol, missing)
-        return True
-
-    try:
-        final_score, conf, strat = _evaluate_trade_signal(
-            ctx, state, feat_df, symbol, model
-        )
-    except ValueError as exc:
-        logger.info(
-            "SKIP_SIGNAL_INVALID",
-            extra={"symbol": symbol, "reason": str(exc)},
-        )
-        return True
-    if pd.isna(final_score) or pd.isna(conf):
-        logger.warning(f"Skipping {symbol}: model returned NaN prediction")
-        return True
-
-    current_qty = _current_qty(ctx, symbol)
-    if current_qty == 0:
-        entry_times = getattr(state, "position_entry_times", None)
-        if isinstance(entry_times, dict):
-            entry_times.pop(symbol, None)
-        _reset_reversal_signal_streak(state, symbol)
-
-    from datetime import UTC, datetime
-
-    now_fn = now_provider or (lambda: datetime.now(UTC))
-    now = now_fn()  # AI-AGENT-REF: injectable clock
-
-    signal = "buy" if final_score > 0 else "sell" if final_score < 0 else "hold"
-
-    if _exit_positions_if_needed(
-        ctx, state, symbol, feat_df, final_score, conf, current_qty
-    ):
-        return True
-
-    # AI-AGENT-REF: Add thread-safe locking for trade cooldown access
-    with trade_cooldowns_lock:
-        cd_ts = state.trade_cooldowns.get(symbol)
-    if cd_ts and (now - cd_ts).total_seconds() < get_trade_cooldown_min() * 60:
-        prev = state.last_trade_direction.get(symbol)
-        if prev and (
-            (prev == "buy" and signal == "sell") or (prev == "sell" and signal == "buy")
-        ):
-            logger.info("SKIP_REVERSED_SIGNAL", extra={"symbol": symbol})
-            return True
-        logger.debug("SKIP_COOLDOWN", extra={"symbol": symbol})
-        return True
-
-    # AI-AGENT-REF: Enhanced overtrading prevention - check frequency limits
-    if _check_trade_frequency_limits(state, symbol, now):
-        logger.info("SKIP_FREQUENCY_LIMIT", extra={"symbol": symbol})
-        return True
-
-    alpha_decay_guard: dict[str, Any] | None = None
-    if current_qty == 0:
-        alpha_decay_guard = _alpha_decay_entry_guard(state, symbol, now)
-        if alpha_decay_guard.get("blocked"):
-            logger.info(
-                "ENTRY_BLOCKED_ALPHA_DECAY",
-                extra={
-                    "symbol": symbol,
-                    "trades_in_window": alpha_decay_guard.get("trades_in_window", 0),
-                    "window_minutes": alpha_decay_guard.get("window_minutes", 0),
-                    "max_trades_window": alpha_decay_guard.get("max_trades_window", 0),
-                },
-            )
-            return True
-
-    local_threshold = max(get_buy_threshold(), get_conf_threshold())
-    meta_capped = bool(getattr(ctx.signal_manager, "meta_confidence_capped", False))
-    if meta_capped:
-        cap_limit = _metafallback_confidence_cap()
-        try:
-            local_threshold = min(float(local_threshold), float(cap_limit))
-        except Exception:
-            local_threshold = min(local_threshold, cap_limit)
-        local_threshold = max(local_threshold, get_conf_threshold())
-    fallback_confidence_bonus = get_fallback_entry_confidence_bonus()
-    if fallback_confidence_bonus > 0:
-        quality = _ensure_data_quality_bucket(state).get(symbol, {})
-        if isinstance(quality, MappingABC):
-            using_fallback_provider = bool(quality.get("using_fallback_provider"))
-            stale_data = bool(quality.get("stale_data"))
-            missing_ohlcv = bool(quality.get("missing_ohlcv"))
-            if using_fallback_provider or stale_data or missing_ohlcv:
-                threshold_before = local_threshold
-                local_threshold = min(1.0, local_threshold + fallback_confidence_bonus)
-                logger.info(
-                    "ENTRY_THRESHOLD_RAISED_DEGRADED_DATA",
-                    extra={
-                        "symbol": symbol,
-                        "threshold_before": threshold_before,
-                        "threshold_after": local_threshold,
-                        "confidence_bonus": fallback_confidence_bonus,
-                        "using_fallback_provider": using_fallback_provider,
-                        "stale_data": stale_data,
-                        "missing_ohlcv": missing_ohlcv,
-                    },
-                )
-
-    if current_qty == 0 and alpha_decay_guard is not None:
-        threshold_bump = float(alpha_decay_guard.get("threshold_bump", 0.0) or 0.0)
-        if threshold_bump > 0:
-            threshold_before = local_threshold
-            local_threshold = min(1.0, local_threshold + threshold_bump)
-            logger.info(
-                "ENTRY_THRESHOLD_RAISED_ALPHA_DECAY",
-                extra={
-                    "symbol": symbol,
-                    "threshold_before": threshold_before,
-                    "threshold_after": local_threshold,
-                    "threshold_bump": threshold_bump,
-                    "trades_in_window": alpha_decay_guard.get("trades_in_window", 0),
-                    "window_minutes": alpha_decay_guard.get("window_minutes", 0),
-                    "start_trades": alpha_decay_guard.get("start_trades", 0),
-                },
-            )
-
-    feed_reliability = _get_symbol_feed_reliability(symbol)
-    if current_qty == 0 and bool(feed_reliability.get("active")):
-        reliability_threshold_bonus = _safe_float(feed_reliability.get("threshold_bonus"))
-        if reliability_threshold_bonus is not None and reliability_threshold_bonus > 0.0:
-            threshold_before = local_threshold
-            local_threshold = min(1.0, local_threshold + reliability_threshold_bonus)
-            logger.info(
-                "ENTRY_THRESHOLD_RAISED_FEED_RELIABILITY",
-                extra={
-                    "symbol": symbol,
-                    "threshold_before": threshold_before,
-                    "threshold_after": local_threshold,
-                    "reliability_score": _safe_float(feed_reliability.get("score")),
-                    "sample_count": int(feed_reliability.get("sample_count", 0) or 0),
-                    "threshold_bonus": reliability_threshold_bonus,
-                },
-            )
-
-    long_entry_candidate = final_score > 0 and conf >= local_threshold and current_qty == 0
-    short_entry_candidate = final_score < 0 and conf >= local_threshold and current_qty == 0
-    if (
-        current_qty == 0
-        and (long_entry_candidate or short_entry_candidate)
-        and bool(feed_reliability.get("blocked"))
-    ):
-        entry_side = "buy" if long_entry_candidate else "sell_short"
-        logger.info(
-            "ENTRY_BLOCKED_FEED_RELIABILITY",
-            extra={
-                "symbol": symbol,
-                "side": entry_side,
-                "final_score": final_score,
-                "confidence": conf,
-                "reliability_score": _safe_float(feed_reliability.get("score")),
-                "sample_count": int(feed_reliability.get("sample_count", 0) or 0),
-                "min_score": _safe_float(feed_reliability.get("min_score")),
-            },
-        )
-        _reset_entry_flip_signal_streak(state, symbol)
-        return True
-    if current_qty == 0 and not (long_entry_candidate or short_entry_candidate):
-        _reset_entry_flip_signal_streak(state, symbol)
-
-    if long_entry_candidate:
-        if not _entry_flip_confirmation_ready(
-            state,
-            symbol=symbol,
-            candidate_side="long",
-            final_score=float(final_score),
-            confidence=float(conf),
-        ):
-            return True
-        if not _entry_expectancy_allowed(
-            state,
-            symbol=symbol,
-            regime=getattr(state, "current_regime", "sideways"),
-            side="long",
-        ):
-            return True
-        if not _profitability_governor_allows_entry(
-            state,
-            symbol=symbol,
-            regime=getattr(state, "current_regime", "sideways"),
-            side="long",
-        ):
-            return True
-        blocked, degraded_extra = _entry_data_degraded(state, symbol)
-        if blocked:
-            logger.warning(
-                "ENTRY_BLOCKED_DEGRADED_MINUTE_DATA",
-                extra={
-                    "symbol": symbol,
-                    "side": "buy",
-                    "final_score": final_score,
-                    "confidence": conf,
-                    **degraded_extra,
-                },
-            )
-            return True
-        if symbol in state.long_positions:
-            held = state.position_cache.get(symbol, 0)
-            logger.info(
-                f"Skipping BUY for {symbol} — position already LONG {held} shares"
-            )
-            return True
-        return _enter_long(
-            ctx, state, symbol, balance, feat_df, final_score, conf, strat
-        )
-
-    if short_entry_candidate:
-        if not _entry_flip_confirmation_ready(
-            state,
-            symbol=symbol,
-            candidate_side="short",
-            final_score=float(final_score),
-            confidence=float(conf),
-        ):
-            return True
-        if not _entry_expectancy_allowed(
-            state,
-            symbol=symbol,
-            regime=getattr(state, "current_regime", "sideways"),
-            side="short",
-        ):
-            return True
-        if not _profitability_governor_allows_entry(
-            state,
-            symbol=symbol,
-            regime=getattr(state, "current_regime", "sideways"),
-            side="short",
-        ):
-            return True
-        blocked, degraded_extra = _entry_data_degraded(state, symbol)
-        if blocked:
-            logger.warning(
-                "ENTRY_BLOCKED_DEGRADED_MINUTE_DATA",
-                extra={
-                    "symbol": symbol,
-                    "side": "sell",
-                    "final_score": final_score,
-                    "confidence": conf,
-                    **degraded_extra,
-                },
-            )
-            return True
-        if symbol in state.short_positions:
-            held = abs(state.position_cache.get(symbol, 0))
-            logger.info(
-                f"Skipping SELL for {symbol} — position already SHORT {held} shares"
-            )
-            return True
-        return _enter_short(ctx, state, symbol, feat_df, final_score, conf, strat)
-
-    # If holding, check for stops/take/trailing
-    if current_qty != 0:
-        atr = feat_df["atr"].iloc[-1]
-        return _manage_existing_position(
-            ctx, state, symbol, feat_df, conf, atr, current_qty
-        )
-
-    # Else hold / no action
-    logger.info(
-        f"SKIP_LOW_OR_NO_SIGNAL | symbol={symbol}  "
-        f"final_score={final_score:.4f}  confidence={conf:.4f}  threshold={local_threshold:.4f}"
+    return execute_legacy_trade_logic(
+        ctx,
+        state,
+        symbol,
+        balance,
+        model,
+        regime_ok,
+        price_df=price_df,
+        now_provider=now_provider,
     )
-    return True
 
 
 def compute_portfolio_weights(ctx: BotContext, symbols: list[str]) -> dict[str, float]:
@@ -32413,722 +32364,9 @@ def _increment_counter_safe(counter: Any, amount: float = 1.0) -> None:
 
 
 def run_multi_strategy(ctx) -> None:
-    """Execute all modular strategies via allocator and risk engine."""
-    signals_by_strategy: dict[str, list[Any]] = {}
-    for strat in ctx.strategies:
-        try:
-            gen = getattr(strat, "generate", None)
-            # AI-AGENT-REF: support generate() and generate_signals()
-            if callable(gen):
-                sigs = gen(ctx)
-            else:
-                gs = getattr(strat, "generate_signals", None)
-                if callable(gs):
-                    sigs = gs(getattr(ctx, "market_data", ctx))
-                else:
-                    logger.error(
-                        "Strategy %s has neither `generate` nor `generate_signals`; skipping",
-                        type(strat).__name__,
-                    )
-                    continue
-            signals_by_strategy[strat.name] = sigs
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            logger.warning(f"Strategy {strat.name} failed: {e}")
-    # Optionally augment strategy signals with reinforcement learning signals.
-    if RL_AGENT:
-        _init_metrics()
-        _increment_counter_safe(rl_eval_cycles_total)
-        rl_cycle_summary: dict[str, Any] = {
-            "status": "started",
-            "reason": "init",
-            "candidate_symbols": 0,
-            "state_vectors": 0,
-            "rl_signals": 0,
-            "symbol_source": "none",
-            "symbol_limit": _resolve_rl_symbol_limit(),
-            "symbols_truncated": False,
-        }
-        try:
-            all_symbols, symbol_metadata = _resolve_rl_candidate_symbols(
-                ctx,
-                signals_by_strategy,
-            )
-            rl_cycle_summary.update(
-                {
-                    "candidate_symbols": len(all_symbols),
-                    "symbol_source": symbol_metadata.get("source", "none"),
-                    "symbol_limit": int(symbol_metadata.get("symbol_limit", 0) or 0),
-                    "symbols_truncated": bool(symbol_metadata.get("truncated", False)),
-                    "symbol_sample": all_symbols[:5],
-                }
-            )
-            _increment_counter_safe(rl_eval_symbols_total, float(len(all_symbols)))
+    from ai_trading.core.legacy_strategy_cycle import run_multi_strategy_cycle
 
-            if not all_symbols:
-                _increment_counter_safe(rl_eval_skips_total)
-                note_rl_signals_emitted()
-                rl_cycle_summary.update(
-                    {
-                        "status": "skipped",
-                        "reason": "no_symbols",
-                    }
-                )
-                logger.debug(
-                    "RL_SIGNALS_SKIPPED",
-                    extra={"reason": "no_symbols"},
-                )
-            else:
-                # Compute meaningful feature vectors for each symbol
-                import numpy as _np  # AI-AGENT-REF: alias to avoid shadowing global np
-
-                from ai_trading.rl_trading.features import FeatureConfig, compute_features
-
-                states: list[_np.ndarray] = []
-                rl_symbols: list[str] = []
-                rl_feature_window = int(get_env("AI_TRADING_RL_FEATURE_WINDOW", 10, cast=int))
-                if rl_feature_window < 5:
-                    rl_feature_window = 5
-                elif rl_feature_window > 256:
-                    rl_feature_window = 256
-                feature_cfg = FeatureConfig(window=rl_feature_window)
-                for sym in all_symbols:
-                    df = None
-                    try:
-                        df = ctx.data_fetcher.get_daily_df(ctx, sym)
-                    except (
-                        FileNotFoundError,
-                        PermissionError,
-                        IsADirectoryError,
-                        JSONDecodeError,
-                        ValueError,
-                        KeyError,
-                        TypeError,
-                        OSError,
-                    ):
-                        df = None
-                    if df is None or getattr(df, "empty", True):
-                        try:
-                            df = ctx.data_fetcher.get_minute_df(ctx, sym)
-                        except (
-                            FileNotFoundError,
-                            PermissionError,
-                            IsADirectoryError,
-                            JSONDecodeError,
-                            ValueError,
-                            KeyError,
-                            TypeError,
-                            OSError,
-                        ):
-                            df = None
-                    if df is None or getattr(df, "empty", True):
-                        logger.debug("RL_FEATURES_SKIPPED_NO_DATA", extra={"symbol": sym})
-                        continue
-                    try:
-                        state_vec = compute_features(df, cfg=feature_cfg)
-                    except (ValueError, TypeError, KeyError) as exc:
-                        logger.debug(
-                            "RL_FEATURES_BUILD_FAILED",
-                            extra={"symbol": sym, "error": str(exc)},
-                        )
-                        continue
-                    states.append(state_vec)
-                    rl_symbols.append(sym)
-                rl_cycle_summary["state_vectors"] = len(rl_symbols)
-                _increment_counter_safe(rl_eval_state_vectors_total, float(len(rl_symbols)))
-                if states and rl_symbols:
-                    state_mat = _np.stack(states).astype(_np.float32)
-                    rl_sigs = RL_AGENT.predict(state_mat, symbols=rl_symbols)
-                    # Heartbeat is based on decision evaluation, not only actionable signals.
-                    note_rl_signals_emitted()
-                    if rl_sigs:
-                        rl_signal_list = rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
-                        signals_by_strategy["rl"] = rl_signal_list
-                        rl_cycle_summary.update(
-                            {
-                                "status": "emitted",
-                                "reason": "predict_ok",
-                                "rl_signals": len(rl_signal_list),
-                            }
-                        )
-                        logger.info(
-                            "RL_SIGNALS_EMITTED",
-                            extra={
-                                "signals": len(rl_signal_list),
-                                "symbols": rl_symbols,
-                            },
-                        )
-                    else:
-                        rl_cycle_summary.update(
-                            {
-                                "status": "empty",
-                                "reason": "predict_ok",
-                            }
-                        )
-                        logger.debug(
-                            "RL_SIGNALS_EMPTY",
-                            extra={"symbols": rl_symbols},
-                        )
-                else:
-                    _increment_counter_safe(rl_eval_skips_total)
-                    note_rl_signals_emitted()
-                    rl_cycle_summary.update(
-                        {
-                            "status": "skipped",
-                            "reason": "no_state_vectors",
-                        }
-                    )
-                    logger.debug(
-                        "RL_SIGNALS_SKIPPED",
-                        extra={"reason": "no_state_vectors", "symbols": all_symbols},
-                    )
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as exc:
-            _increment_counter_safe(rl_eval_failures_total)
-            rl_cycle_summary.update(
-                {
-                    "status": "error",
-                    "reason": "exception",
-                    "error": str(exc),
-                }
-            )
-            logger.error("RL_AGENT_ERROR", extra={"exc": str(exc)})
-        finally:
-            logger.info("RL_EVAL_CYCLE", extra=rl_cycle_summary)
-
-    # AI-AGENT-REF: Add position holding logic to reduce churn
-    try:
-        # Get current positions
-        current_positions = ctx.api.list_positions()
-
-        # Generate hold signals for existing positions
-        # ai_trading/core/bot_engine.py:8588 - Convert import guard to hard import (internal module)
-        from ai_trading.signals import (  # type: ignore
-            enhance_signals_with_position_logic,
-            generate_position_hold_signals,
-        )
-
-        hold_signals = generate_position_hold_signals(ctx, current_positions)
-
-        # Apply position holding logic to all strategy signals
-        enhanced_signals_by_strategy = {}
-        for strategy_name, strategy_signals in signals_by_strategy.items():
-            enhanced_signals = enhance_signals_with_position_logic(
-                strategy_signals, ctx, hold_signals
-            )
-            enhanced_signals_by_strategy[strategy_name] = enhanced_signals
-
-        # Log the effect of position holding
-        original_count = sum(len(sigs) for sigs in signals_by_strategy.values())
-        enhanced_count = sum(
-            len(sigs) for sigs in enhanced_signals_by_strategy.values()
-        )
-        logger.info(
-            "POSITION_HOLD_FILTER",
-            extra={
-                "original_signals": original_count,
-                "enhanced_signals": enhanced_count,
-                "filtered_out": original_count - enhanced_count,
-                "hold_signals_count": len(hold_signals),
-            },
-        )
-
-        # Use enhanced signals for allocation
-        signals_by_strategy = enhanced_signals_by_strategy
-
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        logger.warning("Position holding logic failed, using original signals: %s", exc)
-    if getattr(ctx, "allocator", None) is None:  # AI-AGENT-REF: ensure allocator
-        ctx.allocator = get_allocator()
-
-    all_signals = [s for sigs in signals_by_strategy.values() for s in sigs]
-    if not all_signals:
-        logger.info("No signals produced this cycle; skipping allocation and execution")
-        return
-
-    allocated = ctx.allocator.allocate(signals_by_strategy)
-    if allocated is None:
-        logger.info("Allocator returned no signals; skipping execution")
-        return
-    if isinstance(allocated, dict):
-        candidate_iterable = allocated.values()
-    else:
-        candidate_iterable = allocated
-    if isinstance(candidate_iterable, Iterable) and not isinstance(
-        candidate_iterable, (str, bytes)
-    ):
-        final = list(candidate_iterable)
-    else:
-        final = [candidate_iterable]
-    final, dedupe_summary = _dedupe_cycle_intents(final)
-    logger.info("CYCLE_INTENTS_DEDUPED", extra=dedupe_summary)
-    if not final:
-        logger.info("No tradable signals after allocation; skipping execution")
-        return
-    acct = ctx.api.get_account()
-    cash = float(getattr(acct, "cash", 0))
-    strength_threshold = _signal_strength_threshold(ctx)
-    for sig in final:
-        sig = to_trade_signal(sig)
-        minute_df: pd.DataFrame | None = None
-        last_close: float | None = None
-        minute_fetch_attempted = False
-
-        quote_price: float | None = None
-        quote_source: str | None = None
-        try:
-            quote_price = get_latest_price(sig.symbol)
-            quote_source = get_price_source(sig.symbol)
-        except COMMON_EXC:
-            quote_price = None
-            quote_source = None
-
-        quote_reliable = _is_reliable_quote(quote_price, quote_source)
-
-        def _maybe_fetch_minute_data() -> bool:
-            nonlocal minute_df, last_close, minute_fetch_attempted
-            if minute_fetch_attempted:
-                return False
-            minute_fetch_attempted = True
-            local_df: pd.DataFrame | None
-            try:
-                local_df = fetch_minute_df_safe(sig.symbol)
-            except DataFetchError:
-                local_df = pd.DataFrame()
-            if local_df is not None and not local_df.empty:
-                minute_df = local_df
-                last_close = utils.get_latest_close(local_df)
-                coverage_meta = getattr(local_df, "attrs", {}).get("_coverage_meta", {})
-                tz_info = ZoneInfo("America/New_York")
-                start_val = coverage_meta.get("window_start") if isinstance(coverage_meta, dict) else None
-                end_val = coverage_meta.get("window_end") if isinstance(coverage_meta, dict) else None
-
-                def _normalize_window(val):
-                    if hasattr(val, "to_pydatetime"):
-                        dt_val = val.to_pydatetime()
-                    elif isinstance(val, datetime):
-                        dt_val = val
-                    else:
-                        return None
-                    if dt_val.tzinfo is None:
-                        dt_val = dt_val.replace(tzinfo=UTC)
-                    return dt_val.astimezone(tz_info)
-
-                start_window = _normalize_window(start_val)
-                end_window = _normalize_window(end_val)
-                if start_window is None or end_window is None:
-                    now_local = datetime.now(tz_info)
-                    start_window = now_local.replace(hour=9, minute=30, second=0, microsecond=0)
-                    end_window = now_local.replace(hour=16, minute=0, second=0, microsecond=0)
-
-                def _gap_ratio_setting() -> float:
-                    env_bps: float | None = None
-                    for key in ("DATA_MAX_GAP_RATIO_BPS", "MAX_GAP_RATIO_BPS"):
-                        try:
-                            value = get_env(key, None, cast=float)
-                        except COMMON_EXC:
-                            continue
-                        if value is not None:
-                            try:
-                                env_bps = max(float(value), 0.0)
-                                break
-                            except (TypeError, ValueError):
-                                continue
-                    base_bps = env_bps if env_bps is not None else 5.0
-                    data_degraded_flag = bool(getattr(ctx, "_data_degraded", False))
-                    degrade_fatal_flag = bool(getattr(ctx, "_data_degraded_fatal", False))
-                    if data_degraded_flag and not degrade_fatal_flag:
-                        degraded_ratio = _degraded_gap_limit_ratio()
-                        if degraded_ratio > 0.0:
-                            base_bps = max(base_bps, degraded_ratio * 10000.0)
-                    return base_bps
-
-                max_gap_bps = _gap_ratio_setting()
-                max_gap_ratio = max_gap_bps / 10000.0
-                if should_skip_symbol(
-                    local_df,
-                    window=(start_window, end_window),
-                    tz=tz_info,
-                    max_gap_ratio=max_gap_ratio,
-                ):
-                    gap_ratio = 0.0
-                    if isinstance(coverage_meta, dict):
-                        try:
-                            gap_ratio = float(coverage_meta.get("gap_ratio", 0.0))
-                        except (TypeError, ValueError):
-                            gap_ratio = 0.0
-                    logger.info(
-                        "SKIP_SYMBOL_DATA_GAPS | symbol=%s gap_ratio=%s",
-                        sig.symbol,
-                        f"{gap_ratio:.4%}",
-                    )
-                    return True
-            else:
-                minute_df = None
-            return False
-
-        if not quote_reliable:
-            skip_due_to_gaps = _maybe_fetch_minute_data()
-            if skip_due_to_gaps:
-                continue
-        price, _price_source = _resolve_limit_price(
-            ctx,
-            sig.symbol,
-            sig.side,
-            minute_df,
-            last_close,
-        )
-        if (price is None or price <= 0) and quote_reliable:
-            skip_due_to_gaps = _maybe_fetch_minute_data()
-            if skip_due_to_gaps:
-                continue
-            price, _price_source = _resolve_limit_price(
-                ctx,
-                sig.symbol,
-                sig.side,
-                minute_df,
-                last_close,
-            )
-        if price is None or price <= 0:
-            logger.info("SKIP_SYMBOL_NO_VALID_PRICE", extra={"symbol": sig.symbol})
-            continue
-        # Provide the account equity (cash) when sizing positions; this allows
-        # CapitalScalingEngine.scale_position to use equity rather than raw size.
-        if sig.side == "buy" and ctx.risk_engine.position_exists(ctx.api, sig.symbol):
-            logger.info("SKIP_DUPLICATE_LONG", extra={"symbol": sig.symbol})
-            continue
-
-        try:
-            strength = float(getattr(sig, "strength", 0.0))
-        except (TypeError, ValueError):
-            strength = 0.0
-
-        if abs(strength) < strength_threshold:
-            logger.info(
-                "SIGNAL_STRENGTH_REJECTED",
-                extra={
-                    "symbol": sig.symbol,
-                    "side": sig.side,
-                    "strategy": getattr(sig, "strategy", "unknown"),
-                    "signal_strength": strength,
-                    "threshold": strength_threshold,
-                },
-            )
-            continue
-
-        # AI-AGENT-REF: Add validation and logging for signal processing
-        logger.debug(
-            "PROCESSING_SIGNAL",
-            extra={
-                "symbol": sig.symbol,
-                "side": sig.side,
-                "confidence": sig.confidence,
-                "strategy": getattr(sig, "strategy", "unknown"),
-                "weight": getattr(sig, "weight", 0.0),
-                "signal_strength": strength,
-                "strength_threshold": strength_threshold,
-            },
-        )
-
-        qty = ctx.risk_engine.position_size(sig, cash, price)
-        if qty is None or not np.isfinite(qty) or qty <= 0:
-            logger.warning(
-                "SKIP_INVALID_QTY",
-                extra={
-                    "symbol": sig.symbol,
-                    "side": sig.side,
-                    "qty": qty,
-                    "cash": cash,
-                    "price": price,
-                    "signal_strength": strength,
-                    "threshold": strength_threshold,
-                },
-            )
-            continue
-
-        logger.debug(
-            "RISK_MANAGER_APPROVED",
-            extra={
-                "symbol": sig.symbol,
-                "side": sig.side,
-                "qty": qty,
-                "signal_strength": strength,
-                "threshold": strength_threshold,
-            },
-        )
-
-        # AI-AGENT-REF: Validate signal side before execution to catch any corruption
-        if sig.side not in ["buy", "sell"]:
-            logger.error(
-                "INVALID_SIGNAL_SIDE",
-                extra={
-                    "symbol": sig.symbol,
-                    "side": sig.side,
-                    "expected": "buy or sell",
-                },
-            )
-            continue
-
-        logger.info(
-            "EXECUTING_ORDER",
-            extra={
-                "symbol": sig.symbol,
-                "side": sig.side,
-                "qty": qty,
-                "price": price,
-                "signal_strength": strength,
-                "threshold": strength_threshold,
-                "confidence": sig.confidence,
-            },
-        )
-
-        try:
-            target_qty = int(round(float(qty)))
-        except (TypeError, ValueError):
-            target_qty = 0
-        if target_qty <= 0:
-            continue
-
-        try:
-            order_type = 'market' if price is None else 'limit'
-            order_kwargs = {
-                'order_type': order_type,
-                'asset_class': sig.asset_class,
-                'signal': sig,
-                'signal_weight': getattr(sig, "weight", None),
-            }
-            if price is not None:
-                order_kwargs['price'] = price
-                # Provide a price hint to the execution layer for slippage logs
-                order_kwargs['price_hint'] = price
-            # Propagate quote/price source so execution can enforce degraded feed gates
-            annotations: dict[str, Any] = {}
-            # Prefer the immediate quote_source when available; fall back to the
-            # resolved limit price source from _resolve_limit_price
-            price_source_label: Any = None
-            try:
-                if 'quote_source' in locals() and quote_source is not None:
-                    price_source_label = quote_source
-                elif _price_source is not None:
-                    price_source_label = _price_source
-            except Exception:
-                price_source_label = None
-            if price_source_label in (None, ""):
-                try:
-                    price_source_label = get_price_source(sig.symbol)
-                except Exception:
-                    price_source_label = None
-            if price_source_label is not None:
-                annotations['price_source'] = price_source_label
-            # Mark fallback usage from the active price source rather than any
-            # secondary candidate source to avoid stale false positives.
-            primary_source_label = _normalize_price_source_label(price_source_label)
-            if not primary_source_label:
-                primary_source_label = _normalize_price_source_label(quote_source)
-            if not primary_source_label:
-                primary_source_label = _normalize_price_source_label(_price_source)
-            using_fallback = bool(
-                primary_source_label
-                and not _is_primary_price_source(primary_source_label)
-            )
-            if using_fallback:
-                annotations['using_fallback_price'] = True
-                # Also surface at top-level for execution hinting
-                order_kwargs['using_fallback_price'] = True
-            if annotations:
-                order_kwargs['annotations'] = annotations
-            # Wire ATR-based bracket targets when available on context
-            try:
-                sl = getattr(getattr(ctx, 'stop_targets', {}), 'get', lambda _s, _d=None: None)(sig.symbol, None)
-            except COMMON_EXC:
-                sl = None
-            try:
-                tp = getattr(getattr(ctx, 'take_profit_targets', {}), 'get', lambda _s, _d=None: None)(sig.symbol, None)
-            except COMMON_EXC:
-                tp = None
-            if isinstance(sl, (int, float)) and sl > 0:
-                order_kwargs['stop_loss'] = float(sl)
-                # Request bracket when either stop or take is present
-                order_kwargs.setdefault('order_class', 'bracket')
-            if isinstance(tp, (int, float)) and tp > 0:
-                order_kwargs['take_profit'] = float(tp)
-                order_kwargs.setdefault('order_class', 'bracket')
-            try:
-                target_weight_val = float(ctx.portfolio_weights.get(sig.symbol, 0.0))
-            except (AttributeError, TypeError, ValueError):
-                try:
-                    target_weight_val = float(getattr(sig, "weight", 0.0) or 0.0)
-                except (TypeError, ValueError):
-                    target_weight_val = 0.0
-            intent_decision = _resolve_order_intent(
-                ctx,
-                state,
-                symbol=sig.symbol,
-                signal_side=sig.side,
-                target_weight=target_weight_val,
-            )
-            if not intent_decision:
-                _log_order_intent_blocked(intent_decision)
-                continue
-            expected_sides = set(intent_decision.expected_sides) or {intent_decision.order_side}
-            open_buy_qty = open_sell_qty = 0
-            engine_for_delta = getattr(ctx, "execution_engine", None)
-            if engine_for_delta is not None and hasattr(engine_for_delta, "open_order_totals"):
-                try:
-                    open_buy_qty, open_sell_qty = engine_for_delta.open_order_totals(sig.symbol)
-                except Exception:
-                    open_buy_qty = open_sell_qty = 0
-            position_qty = _current_qty(ctx, sig.symbol)
-            delta_qty = _delta_quantity(
-                intent_decision.order_side,
-                target_qty,
-                position_qty,
-                open_buy_qty,
-                open_sell_qty,
-            )
-            logger.info(
-                "DELTA_BREAKDOWN",
-                extra={
-                    "symbol": sig.symbol,
-                    "order_side": intent_decision.order_side,
-                    "target": target_qty,
-                    "position": position_qty,
-                    "open_buy": open_buy_qty,
-                    "open_sell": open_sell_qty,
-                    "delta": delta_qty,
-                },
-            )
-            if delta_qty <= 0:
-                continue
-            qty = delta_qty
-            result = ctx.execution_engine.execute_order(
-                sig.symbol,
-                intent_decision.order_side,
-                qty,
-                **order_kwargs,
-            )
-            if result is not None:
-                try:
-                    state.execution_metrics.submitted += 1
-                except Exception:
-                    logger.debug("EXECUTION_METRIC_SUBMITTED_INCREMENT_FAILED", exc_info=True)
-                actual_side_norm = _normalize_order_side_value(getattr(result, "side", None))
-                if actual_side_norm is None:
-                    actual_side_norm = _normalize_order_side_value(intent_decision.order_side)
-                if actual_side_norm not in expected_sides:
-                    logger.error(
-                        "ORDER_SIDE_MISMATCH",
-                        extra={
-                            "symbol": sig.symbol,
-                            "signal_side": sig.side,
-                            "order_side": actual_side_norm,
-                            "expected_sides": tuple(sorted(expected_sides)),
-                            "order_id": getattr(result, "id", None),
-                        },
-                    )
-                    raise AssertionError("order_side_mismatch")
-        except AssertionError as exc:
-            logger.warning(
-                "ORDER_EXECUTION_ABORTED",
-                extra={
-                    "symbol": sig.symbol,
-                    "side": sig.side,
-                    "qty": qty,
-                    "reason": str(exc),
-                },
-            )
-            continue
-        if result is None:
-            continue
-        if not getattr(result, "reconciled", True):
-            logger.warning(
-                "BROKER_RECONCILE_SKIPPED",
-                extra={
-                    "symbol": sig.symbol,
-                    "side": sig.side,
-                    "order_id": getattr(result, "order", None),
-                },
-            )
-            continue
-        filled_qty = getattr(result, "filled_quantity", 0) or 0
-        if filled_qty <= 0:
-            continue
-        requested_qty = getattr(result, "requested_quantity", qty) or qty
-        try:
-            requested_qty = float(requested_qty)
-            filled_qty = float(filled_qty)
-        except (TypeError, ValueError):
-            continue
-        if requested_qty <= 0:
-            continue
-        try:
-            signal_weight = float(getattr(sig, "weight", 0.0))
-        except (TypeError, ValueError):
-            signal_weight = 0.0
-        fill_ratio = filled_qty / requested_qty
-        if fill_ratio <= 0:
-            continue
-        filled_weight = signal_weight * min(1.0, fill_ratio)
-        if filled_weight == 0:
-            continue
-        try:
-            from dataclasses import replace
-
-            filled_signal = replace(sig, weight=filled_weight)
-        except COMMON_EXC:
-            try:
-                filled_signal = sig.__class__(**{**getattr(sig, "__dict__", {}), "weight": filled_weight})
-            except COMMON_EXC:
-                continue
-        ctx.risk_engine.register_fill(filled_signal)
-        try:
-            ctx.execution_engine.mark_fill_reported(str(result), int(filled_qty))
-        except COMMON_EXC:
-            logger.debug("MARK_FILL_REPORTED_FAILED", exc_info=True)
-
-    # At the end of the strategy cycle, trigger trailing-stop checks if an ExecutionEngine is present.
-    try:
-        engine = getattr(ctx, "execution_engine", None)
-        if engine is not None:
-            end_hook = getattr(engine, "end_cycle", None)
-            if callable(end_hook):
-                end_hook()
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        logger.error("TRAILING_STOP_CHECK_FAILED", extra={"exc": str(exc)})
+    run_multi_strategy_cycle(ctx)
 
 
 def _param(runtime, key, default):
@@ -33943,588 +33181,16 @@ def _process_symbols(
     close_shorts: bool = False,
     skip_duplicates: bool = False,
 ) -> tuple[list[str], dict[str, int], int]:
-    processed: list[str] = []
-    row_counts: dict[str, int] = {}
-    fetch_attempts = 0
-    fetch_attempts_lock = Lock()
-    warmup_data_only = _warmup_data_only_mode_active()
-    warmup_symbol_limit = _warmup_symbol_limit()
+    from ai_trading.core.legacy_strategy_cycle import process_symbols_cycle
 
-    # AI-AGENT-REF: bind lazy context for trade helpers
-    ctx = get_ctx()
-    safe_mode_policy_blocks = _safe_mode_blocks_trading()
-    pytest_mode = bool(get_env("PYTEST_RUNNING") or get_env("PYTEST_CURRENT_TEST"))
-    ctx_tracks_degraded_state = any(
-        hasattr(ctx, attr_name)
-        for attr_name in ("_data_degraded", "_data_degraded_reason", "_data_degraded_fatal")
+    return process_symbols_cycle(
+        symbols,
+        current_cash,
+        model,
+        regime_ok,
+        close_shorts=close_shorts,
+        skip_duplicates=skip_duplicates,
     )
-    respect_provider_safe_mode = not pytest_mode or ctx_tracks_degraded_state
-    safe_mode_flag = provider_monitor.is_safe_mode_active() if respect_provider_safe_mode else False
-    safe_mode_label = safe_mode_reason() or "provider_safe_mode"
-    if safe_mode_flag and safe_mode_policy_blocks:
-        raise CycleAbortSafeMode(safe_mode_label)
-    if safe_mode_flag:
-        _mark_ctx_degraded(ctx, safe_mode_label)
-        _log_safe_mode_continue(ctx, stage="process_symbols", reason=safe_mode_label)
-    data_degraded = bool(getattr(ctx, "_data_degraded", False))
-    degrade_reason = getattr(ctx, "_data_degraded_reason", None) or "provider_degraded"
-    degrade_fatal = bool(getattr(ctx, "_data_degraded_fatal", False))
-    degrade_announce_logged = False
-    degraded_mode = "block"
-    try:
-        cfg_obj = get_trading_config()
-    except COMMON_EXC:
-        cfg_obj = None
-    if cfg_obj is not None:
-        degraded_mode = str(getattr(cfg_obj, "degraded_feed_mode", "block") or "block").strip().lower()
-        if degraded_mode not in {"block", "widen", "hard_block"}:
-            degraded_mode = "block"
-    explicit_degraded_mode = get_env("TRADING__DEGRADED_FEED_MODE") or get_env("DEGRADED_FEED_MODE")
-    if pytest_mode and not explicit_degraded_mode and degraded_mode == "block":
-        degraded_mode = "widen"
-    detect_runtime_degrade = not pytest_mode or ctx_tracks_degraded_state
-    respect_stop_signal = (
-        not pytest_mode
-        or ctx_tracks_degraded_state
-        or hasattr(ctx, "execution_engine")
-    )
-
-    def _should_stop_now() -> bool:
-        return should_stop() if respect_stop_signal else False
-
-    cycle_budget = get_cycle_budget_context()
-
-    if not hasattr(state, "trade_cooldowns"):
-        state.trade_cooldowns = {}
-    if not hasattr(state, "last_trade_direction"):
-        state.last_trade_direction = {}
-    if not hasattr(state, "entry_flip_signal_streak"):
-        state.entry_flip_signal_streak = {}
-    if not hasattr(state, "last_entry_side"):
-        state.last_entry_side = {}
-    if not hasattr(state, "entry_expectancy_context"):
-        state.entry_expectancy_context = {}
-    if not hasattr(state, "expectancy_history"):
-        state.expectancy_history = {}
-    if not hasattr(state, "exit_policy_state"):
-        state.exit_policy_state = {}
-    if not hasattr(state, "policy_rollback_disabled_slices"):
-        state.policy_rollback_disabled_slices = []
-    if not hasattr(state, "last_policy_ablation_run_date"):
-        state.last_policy_ablation_run_date = None
-
-    now = datetime.now(UTC)
-
-    filtered: list[str] = []
-    cd_skipped: list[str] = []
-    blocked_symbols = {
-        str(sym).strip().upper()
-        for sym in getattr(state, _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, ())
-        if str(sym).strip()
-    }
-    if blocked_symbols:
-        original_count = len(symbols)
-        symbols = [
-            str(sym).strip().upper()
-            for sym in symbols
-            if str(sym).strip() and str(sym).strip().upper() not in blocked_symbols
-        ]
-        logger.info(
-            "PENDING_ORDERS_SYMBOLS_FILTERED",
-            extra={
-                "before": original_count,
-                "after": len(symbols),
-                "blocked_symbols_count": len(blocked_symbols),
-                "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
-            },
-        )
-
-    # AI-AGENT-REF: Add circuit breaker for symbol processing to prevent resource exhaustion.
-    # A non-positive value keeps the full screened universe available in this cycle.
-    configured_max_symbols = 0
-    raw_max_symbols = get_env("MAX_SYMBOLS_PER_CYCLE", 0)
-    try:
-        configured_max_symbols = int(raw_max_symbols)  # type: ignore[arg-type]
-    except (TypeError, ValueError):  # pragma: no cover - defensive cast
-        configured_max_symbols = 0
-    if configured_max_symbols > 0:
-        max_symbols_per_cycle = min(configured_max_symbols, len(symbols))
-    else:
-        max_symbols_per_cycle = len(symbols)
-    if 0 < max_symbols_per_cycle < len(symbols):
-        logger.info(
-            "SYMBOL_PROCESSING_CAP_APPLIED",
-            extra={
-                "configured_max_symbols": configured_max_symbols,
-                "before": len(symbols),
-                "after": max_symbols_per_cycle,
-            },
-        )
-    processed_symbols = 0
-
-    _budget_sec = get_env("SYMBOL_PROCESS_BUDGET", 300)
-    try:
-        _budget_sec = float(_budget_sec)  # type: ignore[arg-type]
-    except (TypeError, ValueError):  # pragma: no cover - defensive cast
-        _budget_sec = 300.0
-    proc_budget = SoftBudget(int(max(0.0, float(_budget_sec)) * 1000))
-
-    quota_notice_logged = False
-    quota_notice_lock = Lock()
-    try:
-        trade_cooldown_seconds = max(0.0, float(get_trade_cooldown_min()) * 60.0)
-    except (TypeError, ValueError):
-        trade_cooldown_seconds = 15.0 * 60.0
-
-    def _log_trade_quota_once() -> None:
-        nonlocal quota_notice_logged
-        with quota_notice_lock:
-            if quota_notice_logged:
-                return
-            quota_notice_logged = True
-            logger.info(
-                "TRADE_QUOTA_EXHAUSTED_SKIP",
-                extra={"max_per_hour": MAX_TRADES_PER_HOUR},
-            )
-
-    for symbol in symbols:
-        safe_mode_now = provider_monitor.is_safe_mode_active() if respect_provider_safe_mode else False
-        if safe_mode_now and safe_mode_policy_blocks:
-            raise CycleAbortSafeMode(safe_mode_reason() or "provider_safe_mode")
-        if safe_mode_now and not data_degraded:
-            degrade_reason = safe_mode_reason() or degrade_reason
-            data_degraded = True
-            _mark_ctx_degraded(ctx, degrade_reason)
-            _log_safe_mode_continue(ctx, stage="process_symbols", reason=degrade_reason)
-        detected = False
-        if detect_runtime_degrade and (not data_degraded or not degrade_fatal):
-            detected_cycle, detected_reason, detected_fatal = _degrade_state(
-                _resolve_data_provider_degraded()
-            )
-            if detected_cycle:
-                data_degraded = True
-                detected = True
-                degrade_reason = detected_reason or degrade_reason
-                degrade_fatal = bool(degrade_fatal or detected_fatal)
-                try:
-                    setattr(ctx, "_data_degraded", True)
-                    if degrade_reason:
-                        setattr(ctx, "_data_degraded_reason", degrade_reason)
-                    setattr(ctx, "_data_degraded_fatal", degrade_fatal)
-                except (AttributeError, Exception):
-                    # Context objects used in tests may be bare objects without attribute support.
-                    pass
-        pos = state.position_cache.get(symbol, 0)
-        if data_degraded:
-            if not degrade_announce_logged or detected:
-                logger.warning(
-                    "DEGRADED_FEED_ACTIVE",
-                    extra={"reason": degrade_reason, "fatal": degrade_fatal},
-                )
-                degrade_announce_logged = True
-            if degrade_fatal:
-                logger.warning(
-                    "DEGRADED_FEED_SKIP_SYMBOL",
-                    extra={"symbol": symbol, "reason": degrade_reason},
-                )
-                continue
-            if degraded_mode in {"block", "hard_block"} and pos >= 0:
-                logger.warning(
-                    "DEGRADED_FEED_SKIP_SYMBOL",
-                    extra={"symbol": symbol, "reason": degrade_reason, "mode": degraded_mode},
-                )
-                continue
-        now = datetime.now(UTC)
-        if not warmup_data_only and _trade_limit_reached(state, now):
-            _log_trade_quota_once()
-            break
-        # AI-AGENT-REF: Final-bar/session gating before strategy evaluation
-        if not ensure_final_bar(symbol, "1min"):  # Default to 1min timeframe
-            logger.info("SKIP_PARTIAL_BAR", extra={"symbol": symbol, "timeframe": "1min"})
-            continue
-
-        # Circuit breaker: limit processing time and symbol count
-        if processed_symbols >= max_symbols_per_cycle:
-            logger.warning(
-                "SYMBOL_PROCESSING_CIRCUIT_BREAKER",
-                extra={
-                    "processed_count": processed_symbols,
-                    "remaining_count": len(symbols) - processed_symbols,
-                    "reason": "max_symbols_reached",
-                },
-            )
-            break
-        if proc_budget.over_budget():
-            logger.warning(
-                "SYMBOL_PROCESSING_CIRCUIT_BREAKER",
-                extra={
-                    "processed_count": processed_symbols,
-                    "elapsed_seconds": proc_budget.elapsed_ms() / 1000,
-                    "reason": "time_limit_reached",
-                },
-            )
-            break
-
-        processed_symbols += 1
-        if not warmup_data_only:
-            if pos < 0 and close_shorts:
-                logger.info(
-                    "SKIP_SHORT_CLOSE_QUEUED | symbol=%s qty=%s",
-                    symbol,
-                    -pos,
-                )
-                # AI-AGENT-REF: avoid submitting orders when short-close is skipped
-                continue
-            if skip_duplicates and pos != 0:
-                log_skip_cooldown(symbol, reason="duplicate")
-                skipped_duplicates.inc()
-                continue
-            if pos > 0:
-                logger.info("SKIP_HELD_POSITION | already long, skipping close")
-                skipped_duplicates.inc()
-                continue
-            if pos < 0:
-                logger.info(
-                    "SHORT_CLOSE_QUEUED | symbol=%s  qty=%d",
-                    symbol,
-                    abs(pos),
-                )
-                try:
-                    submit_order(ctx, symbol, abs(pos), "buy")
-                except (
-                    APIError,
-                    TimeoutError,
-                    ConnectionError,
-                ) as e:  # AI-AGENT-REF: tighten order close errors
-                    logger.warning(
-                        "SHORT_CLOSE_FAIL",
-                        extra={
-                            "symbol": symbol,
-                            "cause": e.__class__.__name__,
-                            "detail": str(e),
-                        },
-                    )
-                continue
-            # AI-AGENT-REF: Add thread-safe locking for trade cooldown access
-            with trade_cooldowns_lock:
-                ts = state.trade_cooldowns.get(symbol)
-            if ts and (now - ts).total_seconds() < trade_cooldown_seconds:
-                cd_skipped.append(symbol)
-                skipped_cooldown.inc()
-                continue
-        filtered.append(symbol)
-
-    symbols = filtered  # replace with filtered list
-    if warmup_data_only and len(symbols) > warmup_symbol_limit:
-        original_count = len(symbols)
-        symbols = symbols[:warmup_symbol_limit]
-        logger.info(
-            "WARMUP_SYMBOL_LIMIT_APPLIED",
-            extra={
-                "limit": warmup_symbol_limit,
-                "original_count": original_count,
-                "retained_count": len(symbols),
-            },
-        )
-
-    symbols = _pre_rank_execution_candidates(symbols, runtime=ctx)
-
-    if cycle_budget:
-        cycle_budget.register_total(len(symbols))
-        if symbols and cycle_budget.should_throttle():
-            cycle_budget.mark_skipped(symbols)
-            logger.debug(
-                "CYCLE_BUDGET_SKIP_SYMBOLS",
-                extra={
-                    "count": len(symbols),
-                    "reason": cycle_budget.cause or "guard",
-                },
-            )
-            return [], {s: 0 for s in symbols}, fetch_attempts
-
-    executors._ensure_executors()  # AI-AGENT-REF: lazy executor creation
-
-    if cd_skipped:
-        log_skip_cooldown(cd_skipped)
-
-    data_stats_lock = Lock()
-    data_stats = {"failed": 0, "succeeded": 0}
-    broker_stats_before = {"capacity_skips": 0, "retry_count": 0, "skipped_orders": 0}
-    exec_engine = getattr(ctx, "execution_engine", None)
-    if exec_engine is not None:
-        adaptive_cap, adaptive_details = _resolve_adaptive_order_cap(
-            cycle_budget=cycle_budget,
-            last_loop_duration_s=getattr(state, "last_loop_duration", 0.0),
-        )
-        try:
-            setattr(exec_engine, "_adaptive_new_orders_cap", adaptive_cap)
-            setattr(exec_engine, "_adaptive_new_orders_details", adaptive_details)
-        except Exception:
-            logger.debug("ADAPTIVE_ORDER_CAP_SET_FAILED", exc_info=True)
-        if adaptive_cap is not None:
-            logger.info(
-                "ADAPTIVE_ORDER_CAP_APPLIED",
-                extra={
-                    "cap": int(adaptive_cap),
-                    "mode": adaptive_details.get("mode"),
-                    "headroom_ratio": adaptive_details.get("headroom_ratio"),
-                    "loop_headroom_ratio": adaptive_details.get("loop_headroom_ratio"),
-                    "budget_headroom_ratio": adaptive_details.get("budget_headroom_ratio"),
-                },
-            )
-        start_hook = getattr(exec_engine, "start_cycle", None)
-        if callable(start_hook):
-            try:
-                start_hook()
-            except Exception as exc:
-                logger.warning(
-                    "EXECUTION_START_CYCLE_FAILED",
-                    extra={"cause": exc.__class__.__name__, "detail": str(exc)},
-                    exc_info=True,
-                )
-    stats_snapshot = getattr(exec_engine, "stats", None)
-    if isinstance(stats_snapshot, dict):
-        try:
-            broker_stats_before["capacity_skips"] = int(stats_snapshot.get("capacity_skips", 0) or 0)
-        except (TypeError, ValueError):
-            broker_stats_before["capacity_skips"] = 0
-        try:
-            broker_stats_before["retry_count"] = int(stats_snapshot.get("retry_count", 0) or 0)
-        except (TypeError, ValueError):
-            broker_stats_before["retry_count"] = 0
-        try:
-            broker_stats_before["skipped_orders"] = int(stats_snapshot.get("skipped_orders", 0) or 0)
-        except (TypeError, ValueError):
-            broker_stats_before["skipped_orders"] = 0
-
-    def process_symbol(symbol: str) -> None:
-        completed_stages: list[str] = []
-        local_success = False
-        nonlocal fetch_attempts
-
-        def _checkpoint(pending: str) -> bool:
-            if _should_stop_now():
-                logger.info(
-                    "PROCESS_SYMBOL_STOP",
-                    extra={
-                        "symbol": symbol,
-                        "completed": ",".join(completed_stages) if completed_stages else "",
-                        "pending": pending,
-                    },
-                )
-                return True
-            return False
-
-        try:
-            if (
-                respect_provider_safe_mode
-                and provider_monitor.is_safe_mode_active()
-                and _safe_mode_blocks_trading()
-            ):
-                logger.warning(
-                    "SAFE_MODE_BLOCK",
-                    extra={
-                        "symbol": symbol,
-                        "reason": safe_mode_reason() or "provider_safe_mode",
-                        "block_reason": "provider_disabled_midcycle",
-                    },
-                )
-                return
-            if _checkpoint("start"):
-                return
-            if cycle_budget and cycle_budget.should_throttle():
-                cycle_budget.mark_skipped([symbol])
-                logger.debug(
-                    "CYCLE_BUDGET_SKIP_SYMBOL",
-                    extra={
-                        "symbol": symbol,
-                        "reason": cycle_budget.cause or "guard",
-                    },
-                )
-                return
-            logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
-            if not is_market_open():
-                logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
-                return
-            if not warmup_data_only and _trade_limit_reached(state, datetime.now(UTC)):
-                _log_trade_quota_once()
-                return
-            def _halt(reason: str) -> None:
-                logger.info("COVERAGE_BLOCK", extra={"symbol": symbol, "reason": reason})
-                halt_mgr = getattr(ctx, "halt_manager", None)
-                if halt_mgr is not None:
-                    try:
-                        halt_mgr.manual_halt_trading(f"{symbol}:{reason}")
-                    except (AttributeError, RuntimeError) as hm_exc:  # noqa: BLE001
-                        logger.error("HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)})
-            try:
-                if _checkpoint("fetch"):
-                    return
-                with fetch_attempts_lock:
-                    fetch_attempts += 1
-                price_df = fetch_minute_df_safe(symbol)
-                completed_stages.append("fetch")
-            except EmptyBarsError as exc:
-                logger.warning(
-                    "PROCESS_SYMBOL_EMPTY_BARS",
-                    extra={
-                        "symbol": symbol,
-                        "timeframe": "1Min",
-                        "detail": str(exc),
-                    },
-                )
-                with data_stats_lock:
-                    data_stats["failed"] += 1
-                return
-            except DataFetchError as exc:
-                reason = getattr(exc, "fetch_reason", "")
-                if reason in {
-                    "close_column_all_nan",
-                    "close_column_missing",
-                    "ohlcv_columns_missing",
-                }:
-                    _halt("empty_frame")
-                else:
-                    _halt("minute_data_unavailable")
-                with data_stats_lock:
-                    data_stats["failed"] += 1
-                return
-            # AI-AGENT-REF: record raw row count before validation
-            row_counts[symbol] = len(price_df)
-            logger.info(f"FETCHED_ROWS | {symbol} rows={len(price_df)}")
-            if price_df.empty or "close" not in price_df.columns:
-                _halt("empty_frame")
-                with data_stats_lock:
-                    data_stats["failed"] += 1
-                return
-            close_series = price_df["close"] if "close" in price_df.columns else None
-            if close_series is not None:
-                try:
-                    non_null_count = int(close_series.count())
-                except COMMON_EXC:  # pragma: no cover - defensive fallback
-                    try:
-                        non_null_count = int(close_series.dropna().shape[0])  # type: ignore[attr-defined]
-                    except COMMON_EXC:
-                        non_null_count = 0
-                if non_null_count == 0:
-                    _halt("empty_frame")
-                    with data_stats_lock:
-                        data_stats["failed"] += 1
-                    return
-            if not warmup_data_only and symbol in state.position_cache:
-                return  # AI-AGENT-REF: skip symbol with open position
-            processed.append(symbol)
-            if cycle_budget:
-                cycle_budget.note_processed()
-            if warmup_data_only:
-                completed_stages.append("warmup_data_only")
-                local_success = True
-                return
-            if _checkpoint("trade"):
-                return
-            _safe_trade(
-                ctx,
-                state,
-                symbol,
-                current_cash,
-                model,
-                regime_ok,
-                price_df=price_df,
-            )
-            completed_stages.append("trade")
-            local_success = True
-        except (
-            KeyError,
-            ValueError,
-            TypeError,
-        ) as e:  # AI-AGENT-REF: tighten symbol processing errors
-            logger.error(
-                "PROCESS_SYMBOL_FAILED",
-                extra={
-                    "symbol": symbol,
-                    "cause": e.__class__.__name__,
-                    "detail": str(e),
-                },
-                exc_info=True,
-            )
-        finally:
-            if local_success:
-                with data_stats_lock:
-                    data_stats["succeeded"] += 1
-
-    # Use module-level prediction_executor so tests can monkeypatch it.
-    # When not monkeypatched, initialize it from the shared executors module.
-    _pred = globals().get("prediction_executor")
-    if _pred is None:
-        _pred = getattr(executors, "prediction_executor", None)
-        if _pred is not None:
-            globals()["prediction_executor"] = _pred  # seed module alias once
-    if _pred is None:
-        # Fallback to the general executor if prediction-specific is unavailable
-        _pred = getattr(executors, "executor", None)
-    if _pred is None:
-        raise RuntimeError("ThreadPool executors unavailable after initialization")
-
-    futures = [_pred.submit(process_symbol, s) for s in symbols]
-    if _should_stop_now():
-        for fut in futures:
-            cancel = getattr(fut, "cancel", None)
-            if callable(cancel):
-                cancel()
-        return processed, row_counts, fetch_attempts
-    for f in futures:
-        if _should_stop_now():
-            cancel = getattr(f, "cancel", None)
-            if callable(cancel):
-                cancel()
-            continue
-        try:
-            f.result()
-        except COMMON_EXC:
-            logger.exception("PROCESS_SYMBOL_ERROR | skipping failed symbol")
-
-    with data_stats_lock:
-        failed = int(data_stats.get("failed", 0))
-        succeeded = int(data_stats.get("succeeded", 0))
-    total_candidates = len(symbols)
-    skipped = max(total_candidates - failed - succeeded, 0)
-    logger.info(
-        "CYCLE_DATA_ERRORS",
-        extra={"failed": failed, "succeeded": succeeded, "skipped": skipped},
-    )
-    broker_nonretryable = broker_retryable = broker_skipped = 0
-    stats_latest = getattr(exec_engine, "stats", None) if exec_engine is not None else None
-    if isinstance(stats_latest, dict):
-        try:
-            broker_nonretryable = max(
-                int(stats_latest.get("capacity_skips", 0) or 0) - broker_stats_before["capacity_skips"],
-                0,
-            )
-        except (TypeError, ValueError):
-            broker_nonretryable = 0
-        try:
-            broker_retryable = max(
-                int(stats_latest.get("retry_count", 0) or 0) - broker_stats_before["retry_count"],
-                0,
-            )
-        except (TypeError, ValueError):
-            broker_retryable = 0
-        try:
-            broker_skipped = max(
-                int(stats_latest.get("skipped_orders", 0) or 0) - broker_stats_before["skipped_orders"],
-                0,
-            )
-        except (TypeError, ValueError):
-            broker_skipped = 0
-    logger.info(
-        "CYCLE_BROKER_ERRORS",
-        extra={
-            "nonretryable": broker_nonretryable,
-            "retryable": broker_retryable,
-            "skipped": broker_skipped,
-        },
-    )
-    return processed, row_counts, fetch_attempts
 
 
 def _log_loop_heartbeat(loop_id: str, start: float) -> None:
@@ -34720,6 +33386,10 @@ def _ensure_execution_engine(runtime) -> None:
         delegate_cls: type[Any] | None = None,
     ) -> None:
         """Attach a minimal execution-engine stub exposing the expected hooks."""
+        if not _is_testing_env():
+            raise RuntimeError(
+                "Execution engine stub recovery is test-only; startup aborted."
+            ) from failure
 
         class _RuntimeExecutionEngineStub:
             """Lightweight stub used when the real execution engine is unavailable."""
@@ -34916,12 +33586,9 @@ def _ensure_execution_engine(runtime) -> None:
             logger.warning(
                 "Execution engine initialization failed: %s", e
             )
-            strict_runtime = status.mode in {"paper", "live"} and not (
-                _is_testing_env() or is_runtime_contract_testing_mode()
-            )
-            if strict_runtime:
+            if not _is_testing_env():
                 raise RuntimeError(
-                    "Execution engine initialization failed in paper/live mode; startup aborted."
+                    "Execution engine initialization failed and stub recovery is disabled outside tests."
                 ) from e
             delegate_cls = None if getattr(_ExecutionEngine, "_IS_STUB", False) else _ExecutionEngine
             _attach_stub_engine(e, delegate_cls)
@@ -41264,7 +39931,10 @@ def _runtime_truth_report_thresholds() -> dict[str, Any]:
         "require_replay_live_parity_gate": bool(
             get_env(
                 "AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE",
-                False,
+                not bool(
+                    str(get_env("PYTEST_CURRENT_TEST", "", cast=str) or "").strip()
+                    or bool(get_env("PYTEST_RUNNING", False, cast=bool))
+                ),
                 cast=bool,
             )
         ),
@@ -45511,6 +44181,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         return
     _init_metrics()
     import uuid
+    from ai_trading.core.run_all_trades_execution import execute_run_all_trades_cycle
     from ai_trading.core.run_all_trades_prelude import prepare_run_all_trades_cycle
 
     loop_id = str(uuid.uuid4())
@@ -45584,773 +44255,15 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
 
             state.last_run_at = previous_last_run_at
         try:
-            # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
-            can_list_orders = hasattr(api, "list_orders") and callable(
-                getattr(api, "list_orders", None)
+            execute_run_all_trades_cycle(
+                state=state,
+                runtime=runtime,
+                cfg_runtime=cfg_runtime,
+                loop_id=loop_id,
+                loop_start=loop_start,
+                api=api,
+                restore_last_run_timestamp=_restore_last_run_timestamp,
             )
-            if not can_list_orders:
-                if not getattr(state, "_warned_missing_list_orders", False):
-                    logger.warning("API capability unavailable: list_orders")
-                    setattr(state, "_warned_missing_list_orders", True)
-                open_orders = []
-            else:
-                try:
-                    open_orders = list_open_orders(api)
-                except (
-                    APIError,
-                    TimeoutError,
-                    ConnectionError,
-                    AttributeError,
-                ) as e:  # AI-AGENT-REF: tighten order check errors
-                    logger.warning(
-                        "api.list_orders failed during order check",
-                        extra={"cause": e.__class__.__name__, "detail": str(e)},
-                    )
-                    breaker_info = classify_exception(e, dependency="broker_open_orders")
-                    breakers = _dependency_breakers(state)
-                    breakers.record_failure("broker_open_orders", breaker_info)
-                    _handle_error(breaker_info, state=state, ctx=runtime)
-                    open_orders = []
-            pending_skip_cycle = _handle_pending_orders(open_orders, runtime)
-            if pending_skip_cycle:
-                blocked_symbols_raw = getattr(runtime, _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, ())
-                blocked_symbols = {
-                    str(sym).strip().upper() for sym in blocked_symbols_raw if str(sym).strip()
-                }
-                if _pending_orders_block_scope() == "symbol" and blocked_symbols:
-                    blocked_symbols_sample = sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT]
-                    blocked_payload = {
-                        "blocked_symbols_count": len(blocked_symbols),
-                        "blocked_symbols": blocked_symbols_sample,
-                    }
-                    blocked_ttl_s = _resolve_runtime_info_log_ttl_seconds(
-                        "AI_TRADING_PENDING_SYMBOL_BLOCK_ACTIVE_LOG_TTL_SEC",
-                        _PENDING_SYMBOL_BLOCK_ACTIVE_LOG_TTL_SEC_DEFAULT,
-                    )
-                    blocked_signature = (
-                        f"{blocked_payload['blocked_symbols_count']}:"
-                        f"{','.join(blocked_symbols_sample[:3])}"
-                    )
-                    if _should_emit_runtime_info_log(
-                        runtime,
-                        f"PENDING_ORDERS_SYMBOL_BLOCK_ACTIVE:{blocked_signature}",
-                        ttl_seconds=blocked_ttl_s,
-                    ):
-                        log_throttled_event(
-                            logger,
-                            "PENDING_ORDERS_SYMBOL_BLOCK_ACTIVE",
-                            level=logging.INFO,
-                            message="PENDING_ORDERS_SYMBOL_BLOCK_ACTIVE",
-                            extra=blocked_payload,
-                        )
-                else:
-                    return
-            if _netting_pipeline_enabled(runtime):
-                cycle_engine = getattr(runtime, "execution_engine", None)
-                cycle_started = False
-                broker_snapshot = None
-                if cycle_engine is not None:
-                    start_hook = getattr(cycle_engine, "start_cycle", None)
-                    if callable(start_hook):
-                        try:
-                            start_hook()
-                            cycle_started = True
-                        except Exception as exc:
-                            logger.warning(
-                                "EXECUTION_START_CYCLE_FAILED",
-                                extra={"cause": exc.__class__.__name__, "detail": str(exc)},
-                                exc_info=True,
-                            )
-                try:
-                    _run_netting_cycle(state, runtime, loop_id, loop_start)
-                    provider_status_after = ""
-                    provider_using_backup = False
-                    try:
-                        provider_state_after = runtime_state.observe_data_provider_state()
-                    except Exception:
-                        provider_state_after = {}
-                    if isinstance(provider_state_after, dict):
-                        try:
-                            provider_status_after = str(
-                                provider_state_after.get("status") or ""
-                            ).strip().lower()
-                        except Exception:
-                            provider_status_after = ""
-                        provider_using_backup = bool(provider_state_after.get("using_backup"))
-                        timeframe_state_after = provider_state_after.get("timeframes")
-                        if isinstance(timeframe_state_after, Mapping):
-                            minute_backup = timeframe_state_after.get("1Min")
-                            if isinstance(minute_backup, bool):
-                                provider_using_backup = minute_backup
-                    if provider_status_after not in {
-                        "down",
-                        "disabled",
-                        "failed",
-                        "unreachable",
-                        "error",
-                    }:
-                        runtime_state.update_data_provider_state(
-                            status="degraded" if provider_using_backup else "healthy",
-                            data_status="ready",
-                            reason=(
-                                "data_available_via_backup"
-                                if provider_using_backup
-                                else "data_available_netting"
-                            ),
-                            safe_mode=is_safe_mode_active(),
-                        )
-                    post_sync_enabled = True
-                    try:
-                        post_sync_enabled = bool(
-                            getattr(cfg_runtime, "post_submit_broker_sync", True)
-                        )
-                    except (TypeError, ValueError):
-                        post_sync_enabled = True
-                    if post_sync_enabled:
-                        engine_for_sync = getattr(runtime, "execution_engine", None) or cycle_engine
-                        if engine_for_sync is not None and hasattr(
-                            engine_for_sync, "synchronize_broker_state"
-                        ):
-                            try:
-                                broker_snapshot = engine_for_sync.synchronize_broker_state()
-                            except Exception:
-                                logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
-                finally:
-                    if cycle_started and cycle_engine is not None:
-                        end_hook = getattr(cycle_engine, "end_cycle", None)
-                        if callable(end_hook):
-                            try:
-                                end_hook()
-                            except Exception as exc:
-                                logger.warning(
-                                    "EXECUTION_END_CYCLE_FAILED",
-                                    extra={"cause": exc.__class__.__name__, "detail": str(exc)},
-                                    exc_info=True,
-                                )
-                if broker_snapshot is not None:
-                    _record_broker_sync_metrics(state, broker_snapshot)
-                return
-            if get_verbose_logging():
-                logger.info(
-                    "RUN_ALL_TRADES_START",
-                    extra={"timestamp": utc_now_iso()},
-                )
-
-            # Log standardized market fetch heartbeat (configurable)
-            if bool(getattr(CFG, "log_market_fetch", True)):
-                logger.info("MARKET_FETCH")
-            else:
-                logger.debug("MARKET_FETCH")
-            ctx = _get_runtime_context_or_none()
-            if ctx and getattr(runtime, "data_fetcher", None) is None:
-                runtime.data_fetcher = getattr(ctx, "data_fetcher", None)
-            ensure_data_fetcher(runtime)
-            get_trade_logger()
-            manager = getattr(runtime, "signal_manager", None)
-            if manager is None and ctx is not None:
-                manager = getattr(ctx, "signal_manager", None)
-            if manager is None:
-                manager = signal_manager
-            if hasattr(manager, "begin_cycle"):
-                manager.begin_cycle()
-
-            for attempt in range(3):
-                try:
-                    current_cash, regime_ok, symbols = _prepare_run(
-                        runtime, state, getattr(runtime, "base_universe_tickers", None)
-                    )
-                    break
-                except DataFetchError as e:
-                    logger.warning(
-                        "DATA_FETCHER_UNAVAILABLE",
-                        extra={"detail": str(e), "attempt": attempt + 1},
-                    )
-                    if attempt == 2:
-                        _restore_last_run_timestamp()
-                        return
-                    time.sleep(1.0)
-                except APIError as e:
-                    logger.warning(
-                        "PREPARE_RUN_API_ERROR",
-                        extra={"detail": str(e), "attempt": attempt + 1},
-                    )
-                    if attempt == 2:
-                        _restore_last_run_timestamp()
-                        return
-                    time.sleep(1.0)
-
-            # AI-AGENT-REF: Add memory monitoring and cleanup to prevent resource issues
-            if MEMORY_OPTIMIZATION_AVAILABLE:
-                try:
-                    memory_stats = optimize_memory()
-                    if (
-                        memory_stats.get("memory_usage_mb", 0) > 512
-                    ):  # If using more than 512MB
-                        logger.warning(
-                            "HIGH_MEMORY_USAGE_DETECTED",
-                            extra={
-                                "memory_usage_mb": memory_stats.get(
-                                    "memory_usage_mb", 0
-                                ),
-                                "symbols_count": len(symbols),
-                            },
-                        )
-                        # Emergency cleanup if memory is too high
-                        if (
-                            memory_stats.get("memory_usage_mb", 0) > 1024
-                        ):  # 1GB threshold
-                            logger.critical("EMERGENCY_MEMORY_CLEANUP_TRIGGERED")
-                            emergency_memory_cleanup()
-                except (
-                    RuntimeError,
-                    ValueError,
-                    TypeError,
-                ) as e:  # AI-AGENT-REF: tighten memory optimization errors
-                    logger.debug(
-                        "MEMORY_OPTIMIZATION_FAILED",
-                        extra={"cause": e.__class__.__name__, "detail": str(e)},
-                    )
-
-            api = getattr(runtime, "api", None)
-            get_account = getattr(api, "get_account", None)
-            can_fetch_account = callable(get_account)
-            account_snapshot = (
-                safe_alpaca_get_account(runtime) if can_fetch_account else None
-            )
-
-            # AI-AGENT-REF: Update drawdown circuit breaker with current equity
-            dbc = getattr(runtime, "drawdown_circuit_breaker", None)
-            if dbc and can_fetch_account:
-                try:
-                    acct = account_snapshot
-                    current_equity = (
-                        float(getattr(acct, "equity", 0.0)) if acct else 0.0
-                    )
-                    trading_allowed = dbc.update_equity(current_equity)
-                    # AI-AGENT-REF: Get status once to avoid UnboundLocalError in else block
-                    status = dbc.get_status()
-                    if not trading_allowed:
-                        logger.critical(
-                            "TRADING_HALTED_DRAWDOWN_PROTECTION",
-                            extra={
-                                "current_drawdown": status["current_drawdown"],
-                                "max_drawdown": status["max_drawdown"],
-                                "peak_equity": status["peak_equity"],
-                                "current_equity": current_equity,
-                            },
-                        )
-                        # Manage existing positions but skip new trades
-                        try:
-                            portfolio = runtime.api.list_positions()
-                            for pos in portfolio:
-                                manage_position_risk(runtime, pos)
-                        except (
-                            APIError,
-                            TimeoutError,
-                            ConnectionError,
-                        ) as e:  # AI-AGENT-REF: tighten halt manage errors
-                            logger.warning(
-                                "HALT_MANAGE_FAIL",
-                                extra={"cause": e.__class__.__name__, "detail": str(e)},
-                            )
-                        return
-                    else:
-                        # Log drawdown status for monitoring
-                        logger.debug(
-                            "DRAWDOWN_STATUS_OK",
-                            extra={
-                                "current_drawdown": status["current_drawdown"],
-                                "max_drawdown": status["max_drawdown"],
-                                "trading_allowed": status["trading_allowed"],
-                            },
-                        )
-                except (
-                    APIError,
-                    TimeoutError,
-                    ConnectionError,
-                ) as e:  # AI-AGENT-REF: tighten circuit breaker update errors
-                    logger.error(
-                        "DRAWDOWN_CHECK_FAILED",
-                        extra={"cause": e.__class__.__name__, "detail": str(e)},
-                    )
-                    # Continue trading but log the error for investigation
-
-            # AI-AGENT-REF: honor global halt flag before processing symbols
-            if check_halt_flag(runtime):
-                _log_health_diagnostics(runtime, "halt_flag_loop")
-                logger.info("TRADING_HALTED_VIA_FLAG: Managing existing positions only.")
-                try:
-                    portfolio = runtime.api.list_positions()
-                    for pos in portfolio:
-                        manage_position_risk(runtime, pos)
-                except (
-                    APIError,
-                    TimeoutError,
-                    ConnectionError,
-                ) as e:  # AI-AGENT-REF: tighten halt manage errors
-                    logger.warning(
-                        "HALT_MANAGE_FAIL",
-                        extra={"cause": e.__class__.__name__, "detail": str(e)},
-                    )
-                logger.info("HALT_SKIP_NEW_TRADES")
-                _send_heartbeat()
-                # log summary even when halted
-                if can_fetch_account:
-                    try:
-                        acct = account_snapshot or safe_alpaca_get_account(runtime)
-                        cash = float(getattr(acct, "cash", 0.0)) if acct else 0.0
-                        equity = float(getattr(acct, "equity", cash)) if acct else 0.0
-                        list_positions_fn = getattr(runtime.api, "list_positions", None)
-                        positions = (
-                            list_positions_fn() if callable(list_positions_fn) else []
-                        )
-                        logger.debug("Raw Alpaca positions: %s", positions)
-                        exposure = (
-                            sum(abs(float(p.market_value)) for p in positions)
-                            / equity
-                            * 100
-                            if equity > 0
-                            else 0.0
-                        )
-                        logger.info(
-                            f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
-                        )
-                        logger.info(
-                            "POSITIONS_DETAIL",
-                            extra={
-                                "positions": [
-                                    {
-                                        "symbol": p.symbol,
-                                        "qty": int(p.qty),
-                                        "avg_price": float(p.avg_entry_price),
-                                        "market_value": float(p.market_value),
-                                    }
-                                    for p in positions
-                                ],
-                            },
-                        )
-                        logger.info(
-                            "WEIGHTS_VS_POSITIONS",
-                            extra={
-                                "weights": runtime.portfolio_weights,
-                                "positions": {p.symbol: int(p.qty) for p in positions},
-                                "cash": cash,
-                            },
-                        )
-                    except (
-                        APIError,
-                        TimeoutError,
-                        ConnectionError,
-                    ) as e:  # AI-AGENT-REF: tighten summary fetch errors
-                        logger.warning(
-                            "SUMMARY_FAIL",
-                            extra={"cause": e.__class__.__name__, "detail": str(e)},
-                        )
-                return
-
-            _maybe_hot_reload_runtime_models(runtime)
-            alpha_model = getattr(runtime, "model", None)
-            if not alpha_model:
-                logger.warning(
-                    "ALPHA_MODEL_UNAVAILABLE - skipping compute stage for this cycle"
-                )
-                return
-
-            if not symbols:
-                logger_once.warning(
-                    "RUN_ALL_TRADES_NO_SYMBOLS",
-                    key="run_all_trades_no_symbols_cycle",
-                )
-                logger.info("SKIP_MINUTE_FETCH", extra={"reason": "no_symbols"})
-                time.sleep(1.0)
-                return
-
-            try:
-                provider_state = runtime_state.observe_data_provider_state()
-            except Exception:
-                provider_state = {}
-            data_status = None
-            try:
-                data_status = str(provider_state.get("data_status") or "").strip().lower()
-            except Exception:
-                data_status = None
-            if data_status in {"empty", "degraded"} and is_safe_mode_active():
-                logger.warning(
-                    "DATA_STATUS_EMPTY_SHORT_CIRCUIT",
-                    extra={"data_status": data_status or "unknown"},
-                )
-                runtime_state.update_service_status(status="degraded", reason=data_status or "data_empty")
-                time.sleep(1.0)
-                return
-
-            base_attempts, base_delay = _resolve_data_retry_settings()
-            attempts_limit = max(1, base_attempts)
-            retry_delay = base_delay
-            prefer_backup_quotes = bool(getattr(state, "prefer_backup_quotes", False))
-            primary_disabled = False
-            primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
-            if callable(primary_provider_fn):
-                try:
-                    primary_disabled = not bool(primary_provider_fn())
-                except Exception:
-                    primary_disabled = False
-            if primary_disabled:
-                runtime_state.update_data_provider_state(
-                    status="degraded",
-                    reason="primary_provider_disabled",
-                    data_status="degraded",
-                    safe_mode=is_safe_mode_active(),
-                )
-            if primary_disabled and is_safe_mode_active():
-                logger.warning(
-                    "SAFE_MODE_DATA_SKIP",
-                    extra={"reason": safe_mode_reason() or "provider_disabled"},
-                )
-                runtime_state.update_service_status(status="degraded", reason="data_empty")
-                time.sleep(1.0)
-                return
-            attempts_limit, retry_delay, short_circuit_reason = _short_circuit_retry_budget(
-                prefer_backup=prefer_backup_quotes,
-                primary_disabled=primary_disabled,
-                attempts=attempts_limit,
-                delay=retry_delay,
-            )
-            if short_circuit_reason:
-                logger.info(
-                    "DATA_SOURCE_RETRY_BYPASS",
-                    extra={
-                        "reason": short_circuit_reason,
-                        "attempts": attempts_limit,
-                    },
-                )
-            if _warmup_data_only_mode_active() and attempts_limit > 1:
-                attempts_limit = 1
-                retry_delay = 0.0
-                logger.info(
-                    "WARMUP_DATA_ONLY_RETRY_BYPASS",
-                    extra={"attempts": attempts_limit},
-                )
-            processed: list[str] = []
-            row_counts: dict[str, int] = {}
-            attempts_used = 0
-            fetch_attempts_total = 0
-            for attempt in range(attempts_limit):
-                attempts_used = attempt + 1
-                try:
-                    with StageTimer(logger, "CYCLE_DATA_MS", symbols=len(symbols)):
-                        processed, row_counts, fetch_attempts = _process_symbols(
-                            symbols, current_cash, alpha_model, regime_ok
-                        )
-                        fetch_attempts_total += fetch_attempts
-                except CycleAbortSafeMode as exc:
-                    logger.warning(
-                        "CYCLE_EARLY_EXIT_SAFE_MODE",
-                        extra={"reason": str(exc) or (safe_mode_reason() or "provider_safe_mode")},
-                    )
-                    return
-                if processed:
-                    if attempt:
-                        logger.info(
-                            "DATA_SOURCE_RETRY_SUCCESS",
-                            extra={"attempt": attempts_used, "symbols": symbols},
-                        )
-                    break
-                if attempt < attempts_limit - 1 and retry_delay > 0.0:
-                    time.sleep(retry_delay)
-
-            try:
-                cfg_for_summary = get_trading_config()
-            except COMMON_EXC:
-                cfg_for_summary = None
-
-            def _sync_broker_snapshot_if_enabled() -> Any | None:
-                """Refresh broker snapshot when post-submit sync is enabled."""
-
-                post_sync_enabled = True
-                if cfg_for_summary is not None:
-                    try:
-                        post_sync_enabled = bool(
-                            getattr(cfg_for_summary, "post_submit_broker_sync", True)
-                        )
-                    except (TypeError, ValueError):
-                        post_sync_enabled = True
-                if not post_sync_enabled:
-                    return None
-                engine_obj = getattr(runtime, "execution_engine", None)
-                if engine_obj is None or not hasattr(engine_obj, "synchronize_broker_state"):
-                    return None
-                try:
-                    return engine_obj.synchronize_broker_state()
-                except Exception:
-                    logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
-                    return None
-
-            if fetch_attempts_total == 0:
-                logger.info(
-                    "CYCLE_DATA_SKIP_NO_FETCH",
-                    extra={"symbols": symbols, "attempts": attempts_used or attempts_limit},
-                )
-                broker_snapshot = _sync_broker_snapshot_if_enabled()
-                if broker_snapshot is not None:
-                    _record_broker_sync_metrics(state, broker_snapshot)
-                return
-
-            # AI-AGENT-REF: abort only if all symbols returned zero rows
-            if sum(row_counts.values()) == 0:
-                last_ts = None
-                for sym in symbols:
-                    ts = runtime.data_fetcher._minute_timestamps.get(sym)
-                    if last_ts is None or (ts and ts > last_ts):
-                        last_ts = ts
-                logger.critical(
-                    "DATA_SOURCE_EMPTY",
-                    extra={
-                        "symbols": symbols,
-                        "endpoint": "minute",
-                        "last_success": last_ts.isoformat() if last_ts else "unknown",
-                        "row_counts": row_counts,
-                    },
-                )
-                logger.info(
-                    "DATA_SOURCE_RETRY_FAILED",
-                    extra={"attempts": attempts_used or attempts_limit, "symbols": symbols},
-                )
-                state.skipped_cycles += 1
-                runtime_state.update_data_provider_state(
-                    status="degraded",
-                    reason="data_source_empty",
-                    data_status="empty",
-                    safe_mode=is_safe_mode_active(),
-                )
-                runtime_state.update_service_status(status="degraded", reason="data_source_empty")
-                # AI-AGENT-REF: exit immediately on repeated data failure
-                broker_snapshot = _sync_broker_snapshot_if_enabled()
-                if broker_snapshot is not None:
-                    _record_broker_sync_metrics(state, broker_snapshot)
-                return
-            zero_row_symbols = [s for s in symbols if row_counts.get(s, 0) == 0]
-            skipped = [s for s in symbols if s not in processed]
-            if attempts_used == 0:
-                attempts_used = attempts_limit
-            success = not skipped and not zero_row_symbols
-            if attempts_used > 1 or skipped or zero_row_symbols:
-                logger.info(
-                    "DATA_SOURCE_RETRY_FINAL",
-                    extra={"success": success, "attempts": attempts_used},
-                )
-
-            provider_using_backup = False
-            try:
-                provider_state_post = runtime_state.observe_data_provider_state()
-            except Exception:
-                provider_state_post = {}
-            if isinstance(provider_state_post, dict):
-                provider_using_backup = bool(provider_state_post.get("using_backup"))
-                timeframe_state_post = provider_state_post.get("timeframes")
-                if isinstance(timeframe_state_post, Mapping):
-                    minute_backup = timeframe_state_post.get("1Min")
-                    if isinstance(minute_backup, bool):
-                        provider_using_backup = minute_backup
-            runtime_state.update_data_provider_state(
-                status="degraded" if provider_using_backup else "healthy",
-                data_status="ready",
-                reason="data_available_via_backup" if provider_using_backup else "data_available",
-                safe_mode=is_safe_mode_active(),
-            )
-
-            if skipped:
-                logger.info(
-                    "CYCLE_SKIPPED_SUMMARY",
-                    extra={"count": len(skipped), "symbols": skipped},
-                )
-                if len(skipped) == len(symbols):
-                    state.skipped_cycles += 1
-                else:
-                    state.skipped_cycles = 0
-            else:
-                state.skipped_cycles = 0
-            if state.skipped_cycles >= 2:
-                logger.critical(
-                    "ALL_SYMBOLS_SKIPPED_TWO_CYCLES",
-                    extra={
-                        "hint": "Check data provider API keys and entitlements; test data fetch manually from the server; review data fetcher logs",
-                    },
-                )
-
-            run_multi_strategy(runtime)
-            broker_snapshot = _sync_broker_snapshot_if_enabled()
-            if broker_snapshot is not None:
-                _record_broker_sync_metrics(state, broker_snapshot)
-            try:
-                risk_engine.refresh_positions(runtime.api)
-                pos_list = runtime.api.list_positions()
-                state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
-                state.long_positions = {
-                    s for s, q in state.position_cache.items() if q > 0
-                }
-                state.short_positions = {
-                    s for s, q in state.position_cache.items() if q < 0
-                }
-                try:
-                    state.execution_metrics.positions = len(pos_list)
-                except Exception:
-                    logger.debug("EXECUTION_METRIC_POSITIONS_ASSIGN_FAILED", exc_info=True)
-                if runtime.execution_engine:
-                    trailing_hook = getattr(
-                        runtime.execution_engine, "check_trailing_stops", None
-                    )
-                    if callable(trailing_hook):
-                        try:
-                            trailing_hook()
-                        except (ValueError, TypeError) as e:
-                            logger.info(
-                                "TRAILING_STOP_CHECK_SUPPRESSED",
-                                extra={
-                                    "cause": e.__class__.__name__,
-                                    "detail": str(e),
-                                },
-                            )
-            except (
-                APIError,
-                TimeoutError,
-                ConnectionError,
-            ) as e:  # AI-AGENT-REF: tighten refresh errors
-                logger.warning(
-                    "REFRESH_POSITIONS_FAILED",
-                    extra={"cause": e.__class__.__name__, "detail": str(e)},
-                )
-            logger.info(
-                f"RUN_ALL_TRADES_COMPLETE | processed={len(row_counts)} symbols, total_rows={sum(row_counts.values())}"
-            )
-            try:
-                acct = runtime.api.get_account()
-                cash = float(acct.cash)
-                equity = float(acct.equity)
-                positions = runtime.api.list_positions()
-                logger.debug("Raw Alpaca positions: %s", positions)
-                # ai_trading.csv:9422 - Replace import guard with hard import (required dependencies)
-                from ai_trading import portfolio
-                from ai_trading.utils import portfolio_lock
-
-                try:
-                    with portfolio_lock:
-                        runtime.portfolio_weights = portfolio.compute_portfolio_weights(
-                            runtime, [p.symbol for p in positions]
-                        )
-                except (
-                    ZeroDivisionError,
-                    ValueError,
-                    KeyError,
-                ) as e:  # AI-AGENT-REF: tighten portfolio sizing errors
-                    logger.warning(
-                        "WEIGHT_RECOMPUTE_FAILED",
-                        extra={"cause": e.__class__.__name__, "detail": str(e)},
-                        exc_info=True,
-                    )
-                exposure = (
-                    sum(abs(float(p.market_value)) for p in positions) / equity * 100
-                    if equity > 0
-                    else 0.0
-                )
-                try:
-                    state.execution_metrics.exposure_pct = float(exposure)
-                except Exception:
-                    logger.debug("EXECUTION_METRIC_EXPOSURE_ASSIGN_FAILED", exc_info=True)
-                provider_mode = "alpaca"
-                try:
-                    if getattr(state, "prefer_backup_quotes", False) or provider_monitor.is_disabled("alpaca"):
-                        provider_mode = "backup/synthetic"
-                    elif provider_monitor.is_disabled("alpaca_sip"):
-                        provider_mode = "backup/synthetic"
-                except Exception:
-                    if getattr(state, "prefer_backup_quotes", False):
-                        provider_mode = "backup/synthetic"
-                state.execution_metrics.provider_mode = provider_mode
-                logger.info(
-                    f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
-                )
-                logger.info(
-                    "POSITIONS_DETAIL",
-                    extra={
-                        "positions": [
-                            {
-                                "symbol": p.symbol,
-                                "qty": int(p.qty),
-                                "avg_price": float(p.avg_entry_price),
-                                "market_value": float(p.market_value),
-                            }
-                            for p in positions
-                        ],
-                    },
-                )
-                logger.info(
-                    "WEIGHTS_VS_POSITIONS",
-                    extra={
-                        "weights": runtime.portfolio_weights,
-                        "positions": {p.symbol: int(p.qty) for p in positions},
-                        "cash": cash,
-                    },
-                )
-                try:
-                    adaptive_cap = risk_engine._adaptive_global_cap()
-                except (
-                    ZeroDivisionError,
-                    ValueError,
-                    KeyError,
-                ) as e:  # AI-AGENT-REF: tighten adaptive cap errors
-                    logger.warning(
-                        "ADAPTIVE_CAP_FAILED",
-                        extra={"cause": e.__class__.__name__, "detail": str(e)},
-                    )
-                    adaptive_cap = 0.0
-                logger.info(
-                    "CYCLE SUMMARY: cash=$%.0f equity=$%.0f exposure=%.0f%% positions=%d adaptive_cap=%.1f",
-                    cash,
-                    equity,
-                    exposure,
-                    len(positions),
-                    adaptive_cap,
-                )
-                log_exec_summary = True
-                if cfg_for_summary is not None:
-                    try:
-                        log_exec_summary = bool(getattr(cfg_for_summary, "log_exec_summary_enabled", True))
-                    except (TypeError, ValueError):
-                        log_exec_summary = True
-                if log_exec_summary:
-                    _log_execution_summary(state.execution_metrics)
-            except (
-                APIError,
-                TimeoutError,
-                ConnectionError,
-            ) as e:  # AI-AGENT-REF: tighten summary fetch errors
-                logger.warning(
-                    "SUMMARY_FAIL",
-                    extra={"cause": e.__class__.__name__, "detail": str(e)},
-                )
-            try:
-                acct = runtime.api.get_account()
-                # Handle case where account object might not have last_equity attribute
-                last_equity = getattr(acct, "last_equity", acct.equity)
-                pnl = float(acct.equity) - float(last_equity)
-                logger.info(
-                    "LOOP_PNL",
-                    extra={
-                        "loop_id": loop_id,
-                        "pnl": pnl,
-                        "mode": "SHADOW" if CFG.shadow_mode else "LIVE",
-                    },
-                )
-            except (
-                APIError,
-                TimeoutError,
-                ConnectionError,
-                ValueError,
-            ) as e:  # AI-AGENT-REF: tighten PnL retrieval errors
-                logger.warning(
-                    "PNL_RETRIEVAL_FAILED",
-                    extra={"cause": e.__class__.__name__, "detail": str(e)},
-                )
         except APIError as e:  # AI-AGENT-REF: skip cycle on Alpaca API errors
             logger.warning(
                 "TRADING_CYCLE_API_ERROR",

@@ -31,6 +31,13 @@ def _as_float(value: Any, default: float) -> float:
         return float(default)
 
 
+def _default_fail_closed_outside_tests() -> bool:
+    return not bool(
+        str(get_env("PYTEST_CURRENT_TEST", "", cast=str) or "").strip()
+        or bool(get_env("PYTEST_RUNNING", False, cast=bool))
+    )
+
+
 def _parse_ts(raw: Any) -> datetime | None:
     text = str(raw or "").strip()
     if not text:
@@ -190,7 +197,7 @@ def summarize_replay_live_parity_gate(
     require_oms_lifecycle_parity = bool(
         get_env(
             "AI_TRADING_REPLAY_LIVE_PARITY_REQUIRE_OMS_LIFECYCLE_PARITY",
-            False,
+            _default_fail_closed_outside_tests(),
             cast=bool,
         )
     )

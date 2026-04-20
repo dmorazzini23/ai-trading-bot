@@ -236,6 +236,7 @@ class DecisionJournalEntry:
     bar_ts: datetime | None
     provider: str | None
     feed: str | None
+    data_freshness_sec: float | None
     signal: Signal
     risk_decision: RiskDecision
     order_intent: OrderIntent | None = None
@@ -263,6 +264,7 @@ class DecisionJournalEntry:
             "bar_ts": self.bar_ts.isoformat() if isinstance(self.bar_ts, datetime) else None,
             "provider": self.provider,
             "feed": self.feed,
+            "data_freshness_sec": self.data_freshness_sec,
             "client_order_id": self.client_order_id,
             "decision_trace_id": self.decision_trace_id,
             "accepted": self.accepted,
@@ -423,6 +425,40 @@ def _derive_provider_and_feed(record: Any) -> tuple[str | None, str | None]:
     return provider, feed
 
 
+def _derive_event(record: Any) -> str:
+    metrics = getattr(record, "metrics", None)
+    metrics_map = dict(metrics) if isinstance(metrics, Mapping) else {}
+    config_snapshot = getattr(record, "config_snapshot", None)
+    config_map = dict(config_snapshot) if isinstance(config_snapshot, Mapping) else {}
+    event = _safe_text(metrics_map.get("event")) or _safe_text(config_map.get("event"))
+    return event or "decision_record"
+
+
+def _derive_data_freshness_sec(record: Any) -> float | None:
+    metrics = getattr(record, "metrics", None)
+    metrics_map = dict(metrics) if isinstance(metrics, Mapping) else {}
+    config_snapshot = getattr(record, "config_snapshot", None)
+    config_map = dict(config_snapshot) if isinstance(config_snapshot, Mapping) else {}
+    for key in (
+        "data_freshness_sec",
+        "signal_age_sec",
+        "quote_age_sec",
+        "age_sec",
+    ):
+        parsed = _safe_float(metrics_map.get(key))
+        if parsed is not None:
+            return parsed
+    for key in ("data_freshness_sec", "signal_age_sec", "quote_age_sec"):
+        parsed = _safe_float(config_map.get(key))
+        if parsed is not None:
+            return parsed
+    bar_ts = _normalize_timestamp(getattr(record, "bar_ts", None))
+    if bar_ts is None:
+        return None
+    now_ts = datetime.now(UTC)
+    return max((now_ts - bar_ts).total_seconds(), 0.0)
+
+
 def _derive_journal_reasons(
     signal: Signal,
     risk_decision: RiskDecision,
@@ -519,6 +555,8 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
     )
     config_snapshot = getattr(record, "config_snapshot", None)
     config_map = dict(config_snapshot) if isinstance(config_snapshot, Mapping) else {}
+    metrics = getattr(record, "metrics", None)
+    metrics_map = dict(metrics) if isinstance(metrics, Mapping) else {}
     fills = getattr(record, "fills", None)
     fills_seq = list(fills) if isinstance(fills, Sequence) else []
     decision_trace_id = (
@@ -531,12 +569,16 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
         "has_order": order_intent is not None,
         "has_fills": bool(fills_seq),
     }
+    market_bar = metrics_map.get("market_bar")
+    if isinstance(market_bar, Mapping):
+        metadata["market_bar"] = dict(market_bar)
     return DecisionJournalEntry(
-        event="decision_record",
+        event=_derive_event(record),
         symbol=signal.symbol,
         bar_ts=signal.bar_ts or _normalize_timestamp(getattr(record, "bar_ts", None)),
         provider=provider,
         feed=feed,
+        data_freshness_sec=_derive_data_freshness_sec(record),
         signal=signal,
         risk_decision=risk_decision,
         order_intent=order_intent,

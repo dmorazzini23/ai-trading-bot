@@ -5,6 +5,7 @@ import sys
 import types
 from types import SimpleNamespace
 from typing import Any, cast
+import pytest
 
 
 def _override_env(env_overrides: dict[str, str | None]) -> dict[str, str | None]:
@@ -91,3 +92,38 @@ def test_execution_engine_instantiated_without_stub(request) -> None:
     assert exec_engine is not None, "execution engine should be attached"
     assert not getattr(exec_engine, "_IS_STUB", False), "stub execution engine must not be used"
     assert hasattr(exec_engine, "check_stops"), "risk-stop hook should be available"
+
+
+def test_execution_engine_stub_recovery_is_test_only(monkeypatch) -> None:
+    from ai_trading.core import bot_engine
+
+    class _Status:
+        engine_class = "tests.fake.ExecutionEngine"
+        missing_dependencies = ()
+        missing_credentials = ()
+        reason = None
+        settings_fallback = False
+        mode = "sim"
+        shadow_mode = False
+
+    class _FailingEngine:
+        def __init__(self, _runtime) -> None:
+            raise RuntimeError("boom")
+
+        def check_stops(self) -> None:
+            return None
+
+    fake_module = SimpleNamespace(
+        get_execution_runtime_status=lambda: _Status(),
+        ExecutionEngine=_FailingEngine,
+    )
+
+    monkeypatch.setattr(bot_engine.importlib, "import_module", lambda _name: fake_module)
+    monkeypatch.setattr(bot_engine, "_is_testing_env", lambda: False)
+    runtime = SimpleNamespace(execution_engine=None, exec_engine=None)
+
+    with pytest.raises(
+        RuntimeError,
+        match="stub recovery is disabled outside tests",
+    ):
+        bot_engine._ensure_execution_engine(runtime)

@@ -996,6 +996,10 @@ def test_build_report_includes_broker_open_position_snapshot(
             "broker_open_positions_available": True,
             "broker_open_position_count": 2,
             "broker_open_positions": {"AAPL": 5.0, "MSFT": -3.0},
+            "broker_open_position_snapshots": {
+                "AAPL": {"symbol": "AAPL", "qty": 5.0, "provider": "alpaca"},
+                "MSFT": {"symbol": "MSFT", "qty": -3.0, "provider": "alpaca"},
+            },
             "broker_open_positions_error": None,
         },
     )
@@ -1009,6 +1013,7 @@ def test_build_report_includes_broker_open_position_snapshot(
     assert trade["broker_open_positions_available"] is True
     assert trade["broker_open_position_count"] == 2
     assert trade["broker_open_positions"] == {"AAPL": 5.0, "MSFT": -3.0}
+    assert trade["broker_open_position_snapshots"]["AAPL"]["provider"] == "alpaca"
 
 
 def test_build_report_reports_reconstructed_open_position_counts(
@@ -2707,6 +2712,57 @@ def test_evaluate_go_no_go_fails_on_replay_live_parity_gate_when_required() -> N
     assert observed["replay_live_parity_gate_available"] is True
     assert observed["replay_live_parity_gate_ok"] is False
     assert observed["replay_live_parity_gate_reason"] == "replay_violations"
+
+
+def test_resolve_runtime_gonogo_thresholds_requires_replay_live_parity_by_default_outside_pytest(
+    monkeypatch,
+) -> None:
+    def _fake_get_env(key, default=None, cast=None, **_kwargs):
+        if key == "PYTEST_CURRENT_TEST":
+            return ""
+        if key == "PYTEST_RUNNING":
+            return False
+        return default
+
+    monkeypatch.setattr(rpt, "get_env", _fake_get_env)
+
+    thresholds = rpt.resolve_runtime_gonogo_thresholds()
+
+    assert thresholds["require_replay_live_parity_gate"] is True
+
+
+def test_resolve_runtime_gonogo_thresholds_requires_oms_invariants_by_default_outside_pytest(
+    monkeypatch,
+) -> None:
+    def _fake_get_env(key, default=None, cast=None, **_kwargs):
+        if key == "PYTEST_CURRENT_TEST":
+            return ""
+        if key == "PYTEST_RUNNING":
+            return False
+        return default
+
+    monkeypatch.setattr(rpt, "get_env", _fake_get_env)
+
+    thresholds = rpt.resolve_runtime_gonogo_thresholds()
+
+    assert thresholds["require_oms_invariants"] is True
+
+
+def test_resolve_runtime_gonogo_thresholds_requires_oms_lifecycle_parity_by_default_outside_pytest(
+    monkeypatch,
+) -> None:
+    def _fake_get_env(key, default=None, cast=None, **_kwargs):
+        if key == "PYTEST_CURRENT_TEST":
+            return ""
+        if key == "PYTEST_RUNNING":
+            return False
+        return default
+
+    monkeypatch.setattr(rpt, "get_env", _fake_get_env)
+
+    thresholds = rpt.resolve_runtime_gonogo_thresholds()
+
+    assert thresholds["require_oms_lifecycle_parity"] is True
 
 
 def test_evaluate_go_no_go_fails_on_event_tca_when_required() -> None:

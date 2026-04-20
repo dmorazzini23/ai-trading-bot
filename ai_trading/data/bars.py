@@ -739,7 +739,7 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
 
     return resolved
 
-def _client_fetch_stock_bars(client: Any, request: "StockBarsRequest"):
+def _client_fetch_stock_bars(client: Any, request: Any):
     """Call the appropriate Alpaca SDK method to fetch bars."""
     safe_get_fn = getattr(client, "safe_get_stock_bars", None)
     if callable(safe_get_fn):
@@ -761,7 +761,7 @@ def _client_fetch_stock_bars(client: Any, request: "StockBarsRequest"):
         params["feed"] = request.feed
     return get_bars_fn(request.symbol_or_symbols, request.timeframe, **params)
 
-def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, context: str='') -> DataFrame:
+def safe_get_stock_bars(client: Any, request: Any, symbol: str, context: str='') -> DataFrame:
     """
     Safely fetch stock bars via Alpaca client and always return a DataFrame.
     This is a faithful move of the original implementation from bot_engine,

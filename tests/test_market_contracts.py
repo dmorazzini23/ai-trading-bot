@@ -8,7 +8,12 @@ from ai_trading.contracts import (
     ExecutionResult,
     PositionSnapshot,
     Quote,
+    bar_from_frame,
+    broker_order_snapshot_from_order,
+    position_snapshot_from_position,
 )
+
+import pandas as pd
 
 
 def test_quote_from_mapping_normalizes_shape() -> None:
@@ -134,3 +139,75 @@ def test_bar_from_mapping_preserves_original_metadata() -> None:
     assert bar["symbol"] == "AAPL"
     assert bar["feed"] == "sip"
     assert bar["metadata"]["session"] == "regular"
+
+
+def test_bar_from_frame_extracts_last_row_snapshot() -> None:
+    ts = datetime.now(UTC)
+    frame = pd.DataFrame(
+        {
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.5],
+            "close": [100.75],
+            "volume": [1500],
+        },
+        index=[ts],
+    )
+
+    bar = bar_from_frame("spy", frame, timeframe="1Min", provider="alpaca", feed="iex")
+
+    assert bar is not None
+    payload = bar.to_dict()
+    assert payload["symbol"] == "SPY"
+    assert payload["close"] == 100.75
+    assert payload["provider"] == "alpaca"
+    assert payload["feed"] == "iex"
+
+
+def test_broker_order_snapshot_from_order_extracts_object_fields() -> None:
+    order = type(
+        "Order",
+        (),
+        {
+            "client_order_id": "coid-9",
+            "id": "broker-9",
+            "side": "sell",
+            "qty": "4",
+            "filled_qty": "1",
+            "limit_price": "215.5",
+            "filled_avg_price": "215.45",
+            "status": "partially_filled",
+            "submitted_at": datetime.now(UTC).isoformat(),
+            "symbol": "TSLA",
+        },
+    )()
+
+    snapshot = broker_order_snapshot_from_order(order, venue="alpaca")
+
+    assert snapshot is not None
+    payload = snapshot.to_dict()
+    assert payload["broker_order_id"] == "broker-9"
+    assert payload["client_order_id"] == "coid-9"
+    assert payload["venue"] == "alpaca"
+
+
+def test_position_snapshot_from_position_extracts_object_fields() -> None:
+    position = type(
+        "Position",
+        (),
+        {
+            "symbol": "AMD",
+            "qty": "3",
+            "market_value": "420.0",
+            "avg_entry_price": "140.0",
+            "updated_at": datetime.now(UTC).isoformat(),
+        },
+    )()
+
+    snapshot = position_snapshot_from_position(position, provider="alpaca")
+
+    assert snapshot is not None
+    payload = snapshot.to_dict()
+    assert payload["symbol"] == "AMD"
+    assert payload["qty"] == 3.0
+    assert payload["provider"] == "alpaca"
