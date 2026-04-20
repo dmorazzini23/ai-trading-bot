@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 
 from ai_trading.config.runtime import TradingConfig
 from ai_trading.core import bot_engine
@@ -60,3 +61,27 @@ def test_reconcile_exception_latches_halt_until_success(monkeypatch):
     )
     assert ok_third is True
     assert state.recon_halt is False
+
+
+def test_reconcile_ignores_invalid_last_recon_ts_and_non_mapping_cache(monkeypatch):
+    cfg = TradingConfig.from_env(allow_missing_drawdown=True)
+    cfg.update(recon_enabled=True, recon_interval_seconds=300)
+    runtime = SimpleNamespace(cfg=cfg, api=None)
+    state = bot_engine.BotState()
+    state.position_cache = cast(Any, [])
+    state.last_recon_ts = cast(Any, "bad-timestamp")
+
+    monkeypatch.setattr(
+        bot_engine,
+        "compute_current_positions",
+        lambda _runtime: {"AAPL": 10.0},
+    )
+    monkeypatch.setattr(
+        "ai_trading.oms.reconcile.fetch_broker_positions",
+        lambda _api: {"AAPL": 10.0},
+    )
+
+    ok = bot_engine._run_reconciliation_if_due(state, runtime, cfg, datetime.now(UTC))
+    assert ok is True
+    assert state.recon_halt is False
+    assert isinstance(state.last_recon_ts, datetime)

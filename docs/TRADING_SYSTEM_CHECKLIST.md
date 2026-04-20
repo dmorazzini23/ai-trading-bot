@@ -356,19 +356,24 @@ Verdict:
 These are the next upgrades that would most improve production robustness.
 They are no longer checklist blockers for the core production architecture.
 
-### 1. Thin `bot_engine.py` by responsibility, not by file count
+### 1. Continue operational hardening and contract cleanup
 
-Target:
-- move business logic out of [ai_trading/core/bot_engine.py](../ai_trading/core/bot_engine.py)
-  into clearer modules such as:
-  - market-data evaluation
-  - signal-to-intent translation
-  - reconciliation scheduling
-  - runtime health/reconcile helpers
-  - legacy health/control-plane helpers
+Recent engine-thinning completions now include:
+- governance and reconciliation scheduling through:
+  - [ai_trading/core/governance_runtime.py](../ai_trading/core/governance_runtime.py)
+- remaining netting-cycle ranking/runtime assembly through:
+  - [ai_trading/core/netting_rank_runtime.py](../ai_trading/core/netting_rank_runtime.py)
+- OMS durability and execution-context assembly through:
+  - [ai_trading/core/netting_execution_runtime.py](../ai_trading/core/netting_execution_runtime.py)
+- legacy halted-position control-plane handling through:
+  - [ai_trading/core/position_risk_runtime.py](../ai_trading/core/position_risk_runtime.py)
+- remaining startup/scheduler/control-plane glue through:
+  - [ai_trading/core/startup_runtime.py](../ai_trading/core/startup_runtime.py)
 
-Why it matters:
-- this is the biggest remaining "hard to reason about under stress" risk
+What remains highest-value now:
+- continued fail-closed cleanup for degraded runtime paths
+- further reduction of loose `dict[str, Any]` payload flow in orchestration/runtime state
+- incremental metrics/ops hardening around broker degradation, exposure drift, and restart recovery
 
 ## 4. Recommended Next Order
 
@@ -401,8 +406,8 @@ This repo is already ahead of many trading bots in:
 The biggest remaining risks are not "missing a few helper functions."
 They are:
 
-- remaining non-netting runtime simplification and boundary tightening work
 - continued operational hardening around final execution controls and exposure gates
+- remaining loose orchestration/runtime-state payloads that are still more dynamic than ideal
 
 That is a good place to be. The system no longer looks underbuilt.
 It now mostly needs continued simplification and steady operational hardening
