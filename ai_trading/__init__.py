@@ -207,7 +207,7 @@ def _install_test_meta_learning_write_fallback() -> None:
             runtime_root = "/tmp/ai-trading-bot/data"
         fallback_root = (Path(runtime_root).expanduser().resolve() / "meta_learning")
         fallback_root.mkdir(parents=True, exist_ok=True)
-        file_name = Path(str(filepath or "")).name or "meta_model.pkl"
+        file_name = Path(str(filepath or "")).name or "meta_model.joblib"
         fallback_path = fallback_root / file_name
         original(model, str(fallback_path))
 

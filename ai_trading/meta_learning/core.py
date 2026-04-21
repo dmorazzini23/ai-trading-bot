@@ -1,9 +1,8 @@
 """Meta-learning utilities and weight management helpers.
 
 File operations are limited to a small set of safe directories to prevent
-arbitrary file access. This module uses ``pickle`` for model checkpoints and
-weights; paths are resolved and constrained before deserialization. Prefer
-:mod:`joblib` or ``json`` for simple structures when possible.
+arbitrary file access. Supported checkpoint formats use verified joblib
+artifacts for model objects and JSON for simple payloads.
 """
 
 from importlib.util import find_spec
@@ -30,7 +29,6 @@ import csv
 import json
 from ai_trading.logging import get_logger
 import os
-import pickle
 import random
 import re
 import sys
@@ -42,7 +40,9 @@ from typing import TYPE_CHECKING, Any
 from json import JSONDecodeError
 from tempfile import gettempdir
 
-from ai_trading.utils.pickle_safe import safe_pickle_load
+import joblib
+
+from ai_trading.models.artifacts import load_verified_joblib_artifact, write_artifact_manifest
 
 try:  # pragma: no cover - optional sklearn import
     from sklearn.exceptions import InconsistentVersionWarning as _InconsistentVersionWarning
@@ -698,15 +698,7 @@ def load_weights(path: str, default: Any | None = None) -> Any:
                     logger.debug("Loaded weights using numpy from: %s", path)
                     return weights
             except (ValueError, OSError) as e:
-                logger.debug('CSV/numpy loading failed, trying pickle: %s', e)
-                try:
-                    weights = safe_pickle_load(p, ALLOWED_DIRS)
-                    if isinstance(weights, np_mod.ndarray):
-                        logger.debug('Loaded weights from pickle: %s', path)
-                        return weights
-                    logger.warning('Invalid weights format in %s, using default', path)
-                except RuntimeError as pickle_e:
-                    logger.warning('Pickle loading also failed for %s: %s', path, pickle_e)
+                logger.warning('Weight loading failed for %s: %s', path, e)
         else:
             logger.debug('Weights file %s not found, creating with default', path)
             if default.size > 0:
@@ -805,11 +797,17 @@ class WeightOptimizer:
         return {tag: weight for tag in sorted(tags)}
 
 def save_model_checkpoint(model: Any, filepath: str) -> None:
-    """Serialize ``model`` to ``filepath`` using :mod:`pickle`."""
+    """Serialize ``model`` to ``filepath`` as a verified joblib artifact."""
     try:
-        with open(filepath, "wb") as f:
-            pickle.dump(model, f)
-    except (pickle.PicklingError, AttributeError, TypeError) as exc:
+        target = Path(filepath).resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(model, target)
+        write_artifact_manifest(
+            model_path=target,
+            model_version="meta-learning-checkpoint-v1",
+            metadata={"kind": "meta_model_checkpoint"},
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
         logger.warning(
             "CHECKPOINT_SKIP_UNPICKLABLE",
             extra={"path": filepath, "error": str(exc)},
@@ -836,7 +834,7 @@ def load_model_checkpoint(filepath: str) -> Any | None:
     try:
         with warnings.catch_warnings(record=True) as caught_warnings:
             warnings.simplefilter("always")
-            model = safe_pickle_load(p, ALLOWED_DIRS)
+            model = load_verified_joblib_artifact(p)
         for warning_record in caught_warnings:
             warning_message = str(warning_record.message)
             warning_category = warning_record.category
@@ -867,21 +865,45 @@ def load_model_checkpoint(filepath: str) -> Any | None:
         return None
 
 def load_checkpoint(filepath: str) -> dict[str, Any] | None:
-    """Load a checkpoint dictionary from ``filepath``.
-
-    Uses :func:`load_model_checkpoint` for path validation and safe
-    deserialization. Returns the loaded dictionary or ``None`` when the
-    checkpoint is missing, invalid, or does not contain a mapping.
-    """
-    obj = load_model_checkpoint(filepath)
-    if obj is None:
+    """Load a JSON checkpoint dictionary from ``filepath``."""
+    p = Path(filepath).resolve()
+    if not any(p.is_relative_to(d) for d in ALLOWED_DIRS):
+        logger.error('Checkpoint path not allowed: %s', p)
+        return None
+    if not p.exists():
+        logger.warning('Checkpoint file missing: %s', p)
+        return None
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        logger.error('Failed to load checkpoint: %s', exc, exc_info=True)
         return None
     if not isinstance(obj, dict):
         logger.error('Checkpoint file %s did not contain a dict', filepath)
         return None
     return obj
 
-def retrain_meta_learner(trade_log_path: str=None, model_path: str='runtime/meta_model.pkl', history_path: str='runtime/meta_retrain_history.pkl', min_samples: int=10) -> bool:
+
+def load_history_checkpoint(filepath: str) -> list[dict[str, Any]] | None:
+    """Load JSON retrain-history rows from ``filepath``."""
+    p = Path(filepath).resolve()
+    if not any(p.is_relative_to(d) for d in ALLOWED_DIRS):
+        logger.error('Checkpoint path not allowed: %s', p)
+        return None
+    if not p.exists():
+        return None
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        logger.error('Failed to load retrain history: %s', exc, exc_info=True)
+        return None
+    if not isinstance(obj, list):
+        logger.error('Retrain history %s did not contain a list', filepath)
+        return None
+    return [dict(row) for row in obj if isinstance(row, dict)]
+
+
+def retrain_meta_learner(trade_log_path: str=None, model_path: str='runtime/meta_model.joblib', history_path: str='runtime/meta_retrain_history.json', min_samples: int=10) -> bool:
     """Retrain the meta-learner model from trade logs.
 
     Parameters
@@ -889,9 +911,9 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='runtime/meta
     trade_log_path : str
         CSV file containing historical trades.
     model_path : str
-        Destination to write the trained model pickle.
+        Destination to write the trained model artifact.
     history_path : str
-        Path to a pickle file storing retrain metrics history.
+        Path to a JSON file storing retrain metrics history.
     min_samples : int
         Minimum number of samples required to train.
 
@@ -1194,15 +1216,16 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='runtime/meta
     metrics = {'timestamp': datetime.now(UTC).isoformat(), 'samples': len(y), 'model_path': model_path}
     hist: list[dict[str, Any]] = []
     if Path(history_path).exists():
-        loaded = load_model_checkpoint(history_path)
+        loaded = load_history_checkpoint(history_path)
         if isinstance(loaded, list):
             hist = loaded
     hist.append(metrics)
     hist = hist[-5:]
     try:
-        with open(history_path, 'wb') as f:
-            pickle.dump(hist, f)
-    except (OSError, pickle.PickleError) as exc:
+        Path(history_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(history_path, 'w', encoding='utf-8') as f:
+            json.dump(hist, f, indent=2)
+    except (OSError, TypeError, ValueError) as exc:
         logger.error('Failed to update retrain history: %s', exc, exc_info=True)
     logger.info('META_RETRAIN_SUCCESS', extra={'samples': len(y), 'model': model_path})
     return True

@@ -183,7 +183,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model-path",
         type=str,
-        default=str(get_env("AI_TRADING_META_MODEL_PATH", "meta_model.pkl", cast=str) or "meta_model.pkl"),
+        default=str(get_env("AI_TRADING_META_MODEL_PATH", "meta_model.joblib", cast=str) or "meta_model.joblib"),
         help="Output path for refreshed meta model checkpoint.",
     )
     parser.add_argument(
@@ -192,10 +192,10 @@ def _build_parser() -> argparse.ArgumentParser:
         default=str(
             get_env(
                 "AI_TRADING_META_RETRAIN_HISTORY_PATH",
-                "meta_retrain_history.pkl",
+                "meta_retrain_history.json",
                 cast=str,
             )
-            or "meta_retrain_history.pkl"
+            or "meta_retrain_history.json"
         ),
         help="Output path for retrain history checkpoint.",
     )
@@ -217,11 +217,11 @@ def _build_parser() -> argparse.ArgumentParser:
 def _run(args: argparse.Namespace) -> dict[str, Any]:
     model_path = resolve_runtime_artifact_path(
         args.model_path,
-        default_relative="meta_model.pkl",
+        default_relative="meta_model.joblib",
     )
     history_path = resolve_runtime_artifact_path(
         args.history_path,
-        default_relative="meta_retrain_history.pkl",
+        default_relative="meta_retrain_history.json",
     )
     # Keep trade-log path as provided when absolute; otherwise resolve under runtime root.
     trade_log_path = resolve_runtime_artifact_path(

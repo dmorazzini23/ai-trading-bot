@@ -28,6 +28,13 @@ from ai_trading.logging import logger
 
 
 POSITION_SIZE_MIN_USD_DEFAULT = 25.0
+
+
+def _default_backup_provider_for_mode(mode: Any) -> str:
+    normalized = str(mode or "sim").strip().lower()
+    return "none" if normalized == "live" else "yahoo"
+
+
 try:
     from pydantic.fields import FieldInfo as _FieldInfo
 except Exception:  # pragma: no cover - pydantic may be missing in tests
@@ -177,6 +184,10 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
     enable_finnhub: bool = Field(True, alias="ENABLE_FINNHUB")
     alpaca_rate_limit_per_min: int = Field(200, alias="ALPACA_RATE_LIMIT_PER_MIN")
     finnhub_api_key: str | None = Field(default=None, alias="FINNHUB_API_KEY")
+    execution_mode: str = Field(
+        default="sim",
+        validation_alias=AliasChoices("EXECUTION_MODE", "AI_TRADING_EXECUTION_MODE"),
+    )
     backup_data_provider: Literal["yahoo", "none", "finnhub", "finnhub_low_latency"] = Field(
         "yahoo",
         alias="BACKUP_DATA_PROVIDER",
@@ -837,15 +848,25 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
 
     @field_validator("backup_data_provider", mode="before")
     @classmethod
-    def _normalize_backup_provider(cls, value):
+    def _normalize_backup_provider(cls, value, info):
+        default_provider = _default_backup_provider_for_mode("sim")
         if value is None:
-            return "yahoo"
+            return default_provider
         candidate = str(value).strip().lower()
         if not candidate:
-            return "yahoo"
+            return default_provider
         if candidate == "yfinance":
             return "yahoo"
         return candidate
+
+    @model_validator(mode="after")
+    def _apply_mode_aware_backup_provider_default(self):
+        if "backup_data_provider" not in self.model_fields_set:
+            self.backup_data_provider = cast(
+                Literal["yahoo", "none", "finnhub", "finnhub_low_latency"],
+                _default_backup_provider_for_mode(getattr(self, "execution_mode", "sim")),
+            )
+        return self
 
     @field_validator("capital_cap", mode="before")
     @classmethod
@@ -1253,7 +1274,14 @@ def get_finnhub_rpm() -> int:
 
 
 def get_backup_data_provider() -> str:
-    return getattr(get_settings(), "backup_data_provider", "yahoo")
+    settings = get_settings()
+    return str(
+        getattr(
+            settings,
+            "backup_data_provider",
+            _default_backup_provider_for_mode(getattr(settings, "execution_mode", "sim")),
+        )
+    )
 
 
 def get_data_cache_enable() -> bool:

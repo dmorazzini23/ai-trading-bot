@@ -1,22 +1,17 @@
-"""Machine learning model training utilities.
-
-Pickle is used for model checkpoints; paths are resolved and validated before
-deserialization. Consider safer formats like :mod:`joblib` or JSON for simpler
-objects.
-"""
+"""Machine learning model training utilities."""
 
 from __future__ import annotations
 
 import json
-import pickle
 from datetime import UTC, datetime
 from typing import Any, TYPE_CHECKING
 from pathlib import Path
 from tempfile import gettempdir
 
+import joblib
 import numpy as np
 from ai_trading.logging import logger
-from ai_trading.utils.pickle_safe import safe_pickle_load
+from ai_trading.models.artifacts import load_verified_joblib_artifact, write_artifact_manifest
 
 # Optional dependencies
 try:  # pragma: no cover - optional lightgbm dependency
@@ -385,11 +380,15 @@ class MLTrainer:
             metadata: Additional metadata to save
         """
         try:
-            model_file = Path(f"{model_path}.pkl").resolve()
+            model_file = Path(f"{model_path}.joblib").resolve()
             if not any(model_file.is_relative_to(d) for d in ALLOWED_DIRS):
                 raise RuntimeError(f"Model path not allowed: {model_file}")
-            with model_file.open("wb") as f:
-                pickle.dump(self.model, f)
+            joblib.dump(self.model, model_file)
+            write_artifact_manifest(
+                model_path=model_file,
+                model_version="ml-trainer-v1",
+                metadata={"model_type": self.model_type},
+            )
             meta_data = {
                 "model_type": self.model_type,
                 "best_params": self.best_params,
@@ -420,10 +419,10 @@ class MLTrainer:
             Tuple of (model, metadata)
         """
         try:
-            model_file = Path(f"{model_path}.pkl").resolve()
+            model_file = Path(f"{model_path}.joblib").resolve()
             if not any(model_file.is_relative_to(d) for d in ALLOWED_DIRS):
                 raise RuntimeError(f"Model path not allowed: {model_file}")
-            model = safe_pickle_load(model_file, ALLOWED_DIRS)
+            model = load_verified_joblib_artifact(model_file)
             meta_file = model_file.with_name(model_file.stem + "_meta.json")
             metadata = json.loads(meta_file.read_text())
             logger.info(f"Model loaded from {model_file}")

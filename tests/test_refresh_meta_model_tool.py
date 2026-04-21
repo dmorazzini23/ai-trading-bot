@@ -20,8 +20,8 @@ def test_refresh_meta_model_tool_retrains_and_writes_model(tmp_path: Path) -> No
         }
     ).to_csv(trade_log, index=False)
 
-    model_path = tmp_path / "meta_model.pkl"
-    history_path = tmp_path / "meta_retrain_history.pkl"
+    model_path = tmp_path / "meta_model.joblib"
+    history_path = tmp_path / "meta_retrain_history.json"
 
     rc = main(
         [
@@ -38,7 +38,7 @@ def test_refresh_meta_model_tool_retrains_and_writes_model(tmp_path: Path) -> No
     assert rc == 0
     assert model_path.exists()
     assert history_path.exists()
-    history = meta_learning.load_model_checkpoint(str(history_path))
+    history = meta_learning.load_history_checkpoint(str(history_path))
     assert isinstance(history, list)
     assert history
 
@@ -72,8 +72,8 @@ def test_refresh_meta_model_tool_retrains_from_fill_derived_history(
         encoding="utf-8",
     )
 
-    model_path = tmp_path / "meta_model.pkl"
-    history_path = tmp_path / "meta_retrain_history.pkl"
+    model_path = tmp_path / "meta_model.joblib"
+    history_path = tmp_path / "meta_retrain_history.json"
     output_json = tmp_path / "refresh_report.json"
 
     rc = main(

@@ -58,13 +58,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model-path",
         type=Path,
-        default=Path("runtime/meta_model.pkl"),
+        default=Path("runtime/meta_model.joblib"),
         help="Destination for the updated meta-learner model.",
     )
     parser.add_argument(
         "--history-path",
         type=Path,
-        default=Path("runtime/meta_retrain_history.pkl"),
+        default=Path("runtime/meta_retrain_history.json"),
         help="Path to persist retrain metrics history.",
     )
     parser.add_argument(

@@ -40,8 +40,9 @@ once. Future requests for the same pair use the working feed immediately, elimin
 ## Backup Provider
 
 - `BACKUP_DATA_PROVIDER`: fallback source when the primary feed returns empty data.
-  The historical non-live default remains `yahoo`, but live-safe operator values
-  are `finnhub`, `finnhub_low_latency`, or `none`.
+  The effective default is mode-aware: `live` resolves to `none` unless you
+  explicitly choose an approved live-safe provider, while non-live environments
+  default to `yahoo`.
 - Live startup rejects `BACKUP_DATA_PROVIDER=yahoo`, and live execution blocks
   Yahoo fallback in quote and minute-data recovery paths.
 - Set `BACKUP_DATA_PROVIDER=finnhub` to use the Finnhub low-latency candles API

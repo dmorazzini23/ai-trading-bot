@@ -23,8 +23,8 @@ def test_retrain_meta_learner_strict_schema_requires_signal_tags(
     monkeypatch.setenv("AI_TRADING_META_STRICT_SCHEMA_ENABLED", "1")
     ok = retrain_meta_learner(
         trade_log_path=str(trade_log),
-        model_path=str(tmp_path / "meta.pkl"),
-        history_path=str(tmp_path / "meta_history.pkl"),
+        model_path=str(tmp_path / "meta.joblib"),
+        history_path=str(tmp_path / "meta_history.json"),
         min_samples=1,
     )
 

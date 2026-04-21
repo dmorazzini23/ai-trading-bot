@@ -144,6 +144,30 @@ def test_live_mode_rejects_yahoo_backup_provider(monkeypatch):
         _validate_startup_config()
 
 
+def test_backup_provider_defaults_to_none_in_live_mode(monkeypatch):
+    _clear_alias_env(monkeypatch)
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.delenv("BACKUP_DATA_PROVIDER", raising=False)
+    monkeypatch.delenv("BACKUP_PROVIDER", raising=False)
+    _clear_settings_cache()
+
+    settings = get_settings()
+
+    assert settings.backup_data_provider == "none"
+
+
+def test_backup_provider_defaults_to_yahoo_in_non_live_mode(monkeypatch):
+    _clear_alias_env(monkeypatch)
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.delenv("BACKUP_DATA_PROVIDER", raising=False)
+    monkeypatch.delenv("BACKUP_PROVIDER", raising=False)
+    _clear_settings_cache()
+
+    settings = get_settings()
+
+    assert settings.backup_data_provider == "yahoo"
+
+
 def test_live_mode_applies_strict_execution_quote_defaults(monkeypatch):
     _clear_alias_env(monkeypatch)
     monkeypatch.setenv("TIMEFRAME", "1Min")

@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.config.management import get_env
+from ai_trading.settings import get_backup_data_provider
 from ai_trading.telemetry import runtime_state
 from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
 
@@ -798,6 +799,9 @@ def build_runtime_health_payload(
         runtime_state.observe_data_provider_state,
         {},
     )
+    if not provider_state.get("backup"):
+        provider_state = dict(provider_state)
+        provider_state["backup"] = get_backup_data_provider()
     broker_state: dict[str, Any] = _safe_observe(runtime_state.observe_broker_status, {})
     service_state: dict[str, Any] = _safe_observe(
         runtime_state.observe_service_status,
@@ -1129,6 +1133,9 @@ def build_control_plane_snapshot(
         runtime_state.observe_data_provider_state,
         {},
     )
+    if not provider_state.get("backup"):
+        provider_state = dict(provider_state)
+        provider_state["backup"] = get_backup_data_provider()
     broker_state: dict[str, Any] = _safe_observe(runtime_state.observe_broker_status, {})
     service_state: dict[str, Any] = _safe_observe(runtime_state.observe_service_status, {})
     quote_state: dict[str, Any] = _safe_observe(runtime_state.observe_quote_status, {})

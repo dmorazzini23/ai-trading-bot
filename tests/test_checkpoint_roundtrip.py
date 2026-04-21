@@ -1,9 +1,9 @@
-from ai_trading import meta_learning
+from ai_trading.meta import checkpoint
 
 
 def test_checkpoint_roundtrip(tmp_path):
-    path = tmp_path / "chk.pkl"
+    path = tmp_path / "chk.json"
     data = {"foo": 1}
-    meta_learning.save_model_checkpoint(data, str(path))
-    loaded = meta_learning.load_checkpoint(str(path))
+    checkpoint.save_checkpoint(data, str(path))
+    loaded = checkpoint.load_checkpoint(str(path))
     assert loaded == data

@@ -206,7 +206,8 @@ def test_missing_model_warns_when_flag_set(monkeypatch, tmp_path, caplog):
     monkeypatch.setenv("AI_TRADING_WARN_IF_MODEL_MISSING", "1")
     monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
     caplog.set_level("WARNING")
-    reload_bot_engine()
+    be = reload_bot_engine()
+    be._refresh_model_loading_flags(log_missing=True)
     assert "ML_MODEL_MISSING" in caplog.text
 
 

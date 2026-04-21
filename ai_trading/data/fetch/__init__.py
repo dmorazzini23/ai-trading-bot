@@ -84,6 +84,7 @@ from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
 from ai_trading.logging.normalize import canon_symbol as _canon_symbol
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
+from ai_trading.settings import get_backup_data_provider
 from ai_trading.telemetry import runtime_state
 from ai_trading.timeframe import TimeFrame
 
@@ -1415,9 +1416,9 @@ def fetch_daily_backup(
         return filtered
 
     try:
-        backup_provider = getattr(_current_settings(), "backup_data_provider", "yahoo")
+        backup_provider = getattr(_current_settings(), "backup_data_provider", get_backup_data_provider())
     except Exception:
-        backup_provider = "yahoo"
+        backup_provider = get_backup_data_provider()
     metadata = {"symbols": sorted(filtered.keys())}
     if not _data_fallback_allowed():
         activate_data_kill_switch(
@@ -4573,12 +4574,12 @@ def _empty_ohlcv_frame(pd_local: Any | None = None) -> pd.DataFrame:
 
 
 def _resolve_backup_provider() -> tuple[str, str]:
-    provider_val = getattr(_current_settings(), "backup_data_provider", "yahoo")
+    provider_val = getattr(_current_settings(), "backup_data_provider", get_backup_data_provider())
     provider_str = str(provider_val).strip()
     normalized = provider_str.lower()
     if not normalized or normalized == "yfinance":
-        provider_str = "yahoo"
-        normalized = "yahoo"
+        provider_str = get_backup_data_provider()
+        normalized = provider_str.lower()
     return provider_str, normalized
 
 
@@ -6331,7 +6332,7 @@ def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Da
 def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     """Route to configured backup provider or return empty DataFrame."""
     settings = _current_settings()
-    provider = getattr(settings, "backup_data_provider", "yahoo")
+    provider = getattr(settings, "backup_data_provider", get_backup_data_provider())
     provider_str = str(provider).strip()
     normalized = provider_str.lower()
 
@@ -8801,7 +8802,7 @@ def _fetch_bars(
                 logger.warning(
                     "ALPACA_KEYS_MISSING_USING_BACKUP",
                     extra={
-                        "provider": getattr(_current_settings(), "backup_data_provider", "yahoo"),
+                        "provider": getattr(_current_settings(), "backup_data_provider", get_backup_data_provider()),
                         "hint": "Set ALPACA_API_KEY, ALPACA_SECRET_KEY, and ALPACA_TRADING_BASE_URL to use Alpaca data",
                     },
                 )
@@ -8809,7 +8810,7 @@ def _fetch_bars(
                     AlertType.SYSTEM,
                     AlertSeverity.CRITICAL,
                     "Alpaca credentials missing; using backup provider",
-                    metadata={"provider": getattr(_current_settings(), "backup_data_provider", "yahoo")},
+                    metadata={"provider": getattr(_current_settings(), "backup_data_provider", get_backup_data_provider())},
                 )
             except Exception:
                 pass
@@ -14306,7 +14307,7 @@ def get_bars(
     if not _has_alpaca_keys():
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
-            backup_provider = getattr(S, "backup_data_provider", "yahoo")
+            backup_provider = getattr(S, "backup_data_provider", get_backup_data_provider())
             try:
                 logger.warning(
                     "ALPACA_KEYS_MISSING_USING_BACKUP",

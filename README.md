@@ -896,7 +896,7 @@ connectivity.
 |-----------|---------|-------------|
 | `ALPACA_DATA_FEED` | `iex`/`sip` by env | Preferred Alpaca market-data feed |
 | `DATA_FEED_INTRADAY` | `iex` | Intraday execution-pricing feed |
-| `BACKUP_DATA_PROVIDER` | `yahoo` | Fallback provider (`yahoo`, `finnhub`, `finnhub_low_latency`, `none`) |
+| `BACKUP_DATA_PROVIDER` | mode-aware | `live`: `none` unless explicitly set to `finnhub` or `finnhub_low_latency`; non-live defaults to `yahoo` |
 | `ALPACA_FEED_FAILOVER` | `sip` | Ordered Alpaca feed failover list |
 | `ALLOW_AFTER_HOURS` | `false` | Allow cycles outside regular market hours |
 
@@ -905,7 +905,7 @@ and queries the backup source. Configure additional fallbacks with:
 
 - Set `ENABLE_FINNHUB=1` and supply `FINNHUB_API_KEY` to enable a Finnhub
   retry before using the backup provider.
-- `BACKUP_DATA_PROVIDER` to override the default Yahoo Finance fallback (`yahoo`, `finnhub`, or `none`).
+- `BACKUP_DATA_PROVIDER` to override the mode-aware fallback policy: non-live defaults to Yahoo Finance, while live-capable runtimes should use `finnhub`, `finnhub_low_latency`, or `none`.
 
 When the configured fallback is used, a `USING_BACKUP_PROVIDER` log entry is emitted with the provider name.
 See [docs/provider_configuration.md](docs/provider_configuration.md) for environment-specific examples.
@@ -1273,7 +1273,7 @@ export ENABLE_DAILY_RETRAIN=true   # Enable (default)
 export DISABLE_DAILY_RETRAIN=1     # Disable
 
 # Manual retraining
-python3 -m retrain --trade-log data/trades.csv --model-path artifacts/meta_model.pkl
+python3 -m retrain --trade-log data/trades.csv --model-path artifacts/meta_model.joblib
 
 # Schedule retraining
 echo "0 2 * * * /opt/ai-trading-bot/venv/bin/python3 -m retrain --trade-log /var/lib/ai-trading/trades.csv" | crontab -

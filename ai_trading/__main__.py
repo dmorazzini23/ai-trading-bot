@@ -304,6 +304,14 @@ def _validate_startup_config() -> _StartupConfig:
             )
             raise SystemExit(message)
 
+        logger.info(
+            "BACKUP_PROVIDER_EFFECTIVE",
+            extra={
+                "execution_mode": execution_mode,
+                "backup_provider": backup_provider or "none",
+            },
+        )
+
     # Capture an explicit feed override from the environment before consulting
     # the settings defaults. ``get_env`` would otherwise coerce invalid feeds to
     # a default, preventing ``_StartupConfig`` from surfacing configuration

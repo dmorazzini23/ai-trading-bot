@@ -1,15 +1,16 @@
 import types
-import pickle
 import warnings
 
 import pytest
 np = pytest.importorskip("numpy")
+joblib = pytest.importorskip("joblib")
 
 np.random.seed(0)
 
 from ai_trading import meta_learning
 from ai_trading.meta_learning import MetaLearning
 from ai_trading.meta import checkpoint
+from ai_trading.models.artifacts import write_artifact_manifest
 
 
 class _WarnOnUnpickle:
@@ -145,7 +146,7 @@ def test_update_signal_weights_normal():
 
 
 def test_save_and_load_checkpoint(tmp_path):
-    path = tmp_path / "x.pkl"
+    path = tmp_path / "x.json"
     data = {"x": 1}
     saved = checkpoint.save_checkpoint(data, str(path))
     assert saved == data
@@ -197,16 +198,20 @@ def test_update_weights_success(tmp_path):
 
 
 def test_load_model_checkpoint_missing(tmp_path):
-    path = tmp_path / "x.pkl"
+    path = tmp_path / "x.joblib"
     assert meta_learning.load_model_checkpoint(str(path)) is None
 
 
 def test_load_model_checkpoint_rejects_inconsistent_version_warning(
     tmp_path, caplog
 ):
-    path = tmp_path / "x.pkl"
-    with path.open("wb") as handle:
-        pickle.dump(_WarnOnUnpickle(), handle)
+    path = tmp_path / "x.joblib"
+    joblib.dump(_WarnOnUnpickle(), path)
+    write_artifact_manifest(
+        model_path=path,
+        model_version="test-meta-learning",
+        metadata={"kind": "test"},
+    )
     caplog.set_level("ERROR")
 
     assert meta_learning.load_model_checkpoint(str(path)) is None

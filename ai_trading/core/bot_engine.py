@@ -396,8 +396,6 @@ from ai_trading.config import (
 )
 from ai_trading.health_payload import (
     build_canonical_healthz_payload,
-    build_health_json_response,
-    register_healthz_routes,
 )
 from ai_trading.config.settings import minute_data_freshness_tolerance
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
@@ -5421,10 +5419,7 @@ from ai_trading.logging import (
 )  # AI-AGENT-REF: structured logging helper
 from ai_trading.utils.universe import load_universe as load_universe_from_path
 
-from ai_trading.config.settings import (
-    MODEL_PATH,
-    TICKERS_FILE,
-)
+from ai_trading.config.settings import TICKERS_FILE
 
 # RL: import the trader wrapper from the correct package
 try:
@@ -6784,25 +6779,45 @@ from ai_trading.settings import (
     get_seed_int,
 )  # AI-AGENT-REF: runtime env settings
 
-# Refresh environment variables on startup for reliability
-# Initialize settings once for global use
-_reload_env()
-CFG: Any
-try:
-    CFG = get_runtime_settings()
-except (RuntimeError, ValueError, AttributeError):  # pragma: no cover - defensive fallback
-    CFG = None
-if CFG is None:
-    CFG = types.SimpleNamespace(
-        log_market_fetch=True,
-        max_drawdown_threshold=0.0,
-    )
-# Backward-compat constants for risk thresholds used throughout this module
-# AI-AGENT-REF: restored weekly drawdown limit
-WEEKLY_DRAWDOWN_LIMIT = getattr(CFG, "weekly_drawdown_limit", 0.10)
-# AI-AGENT-REF: cached runtime settings for env aliases
+class _SettingsProxy:
+    """Lazy settings proxy so importing this module stays side-effect light."""
+
+    def __init__(self) -> None:
+        object.__setattr__(
+            self,
+            "_fallback",
+            types.SimpleNamespace(
+                log_market_fetch=True,
+                max_drawdown_threshold=0.0,
+            ),
+        )
+
+    def _current(self) -> Any:
+        try:
+            cfg = get_runtime_settings()
+        except (RuntimeError, ValueError, AttributeError):
+            cfg = None
+        return cfg if cfg is not None else object.__getattribute__(self, "_fallback")
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._current(), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "_fallback":
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._current(), name, value)
+
+    def __delattr__(self, name: str) -> None:
+        current = self._current()
+        if hasattr(current, name):
+            delattr(current, name)
+
+
+CFG: Any = _SettingsProxy()
 S = CFG
-SEED = get_seed_int()  # AI-AGENT-REF: deterministic seed from runtime settings
+WEEKLY_DRAWDOWN_LIMIT = 0.10
+SEED = 42
 
 
 from ai_trading.market.calendars import ensure_final_bar
@@ -6823,19 +6838,6 @@ import numpy as np
 
 # AI-AGENT-REF: logger configuration is handled upstream in ``ai_trading.main``
 logger = get_logger(__name__)  # AI-AGENT-REF: define logger before use
-
-# AI-AGENT-REF: import sanity signal for CI/ops
-info_kv(
-    logger,
-    "INDICATOR_IMPORT_OK",
-    extra={"compute_atr_is_function": bool(inspect.isfunction(_compute_atr))},
-)
-
-info_kv(
-    logger,
-    "RL_IMPORT_OK",
-    extra={"available": bool(RLTrader)},
-)  # AI-AGENT-REF: RL import self-check
 
 
 # Handling missing portfolio weights function
@@ -7001,11 +7003,6 @@ from datetime import datetime as dt_
 from datetime import time as dt_time
 from threading import Lock, Semaphore, Thread
 from zoneinfo import ZoneInfo
-
-random.seed(SEED)
-# AI-AGENT-REF: guard numpy random seed for test environments
-if hasattr(np, "random"):
-    np.random.seed(SEED)
 
 # AI-AGENT-REF: throttle SKIP_COOLDOWN logs
 _LAST_SKIP_CD_TIME = 0.0
@@ -7853,54 +7850,6 @@ if not ALPACA_AVAILABLE:
 
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
 from bs4 import BeautifulSoup
-
-# AI-AGENT-REF: flask is a hard dependency in pyproject.toml
-Flask: Any
-jsonify: Any
-try:
-    from flask import Flask as _FlaskClass, jsonify as _flask_jsonify
-except ModuleNotFoundError:
-    if str(get_env("PYTEST_RUNNING", "") or "").strip().lower() in {"1", "true", "yes"}:
-        class _FlaskStub:
-            """Lightweight Flask stub for test environments without flask."""
-
-            def __init__(self, name: str):
-                self.name = name
-                self._routes: dict[str, Callable] = {}
-                self.config: dict[str, object] = {}
-                self.logger = logger
-
-            def route(self, _path: str, **_kwargs: object) -> Callable:
-                def decorator(fn: Callable) -> Callable:
-                    self._routes[_path] = fn
-                    return fn
-
-                return decorator
-
-            def run(self, *args: object, **kwargs: object) -> None:
-                logger.info(
-                    "FLASK_STUB_RUN",
-                    extra={"args": args, "kwargs": kwargs},
-                )
-
-        def _jsonify_stub(*args: object, **kwargs: object) -> dict[str, object]:
-            """Return payload unchanged when flask is unavailable."""
-
-            if args:
-                payload = args[0]
-                if isinstance(payload, dict):
-                    return dict(payload)
-            if "payload" in kwargs and isinstance(kwargs["payload"], dict):
-                return dict(cast(dict[str, object], kwargs["payload"]))
-            return {}
-
-        Flask = _FlaskStub
-        jsonify = _jsonify_stub
-    else:
-        raise
-else:
-    Flask = _FlaskClass
-    jsonify = _flask_jsonify
 
 # AI-AGENT-REF: lazy import to avoid import-time races and optional deps
 def _alpaca_symbols():
@@ -10798,29 +10747,32 @@ def abspath(fname: str) -> str:
 
 # AI-AGENT-REF: safe ML model path resolution
 DEFAULT_MODEL_PATH = abspath_safe("trained_model.pkl")
-env_model = get_env("AI_TRADING_MODEL_PATH")
-MODEL_PATH = abspath_safe(env_model or getattr(S, "model_path", None))
-WARN_IF_MODEL_MISSING = bool(
-    config.get_env("AI_TRADING_WARN_IF_MODEL_MISSING", "0", cast=int)
-)
-if MODEL_PATH and os.path.exists(MODEL_PATH):
-    USE_ML = True
-elif MODEL_PATH and os.path.abspath(MODEL_PATH) != DEFAULT_MODEL_PATH:
-    if WARN_IF_MODEL_MISSING:
-        logger.warning("ML_MODEL_MISSING", extra={"path": MODEL_PATH})
-    USE_ML = False
-else:  # default path missing - no model required
-    USE_ML = False
+MODEL_PATH: str | None = None
+USE_ML = False
 
-info_kv(
-    logger,
-    "RUNTIME_SETTINGS_RESOLVED",
-    extra={
-        "seed": getattr(S, "ai_trading_seed", 42),
-        "model_path": MODEL_PATH or "",
-        "interval_hint": "main.py",
-    },
-)
+
+def _refresh_model_loading_flags(*, log_missing: bool = False) -> None:
+    """Refresh runtime model-path flags when startup explicitly bootstraps."""
+    global MODEL_PATH, USE_ML
+
+    env_model = get_env("AI_TRADING_MODEL_PATH")
+    model_path = abspath_safe(env_model or getattr(S, "model_path", None))
+    warn_if_missing = bool(
+        config.get_env("AI_TRADING_WARN_IF_MODEL_MISSING", "0", cast=int)
+    )
+    if model_path and os.path.exists(model_path):
+        MODEL_PATH = model_path
+        USE_ML = True
+        return
+    MODEL_PATH = model_path
+    USE_ML = False
+    if (
+        log_missing
+        and model_path
+        and os.path.abspath(model_path) != DEFAULT_MODEL_PATH
+        and warn_if_missing
+    ):
+        logger.warning("ML_MODEL_MISSING", extra={"path": model_path})
 
 
 def abspath_repo_root(fname: str) -> str:
@@ -10914,7 +10866,7 @@ def _log_peak_equity_permission() -> None:
         )
     finally:
         _PEAK_EQUITY_PERMISSION_LOGGED = True
-HALT_FLAG_PATH = abspath(getattr(S, "halt_flag_path", "runtime/halt.flag"))  # AI-AGENT-REF: absolute halt flag path
+HALT_FLAG_PATH = abspath("runtime/halt.flag")  # AI-AGENT-REF: absolute halt flag path
 SLIPPAGE_LOG_FILE = str(paths.LOG_DIR / "slippage.csv")
 REWARD_LOG_FILE = str(paths.LOG_DIR / "reward_log.csv")
 FEATURE_PERF_FILE = abspath_safe("feature_perf.csv")
@@ -11374,14 +11326,14 @@ def _regime_basket_to_proxy_bars(wide: pd.DataFrame) -> pd.DataFrame:
 # <-- NEW: marker file for daily retraining -->
 RETRAIN_MARKER_FILE = abspath("last_retrain.txt")
 
-# Main meta‐learner path: this is where retrain.py will dump the new sklearn model each day.
-MODEL_RF_PATH = abspath_safe(getattr(CFG, "model_rf_path", None))
-MODEL_XGB_PATH = abspath_safe(getattr(CFG, "model_xgb_path", None))
-MODEL_LGB_PATH = abspath_safe(getattr(CFG, "model_lgb_path", None))
+# Main meta-learner paths are resolved during explicit runtime bootstrap.
+MODEL_RF_PATH: str | None = None
+MODEL_XGB_PATH: str | None = None
+MODEL_LGB_PATH: str | None = None
 
 REGIME_MODEL_PATH = abspath_safe("regime_model.pkl")
-# (We keep a separate meta‐model for signal‐weight learning, if you use Bayesian/Ridge, etc.)
-META_MODEL_PATH = abspath_safe("meta_model.pkl")
+# (We keep a separate meta-model for signal-weight learning, if you use Bayesian/Ridge, etc.)
+META_MODEL_PATH = abspath_safe("meta_model.joblib")
 
 
 # Strategy mode
@@ -11639,34 +11591,9 @@ class _LazyState:
 
 state: BotState = cast(BotState, _LazyState())
 _mode_effective_snapshot: dict[str, Any] = {}
-try:
-    _mode_cfg = _get_trading_config()
-    snapshot_fn = getattr(_mode_cfg, "mode_effective_snapshot", None)
-    if callable(snapshot_fn):
-        snapshot_payload = snapshot_fn()
-        if isinstance(snapshot_payload, Mapping):
-            _mode_effective_snapshot = dict(snapshot_payload)
-except COMMON_EXC:
-    _mode_effective_snapshot = {}
-logger.info(
-    "TRADING_MODE_EFFECTIVE",
-    extra={
-        "mode": state.mode_obj.mode,
-        "mode_source": _mode_effective_snapshot.get("mode_source"),
-        "precedence_policy": _mode_effective_snapshot.get("precedence_policy"),
-        "managed_fields": _mode_effective_snapshot.get("managed_fields", {}),
-    },
-)
-logger.info(f"Trading mode is set to '{state.mode_obj.mode}'")
-params = state.mode_obj.get_config()
-params.update(load_hyperparams())
+params: dict[str, Any] = {}
 
-TRAILING_FACTOR = params.get(
-    "TRAILING_FACTOR",
-    getattr(
-        S, "trailing_factor", getattr(state.mode_obj.config, "trailing_factor", 1.0)
-    ),
-)
+TRAILING_FACTOR = 1.0
 SECONDARY_TRAIL_FACTOR = 1.0
 
 
@@ -11690,67 +11617,21 @@ def get_take_profit_factor() -> float:
         raise RuntimeError("TAKE_PROFIT_FACTOR must be a positive number")
     return float(val)
 
-SCALING_FACTOR = params.get(
-    "SCALING_FACTOR",
-    getattr(S, "scaling_factor", getattr(state.mode_obj.config, "scaling_factor", 1.0)),
-)
+SCALING_FACTOR = 1.0
 ORDER_TYPE = "market"
-LIMIT_ORDER_SLIPPAGE = params.get(
-    "LIMIT_ORDER_SLIPPAGE",
-    getattr(
-        S,
-        "limit_order_slippage",
-        getattr(state.mode_obj.config, "limit_order_slippage", 0.001),
-    ),
-)
+LIMIT_ORDER_SLIPPAGE = 0.001
 # Resolved during runtime build to avoid premature network calls.
 # Initialized from TradingConfig so env overrides match runtime resolution.
 MAX_POSITION_SIZE = 8000.0
 SLICE_THRESHOLD = 50
-POV_SLICE_PCT = params.get(
-    "POV_SLICE_PCT",
-    getattr(S, "pov_slice_pct", getattr(state.mode_obj.config, "pov_slice_pct", 0.05)),
-)
-# Coerce invalid/None values to a sane default
-try:
-    _p = float(POV_SLICE_PCT)
-    if not (_p > 0):
-        POV_SLICE_PCT = 0.05
-    else:
-        POV_SLICE_PCT = _p
-except (TypeError, ValueError):
-    POV_SLICE_PCT = 0.05
-DAILY_LOSS_LIMIT = params.get(
-    "DAILY_LOSS_LIMIT",
-    getattr(
-        state.mode_obj.config, "daily_loss_limit", getattr(S, "daily_loss_limit", 0.05)
-    ),
-)
+POV_SLICE_PCT = 0.05
+DAILY_LOSS_LIMIT = 0.05
 # Additional risk/sizing knobs aligned with Settings
-KELLY_FRACTION = params.get(
-    "KELLY_FRACTION",
-    getattr(S, "kelly_fraction", getattr(state.mode_obj.config, "kelly_fraction", 0.0)),
-)
-STOP_LOSS = params.get(
-    "STOP_LOSS",
-    getattr(S, "stop_loss", getattr(state.mode_obj.config, "stop_loss", 0.05)),
-)
-TAKE_PROFIT = params.get(
-    "TAKE_PROFIT",
-    getattr(S, "take_profit", getattr(state.mode_obj.config, "take_profit", 0.10)),
-)
-LOOKBACK_DAYS = params.get(
-    "LOOKBACK_DAYS",
-    getattr(S, "lookback_days", getattr(state.mode_obj.config, "lookback_days", 60)),
-)
-MIN_SIGNAL_STRENGTH = params.get(
-    "MIN_SIGNAL_STRENGTH",
-    getattr(
-        S,
-        "min_signal_strength",
-        getattr(state.mode_obj.config, "min_signal_strength", 0.1),
-    ),
-)
+KELLY_FRACTION = 0.0
+STOP_LOSS = 0.05
+TAKE_PROFIT = 0.10
+LOOKBACK_DAYS = 60
+MIN_SIGNAL_STRENGTH = 0.1
 # AI-AGENT-REF: Increase default position limit from "10" to "20" for better portfolio utilization
 # REMOVED: module-scope MAX_PORTFOLIO_POSITIONS = CFG.max_portfolio_positions
 CORRELATION_THRESHOLD = 0.60
@@ -11760,26 +11641,8 @@ CORRELATION_THRESHOLD = 0.60
 MARKET_OPEN = dt_time(6, 30)
 MARKET_CLOSE = dt_time(13, 0)
 # REMOVED: VOLUME_THRESHOLD = CFG.volume_threshold
-ENTRY_START_OFFSET = timedelta(
-    minutes=params.get(
-        "ENTRY_START_OFFSET_MIN",
-        getattr(
-            S,
-            "entry_start_offset_min",
-            getattr(state.mode_obj.config, "entry_start_offset_min", 0),
-        ),
-    )
-)
-ENTRY_END_OFFSET = timedelta(
-    minutes=params.get(
-        "ENTRY_END_OFFSET_MIN",
-        getattr(
-            S,
-            "entry_end_offset_min",
-            getattr(state.mode_obj.config, "entry_end_offset_min", 0),
-        ),
-    )
-)
+ENTRY_START_OFFSET = timedelta(minutes=0)
+ENTRY_END_OFFSET = timedelta(minutes=0)
 REGIME_LOOKBACK = 14
 REGIME_ATR_THRESHOLD = 20.0
 RF_ESTIMATORS = 300
@@ -11788,12 +11651,7 @@ RF_ESTIMATORS = 300
 RF_MAX_DEPTH = 3
 RF_MIN_SAMPLES_LEAF = 5
 ATR_LENGTH = 10
-CONF_THRESHOLD = float(
-    params.get(
-        "CONF_THRESHOLD",
-        getattr(state.mode_obj.config, "confidence_level", get_conf_threshold()),
-    )
-)
+CONF_THRESHOLD = float(get_conf_threshold())
 
 
 def _minute_frame_attrs(frame: Any) -> dict[str, str]:
@@ -12073,10 +11931,170 @@ def validate_trading_parameters():
     )
 
 
-# AI-AGENT-REF: Defer parameter validation in testing environments to prevent import blocking
-# Validate parameters after loading
-if not get_env("TESTING"):
-    validate_trading_parameters()
+_BOT_ENGINE_RUNTIME_BOOTSTRAPPED = False
+
+
+def bootstrap_runtime_defaults(*, log_import_checks: bool = True) -> None:
+    """Resolve expensive runtime globals only from explicit startup paths."""
+    global _BOT_ENGINE_RUNTIME_BOOTSTRAPPED
+    global SEED, MODEL_RF_PATH, MODEL_XGB_PATH, MODEL_LGB_PATH
+    global HALT_FLAG_PATH, TRADE_COOLDOWN
+    global TRAILING_FACTOR, SCALING_FACTOR, LIMIT_ORDER_SLIPPAGE, POV_SLICE_PCT
+    global DAILY_LOSS_LIMIT, KELLY_FRACTION, STOP_LOSS, TAKE_PROFIT
+    global LOOKBACK_DAYS, MIN_SIGNAL_STRENGTH, ENTRY_START_OFFSET, ENTRY_END_OFFSET
+    global CONF_THRESHOLD, params, _mode_effective_snapshot
+
+    if _BOT_ENGINE_RUNTIME_BOOTSTRAPPED:
+        return
+
+    _reload_env()
+    SEED = get_seed_int()
+    random.seed(SEED)
+    if hasattr(np, "random"):
+        np.random.seed(SEED)
+
+    _refresh_model_loading_flags(log_missing=log_import_checks)
+    MODEL_RF_PATH = abspath_safe(getattr(CFG, "model_rf_path", None))
+    MODEL_XGB_PATH = abspath_safe(getattr(CFG, "model_xgb_path", None))
+    MODEL_LGB_PATH = abspath_safe(getattr(CFG, "model_lgb_path", None))
+    HALT_FLAG_PATH = abspath(getattr(S, "halt_flag_path", "runtime/halt.flag"))
+    TRADE_COOLDOWN = getattr(
+        S, "trade_cooldown", timedelta(minutes=TRADE_COOLDOWN_MIN)
+    )
+
+    _mode_effective_snapshot = {}
+    try:
+        _mode_cfg = _get_trading_config()
+        snapshot_fn = getattr(_mode_cfg, "mode_effective_snapshot", None)
+        if callable(snapshot_fn):
+            snapshot_payload = snapshot_fn()
+            if isinstance(snapshot_payload, Mapping):
+                _mode_effective_snapshot = dict(snapshot_payload)
+    except COMMON_EXC:
+        _mode_effective_snapshot = {}
+
+    params = state.mode_obj.get_config()
+    params.update(load_hyperparams())
+    TRAILING_FACTOR = params.get(
+        "TRAILING_FACTOR",
+        getattr(
+            S, "trailing_factor", getattr(state.mode_obj.config, "trailing_factor", 1.0)
+        ),
+    )
+    SCALING_FACTOR = params.get(
+        "SCALING_FACTOR",
+        getattr(S, "scaling_factor", getattr(state.mode_obj.config, "scaling_factor", 1.0)),
+    )
+    LIMIT_ORDER_SLIPPAGE = params.get(
+        "LIMIT_ORDER_SLIPPAGE",
+        getattr(
+            S,
+            "limit_order_slippage",
+            getattr(state.mode_obj.config, "limit_order_slippage", 0.001),
+        ),
+    )
+    try:
+        _pov_slice_pct = float(
+            params.get(
+                "POV_SLICE_PCT",
+                getattr(S, "pov_slice_pct", getattr(state.mode_obj.config, "pov_slice_pct", 0.05)),
+            )
+        )
+        POV_SLICE_PCT = _pov_slice_pct if _pov_slice_pct > 0 else 0.05
+    except (TypeError, ValueError):
+        POV_SLICE_PCT = 0.05
+    DAILY_LOSS_LIMIT = params.get(
+        "DAILY_LOSS_LIMIT",
+        getattr(
+            state.mode_obj.config, "daily_loss_limit", getattr(S, "daily_loss_limit", 0.05)
+        ),
+    )
+    KELLY_FRACTION = params.get(
+        "KELLY_FRACTION",
+        getattr(S, "kelly_fraction", getattr(state.mode_obj.config, "kelly_fraction", 0.0)),
+    )
+    STOP_LOSS = params.get(
+        "STOP_LOSS",
+        getattr(S, "stop_loss", getattr(state.mode_obj.config, "stop_loss", 0.05)),
+    )
+    TAKE_PROFIT = params.get(
+        "TAKE_PROFIT",
+        getattr(S, "take_profit", getattr(state.mode_obj.config, "take_profit", 0.10)),
+    )
+    LOOKBACK_DAYS = int(
+        params.get(
+            "LOOKBACK_DAYS",
+            getattr(S, "lookback_days", getattr(state.mode_obj.config, "lookback_days", 60)),
+        )
+    )
+    MIN_SIGNAL_STRENGTH = params.get(
+        "MIN_SIGNAL_STRENGTH",
+        getattr(
+            S,
+            "min_signal_strength",
+            getattr(state.mode_obj.config, "min_signal_strength", 0.1),
+        ),
+    )
+    ENTRY_START_OFFSET = timedelta(
+        minutes=params.get(
+            "ENTRY_START_OFFSET_MIN",
+            getattr(
+                S,
+                "entry_start_offset_min",
+                getattr(state.mode_obj.config, "entry_start_offset_min", 0),
+            ),
+        )
+    )
+    ENTRY_END_OFFSET = timedelta(
+        minutes=params.get(
+            "ENTRY_END_OFFSET_MIN",
+            getattr(
+                S,
+                "entry_end_offset_min",
+                getattr(state.mode_obj.config, "entry_end_offset_min", 0),
+            ),
+        )
+    )
+    CONF_THRESHOLD = float(
+        params.get(
+            "CONF_THRESHOLD",
+            getattr(state.mode_obj.config, "confidence_level", get_conf_threshold()),
+        )
+    )
+
+    if log_import_checks:
+        info_kv(
+            logger,
+            "INDICATOR_IMPORT_OK",
+            extra={"compute_atr_is_function": bool(inspect.isfunction(_compute_atr))},
+        )
+        info_kv(
+            logger,
+            "RL_IMPORT_OK",
+            extra={"available": bool(RLTrader)},
+        )
+        info_kv(
+            logger,
+            "RUNTIME_SETTINGS_RESOLVED",
+            extra={
+                "seed": getattr(S, "ai_trading_seed", SEED),
+                "model_path": MODEL_PATH or "",
+                "interval_hint": "main.py",
+            },
+        )
+        logger.info(
+            "TRADING_MODE_EFFECTIVE",
+            extra={
+                "mode": state.mode_obj.mode,
+                "mode_source": _mode_effective_snapshot.get("mode_source"),
+                "precedence_policy": _mode_effective_snapshot.get("precedence_policy"),
+                "managed_fields": _mode_effective_snapshot.get("managed_fields", {}),
+            },
+        )
+        logger.info("Trading mode is set to '%s'", state.mode_obj.mode)
+    if not get_env("TESTING"):
+        validate_trading_parameters()
+    _BOT_ENGINE_RUNTIME_BOOTSTRAPPED = True
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 # Regime symbols (makes SPY configurable)
@@ -12151,7 +12169,7 @@ EVENT_COOLDOWN = 15.0  # seconds
 REBALANCE_HOLD_SECONDS = get_min_position_hold_seconds()
 RUN_INTERVAL_SECONDS = 60  # don't run trading loop more often than this
 TRADE_COOLDOWN_MIN = get_trade_cooldown_min()  # minutes
-TRADE_COOLDOWN = getattr(S, "trade_cooldown", timedelta(minutes=TRADE_COOLDOWN_MIN))  # AI-AGENT-REF: validated cooldown
+TRADE_COOLDOWN = timedelta(minutes=TRADE_COOLDOWN_MIN)  # AI-AGENT-REF: validated cooldown
 
 # AI-AGENT-REF: Enhanced overtrading prevention with frequency limits
 MAX_TRADES_PER_HOUR = get_max_trades_per_hour()  # limit high-frequency trading
@@ -30295,7 +30313,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                             else:
                                 success = retrain_meta_learner(
                                     trade_log_path=meta_trade_log,
-                                    model_path=MODEL_PATH or "meta_model.pkl",
+                                    model_path=MODEL_PATH or "meta_model.joblib",
                                 )
                         else:
                             logger.info(
@@ -30631,33 +30649,15 @@ def on_market_close() -> None:
 
 
 # ─── M. MAIN LOOP & SCHEDULER ─────────────────────────────────────────────────
-app = Flask(__name__)
-
-
 def _legacy_health_payload() -> dict[str, Any]:
     from ai_trading.core.runtime_services import legacy_health_payload_runtime
 
     return legacy_health_payload_runtime()
 
-
-def _legacy_health_response(payload: dict[str, Any], status: int) -> Any:
-    return build_health_json_response(payload, status, jsonify_fn=jsonify)
-
-
-register_healthz_routes(
-    app,
-    payload_builder=_legacy_health_payload,
-    response_builder=_legacy_health_response,
-    service_name="ai-trading",
-    routes=("/health", "/health_check", "/healthz"),
-    logger=logger,
-    error_event="HEALTH_CHECK_FAILED",
-)
-
-
 def start_healthcheck() -> None:
     from ai_trading.core.runtime_services import start_healthcheck_runtime
 
+    bootstrap_runtime_defaults()
     start_healthcheck_runtime()
 
 
@@ -40374,6 +40374,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
 
     from ai_trading.core.run_all_trades_worker import run_all_trades_worker_cycle
 
+    bootstrap_runtime_defaults()
     run_all_trades_worker_cycle(state=state, runtime=runtime)
 
 
@@ -40400,6 +40401,7 @@ def initial_rebalance(ctx: Any, symbols: list[str]) -> None:
 
 
 def main() -> None:
+    bootstrap_runtime_defaults()
     logger.info("Main trading bot starting")
 
     # AI-AGENT-REF: Initialize runtime config and validate credentials

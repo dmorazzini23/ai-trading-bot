@@ -78,6 +78,9 @@ execution, persistence, and operator recovery.
 - Generic pickle/cloudpickle/dill model deserialization has been removed from
   the supported runtime/model-registry path in favor of JSON-safe inline
   artifacts and explicit approved artifact paths.
+- The standalone health entrypoint and the legacy helper now share the same
+  canonical health-only app surface (`/healthz` + `/metrics`) instead of
+  maintaining a second `bot_engine`-owned Flask server.
 
 ### Robustness work already formalized
 

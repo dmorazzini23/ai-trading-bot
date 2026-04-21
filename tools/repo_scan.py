@@ -24,6 +24,10 @@ PICKLE_ALLOWLIST = {
     # so we suppress the generic warning here while keeping the
     # safeguard for the rest of the repository.
     Path("ai_trading/model_registry.py"),
+    # ai_trading/tools/migrate_pickle_artifacts.py is an explicit one-time
+    # offline migration utility for trusted legacy artifacts, not a runtime
+    # deserialization path.
+    Path("ai_trading/tools/migrate_pickle_artifacts.py"),
 }
 
 issues: list[tuple[Path, str]] = []
@@ -72,4 +76,3 @@ else:
 
 # Non-blocking: always exit success
 sys.exit(0)
-

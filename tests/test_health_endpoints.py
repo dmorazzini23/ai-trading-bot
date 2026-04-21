@@ -108,6 +108,29 @@ def test_app_health_unknown_provider_is_not_upgraded_to_healthy(monkeypatch):
     assert payload["data_provider"]["status"] == "unknown"
 
 
+def test_health_surface_exposes_effective_backup_provider_when_runtime_state_missing_backup(
+    monkeypatch,
+):
+    provider_state = {
+        "primary": "alpaca",
+        "active": "alpaca",
+        "backup": None,
+        "using_backup": False,
+        "status": "healthy",
+        "consecutive_failures": 0,
+        "gap_ratio_recent": 0.0,
+        "quote_fresh_ms": 100.0,
+        "safe_mode": False,
+    }
+    monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(health_payload_module, "get_backup_data_provider", lambda: "none")
+
+    app = create_app()
+    payload = app.test_client().get("/healthz").get_json()
+
+    assert payload["provider_state"]["backup"] == "none"
+
+
 def test_pytest_override_keeps_ok_true(monkeypatch):
     provider_state = {
         "primary": "alpaca",

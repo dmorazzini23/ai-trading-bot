@@ -215,12 +215,22 @@ def legacy_health_payload_runtime() -> dict[str, Any]:
     return cast(dict[str, Any], payload)
 
 
+def build_healthcheck_app_runtime() -> Any:
+    """Return the canonical standalone healthcheck app."""
+    from ai_trading.app import create_app
+
+    return create_app(health_only=True, fail_fast_env=True)
+
+
 def start_healthcheck_runtime() -> None:
-    """Run the legacy standalone healthcheck Flask app."""
+    """Run the canonical standalone healthcheck Flask app."""
     be = _bot_engine()
     port = be.CFG.healthcheck_port
     try:
-        be.app.run(host="0.0.0.0", port=port)
+        build_healthcheck_app_runtime().run(
+            host="0.0.0.0",
+            port=port,
+        )
     except OSError as exc:
         be.logger.warning(
             "HEALTHCHECK_PORT_CONFLICT",
@@ -242,6 +252,7 @@ def start_healthcheck_runtime() -> None:
 
 
 __all__ = [
+    "build_healthcheck_app_runtime",
     "legacy_health_payload_runtime",
     "pre_trade_health_check_runtime",
     "reconcile_positions_runtime",
