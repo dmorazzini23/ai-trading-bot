@@ -235,3 +235,57 @@ def test_submit_order_ignores_stale_ledger_when_disabled(monkeypatch) -> None:
     assert second is not None
     assert len(engine.calls) == 2
     assert getattr(bot_engine.state, "_oms_ledger", None) is None
+
+
+def test_submit_order_defaults_opening_nbbo_requirement_when_cfg_missing(monkeypatch) -> None:
+    engine = _DummyExecEngine()
+    ctx = SimpleNamespace(
+        market_data=None,
+        api=SimpleNamespace(list_positions=lambda: []),
+        execution_mode="live",
+    )
+    fresh_quote_ts = datetime.now(UTC)
+
+    _reset_submit_state(monkeypatch)
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", "1")
+    monkeypatch.setattr(bot_engine, "_exec_engine", engine)
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda _cfg: (False, None))
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_trading_config",
+        lambda _ctx: SimpleNamespace(
+            seed="phase2-seed",
+            rth_only=False,
+            allow_extended=True,
+            quote_max_age_ms=0,
+            ledger_enabled=False,
+        ),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote_basis",
+        lambda *_args, **_kwargs: (
+            "yahoo",
+            99.99,
+            100.01,
+            100.0,
+            100.0,
+            fresh_quote_ts,
+        ),
+    )
+
+    order = bot_engine.submit_order(
+        ctx,
+        "AAPL",
+        1,
+        "buy",
+        price=100.0,
+        opening_trade=True,
+    )
+
+    assert order is None
+    assert engine.calls == []
+    assert engine.skips
+    assert engine.skips[-1]["reason"] == "NBBO_REQUIRED_OPENING_SKIP"

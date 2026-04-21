@@ -4,6 +4,7 @@ from typing import Any, cast
 from unittest.mock import Mock, patch
 
 from ai_trading.core.enums import OrderSide
+from ai_trading.services.execution import LegacyLiveExecutionBlockedError
 
 import pytest
 
@@ -191,6 +192,17 @@ def test_submit_order_execution_error_propagation():
     finally:
         # Restore original state
         bot_engine._exec_engine = original_exec_engine
+
+
+def test_submit_order_blocks_legacy_live_mode(monkeypatch):
+    from ai_trading.core.bot_engine import BotContext, submit_order
+
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.delenv("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", raising=False)
+    mock_ctx = Mock(spec=BotContext)
+
+    with pytest.raises(LegacyLiveExecutionBlockedError, match="blocked for live legacy execution"):
+        submit_order(mock_ctx, "AAPL", 10, "buy", price=101.0)
 
 
 def test_submit_order_stub_engine_accepts_price(monkeypatch):

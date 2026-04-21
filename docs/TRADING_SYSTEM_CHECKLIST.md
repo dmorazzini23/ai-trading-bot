@@ -45,6 +45,9 @@ execution, persistence, and operator recovery.
 - Control-plane/operator surfaces exist and are useful:
   - [ai_trading/app.py](../ai_trading/app.py)
   - [ai_trading/services/control_plane.py](../ai_trading/services/control_plane.py)
+- Mutating operator endpoints now require in-code bearer auth plus operator
+  identity / scoped allowlists rather than trusting caller-supplied approver
+  strings.
 - Broker counts and readiness details are exposed in health/control-plane output.
 
 ### Idempotency, reconciliation, and OMS persistence
@@ -55,6 +58,11 @@ execution, persistence, and operator recovery.
   - [docs/runbooks/restart_reconciliation.md](runbooks/restart_reconciliation.md)
   - [docs/persistence/sprint1_adr.md](persistence/sprint1_adr.md)
   - [ai_trading/services/reconciliation.py](../ai_trading/services/reconciliation.py)
+- Live durability now resolves to one authoritative path: the OMS intent store.
+  Live JSONL ledger side paths are disabled and live mode requires explicit
+  non-sqlite `DATABASE_URL`.
+- Pretrade pacing is now durable on the runtime host by default rather than
+  process-local only.
 - Runtime config explicitly supports OMS idempotency and decision records:
   - [ai_trading/config/runtime.py](../ai_trading/config/runtime.py)
 
@@ -65,6 +73,9 @@ execution, persistence, and operator recovery.
   - [ai_trading/training/after_hours.py](../ai_trading/training/after_hours.py)
   - [ai_trading/services/governance.py](../ai_trading/services/governance.py)
 - Runtime model loading now fails closed instead of silently using placeholder artifacts.
+- Generic pickle/cloudpickle/dill model deserialization is now blocked by
+  default outside test runtimes unless explicitly enabled for controlled
+  research or migration workflows.
 
 ### Robustness work already formalized
 
@@ -77,6 +88,8 @@ execution, persistence, and operator recovery.
   - pre-open readiness
   - model governance
   as first-class operational concerns.
+- Live opening orders now fail closed unless they have an approved real-time
+  broker NBBO quote source, even on the legacy non-netting escape hatch.
 
 ## 2. Partially Implemented / Mixed
 

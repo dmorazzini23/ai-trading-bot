@@ -5229,6 +5229,18 @@ class ExecutionEngine:
         context["success"] = not any(
             key.endswith("_error") for key in context.keys()
         )
+        reconcile_errors = self._reconciliation_errors(context)
+        if reconcile_errors and self._strict_live_reconciliation_required():
+            context["fail_closed"] = True
+            context["reason"] = "reconciliation_errors"
+            self._reconciliation_openings_block_until_mono = max(
+                float(getattr(self, "_reconciliation_openings_block_until_mono", 0.0) or 0.0),
+                float(now_mono) + float(context.get("cooldown_sec") or 0.0),
+            )
+            logger.error(
+                "EXECUTION_RECONCILIATION_AUTO_REPAIR_FAILED_CLOSED",
+                extra={"errors": dict(reconcile_errors), "symbol": context.get("symbol")},
+            )
         self._reconciliation_auto_repair_last_context = dict(context)
         try:
             self._record_execution_quality_event(
@@ -7384,6 +7396,26 @@ class ExecutionEngine:
             str(getattr(self, "execution_mode", "") or "").strip().lower() == "live"
         )
         return bool(execution_mode_live and (not _pytest_mode_active()))
+
+    def _strict_live_reconciliation_required(self) -> bool:
+        """Return whether reconciliation-side failures should fail closed."""
+
+        resolved = _resolve_bool_env("AI_TRADING_EXECUTION_STRICT_RECONCILIATION")
+        if resolved is not None:
+            return bool(resolved)
+        execution_mode_live = (
+            str(getattr(self, "execution_mode", "") or "").strip().lower() == "live"
+        )
+        return bool(execution_mode_live and (not _pytest_mode_active()))
+
+    @staticmethod
+    def _reconciliation_errors(context: Mapping[str, Any] | None) -> dict[str, str]:
+        payload = dict(context or {})
+        return {
+            str(key): str(value)
+            for key, value in payload.items()
+            if str(key).endswith("_error") and str(value or "").strip()
+        }
 
     def _adaptive_session_score_threshold(
         self,
@@ -17312,6 +17344,14 @@ class ExecutionEngine:
             context["reason"] = "reconciled"
         else:
             context["reason"] = "reconcile_errors"
+            reconcile_errors = self._reconciliation_errors(context)
+            if reconcile_errors and self._strict_live_reconciliation_required():
+                context["fail_closed"] = True
+                logger.error(
+                    "FAILOVER_POST_SUBMIT_RECONCILIATION_FAILED_CLOSED",
+                    extra={"provider": provider, "errors": dict(reconcile_errors)},
+                )
+                raise RuntimeError("FAILOVER_POST_SUBMIT_RECONCILIATION_FAILED")
         return context
 
     def _attempt_failover_submit(
@@ -24523,6 +24563,20 @@ class ExecutionEngine:
                 else:
                     if isinstance(finalize_result, Mapping):
                         attempt_context["tca_finalize"] = dict(finalize_result)
+
+            reconcile_errors = self._reconciliation_errors(attempt_context)
+            if reconcile_errors and self._strict_live_reconciliation_required():
+                attempt_context["reason"] = "reconciliation_failed"
+                attempt_context["fail_closed"] = True
+                retry_context["attempts"].append(attempt_context)
+                retry_context["reason"] = "reconciliation_failed"
+                retry_context["errors"] = dict(reconcile_errors)
+                retry_context["gate_passed_after"] = False
+                logger.error(
+                    "RUNTIME_GONOGO_RECONCILIATION_RETRY_FAILED_CLOSED",
+                    extra={"errors": dict(reconcile_errors), "attempt": int(attempt_index)},
+                )
+                return None, retry_context
 
             try:
                 retry_report = performance_report_module.build_report(

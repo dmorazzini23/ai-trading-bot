@@ -58,6 +58,49 @@ exits with status `98`, and the packaged systemd unit uses
 4. Check environment diagnostics:
    `curl -s http://127.0.0.1:9001/diag | jq .`
 
+### Operator Mutation Auth
+
+Mutating operator endpoints now fail closed unless in-code auth is configured.
+
+- Required:
+  `AI_TRADING_OPERATOR_API_TOKEN`
+- Optional scoped allowlists:
+  - `AI_TRADING_OPERATOR_OVERRIDE_OPERATORS`
+  - `AI_TRADING_OPERATOR_APPROVERS`
+  - `AI_TRADING_OPERATOR_ROLLBACK_OPERATORS`
+- Mutating requests must send:
+  - `Authorization: Bearer <AI_TRADING_OPERATOR_API_TOKEN>`
+  - `X-AI-Trading-Operator-Id: <operator-id>`
+
+Do not rely on network placement alone for `/operator/control-plane/manual-overrides`,
+`/operator/governance/approval`, or `/operator/governance/rollback`.
+
+### Live Durability Policy
+
+Live mode now requires one authoritative durability path:
+
+- `AI_TRADING_OMS_INTENT_STORE_ENABLED=1`
+- `DATABASE_URL=postgresql+psycopg://...`
+- Live JSONL OMS ledgers are disabled in the hot path.
+- Legacy/non-netting live execution is blocked unless
+  `AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION=1` is set intentionally for a controlled drill.
+- Pretrade pacing persists by default at `runtime/pretrade_rate_limiter.db`; point
+  `AI_TRADING_PRETRADE_RATE_LIMITER_PATH` at a shared durable runtime volume if
+  you run supervised active/passive processes on the same host.
+
+### Canonical Topology
+
+- Production ownership belongs to `ai-trading.service` only.
+- `ai-trading-api.service` is a localhost-only debug facade on `127.0.0.1:9002`,
+  not a second production API topology.
+
+### Model Artifact Loading
+
+- Generic pickle/cloudpickle/dill model deserialization is blocked by default
+  outside tests.
+- Only set `AI_TRADING_ALLOW_UNSAFE_MODEL_DESERIALIZATION=1` for controlled
+  research, migration, or offline recovery workflows.
+
 ### Health and Control-Plane Signals
 
 When investigating a degraded runtime, check:

@@ -5,6 +5,9 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, time as dt_time
 import json
+from pathlib import Path
+import sqlite3
+from threading import RLock
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -71,12 +74,17 @@ class SlidingWindowRateLimiter:
         cancels_per_min: int = 0,
         cancel_loop_max_without_fill: int = 0,
         cancel_loop_block_bars: int = 0,
+        state_path: str | Path | None = None,
     ) -> None:
         self.global_orders_per_min = max(0, int(global_orders_per_min))
         self.per_symbol_orders_per_min = max(0, int(per_symbol_orders_per_min))
         self.cancels_per_min = max(0, int(cancels_per_min))
         self.cancel_loop_max_without_fill = max(0, int(cancel_loop_max_without_fill))
         self.cancel_loop_block_bars = max(0, int(cancel_loop_block_bars))
+        self.state_path = (
+            Path(state_path).expanduser().resolve() if state_path is not None else None
+        )
+        self._lock = RLock()
 
         self._order_ts: deque[float] = deque()
         self._symbol_order_ts: dict[str, deque[float]] = {}
@@ -85,79 +93,421 @@ class SlidingWindowRateLimiter:
         self._symbol_bar_index: dict[str, int] = {}
         self._symbol_last_bar_ts: dict[str, datetime] = {}
         self._symbol_block_until_bar: dict[str, int] = {}
+        if self.state_path is not None:
+            self._initialize_state_store()
 
     @staticmethod
     def _now() -> float:
         import time
 
-        return time.monotonic()
+        return time.time()
 
     @staticmethod
     def _prune(window: deque[float], now: float, seconds: float) -> None:
         while window and now - window[0] > seconds:
             window.popleft()
 
-    def _advance_bar(self, symbol: str, bar_ts: datetime) -> int:
-        ts = bar_ts if bar_ts.tzinfo else bar_ts.replace(tzinfo=UTC)
-        previous = self._symbol_last_bar_ts.get(symbol)
-        if previous is None or ts > previous:
-            self._symbol_last_bar_ts[symbol] = ts
-            self._symbol_bar_index[symbol] = self._symbol_bar_index.get(symbol, 0) + 1
-        return self._symbol_bar_index.get(symbol, 0)
+    @staticmethod
+    def _coerce_bar_ts(bar_ts: datetime) -> datetime:
+        return bar_ts if bar_ts.tzinfo is not None else bar_ts.replace(tzinfo=UTC)
 
-    def allow_order(self, symbol: str, bar_ts: datetime) -> tuple[bool, str | None, dict[str, Any]]:
+    @staticmethod
+    def _symbol_key(symbol: str) -> str:
+        return str(symbol).strip().upper()
+
+    def _initialize_state_store(self) -> None:
+        assert self.state_path is not None
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._db_connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pretrade_rate_events (
+                    kind TEXT NOT NULL,
+                    symbol TEXT,
+                    ts REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_pretrade_rate_events_kind_ts
+                ON pretrade_rate_events (kind, ts)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_pretrade_rate_events_kind_symbol_ts
+                ON pretrade_rate_events (kind, symbol, ts)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pretrade_symbol_state (
+                    symbol TEXT PRIMARY KEY,
+                    last_bar_ts TEXT,
+                    bar_index INTEGER NOT NULL DEFAULT 0,
+                    cancel_without_fill INTEGER NOT NULL DEFAULT 0,
+                    block_until_bar INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+
+    def _db_connect(self) -> sqlite3.Connection:
+        if self.state_path is None:
+            raise RuntimeError("Durable pretrade state is not configured.")
+        conn = sqlite3.connect(str(self.state_path), timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=FULL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        return conn
+
+    def _load_symbol_state_db(
+        self,
+        conn: sqlite3.Connection,
+        symbol: str,
+    ) -> tuple[datetime | None, int, int, int]:
+        row = conn.execute(
+            """
+            SELECT last_bar_ts, bar_index, cancel_without_fill, block_until_bar
+            FROM pretrade_symbol_state
+            WHERE symbol = ?
+            """,
+            (self._symbol_key(symbol),),
+        ).fetchone()
+        if row is None:
+            return None, 0, 0, 0
+        raw_last_bar_ts, raw_bar_index, raw_cancel_without_fill, raw_block_until_bar = row
+        last_bar_ts: datetime | None = None
+        if isinstance(raw_last_bar_ts, str) and raw_last_bar_ts.strip():
+            try:
+                last_bar_ts = datetime.fromisoformat(raw_last_bar_ts)
+            except ValueError:
+                last_bar_ts = None
+        return (
+            self._coerce_bar_ts(last_bar_ts) if last_bar_ts is not None else None,
+            int(raw_bar_index or 0),
+            int(raw_cancel_without_fill or 0),
+            int(raw_block_until_bar or 0),
+        )
+
+    def _persist_symbol_state_db(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        symbol: str,
+        last_bar_ts: datetime | None,
+        bar_index: int,
+        cancel_without_fill: int,
+        block_until_bar: int,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO pretrade_symbol_state (
+                symbol,
+                last_bar_ts,
+                bar_index,
+                cancel_without_fill,
+                block_until_bar
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(symbol) DO UPDATE SET
+                last_bar_ts = excluded.last_bar_ts,
+                bar_index = excluded.bar_index,
+                cancel_without_fill = excluded.cancel_without_fill,
+                block_until_bar = excluded.block_until_bar
+            """,
+            (
+                self._symbol_key(symbol),
+                last_bar_ts.astimezone(UTC).isoformat() if last_bar_ts is not None else None,
+                int(bar_index),
+                int(cancel_without_fill),
+                int(block_until_bar),
+            ),
+        )
+
+    def _advance_bar_db(
+        self,
+        conn: sqlite3.Connection,
+        symbol: str,
+        bar_ts: datetime,
+    ) -> tuple[int, int, int]:
+        ts = self._coerce_bar_ts(bar_ts)
+        previous, bar_index, cancel_without_fill, block_until_bar = self._load_symbol_state_db(
+            conn,
+            symbol,
+        )
+        if previous is None or ts > previous:
+            previous = ts
+            bar_index += 1
+            self._persist_symbol_state_db(
+                conn,
+                symbol=symbol,
+                last_bar_ts=previous,
+                bar_index=bar_index,
+                cancel_without_fill=cancel_without_fill,
+                block_until_bar=block_until_bar,
+            )
+        return bar_index, cancel_without_fill, block_until_bar
+
+    def _prune_db(self, conn: sqlite3.Connection, *, now: float) -> None:
+        conn.execute(
+            "DELETE FROM pretrade_rate_events WHERE ts < ?",
+            (float(now - 60.0),),
+        )
+
+    def _advance_bar(self, symbol: str, bar_ts: datetime) -> int:
+        symbol_key = self._symbol_key(symbol)
+        ts = self._coerce_bar_ts(bar_ts)
+        previous = self._symbol_last_bar_ts.get(symbol_key)
+        if previous is None or ts > previous:
+            self._symbol_last_bar_ts[symbol_key] = ts
+            self._symbol_bar_index[symbol_key] = self._symbol_bar_index.get(symbol_key, 0) + 1
+        return self._symbol_bar_index.get(symbol_key, 0)
+
+    def _cancel_rate_ok_in_memory(self, now: float) -> bool:
+        if self.cancels_per_min <= 0:
+            return True
+        self._prune(self._cancel_ts, now, 60.0)
+        return len(self._cancel_ts) < self.cancels_per_min
+
+    def _allow_order_in_memory(
+        self,
+        symbol: str,
+        bar_ts: datetime,
+        *,
+        reserve_slot: bool,
+    ) -> tuple[bool, str | None, dict[str, Any]]:
+        symbol_key = self._symbol_key(symbol)
         now = self._now()
-        bar_idx = self._advance_bar(symbol, bar_ts)
-        blocked_until = self._symbol_block_until_bar.get(symbol, 0)
+        bar_idx = self._advance_bar(symbol_key, bar_ts)
+        blocked_until = self._symbol_block_until_bar.get(symbol_key, 0)
         if blocked_until and bar_idx < blocked_until:
-            return False, "CANCEL_LOOP_BLOCK", {"symbol": symbol, "blocked_until_bar": blocked_until}
+            return (
+                False,
+                "CANCEL_LOOP_BLOCK",
+                {"symbol": symbol_key, "blocked_until_bar": blocked_until},
+            )
 
         self._prune(self._order_ts, now, 60.0)
         if self.global_orders_per_min > 0 and len(self._order_ts) >= self.global_orders_per_min:
             return False, "RATE_THROTTLE_BLOCK", {"scope": "global", "limit": self.global_orders_per_min}
 
-        symbol_window = self._symbol_order_ts.setdefault(symbol, deque())
+        symbol_window = self._symbol_order_ts.setdefault(symbol_key, deque())
         self._prune(symbol_window, now, 60.0)
         if (
             self.per_symbol_orders_per_min > 0
             and len(symbol_window) >= self.per_symbol_orders_per_min
         ):
-            return False, "RATE_THROTTLE_BLOCK", {"scope": "symbol", "symbol": symbol, "limit": self.per_symbol_orders_per_min}
+            return (
+                False,
+                "RATE_THROTTLE_BLOCK",
+                {"scope": "symbol", "symbol": symbol_key, "limit": self.per_symbol_orders_per_min},
+            )
 
+        if not self._cancel_rate_ok_in_memory(now):
+            return False, "CANCEL_RATE_BLOCK", {"limit": self.cancels_per_min}
+
+        if reserve_slot:
+            self._order_ts.append(now)
+            symbol_window.append(now)
         return True, None, {}
 
-    def record_order(self, symbol: str, bar_ts: datetime) -> None:
+    def _allow_order_db(
+        self,
+        symbol: str,
+        bar_ts: datetime,
+        *,
+        reserve_slot: bool,
+    ) -> tuple[bool, str | None, dict[str, Any]]:
+        symbol_key = self._symbol_key(symbol)
         now = self._now()
-        self._advance_bar(symbol, bar_ts)
-        self._order_ts.append(now)
-        symbol_window = self._symbol_order_ts.setdefault(symbol, deque())
-        symbol_window.append(now)
+        with self._db_connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._prune_db(conn, now=now)
+            bar_idx, _cancel_without_fill, block_until_bar = self._advance_bar_db(
+                conn,
+                symbol_key,
+                bar_ts,
+            )
+            if block_until_bar and bar_idx < block_until_bar:
+                return (
+                    False,
+                    "CANCEL_LOOP_BLOCK",
+                    {"symbol": symbol_key, "blocked_until_bar": block_until_bar},
+                )
+            if self.cancels_per_min > 0:
+                cancel_count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM pretrade_rate_events WHERE kind = 'cancel'",
+                    ).fetchone()[0]
+                )
+                if cancel_count >= self.cancels_per_min:
+                    return False, "CANCEL_RATE_BLOCK", {"limit": self.cancels_per_min}
+            if self.global_orders_per_min > 0:
+                global_count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM pretrade_rate_events WHERE kind = 'order'",
+                    ).fetchone()[0]
+                )
+                if global_count >= self.global_orders_per_min:
+                    return (
+                        False,
+                        "RATE_THROTTLE_BLOCK",
+                        {"scope": "global", "limit": self.global_orders_per_min},
+                    )
+            if self.per_symbol_orders_per_min > 0:
+                symbol_count = int(
+                    conn.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM pretrade_rate_events
+                        WHERE kind = 'order' AND symbol = ?
+                        """,
+                        (symbol_key,),
+                    ).fetchone()[0]
+                )
+                if symbol_count >= self.per_symbol_orders_per_min:
+                    return (
+                        False,
+                        "RATE_THROTTLE_BLOCK",
+                        {
+                            "scope": "symbol",
+                            "symbol": symbol_key,
+                            "limit": self.per_symbol_orders_per_min,
+                        },
+                    )
+            if reserve_slot:
+                conn.execute(
+                    """
+                    INSERT INTO pretrade_rate_events (kind, symbol, ts)
+                    VALUES ('order', ?, ?)
+                    """,
+                    (symbol_key, float(now)),
+                )
+        return True, None, {}
+
+    def allow_order(self, symbol: str, bar_ts: datetime) -> tuple[bool, str | None, dict[str, Any]]:
+        with self._lock:
+            if self.state_path is not None:
+                return self._allow_order_db(symbol, bar_ts, reserve_slot=False)
+            return self._allow_order_in_memory(symbol, bar_ts, reserve_slot=False)
+
+    def allow_and_record_order(
+        self,
+        symbol: str,
+        bar_ts: datetime,
+    ) -> tuple[bool, str | None, dict[str, Any]]:
+        """Atomically validate and reserve an order pacing slot."""
+
+        with self._lock:
+            if self.state_path is not None:
+                return self._allow_order_db(symbol, bar_ts, reserve_slot=True)
+            return self._allow_order_in_memory(symbol, bar_ts, reserve_slot=True)
+
+    def record_order(self, symbol: str, bar_ts: datetime) -> None:
+        with self._lock:
+            if self.state_path is not None:
+                now = self._now()
+                symbol_key = self._symbol_key(symbol)
+                with self._db_connect() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    self._prune_db(conn, now=now)
+                    self._advance_bar_db(conn, symbol_key, bar_ts)
+                    conn.execute(
+                        """
+                        INSERT INTO pretrade_rate_events (kind, symbol, ts)
+                        VALUES ('order', ?, ?)
+                        """,
+                        (symbol_key, float(now)),
+                    )
+                return
+            now = self._now()
+            symbol_key = self._symbol_key(symbol)
+            self._advance_bar(symbol_key, bar_ts)
+            self._order_ts.append(now)
+            symbol_window = self._symbol_order_ts.setdefault(symbol_key, deque())
+            symbol_window.append(now)
 
     def record_cancel(self, symbol: str, *, bar_ts: datetime, filled: bool) -> None:
-        now = self._now()
-        self._cancel_ts.append(now)
-        self._prune(self._cancel_ts, now, 60.0)
+        with self._lock:
+            now = self._now()
+            symbol_key = self._symbol_key(symbol)
+            if self.state_path is not None:
+                with self._db_connect() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    self._prune_db(conn, now=now)
+                    conn.execute(
+                        """
+                        INSERT INTO pretrade_rate_events (kind, symbol, ts)
+                        VALUES ('cancel', ?, ?)
+                        """,
+                        (symbol_key, float(now)),
+                    )
+                    last_bar_ts, bar_index, cancel_without_fill, block_until_bar = (
+                        self._load_symbol_state_db(conn, symbol_key)
+                    )
+                    coerced_bar_ts = self._coerce_bar_ts(bar_ts)
+                    if filled:
+                        cancel_without_fill = 0
+                    else:
+                        cancel_without_fill += 1
+                        if (
+                            self.cancel_loop_max_without_fill > 0
+                            and cancel_without_fill >= self.cancel_loop_max_without_fill
+                            and self.cancel_loop_block_bars > 0
+                        ):
+                            bar_index, _current_without_fill, _current_block_until = self._advance_bar_db(
+                                conn,
+                                symbol_key,
+                                bar_ts,
+                            )
+                            block_until_bar = bar_index + self.cancel_loop_block_bars
+                    self._persist_symbol_state_db(
+                        conn,
+                        symbol=symbol_key,
+                        last_bar_ts=max(
+                            filter(None, [last_bar_ts, coerced_bar_ts]),
+                            default=coerced_bar_ts,
+                        ),
+                        bar_index=bar_index,
+                        cancel_without_fill=cancel_without_fill,
+                        block_until_bar=block_until_bar,
+                    )
+                return
 
-        if filled:
-            self._cancel_without_fill[symbol] = 0
-            return
+            self._cancel_ts.append(now)
+            self._prune(self._cancel_ts, now, 60.0)
 
-        current = self._cancel_without_fill.get(symbol, 0) + 1
-        self._cancel_without_fill[symbol] = current
-        if (
-            self.cancel_loop_max_without_fill > 0
-            and current >= self.cancel_loop_max_without_fill
-            and self.cancel_loop_block_bars > 0
-        ):
-            bar_idx = self._advance_bar(symbol, bar_ts)
-            self._symbol_block_until_bar[symbol] = bar_idx + self.cancel_loop_block_bars
+            if filled:
+                self._cancel_without_fill[symbol_key] = 0
+                return
+
+            current = self._cancel_without_fill.get(symbol_key, 0) + 1
+            self._cancel_without_fill[symbol_key] = current
+            if (
+                self.cancel_loop_max_without_fill > 0
+                and current >= self.cancel_loop_max_without_fill
+                and self.cancel_loop_block_bars > 0
+            ):
+                bar_idx = self._advance_bar(symbol_key, bar_ts)
+                self._symbol_block_until_bar[symbol_key] = bar_idx + self.cancel_loop_block_bars
 
     def cancel_rate_ok(self) -> bool:
-        if self.cancels_per_min <= 0:
-            return True
-        now = self._now()
-        self._prune(self._cancel_ts, now, 60.0)
-        return len(self._cancel_ts) < self.cancels_per_min
+        with self._lock:
+            if self.state_path is not None:
+                if self.cancels_per_min <= 0:
+                    return True
+                now = self._now()
+                with self._db_connect() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    self._prune_db(conn, now=now)
+                    cancel_count = int(
+                        conn.execute(
+                            "SELECT COUNT(*) FROM pretrade_rate_events WHERE kind = 'cancel'",
+                        ).fetchone()[0]
+                    )
+                return cancel_count < self.cancels_per_min
+            return self._cancel_rate_ok_in_memory(self._now())
 
 
 def _cfg_value(
@@ -1092,13 +1442,17 @@ def validate_pretrade(
     if fingerprint in fingerprints:
         return False, "DUPLICATE_ORDER_BLOCK", {"fingerprint": fingerprint}
 
-    allowed, reason, details = rate_limiter.allow_order(intent.symbol, intent.bar_ts)
+    allow_and_record = getattr(rate_limiter, "allow_and_record_order", None)
+    if callable(allow_and_record):
+        allowed, reason, details = allow_and_record(intent.symbol, intent.bar_ts)
+    else:
+        allowed, reason, details = rate_limiter.allow_order(intent.symbol, intent.bar_ts)
+        if allowed and not rate_limiter.cancel_rate_ok():
+            return False, "RATE_THROTTLE_BLOCK", {"scope": "cancel"}
+        if allowed:
+            rate_limiter.record_order(intent.symbol, intent.bar_ts)
     if not allowed:
         return False, reason or "RATE_THROTTLE_BLOCK", details
-    if not rate_limiter.cancel_rate_ok():
-        return False, "RATE_THROTTLE_BLOCK", {"scope": "cancel"}
-
-    rate_limiter.record_order(intent.symbol, intent.bar_ts)
     if ledger is not None:
         fingerprints.add(fingerprint)
     return True, "OK", {}

@@ -132,6 +132,11 @@ if "flask" not in _sys.modules:
     request_state = types.SimpleNamespace(_json=None)
 
     class _StubRequest:
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+            self.method = "GET"
+            self.path = ""
+
         def get_json(self, silent: bool = False):
             payload = request_state._json
             if payload is None and not silent:
@@ -172,9 +177,12 @@ if "flask" not in _sys.modules:
                     return self._data
 
             class _Client:
-                def _request(self, path, method="GET", json=None):
+                def _request(self, path, method="GET", json=None, headers=None):
                     handler = app._routes[(path, method.upper())]
                     request_state._json = json
+                    stub_request.headers = dict(headers or {})
+                    stub_request.method = str(method).upper()
+                    stub_request.path = str(path)
                     handler_globals = getattr(handler, "__globals__", {})
                     previous_request = handler_globals.get("request")
                     handler_globals["request"] = stub_request
@@ -182,6 +190,9 @@ if "flask" not in _sys.modules:
                         result = handler()
                     finally:
                         request_state._json = None
+                        stub_request.headers = {}
+                        stub_request.method = "GET"
+                        stub_request.path = ""
                         if previous_request is None:
                             handler_globals.pop("request", None)
                         else:
@@ -194,17 +205,17 @@ if "flask" not in _sys.modules:
                             status = result[1]
                     return _Response(data, status)
 
-                def open(self, path, method="GET", json=None):
-                    return self._request(path, method=method, json=json)
+                def open(self, path, method="GET", json=None, headers=None):
+                    return self._request(path, method=method, json=json, headers=headers)
 
-                def get(self, path):
-                    return self._request(path, method="GET")
+                def get(self, path, headers=None):
+                    return self._request(path, method="GET", headers=headers)
 
-                def post(self, path, json=None):
-                    return self._request(path, method="POST", json=json)
+                def post(self, path, json=None, headers=None):
+                    return self._request(path, method="POST", json=json, headers=headers)
 
-                def delete(self, path):
-                    return self._request(path, method="DELETE")
+                def delete(self, path, headers=None):
+                    return self._request(path, method="DELETE", headers=headers)
 
             return _Client()
 

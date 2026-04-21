@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Iterable
 from ai_trading.defaults import load_default_json
 from ai_trading.logging import get_logger
+from ai_trading.config.management import get_env
 from ai_trading.database.connection import initialize_database, get_session
 from ai_trading.database.models import Trade
 
@@ -42,7 +43,10 @@ def load_history(path: str | Path = DEFAULT_PATH) -> list[dict]:
 
 def seed_database(trades: Iterable[dict]) -> int:
     """Insert *trades* into the database."""
-    initialize_database()
+    database_url = str(get_env("DATABASE_URL", "", cast=str) or "").strip()
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is required to seed the legacy trade-history database.")
+    initialize_database(database_url)
     inserted = 0
     with get_session() as session:
         for record in trades:

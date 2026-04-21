@@ -93,6 +93,8 @@ class ControlPlaneService:
             },
             "portfolio": {
                 "owner": "ai_trading.services.portfolio",
+                "boundary_type": "facade",
+                "canonical_runtime_owner": "ai_trading.portfolio.compute_portfolio_weights",
                 "status": (
                     "ready"
                     if positions.get("reconciliation_available")
@@ -112,12 +114,22 @@ class ControlPlaneService:
             },
             "execution": {
                 "owner": "ai_trading.services.execution",
+                "boundary_type": "facade",
+                "canonical_runtime_owner": [
+                    "ai_trading.core.legacy_submit_runtime.submit_order_runtime",
+                    "ai_trading.core.legacy_trade_cycle.execute_legacy_trade_logic",
+                ],
                 "status": broker_health.get("status") or rollout.get("status") or "unknown",
                 "inputs": ["broker_health", "open_orders", "execution_quality"],
                 "tca_available": execution_quality.get("oms_event_tca_available"),
             },
             "reconciliation": {
                 "owner": "ai_trading.services.reconciliation",
+                "boundary_type": "facade",
+                "canonical_runtime_owner": [
+                    "ai_trading.services.reconciliation.ReconciliationService.reconcile_position_targets",
+                    "ai_trading.services.reconciliation.ReconciliationService.require_success",
+                ],
                 "status": (
                     "ready"
                     if positions.get("reconciliation_consistent")

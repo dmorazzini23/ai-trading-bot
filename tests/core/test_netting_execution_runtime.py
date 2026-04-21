@@ -21,11 +21,8 @@ def test_prepare_oms_ledger_rebuilds_when_runtime_path_changes(tmp_path, monkeyp
 
     ledger = _prepare_oms_ledger(state, cfg)
 
-    assert ledger is not None
-    assert ledger is not old_ledger
-    assert getattr(ledger, "_path", Path()) == new_path
-    assert getattr(ledger, "_configured_lookback_hours", None) == 24.0
-    assert getattr(state, "_oms_ledger") is ledger
+    assert ledger is None
+    assert getattr(state, "_oms_ledger", None) is None
 
 
 def test_prepare_oms_ledger_rebuilds_when_cached_lookback_metadata_is_invalid(
@@ -46,7 +43,5 @@ def test_prepare_oms_ledger_rebuilds_when_cached_lookback_metadata_is_invalid(
 
     ledger = _prepare_oms_ledger(state, cfg)
 
-    assert ledger is not None
-    assert ledger is not old_ledger
-    assert getattr(ledger, "_configured_lookback_hours", None) == 24.0
-    assert getattr(state, "_oms_ledger") is ledger
+    assert ledger is None
+    assert getattr(state, "_oms_ledger", None) is None

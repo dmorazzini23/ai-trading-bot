@@ -210,6 +210,8 @@ from ai_trading.governance.rollout import (
 )
 from ai_trading.services.execution import (
     execute_signal_orders as _execute_signal_orders_service,
+    execute_trade_cycle as _execute_trade_cycle_service,
+    submit_order as _submit_order_service,
 )
 from ai_trading.services.portfolio import (
     compute_portfolio_weights as _compute_portfolio_weights_service,
@@ -341,6 +343,7 @@ else:
 
 from ai_trading.config.management import (
     get_env,
+    is_test_runtime,
     is_shadow_mode,
     TradingConfig,
     config_snapshot_hash,
@@ -20394,10 +20397,8 @@ def submit_order(
 ) -> Any | None:
     """Submit an order using the institutional execution engine."""
 
-    from ai_trading.core.legacy_submit_runtime import submit_order_runtime
-
     try:
-        return submit_order_runtime(
+        return _submit_order_service(
             ctx,
             symbol,
             qty,
@@ -27359,9 +27360,7 @@ def trade_logic(
     Core per-symbol logic: fetch data, compute features, evaluate signals, enter/exit orders.
     """
     logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
-    from ai_trading.core.legacy_trade_cycle import execute_legacy_trade_logic
-
-    return execute_legacy_trade_logic(
+    return _execute_trade_cycle_service(
         ctx,
         state,
         symbol,
@@ -33769,6 +33768,24 @@ def _pretrade_rate_limiter(state: BotState) -> SlidingWindowRateLimiter:
     limiter = getattr(state, "pretrade_rate_limiter", None)
     if isinstance(limiter, SlidingWindowRateLimiter):
         return limiter
+    limiter_persist_enabled = bool(
+        get_env(
+            "AI_TRADING_PRETRADE_RATE_LIMITER_PERSIST",
+            not is_test_runtime(),
+            cast=bool,
+        )
+    )
+    limiter_state_path: Path | None = None
+    if limiter_persist_enabled:
+        limiter_state_path = resolve_runtime_artifact_path(
+            get_env(
+                "AI_TRADING_PRETRADE_RATE_LIMITER_PATH",
+                "runtime/pretrade_rate_limiter.db",
+                cast=str,
+            ),
+            default_relative="runtime/pretrade_rate_limiter.db",
+            for_write=True,
+        )
     limiter = SlidingWindowRateLimiter(
         global_orders_per_min=_get_pretrade_limit_env(
             "MAX_ORDERS_PER_MINUTE_GLOBAL",
@@ -33789,6 +33806,7 @@ def _pretrade_rate_limiter(state: BotState) -> SlidingWindowRateLimiter:
             get_env("AI_TRADING_CANCEL_LOOP_MAX_WITHOUT_FILL", 5, cast=int)
         ),
         cancel_loop_block_bars=int(get_env("AI_TRADING_CANCEL_LOOP_BLOCK_BARS", 3, cast=int)),
+        state_path=limiter_state_path,
     )
     state.pretrade_rate_limiter = limiter
     return cast(SlidingWindowRateLimiter, limiter)

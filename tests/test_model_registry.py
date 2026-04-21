@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 from ai_trading.model_registry import ModelRegistry
+from ai_trading.utils import safe_pickle
 
 
 class TestModelRegistry:
@@ -176,6 +177,19 @@ class TestModelRegistry:
                 model_id = registry.register_model(model, "s", "t")
             assert model_id in registry.model_index
             assert registry.model_index[model_id]["pickler"] == "fallback"
+
+    def test_load_model_blocks_unsafe_deserialization_outside_test_runtime(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = ModelRegistry(temp_dir)
+            model_id = registry.register_model({"a": 1}, "s", "t")
+            monkeypatch.setattr(safe_pickle, "is_test_runtime", lambda: False)
+            monkeypatch.delenv("AI_TRADING_ALLOW_UNSAFE_MODEL_DESERIALIZATION", raising=False)
+
+            with pytest.raises(RuntimeError, match="unsafe generic model deserialization"):
+                registry.load_model(model_id)
 
     def test_metadata_class_path_conversion(self):
         """Metadata containing classes should be stored as dotted path."""

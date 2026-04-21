@@ -91,14 +91,13 @@ def test_order_manager_live_requires_database_url(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_IN_TESTS", "1")
     monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_ENABLED", "1")
     monkeypatch.setenv("EXECUTION_MODE", "live")
-    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_ALLOW_SQLITE_LIVE", "0")
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
     with pytest.raises(RuntimeError, match="DATABASE_URL is required"):
         OrderManager()
 
 
-def test_order_manager_live_can_opt_into_sqlite(
+def test_order_manager_live_rejects_sqlite_database_url(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -106,12 +105,10 @@ def test_order_manager_live_can_opt_into_sqlite(
     monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_IN_TESTS", "1")
     monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_ENABLED", "1")
     monkeypatch.setenv("EXECUTION_MODE", "live")
-    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_ALLOW_SQLITE_LIVE", "1")
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_PATH", str(tmp_path / "oms_live_sqlite.db"))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'oms_live_sqlite.db'}")
 
-    manager = OrderManager()
-    assert manager._intent_store is not None
+    with pytest.raises(RuntimeError, match="non-sqlite database"):
+        OrderManager()
 
 
 def test_migrate_oms_intent_store_script_round_trip(tmp_path: Path) -> None:

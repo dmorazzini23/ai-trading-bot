@@ -1,21 +1,30 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import types
 from datetime import UTC, datetime
 
 import pandas as pd
 
+import pytest
+
 import ai_trading.portfolio as portfolio_mod
 
-from ai_trading.services.execution import execute_signal_orders
+from ai_trading.services.execution import (
+    LegacyLiveExecutionBlockedError,
+    execute_signal_orders,
+    execute_trade_cycle,
+    submit_order,
+)
 from ai_trading.services.portfolio import ensure_portfolio_weights
 from ai_trading.services.reconciliation import reconcile_position_targets
 from ai_trading.services.risk_approval import (
     RiskApprovalService,
     ensure_policy_learning_artifacts,
     load_policy_runtime_toggles,
+    write_policy_runtime_toggles,
 )
 from ai_trading.services.signal import (
     evaluate_signal_and_confirm,
@@ -85,17 +94,16 @@ def test_execute_signal_orders_submits_expected_orders() -> None:
     assert calls == [("A", 1, "buy"), ("C", 1, "sell")]
 
 
-def test_ensure_portfolio_weights_falls_back_evenly(monkeypatch) -> None:
+def test_ensure_portfolio_weights_requires_canonical_weights(monkeypatch) -> None:
     logger = _DummyLogger()
     monkeypatch.delattr(portfolio_mod, "compute_portfolio_weights", raising=False)
 
-    result = ensure_portfolio_weights(
-        types.SimpleNamespace(),
-        ["AAPL", "MSFT"],
-        logger=logger,
-    )
-
-    assert result == {"AAPL": 0.5, "MSFT": 0.5}
+    with pytest.raises(RuntimeError, match="compute_portfolio_weights"):
+        ensure_portfolio_weights(
+            types.SimpleNamespace(),
+            ["AAPL", "MSFT"],
+            logger=logger,
+        )
 
 
 def test_reconcile_position_targets_prunes_stale_entries() -> None:
@@ -119,6 +127,29 @@ def test_reconcile_position_targets_prunes_stale_entries() -> None:
     assert "MSFT" not in ctx.take_profit_targets
     assert "AAPL" in ctx.stop_targets
     assert ctx._reconciliation_position_snapshots["AAPL"]["qty"] == 2.0
+
+
+def test_execution_service_blocks_legacy_live_submit(monkeypatch) -> None:
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.delenv("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", raising=False)
+
+    with pytest.raises(LegacyLiveExecutionBlockedError, match="blocked for live legacy execution"):
+        submit_order(types.SimpleNamespace(), "AAPL", 1, "buy", price=100.0)
+
+
+def test_execution_service_blocks_legacy_live_trade_cycle(monkeypatch) -> None:
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.delenv("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", raising=False)
+
+    with pytest.raises(LegacyLiveExecutionBlockedError, match="blocked for live legacy execution"):
+        execute_trade_cycle(
+            types.SimpleNamespace(),
+            types.SimpleNamespace(),
+            "AAPL",
+            1000.0,
+            model=None,
+            regime_ok=True,
+        )
 
 
 def test_risk_approval_service_bootstraps_and_updates_runtime_toggles(
@@ -161,3 +192,32 @@ def test_risk_approval_service_bootstraps_and_updates_runtime_toggles(
 
     reloaded = load_policy_runtime_toggles()
     assert reloaded["toggles"]["rankers"]["bandit_enabled"] is False
+
+
+def test_write_policy_runtime_toggles_uses_atomic_replace(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime_toggles_path = tmp_path / "runtime" / "policy_runtime_toggles.json"
+    monkeypatch.setenv(
+        "AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH",
+        str(runtime_toggles_path),
+    )
+    replace_calls: list[tuple[str, str]] = []
+    real_replace = os.replace
+
+    def _spy_replace(src: str | bytes, dst: str | bytes) -> None:
+        replace_calls.append((str(os.fspath(src)), str(os.fspath(dst))))
+        real_replace(src, dst)
+
+    monkeypatch.setattr("ai_trading.services.risk_approval.os.replace", _spy_replace)
+
+    path, payload = write_policy_runtime_toggles(
+        disabled_slices=["ranker:bandit"],
+        diagnostics={"operator": "ops@example.com"},
+    )
+
+    assert path == runtime_toggles_path
+    assert replace_calls
+    assert replace_calls[-1][1] == os.fspath(runtime_toggles_path)
+    assert json.loads(runtime_toggles_path.read_text(encoding="utf-8")) == payload

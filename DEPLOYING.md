@@ -16,6 +16,9 @@ The timer schedules the bot around the market session. If the service starts
 outside market hours, the runtime waits for the next NYSE session unless
 `ALLOW_AFTER_HOURS=1` is set.
 
+`packaging/systemd/ai-trading-api.service` is not a second production topology.
+If you use it at all, treat it as a localhost-only debug facade on `127.0.0.1:9002`.
+
 ## Health Checks
 
 Packaged main service:
@@ -68,6 +71,9 @@ SIP-related controls:
 - `ALPACA_FEED_FAILOVER=sip,iex`
 - `ALPACA_EMPTY_TO_BACKUP=1`
 
+Backup market-data providers are not approved live opening-order quote sources.
+Live opening orders fail closed unless they have a real-time broker NBBO quote.
+
 ## API Port Fail-Fast Semantics
 
 The primary Flask API binds to `API_PORT` (default **9001**). Startup waits up
@@ -82,3 +88,9 @@ uses `RestartPreventExitStatus=98`.
 3. `sudo systemctl restart ai-trading.service`
 4. `journalctl -u ai-trading.service -n 200 --no-pager`
 5. `curl -s http://127.0.0.1:9001/healthz | jq .`
+
+## Additional Hardening Defaults
+
+- Pretrade pacing persists to `runtime/pretrade_rate_limiter.db` by default outside tests.
+- Generic pickle/cloudpickle/dill model deserialization is blocked by default outside tests.
+  Only set `AI_TRADING_ALLOW_UNSAFE_MODEL_DESERIALIZATION=1` in controlled research or migration workflows.

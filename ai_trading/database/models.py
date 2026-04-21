@@ -1,14 +1,21 @@
 """
-SQLAlchemy database models for institutional trading platform.
+Legacy SQLAlchemy models for non-OMS convenience tables.
 
-Contains models for trades, portfolio positions, risk metrics,
-and performance tracking with proper relationships and constraints.
+These tables are not the authoritative OMS durability schema. They remain
+available for legacy tools and reports, but their schema is defined here and
+consumed directly by ``ai_trading.database.connection`` so the repo does not
+maintain a second, conflicting table definition path.
 """
+
+from __future__ import annotations
+
 import uuid
 from datetime import UTC, datetime
-from datetime import datetime as dt_datetime
 from decimal import Decimal
 from typing import Any
+
+from sqlalchemy import Float, Integer, String, Text
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -17,158 +24,129 @@ def _as_float(value: Any, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return float(default)
 
-class DeclarativeBase:
-    """Base class for database models."""
 
-    def __init__(self, **kwargs):
-        for key, value in kwargs.items():
-            setattr(self, key, value)
+class Base(DeclarativeBase):
+    """Base class for legacy SQLAlchemy models."""
 
-    def to_dict(self):
-        """Convert model to dictionary."""
-        result = {}
-        for attr in dir(self):
-            if not attr.startswith('_') and (not callable(getattr(self, attr))):
-                value = getattr(self, attr)
-                if isinstance(value, datetime | dt_datetime):
-                    value = value.isoformat()
-                elif isinstance(value, Decimal):
-                    value = float(value)
-                result[attr] = value
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for column in self.__table__.columns:
+            value = getattr(self, column.name, None)
+            if isinstance(value, datetime):
+                value = value.isoformat()
+            elif isinstance(value, Decimal):
+                value = float(value)
+            result[column.name] = value
         return result
-Base = DeclarativeBase
+
 
 class Trade(Base):
-    """
-    Trade model for recording all trading activity.
+    """Legacy trade record for non-OMS reporting paths."""
 
-    Stores execution details, pricing, and metadata for each trade
-    with full audit trail and performance tracking.
-    """
+    __tablename__ = "trades"
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.id = kwargs.get('id', str(uuid.uuid4()))
-        self.symbol = kwargs.get('symbol')
-        self.side = kwargs.get('side')
-        self.order_type = kwargs.get('order_type', 'market')
-        self.quantity = kwargs.get('quantity', 0)
-        self.price = kwargs.get('price', 0.0)
-        self.executed_price = kwargs.get('executed_price')
-        self.status = kwargs.get('status', 'pending')
-        self.created_at = kwargs.get('created_at', datetime.now(UTC))
-        self.executed_at = kwargs.get('executed_at')
-        self.commission = kwargs.get('commission', 0.0)
-        self.slippage = kwargs.get('slippage', 0.0)
-        self.strategy_id = kwargs.get('strategy_id')
-        self.signal_strength = kwargs.get('signal_strength', 0.0)
-        self.stop_loss = kwargs.get('stop_loss')
-        self.take_profit = kwargs.get('take_profit')
-        self.notes = kwargs.get('notes', '')
-        self.market_data_snapshot = kwargs.get('market_data_snapshot', '{}')
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: str(uuid.uuid4()))
+    symbol: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    side: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    order_type: Mapped[str | None] = mapped_column(String(32), nullable=True, default="market")
+    quantity: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    price: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    executed_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(32), nullable=True, default="pending")
+    created_at: Mapped[Any | None] = mapped_column(String(64), nullable=True, default=lambda: datetime.now(UTC))
+    executed_at: Mapped[Any | None] = mapped_column(String(64), nullable=True)
+    commission: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    slippage: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    strategy_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    signal_strength: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    stop_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    take_profit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
+    market_data_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True, default="{}")
 
     @property
     def gross_pnl(self) -> float:
-        """Calculate gross P&L for the trade."""
-        if not self.executed_price or self.status != 'filled':
+        if not self.executed_price or self.status != "filled":
             return 0.0
-        if self.side == 'buy':
+        if self.side == "buy":
             return _as_float(self.quantity) * (_as_float(self.executed_price) - _as_float(self.price))
-        else:
-            return _as_float(self.quantity) * (_as_float(self.price) - _as_float(self.executed_price))
+        return _as_float(self.quantity) * (_as_float(self.price) - _as_float(self.executed_price))
 
     @property
     def net_pnl(self) -> float:
-        """Calculate net P&L after commissions."""
         return _as_float(self.gross_pnl) - _as_float(self.commission)
 
     @property
     def notional_value(self) -> float:
-        """Calculate notional value of the trade."""
         price = self.executed_price or self.price
         return abs(_as_float(self.quantity) * _as_float(price))
 
+
 class Portfolio(Base):
-    """
-    Portfolio model for tracking positions and valuations.
+    """Legacy portfolio position record for non-OMS reporting paths."""
 
-    Maintains current positions, cash balances, and portfolio-level
-    metrics with real-time updates and historical tracking.
-    """
+    __tablename__ = "portfolio"
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.id = kwargs.get('id', str(uuid.uuid4()))
-        self.account_id = kwargs.get('account_id')
-        self.symbol = kwargs.get('symbol')
-        self.quantity = kwargs.get('quantity', 0)
-        self.average_cost = kwargs.get('average_cost', 0.0)
-        self.current_price = kwargs.get('current_price', 0.0)
-        self.last_updated = kwargs.get('last_updated', datetime.now(UTC))
-        self.asset_class = kwargs.get('asset_class', 'equity')
-        self.sector = kwargs.get('sector')
-        self.market_value = kwargs.get('market_value', 0.0)
-        self.unrealized_pnl = kwargs.get('unrealized_pnl', 0.0)
-        self.realized_pnl = kwargs.get('realized_pnl', 0.0)
-        self.day_change = kwargs.get('day_change', 0.0)
-        self.day_change_percent = kwargs.get('day_change_percent', 0.0)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: str(uuid.uuid4()))
+    account_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    symbol: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    quantity: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    average_cost: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    current_price: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    last_updated: Mapped[Any | None] = mapped_column(String(64), nullable=True, default=lambda: datetime.now(UTC))
+    asset_class: Mapped[str | None] = mapped_column(String(32), nullable=True, default="equity")
+    sector: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    market_value: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    unrealized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    day_change: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    day_change_percent: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
 
     @property
     def total_cost(self) -> float:
-        """Calculate total cost basis of position."""
         return abs(_as_float(self.quantity) * _as_float(self.average_cost))
 
     @property
     def current_market_value(self) -> float:
-        """Calculate current market value of position."""
         return abs(_as_float(self.quantity) * _as_float(self.current_price))
 
     @property
     def position_pnl(self) -> float:
-        """Calculate unrealized P&L of position."""
         if self.quantity == 0:
             return 0.0
         return (_as_float(self.current_price) - _as_float(self.average_cost)) * _as_float(self.quantity)
 
     @property
     def position_pnl_percent(self) -> float:
-        """Calculate unrealized P&L percentage."""
-        if self.average_cost == 0:
-            return 0.0
         avg_cost = _as_float(self.average_cost)
         if avg_cost == 0.0:
             return 0.0
         return (_as_float(self.current_price) - avg_cost) / avg_cost * 100
 
+
 class RiskMetric(Base):
-    """
-    Risk metrics model for tracking portfolio risk measures.
+    """Legacy risk metric record for non-OMS reporting paths."""
 
-    Stores calculated risk metrics including VaR, Sharpe ratio,
-    drawdown, and other institutional risk measures.
-    """
+    __tablename__ = "risk_metrics"
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.id = kwargs.get('id', str(uuid.uuid4()))
-        self.portfolio_id = kwargs.get('portfolio_id')
-        self.calculation_date = kwargs.get('calculation_date', datetime.now(UTC))
-        self.var_95 = kwargs.get('var_95', 0.0)
-        self.var_99 = kwargs.get('var_99', 0.0)
-        self.expected_shortfall = kwargs.get('expected_shortfall', 0.0)
-        self.sharpe_ratio = kwargs.get('sharpe_ratio', 0.0)
-        self.sortino_ratio = kwargs.get('sortino_ratio', 0.0)
-        self.max_drawdown = kwargs.get('max_drawdown', 0.0)
-        self.current_drawdown = kwargs.get('current_drawdown', 0.0)
-        self.volatility = kwargs.get('volatility', 0.0)
-        self.beta = kwargs.get('beta', 1.0)
-        self.correlation_spy = kwargs.get('correlation_spy', 0.0)
-        self.concentration_risk = kwargs.get('concentration_risk', 0.0)
-        self.liquidity_risk = kwargs.get('liquidity_risk', 0.0)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: str(uuid.uuid4()))
+    portfolio_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    calculation_date: Mapped[Any | None] = mapped_column(String(64), nullable=True, default=lambda: datetime.now(UTC))
+    var_95: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    var_99: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    expected_shortfall: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    sharpe_ratio: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    sortino_ratio: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    max_drawdown: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    current_drawdown: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    volatility: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    beta: Mapped[float | None] = mapped_column(Float, nullable=True, default=1.0)
+    correlation_spy: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    concentration_risk: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    liquidity_risk: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
 
     @property
     def risk_score(self) -> float:
-        """Calculate composite risk score (0-100)."""
         var_score = min(abs(_as_float(self.var_95)) * 1000, 50)
         drawdown_score = min(abs(_as_float(self.max_drawdown)) * 100, 30)
         vol_score = min(_as_float(self.volatility) * 100, 20)
@@ -176,75 +154,47 @@ class RiskMetric(Base):
 
     @property
     def risk_level(self) -> str:
-        """Categorize risk level based on composite score."""
         score = self.risk_score
         if score < 25:
-            return 'Low'
-        elif score < 50:
-            return 'Medium'
-        elif score < 75:
-            return 'High'
-        else:
-            return 'Critical'
+            return "Low"
+        if score < 50:
+            return "Medium"
+        if score < 75:
+            return "High"
+        return "Critical"
+
 
 class PerformanceMetric(Base):
-    """
-    Performance metrics model for tracking strategy and portfolio performance.
+    """Legacy performance metric record for non-OMS reporting paths."""
 
-    Stores calculated performance metrics including returns, ratios,
-    and comparative benchmarking over various time periods.
-    """
+    __tablename__ = "performance_metrics"
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.id = kwargs.get('id', str(uuid.uuid4()))
-        self.strategy_id = kwargs.get('strategy_id')
-        self.portfolio_id = kwargs.get('portfolio_id')
-        self.period_start = kwargs.get('period_start')
-        self.period_end = kwargs.get('period_end')
-        self.total_return = kwargs.get('total_return', 0.0)
-        self.annualized_return = kwargs.get('annualized_return', 0.0)
-        self.benchmark_return = kwargs.get('benchmark_return', 0.0)
-        self.alpha = kwargs.get('alpha', 0.0)
-        self.tracking_error = kwargs.get('tracking_error', 0.0)
-        self.information_ratio = kwargs.get('information_ratio', 0.0)
-        self.win_rate = kwargs.get('win_rate', 0.0)
-        self.profit_factor = kwargs.get('profit_factor', 0.0)
-        self.average_win = kwargs.get('average_win', 0.0)
-        self.average_loss = kwargs.get('average_loss', 0.0)
-        self.largest_win = kwargs.get('largest_win', 0.0)
-        self.largest_loss = kwargs.get('largest_loss', 0.0)
-        self.total_trades = kwargs.get('total_trades', 0)
-        self.winning_trades = kwargs.get('winning_trades', 0)
-        self.losing_trades = kwargs.get('losing_trades', 0)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: str(uuid.uuid4()))
+    strategy_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    portfolio_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    period_start: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    period_end: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    total_return: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    annualized_return: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    benchmark_return: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    alpha: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    tracking_error: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    information_ratio: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    win_rate: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    profit_factor: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    average_win: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    average_loss: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    largest_win: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    largest_loss: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
+    total_trades: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    winning_trades: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    losing_trades: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
 
-    @property
-    def loss_rate(self) -> float:
-        """Calculate loss rate."""
-        win_rate = _as_float(self.win_rate)
-        return 1.0 - win_rate if win_rate else 0.0
 
-    @property
-    def avg_win_loss_ratio(self) -> float:
-        """Calculate average win to loss ratio."""
-        if self.average_loss == 0:
-            return float('inf') if _as_float(self.average_win) > 0 else 0.0
-        return abs(_as_float(self.average_win) / _as_float(self.average_loss))
-
-    @property
-    def expectancy(self) -> float:
-        """Calculate trade expectancy."""
-        if self.total_trades == 0:
-            return 0.0
-        win_prob = _as_float(self.win_rate)
-        loss_prob = _as_float(self.loss_rate)
-        avg_win = _as_float(self.average_win)
-        avg_loss = abs(_as_float(self.average_loss))
-        return win_prob * avg_win - loss_prob * avg_loss
-
-    @property
-    def calmar_ratio(self) -> float:
-        """Calculate Calmar ratio (annual return / max drawdown)."""
-        if hasattr(self, 'max_drawdown') and self.max_drawdown != 0:
-            return _as_float(self.annualized_return) / abs(_as_float(self.max_drawdown))
-        return 0.0
+__all__ = [
+    "Base",
+    "PerformanceMetric",
+    "Portfolio",
+    "RiskMetric",
+    "Trade",
+]

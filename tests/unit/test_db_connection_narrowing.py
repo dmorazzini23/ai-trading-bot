@@ -4,8 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ai_trading.database import connection as db_connection
 from ai_trading.database.models import Trade
+
+
+def test_database_manager_requires_explicit_url(monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    with pytest.raises(ValueError, match="DATABASE_URL or an explicit connection string is required"):
+        db_connection.DatabaseManager()
 
 
 def test_connect_handles_timeouterror(monkeypatch) -> None:

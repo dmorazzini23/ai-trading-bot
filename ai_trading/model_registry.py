@@ -25,6 +25,7 @@ from typing import Any
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 from ai_trading.paths import MODELS_DIR
+from ai_trading.utils.safe_pickle import require_unsafe_model_deserialization
 
 logger = get_logger(__name__)
 
@@ -494,6 +495,7 @@ class ModelRegistry:
             if expected is None or actual != expected:
                 raise ValueError("Dataset fingerprint mismatch")
 
+        require_unsafe_model_deserialization(scope="ModelRegistry.load_model")
         raw_bytes = artifact_path.read_bytes()
         if info.get("pickler") == "mock":
             try:

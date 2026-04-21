@@ -10,13 +10,6 @@ import uuid
 from typing import Any
 
 from sqlalchemy import (
-    Column,
-    Float,
-    Integer,
-    MetaData,
-    String,
-    Table,
-    Text,
     create_engine,
     delete,
     insert,
@@ -28,102 +21,20 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from ai_trading.config.management import get_env
+from ai_trading.database.models import (
+    Base as _LEGACY_MODEL_BASE,
+    PerformanceMetric,
+    Portfolio,
+    RiskMetric,
+    Trade,
+)
 from ai_trading.logging import logger
 
-_LEGACY_METADATA = MetaData()
-
-_TRADES_TABLE = Table(
-    "trades",
-    _LEGACY_METADATA,
-    Column("id", String(128), primary_key=True),
-    Column("symbol", String(32), nullable=True),
-    Column("side", String(16), nullable=True),
-    Column("order_type", String(32), nullable=True),
-    Column("quantity", Float, nullable=True),
-    Column("price", Float, nullable=True),
-    Column("executed_price", Float, nullable=True),
-    Column("status", String(32), nullable=True),
-    Column("created_at", String(64), nullable=True),
-    Column("executed_at", String(64), nullable=True),
-    Column("commission", Float, nullable=True),
-    Column("slippage", Float, nullable=True),
-    Column("strategy_id", String(128), nullable=True),
-    Column("signal_strength", Float, nullable=True),
-    Column("stop_loss", Float, nullable=True),
-    Column("take_profit", Float, nullable=True),
-    Column("notes", Text, nullable=True),
-    Column("market_data_snapshot", Text, nullable=True),
-)
-
-_PORTFOLIO_TABLE = Table(
-    "portfolio",
-    _LEGACY_METADATA,
-    Column("id", String(128), primary_key=True),
-    Column("account_id", String(128), nullable=True),
-    Column("symbol", String(32), nullable=True),
-    Column("quantity", Float, nullable=True),
-    Column("average_cost", Float, nullable=True),
-    Column("current_price", Float, nullable=True),
-    Column("last_updated", String(64), nullable=True),
-    Column("asset_class", String(32), nullable=True),
-    Column("sector", String(128), nullable=True),
-    Column("market_value", Float, nullable=True),
-    Column("unrealized_pnl", Float, nullable=True),
-    Column("realized_pnl", Float, nullable=True),
-    Column("day_change", Float, nullable=True),
-    Column("day_change_percent", Float, nullable=True),
-)
-
-_RISK_METRICS_TABLE = Table(
-    "risk_metrics",
-    _LEGACY_METADATA,
-    Column("id", String(128), primary_key=True),
-    Column("portfolio_id", String(128), nullable=True),
-    Column("calculation_date", String(64), nullable=True),
-    Column("var_95", Float, nullable=True),
-    Column("var_99", Float, nullable=True),
-    Column("expected_shortfall", Float, nullable=True),
-    Column("sharpe_ratio", Float, nullable=True),
-    Column("sortino_ratio", Float, nullable=True),
-    Column("max_drawdown", Float, nullable=True),
-    Column("current_drawdown", Float, nullable=True),
-    Column("volatility", Float, nullable=True),
-    Column("beta", Float, nullable=True),
-    Column("correlation_spy", Float, nullable=True),
-    Column("concentration_risk", Float, nullable=True),
-    Column("liquidity_risk", Float, nullable=True),
-)
-
-_PERFORMANCE_METRICS_TABLE = Table(
-    "performance_metrics",
-    _LEGACY_METADATA,
-    Column("id", String(128), primary_key=True),
-    Column("strategy_id", String(128), nullable=True),
-    Column("portfolio_id", String(128), nullable=True),
-    Column("period_start", String(64), nullable=True),
-    Column("period_end", String(64), nullable=True),
-    Column("total_return", Float, nullable=True),
-    Column("annualized_return", Float, nullable=True),
-    Column("benchmark_return", Float, nullable=True),
-    Column("alpha", Float, nullable=True),
-    Column("tracking_error", Float, nullable=True),
-    Column("information_ratio", Float, nullable=True),
-    Column("win_rate", Float, nullable=True),
-    Column("profit_factor", Float, nullable=True),
-    Column("average_win", Float, nullable=True),
-    Column("average_loss", Float, nullable=True),
-    Column("largest_win", Float, nullable=True),
-    Column("largest_loss", Float, nullable=True),
-    Column("total_trades", Integer, nullable=True),
-    Column("winning_trades", Integer, nullable=True),
-    Column("losing_trades", Integer, nullable=True),
-)
-
-_MODEL_TABLES: dict[str, Table] = {
-    "Trade": _TRADES_TABLE,
-    "Portfolio": _PORTFOLIO_TABLE,
-    "RiskMetric": _RISK_METRICS_TABLE,
-    "PerformanceMetric": _PERFORMANCE_METRICS_TABLE,
+_MODEL_TABLES = {
+    "Trade": Trade.__table__,
+    "Portfolio": Portfolio.__table__,
+    "RiskMetric": RiskMetric.__table__,
+    "PerformanceMetric": PerformanceMetric.__table__,
 }
 
 
@@ -132,7 +43,9 @@ def _normalize_database_url(connection_string: str | None) -> str:
     if not raw:
         raw = str(get_env("DATABASE_URL", "", cast=str) or "").strip()
     if not raw:
-        return "sqlite:///trading.db"
+        raise ValueError(
+            "DATABASE_URL or an explicit connection string is required for legacy database access."
+        )
     if raw.startswith("postgres://"):
         return f"postgresql+psycopg://{raw[len('postgres://') :]}"
     if raw.startswith("postgresql://") and "+" not in raw.split("://", 1)[0]:
@@ -156,7 +69,7 @@ class DatabaseManager:
         self._engine: Engine | None = None
         self._session_factory: sessionmaker[Session] | None = None
         logger.info(
-            "DatabaseManager initialized",
+            "LEGACY_DATABASE_MANAGER_INITIALIZED",
             extra={"connection_string": self.connection_string},
         )
 
@@ -192,7 +105,7 @@ class DatabaseManager:
                 )
                 with self._engine.connect() as conn:
                     conn.execute(text("SELECT 1"))
-                _LEGACY_METADATA.create_all(self._engine, checkfirst=True)
+                _LEGACY_MODEL_BASE.metadata.create_all(self._engine, checkfirst=True)
                 self._session_factory = sessionmaker(
                     bind=self._engine,
                     autoflush=False,
@@ -297,7 +210,7 @@ class DatabaseSession:
             raise RuntimeError("Session is not active")
 
     @staticmethod
-    def _resolve_table(model_or_instance: Any) -> Table:
+    def _resolve_table(model_or_instance: Any) -> Any:
         model_name = (
             model_or_instance.__name__
             if isinstance(model_or_instance, type)

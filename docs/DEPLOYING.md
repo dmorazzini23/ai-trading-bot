@@ -46,9 +46,16 @@ Optional feed controls:
 - `ALPACA_EMPTY_TO_BACKUP=1`
 - `BACKUP_DATA_PROVIDER=yahoo|finnhub|finnhub_low_latency|none`
 
+Production execution note:
+
+- Live opening orders fail closed unless they have an approved real-time broker
+  NBBO execution quote. Backup providers such as Yahoo or Finnhub may still be
+  used for reference or degraded analytics paths, but they are not approved
+  live opening-order quote sources.
+
 ## Packaged Services
 
-Primary trader + API:
+Canonical production service:
 
 ```bash
 sudo cp packaging/systemd/ai-trading.service /etc/systemd/system/
@@ -56,7 +63,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ai-trading.service
 ```
 
-Optional dedicated Gunicorn API:
+Optional local debug API facade:
 
 ```bash
 sudo cp packaging/systemd/ai-trading-api.service /etc/systemd/system/
@@ -64,11 +71,15 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ai-trading-api.service
 ```
 
-The packaged Gunicorn service binds:
+The packaged debug Gunicorn service binds:
 
 ```bash
-0.0.0.0:9001
+127.0.0.1:9002
 ```
+
+Do not enable `ai-trading-api.service` for production ownership of the runtime.
+Institutional production deployment uses `ai-trading.service` as the single
+authoritative topology for trading, API, health, and metrics on `:9001`.
 
 ## Health Surfaces
 
@@ -95,3 +106,14 @@ When launching the standalone health app, `HEALTHCHECK_PORT` must differ from
 3. `journalctl -u ai-trading.service -n 200 --no-pager`
 4. `curl -s http://127.0.0.1:9001/healthz | jq .`
 5. `curl -s http://127.0.0.1:9001/operator/control-plane | jq .`
+
+## Additional Runtime Hardening
+
+- Pretrade pacing is persisted by default outside tests at
+  `runtime/pretrade_rate_limiter.db`. Override with
+  `AI_TRADING_PRETRADE_RATE_LIMITER_PATH` only when pointing to a shared durable
+  runtime volume.
+- Generic pickle/cloudpickle/dill model deserialization is blocked by default
+  outside test runtimes. Only enable
+  `AI_TRADING_ALLOW_UNSAFE_MODEL_DESERIALIZATION=1` for controlled research or
+  migration workflows.

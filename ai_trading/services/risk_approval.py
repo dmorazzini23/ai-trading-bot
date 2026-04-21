@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -12,6 +14,11 @@ from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 _log = get_logger(__name__)
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback
+    fcntl = None  # type: ignore[assignment]
+
 
 def _json_default(value: Any) -> str:
     isoformat = getattr(value, "isoformat", None)
@@ -21,6 +28,36 @@ def _json_default(value: Any) -> str:
         except Exception:
             return str(value)
     return str(value)
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(f"{path.suffix}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(dict(payload), sort_keys=True, default=_json_default) + "\n"
+    with lock_path.open("a+", encoding="utf-8") as lock_fh:
+        if fcntl is not None:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp_fh:
+                tmp_fh.write(serialized)
+                tmp_fh.flush()
+                os.fsync(tmp_fh.fileno())
+            os.replace(tmp_name, path)
+            dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        finally:
+            if os.path.exists(tmp_name):
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    _log.debug("POLICY_STATE_TMP_CLEANUP_FAILED", exc_info=True)
+            if fcntl is not None:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
 
 
 def policy_ablation_state_path(*, for_write: bool = False) -> Path:
@@ -185,11 +222,7 @@ def load_policy_rollback_state() -> dict[str, Any]:
 
 def write_policy_rollback_state(payload: Mapping[str, Any]) -> Path:
     path = policy_rollback_state_path(for_write=True)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(dict(payload), sort_keys=True, default=_json_default) + "\n",
-        encoding="utf-8",
-    )
+    _atomic_write_json(path, payload)
     return path
 
 
@@ -207,11 +240,7 @@ def write_policy_runtime_toggles(
         source_updated_at=source_updated_at,
     )
     path = policy_runtime_toggles_path(for_write=True)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, sort_keys=True, default=_json_default) + "\n",
-        encoding="utf-8",
-    )
+    _atomic_write_json(path, payload)
     return path, payload
 
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_trading.logging import get_logger
+from ai_trading.utils.safe_pickle import require_unsafe_model_deserialization
 
 logger = get_logger(__name__)
 
@@ -50,6 +51,7 @@ def load_model(path: str | Path) -> Any:
     deserialized.
     """
     p = Path(path)
+    require_unsafe_model_deserialization(scope="ai_trading.ml.model_io.load_model")
     if not p.exists():
         logger.error("MODEL_FILE_MISSING", extra={"path": str(p)})
         raise RuntimeError(f"Model file not found: '{p}'")

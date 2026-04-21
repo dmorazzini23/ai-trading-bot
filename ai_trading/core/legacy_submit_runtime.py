@@ -90,6 +90,17 @@ def _resolve_execution_lineage(exec_kwargs: Mapping[str, Any]) -> tuple[dict[str
 
 
 def _resolve_legacy_ledger(be: Any, cfg: Any) -> Any:
+    execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
+    if execution_mode == "live":
+        if getattr(be.state, "_oms_ledger", None) is not None:
+            setattr(be.state, "_oms_ledger", None)
+        be.emit_once(
+            be.logger,
+            "OMS_LEDGER_DISABLED_LIVE",
+            "info",
+            "Live execution disables JSONL OMS ledger side paths; intent store is authoritative",
+        )
+        return None
     if not bool(getattr(cfg, "ledger_enabled", False)):
         if getattr(be.state, "_oms_ledger", None) is not None:
             setattr(be.state, "_oms_ledger", None)
@@ -259,12 +270,17 @@ def _resolve_execution_intent_context(
         ask=submit_ask_at_arrival,
         reference_price=reference_price,
     )
+    execution_mode = str(
+        getattr(ctx, "execution_mode", be.get_env("EXECUTION_MODE", "paper", cast=str))
+        or "paper"
+    ).strip().lower()
+    require_realtime_nbbo_default = execution_mode == "live"
     try:
         require_realtime_nbbo = bool(
-            getattr(cfg, "execution_require_realtime_nbbo", False)
+            getattr(cfg, "execution_require_realtime_nbbo", require_realtime_nbbo_default)
         )
     except Exception:
-        require_realtime_nbbo = False
+        require_realtime_nbbo = require_realtime_nbbo_default
     require_realtime_nbbo = bool(
         require_realtime_nbbo
         and be.get_env("AI_TRADING_ENFORCE_NBBO_FOR_OPENINGS", True, cast=bool)

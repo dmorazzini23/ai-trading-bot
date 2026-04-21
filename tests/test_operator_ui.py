@@ -8,18 +8,29 @@ from ai_trading.app import create_app
 from ai_trading.operator_presets import PresetValidationError, build_plan
 
 
+def _operator_headers(
+    *,
+    operator_id: str = "ops@example.com",
+    token: str = "test-operator-token",
+) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "X-AI-Trading-Operator-Id": operator_id,
+    }
+
+
 def _post_json(client, path: str, payload: dict[str, object]):
     post = getattr(client, "post", None)
     if callable(post):
-        return post(path, json=payload)
-    return client.open(path, method="POST", json=payload)
+        return post(path, json=payload, headers=_operator_headers())
+    return client.open(path, method="POST", json=payload, headers=_operator_headers())
 
 
 def _delete(client, path: str):
     delete = getattr(client, "delete", None)
     if callable(delete):
-        return delete(path)
-    return client.open(path, method="DELETE")
+        return delete(path, headers=_operator_headers())
+    return client.open(path, method="DELETE", headers=_operator_headers())
 
 
 def test_operator_presets_endpoint(monkeypatch):
@@ -93,10 +104,16 @@ def test_operator_control_plane_services_endpoint(monkeypatch):
     assert payload["ok"] is True
     assert payload["section"] == "services"
     assert payload["data"]["risk_approval"]["owner"] == "ai_trading.services.risk_approval"
+    assert payload["data"]["execution"]["boundary_type"] == "facade"
+    assert "legacy_submit_runtime" in payload["data"]["execution"]["canonical_runtime_owner"][0]
+    assert payload["data"]["portfolio"]["boundary_type"] == "facade"
+    assert payload["data"]["reconciliation"]["boundary_type"] == "facade"
 
 
 def test_operator_manual_overrides_post_and_delete(monkeypatch, tmp_path):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("AI_TRADING_OPERATOR_API_TOKEN", "test-operator-token")
+    monkeypatch.setenv("AI_TRADING_OPERATOR_OVERRIDE_OPERATORS", "ops@example.com")
     toggle_path = tmp_path / "runtime" / "policy_runtime_toggles.json"
     monkeypatch.setenv("AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH", str(toggle_path))
     app = create_app()
@@ -120,13 +137,30 @@ def test_operator_manual_overrides_post_and_delete(monkeypatch, tmp_path):
     assert state["toggles"]["rankers"]["bandit_enabled"] is False
     assert state["toggles"]["disabled_gate_roots"] == ["MAX_LOSS"]
     persisted = json.loads(toggle_path.read_text(encoding="utf-8"))
-    assert persisted["diagnostics"]["operator"] == "ops@example.com"
+    assert persisted["diagnostics"]["operator_id"] == "ops@example.com"
 
     delete = _delete(client, "/operator/control-plane/manual-overrides")
     assert delete.status_code == 200
     cleared = delete.get_json()
     assert cleared["ok"] is True
     assert cleared["manual_overrides"]["state"]["disabled_slices"] == []
+
+
+def test_operator_manual_overrides_requires_auth(monkeypatch, tmp_path):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("AI_TRADING_OPERATOR_API_TOKEN", "test-operator-token")
+    monkeypatch.setenv("AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH", str(tmp_path / "toggles.json"))
+    app = create_app()
+    client = app.test_client()
+
+    response = client.post(
+        "/operator/control-plane/manual-overrides",
+        json={"disabled_slices": ["gate:max_loss"]},
+    )
+
+    assert response.status_code == 401
+    payload = response.get_json()
+    assert payload["ok"] is False
 
 
 def test_operator_plan_builder_accepts_valid_override():
@@ -161,6 +195,8 @@ def test_operator_governance_snapshot_endpoint(monkeypatch):
 
 def test_operator_governance_approval_endpoint(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("AI_TRADING_OPERATOR_API_TOKEN", "test-operator-token")
+    monkeypatch.setenv("AI_TRADING_OPERATOR_APPROVERS", "ops@example.com")
     calls: dict[str, object] = {}
 
     class _FakePromotion:
@@ -184,7 +220,6 @@ def test_operator_governance_approval_endpoint(monkeypatch):
         {
             "strategy": "momentum",
             "model_id": "model-1",
-            "approver": "ops@example.com",
             "decision": "approved",
             "note": "weekly review",
         },
@@ -202,8 +237,28 @@ def test_operator_governance_approval_endpoint(monkeypatch):
     assert recorded["approver"] == "ops@example.com"
 
 
+def test_operator_governance_approval_requires_allowlisted_operator(monkeypatch):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("AI_TRADING_OPERATOR_API_TOKEN", "test-operator-token")
+    monkeypatch.setenv("AI_TRADING_OPERATOR_APPROVERS", "approver@example.com")
+    app = create_app()
+    client = app.test_client()
+
+    response = client.post(
+        "/operator/governance/approval",
+        json={"strategy": "momentum", "model_id": "model-1"},
+        headers=_operator_headers(operator_id="ops@example.com"),
+    )
+
+    assert response.status_code == 403
+    payload = response.get_json()
+    assert payload["ok"] is False
+
+
 def test_operator_governance_rollback_endpoint(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("AI_TRADING_OPERATOR_API_TOKEN", "test-operator-token")
+    monkeypatch.setenv("AI_TRADING_OPERATOR_ROLLBACK_OPERATORS", "ops@example.com")
 
     class _FakePromotion:
         def __init__(self, *args, **kwargs):

@@ -623,36 +623,53 @@ class OrderManager:
         execution_mode = str(get_env("EXECUTION_MODE", "paper") or "").strip().lower()
         ledger_enabled = _env_bool("AI_TRADING_LEDGER_ENABLED", True)
         database_url = str(get_env("DATABASE_URL", "") or "").strip()
-        allow_sqlite_live = _env_bool("AI_TRADING_OMS_INTENT_STORE_ALLOW_SQLITE_LIVE", False)
         if execution_mode == "live":
             emit_once(
                 logger,
                 "OMS_DURABILITY_HIERARCHY",
                 "info",
                 "OMS durability hierarchy resolved",
-                authoritative_store="intent_store" if enabled else "jsonl_ledger",
+                authoritative_store="intent_store",
                 intent_store_enabled=bool(enabled),
                 ledger_enabled=bool(ledger_enabled),
                 execution_mode=execution_mode,
+            )
+        if execution_mode == "live" and not enabled:
+            logger.error(
+                "OMS_INTENT_STORE_REQUIRED_LIVE",
+                extra={"execution_mode": execution_mode},
+            )
+            raise RuntimeError(
+                "AI_TRADING_OMS_INTENT_STORE_ENABLED=1 is required for live execution."
             )
         if not enabled:
             return
         if self._test_mode and not allow_in_tests:
             return
-        if execution_mode == "live" and not database_url and not allow_sqlite_live:
+        if execution_mode == "live" and not database_url:
             message = (
                 "DATABASE_URL is required for live durable intent store. "
-                "Set DATABASE_URL=postgresql+psycopg://... or explicitly opt into "
-                "AI_TRADING_OMS_INTENT_STORE_ALLOW_SQLITE_LIVE=1."
+                "Set DATABASE_URL=postgresql+psycopg://..."
             )
             logger.error(
                 "OMS_INTENT_STORE_DATABASE_URL_REQUIRED",
                 extra={
                     "execution_mode": execution_mode,
-                    "allow_sqlite_live": allow_sqlite_live,
+                    "database_url_configured": False,
                 },
             )
             raise RuntimeError(message)
+        if execution_mode == "live" and database_url.startswith("sqlite:"):
+            logger.error(
+                "OMS_INTENT_STORE_DATABASE_URL_SQLITE_FORBIDDEN",
+                extra={
+                    "execution_mode": execution_mode,
+                    "database_url_configured": True,
+                },
+            )
+            raise RuntimeError(
+                "Live durable intent store requires DATABASE_URL to a non-sqlite database."
+            )
         path = get_env("AI_TRADING_OMS_INTENT_STORE_PATH", "runtime/oms_intents.db")
         event_dual_write_enabled = _env_bool("AI_TRADING_OMS_EVENT_DUAL_WRITE_ENABLED", True)
         try:

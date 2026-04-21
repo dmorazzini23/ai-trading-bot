@@ -51,11 +51,21 @@ def _prepare_oms_ledger(state: Any, cfg: Any) -> OrderLedger | None:
             "OMS_DURABILITY_HIERARCHY",
             "info",
             "OMS durability hierarchy resolved",
-            authoritative_store="intent_store" if intent_store_enabled else "ledger",
+            authoritative_store="intent_store",
             intent_store_enabled=intent_store_enabled,
             ledger_enabled=ledger_enabled,
             execution_mode=execution_mode,
         )
+    if execution_mode == "live":
+        if getattr(state, "_oms_ledger", None) is not None:
+            setattr(state, "_oms_ledger", None)
+        be.emit_once(
+            be.logger,
+            "OMS_LEDGER_DISABLED_LIVE",
+            "info",
+            "Live execution disables JSONL OMS ledger side paths; intent store is authoritative",
+        )
+        return None
     if not ledger_enabled:
         return None
 
@@ -63,14 +73,6 @@ def _prepare_oms_ledger(state: Any, cfg: Any) -> OrderLedger | None:
         str(getattr(cfg, "ledger_path", "runtime/oms_ledger.jsonl"))
     )
     lookback_hours = float(getattr(cfg, "ledger_lookback_hours", 24.0))
-    if execution_mode == "live" and intent_store_enabled:
-        be.emit_once(
-            be.logger,
-            "OMS_LEDGER_AUXILIARY_MODE",
-            "info",
-            "JSONL OMS ledger is auxiliary; intent store is authoritative",
-            ledger_path=str(ledger_path),
-        )
 
     cached_ledger = getattr(state, "_oms_ledger", None)
     cached_path = str(getattr(cached_ledger, "_path", "") or "")

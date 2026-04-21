@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hmac
 import logging
 import sys
 from collections.abc import Mapping
@@ -137,6 +138,9 @@ def _ensure_test_client_support(app: Any, route_registry: dict[Any, Any]) -> Non
     class _StubRequest:
         def __init__(self) -> None:
             self._json_payload: Any = None
+            self.headers: dict[str, str] = {}
+            self.method = "GET"
+            self.path = ""
 
         def get_json(self, silent: bool = False) -> Any:
             if self._json_payload is None and not silent:
@@ -154,11 +158,24 @@ def _ensure_test_client_support(app: Any, route_registry: dict[Any, Any]) -> Non
             return self._data
 
     class _Client:
-        def _request(self, path: str, *, method: str = "GET", json: Any = None) -> Any:
+        def _request(
+            self,
+            path: str,
+            *,
+            method: str = "GET",
+            json: Any = None,
+            headers: Mapping[str, Any] | None = None,
+        ) -> Any:
             handler = route_registry.get((path, method.upper())) or route_registry.get(path)
             if handler is None:
                 raise KeyError(f"route not registered: {method} {path}")
             stub_request._json_payload = json
+            stub_request.headers = {
+                str(key): str(value)
+                for key, value in dict(headers or {}).items()
+            }
+            stub_request.method = str(method).upper()
+            stub_request.path = str(path)
             handler_globals = getattr(handler, "__globals__", {})
             previous_request = handler_globals.get("request")
             handler_globals["request"] = stub_request
@@ -166,6 +183,9 @@ def _ensure_test_client_support(app: Any, route_registry: dict[Any, Any]) -> Non
                 result = handler()
             finally:
                 stub_request._json_payload = None
+                stub_request.headers = {}
+                stub_request.method = "GET"
+                stub_request.path = ""
                 if previous_request is None:
                     handler_globals.pop("request", None)
                 else:
@@ -179,18 +199,35 @@ def _ensure_test_client_support(app: Any, route_registry: dict[Any, Any]) -> Non
                     status = result[1]
             return _Response(payload, status)
 
-        def open(self, path: str, method: str = "GET", json: Any = None) -> Any:
-            return self._request(path, method=method, json=json)
+        def open(
+            self,
+            path: str,
+            method: str = "GET",
+            json: Any = None,
+            headers: Mapping[str, Any] | None = None,
+        ) -> Any:
+            return self._request(path, method=method, json=json, headers=headers)
 
         def get(self, path: str, *args: Any, **kwargs: Any) -> Any:
             json_payload = kwargs.get("json")
-            return self._request(path, method="GET", json=json_payload)
+            headers = kwargs.get("headers")
+            return self._request(path, method="GET", json=json_payload, headers=headers)
 
         def post(self, path: str, *args: Any, **kwargs: Any) -> Any:
-            return self._request(path, method="POST", json=kwargs.get("json"))
+            return self._request(
+                path,
+                method="POST",
+                json=kwargs.get("json"),
+                headers=kwargs.get("headers"),
+            )
 
         def delete(self, path: str, *args: Any, **kwargs: Any) -> Any:
-            return self._request(path, method="DELETE", json=kwargs.get("json"))
+            return self._request(
+                path,
+                method="DELETE",
+                json=kwargs.get("json"),
+                headers=kwargs.get("headers"),
+            )
 
     setattr(app, "test_client", lambda *args, **kwargs: _Client())
 
@@ -233,6 +270,115 @@ def _seed_pytest_env_defaults() -> None:
             continue
         if _set_runtime_env_override is not None:
             _set_runtime_env_override(key, default)
+
+
+def _request_headers() -> Mapping[str, Any]:
+    request_obj = globals().get("request")
+    headers = getattr(request_obj, "headers", None)
+    if isinstance(headers, Mapping):
+        return headers
+    return {}
+
+
+def _request_header(name: str) -> str:
+    if not name:
+        return ""
+    headers = _request_headers()
+    if not headers:
+        return ""
+    target = str(name).lower()
+    for key, value in headers.items():
+        if str(key).lower() != target:
+            continue
+        return str(value or "").strip()
+    return ""
+
+
+def _parse_operator_allowlist(name: str) -> set[str]:
+    raw = str(_managed_env(name, "") or "").strip()
+    if not raw:
+        return set()
+    return {
+        token.strip().lower()
+        for token in raw.split(",")
+        if token and token.strip()
+    }
+
+
+def _authenticate_operator_request(
+    *,
+    scope: str,
+    allowlist_env: str | None = None,
+    require_allowlist: bool = False,
+) -> tuple[str | None, dict[str, Any] | None, int]:
+    configured_token = str(_managed_env("AI_TRADING_OPERATOR_API_TOKEN", "") or "").strip()
+    if not configured_token:
+        _log.error("OPERATOR_AUTH_MISCONFIGURED", extra={"scope": scope})
+        return (
+            None,
+            {"ok": False, "error": "operator authentication is not configured"},
+            503,
+        )
+
+    authorization = _request_header("Authorization")
+    scheme, _, token = authorization.partition(" ")
+    if str(scheme).strip().lower() != "bearer" or not str(token).strip():
+        _log.warning(
+            "OPERATOR_AUTH_REJECTED",
+            extra={"scope": scope, "reason": "missing_bearer_token"},
+        )
+        return (
+            None,
+            {"ok": False, "error": "operator authentication required"},
+            401,
+        )
+    if not hmac.compare_digest(str(token).strip(), configured_token):
+        _log.warning(
+            "OPERATOR_AUTH_REJECTED",
+            extra={"scope": scope, "reason": "invalid_bearer_token"},
+        )
+        return (
+            None,
+            {"ok": False, "error": "operator authentication rejected"},
+            403,
+        )
+
+    operator_id = _request_header("X-AI-Trading-Operator-Id") or _request_header("X-Operator-Id")
+    operator_id = str(operator_id or "").strip()
+    if not operator_id:
+        _log.warning(
+            "OPERATOR_AUTH_REJECTED",
+            extra={"scope": scope, "reason": "missing_operator_id"},
+        )
+        return (
+            None,
+            {"ok": False, "error": "operator identity header required"},
+            400,
+        )
+
+    if allowlist_env:
+        allowlist = _parse_operator_allowlist(allowlist_env)
+        if not allowlist and require_allowlist:
+            _log.error(
+                "OPERATOR_AUTHZ_MISCONFIGURED",
+                extra={"scope": scope, "allowlist_env": allowlist_env},
+            )
+            return (
+                None,
+                {"ok": False, "error": "operator authorization is not configured"},
+                503,
+            )
+        if allowlist and operator_id.lower() not in allowlist:
+            _log.warning(
+                "OPERATOR_AUTHZ_REJECTED",
+                extra={"scope": scope, "operator_id": operator_id},
+            )
+            return (
+                None,
+                {"ok": False, "error": "operator is not authorized for this action"},
+                403,
+            )
+    return operator_id, None, 200
 
 
 def suppress_flask_startup_noise() -> None:
@@ -616,6 +762,13 @@ def create_app():
     def operator_control_plane_update_manual_overrides() -> Any:
         """Persist manual runtime override controls on the canonical operator path."""
 
+        operator_id, auth_error_payload, auth_status = _authenticate_operator_request(
+            scope="manual_overrides_write",
+            allowlist_env="AI_TRADING_OPERATOR_OVERRIDE_OPERATORS",
+            require_allowlist=False,
+        )
+        if auth_error_payload is not None:
+            return _safe_response(auth_error_payload, status=auth_status)
         request_obj = globals().get("request")
         if request_obj is None or not callable(getattr(request_obj, "get_json", None)):
             return _safe_response(
@@ -633,6 +786,7 @@ def create_app():
         )
         diagnostics_raw = body.get("diagnostics")
         diagnostics = dict(diagnostics_raw) if isinstance(diagnostics_raw, Mapping) else {}
+        diagnostics.setdefault("operator_id", str(operator_id))
         source_updated_at = str(body.get("source_updated_at") or "").strip() or None
         try:
             payload = ControlPlaneService(service_name=_SERVICE_NAME).update_manual_overrides(
@@ -652,8 +806,18 @@ def create_app():
     def operator_control_plane_clear_manual_overrides() -> Any:
         """Clear operator manual overrides while preserving the canonical payload shape."""
 
+        operator_id, auth_error_payload, auth_status = _authenticate_operator_request(
+            scope="manual_overrides_clear",
+            allowlist_env="AI_TRADING_OPERATOR_OVERRIDE_OPERATORS",
+            require_allowlist=False,
+        )
+        if auth_error_payload is not None:
+            return _safe_response(auth_error_payload, status=auth_status)
         try:
-            payload = ControlPlaneService(service_name=_SERVICE_NAME).clear_manual_overrides()
+            payload = ControlPlaneService(service_name=_SERVICE_NAME).update_manual_overrides(
+                disabled_slices=[],
+                diagnostics={"operator_id": str(operator_id), "action": "clear_manual_overrides"},
+            )
             return _safe_response({"ok": True, "manual_overrides": payload}, status=200)
         except (OSError, ValueError, TypeError) as exc:
             _log.warning("OPERATOR_MANUAL_OVERRIDES_CLEAR_FAILED", extra={"error": str(exc)})
@@ -690,6 +854,13 @@ def create_app():
     def operator_governance_record_approval() -> Any:
         """Record an explicit governance approval/rejection checkpoint."""
 
+        operator_id, auth_error_payload, auth_status = _authenticate_operator_request(
+            scope="governance_approval",
+            allowlist_env="AI_TRADING_OPERATOR_APPROVERS",
+            require_allowlist=True,
+        )
+        if auth_error_payload is not None:
+            return _safe_response(auth_error_payload, status=auth_status)
         request_obj = globals().get("request")
         if request_obj is None or not callable(getattr(request_obj, "get_json", None)):
             return _safe_response(
@@ -701,16 +872,16 @@ def create_app():
             body = {}
         strategy = str(body.get("strategy") or "").strip()
         model_id = str(body.get("model_id") or "").strip()
-        approver = str(body.get("approver") or "").strip()
+        approver = str(operator_id or "").strip()
         decision = str(body.get("decision") or "approved").strip().lower() or "approved"
         note = str(body.get("note") or "").strip() or None
         ticket = str(body.get("ticket") or "").strip() or None
 
-        if not strategy or not model_id or not approver:
+        if not strategy or not model_id:
             return _safe_response(
                 {
                     "ok": False,
-                    "error": "strategy, model_id, and approver are required",
+                    "error": "strategy and model_id are required",
                 },
                 status=400,
             )
@@ -747,6 +918,13 @@ def create_app():
     def operator_governance_manual_rollback() -> Any:
         """Trigger a governance rollback to previous production model."""
 
+        operator_id, auth_error_payload, auth_status = _authenticate_operator_request(
+            scope="governance_rollback",
+            allowlist_env="AI_TRADING_OPERATOR_ROLLBACK_OPERATORS",
+            require_allowlist=True,
+        )
+        if auth_error_payload is not None:
+            return _safe_response(auth_error_payload, status=auth_status)
         request_obj = globals().get("request")
         if request_obj is None or not callable(getattr(request_obj, "get_json", None)):
             return _safe_response(
@@ -772,12 +950,15 @@ def create_app():
                 status=400,
             )
         try:
+            effective_reason = reason
+            if operator_id:
+                effective_reason = f"{reason} | operator={operator_id}"
             result = GovernanceService(
                 service_name=_SERVICE_NAME,
                 base_path=_governance_base_path(),
             ).rollback(
                 strategy=strategy,
-                reason=reason,
+                reason=effective_reason,
                 force=force,
             )
             rolled_back = bool(result.get("rolled_back"))
