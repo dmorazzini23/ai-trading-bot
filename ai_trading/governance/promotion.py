@@ -9,6 +9,7 @@ import json
 import math
 import uuid
 from ai_trading.logging import get_logger
+from ai_trading.governance.paths import resolve_governance_base_path
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -101,7 +102,7 @@ class ModelPromotion:
     promotion based on defined criteria.
     """
 
-    def __init__(self, model_registry: ModelRegistry | None=None, criteria: PromotionCriteria | None=None, base_path: str='artifacts/governance'):
+    def __init__(self, model_registry: ModelRegistry | None=None, criteria: PromotionCriteria | None=None, base_path: str | None=None):
         """
         Initialize model promotion manager.
 
@@ -112,7 +113,7 @@ class ModelPromotion:
         """
         self.registry = model_registry or ModelRegistry()
         self.criteria = criteria or PromotionCriteria()
-        self.base_path = Path(base_path)
+        self.base_path = resolve_governance_base_path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
         self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self.active_dir = self.base_path / 'active'

@@ -1093,11 +1093,10 @@ def create_app(*, health_only: bool = False, fail_fast_env: bool = False):
             )
 
     def _governance_base_path() -> str:
-        configured = str(
-            _managed_env("AI_TRADING_GOVERNANCE_BASE_PATH", "artifacts/governance")
-            or "artifacts/governance"
-        ).strip()
-        return configured or "artifacts/governance"
+        from ai_trading.governance.paths import resolve_governance_base_path
+
+        configured = str(_managed_env("AI_TRADING_GOVERNANCE_BASE_PATH", "") or "").strip()
+        return str(resolve_governance_base_path(configured or None))
 
     @app.route("/operator/governance")
     def operator_governance_snapshot() -> Any:

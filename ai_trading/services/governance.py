@@ -3,15 +3,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from ai_trading.governance.paths import resolve_governance_base_path
 from ai_trading.health_payload import build_control_plane_snapshot
 
 
 class GovernanceService:
     """Thin operator service for governance snapshots and actions."""
 
-    def __init__(self, *, service_name: str="ai-trading", base_path: str="artifacts/governance") -> None:
+    def __init__(self, *, service_name: str="ai-trading", base_path: str | None = None) -> None:
         self._service_name = str(service_name or "ai-trading")
-        self._base_path = str(base_path or "artifacts/governance")
+        self._base_path = str(resolve_governance_base_path(base_path))
 
     def _promotion(self) -> Any:
         from ai_trading.governance.promotion import ModelPromotion

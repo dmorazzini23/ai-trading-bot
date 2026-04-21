@@ -8,6 +8,7 @@ import sys
 from typing import Any
 
 from ai_trading.config.management import get_env
+from ai_trading.governance.paths import resolve_governance_base_path
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 
@@ -55,19 +56,11 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _resolve_governance_path(value: str | None) -> Path:
-    configured = str(
-        value
-        or get_env(
-            "AI_TRADING_GOVERNANCE_BASE_PATH",
-            "artifacts/governance",
-            cast=str,
-        )
-        or "artifacts/governance"
-    )
+    configured = str(value or resolve_governance_base_path())
     return Path(
         resolve_runtime_artifact_path(
             configured,
-            default_relative="artifacts/governance",
+            default_relative=str(resolve_governance_base_path()),
             for_write=False,
         )
     )

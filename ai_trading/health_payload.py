@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.config.management import get_env
+from ai_trading.governance.paths import resolve_governance_base_path
 from ai_trading.settings import get_backup_data_provider
 from ai_trading.telemetry import runtime_state
 from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
@@ -553,25 +554,7 @@ def _read_json_mapping_artifact(
 
 
 def _governance_base_path() -> Path:
-    configured = "artifacts/governance"
-    try:
-        from ai_trading.config.management import get_env
-
-        configured = str(
-            get_env(
-                "AI_TRADING_GOVERNANCE_BASE_PATH",
-                configured,
-                cast=str,
-                resolve_aliases=False,
-            )
-            or configured
-        ).strip() or configured
-    except Exception:
-        configured = "artifacts/governance"
-    resolved = Path(configured).expanduser()
-    if not resolved.is_absolute():
-        resolved = (Path.cwd() / resolved).resolve()
-    return resolved
+    return resolve_governance_base_path()
 
 
 def _read_jsonl_tail(path: Path, *, limit: int = 20) -> list[dict[str, Any]]:
