@@ -5720,6 +5720,10 @@ def _runtime_execution_mode() -> str:
     return str(raw or "sim").strip().lower() or "sim"
 
 
+def _live_execution_blocks_yahoo_fallback() -> bool:
+    return _runtime_execution_mode() == "live"
+
+
 def _auto_train_allowed(execution_mode: str, *, allow_paper_train: bool) -> bool:
     return execution_mode == "paper" and bool(allow_paper_train)
 
@@ -10023,134 +10027,147 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
             fallback_provider = "alpaca_sip"
 
         if not fallback_used or low_coverage:
-            fallback_attempted = True
-            log_backup_provider_used(
-                "yahoo",
-                symbol=symbol,
-                timeframe="1Min",
-                start=fallback_start_dt,
-                end=end_dt,
-                logger=logger,
-            )
-            try:
-                yahoo_df = get_minute_df(
-                    symbol,
-                    fallback_start_dt,
-                    end_dt,
-                    **_minute_fetch_kwargs(feed="yahoo"),
+            if _live_execution_blocks_yahoo_fallback():
+                logger.warning(
+                    "LIVE_BACKUP_PROVIDER_BLOCKED",
+                    extra={
+                        "provider": "yahoo",
+                        "symbol": symbol,
+                        "timeframe": "1Min",
+                        "execution_mode": _runtime_execution_mode(),
+                    },
                 )
-            except COMMON_EXC as exc:  # pragma: no cover - diagnostics only
-                logger.debug(
-                    "BACKUP_PROVIDER_FAILED",
-                    extra={"provider": "yahoo", "symbol": symbol, "error": str(exc)},
-                )
-                yahoo_df = None
-
-            if yahoo_df is not None and not getattr(yahoo_df, "empty", True):
-                yahoo_df = _sanitize_minute_df(
-                    yahoo_df,
+                fallback_feed = "blocked_live"
+                fallback_provider = "blocked_live"
+            else:
+                fallback_attempted = True
+                log_backup_provider_used(
+                    "yahoo",
                     symbol=symbol,
-                    current_now=now_utc,
+                    timeframe="1Min",
+                    start=fallback_start_dt,
+                    end=end_dt,
+                    logger=logger,
                 )
                 try:
-                    yahoo_bars = int(len(yahoo_df))
-                except COMMON_EXC:
-                    yahoo_bars = 0
-            else:
-                yahoo_bars = 0
-                yahoo_df = None
-
-            if yahoo_df is not None and yahoo_bars > primary_actual_bars:
-                provider_override, feed_override = _df_provider_info(yahoo_df)
-                resolved_feed = feed_override or "yahoo"
-                resolved_provider = provider_override or "yahoo"
-                prev_expected = max(primary_expected_bars or expected_bars or 0, 1)
-                prev_cov = (
-                    primary_actual_bars / prev_expected if prev_expected else 0.0
-                )
-                new_cov = yahoo_bars / max(fallback_expected_bars, 1)
-                event_name = _coverage_recovery_event(resolved_feed)
-                logger.warning(
-                    event_name,
-                    extra={
-                        "symbol": symbol,
-                        "prev_feed": current_feed,
-                        "prev_cov": round(prev_cov, 4),
-                        "new_feed": resolved_feed,
-                        "new_cov": round(new_cov, 4),
-                        "expected_bars": fallback_expected_bars,
-                        "prev_bars": primary_actual_bars,
-                        "new_bars": yahoo_bars,
-                    },
-                )
-                coverage_recovery_logged = True
-                df = yahoo_df
-                start_dt = fallback_start_dt
-                expected_bars = fallback_expected_bars
-                fallback_window_minutes = _window_minutes(fallback_start_dt, end_dt)
-                coverage = _coverage_metrics(
-                    df,
-                    expected=expected_bars,
-                    intraday_requirement=intraday_lookback,
-                    feed="yahoo",
-                    window_minutes=fallback_window_minutes,
-                )
-                actual_bars = _coerce_int(coverage["actual"], 0)
-                coverage_threshold = _coerce_int(coverage["threshold"], 0)
-                coverage_cutoff = _coerce_int(
-                    coverage.get("cutoff", intraday_lookback),
-                    intraday_lookback,
-                )
-                materially_short = bool(coverage["materially_short"])
-                insufficient_intraday = bool(coverage["insufficient_intraday"])
-                low_coverage = bool(coverage["low_coverage"])
-                fallback_used = True
-                fallback_feed = "yahoo"
-                fallback_provider = resolved_provider
-                active_feed = "yahoo"
-                coverage_window_start = fallback_start_dt
-                if coverage_warning_context is not None:
-                    coverage_warning_context.update(
-                        {
-                            "window_minutes": fallback_window_minutes,
-                            "coverage_threshold": coverage_threshold,
-                            "coverage_cutoff": coverage_cutoff,
-                            "threshold_scale": coverage.get("threshold_scale", 1.0),
-                            "intraday_scale": coverage.get("intraday_scale", 1.0),
-                        }
+                    yahoo_df = get_minute_df(
+                        symbol,
+                        fallback_start_dt,
+                        end_dt,
+                        **_minute_fetch_kwargs(feed="yahoo"),
                     )
-                (
-                    _fallback_sanitized,
-                    _fallback_normalized,
-                    _fallback_cached,
-                ) = _cache_cycle_fallback_feed_helper("yahoo", symbol=symbol)
-                try:
-                    _cache_cycle_fallback_feed("yahoo", symbol=symbol)
-                except TypeError:
-                    _cache_cycle_fallback_feed("yahoo")
-                fallback_feed_used = (
-                    _fallback_cached
-                    or _fallback_sanitized
-                    or _fallback_normalized
-                    or "yahoo"
-                )
-                if fallback_feed_used and fallback_feed_used not in cache_key_candidates:
-                    cache_key_candidates.append(fallback_feed_used)
-                data_fetcher_module._cache_fallback(symbol, "yahoo")
-                _record_coverage_provider("yahoo")
-                coverage_window_start = fallback_start_dt
-            else:
-                logger.warning(
-                    "COVERAGE_RECOVERY_INSUFFICIENT",
-                    extra={
-                        "symbol": symbol,
-                        "expected_bars": fallback_expected_bars,
-                        "prev_bars": primary_actual_bars,
-                        "new_bars": yahoo_bars,
-                    },
-                )
-                fallback_feed = "yahoo"
-                fallback_provider = "yahoo"
+                except COMMON_EXC as exc:  # pragma: no cover - diagnostics only
+                    logger.debug(
+                        "BACKUP_PROVIDER_FAILED",
+                        extra={"provider": "yahoo", "symbol": symbol, "error": str(exc)},
+                    )
+                    yahoo_df = None
+
+                if yahoo_df is not None and not getattr(yahoo_df, "empty", True):
+                    yahoo_df = _sanitize_minute_df(
+                        yahoo_df,
+                        symbol=symbol,
+                        current_now=now_utc,
+                    )
+                    try:
+                        yahoo_bars = int(len(yahoo_df))
+                    except COMMON_EXC:
+                        yahoo_bars = 0
+                else:
+                    yahoo_bars = 0
+                    yahoo_df = None
+
+                if yahoo_df is not None and yahoo_bars > primary_actual_bars:
+                    provider_override, feed_override = _df_provider_info(yahoo_df)
+                    resolved_feed = feed_override or "yahoo"
+                    resolved_provider = provider_override or "yahoo"
+                    prev_expected = max(primary_expected_bars or expected_bars or 0, 1)
+                    prev_cov = (
+                        primary_actual_bars / prev_expected if prev_expected else 0.0
+                    )
+                    new_cov = yahoo_bars / max(fallback_expected_bars, 1)
+                    event_name = _coverage_recovery_event(resolved_feed)
+                    logger.warning(
+                        event_name,
+                        extra={
+                            "symbol": symbol,
+                            "prev_feed": current_feed,
+                            "prev_cov": round(prev_cov, 4),
+                            "new_feed": resolved_feed,
+                            "new_cov": round(new_cov, 4),
+                            "expected_bars": fallback_expected_bars,
+                            "prev_bars": primary_actual_bars,
+                            "new_bars": yahoo_bars,
+                        },
+                    )
+                    coverage_recovery_logged = True
+                    df = yahoo_df
+                    start_dt = fallback_start_dt
+                    expected_bars = fallback_expected_bars
+                    fallback_window_minutes = _window_minutes(fallback_start_dt, end_dt)
+                    coverage = _coverage_metrics(
+                        df,
+                        expected=expected_bars,
+                        intraday_requirement=intraday_lookback,
+                        feed="yahoo",
+                        window_minutes=fallback_window_minutes,
+                    )
+                    actual_bars = _coerce_int(coverage["actual"], 0)
+                    coverage_threshold = _coerce_int(coverage["threshold"], 0)
+                    coverage_cutoff = _coerce_int(
+                        coverage.get("cutoff", intraday_lookback),
+                        intraday_lookback,
+                    )
+                    materially_short = bool(coverage["materially_short"])
+                    insufficient_intraday = bool(coverage["insufficient_intraday"])
+                    low_coverage = bool(coverage["low_coverage"])
+                    fallback_used = True
+                    fallback_feed = "yahoo"
+                    fallback_provider = resolved_provider
+                    active_feed = "yahoo"
+                    coverage_window_start = fallback_start_dt
+                    if coverage_warning_context is not None:
+                        coverage_warning_context.update(
+                            {
+                                "window_minutes": fallback_window_minutes,
+                                "coverage_threshold": coverage_threshold,
+                                "coverage_cutoff": coverage_cutoff,
+                                "threshold_scale": coverage.get("threshold_scale", 1.0),
+                                "intraday_scale": coverage.get("intraday_scale", 1.0),
+                            }
+                        )
+                    (
+                        _fallback_sanitized,
+                        _fallback_normalized,
+                        _fallback_cached,
+                    ) = _cache_cycle_fallback_feed_helper("yahoo", symbol=symbol)
+                    try:
+                        _cache_cycle_fallback_feed("yahoo", symbol=symbol)
+                    except TypeError:
+                        _cache_cycle_fallback_feed("yahoo")
+                    fallback_feed_used = (
+                        _fallback_cached
+                        or _fallback_sanitized
+                        or _fallback_normalized
+                        or "yahoo"
+                    )
+                    if fallback_feed_used and fallback_feed_used not in cache_key_candidates:
+                        cache_key_candidates.append(fallback_feed_used)
+                    data_fetcher_module._cache_fallback(symbol, "yahoo")
+                    _record_coverage_provider("yahoo")
+                    coverage_window_start = fallback_start_dt
+                else:
+                    logger.warning(
+                        "COVERAGE_RECOVERY_INSUFFICIENT",
+                        extra={
+                            "symbol": symbol,
+                            "expected_bars": fallback_expected_bars,
+                            "prev_bars": primary_actual_bars,
+                            "new_bars": yahoo_bars,
+                        },
+                    )
+                    fallback_feed = "yahoo"
+                    fallback_provider = "yahoo"
 
         if (
             (coverage_warning_context is not None or fallback_attempted)
@@ -31312,11 +31329,31 @@ def _ensure_executable_quote(
         require_bid_ask = bool(getattr(cfg, "execution_require_bid_ask", True))
     require_realtime_nbbo = bool(getattr(cfg, "execution_require_realtime_nbbo", True))
     allow_last_close = bool(getattr(cfg, "execution_allow_last_close", False))
+    execution_mode = str(
+        getattr(ctx, "execution_mode", get_env("EXECUTION_MODE", "paper", cast=str))
+        or "paper"
+    ).strip().lower()
     if allow_reference_fallback:
         allow_last_close = True
     if data_client is None or not _stock_quote_request_ready():
-        # Without a data client or request support we cannot enforce the gate; defer to existing guards.
-        return QuoteGateDecision(True, None, {})
+        support_details = {
+            "data_client_present": data_client is not None,
+            "quote_request_ready": bool(_stock_quote_request_ready()),
+            "execution_mode": execution_mode,
+        }
+        if execution_mode == "live" and (require_bid_ask or require_realtime_nbbo):
+            runtime_state.update_quote_status(
+                allowed=False,
+                reason="quote_support_unavailable",
+                age_sec=None,
+                synthetic=False,
+                bid=None,
+                ask=None,
+                status="unavailable",
+            )
+            return QuoteGateDecision(False, "quote_support_unavailable", support_details)
+        # Outside live execution we can defer to the remaining guards.
+        return QuoteGateDecision(True, None, support_details)
 
     max_age = float(getattr(cfg, "execution_max_staleness_sec", 60) or 60)
     gap_limit = float(getattr(cfg, "gap_ratio_limit", 0.0) or 0.0)
@@ -40932,6 +40969,9 @@ def get_latest_price(
             for provider in provider_order
             if not _is_primary_price_source(provider)
         )
+    live_yahoo_blocked = _live_execution_blocks_yahoo_fallback()
+    if live_yahoo_blocked:
+        provider_order = tuple(provider for provider in provider_order if provider != "yahoo")
 
     cache: dict[str, Any] = {}
     primary_providers_required: set[str] = {
@@ -41075,7 +41115,7 @@ def get_latest_price(
         alpaca_feed = None
 
     if not provider_order:
-        provider_order = ("yahoo", "bars")
+        provider_order = ("bars",) if live_yahoo_blocked else ("yahoo", "bars")
 
     has_primary_providers = any(_is_primary_price_source(p) for p in provider_order)
 
@@ -41489,6 +41529,9 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     use_alpaca = not skip_alpaca
 
     provider_order = _get_price_provider_order()
+    live_yahoo_blocked = _live_execution_blocks_yahoo_fallback()
+    if live_yahoo_blocked:
+        provider_order = tuple(provider for provider in provider_order if provider != "yahoo")
     if use_alpaca and not any(p.startswith("alpaca") for p in provider_order):
         provider_order = (
             "alpaca_quote",
@@ -41502,17 +41545,19 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                 continue
             if provider not in filtered_order:
                 filtered_order.append(provider)
-        if "yahoo" in filtered_order:
+        if live_yahoo_blocked:
+            filtered_order = [provider for provider in filtered_order if provider != "yahoo"]
+        elif "yahoo" in filtered_order:
             yahoo_index = filtered_order.index("yahoo")
             if yahoo_index != 0:
                 filtered_order.insert(0, filtered_order.pop(yahoo_index))
-        else:
+        elif not live_yahoo_blocked:
             filtered_order.insert(0, "yahoo")
         provider_order = tuple(filtered_order)
         if pytest_running and (invalid_alpaca_feed or sip_locked):
             force_yahoo_only = True
     backup_fetch_fn = getattr(data_fetcher_module, "_backup_get_bars", None)
-    if force_yahoo_only:
+    if force_yahoo_only or live_yahoo_blocked:
         backup_fetch_fn = None
     backup_checked = False
     cache: dict[str, Any] = {}

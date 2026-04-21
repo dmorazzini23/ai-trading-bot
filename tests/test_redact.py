@@ -16,3 +16,14 @@ def test_redact_masks_nested() -> None:
     assert out["nested"]["token"] == "***REDACTED***"
     assert out["pwd"] == "not-masked"
 
+
+def test_redact_masks_connection_strings() -> None:
+    payload = {
+        "connection_string": "postgresql://user:secret@example.com/trading",
+        "dsn": "postgresql://user:secret@example.com/trading",
+    }
+
+    out = redact(payload)
+
+    assert out["connection_string"] == "***REDACTED***"
+    assert out["dsn"] == "***REDACTED***"

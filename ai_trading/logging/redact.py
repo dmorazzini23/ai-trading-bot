@@ -7,7 +7,10 @@ from copy import deepcopy
 import re
 from typing import Any, cast
 
-_RE_KEYS = re.compile("(key|secret|token|password)", re.IGNORECASE)
+_RE_KEYS = re.compile(
+    "(key|secret|token|password|connection[_-]?string|database[_-]?url|dsn)",
+    re.IGNORECASE,
+)
 _MASK = "***REDACTED***"
 _ENV_MASK = "***"
 

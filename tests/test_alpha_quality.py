@@ -147,9 +147,11 @@ def test_model_registry():
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
 
-            # Create a mock model
-            mock_model = Mock()
-            mock_model.__class__.__name__ = "MockModel"
+            model_descriptor = {
+                "model_kind": "mock_descriptor",
+                "version": 1,
+                "status": "registered",
+            }
 
             metadata = {
                 "training_date": "2024-01-01",
@@ -159,7 +161,7 @@ def test_model_registry():
 
             # Register model
             model_id = registry.register_model(
-                model=mock_model,
+                model=model_descriptor,
                 strategy="test_strategy",
                 model_type="mock",
                 metadata=metadata
@@ -170,6 +172,7 @@ def test_model_registry():
 
             # Load model back
             loaded_model, loaded_metadata = registry.load_model(model_id)
+            assert loaded_model == model_descriptor, "JSON-safe model descriptor should round-trip"
             assert loaded_metadata["cv_score"] == 0.85, "Metadata should be preserved"
 
             # Test listing models

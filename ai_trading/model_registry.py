@@ -11,12 +11,10 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
-import pickle
 import re
 import time
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from json import JSONDecodeError
 from pathlib import Path
@@ -25,7 +23,6 @@ from typing import Any
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 from ai_trading.paths import MODELS_DIR
-from ai_trading.utils.safe_pickle import require_unsafe_model_deserialization
 
 logger = get_logger(__name__)
 
@@ -116,21 +113,12 @@ def list_evaluations(symbol: str, limit: int = 100) -> list[dict[str, Any]]:
 # Rich model registry implementation
 
 
-@dataclass
-class _Pickler:
-    """Pickle helper wiring serialize/deserialize callables."""
-
-    name: str
-    dumps: Any
-    loads: Any
-
-
 class ModelRegistry:
     """Filesystem-backed model registry with metadata and governance helpers."""
 
     _DEFAULT_INDEX_NAME = "registry_index.json"
     _MODELS_DIRNAME = "models"
-    _ARTIFACT_FILENAME = "model.pkl"
+    _ARTIFACT_FILENAME = "model.json"
     _META_FILENAME = "meta.json"
 
     def __init__(
@@ -188,41 +176,6 @@ class ModelRegistry:
             logger.debug("MODEL_REGISTRY_INDEX_WRITE_FAILED", exc_info=True)
 
     @staticmethod
-    def _available_picklers() -> list[_Pickler]:
-        picklers: list[_Pickler] = [
-            _Pickler(
-                "pickle",
-                lambda obj: pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL),
-                pickle.loads,
-            )
-        ]
-        try:
-            import cloudpickle
-        except ImportError:
-            cloudpickle = None  # type: ignore[assignment]
-        if cloudpickle is not None:
-            picklers.append(
-                _Pickler(
-                    "cloudpickle",
-                    lambda obj, _cp=cloudpickle: _cp.dumps(obj),
-                    lambda data, _cp=cloudpickle: _cp.loads(data),
-                )
-            )
-        try:
-            import dill
-        except ImportError:
-            dill = None  # type: ignore[assignment]
-        if dill is not None:
-            picklers.append(
-                _Pickler(
-                    "dill",
-                    lambda obj, _dill=dill: _dill.dumps(obj),
-                    lambda data, _dill=dill: _dill.loads(data),
-                )
-            )
-        return picklers
-
-    @staticmethod
     def _slug(value: str) -> str:
         cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "_", value.strip())
         cleaned = cleaned.strip("._-")
@@ -258,35 +211,56 @@ class ModelRegistry:
             cleaned.append(str(tag))
         return cleaned
 
-    def _serialise_model(self, model: Any) -> tuple[bytes, str]:
-        errors: list[str] = []
-        for pickler in self._available_picklers():
-            try:
-                payload = pickler.dumps(model)
-            except Exception as exc:  # noqa: BLE001 - convert to summary later
-                errors.append(f"{pickler.name}: {exc}")
-                continue
-            return payload, pickler.name
-        mock_type: type[Any] | None = None
+    @staticmethod
+    def _artifact_reference_from_mapping(value: Any) -> str | None:
+        if not isinstance(value, Mapping):
+            return None
+        for key in ("artifact_path", "model_path"):
+            candidate = str(value.get(key, "") or "").strip()
+            if candidate:
+                return candidate
+        nested_paths = value.get("paths")
+        if isinstance(nested_paths, Mapping):
+            for key in ("artifact_path", "model_path"):
+                candidate = str(nested_paths.get(key, "") or "").strip()
+                if candidate:
+                    return candidate
+        return None
+
+    def _extract_external_artifact_path(
+        self,
+        model: Any,
+        metadata: Mapping[str, Any] | None,
+    ) -> str | None:
+        for candidate in (
+            self._artifact_reference_from_mapping(metadata),
+            self._artifact_reference_from_mapping(model),
+        ):
+            if candidate:
+                return candidate
+        return None
+
+    @staticmethod
+    def _artifact_hash_for_path(raw_path: str) -> str:
+        path = Path(raw_path).expanduser()
         try:
-            from unittest.mock import Mock as _ImportedMock
-            mock_type = _ImportedMock
-        except ImportError:  # pragma: no cover - stdlib always available
-            pass
-        if mock_type is not None and isinstance(model, mock_type):
-            mock_payload = {
-                "__registry__": "mock",
-                "repr": repr(model),
-                "name": getattr(model, "_mock_name", None),
-            }
-            try:
-                payload = pickle.dumps(mock_payload, protocol=pickle.HIGHEST_PROTOCOL)
-            except Exception as exc:  # noqa: BLE001 - normalized below
-                errors.append(f"mock: {exc}")
-            else:
-                return payload, "mock"
-        message = "; ".join(errors) or "unknown"
-        raise RuntimeError(f"Model not picklable ({message})")
+            if path.is_file():
+                return hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            logger.debug("MODEL_REGISTRY_ARTIFACT_HASH_FAILED", exc_info=True)
+        return hashlib.sha256(str(path).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _serialise_inline_model(model: Any) -> tuple[bytes, str]:
+        try:
+            payload = json.dumps(model, indent=2, sort_keys=True).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "Model registry no longer serializes arbitrary Python objects. "
+                "Provide a JSON-safe inline model or an approved artifact path via "
+                "metadata['model_path'] / metadata['artifact_path']."
+            ) from exc
+        return payload, "json"
 
     @staticmethod
     def _convert_metadata_value(value: Any) -> Any:
@@ -372,11 +346,17 @@ class ModelRegistry:
         tags: Sequence[str] | None = None,
         activate: bool = True,
     ) -> str:
-        payload, pickler_name = self._serialise_model(model)
-        model_hash = hashlib.sha256(payload).hexdigest()
-
         registered_at = datetime.now(UTC)
         dataset_fp = str(dataset_fingerprint) if dataset_fingerprint is not None else None
+        external_artifact_path = self._extract_external_artifact_path(model, metadata)
+        payload: bytes | None = None
+        artifact_format: str
+        if external_artifact_path:
+            artifact_format = "external_path"
+            model_hash = self._artifact_hash_for_path(external_artifact_path)
+        else:
+            payload, artifact_format = self._serialise_inline_model(model)
+            model_hash = hashlib.sha256(payload).hexdigest()
 
         for _attempt in range(64):
             model_id = self._generate_model_id(strategy, model_type, model_hash, registered_at)
@@ -389,8 +369,11 @@ class ModelRegistry:
                 break
         else:
             raise RuntimeError("Failed to allocate unique model registry directory")
-        artifact_path = model_dir / self._ARTIFACT_FILENAME
-        artifact_path.write_bytes(payload)
+        if external_artifact_path:
+            artifact_path = Path(external_artifact_path).expanduser()
+        else:
+            artifact_path = model_dir / self._ARTIFACT_FILENAME
+            artifact_path.write_bytes(payload or b"")
 
         sanitised_metadata = {
             str(key): self._convert_metadata_value(val)
@@ -413,8 +396,8 @@ class ModelRegistry:
             "registered_seq": int(next_seq),
             "path": str(model_dir),
             "artifact_path": str(artifact_path),
+            "artifact_format": artifact_format,
             "active": bool(activate),
-            "pickler": pickler_name,
             "model_hash": model_hash,
             "dataset_fingerprint": dataset_fp,
             "tags": tags_list,
@@ -451,12 +434,6 @@ class ModelRegistry:
         )
         return latest_id
 
-    def _iter_loaders(self, preferred: str | None) -> Iterable[_Pickler]:
-        picklers = self._available_picklers()
-        if preferred:
-            picklers.sort(key=lambda p: 0 if p.name == preferred else 1)
-        return picklers
-
     def load_model(
         self,
         model_id: str,
@@ -485,6 +462,8 @@ class ModelRegistry:
             "dataset_fingerprint": info.get("dataset_fingerprint"),
             "tags": list(info.get("tags", [])),
             "governance": meta_payload.get("governance", info.get("governance", {})),
+            "artifact_path": str(artifact_path),
+            "artifact_format": str(info.get("artifact_format", "json") or "json"),
         }
 
         if verify_dataset_hash:
@@ -495,32 +474,16 @@ class ModelRegistry:
             if expected is None or actual != expected:
                 raise ValueError("Dataset fingerprint mismatch")
 
-        require_unsafe_model_deserialization(scope="ModelRegistry.load_model")
-        raw_bytes = artifact_path.read_bytes()
-        if info.get("pickler") == "mock":
+        artifact_format = str(info.get("artifact_format", "json") or "json").strip().lower()
+        if artifact_format == "external_path":
+            return None, combined_meta
+        if artifact_format == "json":
             try:
-                payload = pickle.loads(raw_bytes)
-            except Exception:  # pragma: no cover - defensive
-                logger.debug("MODEL_REGISTRY_MOCK_LOAD_FAILED", exc_info=True)
-                model = None
-            else:
-                try:
-                    from unittest.mock import Mock
-                except ImportError:  # pragma: no cover - stdlib always available
-                    model = None
-                else:
-                    model = Mock(name=payload.get("name") or payload.get("repr"))
-            return model, combined_meta
-        last_error: Exception | None = None
-        for pickler in self._iter_loaders(info.get("pickler")):
-            try:
-                model = pickler.loads(raw_bytes)
-                return model, combined_meta
-            except Exception as exc:  # noqa: BLE001 - propagate in summary
-                last_error = exc
-                continue
+                return json.loads(artifact_path.read_text()), combined_meta
+            except (OSError, JSONDecodeError) as exc:
+                raise RuntimeError(f"Failed to load model {model_id}: {exc}") from exc
         raise RuntimeError(
-            f"Failed to load model {model_id}: {last_error or 'no compatible loader'}"
+            f"Failed to load model {model_id}: unsupported artifact format '{artifact_format}'"
         )
 
     def list_models(

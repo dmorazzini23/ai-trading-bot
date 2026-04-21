@@ -286,6 +286,24 @@ def _validate_startup_config() -> _StartupConfig:
             )
             raise SystemExit(message)
 
+        backup_provider = (
+            _env_text("BACKUP_DATA_PROVIDER").strip().lower()
+            or _env_text("BACKUP_PROVIDER").strip().lower()
+        )
+        if backup_provider == "yahoo":
+            message = (
+                "Invalid configuration: live mode does not permit Yahoo as a backup "
+                "market-data provider."
+            )
+            logger.error(
+                "LIVE_BACKUP_PROVIDER_YAHOO_FORBIDDEN",
+                extra={
+                    "execution_mode": execution_mode,
+                    "backup_provider": backup_provider,
+                },
+            )
+            raise SystemExit(message)
+
     # Capture an explicit feed override from the environment before consulting
     # the settings defaults. ``get_env`` would otherwise coerce invalid feeds to
     # a default, preventing ``_StartupConfig`` from surfacing configuration

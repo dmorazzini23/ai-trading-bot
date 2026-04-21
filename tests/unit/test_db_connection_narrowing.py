@@ -62,3 +62,23 @@ def test_initialize_database_global_session_lifecycle(tmp_path: Path) -> None:
             assert payload["rows"][0]["ok"] == 1
     finally:
         db_connection.shutdown_database()
+
+
+def test_get_connection_info_redacts_credentials() -> None:
+    db = db_connection.DatabaseManager("postgresql://user:secret@example.com/trading")
+
+    info = db.get_connection_info()
+
+    rendered = str(info["connection_string"])
+    assert rendered.startswith("postgresql")
+    assert rendered.endswith("@example.com/trading")
+    assert "***" in rendered
+    assert "secret" not in rendered
+
+
+def test_connect_fails_closed_when_legacy_schema_missing_without_bootstrap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(db_connection, "is_test_runtime", lambda: False)
+    with pytest.raises(RuntimeError, match="retired outside tests"):
+        db_connection.DatabaseManager("sqlite:///:memory:")

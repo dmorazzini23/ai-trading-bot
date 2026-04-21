@@ -284,6 +284,34 @@ def test_get_latest_price_uses_fallback_when_sip_lockout(monkeypatch):
     assert bot_engine._PRICE_SOURCE[symbol] == "yahoo"
 
 
+def test_get_latest_price_live_mode_blocks_yahoo_fallback(monkeypatch):
+    symbol = "SPY"
+    bot_engine._reset_cycle_cache()
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine.is_alpaca_service_available", lambda: False
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_get_price_provider_order",
+        lambda: ("alpaca_trade", "yahoo", "bars"),
+    )
+
+    yahoo_calls: list[str] = []
+
+    def _unexpected_yahoo(_symbol: str):
+        yahoo_calls.append(_symbol)
+        return 123.45, "yahoo"
+
+    monkeypatch.setattr(bot_engine, "_attempt_yahoo_price", _unexpected_yahoo)
+    monkeypatch.setattr(bot_engine, "_attempt_bars_price", lambda _s: (None, "bars_invalid"))
+
+    price = bot_engine.get_latest_price(symbol)
+
+    assert price is None
+    assert yahoo_calls == []
+
+
 def test_get_latest_price_resumes_primary_after_sip_lockout_cleared(monkeypatch):
     symbol = "QQQ"
     bot_engine._reset_cycle_cache()

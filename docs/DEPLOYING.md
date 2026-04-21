@@ -44,14 +44,15 @@ Optional feed controls:
 - `ALPACA_HAS_SIP=1`
 - `ALPACA_FEED_FAILOVER=sip,iex`
 - `ALPACA_EMPTY_TO_BACKUP=1`
-- `BACKUP_DATA_PROVIDER=yahoo|finnhub|finnhub_low_latency|none`
+- `BACKUP_DATA_PROVIDER=finnhub|finnhub_low_latency|none`
 
 Production execution note:
 
 - Live opening orders fail closed unless they have an approved real-time broker
-  NBBO execution quote. Backup providers such as Yahoo or Finnhub may still be
-  used for reference or degraded analytics paths, but they are not approved
-  live opening-order quote sources.
+  NBBO execution quote. Yahoo is not permitted as a live execution backup data
+  source, and live execution now blocks Yahoo fallback in quote and minute-data
+  recovery paths.
+- Legacy non-netting live execution is blocked outside test runtimes.
 
 ## Packaged Services
 
@@ -105,7 +106,14 @@ When launching the standalone health app, `HEALTHCHECK_PORT` must differ from
 2. `python3 -m ai_trading.tools.env_validate`
 3. `journalctl -u ai-trading.service -n 200 --no-pager`
 4. `curl -s http://127.0.0.1:9001/healthz | jq .`
-5. `curl -s http://127.0.0.1:9001/operator/control-plane | jq .`
+5. `curl -s -H 'Authorization: Bearer <operator-token>' -H 'X-AI-Trading-Operator-Id: <operator-id>' http://127.0.0.1:9001/operator/control-plane | jq .`
+
+## Operator Access
+
+- Configure operator credentials with `AI_TRADING_OPERATOR_TOKEN_MAP`, not a
+  shared bearer token.
+- All `/operator/*` endpoints now require an authenticated operator token plus
+  `X-AI-Trading-Operator-Id`.
 
 ## Additional Runtime Hardening
 
@@ -113,7 +121,9 @@ When launching the standalone health app, `HEALTHCHECK_PORT` must differ from
   `runtime/pretrade_rate_limiter.db`. Override with
   `AI_TRADING_PRETRADE_RATE_LIMITER_PATH` only when pointing to a shared durable
   runtime volume.
-- Generic pickle/cloudpickle/dill model deserialization is blocked by default
-  outside test runtimes. Only enable
-  `AI_TRADING_ALLOW_UNSAFE_MODEL_DESERIALIZATION=1` for controlled research or
-  migration workflows.
+- Generic pickle/cloudpickle/dill model deserialization is retired from the
+  supported runtime/model-registry path.
+- `ai_trading.ml.model_io` and the rich model registry only accept JSON-safe
+  inline artifacts or explicit approved artifact paths.
+- The legacy database manager is retired outside tests; runtime durability uses
+  OMS-backed persistence only.

@@ -73,6 +73,7 @@ SIP-related controls:
 
 Backup market-data providers are not approved live opening-order quote sources.
 Live opening orders fail closed unless they have a real-time broker NBBO quote.
+Legacy non-netting live execution is blocked outside test runtimes.
 
 ## API Port Fail-Fast Semantics
 
@@ -92,5 +93,10 @@ uses `RestartPreventExitStatus=98`.
 ## Additional Hardening Defaults
 
 - Pretrade pacing persists to `runtime/pretrade_rate_limiter.db` by default outside tests.
-- Generic pickle/cloudpickle/dill model deserialization is blocked by default outside tests.
-  Only set `AI_TRADING_ALLOW_UNSAFE_MODEL_DESERIALIZATION=1` in controlled research or migration workflows.
+- Generic pickle/cloudpickle/dill model deserialization is retired from the
+  supported runtime/model-registry path.
+- Live mode does not permit Yahoo as a backup market-data provider.
+- Legacy database access is retired outside tests; runtime durability should use
+  OMS-backed stores only.
+- Operator access should use `AI_TRADING_OPERATOR_TOKEN_MAP` with per-operator
+  credentials rather than a shared bearer token.

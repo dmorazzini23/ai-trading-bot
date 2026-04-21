@@ -17,10 +17,11 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.engine import Engine
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
-from ai_trading.config.management import get_env
+from ai_trading.config.management import get_env, is_test_runtime
 from ai_trading.database.models import (
     Base as _LEGACY_MODEL_BASE,
     PerformanceMetric,
@@ -36,6 +37,27 @@ _MODEL_TABLES = {
     "RiskMetric": RiskMetric.__table__,
     "PerformanceMetric": PerformanceMetric.__table__,
 }
+
+
+def _redact_connection_string(connection_string: str) -> str:
+    raw = str(connection_string or "").strip()
+    if not raw:
+        return raw
+    try:
+        url = make_url(raw)
+    except Exception:
+        if "@" in raw and "://" in raw:
+            scheme, _, rest = raw.partition("://")
+            _, _, host = rest.rpartition("@")
+            return f"{scheme}://***REDACTED***@{host}"
+        return raw
+    if url.password is None:
+        return str(url)
+    return str(url.set(password="***REDACTED***"))
+
+
+def _legacy_database_runtime_allowed() -> bool:
+    return bool(is_test_runtime())
 
 
 def _normalize_database_url(connection_string: str | None) -> str:
@@ -57,6 +79,11 @@ class DatabaseManager:
     """Database connection manager with SQLAlchemy-backed sessions."""
 
     def __init__(self, connection_string: str | None = None, **kwargs: Any):
+        if not _legacy_database_runtime_allowed():
+            raise RuntimeError(
+                "Legacy database manager is retired outside tests. "
+                "Use the OMS intent/event stores for runtime durability."
+            )
         self.connection_string = _normalize_database_url(connection_string)
         self.pool_size = int(kwargs.get("pool_size", 20))
         self.max_overflow = int(kwargs.get("max_overflow", 10))
@@ -70,7 +97,7 @@ class DatabaseManager:
         self._session_factory: sessionmaker[Session] | None = None
         logger.info(
             "LEGACY_DATABASE_MANAGER_INITIALIZED",
-            extra={"connection_string": self.connection_string},
+            extra={"connection_string": _redact_connection_string(self.connection_string)},
         )
 
     def connect(self) -> bool:
@@ -160,7 +187,7 @@ class DatabaseManager:
         """Get current connection pool information."""
         backend = "sqlite" if self.connection_string.startswith("sqlite:") else "postgres"
         return {
-            "connection_string": self.connection_string,
+            "connection_string": _redact_connection_string(self.connection_string),
             "backend": backend,
             "is_connected": self._is_connected,
             "pool_size": self.pool_size,

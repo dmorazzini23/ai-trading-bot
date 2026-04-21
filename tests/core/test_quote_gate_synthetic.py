@@ -217,3 +217,24 @@ def test_gap_ratio_exceeded_uses_synthetic(monkeypatch):
     monkeypatch.delenv("GAP_RATIO_LIMIT", raising=False)
     reload_trading_config()
 
+
+def test_live_quote_gate_fails_closed_when_quote_support_unavailable(monkeypatch):
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    reload_trading_config()
+    ctx = SimpleNamespace(data_client=None, execution_mode="live")
+    monkeypatch.setattr(bot_engine, "_stock_quote_request_ready", lambda: False)
+
+    decision = bot_engine._ensure_executable_quote(
+        cast(Any, ctx),
+        "AAPL",
+        reference_price=150.0,
+    )
+
+    assert not decision
+    assert decision.reason == "quote_support_unavailable"
+    quote_state = runtime_state.observe_quote_status()
+    assert quote_state["allowed"] is False
+    assert quote_state["reason"] == "quote_support_unavailable"
+
+    monkeypatch.delenv("EXECUTION_MODE", raising=False)
+    reload_trading_config()

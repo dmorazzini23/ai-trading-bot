@@ -305,6 +305,40 @@ def _parse_operator_allowlist(name: str) -> set[str]:
     }
 
 
+def _parse_operator_token_map() -> dict[str, str]:
+    raw = str(_managed_env("AI_TRADING_OPERATOR_TOKEN_MAP", "") or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed_payload = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed_payload = None
+    if isinstance(parsed_payload, Mapping):
+        parsed: dict[str, str] = {}
+        for key, value in parsed_payload.items():
+            operator_id = str(key or "").strip().lower()
+            token = str(value or "").strip()
+            if operator_id and token:
+                parsed[operator_id] = token
+        return parsed
+    parsed_fallback: dict[str, str] = {}
+    for item in raw.split(","):
+        token = str(item or "").strip()
+        if not token:
+            continue
+        if "=" in token:
+            operator_id, secret = token.split("=", 1)
+        elif ":" in token:
+            operator_id, secret = token.split(":", 1)
+        else:
+            continue
+        operator_key = str(operator_id or "").strip().lower()
+        secret_value = str(secret or "").strip()
+        if operator_key and secret_value:
+            parsed_fallback[operator_key] = secret_value
+    return parsed_fallback
+
+
 def _authenticate_operator_request(
     *,
     scope: str,
@@ -312,7 +346,13 @@ def _authenticate_operator_request(
     require_allowlist: bool = False,
 ) -> tuple[str | None, dict[str, Any] | None, int]:
     configured_token = str(_managed_env("AI_TRADING_OPERATOR_API_TOKEN", "") or "").strip()
-    if not configured_token:
+    token_map = _parse_operator_token_map()
+    allow_shared_token = bool(
+        _pytest_active()
+        or str(_managed_env("AI_TRADING_ALLOW_SHARED_OPERATOR_TOKEN", "") or "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    if not token_map and not configured_token:
         _log.error("OPERATOR_AUTH_MISCONFIGURED", extra={"scope": scope})
         return (
             None,
@@ -332,17 +372,7 @@ def _authenticate_operator_request(
             {"ok": False, "error": "operator authentication required"},
             401,
         )
-    if not hmac.compare_digest(str(token).strip(), configured_token):
-        _log.warning(
-            "OPERATOR_AUTH_REJECTED",
-            extra={"scope": scope, "reason": "invalid_bearer_token"},
-        )
-        return (
-            None,
-            {"ok": False, "error": "operator authentication rejected"},
-            403,
-        )
-
+    token_value = str(token).strip()
     operator_id = _request_header("X-AI-Trading-Operator-Id") or _request_header("X-Operator-Id")
     operator_id = str(operator_id or "").strip()
     if not operator_id:
@@ -354,6 +384,43 @@ def _authenticate_operator_request(
             None,
             {"ok": False, "error": "operator identity header required"},
             400,
+        )
+
+    expected_token = token_map.get(operator_id.lower())
+    if token_map:
+        if not expected_token:
+            _log.warning(
+                "OPERATOR_AUTHZ_REJECTED",
+                extra={"scope": scope, "operator_id": operator_id, "reason": "unknown_operator"},
+            )
+            return (
+                None,
+                {"ok": False, "error": "operator is not authorized for this action"},
+                403,
+            )
+        token_ok = hmac.compare_digest(token_value, expected_token)
+    elif configured_token and allow_shared_token:
+        token_ok = hmac.compare_digest(token_value, configured_token)
+    else:
+        _log.error(
+            "OPERATOR_AUTH_MISCONFIGURED",
+            extra={"scope": scope, "reason": "token_binding_required"},
+        )
+        return (
+            None,
+            {"ok": False, "error": "operator identity binding is not configured"},
+            503,
+        )
+
+    if not token_ok:
+        _log.warning(
+            "OPERATOR_AUTH_REJECTED",
+            extra={"scope": scope, "reason": "invalid_bearer_token"},
+        )
+        return (
+            None,
+            {"ok": False, "error": "operator authentication rejected"},
+            403,
         )
 
     if allowlist_env:
@@ -379,6 +446,17 @@ def _authenticate_operator_request(
                 403,
             )
     return operator_id, None, 200
+
+
+def _authenticate_operator_read_request(
+    *,
+    scope: str,
+) -> tuple[str | None, dict[str, Any] | None, int]:
+    return _authenticate_operator_request(
+        scope=scope,
+        allowlist_env="AI_TRADING_OPERATOR_READERS",
+        require_allowlist=False,
+    )
 
 
 def suppress_flask_startup_noise() -> None:
@@ -666,10 +744,21 @@ def create_app():
                 return response
         return payload if status == 200 else (payload, status)
 
+    def _require_operator_read_auth(scope: str) -> Any | None:
+        _operator_id, auth_error_payload, auth_status = _authenticate_operator_read_request(
+            scope=scope,
+        )
+        if auth_error_payload is not None:
+            return _safe_response(auth_error_payload, status=auth_status)
+        return None
+
     @app.route("/operator/presets")
     def operator_presets() -> Any:
         """Expose preset choices for operator-driven no-code configuration."""
 
+        auth_response = _require_operator_read_auth("operator_presets_read")
+        if auth_response is not None:
+            return auth_response
         try:
             from ai_trading.operator_presets import list_presets
             payload = {"ok": True, "presets": list_presets()}
@@ -682,6 +771,9 @@ def create_app():
     def operator_plan() -> Any:
         """Return a default guarded plan for lightweight operator workflows."""
 
+        auth_response = _require_operator_read_auth("operator_plan_read")
+        if auth_response is not None:
+            return auth_response
         try:
             from ai_trading.operator_presets import PresetValidationError, build_plan
             plan = build_plan("balanced")
@@ -694,6 +786,9 @@ def create_app():
     def operator_control_plane_snapshot() -> Any:
         """Return a consolidated runtime control-plane snapshot for operators."""
 
+        auth_response = _require_operator_read_auth("operator_control_plane_read")
+        if auth_response is not None:
+            return auth_response
         try:
             snapshot = ControlPlaneService(service_name=_SERVICE_NAME).snapshot()
             return _safe_response({"ok": True, "snapshot": snapshot}, status=200)
@@ -707,6 +802,9 @@ def create_app():
     def _operator_control_plane_section_response(section: str) -> Any:
         """Return an operator-facing control-plane section by canonical name."""
 
+        auth_response = _require_operator_read_auth(f"operator_control_plane_section_read:{section}")
+        if auth_response is not None:
+            return auth_response
         try:
             payload = ControlPlaneService(service_name=_SERVICE_NAME).section(section)
             return _safe_response({"ok": True, "section": section, "data": payload}, status=200)
@@ -837,6 +935,9 @@ def create_app():
     def operator_governance_snapshot() -> Any:
         """Return governance approvals/scorecards/rollback audit snapshot."""
 
+        auth_response = _require_operator_read_auth("operator_governance_read")
+        if auth_response is not None:
+            return auth_response
         try:
             governance = GovernanceService(
                 service_name=_SERVICE_NAME,

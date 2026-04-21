@@ -1,29 +1,24 @@
 """
 Tests for model registry functionality.
 """
+
 import json
-import pickle
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 from typing import cast
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
+
 from ai_trading.model_registry import ModelRegistry
-from ai_trading.utils import safe_pickle
 
 
 class TestModelRegistry:
     """Test model registry round-trip functionality."""
 
     def test_registry_roundtrip(self):
-        """Test register, latest_for, and load_model cycle."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Create registry in temp directory
             registry = ModelRegistry(temp_dir)
-
-            # Create a simple test model (using a dict as a trivial model)
             model = {"type": "test_model", "params": {"param1": 1.0}}
             strategy = "test_strategy"
             model_type = "test_type"
@@ -31,173 +26,114 @@ class TestModelRegistry:
             dataset_fingerprint = "test_fingerprint_123"
             tags = ["test", "unit_test"]
 
-            # Register the model
             model_id = registry.register_model(
                 model=model,
                 strategy=strategy,
                 model_type=model_type,
                 metadata=metadata,
                 dataset_fingerprint=dataset_fingerprint,
-                tags=tags
+                tags=tags,
             )
 
-            # Verify model ID is returned
             assert isinstance(model_id, str)
-            assert len(model_id) > 0
+            assert registry.latest_for(strategy, model_type) == model_id
 
-            # Test latest_for returns the correct ID
-            latest_id = registry.latest_for(strategy, model_type)
-            assert latest_id == model_id
-
-            # Test load_model returns correct data
             loaded_model, loaded_metadata = registry.load_model(model_id)
             assert loaded_model == model
             assert loaded_metadata["strategy"] == strategy
             assert loaded_metadata["model_type"] == model_type
             assert loaded_metadata["dataset_fingerprint"] == dataset_fingerprint
             assert loaded_metadata["tags"] == tags
-
-            # Verify metadata was merged correctly
             assert loaded_metadata["created_by"] == "test"
             assert loaded_metadata["version"] == "1.0"
+            assert loaded_metadata["artifact_format"] == "json"
 
     def test_index_file_creation(self):
-        """Test that index file is created and maintained."""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
-
-            # Register a model
-            model = {"test": "data"}
             model_id = registry.register_model(
-                model=model,
+                model={"test": "data"},
                 strategy="test_strategy",
-                model_type="test_type"
+                model_type="test_type",
             )
 
-            # Check that index file exists
             index_file = Path(temp_dir) / "registry_index.json"
             assert index_file.exists()
 
-            # Verify index contains our model
-            with open(index_file) as f:
-                index_data = json.load(f)
+            index_data = json.loads(index_file.read_text())
             assert model_id in index_data
             assert index_data[model_id]["strategy"] == "test_strategy"
 
     def test_dataset_fingerprint_verification(self):
-        """Test dataset fingerprint mismatch raises ValueError."""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
-
-            # Register model with fingerprint
-            model = {"test": "data"}
             model_id = registry.register_model(
-                model=model,
+                model={"test": "data"},
                 strategy="test_strategy",
                 model_type="test_type",
-                dataset_fingerprint="correct_fingerprint"
+                dataset_fingerprint="correct_fingerprint",
             )
 
-            # Loading with correct fingerprint should work
-            loaded_model, loaded_metadata = registry.load_model(
+            loaded_model, _loaded_metadata = registry.load_model(
                 model_id,
                 verify_dataset_hash=True,
-                expected_dataset_fingerprint="correct_fingerprint"
+                expected_dataset_fingerprint="correct_fingerprint",
             )
-            assert loaded_model == model
+            assert loaded_model == {"test": "data"}
 
-            # Loading with wrong fingerprint should raise ValueError
             with pytest.raises(ValueError, match="Dataset fingerprint mismatch"):
                 registry.load_model(
                     model_id,
                     verify_dataset_hash=True,
-                    expected_dataset_fingerprint="wrong_fingerprint"
+                    expected_dataset_fingerprint="wrong_fingerprint",
                 )
 
     def test_latest_for_empty_registry(self):
-        """Test latest_for returns None for non-existent models."""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
-
-            # Empty registry should return None
-            latest_id = registry.latest_for("nonexistent_strategy", "nonexistent_type")
-            assert latest_id is None
+            assert registry.latest_for("nonexistent_strategy", "nonexistent_type") is None
 
     def test_load_nonexistent_model(self):
-        """Test loading non-existent model raises FileNotFoundError."""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
-
             with pytest.raises(FileNotFoundError, match="Model nonexistent_id not found in registry"):
                 registry.load_model("nonexistent_id")
 
-    def test_model_not_picklable(self):
-        """Test that non-picklable models raise RuntimeError when all picklers fail."""
+    def test_model_not_json_safe_requires_artifact_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
+            with pytest.raises(RuntimeError, match="no longer serializes arbitrary Python objects"):
+                registry.register_model(
+                    model=object(),
+                    strategy="test_strategy",
+                    model_type="test_type",
+                )
 
-            model = object()
-
-            def fail(*_a, **_k):  # pragma: no cover - trivial
-                raise Exception("Cannot pickle this object")
-
-            failing_picklers = [
-                SimpleNamespace(name="primary", dumps=fail, loads=lambda data: data),
-                SimpleNamespace(name="fallback", dumps=fail, loads=lambda data: data),
-            ]
-
-            with pytest.raises(RuntimeError, match="Model not picklable"):
-                with patch.object(
-                    ModelRegistry,
-                    "_available_picklers",
-                    return_value=failing_picklers,
-                ):
-                    registry.register_model(
-                        model=model,
-                        strategy="test_strategy",
-                        model_type="test_type",
-                    )
-
-    def test_pickle_fallback(self):
-        """pickle failure should fall back to cloudpickle or dill."""
+    def test_external_artifact_registration_loads_metadata_only(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
-            model = {"a": 1}
+            external_artifact = Path(temp_dir) / "runtime" / "ml_latest.joblib"
+            external_artifact.parent.mkdir(parents=True, exist_ok=True)
+            external_artifact.write_bytes(b"joblib-artifact")
 
-            picklers = [
-                SimpleNamespace(
-                    name="primary",
-                    dumps=lambda _obj: (_ for _ in ()).throw(Exception("boom")),
-                    loads=lambda data: data,
-                ),
-                SimpleNamespace(name="fallback", dumps=pickle.dumps, loads=pickle.loads),
-            ]
+            model_id = registry.register_model(
+                model={"artifact_path": str(external_artifact), "artifact_kind": "joblib"},
+                strategy="ml_edge",
+                model_type="joblib",
+                metadata={"model_path": str(external_artifact), "version": 7},
+            )
 
-            with patch.object(ModelRegistry, "_available_picklers", return_value=picklers):
-                model_id = registry.register_model(model, "s", "t")
-            assert model_id in registry.model_index
-            assert registry.model_index[model_id]["pickler"] == "fallback"
-
-    def test_load_model_blocks_unsafe_deserialization_outside_test_runtime(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            registry = ModelRegistry(temp_dir)
-            model_id = registry.register_model({"a": 1}, "s", "t")
-            monkeypatch.setattr(safe_pickle, "is_test_runtime", lambda: False)
-            monkeypatch.delenv("AI_TRADING_ALLOW_UNSAFE_MODEL_DESERIALIZATION", raising=False)
-
-            with pytest.raises(RuntimeError, match="unsafe generic model deserialization"):
-                registry.load_model(model_id)
+            loaded_model, loaded_metadata = registry.load_model(model_id)
+            assert loaded_model is None
+            assert loaded_metadata["artifact_format"] == "external_path"
+            assert loaded_metadata["artifact_path"] == str(external_artifact)
+            assert loaded_metadata["version"] == 7
 
     def test_metadata_class_path_conversion(self):
-        """Metadata containing classes should be stored as dotted path."""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
-            model = {"a": 1}
             model_id = registry.register_model(
-                model=model,
+                model={"a": 1},
                 strategy="strat",
                 model_type="dict",
                 metadata={"cls": Mock},
@@ -206,13 +142,11 @@ class TestModelRegistry:
             assert meta["cls"] == "unittest.mock.Mock"
 
     def test_list_models_empty_registry(self):
-        """list_models returns an empty list when no models registered."""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
             assert registry.list_models() == []
 
     def test_list_models_populated_registry(self):
-        """list_models returns all registered model IDs."""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
             m1 = registry.register_model({"a": 1}, "s1", "t1")
@@ -221,40 +155,24 @@ class TestModelRegistry:
             assert sorted(model_ids) == sorted([m1, m2])
 
     def test_sequential_registration_updates_latest(self):
-        """Sequential registrations of identical payloads should succeed."""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
             model = {"a": 1}
 
-            first_id = registry.register_model(
-                model,
-                "s",
-                "t",
-                metadata={"version": 1},
-            )
-            second_id = registry.register_model(
-                model,
-                "s",
-                "t",
-                metadata={"version": 2},
-            )
+            first_id = registry.register_model(model, "s", "t", metadata={"version": 1})
+            second_id = registry.register_model(model, "s", "t", metadata={"version": 2})
 
             assert first_id != second_id
-
-            latest_id = registry.latest_for("s", "t")
-            assert latest_id == second_id
+            assert registry.latest_for("s", "t") == second_id
 
             _old_model, old_meta = registry.load_model(first_id)
-            assert old_meta["version"] == 1
-
             _new_model, new_meta = registry.load_model(second_id)
+            assert old_meta["version"] == 1
             assert new_meta["version"] == 2
 
     def test_get_production_model_returns_newest_registration(self):
-        """Production lookup should prefer the newest registered production model."""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
-
             older = registry.register_model({"a": 1}, "ml_edge", "dict")
             newer = registry.register_model({"a": 2}, "ml_edge", "dict")
             registry.update_governance_status(older, "production")
@@ -266,10 +184,8 @@ class TestModelRegistry:
             assert production[0] == newer
 
     def test_viable_production_lookup_skips_missing_artifacts(self):
-        """Viable production lookup should ignore stale production entries."""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
-
             viable = registry.register_model({"a": 1}, "ml_edge", "dict")
             stale = registry.register_model({"a": 2}, "ml_edge", "dict")
             registry.update_governance_status(viable, "production")
@@ -287,10 +203,8 @@ class TestModelRegistry:
             assert Path(info["production_path"]).is_file()
 
     def test_record_runtime_promotion_persists_runtime_path(self):
-        """Runtime promotion metadata should be durable and usable for viable lookup."""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
-
             model_id = registry.register_model({"a": 1}, "ml_edge", "dict")
             registry.update_governance_status(model_id, "production")
             artifact_path = Path(registry.model_index[model_id]["artifact_path"])

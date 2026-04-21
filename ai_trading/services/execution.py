@@ -3,7 +3,7 @@ from __future__ import annotations
 from json import JSONDecodeError
 from typing import Any
 
-from ai_trading.config.management import get_env
+from ai_trading.config.management import get_env, is_test_runtime
 
 
 class LegacyLiveExecutionBlockedError(RuntimeError):
@@ -18,7 +18,10 @@ def _execution_mode(ctx: Any) -> str:
 
 
 def _legacy_live_execution_allowed() -> bool:
-    return bool(get_env("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", False, cast=bool))
+    return bool(
+        is_test_runtime()
+        and get_env("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", False, cast=bool)
+    )
 
 
 class ExecutionService:

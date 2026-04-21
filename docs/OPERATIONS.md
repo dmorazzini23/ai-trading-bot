@@ -54,26 +54,30 @@ exits with status `98`, and the packaged systemd unit uses
 2. Confirm the current feed config:
    `python3 -c "from ai_trading.config.management import get_env; print(get_env('ALPACA_DATA_FEED'))"`
 3. Check the control-plane snapshot:
-   `curl -s http://127.0.0.1:9001/operator/control-plane | jq .`
+   `curl -s -H 'Authorization: Bearer <operator-token>' -H 'X-AI-Trading-Operator-Id: <operator-id>' http://127.0.0.1:9001/operator/control-plane | jq .`
 4. Check environment diagnostics:
    `curl -s http://127.0.0.1:9001/diag | jq .`
 
 ### Operator Mutation Auth
 
-Mutating operator endpoints now fail closed unless in-code auth is configured.
+All `/operator/*` endpoints now fail closed unless in-code auth is configured.
 
 - Required:
-  `AI_TRADING_OPERATOR_API_TOKEN`
+  `AI_TRADING_OPERATOR_TOKEN_MAP`
+  Example:
+  `{"ops@example.com":"<token-1>","approver@example.com":"<token-2>"}`
 - Optional scoped allowlists:
+  - `AI_TRADING_OPERATOR_READERS`
   - `AI_TRADING_OPERATOR_OVERRIDE_OPERATORS`
   - `AI_TRADING_OPERATOR_APPROVERS`
   - `AI_TRADING_OPERATOR_ROLLBACK_OPERATORS`
-- Mutating requests must send:
-  - `Authorization: Bearer <AI_TRADING_OPERATOR_API_TOKEN>`
+- Requests must send:
+  - `Authorization: Bearer <operator-specific-token>`
   - `X-AI-Trading-Operator-Id: <operator-id>`
 
-Do not rely on network placement alone for `/operator/control-plane/manual-overrides`,
-`/operator/governance/approval`, or `/operator/governance/rollback`.
+Do not rely on network placement alone for `/operator/control-plane`,
+`/operator/control-plane/manual-overrides`, `/operator/governance`, or the
+mutating governance routes.
 
 ### Live Durability Policy
 
@@ -82,11 +86,13 @@ Live mode now requires one authoritative durability path:
 - `AI_TRADING_OMS_INTENT_STORE_ENABLED=1`
 - `DATABASE_URL=postgresql+psycopg://...`
 - Live JSONL OMS ledgers are disabled in the hot path.
-- Legacy/non-netting live execution is blocked unless
-  `AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION=1` is set intentionally for a controlled drill.
+- Legacy/non-netting live execution is blocked in non-test runtimes.
 - Pretrade pacing persists by default at `runtime/pretrade_rate_limiter.db`; point
   `AI_TRADING_PRETRADE_RATE_LIMITER_PATH` at a shared durable runtime volume if
   you run supervised active/passive processes on the same host.
+- The legacy SQLAlchemy database manager is retired outside tests; do not use
+  the old `trades` / `portfolio` / `risk_metrics` / `performance_metrics`
+  schema for runtime durability.
 
 ### Canonical Topology
 
@@ -96,10 +102,10 @@ Live mode now requires one authoritative durability path:
 
 ### Model Artifact Loading
 
-- Generic pickle/cloudpickle/dill model deserialization is blocked by default
-  outside tests.
-- Only set `AI_TRADING_ALLOW_UNSAFE_MODEL_DESERIALIZATION=1` for controlled
-  research, migration, or offline recovery workflows.
+- Generic pickle/cloudpickle/dill model deserialization is retired from the
+  supported runtime/model-registry path.
+- Use JSON-safe inline artifacts or explicit approved model artifact paths
+  instead of generic Python object deserialization.
 
 ### Health and Control-Plane Signals
 

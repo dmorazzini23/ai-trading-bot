@@ -124,3 +124,20 @@ def test_live_mode_accepts_postgres_database_url(monkeypatch):
     cfg = _validate_startup_config()
     assert cfg.timeframe == "1Min"
     assert cfg.data_feed == "iex"
+
+
+def test_live_mode_rejects_yahoo_backup_provider(monkeypatch):
+    _clear_alias_env(monkeypatch)
+    monkeypatch.setenv("TIMEFRAME", "1Min")
+    monkeypatch.setenv("DATA_FEED", "iex")
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_ENABLED", "1")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://user:pass@db.example.com:5432/postgres",
+    )
+    monkeypatch.setenv("BACKUP_DATA_PROVIDER", "yahoo")
+    _clear_settings_cache()
+
+    with pytest.raises(SystemExit, match="does not permit Yahoo"):
+        _validate_startup_config()

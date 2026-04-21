@@ -33,12 +33,29 @@ def _delete(client, path: str):
     return client.open(path, method="DELETE", headers=_operator_headers())
 
 
+def _get(client, path: str):
+    get = getattr(client, "get", None)
+    if callable(get):
+        return get(path, headers=_operator_headers())
+    return client.open(path, method="GET", headers=_operator_headers())
+
+
+def _configure_operator_auth(
+    monkeypatch,
+    *,
+    operator_id: str = "ops@example.com",
+    token: str = "test-operator-token",
+) -> None:
+    monkeypatch.setenv("AI_TRADING_OPERATOR_TOKEN_MAP", json.dumps({operator_id: token}))
+
+
 def test_operator_presets_endpoint(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
     app = create_app()
     client = app.test_client()
 
-    response = client.get("/operator/presets")
+    response = _get(client, "/operator/presets")
 
     assert response.status_code == 200
     payload = response.get_json()
@@ -49,10 +66,11 @@ def test_operator_presets_endpoint(monkeypatch):
 
 def test_operator_plan_endpoint_returns_default_plan(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
     app = create_app()
     client = app.test_client()
 
-    response = client.get("/operator/plan")
+    response = _get(client, "/operator/plan")
 
     assert response.status_code == 200
     payload = response.get_json()
@@ -62,10 +80,11 @@ def test_operator_plan_endpoint_returns_default_plan(monkeypatch):
 
 def test_operator_control_plane_snapshot_endpoint(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
     app = create_app()
     client = app.test_client()
 
-    response = client.get("/operator/control-plane")
+    response = _get(client, "/operator/control-plane")
 
     assert response.status_code == 200
     payload = response.get_json()
@@ -94,10 +113,11 @@ def test_operator_control_plane_snapshot_endpoint(monkeypatch):
 
 def test_operator_control_plane_services_endpoint(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
     app = create_app()
     client = app.test_client()
 
-    response = client.get("/operator/control-plane/services")
+    response = _get(client, "/operator/control-plane/services")
 
     assert response.status_code == 200
     payload = response.get_json()
@@ -112,7 +132,7 @@ def test_operator_control_plane_services_endpoint(monkeypatch):
 
 def test_operator_manual_overrides_post_and_delete(monkeypatch, tmp_path):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
-    monkeypatch.setenv("AI_TRADING_OPERATOR_API_TOKEN", "test-operator-token")
+    _configure_operator_auth(monkeypatch)
     monkeypatch.setenv("AI_TRADING_OPERATOR_OVERRIDE_OPERATORS", "ops@example.com")
     toggle_path = tmp_path / "runtime" / "policy_runtime_toggles.json"
     monkeypatch.setenv("AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH", str(toggle_path))
@@ -148,7 +168,7 @@ def test_operator_manual_overrides_post_and_delete(monkeypatch, tmp_path):
 
 def test_operator_manual_overrides_requires_auth(monkeypatch, tmp_path):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
-    monkeypatch.setenv("AI_TRADING_OPERATOR_API_TOKEN", "test-operator-token")
+    _configure_operator_auth(monkeypatch)
     monkeypatch.setenv("AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH", str(tmp_path / "toggles.json"))
     app = create_app()
     client = app.test_client()
@@ -159,6 +179,41 @@ def test_operator_manual_overrides_requires_auth(monkeypatch, tmp_path):
     )
 
     assert response.status_code == 401
+    payload = response.get_json()
+    assert payload["ok"] is False
+
+
+def test_operator_read_endpoints_require_auth(monkeypatch):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
+    app = create_app()
+    client = app.test_client()
+
+    response = client.get("/operator/control-plane")
+
+    assert response.status_code == 401
+    payload = response.get_json()
+    assert payload["ok"] is False
+
+
+def test_operator_token_binding_rejects_impersonation(monkeypatch, tmp_path):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_OPERATOR_TOKEN_MAP",
+        json.dumps({"approver@example.com": "approver-token"}),
+    )
+    monkeypatch.setenv("AI_TRADING_OPERATOR_OVERRIDE_OPERATORS", "ops@example.com")
+    monkeypatch.setenv("AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH", str(tmp_path / "toggles.json"))
+    app = create_app()
+    client = app.test_client()
+
+    response = client.post(
+        "/operator/control-plane/manual-overrides",
+        json={"disabled_slices": ["gate:max_loss"]},
+        headers=_operator_headers(operator_id="ops@example.com", token="approver-token"),
+    )
+
+    assert response.status_code == 403
     payload = response.get_json()
     assert payload["ok"] is False
 
@@ -182,10 +237,11 @@ def test_operator_plan_builder_rejects_invalid_override():
 
 def test_operator_governance_snapshot_endpoint(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
     app = create_app()
     client = app.test_client()
 
-    response = client.get("/operator/governance")
+    response = _get(client, "/operator/governance")
 
     assert response.status_code == 200
     payload = response.get_json()
@@ -195,7 +251,7 @@ def test_operator_governance_snapshot_endpoint(monkeypatch):
 
 def test_operator_governance_approval_endpoint(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
-    monkeypatch.setenv("AI_TRADING_OPERATOR_API_TOKEN", "test-operator-token")
+    _configure_operator_auth(monkeypatch)
     monkeypatch.setenv("AI_TRADING_OPERATOR_APPROVERS", "ops@example.com")
     calls: dict[str, object] = {}
 
@@ -239,7 +295,7 @@ def test_operator_governance_approval_endpoint(monkeypatch):
 
 def test_operator_governance_approval_requires_allowlisted_operator(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
-    monkeypatch.setenv("AI_TRADING_OPERATOR_API_TOKEN", "test-operator-token")
+    _configure_operator_auth(monkeypatch)
     monkeypatch.setenv("AI_TRADING_OPERATOR_APPROVERS", "approver@example.com")
     app = create_app()
     client = app.test_client()
@@ -257,7 +313,7 @@ def test_operator_governance_approval_requires_allowlisted_operator(monkeypatch)
 
 def test_operator_governance_rollback_endpoint(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
-    monkeypatch.setenv("AI_TRADING_OPERATOR_API_TOKEN", "test-operator-token")
+    _configure_operator_auth(monkeypatch)
     monkeypatch.setenv("AI_TRADING_OPERATOR_ROLLBACK_OPERATORS", "ops@example.com")
 
     class _FakePromotion:

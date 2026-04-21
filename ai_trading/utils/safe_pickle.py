@@ -1,42 +1,29 @@
-"""Guarded helpers for generic pickle-style serialization."""
+"""Retired helpers for generic pickle-style serialization."""
 from __future__ import annotations
 
-from ai_trading.config.management import get_env, is_test_runtime
-
-try:  # pragma: no cover - optional dependency
-    import cloudpickle as _pickle  # type: ignore
-except Exception:  # pragma: no cover - fallback
-    import pickle as _pickle  # type: ignore
-
-
 def unsafe_model_deserialization_allowed() -> bool:
-    """Return whether generic runtime pickle-style loads are explicitly allowed."""
+    """Return whether generic runtime pickle-style loads are allowed."""
 
-    return bool(
-        is_test_runtime()
-        or get_env("AI_TRADING_ALLOW_UNSAFE_MODEL_DESERIALIZATION", False, cast=bool)
-    )
+    return False
 
 
 def require_unsafe_model_deserialization(*, scope: str) -> None:
-    """Fail closed unless explicitly permitted for test or research runtimes."""
+    """Fail closed because generic pickle-style loads are retired."""
 
-    if unsafe_model_deserialization_allowed():
-        return
     raise RuntimeError(
-        f"{scope} uses unsafe generic model deserialization and is disabled by default. "
-        "Set AI_TRADING_ALLOW_UNSAFE_MODEL_DESERIALIZATION=1 only in controlled research or "
-        "migration workflows."
+        f"{scope} uses retired generic model deserialization. "
+        "Use JSON-safe inline artifacts or explicit approved runtime model paths instead."
     )
 
 
 def dumps(obj):
-    return _pickle.dumps(obj)
+    require_unsafe_model_deserialization(scope="safe_pickle.dumps")
+    raise AssertionError("unreachable")
 
 
 def loads(b):
     require_unsafe_model_deserialization(scope="safe_pickle.loads")
-    return _pickle.loads(b)
+    raise AssertionError("unreachable")
 
 
 __all__ = [

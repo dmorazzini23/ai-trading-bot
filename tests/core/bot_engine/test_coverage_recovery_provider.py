@@ -149,6 +149,77 @@ def test_coverage_recovery_uses_backup_provider_annotation(monkeypatch, caplog):
     assert warning_records[0].start == yahoo_start.isoformat()
 
 
+def test_live_coverage_recovery_blocks_yahoo_backup(monkeypatch, caplog):
+    session_end = datetime(2024, 1, 2, 15, 0, tzinfo=UTC)
+    session_start = session_end - timedelta(minutes=180)
+
+    primary_times = pd.date_range(start=session_start, periods=10, freq="1min", tz=UTC)
+    primary_df = pd.DataFrame(
+        {
+            "timestamp": primary_times,
+            "open": [1.0] * len(primary_times),
+            "high": [1.1] * len(primary_times),
+            "low": [0.9] * len(primary_times),
+            "close": [1.0] * len(primary_times),
+            "volume": [50] * len(primary_times),
+        }
+    )
+
+    call_history: list[str | None] = []
+
+    def _fake_get_minute_df(symbol, start_dt, end_dt, feed=None, **_):
+        call_history.append(feed)
+        if feed == "yahoo":
+            raise AssertionError("live coverage recovery should not fetch yahoo")
+        if feed == "sip":
+            bot_engine.data_fetcher_module._SIP_UNAUTHORIZED = True
+        return primary_df.copy()
+
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setattr(bot_engine, "datetime", _FixedDatetime)
+    monkeypatch.setattr(market_calendar, "rth_session_utc", lambda *_: (session_start, session_end))
+    monkeypatch.setattr(market_calendar, "previous_trading_session", lambda date: date - timedelta(days=1))
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "_prefer_feed_this_cycle", lambda: None)
+    monkeypatch.setattr(bot_engine, "_cache_cycle_fallback_feed", lambda feed: None)
+    monkeypatch.setattr(bot_engine, "_sip_authorized", lambda: True)
+    monkeypatch.setattr(bot_engine, "provider_monitor", _DummyMonitor())
+    monkeypatch.setattr(bot_engine, "get_minute_df", _fake_get_minute_df)
+    monkeypatch.setattr(bot_engine.data_fetcher_module, "_sip_configured", lambda: True)
+    monkeypatch.setattr(bot_engine.data_fetcher_module, "_ALLOW_SIP", True, raising=False)
+    monkeypatch.setattr(bot_engine.data_fetcher_module, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(bot_engine, "_SIP_UNAUTHORIZED_LOGGED", False, raising=False)
+    monkeypatch.setattr(bot_engine, "_GLOBAL_INTRADAY_FALLBACK_FEED", None, raising=False)
+
+    cfg = types.SimpleNamespace(
+        data_feed="iex",
+        execution_mode="live",
+        minute_gap_backfill=None,
+        intraday_lookback_minutes=120,
+        intraday_indicator_window_minutes=120,
+        longest_intraday_indicator_minutes=120,
+        alpaca_feed_failover=(),
+        market_cache_enabled=False,
+    )
+    monkeypatch.setattr(bot_engine, "CFG", cfg)
+    monkeypatch.setattr(bot_engine, "S", cfg)
+    monkeypatch.setattr(
+        bot_engine,
+        "state",
+        types.SimpleNamespace(minute_feed_cache={}, minute_feed_cache_ts={}),
+    )
+    monkeypatch.setattr(bot_engine.staleness, "_ensure_data_fresh", lambda *args, **kwargs: None)
+
+    with caplog.at_level("WARNING"):
+        with pytest.raises(bot_engine.DataFetchError, match="minute_data_low_coverage"):
+            bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert "yahoo" not in call_history
+    assert any(record.message == "LIVE_BACKUP_PROVIDER_BLOCKED" for record in caplog.records)
+    assert not any(record.message == "COVERAGE_RECOVERY_YAHOO" for record in caplog.records)
+
+
 def test_coverage_recovery_keeps_indicator_history_window(monkeypatch):
     session_end = datetime(2024, 1, 2, 15, 0, tzinfo=UTC)
     session_start = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)

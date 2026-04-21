@@ -152,6 +152,15 @@ def test_execution_service_blocks_legacy_live_trade_cycle(monkeypatch) -> None:
         )
 
 
+def test_execution_service_legacy_live_escape_hatch_is_test_only(monkeypatch) -> None:
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", "1")
+    monkeypatch.setattr("ai_trading.services.execution.is_test_runtime", lambda: False)
+
+    with pytest.raises(LegacyLiveExecutionBlockedError, match="blocked for live legacy execution"):
+        submit_order(types.SimpleNamespace(), "AAPL", 1, "buy", price=100.0)
+
+
 def test_risk_approval_service_bootstraps_and_updates_runtime_toggles(
     tmp_path,
     monkeypatch,

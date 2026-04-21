@@ -45,9 +45,9 @@ execution, persistence, and operator recovery.
 - Control-plane/operator surfaces exist and are useful:
   - [ai_trading/app.py](../ai_trading/app.py)
   - [ai_trading/services/control_plane.py](../ai_trading/services/control_plane.py)
-- Mutating operator endpoints now require in-code bearer auth plus operator
-  identity / scoped allowlists rather than trusting caller-supplied approver
-  strings.
+- Operator endpoints now require in-code auth, and operator identity is bound to
+  per-operator credentials rather than a shared bearer token plus a free-form
+  header.
 - Broker counts and readiness details are exposed in health/control-plane output.
 
 ### Idempotency, reconciliation, and OMS persistence
@@ -63,6 +63,8 @@ execution, persistence, and operator recovery.
   non-sqlite `DATABASE_URL`.
 - Pretrade pacing is now durable on the runtime host by default rather than
   process-local only.
+- The legacy database manager is retired outside tests instead of remaining a
+  side-path alongside OMS durability.
 - Runtime config explicitly supports OMS idempotency and decision records:
   - [ai_trading/config/runtime.py](../ai_trading/config/runtime.py)
 
@@ -73,9 +75,9 @@ execution, persistence, and operator recovery.
   - [ai_trading/training/after_hours.py](../ai_trading/training/after_hours.py)
   - [ai_trading/services/governance.py](../ai_trading/services/governance.py)
 - Runtime model loading now fails closed instead of silently using placeholder artifacts.
-- Generic pickle/cloudpickle/dill model deserialization is now blocked by
-  default outside test runtimes unless explicitly enabled for controlled
-  research or migration workflows.
+- Generic pickle/cloudpickle/dill model deserialization has been removed from
+  the supported runtime/model-registry path in favor of JSON-safe inline
+  artifacts and explicit approved artifact paths.
 
 ### Robustness work already formalized
 
@@ -90,6 +92,7 @@ execution, persistence, and operator recovery.
   as first-class operational concerns.
 - Live opening orders now fail closed unless they have an approved real-time
   broker NBBO quote source, even on the legacy non-netting escape hatch.
+- Legacy non-netting live execution is blocked outside test runtimes.
 
 ## 2. Partially Implemented / Mixed
 
