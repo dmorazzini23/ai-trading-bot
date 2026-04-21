@@ -36,7 +36,7 @@ from ai_trading.features.indicators import (
 from ai_trading.indicators import rsi as rsi_indicator
 from ai_trading.logging import get_logger
 from ai_trading.model_registry import ModelRegistry
-from ai_trading.models.artifacts import write_artifact_manifest
+from ai_trading.models.artifacts import load_verified_joblib_artifact, write_artifact_manifest
 from ai_trading.monitoring.model_liveness import note_after_hours_training_complete
 from ai_trading.registry.manifest import validate_manifest_metadata
 from ai_trading.research.leakage_tests import run_leakage_guards
@@ -4673,9 +4673,7 @@ def _build_hard_negative_sample_weights(dataset: Any) -> tuple[np.ndarray, dict[
         )
         if runtime_model_path.is_file():
             try:
-                import joblib
-
-                prior_model = joblib.load(runtime_model_path)
+                prior_model = load_verified_joblib_artifact(runtime_model_path)
                 prior_probs = _predict_probabilities(
                     prior_model,
                     dataset.loc[:, FEATURE_COLUMNS],

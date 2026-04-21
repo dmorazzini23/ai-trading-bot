@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import subprocess
 import sys
+import tempfile
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,6 +16,11 @@ from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback
+    fcntl = None  # type: ignore[assignment]
 
 _METRIC_ML_SIGNAL = "ml_signal"
 _METRIC_RL_SIGNAL = "rl_signal"
@@ -59,6 +67,54 @@ def _env_float(name: str, default: float) -> float:
             return float(get_env(name, default))
         except Exception:
             return float(default)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(f"{path.suffix}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_fh:
+        if fcntl is not None:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp_fh:
+                tmp_fh.write(content)
+                tmp_fh.flush()
+                os.fsync(tmp_fh.fileno())
+            os.replace(tmp_name, path)
+            dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        finally:
+            if os.path.exists(tmp_name):
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    logger.debug("CANARY_AUTO_ROLLBACK_TMP_CLEANUP_FAILED", exc_info=True)
+            if fcntl is not None:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _parse_rollback_command(raw: str) -> list[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, list):
+        command = [str(item).strip() for item in parsed if str(item).strip()]
+        if command:
+            return command
+        raise ValueError("rollback command list is empty")
+    command = [part.strip() for part in shlex.split(text) if part.strip()]
+    if command:
+        return command
+    raise ValueError("rollback command is empty")
 
 
 def _event_for_metric(metric: str) -> str:
@@ -309,10 +365,9 @@ class _ModelLivenessMonitor:
             )
         )
         try:
-            flag_path.parent.mkdir(parents=True, exist_ok=True)
-            flag_path.write_text(
+            _atomic_write_text(
+                flag_path,
                 json.dumps(payload, sort_keys=True) + "\n",
-                encoding="utf-8",
             )
             payload["flag_path"] = str(flag_path)
         except Exception as exc:
@@ -326,10 +381,9 @@ class _ModelLivenessMonitor:
                 str(get_env("AI_TRADING_KILL_SWITCH_PATH", "runtime/kill_switch") or "runtime/kill_switch")
             )
             try:
-                kill_switch_path.parent.mkdir(parents=True, exist_ok=True)
-                kill_switch_path.write_text(
+                _atomic_write_text(
+                    kill_switch_path,
                     f"canary_auto_rollback {now_utc.isoformat()}\n",
-                    encoding="utf-8",
                 )
                 payload["kill_switch_path"] = str(kill_switch_path)
             except Exception as exc:
@@ -345,15 +399,16 @@ class _ModelLivenessMonitor:
                 _env_float("AI_TRADING_CANARY_ROLLBACK_COMMAND_TIMEOUT_SECONDS", 30.0),
             )
             try:
+                command_args = _parse_rollback_command(rollback_command)
                 completed = subprocess.run(
-                    rollback_command,
-                    shell=True,
+                    command_args,
                     check=False,
                     capture_output=True,
                     text=True,
                     timeout=command_timeout,
                 )
                 payload["command"] = rollback_command
+                payload["command_args"] = list(command_args)
                 payload["command_exit_code"] = int(completed.returncode)
             except Exception as exc:
                 payload["command"] = rollback_command

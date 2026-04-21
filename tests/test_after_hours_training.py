@@ -986,6 +986,58 @@ def test_after_hours_training_skips_when_no_new_signal_data(
     assert second["unchanged_dataset_fingerprint"] is True
 
 
+def test_hard_negative_prior_model_uses_verified_loader(monkeypatch: pytest.MonkeyPatch) -> None:
+    dataset = pd.DataFrame(
+        {
+            "label": [0, 1],
+            "realized_edge_bps": [-5.0, 10.0],
+            "rsi": [45.0, 55.0],
+            "macd": [0.1, 0.2],
+            "atr": [1.0, 1.1],
+            "vwap": [100.0, 101.0],
+            "sma_50": [99.0, 100.0],
+            "sma_200": [98.0, 99.0],
+            "signal": [1.0, -1.0],
+            "atr_pct": [0.01, 0.011],
+            "vwap_distance": [0.002, -0.003],
+            "sma_spread": [0.01, 0.012],
+            "macd_signal_gap": [0.05, 0.04],
+            "rsi_centered": [-5.0, 5.0],
+        }
+    )
+    runtime_model = Path("models/runtime/ml_latest.joblib")
+    captured: dict[str, object] = {}
+
+    class _PriorModel:
+        pass
+
+    def _fake_load(path):
+        captured["path"] = path
+        return _PriorModel()
+
+    def _fake_predict_probabilities(model, features):
+        assert isinstance(model, _PriorModel)
+        assert len(features) == len(dataset)
+        return np.asarray([0.9, 0.1], dtype=float)
+
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_HARD_NEGATIVE_PRIOR_MODEL_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(runtime_model))
+    monkeypatch.setattr(
+        after_hours,
+        "_resolve_after_hours_output_path",
+        lambda path_value, *, default_relative: runtime_model,
+    )
+    monkeypatch.setattr(after_hours.Path, "is_file", lambda self: self == runtime_model)
+    monkeypatch.setattr(after_hours, "load_verified_joblib_artifact", _fake_load)
+    monkeypatch.setattr(after_hours, "_predict_probabilities", _fake_predict_probabilities)
+
+    _weights, report = after_hours._build_hard_negative_sample_weights(dataset)
+
+    assert captured["path"] == runtime_model
+    assert report["prior_model_path"] == str(runtime_model)
+    assert "prior_model_error" not in report
+
+
 def test_after_hours_training_state_strips_pytest_temp_report_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -196,6 +196,54 @@ def test_operator_read_endpoints_require_auth(monkeypatch):
     assert payload["ok"] is False
 
 
+def test_operator_presets_requires_auth_without_blueprint_bypass(monkeypatch):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
+    app = create_app()
+    client = app.test_client()
+
+    response = client.get("/operator/presets")
+
+    assert response.status_code == 401
+    payload = response.get_json()
+    assert payload["ok"] is False
+
+
+def test_operator_plan_post_is_not_publicly_bound(monkeypatch):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
+    app = create_app()
+    client = app.test_client()
+
+    routes = getattr(app, "_routes", None)
+    if isinstance(routes, dict):
+        assert ("/operator/plan", "POST") not in routes
+        return
+
+    response = client.post("/operator/plan", json={"preset": "balanced"})
+
+    assert response.status_code == 405
+
+
+def test_diag_requires_auth_and_returns_snapshot_when_authenticated(monkeypatch):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
+    app = create_app()
+    app.config["broker_snapshot_fn"] = lambda: {"status": "reachable"}
+    client = app.test_client()
+
+    unauthorized = client.get("/diag")
+    assert unauthorized.status_code == 401
+    unauthorized_payload = unauthorized.get_json()
+    assert unauthorized_payload["ok"] is False
+
+    authorized = _get(client, "/diag")
+    assert authorized.status_code == 200
+    payload = authorized.get_json()
+    assert "alpaca" in payload
+    assert payload["broker"]["status"] == "reachable"
+
+
 def test_operator_token_binding_rejects_impersonation(monkeypatch, tmp_path):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
     monkeypatch.setenv(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -125,3 +127,57 @@ def test_canary_auto_rollback_writes_flag_and_respects_cooldown(monkeypatch, tmp
     assert second is not None
     assert second["triggered"] is False
     assert second["status"] == "cooldown"
+
+
+def test_canary_auto_rollback_runs_command_without_shell(monkeypatch, tmp_path) -> None:
+    _set_default_liveness_env(monkeypatch)
+    rollback_flag = tmp_path / "canary_rollback.flag"
+    kill_switch = tmp_path / "kill_switch.flag"
+    monkeypatch.setenv("AI_TRADING_CANARY_SYMBOLS", "AAPL")
+    monkeypatch.setenv("AI_TRADING_CANARY_ROLLBACK_FLAG_PATH", str(rollback_flag))
+    monkeypatch.setenv("AI_TRADING_KILL_SWITCH_PATH", str(kill_switch))
+    monkeypatch.setenv("AI_TRADING_CANARY_ROLLBACK_SET_KILL_SWITCH", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_CANARY_ROLLBACK_COMMAND",
+        json.dumps(["/bin/echo", "rollback-now"]),
+    )
+    captured: dict[str, object] = {}
+
+    class _Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = dict(kwargs)
+        return _Completed()
+
+    monkeypatch.setattr(model_liveness.subprocess, "run", _fake_run)
+    model_liveness._reset_model_liveness_state_for_tests()
+
+    breach_payload = [
+        {
+            "metric": "ml_signal",
+            "event": "ML_SIGNAL",
+            "age_seconds": 120.0,
+            "threshold_seconds": 60.0,
+            "severity": "critical",
+            "reason": "stale",
+        }
+    ]
+    result = model_liveness.maybe_trigger_canary_auto_rollback(
+        breach_payload,
+        now=datetime.now(UTC),
+    )
+
+    assert result is not None
+    assert result["triggered"] is True
+    assert Path(rollback_flag).exists()
+    assert Path(kill_switch).exists()
+    assert captured["command"] == ["/bin/echo", "rollback-now"]
+    kwargs_payload = captured["kwargs"]
+    assert isinstance(kwargs_payload, Mapping)
+    kwargs = dict(kwargs_payload)
+    assert "shell" not in kwargs
+    assert kwargs["check"] is False

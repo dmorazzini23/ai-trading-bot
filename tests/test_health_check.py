@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 
 import ai_trading.app as app_module
+import ai_trading.config.management as config_management
 
 
 EXPECTED_ALPACA_MINIMAL = {
@@ -176,6 +177,28 @@ def test_health_endpoint_structure_is_stable():
     _assert_payload_structure(payload)
     _assert_fallback_meta(payload, used=False)
     assert payload == data
+
+
+def test_standalone_health_app_only_registers_health_routes():
+    app = app_module.create_app(health_only=True)
+    routes = getattr(app, "_routes", None)
+
+    assert isinstance(routes, dict)
+    assert ("/healthz", "GET") in routes
+    assert ("/metrics", "GET") in routes
+    assert ("/diag", "GET") not in routes
+    assert ("/operator/presets", "GET") not in routes
+    assert ("/operator/control-plane", "GET") not in routes
+
+
+def test_standalone_health_app_fail_fast_env(monkeypatch):
+    def _fail(*args, **kwargs):
+        raise RuntimeError("missing env")
+
+    monkeypatch.setattr(config_management, "validate_required_env", _fail)
+
+    with pytest.raises(RuntimeError, match="missing env"):
+        app_module.create_app(health_only=True, fail_fast_env=True)
 
 
 def test_health_endpoint_jsonify_failure_uses_sanitized_payload(monkeypatch):

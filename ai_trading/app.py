@@ -502,31 +502,13 @@ def _normalize_health_payload(raw: Mapping | None) -> dict[str, Any]:
     return payload
 
 
-def create_app():
+def create_app(*, health_only: bool = False, fail_fast_env: bool = False):
     """Create and configure the Flask application."""
     try:
         FlaskClass = import_module("flask.app").Flask
     except Exception:
         FlaskClass = Flask
     app = FlaskClass(__name__)
-    try:
-        from ai_trading.diagnostics.http_diag import diag_bp  # type: ignore
-    except ImportError:
-        diag_bp = None  # type: ignore[assignment]
-    if diag_bp is not None:
-        try:
-            app.register_blueprint(diag_bp)
-        except Exception:
-            _log.debug("DIAG_BLUEPRINT_REGISTER_FAILED", exc_info=True)
-    try:
-        from ai_trading.operator_ui import operator_bp
-    except ImportError:
-        operator_bp = None  # type: ignore[assignment]
-    if operator_bp is not None:
-        try:
-            app.register_blueprint(operator_bp)
-        except Exception:
-            _log.debug("OPERATOR_BLUEPRINT_REGISTER_FAILED", exc_info=True)
 
     # Some tests may monkeypatch Flask and return objects without a real config
     if not isinstance(getattr(app, "config", None), dict):
@@ -546,6 +528,8 @@ def create_app():
         _log.exception("ENV_VALIDATION_FAILED")
         app.config["_ENV_VALID"] = False
         app.config["_ENV_ERR"] = str(e)
+        if fail_fast_env:
+            raise
 
     route_registry = _ensure_route_registry(app)
 
@@ -751,6 +735,190 @@ def create_app():
         if auth_error_payload is not None:
             return _safe_response(auth_error_payload, status=auth_status)
         return None
+
+    def _register_health_routes(*, include_health: bool) -> None:
+        if include_health:
+            @app.route("/health")
+            def health():
+                """Lightweight liveness probe with Alpaca diagnostics."""
+                pytest_mode = _pytest_active()
+                payload = build_api_health_payload(
+                    service_name=_SERVICE_NAME,
+                    force_ok_for_pytest=pytest_mode,
+                    env_error=app.config.get("_ENV_ERR"),
+                )
+
+                fallback_payload = {
+                    "ok": bool(payload.get("ok")),
+                    "alpaca": dict(payload["alpaca"]),
+                }
+                if payload.get("error"):
+                    fallback_payload["error"] = payload.get("error")
+                return _json_response(payload, fallback=fallback_payload)
+
+        def _build_healthz_payload() -> dict[str, Any]:
+            pytest_mode = _pytest_active()
+            payload = cast(
+                dict[str, Any],
+                build_canonical_healthz_payload(
+                    service_name=_SERVICE_NAME,
+                    force_ok_for_pytest=pytest_mode,
+                    healthy_status_mode="service",
+                    ok_mode="connectivity",
+                    env_error=app.config.get("_ENV_ERR"),
+                ),
+            )
+            if (not pytest_mode) and (
+                _managed_env("PYTEST_RUNNING") or _managed_env("PYTEST_CURRENT_TEST")
+            ):
+                _log.warning(
+                    "PYTEST_OVERRIDE_SKIPPED",
+                    extra={
+                        "env_flag": _managed_env("PYTEST_RUNNING"),
+                        "current_test": _managed_env("PYTEST_CURRENT_TEST"),
+                        "has_pytest_module": "pytest" in sys.modules,
+                    },
+                )
+            return payload
+
+        def _healthz_response(payload: dict[str, Any], status: int) -> Any:
+            return _safe_response(payload, status=status)
+
+        register_healthz_routes(
+            app,
+            payload_builder=_build_healthz_payload,
+            response_builder=_healthz_response,
+            service_name=_SERVICE_NAME,
+            routes=("/healthz",),
+            logger=_log,
+            error_event="HEALTHZ_HANDLER_FAILED",
+        )
+
+        @app.route("/metrics")
+        def metrics():
+            """Expose Prometheus metrics if available."""
+            if not _PROM_OK:
+                return ("metrics unavailable", 501)
+            try:
+                from ai_trading.telemetry.runtime_prom_metrics import (
+                    refresh_runtime_execution_metrics,
+                )
+
+                refresh_runtime_execution_metrics()
+            except (ImportError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                _log.debug(
+                    "PROM_RUNTIME_METRICS_REFRESH_SKIPPED",
+                    extra={"error": str(exc)},
+                )
+            from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+            return generate_latest(cast(Any, _PROM_REG)), 200, {"Content-Type": CONTENT_TYPE_LATEST}
+
+    if health_only:
+        _register_health_routes(include_health=False)
+        _ensure_test_client_support(app, route_registry)
+        original_test_client = getattr(app, "test_client", None)
+
+        if callable(original_test_client):  # pragma: no cover - exercised via tests
+
+            class _HealthOnlyResponseWrapper(Mapping):
+                def __init__(self, data: dict, text: str, status_code: int) -> None:
+                    self._payload = _normalize_health_payload(data)
+                    self._text = text
+                    self.status_code = status_code
+
+                def __getitem__(self, key):
+                    return self._payload[key]
+
+                def __iter__(self):
+                    return iter(self._payload)
+
+                def __len__(self):
+                    return len(self._payload)
+
+                def get_json(self):
+                    return dict(self._payload)
+
+                def get_data(self, as_text: bool = False):
+                    if as_text:
+                        return self._text
+                    return self._text.encode("utf-8")
+
+            def _wrap_response(resp: Any) -> Any:
+                if callable(getattr(resp, "get_data", None)) and callable(getattr(resp, "get_json", None)):
+                    return resp
+                status_code = getattr(resp, "status_code", 200)
+                payload = resp
+                if isinstance(resp, tuple) and resp:
+                    payload = resp[0]
+                    if len(resp) > 1 and isinstance(resp[1], int):
+                        status_code = resp[1]
+                if callable(getattr(resp, "get_json", None)):
+                    try:
+                        payload = resp.get_json()
+                    except Exception:
+                        payload = resp
+                if isinstance(payload, Mapping):
+                    payload_dict = dict(payload)
+                elif isinstance(payload, list):
+                    payload_dict = {"data": payload}
+                else:
+                    payload_dict = {"data": payload}
+                normalized_payload = _normalize_health_payload(payload_dict)
+                try:
+                    body = json.dumps(normalized_payload, default=str)
+                except Exception:
+                    fallback_payload = _normalize_health_payload(
+                        {
+                            "ok": False,
+                            "alpaca": _normalise_alpaca_section(normalized_payload.get("alpaca")),
+                            "error": str(normalized_payload.get("error", "serialization_error")),
+                        },
+                    )
+                    normalized_payload = fallback_payload
+                    body = json.dumps(normalized_payload, default=str)
+                return _HealthOnlyResponseWrapper(normalized_payload, body, status_code)
+
+            def _patched_test_client(*args: Any, **kwargs: Any):
+                client = original_test_client(*args, **kwargs)
+                getter = getattr(client, "get", None)
+                if callable(getter):
+                    def _patched_get(path: str, *g_args: Any, **g_kwargs: Any):
+                        raw = getter(path, *g_args, **g_kwargs)
+                        return _wrap_response(raw)
+
+                    client.get = _patched_get
+                return client
+
+            setattr(app, "test_client", _patched_test_client)
+        return app
+
+    @app.route("/diag")
+    def diag() -> Any:
+        """Return authenticated environment diagnostics plus optional broker snapshot."""
+
+        auth_response = _require_operator_read_auth("diag_read")
+        if auth_response is not None:
+            return auth_response
+        try:
+            from ai_trading.diagnostics.env_diag import gather_env_diag
+
+            payload = gather_env_diag()
+            snapshot_fn = app.config.get("broker_snapshot_fn") if isinstance(app.config, Mapping) else None
+            if callable(snapshot_fn):
+                try:
+                    snapshot = snapshot_fn()
+                except Exception:
+                    _log.debug("BROKER_DIAG_SNAPSHOT_FAILED", exc_info=True)
+                    payload["broker"] = {"error": "snapshot_failed"}
+                else:
+                    if isinstance(snapshot, Mapping):
+                        payload["broker"] = dict(snapshot)
+                    else:
+                        payload["broker"] = {"error": "snapshot_invalid"}
+            return _safe_response(payload, status=200)
+        except Exception as exc:
+            _log.warning("DIAG_UNAVAILABLE", extra={"error": str(exc)})
+            return _safe_response({"ok": False, "error": "diagnostics unavailable"}, status=503)
 
     @app.route("/operator/presets")
     def operator_presets() -> Any:
@@ -1075,80 +1243,7 @@ def create_app():
                 status=503,
             )
 
-    @app.route("/health")
-    def health():
-        """Lightweight liveness probe with Alpaca diagnostics."""
-        pytest_mode = _pytest_active()
-        payload = build_api_health_payload(
-            service_name=_SERVICE_NAME,
-            force_ok_for_pytest=pytest_mode,
-            env_error=app.config.get("_ENV_ERR"),
-        )
-
-        fallback_payload = {
-            "ok": bool(payload.get("ok")),
-            "alpaca": dict(payload["alpaca"]),
-        }
-        if payload.get("error"):
-            fallback_payload["error"] = payload.get("error")
-        return _json_response(payload, fallback=fallback_payload)
-
-    def _build_healthz_payload() -> dict[str, Any]:
-        pytest_mode = _pytest_active()
-        payload = cast(
-            dict[str, Any],
-            build_canonical_healthz_payload(
-            service_name=_SERVICE_NAME,
-            force_ok_for_pytest=pytest_mode,
-            healthy_status_mode="service",
-            ok_mode="connectivity",
-            env_error=app.config.get("_ENV_ERR"),
-            ),
-        )
-        if (not pytest_mode) and (
-            _managed_env("PYTEST_RUNNING") or _managed_env("PYTEST_CURRENT_TEST")
-        ):
-            _log.warning(
-                "PYTEST_OVERRIDE_SKIPPED",
-                extra={
-                    "env_flag": _managed_env("PYTEST_RUNNING"),
-                    "current_test": _managed_env("PYTEST_CURRENT_TEST"),
-                    "has_pytest_module": "pytest" in sys.modules,
-                },
-            )
-        return payload
-
-    def _healthz_response(payload: dict[str, Any], status: int) -> Any:
-        return _safe_response(payload, status=status)
-
-    register_healthz_routes(
-        app,
-        payload_builder=_build_healthz_payload,
-        response_builder=_healthz_response,
-        service_name=_SERVICE_NAME,
-        routes=("/healthz",),
-        logger=_log,
-        error_event="HEALTHZ_HANDLER_FAILED",
-    )
-
-    @app.route("/metrics")
-    def metrics():
-        """Expose Prometheus metrics if available."""
-        if not _PROM_OK:
-            return ("metrics unavailable", 501)
-        try:
-            from ai_trading.telemetry.runtime_prom_metrics import (
-                refresh_runtime_execution_metrics,
-            )
-
-            refresh_runtime_execution_metrics()
-        except (ImportError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            _log.debug(
-                "PROM_RUNTIME_METRICS_REFRESH_SKIPPED",
-                extra={"error": str(exc)},
-            )
-        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-        return generate_latest(cast(Any, _PROM_REG)), 200, {"Content-Type": CONTENT_TYPE_LATEST}
+    _register_health_routes(include_health=True)
 
     _ensure_test_client_support(app, route_registry)
     original_test_client = getattr(app, "test_client", None)
@@ -1268,7 +1363,7 @@ if __name__ == "__main__":
     if _managed_env("RUN_HEALTHCHECK") == "1":
         from ai_trading.config.settings import get_settings
 
-        app = create_app()
+        app = create_app(health_only=True, fail_fast_env=True)
         s = get_settings()
         port = int(s.healthcheck_port or 8081)
         suppress_flask_startup_noise()
