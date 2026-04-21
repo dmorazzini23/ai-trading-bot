@@ -15,6 +15,7 @@ pytest.importorskip("sklearn")
 
 import ai_trading.core.bot_engine as bot_engine
 import ai_trading.model_loader as model_loader
+from ai_trading.models.artifacts import write_artifact_manifest
 from sklearn.dummy import DummyClassifier
 import joblib
 
@@ -165,3 +166,27 @@ def test_load_model_from_internal_dir(tmp_path, monkeypatch):
     loaded = ml.load_model("INT")
     assert hasattr(loaded, "predict")
 
+
+def test_live_model_loader_requires_verified_artifact(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_TRADING_MODELS_DIR", str(tmp_path))
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("AI_TRADING_MODEL_VERIFY_CHECKSUM", "1")
+    import ai_trading.paths as paths
+
+    importlib.reload(paths)
+    ml = importlib.reload(model_loader)
+
+    model = DummyClassifier(strategy="most_frequent")
+    X = np.array([[0], [1]])
+    y = np.array([0, 1])
+    model.fit(X, y)
+    model_path = tmp_path / "LIVE.pkl"
+    joblib.dump(model, model_path)
+
+    with pytest.raises(RuntimeError, match="MODEL_VERIFICATION_FAILED"):
+        ml.load_model("LIVE")
+
+    write_artifact_manifest(model_path=model_path, model_version="live-test-v1")
+
+    loaded = ml.load_model("LIVE")
+    assert hasattr(loaded, "predict")

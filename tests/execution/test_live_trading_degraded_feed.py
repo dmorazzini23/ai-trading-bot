@@ -401,7 +401,10 @@ def test_realtime_nbbo_gate_skips_degraded_openings(monkeypatch, caplog) -> None
         None,
     )
     assert gated_record is not None
-    assert getattr(gated_record, "reason", None) == "realtime_nbbo_required"
+    assert getattr(gated_record, "reason", None) in {
+        "primary_quote_required",
+        "realtime_nbbo_required",
+    }
     assert getattr(gated_record, "provider", None) == "backup/synthetic"
     assert getattr(gated_record, "degraded", None) is True
 
@@ -444,6 +447,48 @@ def test_market_on_degraded_retains_limit(monkeypatch, caplog) -> None:
         None,
     )
     assert downgrade_record is None
+
+
+def test_live_mode_forces_realtime_nbbo_policy(monkeypatch, caplog) -> None:
+    """Live execution should fail closed even when config is permissive."""
+
+    engine = DummyLiveEngine()
+    engine.execution_mode = "live"
+    config = SimpleNamespace(
+        execution_mode="live",
+        min_quote_freshness_ms=0,
+        degraded_feed_mode="widen",
+        degraded_feed_limit_widen_bps=0,
+        execution_require_realtime_nbbo=False,
+        execution_market_on_degraded=True,
+        nbbo_required_for_limit=False,
+    )
+    _patch_config_getter(monkeypatch, config)
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
+
+    result = engine.execute_order(
+        "AAPL",
+        "buy",
+        10,
+        order_type="limit",
+        limit_price=100.0,
+        quote=_quote_payload(),
+        annotations={"price_source": "backup"},
+    )
+
+    assert result is None
+    assert engine.last_submitted is None
+    gated_record = next(
+        (rec for rec in caplog.records if rec.msg == "ORDER_SKIPPED_PRICE_GATED"),
+        None,
+    )
+    assert gated_record is not None
+    assert getattr(gated_record, "reason", None) in {
+        "primary_quote_required",
+        "realtime_nbbo_required",
+    }
 
 
 def test_execute_order_logs_real_order_id(monkeypatch, caplog) -> None:

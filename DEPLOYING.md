@@ -73,6 +73,10 @@ SIP-related controls:
 
 Backup market-data providers are not approved live opening-order quote sources.
 Live opening orders fail closed unless they have a real-time broker NBBO quote.
+Live execution defaults are strict: realtime NBBO is required, degraded quotes
+do not downgrade to market, fallback pricing is disabled, and limit orders
+require NBBO unless a non-production fallback-quote override is explicitly
+enabled.
 Legacy non-netting live execution is blocked outside test runtimes.
 
 ## API Port Fail-Fast Semantics

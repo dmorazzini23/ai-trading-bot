@@ -106,6 +106,8 @@ Live mode now requires one authoritative durability path:
   supported runtime/model-registry path.
 - Use JSON-safe inline artifacts or explicit approved model artifact paths
   instead of generic Python object deserialization.
+- Runtime joblib model loads now pass through the shared manifest/checksum gate,
+  including symbol-model loading and regime-model initialization in live mode.
 
 ### Health and Control-Plane Signals
 

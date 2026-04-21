@@ -92,6 +92,8 @@ execution, persistence, and operator recovery.
   as first-class operational concerns.
 - Live opening orders now fail closed unless they have an approved real-time
   broker NBBO quote source, even on the legacy non-netting escape hatch.
+- Runtime symbol-model loading and regime-model initialization now both use the
+  shared manifest/checksum verification gate before deserialization.
 - Legacy non-netting live execution is blocked outside test runtimes.
 
 ## 2. Partially Implemented / Mixed

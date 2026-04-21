@@ -608,6 +608,44 @@ def _runtime_trading_config() -> Any | None:
         return None
 
 
+def _effective_execution_quote_policy(
+    cfg: Any | None,
+    *,
+    execution_mode: str | None = None,
+) -> tuple[bool, bool, bool]:
+    mode_value = str(
+        execution_mode
+        or (getattr(cfg, "execution_mode", None) if cfg is not None else None)
+        or _runtime_env("EXECUTION_MODE")
+        or "paper"
+    ).strip().lower()
+    require_nbbo = False
+    require_realtime_nbbo = True
+    market_on_degraded = False
+    if cfg is not None:
+        try:
+            require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", False))
+        except Exception:
+            require_nbbo = False
+        try:
+            require_realtime_nbbo = bool(
+                getattr(cfg, "execution_require_realtime_nbbo", True)
+            )
+        except Exception:
+            require_realtime_nbbo = True
+        try:
+            market_on_degraded = bool(
+                getattr(cfg, "execution_market_on_degraded", False)
+            )
+        except Exception:
+            market_on_degraded = False
+    if mode_value == "live":
+        require_nbbo = True
+        require_realtime_nbbo = True
+        market_on_degraded = False
+    return require_nbbo, require_realtime_nbbo, market_on_degraded
+
+
 def _allow_shorts_configured() -> bool:
     deprecated_flag = _resolve_bool_env("AI_TRADING_ALLOW_SHORT")
     if deprecated_flag is not None:
@@ -18064,13 +18102,11 @@ class ExecutionEngine:
 
         require_quotes = _require_bid_ask_quotes()
         cfg: Any | None = None
-        require_nbbo = False
         cfg = _runtime_trading_config()
-        if cfg is not None:
-            try:
-                require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", False))
-            except Exception:
-                require_nbbo = False
+        require_nbbo, _require_realtime_nbbo, _market_on_degraded = _effective_execution_quote_policy(
+            cfg,
+            execution_mode=getattr(self, "execution_mode", None),
+        )
         nbbo_gate_prefetch = require_nbbo and not closing_position
         prefetch_quotes = ((require_quotes and not closing_position) or nbbo_gate_prefetch)
         trading_client = getattr(self, "trading_client", None)
@@ -18777,13 +18813,11 @@ class ExecutionEngine:
 
         require_quotes = _require_bid_ask_quotes()
         cfg = None
-        require_nbbo = False
         cfg = _runtime_trading_config()
-        if cfg is not None:
-            try:
-                require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", False))
-            except Exception:
-                require_nbbo = False
+        require_nbbo, _require_realtime_nbbo, _market_on_degraded = _effective_execution_quote_policy(
+            cfg,
+            execution_mode=getattr(self, "execution_mode", None),
+        )
         nbbo_gate_prefetch = require_nbbo and not closing_position
         prefetch_quotes = ((require_quotes and not closing_position) or nbbo_gate_prefetch)
 
@@ -19827,19 +19861,14 @@ class ExecutionEngine:
             cfg = get_trading_config()
         except Exception:
             cfg = None
-        if cfg is not None:
-            try:
-                require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", False))
-            except Exception:
-                require_nbbo = False
-            try:
-                require_realtime_nbbo = bool(getattr(cfg, "execution_require_realtime_nbbo", True))
-            except Exception:
-                require_realtime_nbbo = True
-            try:
-                market_on_degraded = bool(getattr(cfg, "execution_market_on_degraded", False))
-            except Exception:
-                market_on_degraded = False
+        (
+            require_nbbo,
+            require_realtime_nbbo,
+            market_on_degraded,
+        ) = _effective_execution_quote_policy(
+            cfg,
+            execution_mode=getattr(self, "execution_mode", None),
+        )
         nbbo_gate_prefetch = require_nbbo and not closing_position
         prefetch_quotes = ((require_quotes and not closing_position) or nbbo_gate_prefetch)
 

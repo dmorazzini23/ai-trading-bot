@@ -2738,6 +2738,11 @@ class TradingConfig:
                 provided_fields.add(spec.field)
             values[spec.field] = _build_value(spec, env_map)
 
+        _apply_live_execution_quote_defaults(
+            values,
+            explicit_fields=provided_fields,
+        )
+
         if values["cycle_compute_budget_factor"] is None:
             values["cycle_compute_budget_factor"] = values["cycle_budget_fraction"]
 
@@ -3056,6 +3061,25 @@ def config_snapshot_hash(cfg: TradingConfig | Mapping[str, Any]) -> str:
 
 
 _reject_legacy_apca_env()
+
+
+def _apply_live_execution_quote_defaults(
+    values: dict[str, Any],
+    *,
+    explicit_fields: set[str],
+) -> None:
+    execution_mode = str(values.get("execution_mode") or "sim").strip().lower()
+    if execution_mode != "live":
+        return
+    live_defaults = {
+        "execution_require_realtime_nbbo": True,
+        "execution_market_on_degraded": False,
+        "execution_allow_fallback_price": False,
+        "nbbo_required_for_limit": True,
+    }
+    for field, default_value in live_defaults.items():
+        if field not in explicit_fields:
+            values[field] = default_value
 
 
 __all__ = [

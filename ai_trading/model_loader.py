@@ -16,6 +16,7 @@ import json
 
 import joblib
 from ai_trading.utils.lazy_imports import load_pandas
+from ai_trading.models.artifacts import load_verified_joblib_artifact
 
 logger = get_logger(__name__)
 ML_MODELS: dict[str, object | None] = {}
@@ -166,7 +167,11 @@ def load_model(symbol: str) -> object:
         meta = get_active_model_meta(symbol)
         if meta and meta.get("path"):
             try:
-                return joblib.load(Path(meta["path"]))
+                manifest_path = meta.get("manifest_path")
+                return load_verified_joblib_artifact(
+                    Path(meta["path"]),
+                    manifest_path=manifest_path if manifest_path else None,
+                )
             except Exception as exc:
                 logger.warning("MODEL_REGISTRY_LOAD_FAILED for %s: %s", symbol, exc)
     except Exception:
@@ -179,7 +184,7 @@ def load_model(symbol: str) -> object:
             raise RuntimeError(f"Model path escapes models directory: {path}")
         if path.exists():
             try:
-                model = joblib.load(path)
+                model = load_verified_joblib_artifact(path)
             except Exception as exc:  # noqa: BLE001 - joblib may raise various errors
                 msg = f"Failed to load model for '{symbol}' at '{path}': {exc}"
                 logger.error(

@@ -8,6 +8,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+import joblib
+
+from ai_trading.config.management import get_env
+from ai_trading.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 @dataclass(slots=True)
 class ArtifactManifest:
@@ -122,3 +129,55 @@ def verify_artifact(
 
 def manifest_dict(manifest: ArtifactManifest) -> dict[str, Any]:
     return asdict(manifest)
+
+
+def _execution_mode() -> str:
+    raw = str(get_env("EXECUTION_MODE", "sim", cast=str) or "sim")
+    return raw.strip().lower() or "sim"
+
+
+def enforce_artifact_verification(
+    *,
+    model_path: str | Path,
+    manifest_path: str | Path | None = None,
+) -> Path:
+    resolved = Path(model_path).expanduser().resolve()
+    verify_enabled = bool(get_env("AI_TRADING_MODEL_VERIFY_CHECKSUM", "1", cast=bool))
+    if not verify_enabled:
+        return resolved
+
+    manifest_file = Path(manifest_path).expanduser().resolve() if manifest_path else default_manifest_path(resolved)
+    ok, reason = verify_artifact(model_path=resolved, manifest_path=manifest_file)
+    if ok:
+        return resolved
+
+    details = {
+        "model_path": str(resolved),
+        "manifest_path": str(manifest_file),
+        "reason_code": reason,
+        "execution_mode": _execution_mode(),
+    }
+    if _execution_mode() == "live":
+        logger.error("MODEL_VERIFICATION_FAILED", extra=details)
+        raise RuntimeError(f"MODEL_VERIFICATION_FAILED: {reason}")
+    logger.warning("MODEL_VERIFICATION_SKIPPED", extra=details)
+    return resolved
+
+
+def load_verified_joblib_artifact(
+    model_path: str | Path,
+    *,
+    manifest_path: str | Path | None = None,
+) -> Any:
+    resolved = enforce_artifact_verification(
+        model_path=model_path,
+        manifest_path=manifest_path,
+    )
+    try:
+        return joblib.load(resolved)
+    except Exception as exc:  # noqa: BLE001 - joblib may surface multiple loader errors
+        logger.error(
+            "MODEL_ARTIFACT_LOAD_FAILED",
+            extra={"model_path": str(resolved), "error": str(exc)},
+        )
+        raise RuntimeError(f"Failed to load model artifact '{resolved}': {exc}") from exc

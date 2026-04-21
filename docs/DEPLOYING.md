@@ -52,6 +52,10 @@ Production execution note:
   NBBO execution quote. Yahoo is not permitted as a live execution backup data
   source, and live execution now blocks Yahoo fallback in quote and minute-data
   recovery paths.
+- Live execution defaults are now strict even if permissive quote env vars are
+  omitted: realtime NBBO is required, degraded quotes do not downgrade to
+  market, fallback pricing is disabled, and limit orders require NBBO unless an
+  explicit non-production fallback-quote override is enabled.
 - Legacy non-netting live execution is blocked outside test runtimes.
 
 ## Packaged Services

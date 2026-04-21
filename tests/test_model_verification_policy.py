@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -48,3 +49,31 @@ def test_auto_train_policy_requires_paper_and_flag() -> None:
     assert be._auto_train_allowed("paper", allow_paper_train=False) is False
     assert be._auto_train_allowed("live", allow_paper_train=True) is False
     assert be._auto_train_allowed("sim", allow_paper_train=True) is False
+
+
+def test_regime_model_load_fails_closed_in_live(monkeypatch, tmp_path) -> None:
+    be = _reload_bot_engine()
+    regime_path = tmp_path / "regime_model.pkl"
+    manifest_path = Path(f"{regime_path}.manifest.json")
+    joblib.dump({"bad": "artifact"}, regime_path)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "model_version": "v1",
+                "checksum_sha256": "deadbeef",
+                "created_ts": "2026-01-01T00:00:00+00:00",
+                "training_data_range": {"start": "2025-01-01", "end": "2025-01-31"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("AI_TRADING_MODEL_VERIFY_CHECKSUM", "1")
+    monkeypatch.setattr(be, "REGIME_MODEL_PATH", str(regime_path), raising=False)
+
+    model = be._initialize_regime_model()
+
+    assert type(model).__name__ == "RandomForestClassifier"

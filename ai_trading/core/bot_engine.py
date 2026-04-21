@@ -2,8 +2,7 @@
 # ruff: noqa: E501  # legacy module exceeds line length; limit edits to focused fixes
 """Trading bot core engine.
 
-This module uses ``pickle`` for regime model persistence; model paths are
-validated before deserialization.
+Runtime model artifacts are loaded through the shared manifest/checksum gate.
 """
 from __future__ import annotations
 
@@ -131,7 +130,6 @@ from ai_trading.alpaca_api import (
     get_api_error_cls,
     is_alpaca_service_available,
 )
-from ai_trading.utils.pickle_safe import safe_pickle_load
 from ai_trading.utils.base import is_market_open as _is_market_open_base
 from ai_trading.core.enums import OrderSide as CoreOrderSide
 from ai_trading.core.dependency_breakers import DependencyBreakers
@@ -187,7 +185,11 @@ from ai_trading.runtime.quarantine import (
 )
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.runtime.run_manifest import write_run_manifest
-from ai_trading.models.artifacts import verify_artifact
+from ai_trading.models.artifacts import (
+    enforce_artifact_verification,
+    load_verified_joblib_artifact,
+    write_artifact_manifest,
+)
 from ai_trading.policy.compiler import (
     EffectivePolicy,
     ExecutionCandidate,
@@ -5729,26 +5731,11 @@ def _auto_train_allowed(execution_mode: str, *, allow_paper_train: bool) -> bool
 
 
 def _enforce_model_artifact_verification(model_path: str) -> None:
-    verify_enabled = bool(get_env("AI_TRADING_MODEL_VERIFY_CHECKSUM", "1", cast=bool))
-    if not verify_enabled:
-        return
     configured_manifest = str(get_env("AI_TRADING_MODEL_MANIFEST_PATH", "") or "").strip()
-    manifest_path = configured_manifest or f"{model_path}.manifest.json"
-    ok, reason = verify_artifact(model_path=model_path, manifest_path=manifest_path)
-    if ok:
-        return
-
-    execution_mode = _runtime_execution_mode()
-    details = {
-        "model_path": model_path,
-        "manifest_path": manifest_path,
-        "reason_code": reason,
-        "execution_mode": execution_mode,
-    }
-    if execution_mode == "live" and not (_is_testing_env() or is_runtime_contract_testing_mode()):
-        logger.error("MODEL_VERIFICATION_FAILED", extra=details)
-        raise RuntimeError(f"MODEL_VERIFICATION_FAILED: {reason}")
-    logger.warning("MODEL_VERIFICATION_SKIPPED", extra=details)
+    enforce_artifact_verification(
+        model_path=model_path,
+        manifest_path=configured_manifest or None,
+    )
 
 
 def _model_payload_is_placeholder(model: Any) -> bool:
@@ -5932,8 +5919,11 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
                     configured_path=path,
                 )
 
+        manifest_override = None
         if active_source == "configured":
-            _enforce_model_artifact_verification(active_path)
+            manifest_override = str(
+                get_env("AI_TRADING_MODEL_MANIFEST_PATH", "") or ""
+            ).strip() or None
         else:
             logger.info(
                 "MODEL_ARTIFACT_VERIFIED_VIA_REGISTRY",
@@ -5944,7 +5934,10 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
                 },
             )
 
-        mdl = joblib.load(active_path)
+        mdl = load_verified_joblib_artifact(
+            active_path,
+            manifest_path=manifest_override,
+        )
         if _model_payload_is_placeholder(mdl):
             registry_fallback = (
                 _resolve_registry_production_model_path(path)
@@ -5971,7 +5964,7 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
                         **registry_meta,
                     },
                 )
-                mdl = joblib.load(active_path)
+                mdl = load_verified_joblib_artifact(active_path)
             elif strict_runtime and require_model:
                 logger.error(
                     "MODEL_VERIFICATION_FAILED",
@@ -6100,29 +6093,11 @@ def _refresh_required_model_cache_from_path(
         )
         return False
 
-    verify_enabled = bool(get_env("AI_TRADING_MODEL_VERIFY_CHECKSUM", "1", cast=bool))
-    if verify_enabled:
-        manifest_candidate = str(
-            manifest_path or f"{resolved}.manifest.json"
-        )
-        verified, verify_reason = verify_artifact(
-            model_path=str(resolved),
-            manifest_path=manifest_candidate,
-        )
-        if not verified:
-            logger.warning(
-                "MODEL_HOT_RELOAD_SKIPPED",
-                extra={
-                    "reason": "manifest_verify_failed",
-                    "verify_reason": verify_reason,
-                    "model_path": str(resolved),
-                    "manifest_path": manifest_candidate,
-                },
-            )
-            return False
-
     try:
-        model = joblib.load(resolved)
+        model = load_verified_joblib_artifact(
+            resolved,
+            manifest_path=manifest_path or None,
+        )
     except COMMON_EXC as exc:  # noqa: BLE001
         logger.warning(
             "MODEL_HOT_RELOAD_FAILED",
@@ -6200,7 +6175,7 @@ def _load_shadow_model() -> Any | None:
             )
             return None
         try:
-            model = joblib.load(shadow_path)
+            model = load_verified_joblib_artifact(shadow_path)
         except COMMON_EXC as exc:  # noqa: BLE001
             logger.warning(
                 "ML_SHADOW_MODEL_LOAD_FAILED",
@@ -25568,7 +25543,10 @@ def _enter_long(
         reference_price=current_price,
         allow_reference_fallback=fallback_gate_ok,
     )
-    if not quote_gate and fallback_gate_ok:
+    if not quote_gate and fallback_gate_ok and _synthetic_quote_fallback_allowed(
+        ctx,
+        allow_reference_fallback=fallback_gate_ok,
+    ):
         try:
             quote_gate = _synthetic_quote_decision(
                 symbol,
@@ -26515,7 +26493,10 @@ def _enter_short(
         reference_price=current_price,
         allow_reference_fallback=fallback_gate_ok,
     )
-    if not quote_gate and fallback_gate_ok:
+    if not quote_gate and fallback_gate_ok and _synthetic_quote_fallback_allowed(
+        ctx,
+        allow_reference_fallback=fallback_gate_ok,
+    ):
         try:
             quote_gate = _synthetic_quote_decision(
                 symbol,
@@ -27562,12 +27543,10 @@ class EnsembleModel:
 
 def load_model(path: str = MODEL_PATH) -> dict | EnsembleModel | None:
     """Load a model from ``path`` supporting both single and ensemble files."""
-    import joblib
-
     if not path or not os.path.exists(path):
         return None  # AI-AGENT-REF: handle disabled ML gracefully
 
-    loaded = joblib.load(path)
+    loaded = load_verified_joblib_artifact(path)
     # if this is a plain dict, return it directly
     if isinstance(loaded, dict):
         logger.info("MODEL_LOADED")
@@ -27581,7 +27560,7 @@ def load_model(path: str = MODEL_PATH) -> dict | EnsembleModel | None:
         models = []
         for p in [MODEL_RF_PATH, MODEL_XGB_PATH, MODEL_LGB_PATH]:
             try:
-                models.append(joblib.load(p))
+                models.append(load_verified_joblib_artifact(p))
             except (
                 FileNotFoundError,
                 PermissionError,
@@ -28768,9 +28747,8 @@ def _initialize_regime_model(ctx=None):
         return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
     elif os.path.exists(REGIME_MODEL_PATH):
         try:
-            model_path = Path(REGIME_MODEL_PATH)
-            return safe_pickle_load(model_path, [model_path.parent])
-        except RuntimeError as e:  # AI-AGENT-REF: path-validated load
+            return load_verified_joblib_artifact(REGIME_MODEL_PATH)
+        except RuntimeError as e:
             logger.warning("Failed to load regime model: %s", e)
             return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
     else:
@@ -28850,7 +28828,12 @@ def _initialize_regime_model(ctx=None):
             else:
                 regime_model.fit(X, y)
             try:
-                atomic_pickle_dump(regime_model, REGIME_MODEL_PATH)
+                atomic_joblib_dump(regime_model, REGIME_MODEL_PATH)
+                write_artifact_manifest(
+                    model_path=REGIME_MODEL_PATH,
+                    model_version="regime_model_v1",
+                    metadata={"artifact_type": "regime_model"},
+                )
             except (
                 FileNotFoundError,
                 PermissionError,
@@ -31187,6 +31170,78 @@ def _synthetic_quote_decision(
     return QuoteGateDecision(True, None, details)
 
 
+def _execution_quote_policy_flags(
+    cfg: Any | None,
+    *,
+    execution_mode: str,
+) -> tuple[bool, bool, bool, bool]:
+    require_realtime_nbbo = True
+    market_on_degraded = False
+    allow_fallback_price = False
+    require_limit_nbbo = False
+    if cfg is not None:
+        try:
+            require_realtime_nbbo = bool(
+                getattr(cfg, "execution_require_realtime_nbbo", True)
+            )
+        except Exception:
+            require_realtime_nbbo = True
+        try:
+            market_on_degraded = bool(
+                getattr(cfg, "execution_market_on_degraded", False)
+            )
+        except Exception:
+            market_on_degraded = False
+        try:
+            allow_fallback_price = bool(
+                getattr(cfg, "execution_allow_fallback_price", False)
+            )
+        except Exception:
+            allow_fallback_price = False
+        try:
+            require_limit_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", True))
+        except Exception:
+            require_limit_nbbo = True
+    if execution_mode == "live":
+        require_realtime_nbbo = True
+        market_on_degraded = False
+        allow_fallback_price = False
+        require_limit_nbbo = True
+    return (
+        require_realtime_nbbo,
+        market_on_degraded,
+        allow_fallback_price,
+        require_limit_nbbo,
+    )
+
+
+def _synthetic_quote_fallback_allowed(
+    ctx: BotContext,
+    *,
+    allow_reference_fallback: bool,
+) -> bool:
+    execution_mode = str(
+        getattr(ctx, "execution_mode", get_env("EXECUTION_MODE", "paper", cast=str))
+        or "paper"
+    ).strip().lower()
+    try:
+        cfg = get_trading_config()
+    except COMMON_EXC:
+        cfg = None
+    allow_fallback_quotes = bool(
+        getattr(cfg, "allow_execution_on_fallback_quotes", False)
+    ) if cfg is not None else False
+    if execution_mode == "live" and not allow_fallback_quotes:
+        return False
+    (
+        _require_realtime_nbbo,
+        _market_on_degraded,
+        allow_fallback_price,
+        _require_limit_nbbo,
+    ) = _execution_quote_policy_flags(cfg, execution_mode=execution_mode)
+    return bool(allow_reference_fallback or allow_fallback_price)
+
+
 @dataclass(frozen=True)
 class OrderIntentDecision:
     allowed: bool
@@ -31327,12 +31382,17 @@ def _ensure_executable_quote(
     require_bid_ask = True
     if cfg is not None:
         require_bid_ask = bool(getattr(cfg, "execution_require_bid_ask", True))
-    require_realtime_nbbo = bool(getattr(cfg, "execution_require_realtime_nbbo", True))
     allow_last_close = bool(getattr(cfg, "execution_allow_last_close", False))
     execution_mode = str(
         getattr(ctx, "execution_mode", get_env("EXECUTION_MODE", "paper", cast=str))
         or "paper"
     ).strip().lower()
+    (
+        require_realtime_nbbo,
+        _market_on_degraded,
+        allow_fallback_price,
+        _require_limit_nbbo,
+    ) = _execution_quote_policy_flags(cfg, execution_mode=execution_mode)
     if allow_reference_fallback:
         allow_last_close = True
     if data_client is None or not _stock_quote_request_ready():
@@ -31359,14 +31419,20 @@ def _ensure_executable_quote(
     gap_limit = float(getattr(cfg, "gap_ratio_limit", 0.0) or 0.0)
     slippage_bps = _slippage_setting_bps()
     reference_valid = reference_price is not None and math.isfinite(reference_price) and reference_price > 0.0
-    fallback_policy_enabled = True
+    fallback_policy_enabled = allow_fallback_price
     degraded_mode = "block"
     if cfg is not None:
-        fallback_policy_enabled = bool(getattr(cfg, "execution_allow_fallback_price", True))
         degraded_mode = str(getattr(cfg, "degraded_feed_mode", "block") or "block").strip().lower()
     fallback_permitted = reference_valid and (allow_reference_fallback or fallback_policy_enabled)
+    allow_fallback_quotes = bool(
+        getattr(cfg, "allow_execution_on_fallback_quotes", False)
+    ) if cfg is not None else False
+    if execution_mode == "live" and not allow_fallback_quotes:
+        fallback_permitted = False
     if fallback_policy_enabled and degraded_mode == "widen":
         fallback_permitted = True
+    if execution_mode == "live" and not allow_fallback_quotes:
+        fallback_permitted = False
 
     def _publish_quote_state(
         allowed: bool,
@@ -31646,14 +31712,21 @@ def _resolve_limit_price(
 
     slippage_bps = _slippage_setting_bps()
     failure_reasons: list[str] = []
-    require_nbbo = False
     last_trade_price: float | None = None
+    execution_mode = str(
+        getattr(ctx, "execution_mode", get_env("EXECUTION_MODE", "paper", cast=str))
+        or "paper"
+    ).strip().lower()
     try:
         cfg = get_trading_config()
     except COMMON_EXC:
         cfg = None
-    if cfg is not None:
-        require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", False))
+    (
+        _require_realtime_nbbo,
+        _market_on_degraded,
+        _allow_fallback_price,
+        require_nbbo,
+    ) = _execution_quote_policy_flags(cfg, execution_mode=execution_mode)
     if minute_df is not None:
         try:
             if "close" in minute_df:

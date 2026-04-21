@@ -238,3 +238,30 @@ def test_live_quote_gate_fails_closed_when_quote_support_unavailable(monkeypatch
 
     monkeypatch.delenv("EXECUTION_MODE", raising=False)
     reload_trading_config()
+
+
+def test_live_quote_gate_blocks_synthetic_reference_fallback(monkeypatch):
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("EXECUTION_ALLOW_FALLBACK_PRICE", "1")
+    monkeypatch.delenv("ALLOW_EXECUTION_ON_FALLBACK_QUOTES", raising=False)
+    reload_trading_config()
+    ctx = SimpleNamespace(data_client=object(), execution_mode="live")
+    monkeypatch.setattr(bot_engine, "_stock_quote_request_ready", lambda: True)
+    monkeypatch.setattr(bot_engine, "_fetch_quote", lambda *_args, **_kwargs: None)
+
+    decision = bot_engine._ensure_executable_quote(
+        cast(Any, ctx),
+        "AAPL",
+        reference_price=150.0,
+        allow_reference_fallback=True,
+    )
+
+    assert not decision
+    assert decision.reason == "missing_bid_ask"
+    quote_state = runtime_state.observe_quote_status()
+    assert quote_state["allowed"] is False
+    assert quote_state["synthetic"] is False
+
+    monkeypatch.delenv("EXECUTION_MODE", raising=False)
+    monkeypatch.delenv("EXECUTION_ALLOW_FALLBACK_PRICE", raising=False)
+    reload_trading_config()
