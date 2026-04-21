@@ -39,15 +39,24 @@ once. Future requests for the same pair use the working feed immediately, elimin
 
 ## Backup Provider
 
-- `BACKUP_DATA_PROVIDER`: fallback source when the primary feed returns empty data. The default is `yahoo`. Set to `finnhub` to use the Finnhub low-latency candles API when an API key is configured, or to `none` to disable backup queries.
+- `BACKUP_DATA_PROVIDER`: fallback source when the primary feed returns empty data.
+  The historical non-live default remains `yahoo`, but live-safe operator values
+  are `finnhub`, `finnhub_low_latency`, or `none`.
+- Live startup rejects `BACKUP_DATA_PROVIDER=yahoo`, and live execution blocks
+  Yahoo fallback in quote and minute-data recovery paths.
+- Set `BACKUP_DATA_PROVIDER=finnhub` to use the Finnhub low-latency candles API
+  when an API key is configured, or `none` to disable backup queries entirely.
 - When a fallback is used, the bot logs `USING_BACKUP_PROVIDER` with the chosen provider. If disabled or unknown, `BACKUP_PROVIDER_DISABLED` or `UNKNOWN_BACKUP_PROVIDER` is logged.
 - Daily-bar requests automatically fall back to the configured provider when the primary response is missing required OHLCV columns, ensuring cached consumers always receive canonical data.
 
 ## Provider Priority and Fallbacks
 
-- `DATA_PROVIDER_PRIORITY`: comma-separated order of providers to try. Default is `alpaca_iex,yahoo` unless SIP is entitled, in
-  which case `alpaca_sip` is inserted after `alpaca_iex`.
-- `MAX_DATA_FALLBACKS`: maximum number of fallbacks allowed before giving up. Default is `2` (tries both Alpaca feeds before Yahoo).
+- `DATA_PROVIDER_PRIORITY`: comma-separated order of providers to try. The
+  non-live default is `alpaca_iex,yahoo` unless SIP is entitled, in which case
+  `alpaca_sip` is inserted after `alpaca_iex`. For live-capable runtimes, prefer
+  `alpaca_iex,alpaca_sip,finnhub` or disable the backup provider entirely.
+- `MAX_DATA_FALLBACKS`: maximum number of fallbacks allowed before giving up.
+  Default is `2` in the legacy non-live ordering.
 
 Configure these variables in your deployment environment to control provider availability and failover behavior.
 

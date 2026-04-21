@@ -1023,11 +1023,11 @@ The bot uses a multi-provider approach for reliable market data access:
    - News sentiment analysis
    - Economic calendar
 
-3. **🥉 Yahoo Finance** (Fallback - Free)
-   - Backup data provider
-   - Historical data only
+3. **🥉 Yahoo Finance** (Non-live Fallback - Free)
+   - Historical-data fallback only
    - No real-time capabilities
-   - Used when other providers fail
+   - Suitable for research, backfills, and non-live recovery paths
+   - Not permitted as a live execution backup provider
 
 ### Data Configuration
 
@@ -1035,8 +1035,8 @@ The bot uses a multi-provider approach for reliable market data access:
 # Configure data providers in .env
 ALPACA_DATA_FEED=iex
 DATA_FEED_INTRADAY=iex
-BACKUP_DATA_PROVIDER=yahoo
-DATA_PROVIDER_PRIORITY=alpaca_iex,alpaca_sip,yahoo
+BACKUP_DATA_PROVIDER=finnhub
+DATA_PROVIDER_PRIORITY=alpaca_iex,alpaca_sip,finnhub
 
 # Finnhub API (optional, for enhanced data)
 # Set ENABLE_FINNHUB=1 and provide FINNHUB_API_KEY to enable Finnhub fallback
@@ -1062,6 +1062,11 @@ REQUIRE_MINIMUM_VOLUME=10000
 ### Data Quality Monitoring
 
 The bot automatically monitors data quality and switches providers when issues are detected:
+
+- Live-capable runtimes should use `BACKUP_DATA_PROVIDER=finnhub`,
+  `finnhub_low_latency`, or `none`.
+- Yahoo remains available only for non-live historical fallback and research
+  workflows; live startup rejects `BACKUP_DATA_PROVIDER=yahoo`.
 
 ```python
 # Automatic data provider switching
