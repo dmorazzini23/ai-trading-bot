@@ -1,40 +1,41 @@
-# TOOLS.md - Local Notes
+# TOOLS.md - ai-trading-bot local notes
 
-Skills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup.
+## Repo
 
-## What Goes Here
+- Root: `/home/aiuser/ai-trading-bot`
+- Python venv: `/home/aiuser/ai-trading-bot/venv`
+- Preferred Python invocation: `./venv/bin/python`
 
-Things like:
+## Services
 
-- Camera names and locations
-- SSH hosts and aliases
-- Preferred voices for TTS
-- Speaker/room names
-- Device nicknames
-- Anything environment-specific
+- Trading service: `ai-trading.service`
+- OpenClaw gateway: `openclaw-gateway.service`
 
-## Examples
+## Commands
 
-```markdown
-### Cameras
+- Health:
+  `curl -sS http://127.0.0.1:9001/healthz`
+- Trading service status:
+  `systemctl status ai-trading.service --no-pager`
+- Trading service logs:
+  `journalctl -u ai-trading.service -n 50 --no-pager`
+- OpenClaw gateway status:
+  `openclaw gateway status --token $(cat ~/.openclaw/gateway.token)`
 
-- living-room → Main area, 180° wide angle
-- front-door → Entrance, motion-triggered
+## Narrow sudo for aiuser
 
-### SSH
+- `systemctl status ai-trading.service`
+- `systemctl restart ai-trading.service`
+- `systemctl start ai-trading.service`
+- `systemctl stop ai-trading.service`
+- `systemctl show ai-trading.service`
 
-- home-server → 192.168.1.100, user: admin
+## Slack
 
-### TTS
+- Primary DM destination: `D0AUCEGTFGV`
+- Paired user id: `U0900J4TTB9`
 
-- Preferred voice: "Nova" (warm, slightly British)
-- Default speaker: Kitchen HomePod
-```
+## Hooks
 
-## Why Separate?
-
-Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.
-
----
-
-Add whatever helps you do your job. This is your cheat sheet.
+- Base path: `http://127.0.0.1:18789/hooks/ai-trading-bot`
+- Active transform directory: `~/.openclaw/hooks/transforms`

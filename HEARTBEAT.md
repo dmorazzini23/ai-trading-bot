@@ -1,7 +1,8 @@
-# HEARTBEAT.md Template
+# ai-trading-bot heartbeat checklist
 
-```markdown
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
-
-# Add tasks below when you want the agent to check something periodically.
-```
+- Stay quiet unless there is drift, breakage, or a meaningfully useful summary.
+- Check `ai-trading.service` health a few times per day, especially around market open and after any reported issue.
+- If `/healthz` is unhealthy, inspect recent journal lines and summarize only the actionable issue.
+- Periodically verify OpenClaw gateway and Slack connectivity.
+- Surface hook, cron, or memory failures only when they are actionable.
+- Avoid overnight noise unless something is broken or risky.
