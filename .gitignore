@@ -102,3 +102,6 @@ patch_full_cleanup.patch
 /runtime/run_manifest.jsonl
 /runtime/research_reports/
 /runtime/archive/
+
+# Local OpenClaw workspace state
+.openclaw/
