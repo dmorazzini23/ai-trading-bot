@@ -86,6 +86,41 @@ def test_replay_clips_symbol_cap_breaches_when_enabled() -> None:
     ) + 1e-6
 
 
+def test_replay_clips_gross_cap_breaches_when_enabled() -> None:
+    bars = [
+        {"symbol": "IBM", "ts": "2026-02-18T15:30:00Z", "close": 100.0},
+        {"symbol": "MSFT", "ts": "2026-02-18T15:31:00Z", "close": 10.0},
+    ]
+
+    def strategy(bar):
+        if bar["symbol"] != "MSFT":
+            return None
+        return {
+            "symbol": "MSFT",
+            "side": "buy",
+            "qty": 5,
+            "price": bar["close"],
+            "intent_key": "gross-clip-1",
+        }
+
+    result = ReplayEventLoop(
+        strategy=strategy,
+        seed=17,
+        max_symbol_notional=10_000.0,
+        max_gross_notional=120.0,
+        initial_positions={"IBM": 1.0},
+    ).run(bars)
+
+    codes = {item["code"] for item in result["violations"]}
+    assert "position_cap_exceeded" not in codes
+    assert len(result["orders"]) == 1
+    assert len(result["cap_adjustments"]) == 1
+    adjustment = result["cap_adjustments"][0]
+    assert adjustment["cap_kind"] == "gross"
+    assert float(adjustment["adjusted_qty"]) < float(adjustment["requested_qty"])
+    assert float(adjustment["adjusted_projected_symbol_notional"]) <= 20.0 + 1e-6
+
+
 def test_replay_gross_notional_uses_symbol_specific_prices() -> None:
     bars = [
         {"symbol": "PENNY", "ts": "2026-02-18T15:30:00Z", "close": 1.0},

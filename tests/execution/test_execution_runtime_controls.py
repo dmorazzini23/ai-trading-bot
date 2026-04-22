@@ -2971,6 +2971,95 @@ def test_symbol_intraday_slippage_budget_hard_blocks_on_capture_ratio_breach(
     assert context["capture_ratio_state"] == "hard_breach"
 
 
+def test_symbol_intraday_slippage_budget_uses_global_fill_pool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    engine = _engine_stub()
+    today = datetime.now(UTC).date().isoformat()
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    fill_events_path = runtime_dir / "fill_events.jsonl"
+    fill_events_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "fill_recorded",
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "fill_price": 200.0,
+                        "fill_qty": 10.0,
+                        "slippage_bps": 5.0,
+                        "expected_net_edge_bps": 20.0,
+                        "realized_net_edge_bps": 1.0,
+                        "entry_time": f"{today}T14:30:00+00:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "fill_recorded",
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "fill_price": 210.0,
+                        "fill_qty": 10.0,
+                        "slippage_bps": 5.0,
+                        "expected_net_edge_bps": 20.0,
+                        "realized_net_edge_bps": 1.0,
+                        "entry_time": f"{today}T15:00:00+00:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "fill_recorded",
+                        "symbol": "MSFT",
+                        "side": "buy",
+                        "fill_price": 300.0,
+                        "fill_qty": 10.0,
+                        "slippage_bps": 5.0,
+                        "expected_net_edge_bps": 40.0,
+                        "realized_net_edge_bps": 30.0,
+                        "entry_time": f"{today}T15:30:00+00:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "fill_recorded",
+                        "symbol": "MSFT",
+                        "side": "buy",
+                        "fill_price": 305.0,
+                        "fill_qty": 10.0,
+                        "slippage_bps": 5.0,
+                        "expected_net_edge_bps": 40.0,
+                        "realized_net_edge_bps": 30.0,
+                        "entry_time": f"{today}T16:00:00+00:00",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MAX_DRAG", "1000")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MIN_FILLS", "2")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_CAPTURE_RATIO_GUARD_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_CAPTURE_RATIO_MIN_FILLS", "2")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_CAPTURE_RATIO_SOFT_FLOOR", "0.20")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_CAPTURE_RATIO_HARD_FLOOR", "0.10")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_TZ", "UTC")
+
+    allowed, context = engine._symbol_intraday_slippage_budget_allows_opening(symbol="AAPL")
+
+    assert allowed is True
+    assert context["reason"] == "ok"
+    assert context["capture_ratio_state"] == "ok"
+    assert context["symbol_edge_capture_ratio"] == pytest.approx(0.5166666666666667)
+
+
 def test_symbol_loss_cooldown_triggers_and_expires(monkeypatch):
     engine = _engine_stub()
     clock = {"value": 100.0}

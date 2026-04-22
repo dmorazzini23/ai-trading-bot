@@ -1091,6 +1091,7 @@ class OrderManager:
             # from broker snapshots for a short interval after restart.
             if intent_status == "SUBMITTING":
                 updated_at = self._parse_iso_utc(intent.updated_at)
+                stale_age_seconds: int | None = None
                 if updated_at is not None:
                     age_seconds = max(
                         0.0,
@@ -1099,6 +1100,30 @@ class OrderManager:
                     if age_seconds < submitting_stale_seconds:
                         summary["deferred_submitting"] += 1
                         continue
+                    stale_age_seconds = int(age_seconds)
+
+                # If a submitting intent has aged past the reconciliation grace
+                # window and still cannot be matched or recovered, treat it as
+                # a failed submit instead of leaving the OMS wedged forever.
+                try:
+                    self._intent_store.close_intent(
+                        intent.intent_id,
+                        final_status="FAILED",
+                        last_error=(
+                            "submit ack missing after "
+                            f"{stale_age_seconds if stale_age_seconds is not None else 'stale'}s"
+                        ),
+                    )
+                except Exception:
+                    logger.debug(
+                        "OMS_INTENT_RECONCILE_CLOSE_STALE_SUBMIT_FAILED",
+                        extra={"intent_id": intent.intent_id},
+                        exc_info=True,
+                    )
+                    summary["errors"] += 1
+                else:
+                    summary["marked_failed"] += 1
+                continue
 
             if intent_status in {"SUBMITTED", "SUBMITTING", "PARTIALLY_FILLED"}:
                 recovered_order: Any | None = None

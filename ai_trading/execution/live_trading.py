@@ -26598,7 +26598,7 @@ class ExecutionEngine:
         *,
         symbol: str,
     ) -> tuple[bool, dict[str, Any]]:
-        """Block symbol openings when same-symbol intraday slippage drag exceeds budget."""
+        """Block openings when portfolio-wide intraday slippage drag exceeds budget."""
 
         enabled = _resolve_bool_env(
             "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_ENABLED"
@@ -26766,9 +26766,10 @@ class ExecutionEngine:
         )
         now_mono = float(monotonic_time())
         cache_key = (
-            f"{symbol_token}:{today}:{tz_name}:{max_drag}:{soft_multiplier}:"
+            f"global:{today}:{tz_name}:{max_drag}:{soft_multiplier}:"
             f"{hard_multiplier}:{tolerance_drag}:{min_fills}:{scan_lines}:"
-            f"{lookback_minutes}:{max_drag_bps}"
+            f"{lookback_minutes}:{max_drag_bps}:{dynamic_enabled}:{dynamic_lookback_fills}:"
+            f"{dynamic_min_fills}:{dynamic_percentile}:{dynamic_buffer_drag}:{dynamic_max_multiplier}"
         )
         cache_until = float(
             getattr(self, "_symbol_slippage_budget_cache_until_mono", 0.0) or 0.0
@@ -26888,9 +26889,6 @@ class ExecutionEngine:
             if not isinstance(row, Mapping):
                 continue
             if str(row.get("event") or "").strip().lower() != "fill_recorded":
-                continue
-            row_symbol = str(row.get("symbol") or "").strip().upper()
-            if row_symbol != symbol_token:
                 continue
             fill_ts_local = _parse_fill_timestamp(row.get("entry_time") or row.get("ts"))
             if fill_ts_local is None:

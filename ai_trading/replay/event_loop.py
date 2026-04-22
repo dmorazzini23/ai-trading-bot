@@ -147,7 +147,7 @@ class ReplayEventLoop:
             if qty <= 0:
                 continue
             if self.clip_intents_to_caps:
-                clipped_qty, adjustment = self._clip_qty_to_symbol_cap(
+                clipped_qty, adjustment = self._clip_qty_to_notional_limit(
                     symbol=symbol,
                     side=side,
                     qty=qty,
@@ -253,7 +253,17 @@ class ReplayEventLoop:
             "positions": dict(self._positions),
         }
 
-    def _clip_qty_to_symbol_cap(
+    def _gross_notional_before(self, *, symbol: str, close: float) -> float:
+        gross_before = 0.0
+        for sym, position_qty in self._positions.items():
+            if sym == symbol:
+                px = close
+            else:
+                px = self._last_price_by_symbol.get(sym, close)
+            gross_before += abs(position_qty * px)
+        return gross_before
+
+    def _clip_qty_to_notional_limit(
         self,
         *,
         symbol: str,
@@ -261,47 +271,75 @@ class ReplayEventLoop:
         qty: float,
         close: float,
     ) -> tuple[float, dict[str, Any] | None]:
-        if qty <= 0 or close <= 0 or self.max_symbol_notional <= 0:
+        if qty <= 0 or close <= 0:
             return max(0.0, float(qty)), None
+
         current_symbol_qty = float(self._positions.get(symbol, 0.0) or 0.0)
-        signed_qty = float(qty) if side == "buy" else -float(qty)
-        projected_symbol_qty = current_symbol_qty + signed_qty
         current_symbol_notional = abs(current_symbol_qty * close)
-        projected_symbol_notional = abs(projected_symbol_qty * close)
-        if projected_symbol_notional <= self.max_symbol_notional + 1e-9:
-            return float(qty), None
-        if projected_symbol_notional <= current_symbol_notional + 1e-9:
+        gross_before = float(self._gross_notional_before(symbol=symbol, close=close))
+        other_gross = max(0.0, gross_before - current_symbol_notional)
+
+        active_limits: list[tuple[str, float]] = []
+        if self.max_symbol_notional > 0:
+            active_limits.append(("symbol", float(self.max_symbol_notional)))
+        if self.max_gross_notional > 0:
+            gross_budget_for_symbol = float(self.max_gross_notional) - float(other_gross)
+            active_limits.append(("gross", float(gross_budget_for_symbol)))
+        else:
+            gross_budget_for_symbol = None
+
+        if not active_limits:
             return float(qty), None
 
-        max_abs_qty = max(0.0, float(self.max_symbol_notional) / float(close))
-        if abs(current_symbol_qty) > max_abs_qty + 1e-9:
+        cap_kind, effective_limit_notional = min(active_limits, key=lambda item: item[1])
+        requested_signed = float(qty) if side == "buy" else -float(qty)
+        requested_projected_symbol_qty = current_symbol_qty + requested_signed
+        requested_projected_symbol_notional = abs(requested_projected_symbol_qty * close)
+
+        if requested_projected_symbol_notional <= current_symbol_notional + 1e-9:
+            return float(qty), None
+
+        if requested_projected_symbol_notional <= effective_limit_notional + 1e-9:
+            return float(qty), None
+
+        if effective_limit_notional <= 0:
             adjusted_qty = 0.0
         else:
-            projected_sign = 1.0 if projected_symbol_qty > 0 else -1.0
-            target_qty = projected_sign * max_abs_qty
-            adjusted_signed_delta = target_qty - current_symbol_qty
+            max_abs_qty = float(effective_limit_notional) / float(close)
             if side == "buy":
-                adjusted_qty = max(0.0, min(float(qty), adjusted_signed_delta))
+                lower_bound = max(0.0, -max_abs_qty - current_symbol_qty)
+                upper_bound = min(float(qty), max_abs_qty - current_symbol_qty)
             else:
-                adjusted_qty = max(0.0, min(float(qty), -adjusted_signed_delta))
+                lower_bound = max(0.0, current_symbol_qty - max_abs_qty)
+                upper_bound = min(float(qty), current_symbol_qty + max_abs_qty)
+
+            if upper_bound + 1e-9 < lower_bound:
+                adjusted_qty = 0.0
+            else:
+                adjusted_qty = max(0.0, float(upper_bound))
 
         adjusted_signed = adjusted_qty if side == "buy" else -adjusted_qty
-        adjusted_projected_qty = current_symbol_qty + adjusted_signed
+        adjusted_projected_symbol_qty = current_symbol_qty + adjusted_signed
+        adjusted_projected_symbol_notional = abs(adjusted_projected_symbol_qty * close)
         adjustment = {
             "symbol": symbol,
             "side": side,
             "requested_qty": float(qty),
             "adjusted_qty": float(adjusted_qty),
             "close": float(close),
+            "cap_kind": cap_kind,
             "max_symbol_notional": float(self.max_symbol_notional),
+            "max_gross_notional": float(self.max_gross_notional),
+            "effective_limit_notional": float(effective_limit_notional),
             "current_symbol_qty": float(current_symbol_qty),
             "current_symbol_notional": float(current_symbol_notional),
-            "requested_projected_symbol_qty": float(projected_symbol_qty),
-            "requested_projected_symbol_notional": float(projected_symbol_notional),
-            "adjusted_projected_symbol_qty": float(adjusted_projected_qty),
-            "adjusted_projected_symbol_notional": float(
-                abs(adjusted_projected_qty * close)
-            ),
+            "requested_projected_symbol_qty": float(requested_projected_symbol_qty),
+            "requested_projected_symbol_notional": float(requested_projected_symbol_notional),
+            "adjusted_projected_symbol_qty": float(adjusted_projected_symbol_qty),
+            "adjusted_projected_symbol_notional": float(adjusted_projected_symbol_notional),
+            "gross_before": float(gross_before),
+            "other_gross": float(other_gross),
+            "gross_budget_for_symbol": (float(gross_budget_for_symbol) if gross_budget_for_symbol is not None else None),
         }
         return float(adjusted_qty), adjustment
 

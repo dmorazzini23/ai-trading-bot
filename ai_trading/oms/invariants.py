@@ -199,12 +199,13 @@ def evaluate_oms_lifecycle_parity_invariants(
                     event_types=event_types,
                 )
             if requires_submit_path and "SUBMIT_ACK" not in event_set:
-                _record(
-                    "missing_submit_ack",
-                    intent_id=intent.intent_id,
-                    status=normalized_status,
-                    event_types=event_types,
-                )
+                if normalized_status not in {"FAILED", "REJECTED"}:
+                    _record(
+                        "missing_submit_ack",
+                        intent_id=intent.intent_id,
+                        status=normalized_status,
+                        event_types=event_types,
+                    )
 
             created_idx = _first_index(event_types, "INTENT_CREATED")
             claimed_idx = _first_index(event_types, "SUBMIT_CLAIMED")
@@ -245,13 +246,18 @@ def evaluate_oms_lifecycle_parity_invariants(
                         status=normalized_status,
                         event_types=event_types,
                     )
-            if normalized_status == "FILLED" and "ORDER_PARTIALLY_FILLED" not in event_set:
-                _record(
-                    "filled_missing_partial_fill",
-                    intent_id=intent.intent_id,
-                    status=normalized_status,
-                    event_types=event_types,
+            if normalized_status == "FILLED":
+                order_filled_count = sum(1 for event_type in event_types if event_type == "ORDER_FILLED")
+                partial_fill_count = sum(
+                    1 for event_type in event_types if event_type == "ORDER_PARTIALLY_FILLED"
                 )
+                if partial_fill_count == 0 and order_filled_count < 2:
+                    _record(
+                        "filled_missing_partial_fill",
+                        intent_id=intent.intent_id,
+                        status=normalized_status,
+                        event_types=event_types,
+                    )
     finally:
         try:
             intent_store.close()
