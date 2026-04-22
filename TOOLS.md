@@ -34,6 +34,19 @@
 
 - Primary DM destination: `D0AUCEGTFGV`
 - Paired user id: `U0900J4TTB9`
+- Existing slash command: `/openclaw`
+- Spawn a lane from Slack:
+  `/openclaw /subagents spawn ops <task>`
+  `/openclaw /subagents spawn coder <task>`
+  `/openclaw /subagents spawn auditor <task>`
+  `/openclaw /subagents spawn deep-coder <task>`
+- Keep a thread on one lane:
+  `/openclaw /agents`
+  `/openclaw /focus <target>`
+- Change session behavior from Slack:
+  `/openclaw /model codex/gpt-5.4`
+  `/openclaw /think high`
+  `/openclaw /think xhigh`
 
 ## Hooks
 
