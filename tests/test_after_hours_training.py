@@ -2676,6 +2676,57 @@ def test_on_market_close_writes_after_hours_training_marker(
     assert payload["model_name"] == "logreg"
 
 
+def test_on_market_close_skips_legacy_retrain_when_stop_requested_after_after_hours(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_trading.core import bot_engine
+
+    class _FixedDateTime:
+        @staticmethod
+        def now(_tz=None):
+            return datetime(2026, 1, 6, 21, 10, tzinfo=UTC)
+
+    marker_path = tmp_path / "after_hours.marker.json"
+    stop_checks = {"count": 0}
+    calls: dict[str, int] = {"after_hours": 0, "legacy": 0}
+
+    def _should_stop() -> bool:
+        stop_checks["count"] += 1
+        return stop_checks["count"] >= 3
+
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ONCE_PER_DAY", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_MARKER_PATH", str(marker_path))
+    monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "1")
+    monkeypatch.setattr(bot_engine, "dt_", _FixedDateTime)
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(bot_engine, "should_stop", _should_stop)
+    monkeypatch.setattr(bot_engine, "get_ctx", lambda: object())
+    def _legacy_retrain(*_args, **_kwargs) -> None:
+        calls["legacy"] += 1
+
+    def _run_after_hours_training(**_kwargs):
+        calls["after_hours"] += 1
+        return {"status": "trained", "model_id": "m-1", "model_name": "logreg"}
+
+    monkeypatch.setattr(
+        bot_engine,
+        "load_or_retrain_daily",
+        _legacy_retrain,
+    )
+    monkeypatch.setattr(
+        after_hours,
+        "run_after_hours_training",
+        _run_after_hours_training,
+    )
+
+    bot_engine.on_market_close()
+
+    assert calls["after_hours"] == 1
+    assert calls["legacy"] == 0
+
+
 def test_marker_path_resolution_prefers_data_dir_for_relative_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

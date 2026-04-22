@@ -30564,6 +30564,12 @@ def on_market_close() -> None:
     if market_is_open(now_est):
         logger.info("RETRAIN_SKIP_MARKET_OPEN")
         return
+    if should_stop():
+        logger.info(
+            "MARKET_CLOSE_TRAINING_SKIPPED",
+            extra={"reason": "shutdown_requested", "stage": "entry"},
+        )
+        return
     after_hours_date_key = _resolve_after_hours_training_date_key(now_est)
     if not after_hours_date_key:
         logger.info("RETRAIN_SKIP_WINDOW", extra={"time": now_est.isoformat()})
@@ -30585,6 +30591,12 @@ def on_market_close() -> None:
         )
         after_hours_enabled = False
     if after_hours_enabled:
+        if should_stop():
+            logger.info(
+                "MARKET_CLOSE_TRAINING_SKIPPED",
+                extra={"reason": "shutdown_requested", "stage": "before_after_hours"},
+            )
+            return
         try:
             from ai_trading.training.after_hours import run_after_hours_training
 
@@ -30627,6 +30639,12 @@ def on_market_close() -> None:
                         )
         except Exception as exc:
             logger.exception(f"after-hours training failed: {exc}")
+    if should_stop():
+        logger.info(
+            "MARKET_CLOSE_TRAINING_SKIPPED",
+            extra={"reason": "shutdown_requested", "stage": "before_legacy"},
+        )
+        return
     legacy_daily_retrain = bool(
         get_env("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", True, cast=bool)
     )

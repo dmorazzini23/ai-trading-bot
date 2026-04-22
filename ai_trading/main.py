@@ -220,6 +220,12 @@ def _maybe_trigger_market_close_training(now_est: datetime | None = None) -> Non
     )
     if not (after_hours_enabled or legacy_enabled):
         return
+    if should_stop():
+        logger.info(
+            "MARKET_CLOSE_TRAINING_SKIPPED",
+            extra={"reason": "shutdown_requested", "stage": "pre_claim"},
+        )
+        return
 
     now_local = now_est or datetime.now(ZoneInfo("America/New_York"))
     if now_local.tzinfo is None:
@@ -231,6 +237,17 @@ def _maybe_trigger_market_close_training(now_est: datetime | None = None) -> Non
     if not _claim_market_close_training(date_key):
         return
     try:
+        if should_stop():
+            logger.info(
+                "MARKET_CLOSE_TRAINING_SKIPPED",
+                extra={
+                    "reason": "shutdown_requested",
+                    "stage": "post_claim",
+                    "date": date_key,
+                },
+            )
+            _release_market_close_training(date_key)
+            return
         _invoke_market_close_training()
     except Exception as exc:  # pragma: no cover - defensive fail-open
         _release_market_close_training(date_key)

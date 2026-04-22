@@ -134,6 +134,63 @@ def test_market_close_training_triggers_overnight_catchup_once_per_session(monke
     assert main._LAST_MARKET_CLOSE_TRAINING_DATE == "2026-01-06"
 
 
+def test_market_close_training_skips_when_stop_requested_before_claim(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "0")
+    monkeypatch.setattr(main, "should_stop", lambda: True)
+    calls = {"claim": 0, "invoke": 0}
+    def _claim(*_args, **_kwargs) -> bool:
+        calls["claim"] += 1
+        return True
+
+    def _invoke() -> None:
+        calls["invoke"] += 1
+
+    monkeypatch.setattr(
+        main,
+        "_claim_market_close_training",
+        _claim,
+    )
+    monkeypatch.setattr(
+        main,
+        "_invoke_market_close_training",
+        _invoke,
+    )
+    now_est = datetime(2026, 1, 6, 16, 5, tzinfo=ZoneInfo("America/New_York"))
+
+    main._maybe_trigger_market_close_training(now_est)
+
+    assert calls["claim"] == 0
+    assert calls["invoke"] == 0
+
+
+def test_market_close_training_releases_claim_when_stop_requested_after_claim(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "0")
+    stop_checks = {"count": 0}
+
+    def _should_stop() -> bool:
+        stop_checks["count"] += 1
+        return stop_checks["count"] >= 2
+
+    released: list[str] = []
+    invoked = {"count": 0}
+    monkeypatch.setattr(main, "should_stop", _should_stop)
+    monkeypatch.setattr(main, "_claim_market_close_training", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(main, "_release_market_close_training", lambda date_key: released.append(date_key))
+    monkeypatch.setattr(
+        main,
+        "_invoke_market_close_training",
+        lambda: invoked.__setitem__("count", invoked["count"] + 1),
+    )
+    now_est = datetime(2026, 1, 6, 16, 5, tzinfo=ZoneInfo("America/New_York"))
+
+    main._maybe_trigger_market_close_training(now_est)
+
+    assert invoked["count"] == 0
+    assert released == ["2026-01-06"]
+
+
 def test_market_close_training_skips_overnight_when_catchup_disabled(monkeypatch):
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "0")
