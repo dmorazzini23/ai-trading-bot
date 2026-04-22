@@ -183,12 +183,12 @@ def check_key_jsonl(runtime_dir: Path, sample_size: int) -> CheckResult:
 
 def check_model_artifacts(models_dir: Path) -> CheckResult:
     try:
-        import joblib  # type: ignore
-    except Exception as exc:
+        from ai_trading.models.artifacts import load_verified_joblib_artifact
+    except ImportError as exc:
         return CheckResult(
             name="model_artifacts",
             status="fail",
-            summary="joblib unavailable",
+            summary="artifact loader unavailable",
             details={"error": str(exc)},
         )
 
@@ -199,7 +199,7 @@ def check_model_artifacts(models_dir: Path) -> CheckResult:
     loaded = 0
     for path in pkl_files + joblib_files:
         try:
-            _ = joblib.load(path)
+            _ = load_verified_joblib_artifact(path)
             loaded += 1
         except Exception as exc:
             bad.append({"path": str(path), "error": str(exc)})

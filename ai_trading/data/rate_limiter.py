@@ -6,10 +6,10 @@ API throttling and improve data fetch reliability.
 
 import logging
 import time
+from collections import deque
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Optional
-from collections import deque
-from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class TokenBucket:
             True if tokens were consumed, False otherwise
         """
         
-        start_time = time.time()
+        start_time = time.monotonic()
         
         while True:
             with self.lock:
@@ -77,7 +77,7 @@ class TokenBucket:
                 wait_time = tokens_needed / self.rate
                 
                 if timeout is not None:
-                    elapsed = time.time() - start_time
+                    elapsed = time.monotonic() - start_time
                     if elapsed + wait_time > timeout:
                         logger.warning(
                             "RATE_LIMIT_TIMEOUT",
@@ -199,7 +199,7 @@ class SlidingWindowRateLimiter:
         """
         
         with self.lock:
-            now = datetime.now()
+            now = datetime.now(UTC)
             cutoff = now - timedelta(seconds=self.window_seconds)
             
             # Remove old requests outside the window
@@ -224,7 +224,7 @@ class SlidingWindowRateLimiter:
             True if proceeded, False if timeout
         """
         
-        start_time = time.time()
+        start_time = time.monotonic()
         
         while True:
             can_proceed, wait_time = self.can_proceed()
@@ -233,7 +233,7 @@ class SlidingWindowRateLimiter:
                 return True
             
             if timeout is not None:
-                elapsed = time.time() - start_time
+                elapsed = time.monotonic() - start_time
                 if elapsed + wait_time > timeout:
                     return False
             

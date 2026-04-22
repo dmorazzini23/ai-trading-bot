@@ -2956,7 +2956,7 @@ def _probe_local_api_health(port: int) -> bool:
     try:
         import http.client as _http
         import json as _json
-    except Exception:  # pragma: no cover - stdlib import failures are unexpected
+    except ImportError:  # pragma: no cover - stdlib import failures are unexpected
         logger.debug("LOCAL_API_HEALTH_PROBE_IMPORT_FAILED", exc_info=True)
         return False
 
@@ -2967,26 +2967,26 @@ def _probe_local_api_health(port: int) -> bool:
         conn.request("GET", "/healthz")
         resp = conn.getresponse()
         payload = resp.read()  # must consume response before closing
-    except Exception:
+    except (OSError, RuntimeError, TimeoutError, _http.HTTPException):
         logger.debug("LOCAL_API_HEALTH_PROBE_REQUEST_FAILED", extra={"port": port}, exc_info=True)
         return False
     finally:
         if resp is not None:
             try:
                 resp.close()
-            except Exception:
+            except OSError:
                 logger.debug("LOCAL_API_PROBE_RESPONSE_CLOSE_FAILED", exc_info=True)
         try:
             if conn is not None:
                 conn.close()
-        except Exception:
+        except OSError:
             logger.debug("LOCAL_API_PROBE_CONN_CLOSE_FAILED", exc_info=True)
 
     if resp is None or resp.status != 200:
         return False
     try:
         data = _json.loads(payload.decode("utf-8"))
-    except Exception:
+    except (UnicodeDecodeError, _json.JSONDecodeError):
         logger.debug("LOCAL_API_HEALTH_PROBE_DECODE_FAILED", extra={"port": port}, exc_info=True)
         return False
     return bool(data) and data.get("service") == "ai-trading"
@@ -3010,12 +3010,22 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
 
     # ── Aux health server on HEALTHCHECK_PORT (non-blocking, separate Flask app)
     try:
-        from ai_trading.health import HealthCheck
+        from ai_trading.app import build_standalone_healthcheck_app, run_standalone_healthcheck_app
+
         health_port = int(getattr(settings, "healthcheck_port", 8081) or 8081)
         if int(port) != int(health_port):
-            ctx = SimpleNamespace(host="0.0.0.0", port=health_port, service="ai-trading")
-            hc = HealthCheck(ctx=ctx)
-            th = threading.Thread(target=hc.run, name="health-server", daemon=True)
+            health_app = build_standalone_healthcheck_app(fail_fast_env=True)
+            th = threading.Thread(
+                target=run_standalone_healthcheck_app,
+                kwargs={
+                    "app": health_app,
+                    "host": "0.0.0.0",
+                    "port": health_port,
+                    "logger": logger,
+                },
+                name="health-server",
+                daemon=True,
+            )
             th.start()
             logger.info("HEALTH_SERVER_STARTED", extra={"port": health_port})
         else:

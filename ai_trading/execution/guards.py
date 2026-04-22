@@ -13,7 +13,7 @@ from ai_trading.logging import get_logger
 def _utcnow() -> _dt.datetime:
     """Return timezone-aware UTC now."""
 
-    return _dt.datetime.utcnow().replace(tzinfo=_dt.timezone.utc)
+    return _dt.datetime.now(tz=_dt.timezone.utc)
 
 
 class SafetyState:

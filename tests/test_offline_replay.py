@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ai_trading.models.artifacts import write_artifact_manifest
 from ai_trading.tools.offline_replay import main
 
 
@@ -73,6 +74,11 @@ def _write_model(
         penalties=penalties,
     )
     joblib.dump(model, path)
+    write_artifact_manifest(
+        model_path=path,
+        model_version="offline-replay-test-model-v1",
+        metadata={"source": "tests.test_offline_replay"},
+    )
 
 
 def _write_synthetic_bars(csv_path: Path, periods: int = 360) -> None:

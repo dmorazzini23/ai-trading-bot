@@ -4,15 +4,16 @@ import argparse
 import json
 import logging
 import os
-from threading import Lock
 import time
-import joblib
+from threading import Lock
 from typing import TYPE_CHECKING
-from ai_trading.utils.lazy_imports import load_pandas
+
 from ai_trading.config.management import TradingConfig, reload_env
-from ai_trading.utils.http import http, HTTP_TIMEOUT
-from ai_trading.features.prepare import prepare_indicators
 from ai_trading.exc import RequestException
+from ai_trading.features.prepare import prepare_indicators
+from ai_trading.models.artifacts import load_verified_joblib_artifact
+from ai_trading.utils.http import HTTP_TIMEOUT, http
+from ai_trading.utils.lazy_imports import load_pandas
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -118,7 +119,7 @@ def load_model(regime: str):
     path = MODEL_FILES.get(regime)
     if not path or not os.path.exists(path):
         raise FileNotFoundError(f"Model for regime '{regime}' not found: {path}")
-    return joblib.load(path)
+    return load_verified_joblib_artifact(path)
 
 def predict(csv_path: str, freq: str = 'intraday') -> tuple[int | None, float | None]:
     """Return the predicted class and probability for the data in ``csv_path``."""

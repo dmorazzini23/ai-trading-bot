@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import BaseModel
 from pydantic import field_validator, Field
@@ -108,7 +108,7 @@ def debug_environment() -> dict:
     }
 
     return {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "validation_status": "unknown",
         "critical_issues": [],
         "warnings": [],

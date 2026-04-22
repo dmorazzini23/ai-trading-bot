@@ -28,6 +28,9 @@ PICKLE_ALLOWLIST = {
     # offline migration utility for trusted legacy artifacts, not a runtime
     # deserialization path.
     Path("ai_trading/tools/migrate_pickle_artifacts.py"),
+    # tests/test_model_load_allowlist.py contains the literal pattern strings
+    # for the repository guard itself; it is not a runtime deserialization site.
+    Path("tests/test_model_load_allowlist.py"),
 }
 
 issues: list[tuple[Path, str]] = []

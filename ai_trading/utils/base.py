@@ -688,7 +688,7 @@ def get_volume_spike_factor(symbol: str) -> float:
 def get_ml_confidence(symbol: str) -> float:
     """Return model confidence for ``symbol``."""
     try:
-        from ai_trading.ml_model import load_model
+        from ai_trading.models.artifacts import load_verified_joblib_artifact
     except COMMON_EXC as e:
         logger.error("load_model failed", exc_info=e)
         return 0.5
@@ -700,7 +700,7 @@ def get_ml_confidence(symbol: str) -> float:
         ) from exc
     S = get_settings()
     model_path = S.model_path
-    model = load_model(model_path)
+    model = load_verified_joblib_artifact(model_path)
     if model is None:
         return 0.5
     feats = pd.DataFrame({"price": [0.0]})

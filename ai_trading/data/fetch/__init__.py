@@ -26,9 +26,24 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, cast
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
+_FETCH_BASE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    ArithmeticError,
+    AssertionError,
+    AttributeError,
+    EOFError,
+    ImportError,
+    LookupError,
+    NameError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+FETCH_FALLBACK_EXCEPTIONS: tuple[type[BaseException], ...] = _FETCH_BASE_EXCEPTIONS
+
 try:  # pragma: no cover - requests optional in some test environments
     import requests as _requests  # type: ignore[import]
-except Exception:  # pragma: no cover - fallback sentinel when requests unavailable
+except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - fallback sentinel when requests unavailable
     _requests = None  # type: ignore[assignment]
 from functools import lru_cache
 
@@ -48,12 +63,12 @@ def _now_ts() -> float:
     try:
         if hasattr(time, "time"):
             return float(time.time())
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
     try:
         if hasattr(time, "monotonic"):
             return float(time.monotonic())
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
     return 0.0
 
@@ -134,14 +149,14 @@ _BOOTSTRAP_BACKUP_REASON: dict[str, object] | None = None
 _DATA_HEALTH_LOCK = Lock()
 try:
     _DATA_FAILURE_THRESHOLD = max(1, int(get_env("DATA_PROVIDER_DEGRADED_THRESHOLD", 3, cast=int)))
-except Exception:
+except FETCH_FALLBACK_EXCEPTIONS:
     _DATA_FAILURE_THRESHOLD = 3
 try:
     _DATA_FAILURE_WINDOW = max(
         1.0,
         float(get_env("DATA_PROVIDER_DEGRADED_WINDOW", 60, cast=float)),
     )
-except Exception:
+except FETCH_FALLBACK_EXCEPTIONS:
     _DATA_FAILURE_WINDOW = 60.0
 _DATA_HEALTH_STATE: dict[str, Any] = {
     "consecutive_failures": 0,
@@ -165,7 +180,7 @@ def _configured_primary_provider() -> str | None:
 def _drop_last_bar_enabled() -> bool:
     try:
         cfg = get_trading_config()
-    except Exception as exc:
+    except FETCH_FALLBACK_EXCEPTIONS as exc:
         logger.debug("DROP_LAST_BAR_CONFIG_UNAVAILABLE", exc_info=exc)
         return True
     return bool(getattr(cfg, "data_drop_last_partial_bar", True))
@@ -180,7 +195,7 @@ def _apply_incomplete_row_policy(
         return frame
     try:
         import pandas as pd  # type: ignore
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pd = None  # type: ignore
     drop_events: list[dict[str, Any]] = []
     df_out = frame
@@ -189,7 +204,7 @@ def _apply_incomplete_row_policy(
             try:
                 last_row = df_out.iloc[-1]
                 partial_mask = last_row[["open", "high", "low", "close", "volume"]].isna().any()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 partial_mask = False
             if partial_mask:
                 df_out = df_out.iloc[:-1]
@@ -197,7 +212,7 @@ def _apply_incomplete_row_policy(
         before_close = len(df_out)
         try:
             df_out = df_out.dropna(subset=["close"])
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
         else:
             dropped = before_close - len(df_out)
@@ -375,7 +390,7 @@ def _record_session_last_request(session_obj, method, url, params, headers):
         if feed_value is not None:
             feeds = calls.setdefault("feeds", [])
             feeds.append(str(feed_value))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return
 
 
@@ -383,7 +398,7 @@ def _env_int(name: str, default: int) -> int:
     """Return environment integer value with graceful fallback."""
     try:
         value = get_env(name, default, cast=int)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         value = default
     if value in (None, ""):
         return default
@@ -397,7 +412,7 @@ def _env_float(name: str, default: float) -> float:
     """Return environment float value with graceful fallback."""
     try:
         value = get_env(name, default, cast=float)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         value = default
     if value in (None, ""):
         return default
@@ -418,7 +433,7 @@ def _coerce_memo_ts(raw: Any) -> datetime | None:
     if isinstance(raw, (int, float)) and math.isfinite(raw):
         try:
             return datetime.fromtimestamp(float(raw), tz=UTC)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return None
     coerced = safe_to_datetime(raw)
     if isinstance(coerced, datetime):
@@ -467,7 +482,7 @@ def _is_fresh(ts: datetime) -> bool:
     try:
         ts_utc = ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
         age = (datetime.now(UTC) - ts_utc.astimezone(UTC)).total_seconds()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return False
     return age <= ttl
 
@@ -494,7 +509,7 @@ def _rate_limit_cooldown(resp: Any | None = None) -> float:
         return float(retry_after)
     try:
         raw_value = get_env("AI_TRADING_RATE_LIMIT_COOLDOWN", 60, cast=float)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         raw_value = 60
     try:
         cooldown = float(raw_value)
@@ -521,13 +536,13 @@ def _resolve_consecutive_failure_threshold() -> int:
         from ai_trading.config.settings import (
             get_settings as _get_settings,  # local import to avoid cycles
         )
-    except Exception:  # pragma: no cover - settings optional in tests
+    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - settings optional in tests
         _get_settings = None
     settings = None
     if _get_settings is not None:
         try:
             settings = _get_settings()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             settings = None
     if settings is not None:
         for attr in (
@@ -549,20 +564,20 @@ def _resolve_consecutive_failure_threshold() -> int:
                 None,
                 cast=int,
             )
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             candidate = None
     if candidate is None:
         raw = str(get_env("AI_TRADING_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD", "") or "").strip()
         if raw:
             try:
                 candidate = int(raw)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 candidate = None
     if candidate is None:
         candidate = 1
     try:
         return max(int(candidate), 1)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return 1
 
 
@@ -598,7 +613,7 @@ def _clear_consecutive_failures(symbol: str, timeframe: str | None = None) -> No
 def _yahoo_failure_threshold() -> int:
     try:
         value = get_env("AI_TRADING_YAHOO_FAILURE_THRESHOLD", 3, cast=int)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         value = 3
     try:
         threshold = int(value)
@@ -610,7 +625,7 @@ def _yahoo_failure_threshold() -> int:
 def _yahoo_failure_window_seconds() -> float:
     try:
         value = get_env("AI_TRADING_YAHOO_FAILURE_WINDOW_SECONDS", 300, cast=float)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         value = 300
     try:
         window = float(value)
@@ -663,7 +678,7 @@ def _yahoo_fallback_allowed(symbol: str, timeframe: str | None = None, *, force:
     if monitor is not None:
         try:
             provider_disabled = monitor.is_disabled("alpaca") or monitor.is_disabled("alpaca_iex")
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             provider_disabled = False
     required = max(int(_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD), 1)
     consecutive = _consecutive_failure_count(symbol, timeframe)
@@ -674,11 +689,11 @@ def _yahoo_fallback_allowed(symbol: str, timeframe: str | None = None, *, force:
             return True
         try:
             fail_count = int(monitor.fail_counts.get("alpaca", 0))
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             fail_count = 0
         try:
             threshold = int(getattr(monitor, "threshold", 1))
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             threshold = 1
         if fail_count >= max(threshold, 1):
             return True
@@ -692,11 +707,11 @@ def _yahoo_fallback_allowed(symbol: str, timeframe: str | None = None, *, force:
         return False
     try:
         fail_count = int(monitor.fail_counts.get("alpaca", 0))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         fail_count = 0
     try:
         threshold = int(getattr(monitor, "threshold", 1))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         threshold = 1
     if fail_count >= max(threshold, 1):
         return True
@@ -717,7 +732,7 @@ def _resolve_host_limit() -> tuple[str | None, int]:
     for key in candidates:
         try:
             env_value = get_env(key, None)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             env_value = None
         if env_value is None:
             env_value = get_env(key)
@@ -848,7 +863,7 @@ def acquire_host_slot(host: str | None):
 def _fallback_slots_remaining(_state: dict[str, Any] | None = None):
     try:
         max_fb = max_data_fallbacks()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         max_fb = None
     if max_fb is None or not isinstance(_state, dict):
         return max_fb
@@ -880,14 +895,14 @@ def _log_fallback_skip(
     if details:
         try:
             payload.update(dict(details))
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
     try:
         logger.info(
             "DATA_SOURCE_FALLBACK_SKIPPED",
             extra=_norm_extra(payload),
         )
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
 
 
@@ -910,7 +925,7 @@ def _sip_allowed() -> bool:
             return True
     try:
         resolved = resolve_alpaca_feed("sip")
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         resolved = "iex"
     return str(resolved).strip().lower() == "sip"
 
@@ -960,7 +975,7 @@ def _provider_switch_cooldown_seconds() -> float:
         if candidate is None:
             return 0.0
         return max(float(candidate), 0.0)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return 0.0
 
 
@@ -996,6 +1011,8 @@ def _ensure_override_state_current() -> None:
         return
     if sig != _ENV_STAMP:
         _ENV_STAMP = sig
+        if _detect_pytest_env():
+            return
         _clear_cycle_overrides()
 
 
@@ -1015,13 +1032,13 @@ def _current_intraday_feed() -> str:
         from ai_trading.config import (
             DATA_FEED_INTRADAY as _CFG_INTRADAY,  # local import to avoid cycles
         )
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         _CFG_INTRADAY = None
     feed = _CFG_INTRADAY
     if feed in (None, ""):
         try:
             settings = _current_settings()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             settings = None
         if settings is not None:
             feed = (
@@ -1044,7 +1061,7 @@ def _intraday_feed_prefers_sip() -> bool:
     ]
     try:
         settings = _current_settings()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         settings = None
     if settings is not None:
         candidates.extend(
@@ -1073,7 +1090,7 @@ def _safe_empty_should_emit(
     if callable(hook):
         try:
             return bool(hook(key, when))
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return False
     return False
 
@@ -1086,7 +1103,7 @@ def _safe_empty_record(
     if callable(hook):
         try:
             result = hook(key, when)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return 0
         return int(result) if result is not None else 0
     return 0
@@ -1097,7 +1114,7 @@ def _safe_empty_classify(**kwargs: Any) -> int:
     if callable(hook):
         try:
             return int(hook(**kwargs))
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return logging.INFO
     return logging.INFO
 
@@ -1108,7 +1125,7 @@ def _safe_backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> p
         if callable(hook):
             try:
                 return hook(symbol, start, end, interval)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
         pd_local = _ensure_pandas()
         if pd_local is None:
@@ -1121,12 +1138,12 @@ def _time_now(default: float | None = 0.0) -> float:
     if callable(time_fn):
         try:
             return float(time_fn())
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
     if default is not None:
         try:
             return float(default)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
     return _now_ts()
 
@@ -1137,7 +1154,7 @@ def _record_override(symbol: str, feed: str, timeframe: str = "1Min") -> None:
     except ValueError:
         try:
             normalized_feed = str(feed).strip().lower()
-        except Exception:  # pragma: no cover - defensive
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             return
     if not normalized_feed:
         return
@@ -1153,7 +1170,7 @@ def _cycle_set_fallback_feed(symbol: str, feed: str, timeframe: str | TimeFrame 
     """Record the desired fallback feed for the current cycle."""
     try:
         tf_value = _canon_tf(timeframe if isinstance(timeframe, str) else str(timeframe))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         tf_value = _canon_tf("1Min")
     _record_override(symbol, feed, timeframe=tf_value)
 
@@ -1238,7 +1255,7 @@ async def run_with_concurrency(limit: int, coros):
     """Execute *coros* concurrently while keeping at most *limit* in flight."""
     try:
         reload_host_limit_if_env_changed()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
 
     max_concurrency = max(1, int(limit or 1))
@@ -1350,17 +1367,17 @@ def _emit_capture_record(
                 None,
                 extra=dict(extra or {}),
             )
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             record = base_logger.makeRecord(base_logger.name, level, __file__, 0, message, (), None)
             if extra:
                 for key, value in extra.items():
                     setattr(record, key, value)
         try:
             record.message = record.getMessage()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             record.message = message
         handler.emit(record)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         # Avoid interfering with production logging when pytest internals change.
         return
 
@@ -1379,14 +1396,14 @@ def _data_fallback_allowed() -> bool:
     explicit: bool | None
     try:
         explicit = get_env("AI_TRADING_ALLOW_DATA_FALLBACK", None, cast=bool)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         explicit = None
     if explicit is not None:
         return bool(explicit)
 
     try:
         settings = _current_settings()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         settings = None
     if settings is not None:
         try:
@@ -1417,7 +1434,7 @@ def fetch_daily_backup(
 
     try:
         backup_provider = getattr(_current_settings(), "backup_data_provider", get_backup_data_provider())
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         backup_provider = get_backup_data_provider()
     metadata = {"symbols": sorted(filtered.keys())}
     if not _data_fallback_allowed():
@@ -1505,6 +1522,9 @@ class HTTPError(RequestException):
     pass
 
 
+FETCH_FALLBACK_EXCEPTIONS = _FETCH_BASE_EXCEPTIONS + (RequestException,)
+
+
 def _incr(metric: str, *, value: float = 1.0, tags: dict[str, str] | None = None) -> None:
     """Increment a metric via the lightweight data.metrics hook.
 
@@ -1513,7 +1533,7 @@ def _incr(metric: str, *, value: float = 1.0, tags: dict[str, str] | None = None
     """
     try:
         metrics.incr(metric, value=value, tags=tags)  # type: ignore[attr-defined]
-    except Exception:  # pragma: no cover - metrics optional
+    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - metrics optional
         pass
 
 
@@ -1530,7 +1550,7 @@ def _incr_empty_metric(symbol: str, feed: str, timeframe: str) -> None:
                 "timeframe": timeframe,
             },
         )
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
 
 
@@ -1542,7 +1562,7 @@ def _normalize_feed_value(feed: object) -> str:
     """Return canonical feed string while enforcing validation."""
     try:
         candidate = str(feed).strip().lower()
-    except Exception as exc:  # pragma: no cover - defensive
+    except FETCH_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
         raise ValueError(f"invalid feed: {feed!r}") from exc
 
     if not candidate:
@@ -1596,7 +1616,7 @@ class MissingOHLCVColumnsError(DataFetchError):
                 return tuple(str(item) for item in value)
             try:
                 return tuple(str(item) for item in list(value))
-            except Exception:  # pragma: no cover - defensive coercion
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive coercion
                 return None
 
         self.raw_payload_columns = _coerce_seq(
@@ -1623,7 +1643,7 @@ class EmptyBarsError(DataFetchError, ValueError):
         super().__init__(message, *args)
         try:
             message_text = str(message) if message else str(self)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             message_text = str(self)
         if isinstance(message_text, str) and "alpaca_empty" in message_text.lower():
             fetch_state = _get_fetch_state()
@@ -1650,7 +1670,7 @@ def ensure_datetime(value: Any) -> _dt.datetime:
     if pd_mod is not None:
         try:
             out_of_bounds = (pd_mod.errors.OutOfBoundsDatetime,)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             out_of_bounds = ()
     if callable(value):
         try:
@@ -1725,35 +1745,35 @@ _ENABLE_HTTP_FALLBACK = str(get_env("ENABLE_HTTP_FALLBACK", "1")).strip().lower(
 def _alpaca_empty_error_threshold() -> int:
     try:
         return max(1, int(globals().get("_ALPACA_EMPTY_ERROR_THRESHOLD", 2)))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return max(1, _env_int("ALPACA_EMPTY_ERROR_THRESHOLD", 2))
 
 
 def _alpaca_close_nan_disable_threshold() -> int:
     try:
         return max(1, int(globals().get("_ALPACA_CLOSE_NAN_DISABLE_THRESHOLD", 1)))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return max(1, _env_int("ALPACA_CLOSE_NAN_DISABLE_THRESHOLD", 1))
 
 
 def _fetch_bars_max_retries() -> int:
     try:
         return max(1, int(globals().get("_FETCH_BARS_MAX_RETRIES", 5)))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return max(1, _env_int("FETCH_BARS_MAX_RETRIES", 5))
 
 
 def _fetch_bars_backoff_base() -> float:
     try:
         return max(1.0, float(globals().get("_FETCH_BARS_BACKOFF_BASE", 2.0)))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return max(1.0, _env_float("FETCH_BARS_BACKOFF_BASE", 2.0))
 
 
 def _fetch_bars_backoff_cap() -> float:
     try:
         cap_value = float(globals().get("_FETCH_BARS_BACKOFF_CAP", 5.0))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         cap_value = _env_float("FETCH_BARS_BACKOFF_CAP", 5.0)
     return max(_fetch_bars_backoff_base(), cap_value)
 
@@ -1761,7 +1781,7 @@ def _fetch_bars_backoff_cap() -> float:
 def _minute_gap_warning_threshold() -> int:
     try:
         return max(0, int(globals().get("_MINUTE_GAP_WARNING_THRESHOLD", 3)))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return max(0, _env_int("MINUTE_GAP_WARNING_THRESHOLD", 3))
 
 
@@ -1778,7 +1798,7 @@ def _env_flag_enabled(name: str, default: str = "0") -> bool:
     """Return boolean flag for *name* using :func:`get_env` with graceful fallback."""
     try:
         raw_value = get_env(name, default)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         raw_value = get_env(name, default)
     if raw_value is None:
         raw_value = default
@@ -1787,7 +1807,7 @@ def _env_flag_enabled(name: str, default: str = "0") -> bool:
     try:
         if isinstance(raw_value, (int, float)):
             return float(raw_value) != 0.0
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
     text = str(raw_value).strip().lower()
     if not text:
@@ -1821,7 +1841,7 @@ def _http_fallback_permitted(
         return global_enabled
     try:
         tf_norm = _canon_tf(timeframe)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         tf_norm = str(timeframe or "").strip()
     if not tf_norm:
         return global_enabled
@@ -1879,7 +1899,7 @@ def _classify_fallback_reason(
     if feed_hint_raw not in (None, ""):
         try:
             feed_hint = str(feed_hint_raw).strip().lower()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             feed_hint = ""
         if feed_hint.startswith("alpaca_"):
             feed_hint = feed_hint.split("_", 1)[1]
@@ -2049,7 +2069,7 @@ def _coerce_reason_text(value: Any | None) -> str | None:
         return None
     try:
         text = str(value).strip()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return None
     return text or None
 
@@ -2165,7 +2185,7 @@ def _set_global_backup_skip(timeframe: str, *, until: datetime | float | None = 
     else:
         try:
             until_dt = datetime.fromtimestamp(float(until), tz=UTC)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             until_dt = None
     if until_dt is None:
         return
@@ -2174,7 +2194,7 @@ def _set_global_backup_skip(timeframe: str, *, until: datetime | float | None = 
         try:
             if current_until.tzinfo is None:
                 current_until = current_until.replace(tzinfo=UTC)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             current_until = None
     if isinstance(current_until, datetime) and current_until >= until_dt:
         return
@@ -2221,12 +2241,12 @@ def _timeframe_has_active_backup_skip(timeframe: str) -> bool:
             if until_dt.tzinfo is None:
                 try:
                     until_dt = until_dt.replace(tzinfo=UTC)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     until_dt = None
         else:
             try:
                 until_dt = datetime.fromtimestamp(float(until_raw), tz=UTC)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 until_dt = None
         if until_dt is None:
             _BACKUP_SKIP_UNTIL.pop((symbol_key, timeframe_key), None)
@@ -2256,14 +2276,14 @@ def _backup_probe_watch_enabled(timeframe: str) -> bool:
         return False
     try:
         return bool(get_env("AI_TRADING_BACKUP_PROBE_GUARD_ENABLED", True, cast=bool))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return True
 
 
 def _backup_probe_missing_threshold() -> timedelta:
     try:
         seconds = int(get_env("AI_TRADING_BACKUP_PROBE_MISSING_SECONDS", 300, cast=int))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         seconds = 300
     seconds = max(0, min(seconds, 7200))
     return timedelta(seconds=seconds)
@@ -2272,7 +2292,7 @@ def _backup_probe_missing_threshold() -> timedelta:
 def _backup_probe_alert_cooldown() -> timedelta:
     try:
         seconds = int(get_env("AI_TRADING_BACKUP_PROBE_ALERT_COOLDOWN_SECONDS", 300, cast=int))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         seconds = 300
     seconds = max(0, min(seconds, 7200))
     return timedelta(seconds=seconds)
@@ -2370,7 +2390,7 @@ def _note_backup_skip_activity(
             f"Primary recovery probe missing while backup skip active ({tf_key})",
             metadata=_coerce_json_primitives(payload),
         )
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         logger.exception("ALERT_FAILURE", extra={"provider": "alpaca"})
     _BACKUP_PRIMARY_PROBE_ALERT_AT[tf_key] = now_dt
 
@@ -2382,10 +2402,7 @@ def _schedule_backup_primary_probe(key: tuple[str, str]) -> None:
     if interval <= timedelta(0):
         _BACKUP_PRIMARY_PROBE_AT.pop(key, None)
         return
-    try:
-        _BACKUP_PRIMARY_PROBE_AT[key] = datetime.now(tz=UTC) + interval
-    except Exception:
-        _BACKUP_PRIMARY_PROBE_AT[key] = datetime.now() + interval
+    _BACKUP_PRIMARY_PROBE_AT[key] = datetime.now(tz=UTC) + interval
 
 
 def _backup_primary_probe_due(symbol: str, timeframe: str) -> bool:
@@ -2395,20 +2412,14 @@ def _backup_primary_probe_due(symbol: str, timeframe: str) -> bool:
     interval = _backup_primary_probe_interval()
     if interval <= timedelta(0):
         return False
-    try:
-        now_dt = datetime.now(tz=UTC)
-    except Exception:
-        now_dt = datetime.now()
+    now_dt = datetime.now(tz=UTC)
     due_at = _BACKUP_PRIMARY_PROBE_AT.get(key)
     if not isinstance(due_at, datetime):
         _BACKUP_PRIMARY_PROBE_AT[key] = now_dt + interval
         return False
     if isinstance(due_at, datetime):
-        try:
-            if due_at.tzinfo is None and now_dt.tzinfo is not None:
-                due_at = due_at.replace(tzinfo=now_dt.tzinfo)
-        except Exception:
-            pass
+        if due_at.tzinfo is None and now_dt.tzinfo is not None:
+            due_at = due_at.replace(tzinfo=now_dt.tzinfo)
         if now_dt < due_at:
             return False
     _BACKUP_PRIMARY_PROBE_AT[key] = now_dt + interval
@@ -2440,14 +2451,14 @@ def notify_primary_provider_safe_mode(
     if state_reason is None:
         try:
             state_reason = safe_mode_reason()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             state_reason = None
     marker_version = version
     marker_reason = None
     if marker_version is None:
         try:
             marker_version, marker_reason = provider_monitor.safe_mode_cycle_marker()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             marker_version = (_SAFE_MODE_CYCLE_STATE.get("version", 0) or 0) + 1
     if state_reason is None:
         state_reason = marker_reason or "provider_safe_mode"
@@ -2496,7 +2507,7 @@ def _missing_alpaca_warning_context() -> tuple[bool, dict[str, object]]:
 
     try:
         settings = _current_settings()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         settings = None
 
     provider = str(getattr(settings, "data_provider", "alpaca") or "").strip()
@@ -2509,7 +2520,7 @@ def _missing_alpaca_warning_context() -> tuple[bool, dict[str, object]]:
     override = None
     try:
         override = get_data_feed_override()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         override = None
     if override:
         extra["override"] = override
@@ -2520,7 +2531,7 @@ def _missing_alpaca_warning_context() -> tuple[bool, dict[str, object]]:
 
     try:
         resolved_feed = resolve_alpaca_feed(None)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         resolved_feed = "iex"
 
     if resolved_feed is None:
@@ -2532,7 +2543,7 @@ def _missing_alpaca_warning_context() -> tuple[bool, dict[str, object]]:
     key_map: dict[str, str] = {}
     try:
         key_map = broker_keys(settings)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         key_map = {}
 
     api_key = str((key_map or {}).get("ALPACA_API_KEY", "") or "").strip()
@@ -2598,7 +2609,7 @@ def _reset_state() -> None:
 def _preferred_feed_failover() -> tuple[str, ...]:
     try:
         feeds = alpaca_feed_failover()
-    except Exception as exc:
+    except FETCH_FALLBACK_EXCEPTIONS as exc:
         logger.debug("PREFERRED_FEED_FAILOVER_UNAVAILABLE", exc_info=exc)
         return ()
     return tuple(feeds or ())
@@ -2607,7 +2618,7 @@ def _preferred_feed_failover() -> tuple[str, ...]:
 def _should_use_backup_on_empty() -> bool:
     try:
         return bool(alpaca_empty_to_backup())
-    except Exception as exc:
+    except FETCH_FALLBACK_EXCEPTIONS as exc:
         logger.debug("ALPACA_EMPTY_TO_BACKUP_FALLBACK", exc_info=exc)
         return True
 
@@ -2619,7 +2630,7 @@ def _iter_preferred_feeds(symbol: str, timeframe: str, current_feed: str) -> tup
     if not feeds:
         try:
             providers = provider_priority()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             providers = ()
         for provider in providers:
             if not provider:
@@ -2660,7 +2671,7 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
         except ValueError:
             try:
                 coerced = str(value).strip().lower()
-            except Exception:  # pragma: no cover - defensive
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 return None
             return coerced or None
 
@@ -2675,7 +2686,7 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
     if not from_key:
         try:
             from_key = str(from_feed or "").strip().lower() or "iex"
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             from_key = "iex"
 
     _OVERRIDE_MAP[(symbol, from_key)] = (to_norm, _now_ts())
@@ -2731,19 +2742,19 @@ def _prepare_sip_fallback(
     logger.warning("ALPACA_IEX_FALLBACK_SIP", extra=extra_payload)
     try:
         push_to_caplog("ALPACA_IEX_FALLBACK_SIP", extra=extra_payload)
-    except Exception:  # pragma: no cover - defensive
+    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
         pass
     if _intraday_feed_prefers_sip():
         try:
             record_unauthorized_sip_event(extra_payload)
-        except Exception:  # pragma: no cover - defensive
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             logger.debug(
                 "SAFE_MODE_EVENT_RECORD_FAILED",
                 extra={"reason": "unauthorized_sip", "detail": "record_failed"},
             )
     try:
         tags = tags_factory()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         tags = {}
     _incr("data.fetch.feed_switch", value=1.0, tags=tags)
     inc_provider_fallback("alpaca_iex", "alpaca_sip")
@@ -2773,7 +2784,7 @@ def is_primary_provider_enabled() -> bool:
             if is_safe_mode_active():
                 notify_primary_provider_safe_mode(reason=cycle_reason)
                 cycle_active, cycle_reason = _cycle_safe_mode_active(str(current_cycle))
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             cycle_active = False
     if cycle_active:
         cycle_key = str(current_cycle)
@@ -2823,7 +2834,7 @@ def _disable_alpaca(duration: _dt.timedelta) -> None:
                 },
             ),
         )
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
 
 
@@ -2846,11 +2857,11 @@ def _frame_has_rows(candidate: Any | None) -> bool:
     if empty_attr is not None:
         try:
             return not bool(empty_attr)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return False
     try:
         return len(candidate) > 0  # type: ignore[arg-type]
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return False
 
 
@@ -2871,25 +2882,25 @@ def _fallback_frame_is_usable(
         try:
             if frame["close"].dropna().empty:
                 return False
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return False
     if "timestamp" in frame.columns:
         try:
             ts_index = pd_local.to_datetime(frame["timestamp"], utc=True, errors="coerce")
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return False
         if getattr(ts_index, "isna", None) and ts_index.isna().all():
             return False
         try:
             last_ts = ts_index.max()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return False
         if getattr(pd_local, "isna", None) and pd_local.isna(last_ts):
             return False
         if getattr(last_ts, "tzinfo", None) is None:
             try:
                 last_ts = last_ts.tz_localize("UTC")
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 last_ts = ensure_utc_datetime(last_ts)
         start_utc = ensure_utc_datetime(start_dt)
         end_utc = ensure_utc_datetime(end_dt)
@@ -2931,7 +2942,7 @@ def _mark_fallback(
             return None
         try:
             normalized_value = str(value).strip()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return None
         return normalized_value or None
 
@@ -2946,7 +2957,7 @@ def _mark_fallback(
     if fallback_df is not None:
         try:
             attrs = getattr(fallback_df, "attrs", None)
-        except Exception:  # pragma: no cover - attrs access best-effort
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - attrs access best-effort
             attrs = None
         if isinstance(attrs, Mapping):
             provider_from_df = _normalize(
@@ -2956,7 +2967,7 @@ def _mark_fallback(
             if reason and isinstance(attrs, MutableMapping):
                 try:
                     normalized_reason = str(reason).strip()
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     normalized_reason = None
                 if normalized_reason:
                     attrs.setdefault("fallback_reason", normalized_reason)
@@ -3030,7 +3041,7 @@ def _mark_fallback(
     if reason:
         try:
             normalized_reason = str(reason).strip()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             normalized_reason = None
         if normalized_reason:
             metadata["fallback_reason"] = normalized_reason
@@ -3053,7 +3064,7 @@ def _mark_fallback(
     if feed_hint:
         try:
             fallback_name = _normalize_feed_value(feed_hint)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             fallback_name = str(feed_hint)
     elif provider_for_register and provider_for_register.startswith("alpaca_"):
         fallback_name = provider_for_register.split("_", 1)[1]
@@ -3094,7 +3105,7 @@ def _mark_fallback(
     allow_override = globals().get("_ALLOW_SIP")
     try:
         sip_configured = bool(_sip_configured())
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         sip_configured = False
     sip_allowed = sip_configured and (
         allow_env == "1" or (allow_override is not None and bool(allow_override))
@@ -3103,13 +3114,13 @@ def _mark_fallback(
     if from_provider:
         try:
             from_key = str(from_provider).strip().lower()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             from_key = str(from_provider)
         target_key = None
         if provider_for_register is not None:
             try:
                 target_key = str(provider_for_register).strip().lower()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 target_key = str(provider_for_register)
         if from_key == "alpaca_iex" and not sip_allowed and target_key == "alpaca_sip":
             skip_switchover = True
@@ -3120,7 +3131,7 @@ def _mark_fallback(
         cycle_id, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
         try:
             normalized_timeframe = _canon_tf(str(timeframe))
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             normalized_timeframe = str(timeframe)
         usage_key = (str(symbol).upper(), normalized_timeframe)
         if usage_key not in bucket:
@@ -3175,7 +3186,7 @@ def _mark_fallback(
     # repeated primary-provider retries for small window shifts in the same run.
     try:
         now_s = int(_dt.datetime.now(tz=UTC).timestamp())
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         now_s = int(_time_now())
     cooldown_seconds = max(30, _fallback_ttl_seconds())
     try:
@@ -3186,7 +3197,7 @@ def _mark_fallback(
                 cooldown_seconds = max(cooldown_seconds, int(recovery))
             except (TypeError, ValueError):
                 pass
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
     _FALLBACK_UNTIL[(symbol, timeframe)] = now_s + cooldown_seconds
     primary_label = from_provider or "alpaca"
@@ -3194,17 +3205,17 @@ def _mark_fallback(
     backup_label = provider_hint or provider_for_register
     try:
         primary_canon = canonical_provider(primary_label)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         primary_canon = str(primary_label)
     try:
         active_canon = canonical_provider(active_label)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         active_canon = str(active_label)
     backup_canon = None
     if backup_label:
         try:
             backup_canon = canonical_provider(backup_label)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             backup_canon = str(backup_label)
     using_backup_flag = active_canon != primary_canon
     reason_value = log_extra.get("reason") or log_extra.get("fallback_reason") or reason
@@ -3247,12 +3258,12 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
         if existing_until.tzinfo is None:
             try:
                 existing_until = existing_until.replace(tzinfo=UTC)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 existing_until = None
     elif existing_until is not None:
         try:
             existing_until = datetime.fromtimestamp(float(existing_until), tz=UTC)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             existing_until = None
     active_existing_skip = bool(
         isinstance(existing_until, datetime)
@@ -3274,7 +3285,7 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
         else:
             try:
                 until_float = float(until)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 _BACKUP_SKIP_UNTIL.pop(key, None)
                 _BACKUP_PRIMARY_PROBE_AT.pop(key, None)
                 _SKIPPED_SYMBOLS.add(key)
@@ -3282,7 +3293,7 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
                 return
             try:
                 until_dt = datetime.fromtimestamp(until_float, tz=UTC)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 _BACKUP_SKIP_UNTIL.pop(key, None)
                 _BACKUP_PRIMARY_PROBE_AT.pop(key, None)
                 _SKIPPED_SYMBOLS.add(key)
@@ -3291,7 +3302,7 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
         if until_dt.tzinfo is None:
             try:
                 until_dt = until_dt.replace(tzinfo=UTC)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 until_dt = datetime.now(tz=UTC)
         if isinstance(global_until, datetime) and global_until > now_dt:
             # Keep symbol-level cooldown aligned with active global skip to avoid per-symbol slide-forward.
@@ -3317,7 +3328,7 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
     else:
         try:
             until_dt = now_dt + _backup_skip_window()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             until_dt = datetime.now(tz=UTC)
     _BACKUP_SKIP_UNTIL[key] = until_dt
     _schedule_backup_primary_probe(key)
@@ -3376,17 +3387,17 @@ def _clear_minute_fallback_state(
                     reason="primary_recovered",
                     severity="good",
                 )
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
         try:
             primary_canon = canonical_provider(primary_label or "alpaca")
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             primary_canon = primary_label or "alpaca"
         backup_canon = None
         if backup_label:
             try:
                 backup_canon = canonical_provider(backup_label)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 backup_canon = backup_label
         _record_provider_success_event()
         if not _timeframe_has_active_backup_skip(timeframe):
@@ -3427,7 +3438,7 @@ def _annotate_df_source(
         if feed:
             attrs["data_feed"] = feed
             attrs.setdefault("fallback_feed", feed)
-    except Exception:  # pragma: no cover - metadata best-effort only
+    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - metadata best-effort only
         pass
     return df
 
@@ -3468,15 +3479,15 @@ def _restore_timestamp_column(df: pd.DataFrame | None) -> pd.DataFrame | None:
     try:
         # Copy to avoid mutating shared references downstream.
         frame = df.copy()
-    except Exception:  # pragma: no cover - defensive fallback
+    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
         frame = df
 
     try:
         frame.insert(0, "timestamp", index_values)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         try:
             frame["timestamp"] = index_values
-        except Exception:  # pragma: no cover - last-resort guard
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - last-resort guard
             return frame
     return frame
 
@@ -3524,7 +3535,7 @@ def _normalize_column_token(value: Any) -> str:
                 continue
             try:
                 tokens.extend(_tokenize(str(part)))
-            except Exception:  # pragma: no cover - defensive
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 continue
     else:
         tokens.extend(_tokenize(str(value)))
@@ -3555,7 +3566,7 @@ def _extract_payload_keys(payload: Any) -> tuple[str, ...]:
             for key in item.keys():
                 try:
                     keys.add(str(key))
-                except Exception:  # pragma: no cover - defensive conversion
+                except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive conversion
                     continue
             if len(keys) >= 32:
                 # Prevent unbounded growth on large responses while still
@@ -3580,23 +3591,23 @@ def _attach_payload_metadata(
         try:
             object.__setattr__(target, name, value)
             return
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
         try:
             setattr(target, name, value)
-        except Exception:  # pragma: no cover - defensive attribute set
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive attribute set
             return
 
     try:
         attrs = getattr(frame, "attrs", None)
-    except Exception:  # pragma: no cover - defensive access
+    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive access
         attrs = None
     if not isinstance(attrs, dict):
         return
 
     try:
         column_snapshot = tuple(str(col) for col in getattr(frame, "columns", []))
-    except Exception:  # pragma: no cover - defensive conversion
+    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive conversion
         column_snapshot = tuple()
 
     if column_snapshot and "raw_payload_columns" not in attrs:
@@ -4048,7 +4059,7 @@ def _expand_nested_ohlcv_columns(df: Any) -> None:
 
     try:
         columns = list(getattr(df, "columns", []))
-    except Exception:  # pragma: no cover - defensive
+    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
         return
 
     if not columns:
@@ -4057,7 +4068,7 @@ def _expand_nested_ohlcv_columns(df: Any) -> None:
     for column in columns:
         try:
             series = df[column]
-        except Exception:  # pragma: no cover - defensive access
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive access
             continue
 
         sample: Mapping[str, Any] | None = None
@@ -4068,7 +4079,7 @@ def _expand_nested_ohlcv_columns(df: Any) -> None:
                 values_iterable = (value for _, value in series.items())
             else:
                 values_iterable = getattr(series, "values", series)
-        except Exception:  # pragma: no cover - defensive iteration
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive iteration
             values_iterable = []
 
         for value in values_iterable:
@@ -4085,7 +4096,7 @@ def _expand_nested_ohlcv_columns(df: Any) -> None:
             results: list[tuple[tuple[Any, ...], str]] = []
             try:
                 rename_map = _alias_rename_map(node.keys())
-            except Exception:  # pragma: no cover - defensive mapping access
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive mapping access
                 rename_map = {}
             for alias_key, canonical in rename_map.items():
                 if canonical in allowed:
@@ -4134,10 +4145,10 @@ def _expand_nested_ohlcv_columns(df: Any) -> None:
 
             try:
                 df[canonical] = extracted
-            except Exception:  # pragma: no cover - fallback to pandas assignment
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - fallback to pandas assignment
                 try:
                     df.loc[:, canonical] = extracted
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     continue
 
 
@@ -4197,7 +4208,7 @@ def _gather_schema_tokens(frame: Any) -> set[str]:
     for column in columns:
         try:
             tokens.add(_normalize_column_token(column))
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             continue
 
     def _walk(value: Any) -> None:
@@ -4205,7 +4216,7 @@ def _gather_schema_tokens(frame: Any) -> set[str]:
             for key, nested in value.items():
                 try:
                     tokens.add(_normalize_column_token(key))
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
                 _walk(nested)
         elif isinstance(value, (list, tuple)):
@@ -4215,13 +4226,13 @@ def _gather_schema_tokens(frame: Any) -> set[str]:
     for column in columns:
         try:
             series = frame[column]
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             continue
         values = getattr(series, "values", None)
         if values is None:
             try:
                 values = list(series)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 continue
         for item in values:
             _walk(item)
@@ -4279,13 +4290,13 @@ def _extract_alpaca_iex_records(frame: Any) -> list[Mapping[str, Any]]:
             continue
         try:
             series = frame[column]
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             continue
         values = getattr(series, "values", None)
         if values is None:
             try:
                 values = list(series)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 continue
         for item in values:
             records = _coerce_bar_records(item)
@@ -4301,7 +4312,7 @@ def _attempt_alpaca_iex_recovery(frame: Any, pd_local: Any) -> Any | None:
         return None
     try:
         recovered = pd_local.DataFrame(records)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return None
     if recovered is None or getattr(recovered, "empty", False):
         return None
@@ -4327,7 +4338,7 @@ def ensure_ohlcv_schema(
     if not isinstance(df, pd_local.DataFrame):
         try:
             df = pd_local.DataFrame(df)
-        except Exception as exc:  # pragma: no cover - defensive conversion
+        except FETCH_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive conversion
             raise DataFetchError("DATA_FETCH_EMPTY") from exc
 
     if df.empty:
@@ -4376,7 +4387,7 @@ def ensure_ohlcv_schema(
     if hasattr(work_df.columns, "duplicated"):
         try:
             work_df = work_df.loc[:, ~work_df.columns.duplicated()]
-        except Exception:  # pragma: no cover - defensive guard
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive guard
             pass
 
     timestamp_col: str | None = None
@@ -4464,7 +4475,7 @@ def ensure_ohlcv_schema(
                 return tuple()
             try:
                 attrs = getattr(frame, "attrs", None)
-            except Exception:  # pragma: no cover - defensive
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 attrs = None
             values: Any | None = None
             if isinstance(attrs, Mapping):
@@ -4475,10 +4486,10 @@ def ensure_ohlcv_schema(
                 return tuple()
             try:
                 return tuple(str(item) for item in values)
-            except Exception:  # pragma: no cover - defensive coercion
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive coercion
                 try:
                     return tuple(map(str, list(values)))
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     return tuple()
 
         def _scalar_metadata(frame: Any, attr_name: str) -> str | None:
@@ -4486,14 +4497,14 @@ def ensure_ohlcv_schema(
                 return None
             try:
                 attrs = getattr(frame, "attrs", None)
-            except Exception:  # pragma: no cover - defensive
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 attrs = None
             if isinstance(attrs, Mapping):
                 value = attrs.get(attr_name)
                 if value is not None:
                     try:
                         return str(value)
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         return None
             return None
 
@@ -4597,7 +4608,7 @@ def _pytest_logging_active() -> bool:
     try:
         root_handlers = getattr(logging.getLogger(), "handlers", [])
         return any(h.__class__.__name__ == "LogCaptureHandler" for h in root_handlers)
-    except Exception:  # pragma: no cover - defensive
+    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
         return False
 
 
@@ -4622,7 +4633,7 @@ def _find_pytest_capture_handler() -> logging.Handler | None:
                 if existing.__class__.__name__ == "LogCaptureHandler" and getattr(existing, "records", None) is not None and not getattr(existing, "closed", False):
                     _CAPTURE_HANDLER_REF = weakref.ref(existing)
                     return cast(logging.Handler, existing)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 continue
 
         for obj in gc.get_objects():
@@ -4632,7 +4643,7 @@ def _find_pytest_capture_handler() -> logging.Handler | None:
                         continue
                     _CAPTURE_HANDLER_REF = weakref.ref(obj)
                     return cast(logging.Handler, obj)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 continue
 
         _CAPTURE_HANDLER_REF = None
@@ -4660,7 +4671,7 @@ def _log_with_capture(level: int, message: str, extra: Mapping[str, Any] | None 
             None,
             extra=record_extra,
         )
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         record = logger.makeRecord(logger.name, level, __file__, 0, message, (), None)
         if record_extra:
             for key, value in record_extra.items():
@@ -4672,7 +4683,7 @@ def _log_with_capture(level: int, message: str, extra: Mapping[str, Any] | None 
 
     try:
         handler.emit(record)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
 
 
@@ -4743,13 +4754,13 @@ def _symbol_exists(symbol: str) -> bool:
         if resp.status_code == 200:
             try:
                 data = resp.json()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 data = {}
             if str(data.get("symbol", "")).upper() == symbol.upper():
                 return True
         elif resp.status_code == 404:
             return False
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
     path = get_env("AI_TRADING_TICKERS_FILE") or get_env("TICKERS_FILE_PATH")
     if not path:
@@ -4758,7 +4769,7 @@ def _symbol_exists(symbol: str) -> bool:
 
             p = pkg_files("ai_trading.data").joinpath("tickers.csv")
             path = str(p) if p.is_file() else None
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             path = None
     if not path:
         return False
@@ -4780,7 +4791,7 @@ def _outside_market_hours(start: _dt.datetime, end: _dt.datetime) -> bool:
         from ai_trading.utils.base import is_market_open as _is_open
 
         return not (_is_open(start) or _is_open(end))
-    except Exception:  # pragma: no cover - fallback to retrying
+    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - fallback to retrying
         return False
 
 
@@ -4849,12 +4860,12 @@ def _has_alpaca_keys() -> bool:
         from ai_trading.execution import live_trading as _live_exec
 
         truth_fn = getattr(_live_exec, "get_cached_credential_truth", None)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         truth_fn = None
     if callable(truth_fn):
         try:
             has_key_live, has_secret_live, ts = truth_fn()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             has_key_live = has_secret_live = False
             ts = 0.0
         else:
@@ -4877,7 +4888,7 @@ def _has_alpaca_keys() -> bool:
         from ai_trading.config.management import TradingConfig
 
         cfg = TradingConfig.from_env(allow_missing_drawdown=True)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         cfg = None
     if cfg is not None:
         key = getattr(cfg, "alpaca_api_key", None)
@@ -4951,7 +4962,7 @@ def _env_source_override_raw(timeframe: str) -> tuple[str, ...] | None:
 
     try:
         raw_value = get_env(env_key)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         raw_value = get_env(env_key)
     normalized = str(raw_value or "").strip().lower()
     if not normalized or normalized in {"auto", "default"}:
@@ -4972,7 +4983,7 @@ def _env_source_override_raw(timeframe: str) -> tuple[str, ...] | None:
         for key in ("ALPACA_EXECUTION_FEED", "ALPACA_DATA_FEED", "DATA_FEED_INTRADAY", "ALPACA_DEFAULT_FEED"):
             try:
                 candidate = get_env(key)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 candidate = get_env(key)
             if candidate:
                 feed_candidates.append(str(candidate).strip().lower())
@@ -4992,7 +5003,7 @@ def _source_regime_mode() -> str:
 
     try:
         raw_value = get_env("AI_TRADING_SOURCE_REGIME_MODE")
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         raw_value = get_env("AI_TRADING_SOURCE_REGIME_MODE")
     mode = str(raw_value or "").strip().lower()
     if mode in {"consistent", "lockstep", "strict"}:
@@ -5052,7 +5063,7 @@ def refresh_default_feed(feed: str | None = None) -> str:
         else:
             try:
                 cfg_default = _current_settings()
-            except Exception:  # pragma: no cover - defensive fallback
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
                 candidate = None
             else:
                 candidate = (
@@ -5118,7 +5129,7 @@ def _prefers_sip() -> bool:
         return True
     try:
         settings = _current_settings()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return False
     failover_tuple = getattr(settings, "alpaca_feed_failover", ()) or ()
     return any(str(part).strip().lower() == "sip" for part in failover_tuple)
@@ -5168,7 +5179,7 @@ def _mark_sip_unauthorized(cooldown_s: float = 1800.0) -> None:
     _SIP_UNAUTHORIZED = True
     try:
         cooldown = max(60.0, float(cooldown_s))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         cooldown = 1800.0
     _SIP_UNAUTHORIZED_UNTIL = _now_monotonic() + cooldown
 
@@ -5185,7 +5196,7 @@ def _get_cycle_id() -> str:
     if bot_engine is not None:
         try:
             cycle_val = getattr(bot_engine, "_GLOBAL_CYCLE_ID", None)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             cycle_val = None
         if cycle_val is not None:
             return str(cycle_val)
@@ -5240,7 +5251,7 @@ def _sip_configured() -> bool:
         return True
     try:
         feeds = alpaca_feed_failover()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         feeds = ("sip",)
     if not feeds:
         feeds = ("sip",)
@@ -5260,10 +5271,10 @@ def _should_disable_alpaca_on_empty(
     if feed not in (None, ""):
         try:
             normalized = _normalize_feed_value(feed)  # type: ignore[arg-type]
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             try:
                 normalized = str(feed).strip().lower()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 normalized = None
 
     if reason == "close_column_all_nan":
@@ -5278,10 +5289,10 @@ def _should_disable_alpaca_on_empty(
         if fallback_feed not in (None, ""):
             try:
                 fallback_norm = _normalize_feed_value(fallback_feed)  # type: ignore[arg-type]
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 try:
                     fallback_norm = str(fallback_feed).strip().lower() or None
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     fallback_norm = None
         if (
             fallback_norm
@@ -5295,18 +5306,18 @@ def _should_disable_alpaca_on_empty(
                     timeframe_key,
                     fallback_norm,
                 )
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
 
         if count >= _alpaca_close_nan_disable_threshold():
             provider_label = f"alpaca_{feed_label}" if feed_label else "alpaca"
             try:
                 provider_monitor.disable(provider_label, reason="nan_close")
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             try:
                 provider_monitor.disable("alpaca", reason="nan_close")
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             _ALPACA_CLOSE_NAN_COUNTS.pop(counter_key, None)
         return True
@@ -5315,7 +5326,7 @@ def _should_disable_alpaca_on_empty(
         sip_ready = False
         try:
             sip_ready = _sip_configured()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             sip_ready = False
         sip_authorized = not _is_sip_unauthorized()
         if not (sip_ready and sip_authorized):
@@ -5364,7 +5375,7 @@ def _sip_fallback_allowed(session: Any | None, headers: dict[str, str], timefram
     pytest_active = _detect_pytest_env()
     try:
         configured = _sip_configured()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         configured = False
     sip_state_locked = bool(globals().get("_SIP_UNAUTHORIZED"))
     if not sip_state_locked:
@@ -5398,7 +5409,7 @@ def _sip_fallback_allowed(session: Any | None, headers: dict[str, str], timefram
             timeout=clamp_request_timeout(5),
         )
         _record_session_last_request(session, "GET", url, params, headers)
-    except Exception as e:  # pragma: no cover - best effort
+    except FETCH_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - best effort
         logger.debug(
             "SIP_PRECHECK_FAILED",
             extra=_norm_extra({"provider": "alpaca", "feed": "sip", "timeframe": timeframe, "error": str(e)}),
@@ -5606,7 +5617,7 @@ def _flatten_and_normalize_ohlcv(
                 df.columns = new_columns
                 try:
                     df = df.loc[:, ~pd.Index(df.columns).duplicated()]
-                except Exception:  # pragma: no cover - defensive fallback
+                except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
                     pass
             else:
                 lvl0 = set(map(str, df.columns.get_level_values(0)))
@@ -5619,12 +5630,12 @@ def _flatten_and_normalize_ohlcv(
 
     try:
         rename_map = _alias_rename_map(df.columns)
-    except Exception:  # pragma: no cover - defensive
+    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
         rename_map = {}
     if rename_map:
         try:
             df = df.rename(columns=rename_map)
-        except Exception:  # pragma: no cover - defensive rename fallback
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive rename fallback
             pass
     normalize_ohlcv_columns(df)
 
@@ -5675,14 +5686,14 @@ def _flatten_and_normalize_ohlcv(
         if alias in getattr(df, "columns", []):
             try:
                 df[target] = df[alias]
-            except Exception:  # pragma: no cover - defensive assignment
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive assignment
                 return False
             return True
         compact = alias.replace("_", "")
         if compact and compact in getattr(df, "columns", []):
             try:
                 df[target] = df[compact]
-            except Exception:  # pragma: no cover - defensive assignment
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive assignment
                 return False
             return True
         return False
@@ -5711,7 +5722,7 @@ def _flatten_and_normalize_ohlcv(
             if candidate in getattr(df, "columns", []):
                 try:
                     df["close"] = df[candidate]
-                except Exception:  # pragma: no cover - defensive assignment
+                except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive assignment
                     pass
                 else:
                     break
@@ -5728,7 +5739,7 @@ def _flatten_and_normalize_ohlcv(
         if redundant:
             try:
                 df.drop(columns=redundant, inplace=True)
-            except Exception:  # pragma: no cover - defensive fallback
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
                 pass
 
     timeframe_norm = str(timeframe or "").lower()
@@ -5748,22 +5759,22 @@ def _flatten_and_normalize_ohlcv(
     if "open" not in df.columns and "o" in df.columns:
         try:
             df["open"] = pd.to_numeric(df["o"], errors="coerce")
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             df["open"] = df["o"]
     if "high" not in df.columns and "h" in df.columns:
         try:
             df["high"] = pd.to_numeric(df["h"], errors="coerce")
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             df["high"] = df["h"]
     if "low" not in df.columns and "l" in df.columns:
         try:
             df["low"] = pd.to_numeric(df["l"], errors="coerce")
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             df["low"] = df["l"]
     if "volume" not in df.columns and "v" in df.columns:
         try:
             df["volume"] = pd.to_numeric(df["v"], errors="coerce")
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             df["volume"] = df["v"]
 
     if close_like is not None:
@@ -5773,13 +5784,13 @@ def _flatten_and_normalize_ohlcv(
         if "volume" not in df.columns:
             try:
                 df["volume"] = pd.Series(0, index=df.index)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 df["volume"] = 0
 
     if "close" not in df.columns and "c" in df.columns:
         try:
             df["close"] = pd.to_numeric(df["c"], errors="coerce")
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             df["close"] = df["c"]
 
     def _recover_close_column(frame: Any) -> str | None:
@@ -5803,17 +5814,17 @@ def _flatten_and_normalize_ohlcv(
                 continue
             try:
                 candidate_series = pd.to_numeric(frame[candidate], errors="coerce")
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 continue
             try:
                 has_valid = bool(candidate_series.notna().any())
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 has_valid = False
             if not has_valid:
                 continue
             try:
                 frame["close"] = candidate_series
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 continue
             return candidate
         return None
@@ -5823,10 +5834,10 @@ def _flatten_and_normalize_ohlcv(
     if close_series_initial is not None:
         try:
             close_all_nan_initial = bool(pd.isna(close_series_initial).all())
-        except Exception:  # pragma: no cover - defensive fallback
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
             try:
                 close_all_nan_initial = bool(close_series_initial.isna().all())  # type: ignore[attr-defined]
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 close_all_nan_initial = False
         if close_all_nan_initial:
             recovered_from = _recover_close_column(df)
@@ -5834,10 +5845,10 @@ def _flatten_and_normalize_ohlcv(
                 close_series_initial = df.get("close")
                 try:
                     close_all_nan_initial = bool(pd.isna(close_series_initial).all())
-                except Exception:  # pragma: no cover - defensive fallback
+                except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
                     try:
                         close_all_nan_initial = bool(close_series_initial.isna().all())  # type: ignore[attr-defined]
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         close_all_nan_initial = False
 
     normalize_ohlcv_columns(df)
@@ -5862,10 +5873,10 @@ def _flatten_and_normalize_ohlcv(
         if col in df.columns:
             try:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
-            except Exception:  # pragma: no cover - defensive fallback
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
                 try:
                     df[col] = pd.Series(df[col]).apply(lambda value: pd.to_numeric(value, errors="coerce"))
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     # Leave the column as-is if coercion repeatedly fails; the
                     # downstream NaN guard will handle missing values.
                     pass
@@ -5874,10 +5885,10 @@ def _flatten_and_normalize_ohlcv(
     if close_series is not None:
         try:
             all_nan = bool(pd.isna(close_series).all())
-        except Exception:  # pragma: no cover - defensive fallback
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
             try:
                 all_nan = bool(close_series.isna().all())  # type: ignore[attr-defined]
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 all_nan = False
         recovered_from_normalized: str | None = None
         if all_nan:
@@ -5886,26 +5897,26 @@ def _flatten_and_normalize_ohlcv(
                     continue
                 try:
                     candidate_series = pd.to_numeric(df[candidate], errors="coerce")
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     continue
                 try:
                     has_valid = bool(candidate_series.notna().any())
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     has_valid = False
                 if not has_valid:
                     continue
                 try:
                     df["close"] = candidate_series
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     continue
                 recovered_from_normalized = candidate
                 close_series = df.get("close")
                 try:
                     all_nan = bool(pd.isna(close_series).all())
-                except Exception:  # pragma: no cover - defensive fallback
+                except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
                     try:
                         all_nan = bool(close_series.isna().all())  # type: ignore[attr-defined]
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         all_nan = False
                 if not all_nan:
                     break
@@ -5915,11 +5926,11 @@ def _flatten_and_normalize_ohlcv(
             if close_series_log is not None:
                 try:
                     head_values = getattr(close_series_log, "head", lambda n: close_series_log[:n])(5)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     head_values = close_series_log
                 try:
                     iterator = list(head_values)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     iterator = []
                 for value in iterator:
                     try:
@@ -5929,7 +5940,7 @@ def _flatten_and_normalize_ohlcv(
                             close_snapshot.append(float(value))
                         else:
                             close_snapshot.append(value)
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         close_snapshot.append(value)
             extra = {
                 "symbol": symbol,
@@ -5961,7 +5972,7 @@ def _flatten_and_normalize_ohlcv(
             err.timeframe = timeframe
             try:
                 _record_alpaca_failure_event(symbol or "", timeframe=timeframe)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             raise err
         if recovered_from is not None or recovered_from_normalized is not None:
@@ -5979,7 +5990,7 @@ def _flatten_and_normalize_ohlcv(
     if isinstance(df_out.index, pd.DatetimeIndex):
         try:
             tz = df_out.index.tz
-        except Exception:  # pragma: no cover - defensive
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             tz = None
         try:
             if tz is not None:
@@ -5990,39 +6001,39 @@ def _flatten_and_normalize_ohlcv(
             pass
         try:
             duplicated = df_out.index.duplicated(keep="last")
-        except Exception:  # pragma: no cover - defensive
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             duplicated = None
         has_duplicates = False
         if duplicated is not None:
             try:
                 has_duplicates = bool(duplicated.any())
-            except Exception:  # pragma: no cover - defensive
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 has_duplicates = False
         if has_duplicates:
             mask = ~duplicated
             try:
                 needs_filter = not bool(mask.all())
-            except Exception:  # pragma: no cover - defensive
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 needs_filter = True
             if needs_filter:
                 df_out = df_out.loc[mask]
         is_monotonic_attr = getattr(df_out.index, "is_monotonic_increasing", True)
         try:
             is_monotonic = bool(is_monotonic_attr()) if callable(is_monotonic_attr) else bool(is_monotonic_attr)
-        except Exception:  # pragma: no cover - defensive
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             is_monotonic = True
         if not is_monotonic:
             df_out.sort_index(inplace=True)
     if "timestamp" in getattr(df_out, "columns", []):
         try:
             ts_series = df_out["timestamp"]
-        except Exception:  # pragma: no cover - defensive
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             ts_series = None
         if ts_series is not None:
             tz = None
             try:
                 tz = getattr(ts_series.dt, "tz", None)  # type: ignore[attr-defined]
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 tz = None
             try:
                 if tz is not None:
@@ -6069,28 +6080,28 @@ def _flatten_and_normalize_ohlcv(
                 context=f"{context_label} {tf_label}",
             )
             df_out = df_out.assign(timestamp=pd.Series(ts_index, index=df_out.index))
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
     if "timestamp" in getattr(df_out, "columns", []):
         try:
             df_out = df_out[df_out["timestamp"].notna()]
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
     required_cols = ["open", "high", "low", "close", "volume"]
     try:
         df_out = df_out.dropna(subset=required_cols, how="any")
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         for col in required_cols:
             if col in getattr(df_out, "columns", []):
                 try:
                     df_out = df_out[df_out[col].notna()]
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     continue
     if "timestamp" in getattr(df_out, "columns", []):
         try:
             df_out = df_out.sort_values("timestamp")
             df_out = df_out.drop_duplicates(subset=["timestamp"], keep="last")
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
 
     return df_out
@@ -6115,31 +6126,31 @@ def _mutate_dataframe_in_place(target: Any, source: Any) -> Any:
 
     try:
         target.drop(target.index, inplace=True)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
     try:
         target.drop(columns=list(target.columns), inplace=True, errors="ignore")
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
 
     for column in source.columns:
         try:
             target[column] = source[column].to_numpy()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             target[column] = list(source[column])
 
     try:
         target.index = source.index.copy()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         try:
             target.index = source.index
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
 
     try:
         target.attrs.clear()
         target.attrs.update(getattr(source, "attrs", {}) or {})
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
 
     return target
@@ -6160,7 +6171,7 @@ def _set_price_reliability(
             attrs["price_reliable_reason"] = str(reason)
         else:
             attrs.pop("price_reliable_reason", None)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
 
 
@@ -6226,7 +6237,7 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
                 combined["timestamp"] = pd_local.to_datetime(
                     combined["timestamp"], utc=True, errors="coerce",
                 )
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 combined = combined.drop(columns=["timestamp"], errors="ignore")
                 return _empty_frame()
             combined = combined.dropna(subset=["timestamp"])
@@ -6272,16 +6283,16 @@ def _normalize_finnhub_bars(frame: Any) -> pd.DataFrame | Any:
     if not isinstance(frame, pd_local.DataFrame):
         try:
             frame = pd_local.DataFrame(frame)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return frame
     try:
         frame = frame.copy()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
     if "timestamp" in frame.columns:
         try:
             frame["timestamp"] = pd_local.to_datetime(frame["timestamp"], utc=True)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
     normalized = _normalize_with_attrs(frame)
     return _annotate_df_source(normalized, provider="finnhub", feed="finnhub")
@@ -6315,7 +6326,7 @@ def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Da
                 df["volume"] = 0.0
     except FinnhubAPIException:
         df = None
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         df = None
     if df is None:
         if pd_local is None:
@@ -6323,7 +6334,7 @@ def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Da
         return pd_local.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
     try:
         return _flatten_and_normalize_ohlcv(df, symbol, interval)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         if pd_local is None:
             return []  # type: ignore[return-value]
         return pd_local.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
@@ -6398,7 +6409,7 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
         cycle_id, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
         try:
             normalized_interval = _canon_tf(str(interval))
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             normalized_interval = str(interval)
         key = (str(symbol).upper(), normalized_interval)
         reason_extra = _consume_bootstrap_backup_reason()
@@ -6448,7 +6459,7 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
                 if valid_frames:
                     try:
                         combined = pd_local.concat(valid_frames, ignore_index=True)
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         combined = valid_frames[0]
                 else:
                     combined = frames[0]
@@ -6457,7 +6468,7 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
                         combined["timestamp"] = pd_local.to_datetime(
                             combined["timestamp"], utc=True, errors="coerce",
                         )
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         pass
                     else:
                         combined = combined.sort_values("timestamp")
@@ -6468,7 +6479,7 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
                     combined = _annotate_df_source(combined, provider=normalized, feed=normalized)
                     try:
                         combined.attrs["yf_1m_range_split"] = True
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         pass
                 return combined
             first = frames[0]
@@ -6513,7 +6524,7 @@ def _is_normalized_ohlcv_frame(
     expected_columns = ["timestamp", "open", "high", "low", "close", "volume"]
     try:
         cols_lower = {str(col).lower() for col in getattr(df, "columns", [])}
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return False
     if any(required not in cols_lower for required in expected_columns):
         return False
@@ -6523,25 +6534,25 @@ def _is_normalized_ohlcv_frame(
             (col for col in df.columns if str(col).lower() == "timestamp"),
             None,
         )
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         ts_col = None
     if ts_col is None:
         return False
 
     try:
         ts_series = df[ts_col]
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return False
 
     try:
         if ts_series.isna().any():
             return False
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return False
 
     try:
         tz = getattr(getattr(ts_series, "dt", None), "tz", None)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         tz = None
     if tz is None or str(tz) != "UTC":
         return False
@@ -6551,7 +6562,7 @@ def _is_normalized_ohlcv_frame(
         is_monotonic = (
             bool(monotonic_attr()) if callable(monotonic_attr) else bool(monotonic_attr)
         )
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         is_monotonic = True
     if not is_monotonic:
         return False
@@ -6570,7 +6581,7 @@ def _post_process(
     def _fallback_slots_remaining_local():
         try:
             return _fallback_slots_remaining()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return None
 
     pd = _ensure_pandas()
@@ -6602,16 +6613,16 @@ def _post_process(
         if close_candidate is not None:
             try:
                 close_all_nan_candidate = bool(pd.isna(close_candidate).all())
-            except Exception:  # pragma: no cover - defensive fallback
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
                 try:
                     close_all_nan_candidate = bool(close_candidate.isna().all())  # type: ignore[attr-defined]
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     close_all_nan_candidate = False
             if close_all_nan_candidate:
                 candidate = _flatten_and_normalize_ohlcv(candidate, symbol, timeframe)
     try:
         normalized = normalize_ohlcv_df(candidate, include_columns=("timestamp",))
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         normalized = candidate
 
     if normalized is None:
@@ -6621,7 +6632,7 @@ def _post_process(
         close_series = normalized["close"]
         try:
             has_non_nan = bool(close_series.notna().any())
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             has_non_nan = True
         if not has_non_nan:
             err = DataFetchError("close_column_all_nan")
@@ -6656,12 +6667,12 @@ def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: st
     monotonic_attr = getattr(timestamp_series, "is_monotonic_increasing", None)
     try:
         needs_sort = bool(monotonic_attr is False)
-    except Exception:  # pragma: no cover - defensive
+    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
         needs_sort = False
     if monotonic_attr is None:
         try:
             needs_sort = bool(timestamp_series.is_monotonic_increasing is False)
-        except Exception:  # pragma: no cover - fallback
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - fallback
             needs_sort = True
     if needs_sort:
         df.sort_values("timestamp", inplace=True)
@@ -6673,11 +6684,11 @@ def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: st
     try:
         start_utc = ensure_utc_datetime(ts.min())
         end_utc = ensure_utc_datetime(ts.max())
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return df
     try:
         end_utc = end_utc + _dt.timedelta(minutes=1)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
     try:
         expected_local = _build_trading_minute_index(
@@ -6686,7 +6697,7 @@ def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: st
             start_utc=start_utc,
             end_utc=end_utc,
         )
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         expected_local = pd_local.DatetimeIndex([], tz="UTC")
     if expected_local.empty:
         return df
@@ -6774,7 +6785,7 @@ def _build_trading_minute_index(
             continue
         try:
             session_start, session_end = session_bounds_fn(day_cursor)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             day_cursor += _dt.timedelta(days=1)
             continue
         window_start = max(session_start, start_utc)
@@ -6842,11 +6853,11 @@ def _repair_yahoo_minute_contiguity(
         return df, False
     try:
         base = df.set_index(existing_index)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return df, False
     try:
         repaired = base.reindex(expected_index)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return df, False
     repaired.index.name = "timestamp"
     repaired = repaired.copy()
@@ -6865,7 +6876,7 @@ def _repair_yahoo_minute_contiguity(
                     repaired[column] = repaired[column].fillna(repaired["close"])
         if "volume" in repaired.columns:
             repaired["volume"] = repaired["volume"].fillna(0)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return df, False
     repaired = repaired.reset_index()
     if "timestamp" not in repaired.columns and "index" in repaired.columns:
@@ -6896,7 +6907,7 @@ def _repair_rth_minute_gaps(
             observed_ts = pd_local.to_datetime(observed_source, utc=True, errors="coerce")
             observed_index = pd_local.DatetimeIndex(observed_ts)
             observed_count = int(observed_index.notna().sum())
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             observed_count = 0
         span_minutes = 0
         try:
@@ -6904,7 +6915,7 @@ def _repair_rth_minute_gaps(
             end_span = ensure_datetime(end)
             delta_seconds = max((end_span - start_span).total_seconds(), 0.0)
             span_minutes = int(delta_seconds // 60.0)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             span_minutes = 0
         if span_minutes <= 0 and observed_count > 0:
             span_minutes = observed_count
@@ -6932,41 +6943,41 @@ def _repair_rth_minute_gaps(
                 source = frame["timestamp"]
             else:
                 source = frame.index
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return empty_index, empty_index
         try:
             converted = pd_local.to_datetime(source, utc=True, errors="coerce")
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return empty_index, empty_index
         try:
             raw_index = pd_local.DatetimeIndex(converted)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return empty_index, empty_index
         try:
             mask = ~raw_index.isna()
             coverage_index = raw_index[mask]
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             coverage_index = raw_index
         if getattr(coverage_index, "empty", True):
             tz = getattr(raw_index, "tz", None) or "UTC"
             try:
                 return raw_index, pd_local.DatetimeIndex([], tz=tz)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 return raw_index, empty_index
         try:
             coverage_index = coverage_index.unique()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             coverage_index = pd_local.DatetimeIndex(coverage_index)
         try:
             coverage_index = coverage_index.sort_values()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
         return raw_index, coverage_index
 
     def _infer_provider(frame: object) -> str | None:
         try:
             attrs = getattr(frame, "attrs", None)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return None
         if not isinstance(attrs, dict):
             return None
@@ -6992,7 +7003,7 @@ def _repair_rth_minute_gaps(
                 or attrs.get("fallback_provider")
                 or "",
             ).strip().lower()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         provider_attr = None
     skip_backup_fill = provider_attr == "yahoo"
     primary_provider_canonical = canonical_provider(
@@ -7001,14 +7012,14 @@ def _repair_rth_minute_gaps(
     feed_hint: str | None = None
     try:
         attrs = getattr(df, "attrs", None)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         attrs = None
     if isinstance(attrs, dict):
         feed_hint = attrs.get("data_feed") or attrs.get("fallback_feed")
     if not feed_hint:
         try:
             feed_hint = _current_intraday_feed()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             feed_hint = None
     gap_limit_ratio = _resolve_gap_ratio_limit(feed=feed_hint)
     # When the configured gap ratio limit is extremely strict (e.g. 0.5% in
@@ -7046,7 +7057,7 @@ def _repair_rth_minute_gaps(
                     missing_end,
                     interval="1m",
                 )
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 fallback_df = None
             else:
                 fallback_df = _post_process(
@@ -7141,7 +7152,7 @@ def _repair_rth_minute_gaps(
                 (end_utc + pd_local.Timedelta(minutes=1)).to_pydatetime(),
                 interval="1m",
             )
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             fallback_full = None
         else:
             fallback_full = _post_process(
@@ -7208,7 +7219,7 @@ def _repair_rth_minute_gaps(
     using_fallback_provider = bool(fallback_provider_hint and used_backup) or provider_canonical == "yahoo"
     try:
         last_timestamp_dt = combined_index.max().to_pydatetime()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         last_timestamp_dt = None
     if fallback_provider_hint is None and promoted_provider:
         fallback_provider_hint = promoted_provider
@@ -7289,7 +7300,7 @@ def _repair_rth_minute_gaps(
         }
         try:
             record_minute_gap_event(event_payload)
-        except Exception:  # pragma: no cover - defensive
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             logger.debug(
                 "SAFE_MODE_EVENT_RECORD_FAILED",
                 extra={"reason": "minute_gap", "detail": "record_failed"},
@@ -7302,12 +7313,12 @@ def _repair_rth_minute_gaps(
             attrs["data_provider"] = fallback_provider_hint
             attrs["fallback_provider"] = fallback_provider_hint
         attrs["_coverage_meta"] = metadata
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
 
     try:
         record_gap_statistics(symbol, metadata)
-    except Exception:  # pragma: no cover - defensive diagnostics capture
+    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive diagnostics capture
         logger.debug(
             "GAP_STATS_RECORD_FAILED",
             extra={"symbol": symbol, "detail": "metadata_capture_failed"},
@@ -7325,7 +7336,7 @@ def _read_env_float(key: str) -> float | None:
             return None
     try:
         value = get_env(key, None, cast=float)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         value = None
     if value is not None:
         try:
@@ -7363,7 +7374,7 @@ def _resolve_gap_ratio_limit(*, default_ratio: float = 0.05, feed: str | None = 
     if feed:
         try:
             normalized = str(feed).strip().lower()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             normalized = ""
         if "iex" in normalized:
             resolved = max(resolved, 0.30)
@@ -7398,7 +7409,7 @@ def should_skip_symbol(
             raw_timestamps = pd_local.DatetimeIndex(raw_timestamps)
         timestamps_utc = raw_timestamps.tz_convert("UTC")
         timestamps = raw_timestamps.tz_convert(tzinfo)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         raw_timestamps = pd_local.DatetimeIndex([])
         timestamps_utc = pd_local.DatetimeIndex([])
         timestamps = pd_local.DatetimeIndex([])
@@ -7416,7 +7427,7 @@ def should_skip_symbol(
                 session_bounds_fn=getattr(market_calendar_module, "rth_session_utc", None),
             )
             expected_count = int(expected_local.size)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             expected_count = 0
 
     if expected_count == 0:
@@ -7424,7 +7435,7 @@ def should_skip_symbol(
             in_window = int(
                 ((timestamps_utc >= start_utc) & (timestamps_utc < end_utc)).sum(),
             )
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             in_window = 0
         if (
             len(timestamps_utc) > 0
@@ -7434,7 +7445,7 @@ def should_skip_symbol(
         ):
             try:
                 attrs = df.attrs  # type: ignore[attr-defined]
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 attrs = None
             if isinstance(attrs, dict):
                 coverage_meta = attrs.setdefault("_coverage_meta", {})
@@ -7466,7 +7477,7 @@ def should_skip_symbol(
     gap_ratio = missing_after / expected_count if expected_count else 0.0
     try:
         attrs = df.attrs  # type: ignore[attr-defined]
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         attrs = None
     coverage_meta_info: dict[str, object] | None = None
     if isinstance(attrs, dict):
@@ -7558,14 +7569,14 @@ def _resolve_env_host_limit() -> tuple[str | None, int]:
     """Return ``(signature, limit)`` for the configured HTTP_HOST_LIMIT."""
     try:
         raw_value = get_env("HTTP_HOST_LIMIT", "")
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         raw_value = ""
     if raw_value is None:
         text = ""
     else:
         try:
             text = str(raw_value).strip()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             text = ""
     if not text:
         return None, _HOST_LIMIT_DEFAULT
@@ -7591,7 +7602,7 @@ def _host_semaphore_for_url(url: str) -> Semaphore | None:
     """Return the semaphore guarding *url*'s host:port pair."""
     try:
         parsed = urlparse(url)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return None
     host = parsed.hostname or ""
     if not host:
@@ -7629,7 +7640,7 @@ def _ensure_pandas():
     if pd is None:
         try:
             pd = load_pandas()
-        except Exception:  # pragma: no cover - optional dependency
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency
             pd = None
     return pd
 
@@ -7646,7 +7657,7 @@ def _last_complete_minute(pd_local: Any | None = None) -> _dt.datetime:
             else:
                 ts = ts.tz_convert("UTC")
             return cast(_dt.datetime, ts.to_pydatetime())
-        except Exception:  # pragma: no cover - defensive
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             pass
     return datetime.now(UTC).replace(second=0, microsecond=0) - _dt.timedelta(minutes=1)
 
@@ -7692,7 +7703,7 @@ def _ensure_requests():
                     placeholder.__bases__ = (real,)
                 except TypeError:  # pragma: no cover - fallback for exotic class wrappers
                     continue
-        except Exception:  # pragma: no cover - optional dependency
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency
             requests = _RequestsModulePlaceholder()
     if _requests is None or getattr(_requests, "get", None) is None:
         _requests = requests
@@ -7719,7 +7730,7 @@ def _session_get(
         try:
             semaphore.acquire()
             acquired = True
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             acquired = False
     try:
         if getattr(sess, "get", None):
@@ -7727,7 +7738,7 @@ def _session_get(
                 response = sess.get(url, params=params, headers=headers, timeout=timeout)
                 if response is not None:
                     return response
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 if _pytest_active():
                     raise
         requests_mod = _ensure_requests()
@@ -7735,7 +7746,7 @@ def _session_get(
         if callable(get_fn):
             try:
                 return get_fn(url, params=params, headers=headers, timeout=timeout)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
         return SimpleNamespace(
             status_code=599,
@@ -7747,7 +7758,7 @@ def _session_get(
         if acquired:
             try:
                 semaphore.release()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
 
 
@@ -7755,7 +7766,7 @@ def _get_alpaca_data_base_url() -> str:
     """Return the normalized Alpaca data base URL."""
     try:
         base_url = get_alpaca_data_base_url()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         base_url = "https://data.alpaca.markets"
     base_url = (base_url or "https://data.alpaca.markets").strip()
     if not base_url:
@@ -7784,7 +7795,7 @@ def _parse_bars(symbol: str, content_type: str, body: bytes) -> pd.DataFrame:
             import io
 
             df = pd.read_csv(io.BytesIO(body))
-    except Exception as exc:  # pragma: no cover - narrow parsing
+    except FETCH_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - narrow parsing
         raise DataFetchError(f"parse error: {exc}") from exc
     return _flatten_and_normalize_ohlcv(df, symbol)
 
@@ -7804,13 +7815,13 @@ def _alpaca_get_bars(
         raise DataFetchError("invalid client")
     try:
         bars = client.get_bars(symbol, start=start, end=end, timeframe=timeframe)
-    except Exception as exc:  # pragma: no cover - client variability
+    except FETCH_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - client variability
         raise DataFetchError(str(exc)) from exc
     if isinstance(bars, pd.DataFrame):
         return _flatten_and_normalize_ohlcv(bars, symbol, timeframe)
     try:
         return _flatten_and_normalize_ohlcv(pd.DataFrame(bars), symbol, timeframe)
-    except Exception as exc:  # pragma: no cover - conversion failure
+    except FETCH_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - conversion failure
         raise DataFetchError(f"invalid bars: {exc}") from exc
 
 
@@ -7826,7 +7837,7 @@ def get_daily(symbol: str, start: Any, end: Any) -> pd.DataFrame:
     url = _build_daily_url(symbol, start_dt, end_dt)
     try:
         resp = _HTTP_SESSION.get(url, timeout=clamp_request_timeout(10))
-    except Exception as exc:  # pragma: no cover - network variance
+    except FETCH_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - network variance
         raise DataFetchError(str(exc)) from exc
     if getattr(resp, "status_code", 0) != 200:
         raise DataFetchError(f"http {getattr(resp, 'status_code', 'unknown')}")
@@ -8029,7 +8040,7 @@ def _fetch_reference_bars(
     validate_adjustment(resolved_adjustment)
     try:
         from ai_trading.alpaca_api import get_bars_df as _alpaca_get_bars_df
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return _empty_reference_frame()
 
     try:
@@ -8041,7 +8052,7 @@ def _fetch_reference_bars(
             feed=effective_feed,
             adjustment=resolved_adjustment,
         )
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         logger.debug(
             "REFERENCE_FETCH_FAILED",
             extra={"symbol": symbol, "timeframe": timeframe, "feed": resolved_feed},
@@ -8065,7 +8076,7 @@ def _fetch_reference_bars(
     try:
         normalized.attrs["reference_feed_requested"] = str(resolved_feed)
         normalized.attrs["reference_feed_effective"] = str(effective_feed)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
     return _annotate_df_source(
         normalized,
@@ -8101,13 +8112,13 @@ def _fetch_bars(
         raise ValueError("end is required")
     try:
         start_dt = ensure_datetime(start)
-    except Exception as exc:
+    except FETCH_FALLBACK_EXCEPTIONS as exc:
         raise ValueError("start must be a timezone-aware datetime") from exc
     if start_dt.tzinfo is None or start_dt.tzinfo.utcoffset(start_dt) is None:
         raise ValueError("start must be a timezone-aware datetime")
     try:
         end_dt = ensure_datetime(end)
-    except Exception as exc:
+    except FETCH_FALLBACK_EXCEPTIONS as exc:
         raise ValueError("end must be a timezone-aware datetime") from exc
     if end_dt.tzinfo is None or end_dt.tzinfo.utcoffset(end_dt) is None:
         raise ValueError("end must be a timezone-aware datetime")
@@ -8122,7 +8133,7 @@ def _fetch_bars(
         if not _http_fallback_permitted(tf_norm, window_has_session=has_session, feed=feed):
             try:
                 backup_allowed = bool(alpaca_empty_to_backup())
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 backup_allowed = True
         if not backup_allowed:
             _FALLBACK_WINDOWS.clear()
@@ -8152,7 +8163,7 @@ def _fetch_bars(
                     },
                 ),
             )
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
                 logger.info("DATA_WINDOW_NO_SESSION")
         _incr(
             "data.fetch.empty",
@@ -8256,7 +8267,7 @@ def _fetch_bars(
 
     try:
         _max_fallbacks_raw = max_data_fallbacks()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         _max_fallbacks_raw = None
     try:
         _max_fallbacks_config = (
@@ -8356,7 +8367,7 @@ def _fetch_bars(
         ):
             try:
                 market_open_now = is_market_open()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 market_open_now = False
             if market_open_now:
                 lvl = _safe_empty_classify(is_market_open=True)
@@ -8425,14 +8436,14 @@ def _fetch_bars(
         try:
             attempt_payload["start"] = _start.isoformat()
             attempt_payload["end"] = _end.isoformat()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
         try:
             logger.info(
                 "DATA_SOURCE_FALLBACK_ATTEMPT",
                 extra=_norm_extra(attempt_payload),
             )
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
         fallback_df = _safe_backup_get_bars(symbol, _start, _end, interval=interval_code)
         annotated_df = _annotate_df_source(
@@ -8463,24 +8474,24 @@ def _fetch_bars(
             else:
                 try:
                     annotated_df = pd.DataFrame()
-                except Exception:  # pragma: no cover - pandas unavailable
+                except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - pandas unavailable
                     annotated_df = []  # type: ignore[assignment]
             frame_has_rows = False
         if frame_has_rows:
             _record_fallback_success_metric(tags)
             try:
                 to_feed = _normalize_feed_value(feed_tag)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 try:
                     to_feed = str(feed_tag).strip().lower() or None
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     to_feed = None
             try:
                 from_feed = _normalize_feed_value(_feed)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 try:
                     from_feed = str(_feed).strip().lower() or None
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     from_feed = None
             success_payload = {
                 "provider": resolved_provider,
@@ -8493,21 +8504,21 @@ def _fetch_bars(
             try:
                 success_payload["start"] = _start.isoformat()
                 success_payload["end"] = _end.isoformat()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             try:
                 logger.info(
                     "DATA_SOURCE_FALLBACK_SUCCESS",
                     extra=_norm_extra(success_payload),
                 )
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             _state.pop("empty_attempts", None)
             if from_feed and to_feed and to_feed != from_feed:
                 _record_feed_switch(symbol, _interval, from_feed, to_feed)
             try:
                 skip_until = datetime.now(tz=UTC) + _backup_skip_window()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 skip_until = None
             _set_backup_skip(symbol, _interval, until=skip_until)
             _mark_fallback(
@@ -8551,7 +8562,7 @@ def _fetch_bars(
                     provider_monitor.record_switchover(
                         f"alpaca_{_feed}", "yahoo",
                     )
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
                 logger.warning(
                     "ALPACA_FEED_SWITCHOVER",
@@ -8579,7 +8590,7 @@ def _fetch_bars(
                 try:
                     attempt_payload["start"] = _start.isoformat()
                     attempt_payload["end"] = _end.isoformat()
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
                 _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
                 try:
@@ -8587,7 +8598,7 @@ def _fetch_bars(
                         "DATA_SOURCE_FALLBACK_ATTEMPT",
                         extra=_norm_extra(attempt_payload),
                     )
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
                 backup_frame = _backup_get_bars(
                     symbol,
@@ -8611,24 +8622,24 @@ def _fetch_bars(
                     pd_local = _ensure_pandas()
                     try:
                         empty_candidate = _empty_ohlcv_frame(pd_local)
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         empty_candidate = None
                     if empty_candidate is not None:
                         processed_frame = empty_candidate
                     elif pd_local is not None:
                         try:
                             processed_frame = pd_local.DataFrame()
-                        except Exception:
+                        except FETCH_FALLBACK_EXCEPTIONS:
                             processed_frame = None
                     if processed_frame is None:
                         try:
                             pandas_mod = load_pandas()
-                        except Exception:
+                        except FETCH_FALLBACK_EXCEPTIONS:
                             pandas_mod = None
                         if pandas_mod is not None:
                             try:
                                 processed_frame = pandas_mod.DataFrame()
-                            except Exception:  # pragma: no cover - pandas missing
+                            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - pandas missing
                                 processed_frame = None
                     if processed_frame is None:
                         processed_frame = []
@@ -8690,7 +8701,7 @@ def _fetch_bars(
         else:
             try:
                 frame = pd.DataFrame(candidate)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 frame = pd.DataFrame()
         if short_circuit_empty and not _frame_has_rows(frame):
             return _empty_ohlcv_frame(pd)
@@ -8701,7 +8712,7 @@ def _fetch_bars(
             interval_code = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
             try:
                 yahoo_df = _yahoo_get_bars(symbol, _start, _end, interval=interval_code)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 yahoo_df = pd.DataFrame()
             annotated = _annotate_df_source(yahoo_df, provider="yahoo", feed="yahoo")
             processed = _post_process(annotated, symbol=symbol, timeframe=_interval)
@@ -8754,7 +8765,7 @@ def _fetch_bars(
             yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
             try:
                 fallback_frame = _yahoo_get_bars(symbol, _start, _end, yf_interval)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 fallback_frame = _safe_backup_get_bars(symbol, _start, _end, interval=yf_interval)
             annotated_df = _annotate_df_source(
                 fallback_frame,
@@ -8812,7 +8823,7 @@ def _fetch_bars(
                     "Alpaca credentials missing; using backup provider",
                     metadata={"provider": getattr(_current_settings(), "backup_data_provider", get_backup_data_provider())},
                 )
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             _ALPACA_KEYS_MISSING_LOGGED = True
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
@@ -8873,7 +8884,7 @@ def _fetch_bars(
     if skip_until_dt is not None and not isinstance(skip_until_dt, datetime):
         try:
             skip_until_dt = datetime.fromtimestamp(float(skip_until_dt), tz=UTC)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             skip_until_dt = None
             _clear_backup_skip(symbol, _interval)
     if isinstance(skip_until_dt, datetime):
@@ -8919,7 +8930,7 @@ def _fetch_bars(
             try:
                 skip_payload["start"] = _start.isoformat()
                 skip_payload["end"] = _end.isoformat()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             if skip_from_global:
                 skip_payload["global_skip"] = True
@@ -8935,7 +8946,7 @@ def _fetch_bars(
             )
             try:
                 _state["empty_data_logged"] = True
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             fallback_df = _run_backup_fetch(fb_interval, from_provider=f"alpaca_{_feed}")
             return _finalize_frame(fallback_df)
@@ -8961,7 +8972,7 @@ def _fetch_bars(
                 try:
                     skip_payload["start"] = _start.isoformat()
                     skip_payload["end"] = _end.isoformat()
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
                 if skip_from_global:
                     skip_payload["global_skip"] = True
@@ -8977,7 +8988,7 @@ def _fetch_bars(
                 )
                 try:
                     _state["empty_data_logged"] = True
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
                 fallback_df = _run_backup_fetch(fb_interval, from_provider=f"alpaca_{_feed}")
                 return _finalize_frame(fallback_df)
@@ -8993,7 +9004,7 @@ def _fetch_bars(
         if not preserve_backup_skip:
             try:
                 _clear_backup_skip(symbol, _interval)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
         provider_monitor.record_success("alpaca")
         _alpaca_disable_count = 0
@@ -9007,7 +9018,7 @@ def _fetch_bars(
                 _clear_backup_skip(symbol, _interval)
                 _clear_global_backup_skip(_interval)
                 _clear_minute_fallback_state(symbol, _interval, _start, _end)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
         try:
             logger.info(
@@ -9021,18 +9032,18 @@ def _fetch_bars(
                     },
                 ),
             )
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
     monitor_disabled_until: _dt.datetime | None = None
     try:
         monitor_disabled_until = provider_monitor.disabled_until.get("alpaca")
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         monitor_disabled_until = None
     if monitor_disabled_until is not None:
         try:
             if monitor_disabled_until.tzinfo is None:
                 monitor_disabled_until = monitor_disabled_until.replace(tzinfo=UTC)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             monitor_disabled_until = None
     if monitor_disabled_until and monitor_disabled_until <= now:
         provider_monitor.record_success("alpaca")
@@ -9060,7 +9071,7 @@ def _fetch_bars(
                             "disabled_until": _alpaca_disabled_until.isoformat(),
                         },
                     )
-                except Exception:  # pragma: no cover - alerting best effort
+                except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - alerting best effort
                     logger.exception("ALERT_FAILURE", extra={"provider": "alpaca"})
                 _ALPACA_DISABLED_ALERTED = True
             try:
@@ -9075,7 +9086,7 @@ def _fetch_bars(
                         },
                     ),
                 )
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             if (
                 explicit_feed_request
@@ -9095,7 +9106,7 @@ def _fetch_bars(
                 if not backup_allowed:
                     try:
                         backup_allowed = _should_use_backup_on_empty()
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         backup_allowed = False
                 fallback_permitted = _http_fallback_permitted(
                     _interval,
@@ -9127,7 +9138,7 @@ def _fetch_bars(
             except ValueError:
                 try:
                     override_norm = str(override_feed).strip().lower() or None
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     override_norm = None
         if override_norm in {"iex", "sip"}:
             _FALLBACK_WINDOWS.discard(fallback_key)
@@ -9141,7 +9152,7 @@ def _fetch_bars(
     # Respect recent fallback TTL at coarse granularity
     try:
         now_s = int(_dt.datetime.now(tz=UTC).timestamp())
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         now_s = int(_time_now())
     until = _FALLBACK_UNTIL.get((symbol, _interval))
     if until and now_s < until:
@@ -9288,7 +9299,7 @@ def _fetch_bars(
         if _feed:
             try:
                 call_attempts.add(str(_feed).strip().lower())
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 call_attempts.add(_feed)
 
         skip_empty_metrics = bool(_state.get("skip_empty_metrics"))
@@ -9332,7 +9343,7 @@ def _fetch_bars(
             retries_val = 0
             try:
                 retries_val = int(_state.get("retries", 0))
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 retries_val = 0
             return max(retries_val, 0) + 1
 
@@ -9356,7 +9367,7 @@ def _fetch_bars(
             )
             try:
                 _state["last_fetch_attempt"] = dict(payload)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 _state["last_fetch_attempt"] = payload
             provider_label = str(payload.get("provider") or "alpaca")
             log_payload = dict(payload)
@@ -9379,7 +9390,7 @@ def _fetch_bars(
                     quote_timestamp_present=False,
                     quote_age_ms=None,
                 )
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
 
         def _attempt_fallback(
@@ -9403,7 +9414,7 @@ def _fetch_bars(
             )
             try:
                 allow_sip_fallback = bool(_sip_allowed())
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 allow_sip_fallback = False
             skip_sip_validation = skip_check or (
                 pytest_active_local
@@ -9443,7 +9454,7 @@ def _fetch_bars(
                             {"provider": "alpaca", "from": from_feed, "to": fb_feed, "timeframe": _interval},
                         ),
                     )
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
             if not skip_metrics:
                 provider_fallback.labels(
@@ -9466,14 +9477,14 @@ def _fetch_bars(
             try:
                 attempt_extra["start"] = fb_start.isoformat()
                 attempt_extra["end"] = fb_end.isoformat()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             try:
                 logger.info(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
                     extra=_norm_extra(attempt_extra),
                 )
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             prev_defer = _state.get("defer_success_metric")
             _state["defer_success_metric"] = True
@@ -9499,7 +9510,7 @@ def _fetch_bars(
                 used_backup = True
             try:
                 fallback_meta = dict(_state.get("meta", {}) or {})
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 fallback_meta = {}
             if fallback_meta.get("sip_unauthorized"):
                 _state["skip_backup_after_fallback"] = True
@@ -9524,28 +9535,29 @@ def _fetch_bars(
                 try:
                     success_payload["start"] = fb_start.isoformat()
                     success_payload["end"] = fb_end.isoformat()
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
                 try:
                     logger.info(
                         "DATA_SOURCE_FALLBACK_SUCCESS",
                         extra=_norm_extra(success_payload),
                     )
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
                 _state.pop("empty_attempts", None)
                 if from_feed != fb_feed:
                     try:
                         cooldown_seconds = _provider_switch_cooldown_seconds()
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         cooldown_seconds = 0.0
                     if cooldown_seconds > 0.0:
                         try:
                             provider_monitor.disable(
                                 f"alpaca_{from_feed}", duration=cooldown_seconds,
                             )
-                        except Exception:
+                        except FETCH_FALLBACK_EXCEPTIONS:
                             pass
+                _cycle_set_fallback_feed(symbol, fb_feed, timeframe=_interval)
             if result is not None:
                 _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
             if result is not None and not _used_fallback(symbol, fb_interval, fb_start, fb_end):
@@ -9657,7 +9669,7 @@ def _fetch_bars(
                 _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
                 try:
                     _log_sip_unavailable(symbol, _interval, "UNAUTHORIZED_SIP")
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
                 _state["skip_backup_after_fallback"] = True
                 _state["fallback_reason"] = "sip_unauthorized"
@@ -9667,7 +9679,7 @@ def _fetch_bars(
                 if callable(_backup_get_bars):
                     try:
                         backup_frame = _backup_get_bars(symbol, _start, _end, _interval)
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         backup_frame = None
                 if backup_frame is not None and not getattr(backup_frame, "empty", True):
                     return _depth_exit(_finalize_frame(backup_frame))
@@ -9694,7 +9706,7 @@ def _fetch_bars(
             metrics.timeout += 1
             try:
                 time.sleep(1.0)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             provider_monitor.record_failure("alpaca", "timeout", str(e))
             _report_provider_health_failure("timeout")
@@ -9728,7 +9740,7 @@ def _fetch_bars(
                 return _depth_exit(_empty_result())
             try:
                 time.sleep(retry_delay)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             result = _req(session, fallback, headers=headers, timeout=timeout)
             return _depth_exit(result)
@@ -10103,7 +10115,7 @@ def _fetch_bars(
             _record_alpaca_failure_event(symbol, timeframe=_interval)
             try:
                 already_disabled = provider_monitor.is_disabled("alpaca")
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 already_disabled = False
             if already_disabled:
                 if cooldown and cooldown > 0:
@@ -10111,30 +10123,30 @@ def _fetch_bars(
                         provider_monitor.disabled_until["alpaca"] = datetime.now(tz=UTC) + timedelta(
                             seconds=float(cooldown),
                         )
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         pass
             else:
                 try:
                     provider_monitor.disable("alpaca", duration=cooldown)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
             if not already_disabled and _pytest_active():
                 try:
                     provider_disable_total.labels(provider="alpaca").inc()
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
             try:
                 skip_window_seconds = cooldown if (cooldown and cooldown > 0) else _MIN_RATE_LIMIT_SLEEP_SECONDS
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 skip_window_seconds = _MIN_RATE_LIMIT_SLEEP_SECONDS
             try:
                 skip_until_dt = datetime.now(tz=UTC) + timedelta(seconds=skip_window_seconds)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 skip_until_dt = None
             if skip_until_dt is not None:
                 try:
                     _set_backup_skip(symbol, _interval, until=skip_until_dt)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
             pending_recover = _state.setdefault("pending_recover", set())
             if isinstance(pending_recover, set):
@@ -10142,7 +10154,7 @@ def _fetch_bars(
             if cooldown and cooldown > 0 and has_retry_after:
                 try:
                     existing_delay = float(_state.get("retry_delay") or 0.0)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     existing_delay = 0.0
                 _state["retry_delay"] = max(existing_delay, float(cooldown))
             if _state.get("sip_unauthorized"):
@@ -10164,7 +10176,7 @@ def _fetch_bars(
             if not has_retry_after and _state.get("retries", 0) < max_retries:
                 try:
                     delay_hint = float(_state.get("retry_delay") or 0.0)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     delay_hint = 0.0
                 if delay_hint <= 0:
                     delay_hint = _MIN_RATE_LIMIT_SLEEP_SECONDS
@@ -10172,20 +10184,20 @@ def _fetch_bars(
                 _state["retries"] = _state.get("retries", 0) + 1
                 try:
                     time.sleep(delay_hint)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
                 return _depth_exit(_req(session, fallback, headers=headers, timeout=timeout))
             rate_limit_backup_frame: Any | None = None
             if callable(_backup_get_bars):
                 try:
                     rate_limit_backup_frame = _backup_get_bars(symbol, _start, _end, _interval)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     rate_limit_backup_frame = None
             if rate_limit_backup_frame is not None and not getattr(rate_limit_backup_frame, "empty", True):
                 finalized_backup = _finalize_frame(rate_limit_backup_frame)
                 try:
                     attrs = getattr(finalized_backup, "attrs", {}) or {}
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     attrs = {}
                 provider_name = (
                     attrs.get("data_provider")
@@ -10235,7 +10247,7 @@ def _fetch_bars(
             can_retry_timeframe = str(_interval).lower() not in {"1day", "day", "1d"}
             try:
                 market_open_now = is_market_open()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 market_open_now = False
             outside_market_hours = _outside_market_hours(_start, _end) if can_retry_timeframe else False
             http_fallback_allowed = _http_fallback_permitted(
@@ -10245,12 +10257,12 @@ def _fetch_bars(
             )
             try:
                 alpaca_backup_allowed = bool(alpaca_empty_to_backup())
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 alpaca_backup_allowed = False
             fallback_slot_limit: int | None = None
             try:
                 fallback_slot_limit = int(max_data_fallbacks())
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 fallback_slot_limit = None
             if (
                 (not market_open_now or outside_market_hours)
@@ -10354,7 +10366,7 @@ def _fetch_bars(
             if http_fallback_allowed and not outside_market_hours:
                 try:
                     remaining_fallbacks = max_data_fallbacks()
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     should_backoff_first_empty = True
                 else:
                     should_backoff_first_empty = remaining_fallbacks <= 0
@@ -10414,7 +10426,7 @@ def _fetch_bars(
                 if _pytest_active():
                     try:
                         return _empty_result()
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         pass
                 logger.info(
                     "ALPACA_FETCH_MARKET_CLOSED",
@@ -10456,7 +10468,7 @@ def _fetch_bars(
                 _state["retries"] = attempt
                 try:
                     market_open = is_market_open()
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     market_open = False
                 if market_open:
                     _now = datetime.now(UTC)
@@ -10532,7 +10544,7 @@ def _fetch_bars(
                         if outside_market_hours and not _state.get("allow_no_session_primary", False):
                             try:
                                 market_open = is_market_open()
-                            except Exception:
+                            except FETCH_FALLBACK_EXCEPTIONS:
                                 market_open = False
                             if not market_open:
                                 try:
@@ -10547,7 +10559,7 @@ def _fetch_bars(
                                             },
                                         ),
                                     )
-                                except Exception:
+                                except FETCH_FALLBACK_EXCEPTIONS:
                                     pass
                                 _log_fallback_skip(
                                     fb_feed,
@@ -10578,7 +10590,7 @@ def _fetch_bars(
                 ):
                     try:
                         market_open = is_market_open()
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         market_open = False
                     if market_open:
                         lvl = _safe_empty_classify(is_market_open=True)
@@ -10664,7 +10676,7 @@ def _fetch_bars(
                         except ValueError:
                             try:
                                 normalized_feed_candidate = str(feed_option).strip().lower()
-                            except Exception:
+                            except FETCH_FALLBACK_EXCEPTIONS:
                                 continue
                         if normalized_feed_candidate in allowed_alpaca_feeds:
                             filtered_intraday.append(normalized_feed_candidate)
@@ -10677,7 +10689,7 @@ def _fetch_bars(
                         except ValueError:
                             try:
                                 normalized_feed_candidate = str(feed_option).strip().lower()
-                            except Exception:
+                            except FETCH_FALLBACK_EXCEPTIONS:
                                 continue
                         if normalized_feed_candidate in allowed_alpaca_feeds:
                             filtered_no_session.append(normalized_feed_candidate)
@@ -10817,7 +10829,7 @@ def _fetch_bars(
                 if allow_sip_fallback:
                     try:
                         sip_fallbacks_remaining = max_data_fallbacks()
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         sip_fallbacks_remaining = None
                     if sip_fallbacks_remaining is not None and sip_fallbacks_remaining <= 0:
                         attempt = _state.get("retries", 0) + 1
@@ -10964,7 +10976,7 @@ def _fetch_bars(
             _key = (symbol, "AVAILABLE", _now.date().isoformat(), _feed, _interval)
             try:
                 _open = is_market_open()
-            except Exception:  # pragma: no cover - defensive
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 _open = False
             if _open:
                 if _safe_empty_should_emit(_key, _now):
@@ -11084,7 +11096,7 @@ def _fetch_bars(
                     if not already_disabled and _alpaca_disabled_until:
                         try:
                             already_disabled = datetime.now(UTC) < _alpaca_disabled_until
-                        except Exception:
+                        except FETCH_FALLBACK_EXCEPTIONS:
                             already_disabled = False
                     if not already_disabled:
                         _incr("data.fetch.provider_disabled", value=1.0, tags=_tags())
@@ -11102,7 +11114,7 @@ def _fetch_bars(
                                     "reason": "empty",
                                 },
                             )
-                        except Exception:  # pragma: no cover - alerting best effort
+                        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - alerting best effort
                             logger.exception("ALERT_FAILURE", extra={"provider": "alpaca"})
                     else:
                         logger.debug(
@@ -11238,7 +11250,7 @@ def _fetch_bars(
                             pandas_mod = load_pandas()
                             try:
                                 return pandas_mod.DataFrame()
-                            except Exception:
+                            except FETCH_FALLBACK_EXCEPTIONS:
                                 import pandas as _pd  # type: ignore
 
                                 return _pd.DataFrame()
@@ -11307,7 +11319,7 @@ def _fetch_bars(
                     pandas_mod = load_pandas()
                     try:
                         return pandas_mod.DataFrame()
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         import pandas as _pd  # type: ignore
 
                         return _pd.DataFrame()
@@ -11350,7 +11362,7 @@ def _fetch_bars(
                 pd_mod = _lp()
                 try:
                     return pd_mod.DataFrame()
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     return pd.DataFrame()
             if _state.get("retries", 0) < max_retries:
                 _state["retries"] = max_retries
@@ -11492,7 +11504,7 @@ def _fetch_bars(
     else:
         try:
             max_fb = int(max_data_fallbacks())
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             max_fb = 0
     fallback = None
     sip_locked_initial = _is_sip_unauthorized()
@@ -11588,7 +11600,7 @@ def _fetch_bars(
                     _fetch_bars_backoff_base() ** empty_attempts,
                     _fetch_bars_backoff_cap(),
                 )
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 backoff_seconds = 0.0
             if backoff_seconds > 0:
                 time.sleep(backoff_seconds)
@@ -11610,7 +11622,7 @@ def _fetch_bars(
     market_open_now = True
     try:
         market_open_now = is_market_open()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         market_open_now = True
     outside_hours = _outside_market_hours(_start, _end)
     frame_empty = df is None or getattr(df, "empty", True)
@@ -11636,7 +11648,7 @@ def _fetch_bars(
         ):
             try:
                 market_open_now = is_market_open()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 market_open_now = False
             if market_open_now:
                 lvl = _safe_empty_classify(is_market_open=True)
@@ -11699,7 +11711,7 @@ def _fetch_bars(
         if monitor is not None:
             try:
                 provider_is_disabled = monitor.is_disabled("alpaca") or monitor.is_disabled("alpaca_iex")
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 provider_is_disabled = False
         threshold = _yahoo_failure_threshold()
         force_yahoo = False
@@ -11738,11 +11750,11 @@ def _fetch_bars(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
                     extra=_norm_extra({"provider": "yahoo", "fallback": {"interval": y_int}}),
                 )
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
             try:
                 alt_df = _yahoo_get_bars(symbol, _start, _end, interval=y_int)
-            except Exception:  # pragma: no cover - network variance
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - network variance
                 alt_df = pd.DataFrame()
             if alt_df is not None and (not alt_df.empty):
                 annotated_df = _annotate_df_source(
@@ -11788,14 +11800,14 @@ def _fetch_bars(
             except ValueError:
                 try:
                     initial_norm = str(initial_feed).strip().lower() or None
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     initial_norm = None
             try:
                 fallback_norm = _normalize_feed_value(fallback_feed)
             except ValueError:
                 try:
                     fallback_norm = str(fallback_feed).strip().lower() or None
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     fallback_norm = None
             if (
                 fallback_norm
@@ -11815,7 +11827,7 @@ def _fetch_bars(
         if session_open and not short_circuit_empty:
             try:
                 open_now = bool(is_market_open())
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 open_now = False
             if open_now and not _outside_market_hours(_start, _end):
                 return _finalize_frame(None)
@@ -11867,13 +11879,13 @@ def _minute_df_from_finnhub(
         frame = fetcher.fetch(_canon_symbol(symbol), start, end, resolution="1")
     except FinnhubAPIException:
         return None
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return None
     if frame is None or getattr(frame, "empty", True):
         return None
     try:
         return _normalize_finnhub_bars(frame)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return None
 
 
@@ -11904,7 +11916,7 @@ def get_minute_df(
         nonlocal last_complete_evaluations
         try:
             value = _last_complete_minute(pd)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             if fallback is not None:
                 return fallback
             raise
@@ -11948,7 +11960,7 @@ def get_minute_df(
     elif skip_until_raw is not None:
         try:
             skip_until_dt = datetime.fromtimestamp(float(skip_until_raw), tz=UTC)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             skip_until_dt = None
     now_skip_eval = datetime.now(tz=UTC)
     if isinstance(skip_until_dt, datetime) and skip_until_dt <= now_skip_eval:
@@ -11960,7 +11972,7 @@ def get_minute_df(
             skip_until_dt = global_skip_until_dt
     try:
         skip_window_active = bool(skip_until_dt and datetime.now(tz=UTC) < skip_until_dt)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         skip_window_active = False
     if skip_window_active:
         _note_backup_skip_activity(
@@ -11985,7 +11997,7 @@ def get_minute_df(
     if fallback_window_used:
         try:
             fallback_metadata = get_fallback_metadata(symbol, "1Min", start_dt, end_dt)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             fallback_metadata = None
         provider_hint = None
         if isinstance(fallback_metadata, dict):
@@ -12008,7 +12020,7 @@ def get_minute_df(
                     },
                 ),
             )
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             logger.info("DATA_WINDOW_NO_SESSION")
     global _GLOBAL_RETRY_LIMIT_LOGGED
     _state: dict[str, Any] = {
@@ -12087,7 +12099,7 @@ def get_minute_df(
         if now_s_cached is None:
             try:
                 now_s_cached = int(_dt.datetime.now(tz=UTC).timestamp())
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 now_s_cached = int(_time_now())
         return now_s_cached
 
@@ -12095,7 +12107,7 @@ def get_minute_df(
         ttl_until_value = _FALLBACK_UNTIL.get(tf_key)
         if ttl_until_value is not None:
             ttl_until = int(ttl_until_value)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         ttl_until = None
     if ttl_until is not None:
         fallback_ttl_active = _now_seconds() < ttl_until
@@ -12126,7 +12138,7 @@ def get_minute_df(
         _state["fallback_reason"] = fallback_metadata.get("reason")
         try:
             is_primary_provider_enabled()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
 
     forced_skip_engaged = False
@@ -12139,7 +12151,7 @@ def get_minute_df(
         if not isinstance(forced_skip_until, datetime):
             try:
                 forced_skip_until = datetime.fromtimestamp(float(forced_skip_until), tz=UTC)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 _clear_backup_skip(symbol, "1Min")
                 forced_skip_until = None
         if isinstance(forced_skip_until, datetime):
@@ -12162,7 +12174,7 @@ def get_minute_df(
             skip_primary_due_to_fallback = False
             try:
                 _clear_minute_fallback_state(symbol, "1Min", start_dt, end_dt)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pass
     elif forced_skip_engaged:
         skip_primary_due_to_fallback = True
@@ -12184,7 +12196,7 @@ def get_minute_df(
         backup_skip_engaged = True
         try:
             skip_until = datetime.now(tz=UTC) + _backup_skip_window()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             skip_until = None
         _set_backup_skip(symbol, "1Min", until=skip_until)
 
@@ -12291,7 +12303,7 @@ def get_minute_df(
         if frame is not None:
             try:
                 attrs = getattr(frame, "attrs", {})
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 attrs = {}
             if isinstance(attrs, dict):
                 provider_attr = attrs.get("data_provider") or attrs.get("fallback_provider")
@@ -12337,17 +12349,17 @@ def get_minute_df(
             if feed_tag:
                 try:
                     fallback_feed = _normalize_feed_value(feed_tag)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     try:
                         fallback_feed = str(feed_tag).strip().lower() or None
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         fallback_feed = None
             try:
                 source_feed_norm = _normalize_feed_value(source_feed)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 try:
                     source_feed_norm = str(source_feed).strip().lower() or None
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     source_feed_norm = None
             if (
                 source_feed_norm
@@ -12374,7 +12386,7 @@ def get_minute_df(
         if cached_cycle_feed:
             try:
                 normalized_feed = _normalize_feed_value(cached_cycle_feed)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 normalized_feed = str(cached_cycle_feed).strip().lower()
     finnhub_key_present = bool(get_env("FINNHUB_API_KEY")) and fh_fetcher is not None
     if tf_key in _SKIPPED_SYMBOLS:
@@ -12385,13 +12397,13 @@ def get_minute_df(
             if skip_window_until is not None and not isinstance(skip_window_until, datetime):
                 try:
                     skip_window_until = datetime.fromtimestamp(float(skip_window_until), tz=UTC)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     skip_window_until = None
             try:
                 skip_window_active_local = bool(
                     skip_window_until and datetime.now(tz=UTC) < skip_window_until
                 )
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 skip_window_active_local = False
         if skip_window_active_local:
             skip_window_active = True
@@ -12466,7 +12478,7 @@ def get_minute_df(
     def _disable_signal_active(provider_label: str) -> bool:
         try:
             disabled_map = getattr(provider_monitor, "disabled_until", {})
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return False
         if not isinstance(disabled_map, Mapping):
             return False
@@ -12483,7 +12495,7 @@ def get_minute_df(
                 if now is None:
                     try:
                         now = _dt.datetime.now(UTC)
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         now = None
                 if now is None or until > now:
                     return True
@@ -12541,7 +12553,7 @@ def get_minute_df(
         elif prefer_primary_first:
             try:
                 monitored_choice = provider_monitor.active_provider(primary_label, backup_label)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 monitored_choice = primary_label
             active_provider = monitored_choice if monitored_choice == backup_label else primary_label
         else:
@@ -12559,7 +12571,7 @@ def get_minute_df(
         if active_provider == backup_label:
             try:
                 refreshed_last_minute = _evaluate_last_complete(last_complete_minute)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 refreshed_last_minute = last_complete_minute
             else:
                 last_complete_minute = refreshed_last_minute
@@ -12572,7 +12584,7 @@ def get_minute_df(
             backup_attempted = True
             try:
                 df = _minute_backup_get_bars(symbol, start_dt, backup_end_dt, interval="1m")
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 df = None
             else:
                 df = _post_process(df, symbol=symbol, timeframe="1Min")
@@ -12680,7 +12692,7 @@ def get_minute_df(
             if df is not None:
                 try:
                     attrs = getattr(df, "attrs", None)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     attrs = None
                 if isinstance(attrs, dict):
                     provider_attr = attrs.get("data_provider") or attrs.get("fallback_provider")
@@ -12717,7 +12729,7 @@ def get_minute_df(
                     fallback_start_dt = max(start_dt, end_dt - shrink_window)
                     try:
                         session_start, _session_end = rth_session_utc(end_dt.date())
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         session_start = None
                     if session_start is not None:
                         fallback_start_dt = max(fallback_start_dt, session_start)
@@ -12741,7 +12753,7 @@ def get_minute_df(
                         if not switch_recorded:
                             try:
                                 _record_feed_switch(symbol, "1Min", current_feed, "sip")
-                            except Exception:
+                            except FETCH_FALLBACK_EXCEPTIONS:
                                 pass
                             switch_recorded = True
                         try:
@@ -12759,7 +12771,7 @@ def get_minute_df(
                     if not switch_recorded:
                         try:
                             priorities = provider_priority()
-                        except Exception:
+                        except FETCH_FALLBACK_EXCEPTIONS:
                             priorities = ()
                         fallback_target: str | None = None
                         for priority in priorities or ():
@@ -12777,16 +12789,16 @@ def get_minute_df(
                     return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
                 try:
                     market_open = is_market_open()
-                except Exception:  # pragma: no cover - defensive
+                except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                     market_open = True
                 try:
                     outside_hours_window = _outside_market_hours(start_dt, end_dt)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     outside_hours_window = False
                 http_fallback_enabled = _enable_http_fallback()
                 try:
                     backup_policy_enabled = bool(alpaca_empty_to_backup())
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     backup_policy_enabled = False
                 if (
                     (not market_open or outside_hours_window)
@@ -12978,7 +12990,7 @@ def get_minute_df(
                             switch_recorded = True
                         try:
                             fallback_payload_info: list[str] | dict[str, str] = _format_fallback_payload_df("1Min", alt_feed, start_dt, end_dt)
-                        except Exception:
+                        except FETCH_FALLBACK_EXCEPTIONS:
                             fallback_payload_info = {"feed": alt_feed, "timeframe": "1Min"}
                         logger.info(
                             "DATA_SOURCE_FALLBACK_ATTEMPT",
@@ -13144,7 +13156,7 @@ def get_minute_df(
         if forced_provider_label == "yahoo":
             try:
                 yahoo_raw = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 yahoo_raw = None
                 if pd is not None:
                     yahoo_raw = pd.DataFrame()
@@ -13160,7 +13172,7 @@ def get_minute_df(
         elif forced_provider_label == "finnhub":
             try:
                 finnhub_frame = _minute_df_from_finnhub(symbol, start_dt, end_dt)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 finnhub_frame = None
             if finnhub_frame is None or getattr(finnhub_frame, "empty", True):
                 df = finnhub_frame
@@ -13256,7 +13268,7 @@ def get_minute_df(
                 if "timestamp" in df.columns:
                     try:
                         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
-                    except Exception:
+                    except FETCH_FALLBACK_EXCEPTIONS:
                         pass
                     else:
                         df = df.sort_values("timestamp")
@@ -13299,7 +13311,7 @@ def get_minute_df(
                 fallback_logged = True
             try:
                 attrs = getattr(df, "attrs", None)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 attrs = None
             if isinstance(attrs, dict):
                 existing_coverage_meta = attrs.get("_coverage_meta")
@@ -13440,7 +13452,7 @@ def get_minute_df(
             and str(resolved_backup_provider or backup_label or "").strip().lower() == "yahoo"
             and (end_dt - start_dt) > _dt.timedelta(days=7)
         )
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         long_range_backup = False
     skip_gap_repair = (
         isinstance(df_attrs, Mapping)
@@ -13466,7 +13478,7 @@ def get_minute_df(
         if isinstance(attrs, dict):
             attrs.setdefault("symbol", symbol)
             attrs["_coverage_meta"] = coverage_meta
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
 
     if isinstance(coverage_meta, dict):
@@ -13482,7 +13494,7 @@ def get_minute_df(
             return
         try:
             attrs = getattr(frame, "attrs", None)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             return
         if not isinstance(attrs, dict):
             return
@@ -13490,7 +13502,7 @@ def get_minute_df(
         if isinstance(meta, dict):
             try:
                 existing_count = int(meta.get("last_complete_evaluations", 0))
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 existing_count = 0
             meta["last_complete_evaluations"] = max(existing_count, last_complete_evaluations)
         else:
@@ -13503,14 +13515,14 @@ def get_minute_df(
     feed_hint: str | None = None
     try:
         attrs = getattr(df, "attrs", None)
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         attrs = None
     if isinstance(attrs, dict):
         feed_hint = attrs.get("data_feed") or attrs.get("fallback_feed")
     if not feed_hint:
         try:
             feed_hint = _current_intraday_feed()
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             feed_hint = None
     max_gap_ratio = _resolve_gap_ratio_limit(feed=feed_hint)
     raw_gap_ratio = coverage_meta.get("gap_ratio", 0.0)
@@ -13521,7 +13533,7 @@ def get_minute_df(
     try:
         coverage_meta["gap_ratio_pct"] = gap_ratio * 100.0
         coverage_meta["gap_ratio_limit_pct"] = _resolve_gap_ratio_limit(feed=feed_hint) * 100.0
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         pass
     healthy_gap = gap_ratio <= max_gap_ratio
     severity = "good" if healthy_gap else "degraded"
@@ -13533,12 +13545,12 @@ def get_minute_df(
         fallback_reason = None
         try:
             fallback_reason = _state.get("fallback_reason")
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             fallback_reason = None
         if fallback_reason is not None:
             try:
                 fallback_reason = str(fallback_reason).strip()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 fallback_reason = None
         primary_feed_gap = False
         residual_gap = False
@@ -13546,11 +13558,11 @@ def get_minute_df(
         if isinstance(coverage_meta, Mapping):
             try:
                 primary_feed_gap = bool(coverage_meta.get("primary_feed_gap"))
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 primary_feed_gap = False
             try:
                 residual_gap = bool(coverage_meta.get("residual_gap"))
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 residual_gap = False
             try:
                 raw_initial = coverage_meta.get("initial_gap_ratio")
@@ -13587,7 +13599,7 @@ def get_minute_df(
                 0.0,
                 (datetime.now(UTC) - last_timestamp_dt.astimezone(UTC)).total_seconds() * 1000.0,
             )
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             quote_age_ms = None
     if backup_label:
         provider_monitor.update_data_health(
@@ -13602,7 +13614,7 @@ def get_minute_df(
         )
     try:
         settings_obj = _current_settings()
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         settings_obj = None
     gap_limit = None
     if settings_obj is not None:
@@ -13612,13 +13624,13 @@ def get_minute_df(
                 candidate = getattr(data_settings, "max_gap_ratio_intraday", None)
                 if candidate is not None:
                     gap_limit = max(float(candidate), 0.0)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             gap_limit = None
     if not healthy_gap:
         try:
             coverage_meta["status"] = "degraded"
             coverage_meta["gap_reason"] = gap_reason
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             pass
     if gap_limit is None:
         gap_limit = max_gap_ratio
@@ -13646,7 +13658,7 @@ def get_minute_df(
                 fallback_logged = True
             try:
                 attrs = getattr(fallback_candidate, "attrs", None)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 attrs = None
             if isinstance(attrs, dict) and "price_reliable" not in attrs:
                 _set_price_reliability(fallback_candidate, reliable=True)
@@ -13724,13 +13736,13 @@ def get_minute_df(
     if not used_backup:
         try:
             primary_canon = canonical_provider(primary_label or "alpaca")
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             primary_canon = str(primary_label or "alpaca")
         backup_canon: str | None = None
         if backup_label:
             try:
                 backup_canon = canonical_provider(backup_label)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 backup_canon = str(backup_label)
         runtime_state.update_data_provider_state(
             primary=primary_canon,
@@ -13779,7 +13791,7 @@ def get_minute_df(
         span_is_chunked = False
         try:
             span_is_chunked = (end_dt - start_dt) > _dt.timedelta(days=7)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             span_is_chunked = False
         if (
             used_backup
@@ -13870,7 +13882,7 @@ def get_daily_df(
             return alpaca_api_mod
         try:
             import ai_trading.alpaca_api as _alpaca_mod
-        except Exception as exc:  # pragma: no cover - optional dependency
+        except FETCH_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - optional dependency
             raise DataFetchError("DATA_FETCHER_UNAVAILABLE") from exc
         alpaca_api_mod = _alpaca_mod
         return alpaca_api_mod
@@ -13958,7 +13970,7 @@ def get_daily_df(
                 fetch_error = MissingOHLCVColumnsError(str(exc))
                 df = None
                 bootstrap_reason = "data_fetch_error"
-            except Exception as exc:  # pragma: no cover - defensive bootstrap attempt
+            except FETCH_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive bootstrap attempt
                 df = None
                 bootstrap_reason = f"error:{type(exc).__name__}"
             else:
@@ -13993,7 +14005,7 @@ def get_daily_df(
     def _empty_daily_frame() -> Any:
         try:
             return _empty_ohlcv_frame(pd_mod)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             if pd_mod is not None:
                 try:
                     return pd_mod.DataFrame(
@@ -14006,11 +14018,11 @@ def get_daily_df(
                             "volume": [],
                         },
                     )
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
             try:
                 pandas_mod = load_pandas()
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 pandas_mod = None
             if pandas_mod is not None:
                 try:
@@ -14024,7 +14036,7 @@ def get_daily_df(
                             "volume": [],
                         },
                     )
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
             return []
     if pd_mod is None:
@@ -14038,7 +14050,7 @@ def get_daily_df(
                     index_names = [name for name in df.index.names if name is not None]
                 else:
                     index_names = [getattr(df.index, "name", None)]
-            except Exception:  # pragma: no cover - defensive fallback
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
                 index_names = [getattr(df.index, "name", None)]
 
             for index_name in index_names:
@@ -14055,12 +14067,12 @@ def get_daily_df(
         if hasattr(df.columns, "duplicated"):
             try:
                 df = df.loc[:, ~df.columns.duplicated()]
-            except Exception:  # pragma: no cover - defensive guard
+            except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive guard
                 pass
     if df is not None and bootstrap_attempted:
         try:
             attrs = getattr(df, "attrs", {}) or {}
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             attrs = {}
         provider_attr = str(
             attrs.get("data_provider")
@@ -14077,7 +14089,7 @@ def get_daily_df(
         resolved_source = source_hint
         try:
             attrs = getattr(frame, "attrs", None)
-        except Exception:  # pragma: no cover - defensive metadata access
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive metadata access
             attrs = None
         if isinstance(attrs, dict):
             resolved_source = (
@@ -14092,19 +14104,19 @@ def get_daily_df(
         alias_map: dict[str, str] = {}
         try:
             columns = getattr(frame, "columns", None)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             columns = None
         if columns is not None:
             try:
                 alias_map = _alias_rename_map(columns)
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 alias_map = {}
         if alias_map:
             rename_fn = getattr(frame, "rename", None)
             if callable(rename_fn):
                 try:
                     frame = rename_fn(columns=alias_map)
-                except Exception:
+                except FETCH_FALLBACK_EXCEPTIONS:
                     pass
         normalized = ensure_ohlcv_schema(
             frame,
@@ -14136,7 +14148,7 @@ def get_daily_df(
         fallback_source_hint = source_hint
         try:
             fallback_attrs = getattr(fallback_df, "attrs", None)
-        except Exception:  # pragma: no cover - defensive metadata access
+        except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive metadata access
             fallback_attrs = None
         if isinstance(fallback_attrs, dict):
             fallback_source_hint = (
@@ -14322,7 +14334,7 @@ def get_bars(
                     "Alpaca credentials missing; using backup provider",
                     metadata={"provider": backup_provider},
                 )
-            except Exception:
+            except FETCH_FALLBACK_EXCEPTIONS:
                 # Never allow diagnostics to break data path
                 pass
             _ALPACA_KEYS_MISSING_LOGGED = True
@@ -14349,7 +14361,7 @@ def get_bars(
             if return_meta:
                 return df_backup, {}
             return df_backup
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             # Defer to Alpaca path (will return None) to preserve behavior
             return _fetch_bars(
                 symbol,
@@ -14374,6 +14386,7 @@ def get_bars(
         not return_meta
         and normalized_feed == "sip"
         and not (_SIP_UNAUTHORIZED or _is_sip_unauthorized())
+        and _window_has_trading_session(ensure_datetime(start), ensure_datetime(end), timeframe)
         and (
             result is None
             or (isinstance(result, pd.DataFrame) and result.empty)
@@ -14447,7 +14460,7 @@ def is_market_open() -> bool:
         from ai_trading.utils.base import is_market_open as _is_open
 
         return bool(_is_open())
-    except Exception:
+    except FETCH_FALLBACK_EXCEPTIONS:
         return True
 
 
@@ -14535,7 +14548,7 @@ def _record_gap_ratio_state(ratio: float | None, *, metadata: Mapping[str, Any] 
     if metadata is not None:
         try:
             state["coverage_meta"] = dict(metadata)
-        except Exception:
+        except FETCH_FALLBACK_EXCEPTIONS:
             state["coverage_meta"] = metadata
 
 

@@ -25,6 +25,7 @@ from ai_trading.features.indicators import (
 )
 from ai_trading.indicators import rsi as rsi_indicator
 from ai_trading.logging import get_logger
+from ai_trading.models.artifacts import load_verified_joblib_artifact
 from ai_trading.replay.event_loop import ReplayEventLoop
 
 logger = get_logger(__name__)
@@ -306,9 +307,7 @@ def _load_replay_model_context(args: argparse.Namespace) -> ReplayModelContext |
     if model_path is None or not model_path.is_file():
         return None
     try:
-        import joblib
-
-        model = joblib.load(model_path)
+        model = load_verified_joblib_artifact(model_path)
     except Exception as exc:
         logger.warning(
             "OFFLINE_REPLAY_MODEL_LOAD_FAILED",

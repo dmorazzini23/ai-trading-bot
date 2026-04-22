@@ -201,6 +201,13 @@ def test_standalone_health_app_fail_fast_env(monkeypatch):
         app_module.create_app(health_only=True, fail_fast_env=True)
 
 
+def test_resolve_standalone_healthcheck_port_rejects_shared_port():
+    settings = types.SimpleNamespace(api_port=9001, healthcheck_port=9001)
+
+    with pytest.raises(SystemExit, match="HEALTHCHECK_PORT to differ from API_PORT"):
+        app_module._resolve_standalone_healthcheck_port(settings)
+
+
 def test_health_endpoint_jsonify_failure_uses_sanitized_payload(monkeypatch):
     def broken_jsonify(payload):
         raise RuntimeError("json busted")

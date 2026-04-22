@@ -81,6 +81,94 @@ _REQUIRED_TEST_ENV = {
 }
 
 
+def _register_metrics_endpoint(app: Any, logger: Any) -> None:
+    """Register the canonical ``/metrics`` endpoint on ``app``."""
+
+    @app.route("/metrics")
+    def metrics():
+        """Expose Prometheus metrics if available."""
+        if not _PROM_OK:
+            return ("metrics unavailable", 501)
+        try:
+            from ai_trading.telemetry.runtime_prom_metrics import (
+                refresh_runtime_execution_metrics,
+            )
+
+            refresh_runtime_execution_metrics()
+        except (ImportError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.debug(
+                "PROM_RUNTIME_METRICS_REFRESH_SKIPPED",
+                extra={"error": str(exc)},
+            )
+        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+        return generate_latest(cast(Any, _PROM_REG)), 200, {"Content-Type": CONTENT_TYPE_LATEST}
+
+
+def _resolve_standalone_healthcheck_port(settings: Any) -> int:
+    """Return the standalone health port or raise on shared-port misuse."""
+
+    port = int(getattr(settings, "healthcheck_port", 8081) or 8081)
+    api_port = int(getattr(settings, "api_port", 9001) or 9001)
+    if port == api_port:
+        _log.critical(
+            "HEALTHCHECK_PORT_CONFLICT",
+            extra={"api_port": api_port, "healthcheck_port": port},
+        )
+        raise SystemExit(
+            "RUN_HEALTHCHECK=1 requires HEALTHCHECK_PORT to differ from API_PORT; "
+            f"both are set to {api_port}."
+        )
+    return port
+
+
+def build_standalone_healthcheck_app(
+    *,
+    fail_fast_env: bool = True,
+    service_name: str = _SERVICE_NAME,
+    alpaca_context: Mapping[str, Any] | None = None,
+    force_ok_for_pytest: bool | None = None,
+    healthy_status_mode: str = "service",
+    ok_mode: str = "connectivity",
+) -> Any:
+    """Return the canonical standalone health-only app."""
+
+    return create_app(
+        health_only=True,
+        fail_fast_env=fail_fast_env,
+        service_name=service_name,
+        alpaca_context=alpaca_context,
+        force_ok_for_pytest=force_ok_for_pytest,
+        healthy_status_mode=healthy_status_mode,
+        ok_mode=ok_mode,
+    )
+
+
+def run_standalone_healthcheck_app(
+    app: Any,
+    *,
+    host: str,
+    port: int,
+    logger: Any | None = None,
+) -> None:
+    """Run ``app`` with the canonical standalone healthcheck server settings."""
+
+    active_logger = _log if logger is None else logger
+    try:
+        suppress_flask_startup_noise()
+        app.run(host=host, port=port, threaded=True, use_reloader=False)
+    except OSError as exc:
+        active_logger.warning(
+            "HEALTHCHECK_PORT_CONFLICT",
+            extra={"host": host, "port": port, "error": str(exc)},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        active_logger.warning(
+            "HEALTH_SERVER_START_FAILED",
+            extra={"host": host, "port": port, "error": str(exc)},
+        )
+
+
 def _ensure_route_registry(app: Any) -> dict[Any, Any]:
     """Ensure lightweight Flask stubs can register routes for tests."""
 
@@ -502,7 +590,16 @@ def _normalize_health_payload(raw: Mapping | None) -> dict[str, Any]:
     return payload
 
 
-def create_app(*, health_only: bool = False, fail_fast_env: bool = False):
+def create_app(
+    *,
+    health_only: bool = False,
+    fail_fast_env: bool = False,
+    service_name: str = _SERVICE_NAME,
+    alpaca_context: Mapping[str, Any] | None = None,
+    force_ok_for_pytest: bool | None = None,
+    healthy_status_mode: str = "service",
+    ok_mode: str = "connectivity",
+):
     """Create and configure the Flask application."""
     try:
         FlaskClass = import_module("flask.app").Flask
@@ -702,7 +799,7 @@ def create_app(*, health_only: bool = False, fail_fast_env: bool = False):
 
     def _safe_response(payload: dict, *, status: int = 200) -> Any:
         """Return a Flask response when available, otherwise a plain payload."""
-        if _pytest_active() and status == 200:
+        if _pytest_active() and status == 200 and force_ok_for_pytest is None:
             payload = dict(payload)
             payload["ok"] = True
         response_factory = globals().get("jsonify")
@@ -743,7 +840,7 @@ def create_app(*, health_only: bool = False, fail_fast_env: bool = False):
                 """Lightweight liveness probe with Alpaca diagnostics."""
                 pytest_mode = _pytest_active()
                 payload = build_api_health_payload(
-                    service_name=_SERVICE_NAME,
+                    service_name=service_name,
                     force_ok_for_pytest=pytest_mode,
                     env_error=app.config.get("_ENV_ERR"),
                 )
@@ -758,17 +855,19 @@ def create_app(*, health_only: bool = False, fail_fast_env: bool = False):
 
         def _build_healthz_payload() -> dict[str, Any]:
             pytest_mode = _pytest_active()
+            force_ok = pytest_mode if force_ok_for_pytest is None else bool(force_ok_for_pytest)
             payload = cast(
                 dict[str, Any],
                 build_canonical_healthz_payload(
-                    service_name=_SERVICE_NAME,
-                    force_ok_for_pytest=pytest_mode,
-                    healthy_status_mode="service",
-                    ok_mode="connectivity",
+                    service_name=service_name,
+                    force_ok_for_pytest=force_ok,
+                    healthy_status_mode=healthy_status_mode,
+                    ok_mode=ok_mode,
                     env_error=app.config.get("_ENV_ERR"),
+                    alpaca_context=alpaca_context,
                 ),
             )
-            if (not pytest_mode) and (
+            if force_ok_for_pytest is None and (not pytest_mode) and (
                 _managed_env("PYTEST_RUNNING") or _managed_env("PYTEST_CURRENT_TEST")
             ):
                 _log.warning(
@@ -788,30 +887,12 @@ def create_app(*, health_only: bool = False, fail_fast_env: bool = False):
             app,
             payload_builder=_build_healthz_payload,
             response_builder=_healthz_response,
-            service_name=_SERVICE_NAME,
+            service_name=service_name,
             routes=("/healthz",),
             logger=_log,
             error_event="HEALTHZ_HANDLER_FAILED",
         )
-
-        @app.route("/metrics")
-        def metrics():
-            """Expose Prometheus metrics if available."""
-            if not _PROM_OK:
-                return ("metrics unavailable", 501)
-            try:
-                from ai_trading.telemetry.runtime_prom_metrics import (
-                    refresh_runtime_execution_metrics,
-                )
-
-                refresh_runtime_execution_metrics()
-            except (ImportError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                _log.debug(
-                    "PROM_RUNTIME_METRICS_REFRESH_SKIPPED",
-                    extra={"error": str(exc)},
-                )
-            from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-            return generate_latest(cast(Any, _PROM_REG)), 200, {"Content-Type": CONTENT_TYPE_LATEST}
+        _register_metrics_endpoint(app, _log)
 
     if health_only:
         _register_health_routes(include_health=False)
@@ -1362,9 +1443,8 @@ if __name__ == "__main__":
     if _managed_env("RUN_HEALTHCHECK") == "1":
         from ai_trading.config.settings import get_settings
 
-        app = create_app(health_only=True, fail_fast_env=True)
         s = get_settings()
-        port = int(s.healthcheck_port or 8081)
-        suppress_flask_startup_noise()
+        app = build_standalone_healthcheck_app(fail_fast_env=True)
+        port = _resolve_standalone_healthcheck_port(s)
         app.logger.info("Starting Flask", extra={"port": port})
-        app.run(host="0.0.0.0", port=port)
+        run_standalone_healthcheck_app(app, host="0.0.0.0", port=port, logger=app.logger)

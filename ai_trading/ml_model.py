@@ -9,15 +9,17 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.util
-import io
 import logging
-import pickle
 import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from ai_trading import paths
+from ai_trading.models.artifacts import (
+    load_verified_joblib_artifact,
+    write_artifact_manifest,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
@@ -139,6 +141,11 @@ class MLModel:
         abs_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             _require_joblib().dump(self.pipeline, abs_path)
+            write_artifact_manifest(
+                model_path=abs_path,
+                model_version=str(getattr(self.pipeline, "version", "ml-model-save-v1")),
+                metadata={"source": "MLModel.save"},
+            )
             self.logger.info("MODEL_SAVED", extra={"path": str(abs_path)})
         except (OSError, ValueError) as exc:  # pragma: no cover - defensive
             self.logger.exception("MODEL_SAVE_FAILED: %s", exc)
@@ -153,11 +160,13 @@ class MLModel:
         abs_path = Path(path).resolve()
         if not abs_path.is_relative_to(model_dir):
             raise RuntimeError(f"Model path outside allowed directory: {abs_path}")
+        if not abs_path.exists():
+            raise FileNotFoundError(abs_path)
         try:
             with abs_path.open("rb") as f:
                 data = f.read()
             digest = hashlib.sha256(data).hexdigest()
-            pipeline = _require_joblib().load(io.BytesIO(data))
+            pipeline = load_verified_joblib_artifact(abs_path)
             logger.info(
                 "MODEL_LOADED",
                 extra={
@@ -166,7 +175,7 @@ class MLModel:
                     "version": getattr(pipeline, "version", "n/a"),
                 },
             )
-        except (OSError, ValueError, pickle.UnpicklingError) as exc:  # pragma: no cover
+        except (OSError, RuntimeError, ValueError) as exc:  # pragma: no cover
             logger.exception("MODEL_LOAD_FAILED: %s", exc)
             raise
         return cls(pipeline)
@@ -211,6 +220,11 @@ def save_model(model: Any, path: str) -> None:
         raise RuntimeError(f"Model path outside allowed directory: {p}")
     p.parent.mkdir(parents=True, exist_ok=True)
     _require_joblib().dump(model, p)
+    write_artifact_manifest(
+        model_path=p,
+        model_version=str(getattr(model, "version", "ml-model-save-v1")),
+        metadata={"source": "save_model"},
+    )
 
 
 def load_model(path: str) -> Any:
@@ -220,7 +234,9 @@ def load_model(path: str) -> Any:
     p = Path(path).resolve()
     if not p.is_relative_to(model_dir):
         raise RuntimeError(f"Model path outside allowed directory: {p}")
-    return _require_joblib().load(p)
+    if not p.exists():
+        raise FileNotFoundError(p)
+    return load_verified_joblib_artifact(p)
 
 
 def train_xgboost_with_optuna(

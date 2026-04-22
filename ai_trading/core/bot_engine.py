@@ -316,11 +316,11 @@ def _is_alpaca_error_instance(exc: BaseException, attr: str, fallback: type[Base
         try:
             if isinstance(exc, candidate):
                 return True
-        except Exception:  # pragma: no cover - defensive guard
+        except BOT_ENGINE_FALLBACK_EXC:  # pragma: no cover - defensive guard
             continue
     try:
         return exc.__class__.__name__ == attr
-    except Exception:  # pragma: no cover - defensive guard
+    except BOT_ENGINE_FALLBACK_EXC:  # pragma: no cover - defensive guard
         logger.debug("ALPACA_ERROR_NAME_COMPARE_FAILED", exc_info=True)
         return False
 
@@ -975,7 +975,7 @@ def _parse_timeframe(tf: Any) -> Any:
         return canonicalize_timeframe(tf)
     raise ValueError(f"Unsupported timeframe: {tf}")
 # One place to define the common exception family (module-scoped)
-COMMON_EXC: tuple[type[BaseException], ...] = (
+COMMON_EXC: tuple[type[Exception], ...] = (
     TypeError,
     ValueError,
     KeyError,
@@ -984,6 +984,15 @@ COMMON_EXC: tuple[type[BaseException], ...] = (
     TimeoutError,
     ImportError,
     RuntimeError,
+)
+
+BOT_ENGINE_FALLBACK_EXC: tuple[type[Exception], ...] = COMMON_EXC + (
+    AttributeError,
+    AssertionError,
+    EOFError,
+    LookupError,
+    NameError,
+    OSError,
 )
 
 # Environment keys (defined early to support import-time fallbacks)
@@ -1399,13 +1408,13 @@ def _warmup_data_only_mode_active() -> bool:
 
     try:
         warmup_mode = bool(get_env("AI_TRADING_WARMUP_MODE", False, cast=bool))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         warmup_mode = False
     if not warmup_mode:
         return False
     try:
         allow_orders = bool(get_env("AI_TRADING_WARMUP_ALLOW_ORDERS", False, cast=bool))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         allow_orders = False
     return not allow_orders
 
@@ -1415,7 +1424,7 @@ def _warmup_symbol_limit() -> int:
 
     try:
         raw_limit = get_env("AI_TRADING_WARMUP_SYMBOL_LIMIT", 5, cast=int)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         raw_limit = 5
     try:
         limit = int(raw_limit)
@@ -1429,7 +1438,7 @@ def _resolve_execution_candidate_top_n() -> int | None:
 
     try:
         raw_top_n = get_env("AI_TRADING_EXEC_CANDIDATE_TOP_N", 0, cast=int)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         raw_top_n = 0
     try:
         top_n = int(raw_top_n)
@@ -1445,7 +1454,7 @@ def _resolve_prepare_symbol_limit() -> int | None:
 
     try:
         raw_limit = get_env("AI_TRADING_PREPARE_SYMBOL_LIMIT", 0, cast=int)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         raw_limit = 0
     try:
         limit = int(raw_limit)
@@ -1454,7 +1463,7 @@ def _resolve_prepare_symbol_limit() -> int | None:
     if limit <= 0:
         try:
             fallback_limit = get_env("MAX_SYMBOLS_PER_CYCLE", 0, cast=int)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             fallback_limit = 0
         try:
             limit = int(fallback_limit)
@@ -1468,18 +1477,18 @@ def _resolve_prepare_symbol_limit() -> int | None:
 def _acceptance_rate_governor_enabled() -> bool:
     try:
         return bool(get_env("AI_TRADING_ACCEPTANCE_RATE_GOVERNOR_ENABLED", True, cast=bool))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         return True
 
 
 def _acceptance_rate_governor_min_rate() -> float:
     try:
         fallback = float(get_env("AI_TRADING_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", 0.05, cast=float))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         fallback = 0.05
     try:
         raw = float(get_env("AI_TRADING_ACCEPTANCE_RATE_GOVERNOR_MIN_RATE", fallback, cast=float))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         raw = fallback
     return max(0.0, min(raw, 1.0))
 
@@ -1487,7 +1496,7 @@ def _acceptance_rate_governor_min_rate() -> float:
 def _acceptance_rate_governor_min_records() -> int:
     try:
         raw = int(get_env("AI_TRADING_ACCEPTANCE_RATE_GOVERNOR_MIN_RECORDS", 50, cast=int))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         raw = 50
     return max(1, min(raw, 10000))
 
@@ -1495,7 +1504,7 @@ def _acceptance_rate_governor_min_records() -> int:
 def _acceptance_rate_governor_trigger_streak() -> int:
     try:
         raw = int(get_env("AI_TRADING_ACCEPTANCE_RATE_GOVERNOR_TRIGGER_STREAK", 3, cast=int))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         raw = 3
     return max(1, min(raw, 100))
 
@@ -1503,7 +1512,7 @@ def _acceptance_rate_governor_trigger_streak() -> int:
 def _acceptance_rate_governor_recover_streak() -> int:
     try:
         raw = int(get_env("AI_TRADING_ACCEPTANCE_RATE_GOVERNOR_RECOVER_STREAK", 2, cast=int))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         raw = 2
     return max(1, min(raw, 100))
 
@@ -1511,7 +1520,7 @@ def _acceptance_rate_governor_recover_streak() -> int:
 def _acceptance_rate_governor_symbol_cap() -> int | None:
     try:
         raw = int(get_env("AI_TRADING_ACCEPTANCE_RATE_GOVERNOR_SYMBOL_CAP", 25, cast=int))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         raw = 25
     if raw <= 0:
         return None
@@ -1945,7 +1954,7 @@ def _portfolio_optimizer_allows_trade(
             current_positions=dict(current_positions),
             market_data=dict(market_data),
         )
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         return True, {
             "enabled": True,
             "reason": "decision_error_fail_open",
@@ -1983,7 +1992,7 @@ def _record_prerank_shadow_snapshot(
             value = get_env(name, default, cast=bool)
         except TypeError:
             value = get_env(name, default)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             return bool(default)
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "on"}
@@ -2061,7 +2070,7 @@ def _pre_rank_execution_candidates(
         adaptive_top_n_enabled = bool(
             get_env("AI_TRADING_EXEC_CANDIDATE_TOP_N_ADAPTIVE_ENABLED", True, cast=bool)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         adaptive_top_n_enabled = True
     if adaptive_top_n_enabled and runtime is not None:
         exec_engine = getattr(runtime, "execution_engine", None)
@@ -2069,7 +2078,7 @@ def _pre_rank_execution_candidates(
         if callable(resolve_submit_cap):
             try:
                 cap_value, cap_source = resolve_submit_cap()
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 cap_value, cap_source = (None, "error")
             if cap_value is not None:
                 try:
@@ -2082,13 +2091,13 @@ def _pre_rank_execution_candidates(
             per_order = int(
                 get_env("AI_TRADING_EXEC_CANDIDATE_TOP_N_PER_ORDER_CAP", 4, cast=int)
             )
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             per_order = 4
         try:
             adaptive_min = int(
                 get_env("AI_TRADING_EXEC_CANDIDATE_TOP_N_ADAPTIVE_MIN", 6, cast=int)
             )
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             adaptive_min = 6
         per_order = max(1, min(per_order, 25))
         adaptive_min = max(1, min(adaptive_min, 500))
@@ -2113,7 +2122,7 @@ def _pre_rank_execution_candidates(
         quality_filter_enabled = bool(
             get_env("AI_TRADING_EXEC_OPPORTUNITY_QUALITY_ENABLED", True)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         quality_filter_enabled = True
     try:
         quality_top_quantile = float(
@@ -2123,7 +2132,7 @@ def _pre_rank_execution_candidates(
         quality_top_quantile = float(
             get_env("AI_TRADING_EXEC_OPPORTUNITY_TOP_QUANTILE", 0.93)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         quality_top_quantile = 0.93
     quality_top_quantile = max(0.05, min(quality_top_quantile, 0.99))
     try:
@@ -2132,7 +2141,7 @@ def _pre_rank_execution_candidates(
         )
     except TypeError:
         quality_min_keep = int(get_env("AI_TRADING_EXEC_OPPORTUNITY_MIN_KEEP", 6))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         quality_min_keep = 6
     quality_min_keep = max(1, quality_min_keep)
     quality_threshold: float | None = None
@@ -2243,7 +2252,7 @@ def _pre_rank_execution_candidates(
                         cast=bool,
                     )
                 )
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 exploration_enabled = False
         if exploration_enabled and top_n > 1 and dropped:
             try:
@@ -2254,7 +2263,7 @@ def _pre_rank_execution_candidates(
                         cast=float,
                     )
                 )
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 exploration_fraction = 0.2
             exploration_fraction = max(0.0, min(exploration_fraction, 0.9))
             try:
@@ -2265,7 +2274,7 @@ def _pre_rank_execution_candidates(
                         cast=int,
                     )
                 )
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 exploration_min = 2
             exploration_min = max(1, min(exploration_min, max(top_n - 1, 1)))
             try:
@@ -2276,7 +2285,7 @@ def _pre_rank_execution_candidates(
                         cast=int,
                     )
                 )
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 exploration_stale_cycles = 3
             exploration_stale_cycles = max(1, min(exploration_stale_cycles, 1000))
             fraction_slots = (
@@ -2453,11 +2462,11 @@ def _resolve_data_retry_settings() -> tuple[int, float]:
             return _DATA_RETRY_SETTINGS_CACHE
         try:
             attempts_raw = get_env("DATA_SOURCE_RETRY_ATTEMPTS", 2, cast=int)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             attempts_raw = 2
         try:
             delay_raw = get_env("DATA_SOURCE_RETRY_DELAY_SECONDS", 0.5, cast=float)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             delay_raw = 0.5
         try:
             attempts = int(attempts_raw)
@@ -2474,7 +2483,7 @@ def _resolve_data_retry_settings() -> tuple[int, float]:
             flatten_enabled = bool(
                 get_env("AI_TRADING_DATA_RETRY_FLATTEN_ENABLED", False, cast=bool)
             )
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             flatten_enabled = False
         if flatten_enabled:
             try:
@@ -2483,7 +2492,7 @@ def _resolve_data_retry_settings() -> tuple[int, float]:
                     1,
                     cast=int,
                 )
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 flatten_attempts_raw = 1
             try:
                 flatten_attempts = int(flatten_attempts_raw)
@@ -2497,7 +2506,7 @@ def _resolve_data_retry_settings() -> tuple[int, float]:
                     0.0,
                     cast=float,
                 )
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 flatten_delay_raw = 0.0
             try:
                 flatten_delay = float(flatten_delay_raw)
@@ -2545,7 +2554,7 @@ def _resolve_adaptive_order_cap(
 
     try:
         enabled = bool(get_env("AI_TRADING_ADAPTIVE_ORDER_CAP_ENABLED", False, cast=bool))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         enabled = False
     details: dict[str, Any] = {"enabled": enabled}
     if not enabled:
@@ -2555,15 +2564,15 @@ def _resolve_adaptive_order_cap(
     if cycle_budget is not None:
         try:
             interval_candidates.append(float(getattr(cycle_budget, "interval_s", 0.0) or 0.0))
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             pass
     try:
         interval_candidates.append(float(get_env("AI_TRADING_INTERVAL", 60, cast=float)))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         pass
     try:
         interval_candidates.append(float(get_env("INTERVAL_WHEN_CLOSED", 60, cast=float)))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         pass
     interval_s = max((val for val in interval_candidates if val > 0.0), default=60.0)
     details["interval_s"] = interval_s
@@ -2574,7 +2583,7 @@ def _resolve_adaptive_order_cap(
         if budget_obj is not None:
             try:
                 remaining_s = max(float(budget_obj.remaining()), 0.0)
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 remaining_s = None
             if remaining_s is not None:
                 ratio = max(0.0, min(1.0, remaining_s / max(interval_s, 1e-6)))
@@ -2600,13 +2609,13 @@ def _resolve_adaptive_order_cap(
         warn_ratio = float(
             get_env("AI_TRADING_ADAPTIVE_ORDER_CAP_WARN_HEADROOM_RATIO", 0.40, cast=float)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         warn_ratio = 0.40
     try:
         crit_ratio = float(
             get_env("AI_TRADING_ADAPTIVE_ORDER_CAP_CRIT_HEADROOM_RATIO", 0.20, cast=float)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         crit_ratio = 0.20
     warn_ratio = max(0.0, min(warn_ratio, 1.0))
     crit_ratio = max(0.0, min(crit_ratio, warn_ratio))
@@ -2615,11 +2624,11 @@ def _resolve_adaptive_order_cap(
 
     try:
         warn_cap_raw = int(get_env("AI_TRADING_ADAPTIVE_ORDER_CAP_WARN_VALUE", 2, cast=int))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         warn_cap_raw = 2
     try:
         crit_cap_raw = int(get_env("AI_TRADING_ADAPTIVE_ORDER_CAP_CRIT_VALUE", 1, cast=int))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         crit_cap_raw = 1
     warn_cap = max(1, min(warn_cap_raw, 25))
     crit_cap = max(1, min(crit_cap_raw, warn_cap))
@@ -2660,38 +2669,38 @@ def _resolve_slo_derisk_effective_mode(
 
     try:
         configured_scale = float(get_env("AI_TRADING_DERISK_SLO_SCALE_MULT", 0.50, cast=float))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         configured_scale = 0.50
     configured_scale = max(0.05, min(configured_scale, 1.0))
 
     try:
         relax_enabled = bool(get_env("AI_TRADING_DERISK_SLO_BLOCK_RELAX_ENABLED", True, cast=bool))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         relax_enabled = True
     try:
         relax_scale = float(get_env("AI_TRADING_DERISK_SLO_BLOCK_RELAX_SCALE_MULT", 0.70, cast=float))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         relax_scale = 0.70
     relax_scale = max(0.05, min(relax_scale, 1.0))
     try:
         severe_pacing_pct = float(
             get_env("AI_TRADING_DERISK_SLO_BLOCK_RELAX_PACING_SEVERE_PCT", 75.0, cast=float)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         severe_pacing_pct = 75.0
     severe_pacing_pct = max(0.0, min(severe_pacing_pct, 100.0))
     try:
         severe_pending_sec = float(
             get_env("AI_TRADING_DERISK_SLO_BLOCK_RELAX_PENDING_SEVERE_SEC", 1800.0, cast=float)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         severe_pending_sec = 1800.0
     severe_pending_sec = max(60.0, min(severe_pending_sec, 86400.0))
     try:
         max_friction_breaches = int(
             get_env("AI_TRADING_DERISK_SLO_BLOCK_RELAX_MAX_FRICTION_BREACHES", 2, cast=int)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         max_friction_breaches = 2
     max_friction_breaches = max(1, min(max_friction_breaches, 10))
 
@@ -2780,7 +2789,7 @@ def _resolve_capacity_throttle_adaptive_params(
 
     try:
         enabled = bool(get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_ENABLED", True, cast=bool))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         enabled = True
     details: dict[str, Any] = {
         "enabled": bool(enabled),
@@ -2803,7 +2812,7 @@ def _resolve_capacity_throttle_adaptive_params(
 
     try:
         min_samples = int(get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_MIN_SAMPLES", 10, cast=int))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         min_samples = 10
     min_samples = max(1, min(min_samples, 10_000))
 
@@ -2811,13 +2820,13 @@ def _resolve_capacity_throttle_adaptive_params(
         pacing_clear_pct = float(
             get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_PACING_CLEAR_PCT", 8.0, cast=float)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         pacing_clear_pct = 8.0
     try:
         pacing_tighten_pct = float(
             get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_PACING_TIGHTEN_PCT", 20.0, cast=float)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         pacing_tighten_pct = 20.0
     pacing_clear_pct = max(0.0, min(pacing_clear_pct, 100.0))
     pacing_tighten_pct = max(pacing_clear_pct, min(pacing_tighten_pct, 100.0))
@@ -2826,19 +2835,19 @@ def _resolve_capacity_throttle_adaptive_params(
         reject_clear_pct = float(
             get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_REJECT_CLEAR_PCT", 2.5, cast=float)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         reject_clear_pct = 2.5
     reject_clear_pct = max(0.0, min(reject_clear_pct, 100.0))
 
     try:
         relax_mult = float(get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_RELAX_MULT", 1.15, cast=float))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         relax_mult = 1.15
     try:
         tighten_mult = float(
             get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_TIGHTEN_MULT", 0.90, cast=float)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         tighten_mult = 0.90
     relax_mult = max(1.0, min(relax_mult, 3.0))
     tighten_mult = max(0.25, min(tighten_mult, 1.0))
@@ -2847,13 +2856,13 @@ def _resolve_capacity_throttle_adaptive_params(
         relax_min_scale_add = float(
             get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_RELAX_MIN_SCALE_ADD", 0.10, cast=float)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         relax_min_scale_add = 0.10
     try:
         tighten_min_scale_mult = float(
             get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_TIGHTEN_MIN_SCALE_MULT", 0.85, cast=float)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         tighten_min_scale_mult = 0.85
     relax_min_scale_add = max(0.0, min(relax_min_scale_add, 0.5))
     tighten_min_scale_mult = max(0.2, min(tighten_min_scale_mult, 1.0))
@@ -2865,7 +2874,7 @@ def _resolve_capacity_throttle_adaptive_params(
                 cast=float,
             )
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         pending_soft_sec = 45.0
     try:
         pending_hard_sec = float(
@@ -2875,7 +2884,7 @@ def _resolve_capacity_throttle_adaptive_params(
                 cast=float,
             )
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         pending_hard_sec = 120.0
     pending_soft_sec = max(0.0, min(float(pending_soft_sec), 3600.0))
     pending_hard_sec = max(float(pending_soft_sec), min(float(pending_hard_sec), 7200.0))
@@ -2887,7 +2896,7 @@ def _resolve_capacity_throttle_adaptive_params(
                 cast=float,
             )
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         slippage_soft_bps = 10.0
     try:
         slippage_hard_bps = float(
@@ -2897,7 +2906,7 @@ def _resolve_capacity_throttle_adaptive_params(
                 cast=float,
             )
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         slippage_hard_bps = 16.0
     slippage_soft_bps = max(0.0, min(float(slippage_soft_bps), 250.0))
     slippage_hard_bps = max(float(slippage_soft_bps), min(float(slippage_hard_bps), 500.0))
@@ -2909,7 +2918,7 @@ def _resolve_capacity_throttle_adaptive_params(
                 cast=float,
             )
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         stress_tighten_mult = 0.82
     try:
         stress_min_scale_mult = float(
@@ -2919,7 +2928,7 @@ def _resolve_capacity_throttle_adaptive_params(
                 cast=float,
             )
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         stress_min_scale_mult = 0.80
     stress_tighten_mult = max(0.25, min(float(stress_tighten_mult), 1.0))
     stress_min_scale_mult = max(0.2, min(float(stress_min_scale_mult), 1.0))
@@ -3111,7 +3120,7 @@ class BotEngine:
             from ai_trading.ml_model import ensure_default_models
 
             ensure_default_models(self._tickers)
-        except Exception as exc:  # pragma: no cover - best effort on startup
+        except BOT_ENGINE_FALLBACK_EXC as exc:  # pragma: no cover - best effort on startup
             self.logger.warning(
                 "MODEL_STARTUP_CHECK_FAILED", extra={"error": str(exc)}
             )
@@ -3463,7 +3472,7 @@ def _normalize_price_source_label(source: Any) -> str:
         return ""
     try:
         normalized = str(source).strip().lower()
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         return ""
     if normalized in {"", "unknown", "none", "null", "n/a", "na"}:
         return ""
@@ -4016,7 +4025,7 @@ def _normalize_unreliable_reason(reason_label: str | None) -> str:
         return "unreliable_price"
     try:
         text = str(reason_label)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("UNRELIABLE_REASON_NORMALIZE_FAILED", exc_info=True)
         return "unreliable_price"
     if ";" in text:
@@ -4273,13 +4282,13 @@ def _attempt_alpaca_trade(
         )
         try:
             from ai_trading.alpaca_api import _set_alpaca_service_available
-        except Exception as exc:
+        except BOT_ENGINE_FALLBACK_EXC as exc:
             logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=exc)
             _set_alpaca_service_available = None  # type: ignore[assignment]
         if callable(_set_alpaca_service_available):
             try:
                 _set_alpaca_service_available(False)
-            except Exception as exc:
+            except BOT_ENGINE_FALLBACK_EXC as exc:
                 logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=exc)
         _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
         cache['alpaca_auth_failed'] = True
@@ -4309,7 +4318,7 @@ def _attempt_alpaca_trade(
                     reason='alpaca_trade_not_found',
                     http_code=status,
                 )
-            except Exception as update_exc:
+            except BOT_ENGINE_FALLBACK_EXC as update_exc:
                 logger.debug("DATA_PROVIDER_STATE_UPDATE_FAILED", exc_info=update_exc)
             cache['trade_source'] = 'alpaca_trade_not_found'
             cache['trade_price'] = None
@@ -4321,13 +4330,13 @@ def _attempt_alpaca_trade(
             )
             try:
                 from ai_trading.alpaca_api import _set_alpaca_service_available
-            except Exception as import_exc:
+            except BOT_ENGINE_FALLBACK_EXC as import_exc:
                 logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=import_exc)
                 _set_alpaca_service_available = None  # type: ignore[assignment]
             if callable(_set_alpaca_service_available):
                 try:
                     _set_alpaca_service_available(False)
-                except Exception as set_exc:
+                except BOT_ENGINE_FALLBACK_EXC as set_exc:
                     logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=set_exc)
             _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
             cache['alpaca_auth_failed'] = True
@@ -4338,7 +4347,7 @@ def _attempt_alpaca_trade(
                     reason='alpaca_trade_auth_failed',
                     http_code=status,
                 )
-            except Exception as update_exc:
+            except BOT_ENGINE_FALLBACK_EXC as update_exc:
                 logger.debug("DATA_PROVIDER_STATE_UPDATE_FAILED", exc_info=update_exc)
         else:
             _log_price_warning(
@@ -4354,7 +4363,7 @@ def _attempt_alpaca_trade(
                     reason='alpaca_trade_http_error',
                     http_code=status,
                 )
-            except Exception as update_exc:
+            except BOT_ENGINE_FALLBACK_EXC as update_exc:
                 logger.debug("DATA_PROVIDER_STATE_UPDATE_FAILED", exc_info=update_exc)
         cache['trade_price'] = None
         return None, cache['trade_source']
@@ -4366,13 +4375,13 @@ def _attempt_alpaca_trade(
             )
             try:
                 from ai_trading.alpaca_api import _set_alpaca_service_available
-            except Exception as import_exc:
+            except BOT_ENGINE_FALLBACK_EXC as import_exc:
                 logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=import_exc)
                 _set_alpaca_service_available = None  # type: ignore[assignment]
             if callable(_set_alpaca_service_available):
                 try:
                     _set_alpaca_service_available(False)
-                except Exception as set_exc:
+                except BOT_ENGINE_FALLBACK_EXC as set_exc:
                     logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=set_exc)
             _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
             cache['alpaca_auth_failed'] = True
@@ -4471,12 +4480,12 @@ def _attempt_alpaca_quote(
             )
             try:
                 from ai_trading.alpaca_api import _set_alpaca_service_available
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 _set_alpaca_service_available = None  # type: ignore[assignment]
             if callable(_set_alpaca_service_available):
                 try:
                     _set_alpaca_service_available(False)
-                except Exception:
+                except BOT_ENGINE_FALLBACK_EXC:
                     logger.debug("ALPACA_SERVICE_AVAILABILITY_MARK_FAILED", exc_info=True)
             _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
             cache['alpaca_auth_failed'] = True
@@ -4501,13 +4510,13 @@ def _attempt_alpaca_quote(
         )
         try:
             from ai_trading.alpaca_api import _set_alpaca_service_available
-        except Exception as import_exc:
+        except BOT_ENGINE_FALLBACK_EXC as import_exc:
             logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=import_exc)
             _set_alpaca_service_available = None  # type: ignore[assignment]
         if callable(_set_alpaca_service_available):
             try:
                 _set_alpaca_service_available(False)
-            except Exception as set_exc:
+            except BOT_ENGINE_FALLBACK_EXC as set_exc:
                 logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=set_exc)
         _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
         cache['alpaca_auth_failed'] = True
@@ -4530,7 +4539,7 @@ def _attempt_alpaca_quote(
                     reason='alpaca_quote_not_found',
                     http_code=status,
                 )
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 logger.debug("QUOTE_HTTP_STATUS_NOT_FOUND_RECORD_FAILED", exc_info=True)
         elif status in {401, 403}:
             sdk_quote = _attempt_sdk_quote()
@@ -4542,13 +4551,13 @@ def _attempt_alpaca_quote(
             )
             try:
                 from ai_trading.alpaca_api import _set_alpaca_service_available
-            except Exception as import_exc:
+            except BOT_ENGINE_FALLBACK_EXC as import_exc:
                 logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=import_exc)
                 _set_alpaca_service_available = None  # type: ignore[assignment]
             if callable(_set_alpaca_service_available):
                 try:
                     _set_alpaca_service_available(False)
-                except Exception as set_exc:
+                except BOT_ENGINE_FALLBACK_EXC as set_exc:
                     logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=set_exc)
             _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
             cache['alpaca_auth_failed'] = True
@@ -4559,7 +4568,7 @@ def _attempt_alpaca_quote(
                     reason='alpaca_quote_auth_failed',
                     http_code=status,
                 )
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 logger.debug("QUOTE_HTTP_STATUS_AUTH_RECORD_FAILED", exc_info=True)
         else:
             _log_price_warning(
@@ -4575,7 +4584,7 @@ def _attempt_alpaca_quote(
                     reason='alpaca_quote_http_error',
                     http_code=status,
                 )
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 logger.debug("QUOTE_HTTP_STATUS_ERROR_RECORD_FAILED", exc_info=True)
         cache['quote_price'] = None
         return None, cache['quote_source']
@@ -6257,7 +6266,7 @@ def _record_shadow_prediction(payload: Mapping[str, Any]) -> None:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(dict(payload), sort_keys=True, default=_json_dump_default))
             handle.write("\n")
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "ML_SHADOW_LOG_WRITE_FAILED",
             extra={"path": str(path), "error": str(exc)},
@@ -6552,7 +6561,7 @@ def _startup_prefetch_daily_data(ctx: Any, symbols: Sequence[str]) -> dict[str, 
                 continue
             try:
                 frame = data_fetcher_module.get_daily_df(symbol, start=start_dt, end=end_dt)
-            except Exception as exc:
+            except BOT_ENGINE_FALLBACK_EXC as exc:
                 failures[symbol] = str(exc)
                 continue
             if frame is None or bool(getattr(frame, "empty", False)):
@@ -8579,7 +8588,7 @@ def _resolve_latest_close(df_obj: Any) -> float | None:
         return None
     try:
         value = get_latest_close(df_obj)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         return None
     if value is None:
         return None
@@ -9028,7 +9037,7 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
                     df.loc[:, "volume"] = volume_series
                 except COMMON_EXC:
                     df["volume"] = volume_series.to_numpy()
-        except Exception as exc:  # pragma: no cover - defensive
+        except BOT_ENGINE_FALLBACK_EXC as exc:  # pragma: no cover - defensive
             logger.debug("minute bar filtering failed: %s", exc)
 
         if df.empty:
@@ -12474,7 +12483,7 @@ def _signal_strength_threshold(ctx: Any) -> float:
     try:
         if get_env("PYTEST_RUNNING") or get_env("PYTEST_CURRENT_TEST"):
             return 0.0
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("PYTEST_ENV_DETECT_FAILED", exc_info=True)
     candidates: list[Any] = []
     params_obj = getattr(ctx, "params", None)
@@ -12995,7 +13004,7 @@ class DataFetcher:
                 )
             try:
                 hash(request)
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 request = _HashableRequest(**getattr(request, "__dict__", req_kwargs))
             if use_legacy_fetch:
                 raw_df = self._legacy_fetch_stock_bars(
@@ -13325,7 +13334,7 @@ class DataFetcher:
         now_utc = datetime.now(UTC)
         try:
             now_monotonic = float(time.monotonic())
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             now_monotonic = float(monotonic_time())
 
         try:  # lazy import to avoid hard dependency at import time
@@ -13400,7 +13409,7 @@ class DataFetcher:
                             start_ts = datetime.fromisoformat(str(key[2]))
                             end_ts = datetime.fromisoformat(str(key[3]))
                             fetch_date = end_ts.date()
-                        except Exception:
+                        except BOT_ENGINE_FALLBACK_EXC:
                             continue
                         timeframe_key = str(key[1])
                         start_iso = start_ts.isoformat()
@@ -13413,7 +13422,7 @@ class DataFetcher:
                         continue
                     try:
                         memo_date = date.fromisoformat(str(key[1]))
-                    except Exception:
+                    except BOT_ENGINE_FALLBACK_EXC:
                         continue
                     if memo_date != fetch_date:
                         fetch_date = memo_date
@@ -13427,7 +13436,7 @@ class DataFetcher:
                         memo_key = (symbol, timeframe_key, start_iso, end_iso)
                         legacy_memo_key = (symbol, fetch_date.isoformat())
                     break
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 logger.debug("DAILY_FETCH_MEMO_KEY_RESOLVE_FAILED", exc_info=True)
         memo_ttl = float(getattr(be_module, "_DAILY_FETCH_MEMO_TTL", 0.0) or 0.0)
         memo_ttl_limit = (
@@ -13627,7 +13636,7 @@ class DataFetcher:
                 if memo_payload is not None:
                     try:
                         now_monotonic = float(time.monotonic())
-                    except Exception:
+                    except BOT_ENGINE_FALLBACK_EXC:
                         now_monotonic = float(monotonic_time())
                     ttl_limit = memo_ttl_limit
                     is_fresh = True
@@ -16187,7 +16196,7 @@ else:
 def _metafallback_confidence_cap() -> float:
     try:
         return max(float(get_env("METALEARN_FALLBACK_CONFIDENCE_CAP", 0.35, cast=float)), 0.0)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("METAFALLBACK_CONFIDENCE_CAP_PARSE_FAILED", exc_info=True)
         return 0.35
 
@@ -16788,7 +16797,7 @@ class SignalManager:
             cache_ttl = int(
                 get_env("AI_TRADING_META_SIGNAL_WEIGHT_CACHE_TTL_SECONDS", 30, cast=int)
             )
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             cache_ttl = 30
         cache_ttl = max(cache_ttl, 0)
         try:
@@ -17049,13 +17058,13 @@ class SignalManager:
         def _meta_bool(name: str, default: bool) -> bool:
             try:
                 return bool(get_env(name, default, cast=bool))
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 return default
 
         def _meta_float(name: str, default: float, *, floor: float = 0.0) -> float:
             try:
                 value = float(get_env(name, default, cast=float))
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 value = default
             if not math.isfinite(value):
                 return default
@@ -17179,7 +17188,7 @@ def _load_meta_seed_symbols() -> set[str]:
                 continue
             try:
                 symbols.add(str(symbol).upper())
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 continue
     return symbols
 
@@ -17228,7 +17237,7 @@ def _persist_meta_seed(symbol: str, snapshot: Mapping[str, Any]) -> None:
         )
         try:
             _trade_history_symbol_set.cache_clear()  # type: ignore[attr-defined]
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             logger.debug("TRADE_HISTORY_SYMBOL_SET_CACHE_CLEAR_FAILED", exc_info=True)
 
 
@@ -17239,7 +17248,7 @@ def _seed_symbol_history_from_bars(symbol: str, df: pd.DataFrame | None) -> None
         return
     try:
         row = df.iloc[-1]
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("META_SEED_ROW_ACCESS_FAILED", extra={"symbol": symbol}, exc_info=True)
         return
     ts_value = None
@@ -17250,11 +17259,11 @@ def _seed_symbol_history_from_bars(symbol: str, df: pd.DataFrame | None) -> None
     if ts_value is None:
         try:
             ts_value = row.name
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             ts_value = None
     try:
         ts = ensure_datetime(ts_value) if ts_value is not None else datetime.now(UTC)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         ts = datetime.now(UTC)
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=UTC)
@@ -17290,18 +17299,18 @@ def _trade_history_symbol_set() -> set[str]:
         return set()
     try:
         symbols = frame["symbol"]
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("TRADE_HISTORY_SYMBOL_COLUMN_MISSING", exc_info=True)
         return set()
     try:
         iterable = symbols.dropna()  # type: ignore[assignment]
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         iterable = (sym for sym in symbols if sym not in (None, ""))
     normalized: set[str] = set()
     for raw_sym in iterable:
         try:
             sym_text = str(raw_sym).strip()
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             continue
         if not sym_text:
             continue
@@ -19624,7 +19633,7 @@ def _clip_sell_qty_to_available_position(
         try:
             _, open_sell_qty_raw = exec_engine.open_order_totals(symbol)
             open_sell_qty = max(float(_safe_float(open_sell_qty_raw) or 0.0), 0.0)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             open_sell_qty = 0.0
     reserved_shares = int(math.ceil(open_sell_qty - 1e-9))
     available_qty = max(current_qty_int - max(reserved_shares, 0), 0)
@@ -20522,7 +20531,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> An
     alpaca_classes_available = True
     try:
         _ensure_alpaca_classes()
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         alpaca_classes_available = False
         if not (getattr(CFG, "testing", False) or pytest_running):
             raise
@@ -20613,7 +20622,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> An
                     base_kwargs["stop_price"] = stop_price
                     return StopOrderRequest(**base_kwargs)
                 return MarketOrderRequest(**base_kwargs)
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 pass
         return types.SimpleNamespace(**args)
 
@@ -20687,7 +20696,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> An
             from ai_trading.core.order_ids import generate_client_order_id as _gen_id
 
             client_order_id = _gen_id(prefix)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             client_order_id = None
         if not client_order_id:
             client_order_id = _stable_client_order_id(prefix)
@@ -21487,7 +21496,7 @@ def _position_entry_price(ctx: Any, symbol: str) -> float | None:
                 if str(key).strip().upper() == symbol_key:
                     pos = candidate
                     break
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 continue
     if pos is None:
         return None
@@ -21830,7 +21839,7 @@ def _safe_trade(
                 regime_ok,
                 price_df=price_df,
             )
-        except Exception as exc:
+        except BOT_ENGINE_FALLBACK_EXC as exc:
             if _is_alpaca_auth_error(exc):
                 logger.error(
                     "SKIP_TRADE_ALPACA_AUTH",
@@ -22586,7 +22595,7 @@ def _load_exit_policy_state() -> dict[str, dict[str, Any]]:
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("EXIT_POLICY_STATE_READ_FAILED", exc_info=True)
         return {}
     if not isinstance(payload, Mapping):
@@ -22688,7 +22697,7 @@ def _persist_exit_policy_state(
             json.dumps(payload, sort_keys=True, default=_json_dump_default) + "\n",
             encoding="utf-8",
         )
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "EXIT_POLICY_STATE_WRITE_FAILED",
             extra={"path": str(path), "error": str(exc)},
@@ -22927,14 +22936,14 @@ def _entry_expectancy_allowed(
 def _profitability_governor_enabled() -> bool:
     try:
         return bool(get_env("AI_TRADING_PROFITABILITY_GOVERNOR_ENABLED", True, cast=bool))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         return True
 
 
 def _profitability_governor_cache_ttl_seconds() -> float:
     try:
         ttl = float(get_env("AI_TRADING_PROFITABILITY_GOVERNOR_CACHE_TTL_SEC", 60.0, cast=float))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         ttl = 60.0
     return max(5.0, min(ttl, 3600.0))
 
@@ -22943,19 +22952,19 @@ def _profitability_governor_thresholds() -> dict[str, Any]:
     def _bool_env(name: str, default: bool) -> bool:
         try:
             return bool(get_env(name, default, cast=bool))
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             return default
 
     def _int_env(name: str, default: int) -> int:
         try:
             return int(get_env(name, default, cast=int))
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             return default
 
     def _float_env(name: str, default: float) -> float:
         try:
             return float(get_env(name, default, cast=float))
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             return default
 
     return {
@@ -23093,14 +23102,14 @@ def _profitability_governor_load_rows(path: Path) -> list[dict[str, Any]]:
         return []
     try:
         from ai_trading.tools import runtime_performance_report as performance_report
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         performance_report = None
     if performance_report is not None:
         loader = getattr(performance_report, "_load_trade_rows", None)
         if callable(loader):
             try:
                 rows = loader(path)
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 rows = []
             if isinstance(rows, list):
                 return [row for row in rows if isinstance(row, dict)]
@@ -23115,37 +23124,37 @@ def _profitability_governor_load_rows(path: Path) -> list[dict[str, Any]]:
                 parsed = json.loads(payload)
                 if isinstance(parsed, dict):
                     json_rows.append(parsed)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             return []
         return json_rows
     try:
         import pandas as pd_mod  # type: ignore
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         return []
     frame = None
     if suffix in {".parquet", ".pq"}:
         try:
             frame = pd_mod.read_parquet(path)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             try:
                 frame = pd_mod.read_pickle(path)
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 frame = None
     elif suffix in {".pkl", ".pickle"}:
         try:
             frame = pd_mod.read_pickle(path)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             frame = None
     elif suffix == ".csv":
         try:
             frame = pd_mod.read_csv(path)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             frame = None
     if frame is None:
         return []
     try:
         frame_rows = frame.to_dict(orient="records")
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         return []
     if not isinstance(frame_rows, list):
         return []
@@ -23288,7 +23297,7 @@ def _profitability_governor_snapshot(state: BotState) -> Mapping[str, Any]:
             name: _profitability_governor_metric_from_bucket(bucket)
             for name, bucket in regime_buckets.items()
         }
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         snapshot["error"] = str(exc)
 
     setattr(state, "profitability_governor_cache", snapshot)
@@ -24086,12 +24095,12 @@ def _derive_synthetic_fallback_quote(quality: Mapping[str, Any]) -> tuple[float,
     else:
         try:
             last_ts = last_ts_obj.astimezone(UTC)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             logger.debug("FALLBACK_COVERAGE_TIMESTAMP_NORMALIZE_FAILED", exc_info=True)
             return None
     try:
         age = max(0.0, (datetime.now(UTC) - last_ts).total_seconds())
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("FALLBACK_COVERAGE_AGE_COMPUTE_FAILED", exc_info=True)
         return None
     return age, last_ts
@@ -24178,7 +24187,7 @@ def _extract_quote_timestamp(payload: Any) -> datetime | None:
             if hasattr(candidate, key):
                 try:
                     source = getattr(candidate, key)
-                except Exception:
+                except BOT_ENGINE_FALLBACK_EXC:
                     source = None
             if source is None and isinstance(candidate, Mapping):
                 source = candidate.get(key)
@@ -24641,7 +24650,7 @@ def _provider_backup_available(provider_state: Mapping[str, Any] | None) -> bool
     try:
         if primary and active and str(primary).strip().lower() != str(active).strip().lower():
             return True
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("PROVIDER_BACKUP_AVAILABILITY_COMPARE_FAILED", exc_info=True)
     return _minute_fallback_active(provider_state)
 
@@ -24655,12 +24664,12 @@ def _failsoft_mode_active(provider_state: Mapping[str, Any] | None = None) -> bo
     if callable(degraded_marker) and safe_mode_flag:
         try:
             safe_mode_soft = bool(degraded_marker())
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             safe_mode_soft = False
     if provider_state is None:
         try:
             provider_state = runtime_state.observe_data_provider_state()
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             provider_state = {}
     backup_ready = safe_mode_flag and _provider_backup_available(provider_state)
     return safe_mode_soft or backup_ready
@@ -24684,7 +24693,7 @@ def _should_failsoft_allow_low_coverage(
         return False
     try:
         safe_mode_active = bool(provider_monitor.is_safe_mode_active())
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         safe_mode_active = False
     if not safe_mode_active:
         return False
@@ -24693,25 +24702,25 @@ def _should_failsoft_allow_low_coverage(
     if callable(degraded_marker):
         try:
             degraded_only = bool(degraded_marker())
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             degraded_only = False
     if not degraded_only:
         return False
     try:
         expected = max(1, int(coverage_threshold))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         expected = 1
     try:
         ratio = float(actual_bars) / float(expected)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         ratio = 0.0
     try:
         coverage_threshold_int = int(coverage_threshold)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         coverage_threshold_int = 0
     try:
         actual_bars_int = int(actual_bars)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         actual_bars_int = 0
     if isinstance(relax_ratio, (int, float)):
         relax_value: float | None = float(relax_ratio)
@@ -24764,7 +24773,7 @@ def _safe_mode_blocks_trading() -> bool:
             try:
                 if bool(degraded_marker()):
                     return False
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 logger.debug("SAFE_MODE_DEGRADED_MARKER_EVAL_FAILED", exc_info=True)
     if bool(getattr(cfg, "execution_market_on_degraded", False)):
         return False
@@ -24784,7 +24793,7 @@ def _mark_ctx_degraded(ctx: BotContext | None, reason: str | None = None, *, fat
             delattr(ctx, "_data_degraded_reason")
         if fatal:
             setattr(ctx, "_data_degraded_fatal", True)
-    except Exception:  # pragma: no cover - context objects vary in tests
+    except BOT_ENGINE_FALLBACK_EXC:  # pragma: no cover - context objects vary in tests
         logger.debug("CTX_DEGRADED_MARK_FAILED", exc_info=True)
         return
 
@@ -24966,7 +24975,7 @@ def _enter_long(
     if isinstance(feat_df, pd.DataFrame) and not feat_df.empty:
         try:
             raw_bar_ts = feat_df.index[-1]
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             raw_bar_ts = None
         if isinstance(raw_bar_ts, datetime):
             bar_ts_value = (
@@ -25016,7 +25025,7 @@ def _enter_long(
                 data_freshness_sec=freshness,
                 metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
             )
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             logger.debug("LEGACY_ORDER_DECISION_RECORD_FAILED", exc_info=True)
 
     prefer_backup_quote = bool(getattr(state, "prefer_backup_quotes", False))
@@ -25991,7 +26000,7 @@ def _enter_short(
     if isinstance(feat_df, pd.DataFrame) and not feat_df.empty:
         try:
             raw_bar_ts = feat_df.index[-1]
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             raw_bar_ts = None
         if isinstance(raw_bar_ts, datetime):
             bar_ts_value = (
@@ -26041,7 +26050,7 @@ def _enter_short(
                 data_freshness_sec=freshness,
                 metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
             )
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             logger.debug("LEGACY_ORDER_DECISION_RECORD_FAILED", exc_info=True)
 
     prefer_backup_quote = bool(getattr(state, "prefer_backup_quotes", False))
@@ -26675,7 +26684,7 @@ def _enter_short(
             get_account = getattr(ctx.api, "get_account", None)
             if callable(get_account):
                 acct = get_account()
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             acct = None
         if acct is not None:
             if _attr_disabled(acct, ("shorting_enabled", "shorting")):
@@ -27224,14 +27233,14 @@ def _current_qty(ctx, symbol: str) -> int:
                     continue
                 try:
                     key = str(raw_symbol).strip().upper()
-                except Exception:
+                except BOT_ENGINE_FALLBACK_EXC:
                     continue
                 if key:
                     fresh_map[key] = pos_entry
         position_map = fresh_map
         try:
             setattr(ctx, "position_map", fresh_map)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             logger.debug("CTX_POSITION_MAP_ASSIGN_FAILED", exc_info=True)
 
     pos = None
@@ -27294,22 +27303,22 @@ def _record_broker_sync_metrics(state: BotState, snapshot: "BrokerSyncResult" | 
     if snapshot is not None:
         try:
             open_orders_count = len(getattr(snapshot, "open_orders", ()) or ())
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             open_orders_count = 0
         try:
             positions_count = len(getattr(snapshot, "positions", ()) or ())
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             positions_count = 0
 
     metrics = getattr(state, "execution_metrics", None)
     if metrics is not None:
         try:
             metrics.open_orders = int(open_orders_count)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             metrics.open_orders = open_orders_count
         try:
             metrics.positions = int(positions_count)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             metrics.positions = positions_count
 
     try:
@@ -27320,7 +27329,7 @@ def _record_broker_sync_metrics(state: BotState, snapshot: "BrokerSyncResult" | 
             open_orders_count=int(open_orders_count),
             positions_count=int(positions_count),
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("BROKER_SYNC_RUNTIME_STATE_UPDATE_FAILED", exc_info=True)
 
     logger.info(
@@ -27339,7 +27348,7 @@ def _log_execution_summary(metrics: "ExecutionCycleMetrics") -> None:
     provider_mode = getattr(metrics, "provider_mode", "alpaca") or "alpaca"
     try:
         exposure_value = round(float(exposure_pct), 2)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         exposure_value = 0.0
 
     logger.info(
@@ -30183,7 +30192,7 @@ def _mark_learning_readiness_block(
             severity="warning",
             details=payload,
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("LEARNING_READINESS_ALERT_EMIT_FAILED", exc_info=True)
     if _learning_readiness_fail_hard_enabled():
         state.halt_trading = True
@@ -30637,7 +30646,7 @@ def on_market_close() -> None:
                             reason="after_hours_training",
                             force=True,
                         )
-        except Exception as exc:
+        except BOT_ENGINE_FALLBACK_EXC as exc:
             logger.exception(f"after-hours training failed: {exc}")
     if should_stop():
         logger.info(
@@ -30899,7 +30908,7 @@ def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | Non
             if len(candidate) == 1:
                 try:
                     return next(iter(candidate.values()))
-                except Exception:
+                except BOT_ENGINE_FALLBACK_EXC:
                     return None
             return None
 
@@ -31202,23 +31211,23 @@ def _execution_quote_policy_flags(
             require_realtime_nbbo = bool(
                 getattr(cfg, "execution_require_realtime_nbbo", True)
             )
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             require_realtime_nbbo = True
         try:
             market_on_degraded = bool(
                 getattr(cfg, "execution_market_on_degraded", False)
             )
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             market_on_degraded = False
         try:
             allow_fallback_price = bool(
                 getattr(cfg, "execution_allow_fallback_price", False)
             )
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             allow_fallback_price = False
         try:
             require_limit_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", True))
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             require_limit_nbbo = True
     if execution_mode == "live":
         require_realtime_nbbo = True
@@ -31328,7 +31337,7 @@ def _resolve_order_intent(
     if callable(pending_fetcher):
         try:
             pending_orders = pending_fetcher()
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             pending_orders = []
         for info in pending_orders:
             info_symbol = getattr(info, "symbol", None)
@@ -31337,7 +31346,7 @@ def _resolve_order_intent(
             try:
                 if str(info_symbol).upper() != symbol.upper():
                     continue
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 continue
             raw_side = getattr(info, "side", None)
             normalized = _normalize_order_side_value(raw_side)
@@ -31524,7 +31533,7 @@ def _ensure_executable_quote(
         if not isinstance(gate_decision.details, dict):
             try:
                 gate_decision.details = dict(gate_decision.details or {})
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 gate_decision.details = {}
         details_dict: dict[str, Any] = (
             gate_decision.details if isinstance(gate_decision.details, dict) else {}
@@ -32176,7 +32185,7 @@ def _resolve_data_provider_degraded() -> tuple[bool, str | None, bool]:
 
     try:
         snapshot = runtime_state.observe_data_provider_state()
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         snapshot = {}
 
     intraday_backup_detected = False
@@ -32192,13 +32201,13 @@ def _resolve_data_provider_degraded() -> tuple[bool, str | None, bool]:
             for tf_key, tf_flag in timeframe_state.items():
                 try:
                     normalized_tf = str(tf_key).strip().lower()
-                except Exception:
+                except BOT_ENGINE_FALLBACK_EXC:
                     normalized_tf = str(tf_key)
                 if not normalized_tf:
                     continue
                 try:
                     flag = bool(tf_flag)
-                except Exception:
+                except BOT_ENGINE_FALLBACK_EXC:
                     flag = False
                 if not flag:
                     continue
@@ -32235,7 +32244,7 @@ def _resolve_data_provider_degraded() -> tuple[bool, str | None, bool]:
         fatal_reason = False
         try:
             reason_lower = str(safe_reason).strip().lower()
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             reason_lower = ""
         kill_tokens = ("kill_switch", "halt", "disabled", "offline")
         if reason_lower and any(token in reason_lower for token in kill_tokens):
@@ -32251,7 +32260,7 @@ def _resolve_data_provider_degraded() -> tuple[bool, str | None, bool]:
         try:
             if disabled_check("alpaca"):
                 return True, "provider_disabled", True
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             logger.debug("PROVIDER_DISABLED_CHECK_FAILED", exc_info=True)
 
     if degraded and reason is None:
@@ -32286,7 +32295,7 @@ def _reason_implies_fatal(reason: str | None) -> bool:
         return False
     try:
         reason_lower = str(reason).strip().lower()
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("FATAL_REASON_NORMALIZE_FAILED", exc_info=True)
         return False
     if not reason_lower:
@@ -32308,7 +32317,7 @@ def _fallback_active_for_timeframes(
     for tf_key, flag in tf_state.items():
         try:
             normalized = str(tf_key).strip().lower()
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             normalized = str(tf_key)
         if not normalized:
             continue
@@ -32323,7 +32332,7 @@ def _fallback_active_for_timeframes(
             try:
                 if bool(flag):
                     return True
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 continue
     return False
 
@@ -32335,7 +32344,7 @@ def _minute_fallback_active(provider_state: Mapping[str, Any] | None) -> bool:
 def _quote_age_limit_ms() -> float:
     try:
         return max(float(get_env("QUOTE_MAX_AGE_MS", 2000, cast=float)), 0.0)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("QUOTE_AGE_LIMIT_PARSE_FAILED", exc_info=True)
         return 2000.0
 
@@ -32349,7 +32358,7 @@ def _quote_age_ms_from_state(state: Mapping[str, Any] | None) -> float | None:
         try:
             if age_sec is not None:
                 age_ms = float(age_sec) * 1000.0
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             age_ms = None
     if age_ms is None:
         return None
@@ -32367,7 +32376,7 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
         enabled = bool(
             get_env("AI_TRADING_PRIMARY_FEED_DERISK_ENABLED", True, cast=bool)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         enabled = True
 
     try:
@@ -32379,7 +32388,7 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
             )
             or "scale"
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         mode_raw = "scale"
     mode = mode_raw.strip().lower()
     if mode not in {"scale", "block"}:
@@ -32393,7 +32402,7 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
                 cast=float,
             )
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         trigger_after_s = 180.0
     if not math.isfinite(trigger_after_s):
         trigger_after_s = 180.0
@@ -32407,7 +32416,7 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
                 cast=float,
             )
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         block_after_s = 900.0
     if not math.isfinite(block_after_s):
         block_after_s = 900.0
@@ -32421,7 +32430,7 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
                 cast=float,
             )
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         scale_mult = 0.5
     if not math.isfinite(scale_mult):
         scale_mult = 0.5
@@ -32431,7 +32440,7 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
         include_daily_fallback = bool(
             get_env("AI_TRADING_PRIMARY_FEED_DERISK_INCLUDE_DAILY", False, cast=bool)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         include_daily_fallback = False
     try:
         suppress_on_healthy_backup = bool(
@@ -32441,22 +32450,22 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
                 cast=bool,
             )
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         suppress_on_healthy_backup = True
     try:
         exit_only_on_degraded = bool(
             get_env("AI_TRADING_PRIMARY_FEED_DERISK_EXIT_ONLY_ON_DEGRADED", True, cast=bool)
         )
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         exit_only_on_degraded = True
 
     try:
         provider_state = runtime_state.observe_data_provider_state()
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         provider_state = {}
     try:
         quote_state = runtime_state.observe_quote_status()
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         quote_state = {}
 
     fallback_active = _fallback_active_for_timeframes(
@@ -32599,7 +32608,7 @@ def _pre_trade_gate() -> bool:
 
     try:
         provider_state = runtime_state.observe_data_provider_state()
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         provider_state = {}
     safe_mode_active = provider_monitor.is_safe_mode_active()
     safe_mode_reason_text = safe_mode_reason()
@@ -32613,12 +32622,12 @@ def _pre_trade_gate() -> bool:
     if not provider_disabled and callable(disabled_check):
         try:
             provider_disabled = bool(disabled_check("alpaca"))
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             provider_disabled = False
     fallback_active = _minute_fallback_active(provider_state)
     try:
         allow_fallback_quotes = bool(get_env("ALLOW_EXECUTION_ON_FALLBACK_QUOTES", False, cast=bool))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         allow_fallback_quotes = False
     failsoft_active = _failsoft_mode_active(provider_state)
     if failsoft_active:
@@ -32626,7 +32635,7 @@ def _pre_trade_gate() -> bool:
 
     try:
         quote_state = runtime_state.observe_quote_status()
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         quote_state = {}
     quote_age_ms = _quote_age_ms_from_state(quote_state)
     max_age_ms = _quote_age_limit_ms()
@@ -33427,7 +33436,7 @@ def _cancel_open_orders_subset(
             elif callable(cancel_order_by_id):
                 cancel_order_by_id(order_id)
             cancelled += 1
-        except Exception as exc:
+        except BOT_ENGINE_FALLBACK_EXC as exc:
             failed += 1
             errors.append({"order_id": order_id, "error": str(exc)})
     return CancelAllResult(
@@ -33769,7 +33778,7 @@ def _netting_pipeline_enabled(runtime) -> bool:
     cfg = getattr(runtime, "cfg", None)
     try:
         pytest_running = bool(get_env("PYTEST_RUNNING", "0", cast=bool))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         pytest_running = False
     if cfg is None and pytest_running:
         return False
@@ -33782,7 +33791,7 @@ def _enforce_dependency_preflight(runtime) -> None:
     testing_flag = bool(getattr(cfg, "testing", False))
     try:
         testing_flag = testing_flag or bool(get_env("AI_TRADING_TESTING", "0", cast=bool))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         testing_flag = testing_flag or False
     testing_flag = testing_flag or is_runtime_contract_testing_mode() or _is_testing_env()
     if testing_flag:
@@ -33996,7 +34005,7 @@ def _kill_switch_active(cfg: TradingConfig) -> tuple[bool, str | None]:
         try:
             if Path(path).exists():
                 return True, "file"
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             logger.debug("KILL_SWITCH_PATH_CHECK_FAILED", extra={"path": path}, exc_info=True)
             return True, "file_error"
     return False, None
@@ -34040,7 +34049,7 @@ def _score_from_bars(df) -> tuple[float, float]:
         def _clamped_int_env(name: str, default: int, lower: int, upper: int) -> int:
             try:
                 value = int(get_env(name, default, cast=int))
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 value = int(default)
             return max(lower, min(value, upper))
 
@@ -34050,7 +34059,7 @@ def _score_from_bars(df) -> tuple[float, float]:
 
         try:
             fast_weight = float(get_env("AI_TRADING_SCORE_FAST_WEIGHT", 0.65, cast=float))
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             fast_weight = 0.65
         if not math.isfinite(fast_weight):
             fast_weight = 0.65
@@ -34058,7 +34067,7 @@ def _score_from_bars(df) -> tuple[float, float]:
 
         try:
             z_clip = float(get_env("AI_TRADING_SCORE_Z_CLIP", 3.0, cast=float))
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             z_clip = 3.0
         if not math.isfinite(z_clip):
             z_clip = 3.0
@@ -34066,7 +34075,7 @@ def _score_from_bars(df) -> tuple[float, float]:
 
         try:
             min_abs_score = float(get_env("AI_TRADING_SCORE_MIN_ABS", 0.04, cast=float))
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             min_abs_score = 0.04
         if not math.isfinite(min_abs_score):
             min_abs_score = 0.04
@@ -34125,7 +34134,7 @@ def _score_from_bars(df) -> tuple[float, float]:
         sample_ratio = min(1.0, float(len(returns)) / float(max(vol_bars, 1)))
         confidence = max(0.0, min(1.0, abs(score) * sample_ratio))
         return score, confidence
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("SCORE_FROM_BARS_FAILED", exc_info=True)
         return 0.0, 0.0
 
@@ -34137,17 +34146,17 @@ def _record_netting_model_liveness(*, proposals_total: int) -> None:
         return
     try:
         note_ml_signal()
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("NETTING_MODEL_LIVENESS_ML_NOTE_FAILED", exc_info=True)
     try:
         rl_enabled = bool(get_env("USE_RL_AGENT", False, cast=bool))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         rl_enabled = False
     if not rl_enabled or RL_AGENT is None:
         return
     try:
         note_rl_signals_emitted()
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("NETTING_MODEL_LIVENESS_RL_NOTE_FAILED", exc_info=True)
 
 
@@ -34164,7 +34173,7 @@ def _resolve_submit_none_reason(runtime: Any) -> str:
     if reason_raw not in (None, ""):
         try:
             token = str(reason_raw).strip().upper()
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             token = ""
         if token:
             return token
@@ -34172,7 +34181,7 @@ def _resolve_submit_none_reason(runtime: Any) -> str:
     status_raw = outcome.get("status")
     try:
         status = str(status_raw or "").strip().lower()
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         status = ""
     if status == "failed":
         return "ORDER_SUBMIT_FAILED"
@@ -34311,14 +34320,14 @@ def _json_dump_default(value: Any) -> Any:
     if callable(isoformat):
         try:
             return isoformat()
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             pass
 
     scalar = getattr(value, "item", None)
     if callable(scalar):
         try:
             candidate = scalar()
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             candidate = None
         if isinstance(candidate, (str, int, float, bool)) or candidate is None:
             return candidate
@@ -34332,7 +34341,7 @@ _DECISION_RECORD_SCHEMA_VERSION = "2.0.0"
 def _write_decision_record(record: Any, path: str | None) -> None:
     try:
         payload = record.to_dict() if hasattr(record, "to_dict") else dict(record)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         payload = {"record": repr(record)}
     if isinstance(payload, dict):
         schema_version = str(payload.get("schema_version") or "").strip()
@@ -34348,7 +34357,7 @@ def _write_decision_record(record: Any, path: str | None) -> None:
                 payload if isinstance(payload, Mapping) else {"record": payload},
                 event_source="decision_record",
             )
-        except Exception as exc:
+        except BOT_ENGINE_FALLBACK_EXC as exc:
             logger.warning(
                 "DECISION_EVENT_EMIT_FAILED",
                 extra={"error": str(exc)},
@@ -34369,7 +34378,7 @@ def _write_decision_record(record: Any, path: str | None) -> None:
             with dest.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(payload, sort_keys=True, default=_json_dump_default))
                 fh.write("\n")
-        except Exception as exc:
+        except BOT_ENGINE_FALLBACK_EXC as exc:
             logger.warning(
                 "DECISION_RECORD_WRITE_FAILED path=%s error=%s",
                 resolved_path,
@@ -34744,7 +34753,7 @@ def _update_gate_effectiveness_analytics(
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(cycle_payload, sort_keys=True, default=_json_dump_default))
             handle.write("\n")
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "GATE_EFFECTIVENESS_LOG_WRITE_FAILED",
             extra={"path": str(log_path), "error": str(exc)},
@@ -34770,7 +34779,7 @@ def _update_gate_effectiveness_analytics(
             loaded = json.loads(summary_path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 summary.update(loaded)
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("GATE_EFFECTIVENESS_SUMMARY_READ_FAILED", exc_info=True)
     gate_totals = _analytics_counter_map(summary.get("gate_totals"))
     gate_root_totals = _analytics_counter_map(summary.get("gate_root_totals"))
@@ -34843,7 +34852,7 @@ def _update_gate_effectiveness_analytics(
             json.dumps(summary, sort_keys=True, default=_json_dump_default) + "\n",
             encoding="utf-8",
         )
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "GATE_EFFECTIVENESS_SUMMARY_WRITE_FAILED",
             extra={"path": str(summary_path), "error": str(exc)},
@@ -34914,7 +34923,7 @@ def _ensure_counterfactual_learning_artifacts(
                 "COUNTERFACTUAL_STATE_BOOTSTRAPPED",
                 extra={"path": str(state_path), "ts": ts},
             )
-        except Exception as exc:
+        except BOT_ENGINE_FALLBACK_EXC as exc:
             context["state_error"] = str(exc)
             logger.warning(
                 "COUNTERFACTUAL_STATE_BOOTSTRAP_FAILED",
@@ -34931,7 +34940,7 @@ def _ensure_counterfactual_learning_artifacts(
                 "COUNTERFACTUAL_EVENTS_BOOTSTRAPPED",
                 extra={"path": str(events_path), "ts": ts},
             )
-        except Exception as exc:
+        except BOT_ENGINE_FALLBACK_EXC as exc:
             context["events_error"] = str(exc)
             logger.warning(
                 "COUNTERFACTUAL_EVENTS_BOOTSTRAP_FAILED",
@@ -34977,7 +34986,7 @@ def _load_counterfactual_learning_state() -> dict[str, Any]:
         return {"updated_at": None, "global": {}, "buckets": {}}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("COUNTERFACTUAL_STATE_READ_FAILED", exc_info=True)
         return {"updated_at": None, "global": {}, "buckets": {}}
     if not isinstance(payload, Mapping):
@@ -35018,7 +35027,7 @@ def _load_execution_learning_state() -> dict[str, Any]:
         return default_payload
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("EXECUTION_LEARNING_STATE_READ_FAILED", exc_info=True)
         return default_payload
     if not isinstance(payload, Mapping):
@@ -35348,7 +35357,7 @@ def _update_counterfactual_learning_analytics(
             json.dumps(next_state, sort_keys=True, default=_json_dump_default) + "\n",
             encoding="utf-8",
         )
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         state_persisted = False
         logger.warning(
             "COUNTERFACTUAL_STATE_WRITE_FAILED",
@@ -35370,7 +35379,7 @@ def _update_counterfactual_learning_analytics(
         with events_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event_payload, sort_keys=True))
             handle.write("\n")
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         events_persisted = False
         logger.warning(
             "COUNTERFACTUAL_EVENTS_WRITE_FAILED",
@@ -35531,7 +35540,7 @@ def _load_uncertainty_capital_state() -> dict[str, Any]:
         }
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("UNCERTAINTY_CAPITAL_STATE_READ_FAILED", exc_info=True)
         return {
             "updated_at": None,
@@ -35833,7 +35842,7 @@ def _update_uncertainty_capital_analytics(
             json.dumps(payload, sort_keys=True, default=_json_dump_default) + "\n",
             encoding="utf-8",
         )
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "UNCERTAINTY_CAPITAL_STATE_WRITE_FAILED",
             extra={"path": str(path), "error": str(exc)},
@@ -35852,7 +35861,7 @@ def _update_uncertainty_capital_analytics(
         with events_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event_payload, sort_keys=True, default=_json_dump_default))
             handle.write("\n")
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "UNCERTAINTY_CAPITAL_EVENTS_WRITE_FAILED",
             extra={"path": str(events_path), "error": str(exc)},
@@ -35870,7 +35879,7 @@ def _load_policy_ablation_state() -> dict[str, Any]:
         return {"updated_at": None, "slices": {}}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         logger.debug("POLICY_ABLATION_STATE_READ_FAILED", exc_info=True)
         return {"updated_at": None, "slices": {}}
     if not isinstance(payload, Mapping):
@@ -36058,7 +36067,7 @@ def _update_policy_ablation_analytics(
             json.dumps(state_payload, sort_keys=True, default=_json_dump_default) + "\n",
             encoding="utf-8",
         )
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "POLICY_ABLATION_STATE_WRITE_FAILED",
             extra={"path": str(path), "error": str(exc)},
@@ -36091,7 +36100,7 @@ def _update_policy_ablation_analytics(
         with events_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event_payload, sort_keys=True, default=_json_dump_default))
             handle.write("\n")
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "POLICY_ABLATION_EVENTS_WRITE_FAILED",
             extra={"path": str(events_path), "error": str(exc)},
@@ -36427,7 +36436,7 @@ def _run_policy_ablation_rollback(
     }
     try:
         rollback_path = _write_policy_rollback_state_service(rollback_payload)
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         rollback_path = _policy_rollback_state_path()
         logger.warning(
             "POLICY_ROLLBACK_STATE_WRITE_FAILED",
@@ -36449,7 +36458,7 @@ def _run_policy_ablation_rollback(
                 rollback_payload.get("source_updated_at"),
             ),
         )
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         runtime_toggles_path = _policy_runtime_toggles_path()
         logger.warning(
             "POLICY_RUNTIME_TOGGLES_WRITE_FAILED",
@@ -36526,7 +36535,7 @@ def _rolling_volume_from_bars(df: Any, lookback_bars: int) -> float:
     lookback = max(1, int(lookback_bars))
     try:
         raw = [float(v) for v in df["volume"].tail(lookback).tolist()]
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         return 0.0
     usable = [value for value in raw if value > 0]
     if not usable:
@@ -36572,7 +36581,7 @@ def _read_recent_tca_records(path: str, *, max_records: int) -> list[dict[str, A
                     continue
                 if isinstance(payload, dict):
                     window.append(payload)
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning("POST_TRADE_LEARNING_TCA_READ_FAILED", extra={"error": str(exc), "path": str(src)})
         return []
     return list(window)
@@ -36765,7 +36774,7 @@ def _run_post_trade_learning_update(
     updates["overrides"] = safe_overrides
     try:
         write_learning_overrides(output_path, updates)
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "POST_TRADE_LEARNING_WRITE_FAILED",
             extra={"error": str(exc), "path": output_path},
@@ -36856,7 +36865,7 @@ def _refresh_tca_feedback_components(
         return
     try:
         payload = json.loads(feedback_path.read_text(encoding="utf-8"))
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.debug(
             "TCA_FEEDBACK_LOAD_FAILED",
             extra={"path": str(feedback_path), "error": str(exc)},
@@ -36946,7 +36955,7 @@ def _run_tca_cost_calibration(
             json.dumps(feedback_payload, sort_keys=True, default=str),
             encoding="utf-8",
         )
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "TCA_FEEDBACK_WRITE_FAILED",
             extra={"error": str(exc), "path": str(feedback_path)},
@@ -36958,7 +36967,7 @@ def _run_tca_cost_calibration(
             model_path=model_path,
             lookback_days=lookback_days,
         )
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         _mark_learning_readiness_block(
             state,
             reason="TCA_COST_CALIBRATION_FAILED",
@@ -37038,7 +37047,7 @@ def _session_bucket_from_ts(ts_value: datetime | None) -> str:
         return "offhours"
     try:
         eastern = ts_value.astimezone(ZoneInfo("America/New_York"))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         eastern = ts_value
     hour = int(getattr(eastern, "hour", 0))
     minute = int(getattr(eastern, "minute", 0))
@@ -37069,7 +37078,7 @@ def _read_jsonl_records(path: str, *, max_records: int = 10000) -> list[dict[str
                     continue
                 if isinstance(payload, dict):
                     rows.append(payload)
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning("JSONL_READ_FAILED", extra={"error": str(exc), "path": str(path)})
         return []
     return list(rows)
@@ -37109,7 +37118,7 @@ def _tca_model_out_of_bounds_reason() -> str | None:
         min_bps = float(params.min_bps)
         max_bps = float(params.max_bps)
         base_cost = float(params.base_cost_bps)
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "TCA_MODEL_BOUNDS_CHECK_FAILED",
             extra={"error": str(exc), "model_path": model_path},
@@ -37280,7 +37289,7 @@ def _maybe_update_allocation_state(
                 "source": "post_cost_expectancy" if use_postcost else "manual_base",
             },
         )
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning("ALLOCATION_UPDATE_FAILED", extra={"error": str(exc), "path": path})
     else:
         logger.info("ALLOCATION_UPDATED", extra={"path": path, "weights": updated})
@@ -37494,7 +37503,7 @@ def _replay_initial_positions_from_env() -> dict[str, float]:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             return _parse_replay_initial_positions_payload(payload)
-        except Exception as exc:
+        except BOT_ENGINE_FALLBACK_EXC as exc:
             logger.warning(
                 "REPLAY_INITIAL_POSITIONS_PATH_INVALID",
                 extra={"path": str(path), "error": str(exc)},
@@ -37505,7 +37514,7 @@ def _replay_initial_positions_from_env() -> dict[str, float]:
         return {}
     try:
         payload = json.loads(raw)
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "REPLAY_INITIAL_POSITIONS_JSON_INVALID",
             extra={"error": str(exc)},
@@ -38346,7 +38355,7 @@ def _run_walk_forward_governance(state: BotState, *, now: datetime, market_open_
                     horizon_days=leakage_horizon_days,
                     embargo_days=int(get_env("AI_TRADING_WF_EMBARGO_DAYS", 5, cast=int)),
                 )
-            except Exception as exc:
+            except BOT_ENGINE_FALLBACK_EXC as exc:
                 logger.error("LEAKAGE_GUARD_FAILED", extra={"error": str(exc)})
                 if fail_hard:
                     raise RuntimeError("LEAKAGE_GUARD_FAILED") from exc
@@ -38607,7 +38616,7 @@ def _run_runtime_truth_report(
                 "failed_checks": list(go_no_go.get("failed_checks", [])),
             },
         )
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "RUNTIME_TRUTH_REPORT_FAILED",
             extra={
@@ -38627,7 +38636,7 @@ def _load_quarantine_manager(state: BotState) -> Any:
     path = str(get_env("AI_TRADING_QUARANTINE_STATE_PATH", "runtime/quarantine_state.json"))
     try:
         manager = load_quarantine_state(path)
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "QUARANTINE_STATE_LOAD_FAILED",
             extra={"error": str(exc), "path": path},
@@ -38644,7 +38653,7 @@ def _persist_quarantine_manager(state: BotState) -> None:
     path = str(get_env("AI_TRADING_QUARANTINE_STATE_PATH", "runtime/quarantine_state.json"))
     try:
         save_quarantine_state(path, manager)
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning(
             "QUARANTINE_STATE_WRITE_FAILED",
             extra={"error": str(exc), "path": path},
@@ -39004,7 +39013,7 @@ def _update_rollout_governance_state(
         )
         save_rollout_state(path, updated_state)
         state.rollout_state_path = str(path)
-    except Exception as exc:
+    except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning("ROLLOUT_GOVERNANCE_UPDATE_FAILED", extra={"error": str(exc)})
         state.capital_ramp_multiplier = 1.0
         state.burn_in_ready = True
@@ -39529,7 +39538,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         ).strip()
                         or "UTC",
                     )
-                except Exception as exc:
+                except BOT_ENGINE_FALLBACK_EXC as exc:
                     logger.warning("EXECUTION_REPORT_FAILED", extra={"error": str(exc)})
                 else:
                     state.last_execution_report_date = now.date()
@@ -39714,7 +39723,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 jitter=0.1,
                 context={"sleeve": sleeve.name},
             )
-        except Exception as exc:
+        except BOT_ENGINE_FALLBACK_EXC as exc:
             error_info = classify_exception(exc, dependency="data_primary", sleeve=sleeve.name)
             breakers.record_failure("data_primary", error_info)
             _handle_error(error_info, state=state, ctx=runtime, sleeve=sleeve.name)
@@ -39779,7 +39788,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 bar_ts = df.index[-1]
                 if bar_ts.tzinfo is None:
                     bar_ts = bar_ts.replace(tzinfo=UTC)
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 skip_reasons[symbol].append("BAD_DATA_CONTRACT")
                 continue
             last_key = (sleeve.name, symbol)
@@ -39790,7 +39799,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             score, confidence = _score_from_bars(df)
             try:
                 price = float(df["close"].iloc[-1])
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 price = 0.0
             spread = None
             vol = None
@@ -39801,7 +39810,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     spread = max(0.0, high - low)
                 if price > 0:
                     vol = max(0.0, (high - low) / price)
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 spread = None
             proposal = compute_sleeve_proposal(
                 sleeve,
@@ -39832,7 +39841,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     cur = close_values[idx]
                     if prev > 0:
                         close_returns.append((cur / prev) - 1.0)
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 close_returns = []
             if close_returns:
                 symbol_returns[symbol] = close_returns
@@ -40864,7 +40873,7 @@ def _alpha_decay_entry_guard(
         except TypeError:
             try:
                 return float(timestamp.timestamp()) > float(cutoff.timestamp())
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 logger.debug("RECENT_TRADE_TIMESTAMP_COMPARE_FAILED", exc_info=True)
                 return False
 
@@ -41414,7 +41423,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             try:
                 if getattr(canonical_fn, "__globals__", None) is not globals():
                     return canonical_fn(symbol, *_, **__)
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 logger.debug("CANONICAL_FETCH_BARS_DELEGATE_FAILED", exc_info=True)
 
     feed_role = normalize_feed_role(str(__.get("feed_role") or "execution"))
@@ -41428,7 +41437,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     if feed_override_raw is not None:
         try:
             override_token = str(feed_override_raw).strip()
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             override_token = None
         if override_token:
             override_sanitized = _sanitize_alpaca_feed(override_token.lower())
@@ -41477,7 +41486,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             continue
         try:
             token_text = str(token).strip()
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             token_text = None
         if not token_text:
             continue
@@ -41486,7 +41495,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         if sanitized_value is None:
             try:
                 normalized_token = token_text.lower()
-            except Exception:
+            except BOT_ENGINE_FALLBACK_EXC:
                 normalized_token = None
             else:
                 if source == "preferred" and normalized_token in {"iex", "sip"}:
@@ -41518,7 +41527,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     ):
         try:
             intraday_token = str(intraday_raw).strip()
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             intraday_token = None
         if intraday_token:
             if configured_feed not in {"iex", "sip"}:
@@ -41565,7 +41574,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     if not invalid_alpaca_feed and configured_raw not in (None, ""):
         try:
             sanitized_configured = _sanitize_alpaca_feed(configured_raw)
-        except Exception:
+        except BOT_ENGINE_FALLBACK_EXC:
             sanitized_configured = None
         if sanitized_configured is None:
             invalid_alpaca_feed = True
@@ -41685,13 +41694,13 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             except AlpacaAuthenticationError:
                 try:
                     from ai_trading.alpaca_api import _set_alpaca_service_available
-                except Exception as import_exc:
+                except BOT_ENGINE_FALLBACK_EXC as import_exc:
                     logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=import_exc)
                     _set_alpaca_service_available = None  # type: ignore[assignment]
                 if callable(_set_alpaca_service_available):
                     try:
                         _set_alpaca_service_available(False)
-                    except Exception as set_exc:
+                    except BOT_ENGINE_FALLBACK_EXC as set_exc:
                         logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=set_exc)
                 _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
                 _cache_feed_if_allowed(force=True)
@@ -41789,7 +41798,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     alpaca_module = sys.modules.get("ai_trading.alpaca_api")
     try:
         alpaca_available = bool(getattr(alpaca_module, "_ALPACA_SERVICE_AVAILABLE"))
-    except Exception:
+    except BOT_ENGINE_FALLBACK_EXC:
         alpaca_available = True
     if attempted_alpaca and not alpaca_available:
         _PRICE_SOURCE[symbol] = "alpaca_auth_failed"

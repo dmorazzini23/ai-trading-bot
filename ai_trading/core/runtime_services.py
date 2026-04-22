@@ -217,9 +217,9 @@ def legacy_health_payload_runtime() -> dict[str, Any]:
 
 def build_healthcheck_app_runtime() -> Any:
     """Return the canonical standalone healthcheck app."""
-    from ai_trading.app import create_app
+    from ai_trading.app import build_standalone_healthcheck_app
 
-    return create_app(health_only=True, fail_fast_env=True)
+    return build_standalone_healthcheck_app(fail_fast_env=True)
 
 
 def start_healthcheck_runtime() -> None:
@@ -227,14 +227,13 @@ def start_healthcheck_runtime() -> None:
     be = _bot_engine()
     port = be.CFG.healthcheck_port
     try:
-        build_healthcheck_app_runtime().run(
+        from ai_trading.app import run_standalone_healthcheck_app
+
+        run_standalone_healthcheck_app(
+            build_healthcheck_app_runtime(),
             host="0.0.0.0",
             port=port,
-        )
-    except OSError as exc:
-        be.logger.warning(
-            "HEALTHCHECK_PORT_CONFLICT",
-            extra={"port": port, "detail": str(exc)},
+            logger=be.logger,
         )
     except (
         be.APIError,

@@ -74,3 +74,13 @@ def test_health_endpoint_keeps_unknown_provider_unhealthy() -> None:
     assert payload["status"] == "degraded"
     assert payload["ok"] is False
     assert payload["primary_data_provider"]["status"] == "unknown"
+
+
+def test_health_metrics_endpoint_available() -> None:
+    ctx = SimpleNamespace(service="ai-trading")
+    hc = HealthCheck(ctx=ctx)
+    client = hc.app.test_client()
+
+    response = client.get("/metrics")
+
+    assert response.status_code in {200, 501}

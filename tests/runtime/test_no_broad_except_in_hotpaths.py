@@ -21,7 +21,7 @@ def test_no_broad_except_in_hotpaths():
     assert offenders == {}, f"broad except present in: {list(offenders)}"
 
 
-def test_bot_engine_is_not_suppressed_from_audit():
+def test_bot_engine_has_no_broad_handlers_after_cleanup():
     p = subprocess.run(
         [sys.executable, "tools/audit_exceptions.py", "--paths", "ai_trading/core/bot_engine.py"],
         capture_output=True,
@@ -30,4 +30,4 @@ def test_bot_engine_is_not_suppressed_from_audit():
     assert p.returncode == 0
     data = json.loads(p.stdout.splitlines()[0])
     hits = data.get("by_file", {}).get("ai_trading/core/bot_engine.py", [])
-    assert len(hits) > 0, "bot_engine broad handlers should be reported (not suppressed)"
+    assert hits == [], "bot_engine broad handlers should be fully removed"

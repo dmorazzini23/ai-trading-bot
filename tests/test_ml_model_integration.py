@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from ai_trading import ml_model  # AI-AGENT-REF: canonical import
+from ai_trading.models.artifacts import default_manifest_path
 
 
 def _fit_noop(X, y):
@@ -31,9 +32,11 @@ def test_save_and_load_roundtrip():
     model.fit(df, [1.0])
     path = model_dir / "roundtrip.pkl"
     saved = model.save(str(path))
+    assert default_manifest_path(saved).exists()
     loaded = ml_model.MLModel.load(saved)
     assert isinstance(loaded.pipeline, types.SimpleNamespace)
     Path(saved).unlink()
+    default_manifest_path(saved).unlink()
 
 
 def test_save_outside_model_dir_raises(tmp_path):

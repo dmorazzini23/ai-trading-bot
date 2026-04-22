@@ -6,6 +6,7 @@ pd = pytest.importorskip("pandas")
 
 from ai_trading import ml_model  # AI-AGENT-REF: canonical import
 from ai_trading.ml_model import MLModel
+from ai_trading.models.artifacts import default_manifest_path
 
 
 class DummyPipe:
@@ -49,9 +50,11 @@ def test_fit_and_predict():
         pytest.skip("joblib not available")
     save_path = model.save(str(model_dir / "m.pkl"))
     assert Path(save_path).exists()
+    assert default_manifest_path(save_path).exists()
     loaded = MLModel.load(save_path)
     assert isinstance(loaded.pipeline, DummyPipe)
     Path(save_path).unlink()
+    default_manifest_path(save_path).unlink()
 
 
 def test_train_model_invalid_algorithm():
@@ -95,6 +98,8 @@ def test_save_and_load_model():
     model_dir = Path(ml_model.__file__).resolve().parent / "models"
     model_path = model_dir / "test_model.pkl"
     ml_model.save_model(dummy_model, str(model_path))
+    assert default_manifest_path(model_path).exists()
     loaded = ml_model.load_model(str(model_path))
     assert loaded == dummy_model
     model_path.unlink()
+    default_manifest_path(model_path).unlink()
