@@ -53,7 +53,7 @@ from ai_trading.utils.time import monotonic_time
 
 try:  # pragma: no cover - optional dependency
     from alpaca.common.exceptions import APIError as _ImportedAlpacaAPIError  # type: ignore[import]
-except Exception:  # pragma: no cover - fallback when SDK missing
+except (ImportError, AttributeError, OSError, RuntimeError):  # pragma: no cover - fallback when SDK missing
     _AlpacaAPIError: type[BaseException] | None = None
 else:
     _AlpacaAPIError = _ImportedAlpacaAPIError
@@ -79,7 +79,7 @@ class _FallbackAPIError(Exception):
             payload = json.loads(message)
             parsed_message = payload.get("message", parsed_message)
             parsed_code = payload.get("code", parsed_code)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("API_ERROR_JSON_PARSE_FAILED", exc_info=True)
         self._code = parsed_code
         self._message = parsed_message
@@ -87,7 +87,7 @@ class _FallbackAPIError(Exception):
         if http_error is not None:
             try:
                 derived_status = getattr(getattr(http_error, "response", None), "status_code", derived_status)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 logger.debug("API_ERROR_STATUS_DERIVE_FAILED", exc_info=True)
         self._status_code = derived_status
 
@@ -143,6 +143,25 @@ class NonRetryableBrokerError(Exception):
         self.status = status
         self.symbol = symbol
         self.detail = detail
+
+
+LIVE_TRADING_FALLBACK_EXC: tuple[type[Exception], ...] = (
+    APIError,
+    ArithmeticError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    ImportError,
+    KeyError,
+    LookupError,
+    NameError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 _BROKER_UNAUTHORIZED_BACKOFF_SECONDS = 120.0
@@ -313,7 +332,7 @@ def _is_primary_provider_source(source: Any) -> bool:
         return False
     try:
         normalized = str(source).strip().lower()
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         return False
     if not normalized:
         return False
@@ -382,7 +401,7 @@ def _maybe_accept_backup_quote(
     if fallback_dt is None and fallback_age_s is not None:
         try:
             fallback_dt = datetime.now(UTC) - timedelta(seconds=float(fallback_age_s))
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             fallback_dt = None
     details = {
         "provider": provider_label,
@@ -457,7 +476,7 @@ def _merge_pending_order_kwargs(
 
 try:  # pragma: no cover - defensive import guard for optional extras
     from ai_trading.config.management import get_env as _config_get_env
-except Exception as exc:  # pragma: no cover - fallback when optional deps missing
+except LIVE_TRADING_FALLBACK_EXC as exc:  # pragma: no cover - fallback when optional deps missing
     logger.debug(
         "BROKER_CAPACITY_CONFIG_IMPORT_FAILED",
         extra={"error": getattr(exc, "__class__", type(exc)).__name__, "detail": str(exc)},
@@ -472,7 +491,7 @@ def _runtime_env(name: str, default: str | None = None) -> str | None:
     if resolver is not None:
         try:
             value = resolver(name, default=None, resolve_aliases=False)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             value = None
         if value not in (None, ""):
             return str(value)
@@ -488,7 +507,7 @@ def _resolve_ack_timeout_seconds() -> float:
         return default_timeout
     try:
         configured = resolver("ORDER_ACK_TIMEOUT_SECONDS", None, cast=float)
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         configured = None
     if configured in (None, ""):
         return default_timeout
@@ -516,12 +535,12 @@ def _resolve_bool_env(name: str) -> bool | None:
     if resolver is not None:
         try:
             value = resolver(name, None, cast=bool)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             value = None
         if value not in (None, ""):
             try:
                 return bool(value)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 logger.debug("BOOL_ENV_CAST_FAILED", extra={"name": name, "value": value}, exc_info=True)
                 return None
     raw = _runtime_env(name)
@@ -529,7 +548,7 @@ def _resolve_bool_env(name: str) -> bool | None:
         return None
     try:
         return _safe_bool(raw)
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         logger.debug("BOOL_ENV_PARSE_FAILED", extra={"name": name, "raw": raw}, exc_info=True)
     return None
 
@@ -542,7 +561,7 @@ def _market_is_open_now(now_utc: datetime | None = None) -> bool:
         from ai_trading.utils.base import is_market_open as _is_market_open
 
         return bool(_is_market_open(current))
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         logger.debug("MARKET_OPEN_STATUS_RESOLVE_FAILED", exc_info=True)
         return False
 
@@ -599,11 +618,11 @@ def _runtime_trading_config() -> Any | None:
         if callable(getter):
             try:
                 return getter()
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 logger.debug("RUNTIME_CONFIG_GETTER_FAILED", exc_info=exc)
     try:
         return get_trading_config()
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         logger.debug("RUNTIME_CONFIG_DIRECT_GET_FAILED", exc_info=True)
         return None
 
@@ -625,19 +644,19 @@ def _effective_execution_quote_policy(
     if cfg is not None:
         try:
             require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", False))
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             require_nbbo = False
         try:
             require_realtime_nbbo = bool(
                 getattr(cfg, "execution_require_realtime_nbbo", True)
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             require_realtime_nbbo = True
         try:
             market_on_degraded = bool(
                 getattr(cfg, "execution_market_on_degraded", False)
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             market_on_degraded = False
     if mode_value == "live":
         require_nbbo = True
@@ -703,7 +722,7 @@ def _mark_long_only_reason(
     if engine is not None:
         try:
             engine._activate_long_only_mode(reason=reason, context=payload)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("LONG_ONLY_MODE_ACTIVATE_FAILED", exc_info=True)
 
 
@@ -714,7 +733,7 @@ def _require_bid_ask_quotes() -> bool:
         return False
     try:
         cfg = get_trading_config()
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         logger.debug("REQUIRE_BID_ASK_CONFIG_UNAVAILABLE", exc_info=True)
         return True
     return bool(getattr(cfg, "execution_require_bid_ask", True))
@@ -725,7 +744,7 @@ def _max_quote_staleness_seconds() -> int:
 
     try:
         cfg = get_trading_config()
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         logger.debug("MAX_QUOTE_STALENESS_CONFIG_UNAVAILABLE", exc_info=True)
         return 60
     raw_value = getattr(cfg, "execution_max_staleness_sec", 60)
@@ -740,7 +759,7 @@ def _quote_gate_max_age_ms() -> float:
 
     try:
         cfg = get_trading_config()
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         logger.debug("QUOTE_GATE_MAX_AGE_CONFIG_UNAVAILABLE", exc_info=True)
         return 2000.0
     raw_value = getattr(cfg, "quote_max_age_ms", 2000)
@@ -879,7 +898,7 @@ def _normalize_status(value: Any) -> str | None:
                 break
         if "." in text:
             text = text.split(".")[-1]
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         logger.debug("ORDER_STATUS_NORMALIZE_FAILED", extra={"value": value}, exc_info=True)
         return None
     return text or None
@@ -946,7 +965,7 @@ def _bool_from_record(record: Any, *names: str) -> bool | None:
         return None
     try:
         return _safe_bool(value)
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         logger.debug("BOOL_FROM_RECORD_PARSE_FAILED", extra={"value": value}, exc_info=True)
         return None
 
@@ -965,19 +984,19 @@ def _effective_closing_position(
         return True
     try:
         side_token = str(side).strip().lower() if side is not None else ""
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         side_token = ""
     if side_token != "sell" or engine is None:
         return False
     try:
         requested_qty = max(int(quantity), 0)
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         requested_qty = 0
     if requested_qty <= 0:
         return False
     try:
         return int(engine._position_quantity(symbol)) > 0
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         logger.debug(
             "EFFECTIVE_CLOSING_POSITION_LOOKUP_FAILED",
             extra={"symbol": symbol, "side": side_token},
@@ -1015,7 +1034,7 @@ def _short_sale_precheck(
     if callable(get_asset):
         try:
             asset = get_asset(symbol)
-        except Exception as exc:  # pragma: no cover - defensive broker guard
+        except LIVE_TRADING_FALLBACK_EXC as exc:  # pragma: no cover - defensive broker guard
             asset_detail = getattr(exc, "__class__", type(exc)).__name__
     else:
         asset_detail = "get_asset_unavailable"
@@ -1117,7 +1136,7 @@ def _short_sale_precheck(
     if ssr_state is not None:
         try:
             extras["short_sale_restriction"] = str(ssr_state)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             extras["short_sale_restriction"] = ssr_state
 
     if asset is None:
@@ -1214,7 +1233,7 @@ def _extract_error_detail(err: BaseException | None) -> str | None:
             parts = [str(part).strip() for part in err.args if str(part).strip()]
             if parts:
                 return " ".join(parts)
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         logger.debug("ERROR_DETAIL_EXTRACTION_FAILED", exc_info=True)
         return None
     return None
@@ -1230,7 +1249,7 @@ def _extract_error_code(err: BaseException | None) -> str | int | None:
             value = getattr(err, attr, None)
             if isinstance(value, (str, int)):
                 return value
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         logger.debug("ERROR_CODE_EXTRACTION_FAILED", exc_info=True)
         return None
     return None
@@ -1265,7 +1284,7 @@ def _extract_api_error_metadata(err: BaseException | None) -> dict[str, Any]:
     metadata.setdefault("error_type", err.__class__.__name__)
     try:
         rendered = str(err)
-    except Exception:  # pragma: no cover - defensive stringification
+    except LIVE_TRADING_FALLBACK_EXC:  # pragma: no cover - defensive stringification
         rendered = None
     if rendered:
         metadata.setdefault("error", rendered)
@@ -1405,7 +1424,7 @@ def _extract_retry_after_seconds(err: BaseException | None) -> float | None:
                 if callable(get_fn):
                     try:
                         header_value = get_fn(header_key)
-                    except Exception:
+                    except LIVE_TRADING_FALLBACK_EXC:
                         header_value = None
             parsed = _parse_retry_after_seconds(header_value)
             if parsed is not None:
@@ -1507,7 +1526,7 @@ def _config_int(name: str, default: int | None) -> int | None:
     if _config_get_env is not None:
         try:
             raw = _config_get_env(name, default=None)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             raw = None
     if raw in (None, ""):
         raw = _runtime_env(name)
@@ -1526,7 +1545,7 @@ def _config_float(name: str, default: float | None) -> float | None:
     if _config_get_env is not None:
         try:
             raw = _config_get_env(name, default=None)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             raw = None
     if raw in (None, ""):
         raw = _runtime_env(name)
@@ -1555,7 +1574,7 @@ def _config_decimal(name: str, default: Decimal) -> Decimal:
     if _config_get_env is not None:
         try:
             raw = _config_get_env(name, default=None)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             raw = None
     if raw in (None, ""):
         raw = _runtime_env(name)
@@ -1563,7 +1582,7 @@ def _config_decimal(name: str, default: Decimal) -> Decimal:
         return default
     try:
         return _safe_decimal(raw)
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         logger.debug("CONFIG_DECIMAL_PARSE_FAILED", extra={"name": name, "raw": raw}, exc_info=True)
         return default
 
@@ -1625,7 +1644,7 @@ def _capacity_precheck_side(side: Any, *, closing_position: bool) -> Any:
         return side
     try:
         normalized = str(side).strip().lower()
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         return side
     # Plain sell can mean close-long or open-short. When caller declares this is
     # not a position-closing order, force short semantics so preflight reserves
@@ -1705,7 +1724,7 @@ def _call_preflight_capacity(
     supports_account = False
     try:
         supports_account = _preflight_supports_account_kwarg(fn)
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         supports_account = False
     if supports_account:
         try:
@@ -1823,7 +1842,7 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
                 open_orders = []
             else:
                 open_orders = list(orders)
-        except Exception as exc:
+        except LIVE_TRADING_FALLBACK_EXC as exc:
             logger.debug(
                 "BROKER_CAPACITY_OPEN_ORDERS_ERROR",
                 extra={"error": getattr(exc, "__class__", type(exc)).__name__, "detail": str(exc)},
@@ -1903,7 +1922,7 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
     if account is None and broker is not None and hasattr(broker, "get_account"):
         try:
             account = broker.get_account()
-        except Exception as exc:
+        except LIVE_TRADING_FALLBACK_EXC as exc:
             logger.debug(
                 "BROKER_CAPACITY_ACCOUNT_ERROR",
                 extra={"error": getattr(exc, "__class__", type(exc)).__name__, "detail": str(exc)},
@@ -1915,7 +1934,7 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
         if _config_get_env is not None:
             try:
                 execution_mode_raw = _config_get_env("EXECUTION_MODE", None)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 execution_mode_raw = None
         if execution_mode_raw in (None, ""):
             execution_mode_raw = _runtime_env("EXECUTION_MODE")
@@ -2153,7 +2172,7 @@ def _stable_order_id(symbol: str, side: str) -> str:
 def _halt_flag_path() -> str:
     try:
         settings = get_settings()
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         settings = None
     if settings is not None:
         path = getattr(settings, "halt_flag_path", None)
@@ -2170,7 +2189,7 @@ def _safe_mode_policy() -> tuple[bool, str]:
     mode_value: str | None = str(EXECUTION_MODE).strip().lower() if EXECUTION_MODE else None
     try:
         cfg = get_trading_config()
-    except Exception:
+    except LIVE_TRADING_FALLBACK_EXC:
         cfg = None
     if cfg is not None:
         allow = bool(getattr(cfg, "safe_mode_allow_paper", allow))
@@ -2556,7 +2575,7 @@ class ExecutionEngine:
             if callable(hook):
                 try:
                     hook()
-                except Exception as exc:  # pragma: no cover - defensive guard
+                except LIVE_TRADING_FALLBACK_EXC as exc:  # pragma: no cover - defensive guard
                     logger.debug(
                         "TRAILING_STOP_CHECK_SUPPRESSED",
                         extra={"handler": attr, "error": str(exc)},
@@ -2584,7 +2603,7 @@ class ExecutionEngine:
         try:
             with self._cycle_reserved_intents_lock:
                 self._cycle_reserved_intents.clear()
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             self._cycle_reserved_intents = set()
             self._cycle_reserved_intents_lock = Lock()
         self._cycle_account = None
@@ -2615,7 +2634,7 @@ class ExecutionEngine:
         try:
             with self._cycle_reserved_intents_lock:
                 self._cycle_reserved_intents.clear()
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             self._cycle_reserved_intents = set()
             self._cycle_reserved_intents_lock = Lock()
         self._cycle_account = None
@@ -2627,7 +2646,7 @@ class ExecutionEngine:
         if callable(flush):
             try:
                 flush()
-            except Exception:  # pragma: no cover - diagnostics only
+            except LIVE_TRADING_FALLBACK_EXC:  # pragma: no cover - diagnostics only
                 logger.debug("ORDER_MANAGER_FLUSH_FAILED", exc_info=True)
 
     @staticmethod
@@ -2643,7 +2662,7 @@ class ExecutionEngine:
             else:
                 try:
                     ts = datetime.fromisoformat(str(raw_value))
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     continue
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=UTC)
@@ -2665,7 +2684,7 @@ class ExecutionEngine:
                 orders = list_orders(status="open")  # type: ignore[call-arg]
             except TypeError:
                 orders = list_orders()  # type: ignore[call-arg]
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 logger.debug("PENDING_POLICY_LIST_ORDERS_FAILED", exc_info=True)
                 return []
             return list(orders or [])
@@ -2675,7 +2694,7 @@ class ExecutionEngine:
                 orders = get_orders(status="open")  # type: ignore[call-arg]
             except TypeError:
                 orders = get_orders()  # type: ignore[call-arg]
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 logger.debug("PENDING_POLICY_GET_ORDERS_FAILED", exc_info=True)
                 return []
             return list(orders or [])
@@ -2688,7 +2707,7 @@ class ExecutionEngine:
         if _config_get_env is not None:
             try:
                 policy_raw = _config_get_env("AI_TRADING_PENDING_NEW_POLICY", None)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 policy_raw = None
         if policy_raw in (None, ""):
             policy_raw = _runtime_env("AI_TRADING_PENDING_NEW_POLICY")
@@ -3055,7 +3074,7 @@ class ExecutionEngine:
             if not action_success and should_cancel:
                 try:
                     self._cancel_order_alpaca(str(order_id))
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     logger.warning(
                         "PENDING_NEW_POLICY_ACTION_FAILED",
                         extra={
@@ -4120,7 +4139,7 @@ class ExecutionEngine:
                 required_qty = int(
                     max(1, math.ceil(float(min_notional) / max(float(price_hint), 1e-9)))
                 )
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 required_qty = 0
             current_qty = int(max(1, math.ceil(float(qty))))
             if required_qty > current_qty:
@@ -4166,7 +4185,7 @@ class ExecutionEngine:
                 return str(phase_value).strip().lower() or "unknown"
         try:
             snapshot = runtime_state.observe_service_status()
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             return "unknown"
         phase_raw = snapshot.get("phase") if isinstance(snapshot, Mapping) else None
         return str(phase_raw or "unknown").strip().lower() or "unknown"
@@ -4182,7 +4201,7 @@ class ExecutionEngine:
         if _config_get_env is not None:
             try:
                 raw_value = _config_get_env("AI_TRADING_EXECUTION_PHASE_BLOCKED", None)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 raw_value = None
         if raw_value in (None, ""):
             raw_value = _runtime_env("AI_TRADING_EXECUTION_PHASE_BLOCKED")
@@ -4250,7 +4269,7 @@ class ExecutionEngine:
 
             if not bool(_is_market_open(now_utc)):
                 return None
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("OPENING_PROVIDER_GUARD_MARKET_OPEN_CHECK_FAILED", exc_info=True)
 
         try:
@@ -4259,7 +4278,7 @@ class ExecutionEngine:
             elapsed = float((now_et - session_open_et).total_seconds())
             if elapsed >= 0.0:
                 return elapsed
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("OPENING_PROVIDER_GUARD_ELAPSED_CALC_FAILED", exc_info=True)
 
         service_snapshot = runtime_state.observe_service_status()
@@ -4280,7 +4299,7 @@ class ExecutionEngine:
                 phase_since_dt = phase_since_dt.replace(tzinfo=UTC)
             elapsed = float((now_utc - phase_since_dt.astimezone(UTC)).total_seconds())
             return elapsed if elapsed >= 0.0 else None
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("OPENING_PROVIDER_GUARD_PHASE_SINCE_PARSE_FAILED", exc_info=True)
         return None
 
@@ -4318,7 +4337,7 @@ class ExecutionEngine:
                     (datetime.now(UTC) - provider_updated_dt.astimezone(UTC)).total_seconds(),
                     0.0,
                 )
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 provider_updated_age_s = None
         provider_disabled = False
         try:
@@ -4326,7 +4345,7 @@ class ExecutionEngine:
                 provider_monitor.is_disabled("alpaca")
                 or provider_monitor.is_disabled("alpaca_sip")
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             provider_disabled = False
         provider_degraded = provider_status in {
             "degraded",
@@ -4594,7 +4613,7 @@ class ExecutionEngine:
                     if age_s is None:
                         continue
                     local_oldest_pending_age_s = max(local_oldest_pending_age_s, float(age_s))
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             local_pending_count = 0
             stale_ignored_count = 0
             local_oldest_pending_age_s = 0.0
@@ -4619,7 +4638,7 @@ class ExecutionEngine:
                         broker_oldest_pending_age_s,
                         float(age_s),
                     )
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 broker_open_count = 0
                 broker_oldest_pending_age_s = 0.0
                 backlog = max(backlog, 0)
@@ -5219,7 +5238,7 @@ class ExecutionEngine:
         if callable(sync_fn):
             try:
                 snapshot = sync_fn()
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 context["broker_sync_error"] = str(exc)
             else:
                 broker_sync_summary = {
@@ -5241,14 +5260,14 @@ class ExecutionEngine:
                     )
                 reconcile_fn(open_orders=open_orders_for_reconcile)
                 context["durable_intent_reconcile"] = True
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 context["durable_intent_reconcile_error"] = str(exc)
 
         backfill_fn = getattr(self, "_backfill_pending_tca_from_fill_events", None)
         if callable(backfill_fn):
             try:
                 backfill_result = backfill_fn()
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 context["tca_backfill_error"] = str(exc)
             else:
                 if isinstance(backfill_result, Mapping):
@@ -5258,7 +5277,7 @@ class ExecutionEngine:
         if callable(finalize_fn):
             try:
                 finalize_result = finalize_fn()
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 context["tca_finalize_error"] = str(exc)
             else:
                 if isinstance(finalize_result, Mapping):
@@ -5294,7 +5313,7 @@ class ExecutionEngine:
                     "cooldown_sec": _safe_float(context.get("cooldown_sec")),
                 }
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("RECONCILIATION_AUTO_REPAIR_EVENT_WRITE_FAILED", exc_info=True)
         if isinstance(reconcile_summary, Mapping):
             logger.warning(
@@ -6140,7 +6159,7 @@ class ExecutionEngine:
                 from ai_trading.execution.slippage_log import get_ewma_cost_bps
 
                 ewma_cost_bps = float(get_ewma_cost_bps(str(symbol).upper(), default=float(base_bps)))
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 ewma_cost_bps = float(base_bps)
             if math.isfinite(ewma_cost_bps) and ewma_cost_bps > 0:
                 blended = ((1.0 - adaptive_weight) * float(base_bps)) + (
@@ -6517,7 +6536,7 @@ class ExecutionEngine:
                             "tick_size": float(tick_size),
                         },
                     )
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 logger.warning(
                     "LIMIT_PRICE_NORMALIZATION_FAILED",
                     extra={
@@ -7353,11 +7372,11 @@ class ExecutionEngine:
             return "offhours"
         try:
             tz = ZoneInfo(str(tz_name or "America/New_York"))
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             tz = ZoneInfo("America/New_York")
         try:
             local_ts = value.astimezone(tz)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             local_ts = value
             if local_ts.tzinfo is None:
                 local_ts = local_ts.replace(tzinfo=UTC)
@@ -7618,7 +7637,7 @@ class ExecutionEngine:
                 return float(z_score)
         try:
             return float(statistics.NormalDist().inv_cdf(parsed))
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             return 1.2816
 
     def _execution_expected_edge_confidence_allows_opening(
@@ -10313,7 +10332,7 @@ class ExecutionEngine:
             return
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "EDGE_REALISM_STATE_LOAD_FAILED",
                 extra={"path": str(path)},
@@ -10394,7 +10413,7 @@ class ExecutionEngine:
             temp_path.replace(path)
             self._edge_realism_last_persist_mono = now_mono
             self._edge_realism_updates_since_persist = 0
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "EDGE_REALISM_STATE_WRITE_FAILED",
                 extra={"path": str(path)},
@@ -10612,7 +10631,7 @@ class ExecutionEngine:
             return
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "EXECUTION_LEARNING_STATE_LOAD_FAILED",
                 extra={"path": str(path)},
@@ -10768,7 +10787,7 @@ class ExecutionEngine:
             temp_path.replace(path)
             self._execution_learning_last_persist_mono = now_mono
             self._execution_learning_updates_since_persist = 0
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "EXECUTION_LEARNING_STATE_WRITE_FAILED",
                 extra={"path": str(path)},
@@ -10889,7 +10908,7 @@ class ExecutionEngine:
                     "min_samples": int(min_samples),
                 },
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "EXECUTION_AUTOTUNE_BOOTSTRAP_WRITE_FAILED",
                 extra={"path": str(path)},
@@ -10934,7 +10953,7 @@ class ExecutionEngine:
                         "autotune_exists": bool(autotune_exists),
                     },
                 )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.warning(
                 "EXECUTION_LEARNING_CLOSE_MAINTENANCE_FAILED",
                 extra={"date": str(session_date)},
@@ -11962,7 +11981,7 @@ class ExecutionEngine:
                     ],
                 },
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "EXECUTION_AUTOTUNE_WRITE_FAILED",
                 extra={"path": str(path)},
@@ -12007,7 +12026,7 @@ class ExecutionEngine:
             return payload
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except Exception as exc:
+        except LIVE_TRADING_FALLBACK_EXC as exc:
             payload = {
                 "enabled": True,
                 "active": False,
@@ -12047,7 +12066,7 @@ class ExecutionEngine:
                 if generated_dt.tzinfo is None:
                     generated_dt = generated_dt.replace(tzinfo=UTC)
                 generated_dt = generated_dt.astimezone(UTC)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 generated_dt = None
         age_hours = None
         if generated_dt is not None:
@@ -12172,7 +12191,7 @@ class ExecutionEngine:
 
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except Exception as exc:
+        except LIVE_TRADING_FALLBACK_EXC as exc:
             payload = {
                 "enabled": True,
                 "active": False,
@@ -12212,7 +12231,7 @@ class ExecutionEngine:
                 if generated_dt.tzinfo is None:
                     generated_dt = generated_dt.replace(tzinfo=UTC)
                 generated_dt = generated_dt.astimezone(UTC)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 generated_dt = None
         age_hours = None
         if generated_dt is not None:
@@ -12332,7 +12351,7 @@ class ExecutionEngine:
                 "sample_count": payload["sample_count"],
             }
             self._markout_execution_override_cache_until_mono = float(monotonic_time()) + 30.0
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "MARKOUT_EXECUTION_OVERRIDE_WRITE_FAILED",
                 extra={
@@ -13347,7 +13366,7 @@ class ExecutionEngine:
                 market_data=market_data,
                 urgency=urgency,
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "SMART_ORDER_ROUTER_FAILED",
                 extra={"symbol": symbol, "side": side},
@@ -14042,7 +14061,7 @@ class ExecutionEngine:
                 context_rendered = ""
                 try:
                     context_rendered = json.dumps(payload.get("context"), sort_keys=True, default=str)
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     context_rendered = str(payload.get("context"))
                 if context_rendered:
                     if len(context_rendered) > 240:
@@ -14267,7 +14286,7 @@ class ExecutionEngine:
             if status == "failed":
                 try:
                     fail_reason = str(item.get("reason") or "").strip().lower()
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     fail_reason = ""
                 if not fail_reason:
                     fail_reason = "unspecified"
@@ -14305,7 +14324,7 @@ class ExecutionEngine:
                 continue
             try:
                 reason = str(item.get("reason") or "").strip().lower()
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 reason = ""
             if not reason:
                 reason = "unspecified"
@@ -14564,7 +14583,7 @@ class ExecutionEngine:
                 record_realized_slippage(cycle_realized_slippage_bps)
             if decision_count > 0:
                 record_order_pacing_cap_hit_rate(pacing_cap_hit_rate_pct)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("EXECUTION_KPI_SLO_RECORD_FAILED", exc_info=True)
 
         now_dt = datetime.now(UTC)
@@ -14939,7 +14958,7 @@ class ExecutionEngine:
             return None
         try:
             account = get_account()
-        except Exception as exc:  # pragma: no cover - network variability
+        except LIVE_TRADING_FALLBACK_EXC as exc:  # pragma: no cover - network variability
             logger.debug(
                 "BROKER_ACCOUNT_SNAPSHOT_FAILED",
                 extra={"error": getattr(exc, "__class__", type(exc)).__name__, "detail": str(exc)},
@@ -14983,7 +15002,7 @@ class ExecutionEngine:
             return None
         try:
             account_snapshot = get_account()
-        except Exception as exc:  # pragma: no cover - network variability
+        except LIVE_TRADING_FALLBACK_EXC as exc:  # pragma: no cover - network variability
             logger.debug(
                 "BROKER_ACCOUNT_SNAPSHOT_FAILED",
                 extra={
@@ -15475,7 +15494,7 @@ class ExecutionEngine:
             )
             parsed_intent_id = str(created_intent_id or "").strip()
             return parsed_intent_id or None
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("OMS_EXTERNAL_INTENT_CREATE_FAILED", exc_info=True)
             return None
 
@@ -15500,7 +15519,7 @@ class ExecutionEngine:
                 client_order_id=client_order_id,
                 error=error,
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("OMS_EXTERNAL_SUBMIT_ERROR_RECORD_FAILED", exc_info=True)
 
     def _sync_durable_order_state(
@@ -15530,7 +15549,7 @@ class ExecutionEngine:
                 fill_price=fill_price,
                 error=error,
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("OMS_EXTERNAL_STATE_SYNC_FAILED", exc_info=True)
 
     def _record_execution_quality_event(self, payload: Mapping[str, Any]) -> None:
@@ -15781,7 +15800,7 @@ class ExecutionEngine:
         if hasattr(account_snapshot, "__dict__"):
             try:
                 adjusted_obj.update(vars(account_snapshot))
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 adjusted_obj = {}
         changed = False
         for field in capacity_fields:
@@ -16396,7 +16415,7 @@ class ExecutionEngine:
                 fill_record["source_detail"] = raw_source
         try:
             record_trade_fill(fill_record)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "RUNTIME_FILL_RECORD_PERSIST_FAILED",
                 extra={
@@ -16861,7 +16880,7 @@ class ExecutionEngine:
 
         try:
             settings = get_execution_settings()
-        except Exception as exc:  # pragma: no cover - defensive guard
+        except LIVE_TRADING_FALLBACK_EXC as exc:  # pragma: no cover - defensive guard
             logger.warning("EXECUTION_SETTINGS_REFRESH_FAILED", extra={"error": str(exc)})
             return
 
@@ -16988,7 +17007,7 @@ class ExecutionEngine:
                 paper = True
             try:
                 self.config = get_alpaca_config()
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 self.config = None
             if self.config is not None:
                 base_url = self.config.base_url or base_url
@@ -17096,7 +17115,7 @@ class ExecutionEngine:
     ) -> None:
         try:
             duration = float(cooldown) if cooldown is not None else _BROKER_UNAUTHORIZED_BACKOFF_SECONDS
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             duration = _BROKER_UNAUTHORIZED_BACKOFF_SECONDS
         duration = max(duration, 60.0)
         now = monotonic_time()
@@ -17188,7 +17207,7 @@ class ExecutionEngine:
                     "AI_TRADING_BROKER_FAILOVER_PROVIDERS",
                     None,
                 )
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 providers_raw = None
         if providers_raw in (None, ""):
             providers_raw = _runtime_env("AI_TRADING_BROKER_FAILOVER_PROVIDERS", None)
@@ -17207,7 +17226,7 @@ class ExecutionEngine:
         if _config_get_env is not None:
             try:
                 provider_raw = _config_get_env("AI_TRADING_BROKER_FAILOVER_PROVIDER", None)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 provider_raw = None
         if provider_raw in (None, ""):
             provider_raw = _runtime_env("AI_TRADING_BROKER_FAILOVER_PROVIDER", "paper")
@@ -17339,7 +17358,7 @@ class ExecutionEngine:
                     "open_orders": int(len(open_orders_for_reconcile)),
                     "positions": int(len(getattr(snapshot, "positions", ()) or ())),
                 }
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 context["broker_sync_error"] = str(exc)
         if not open_orders_for_reconcile:
             sync_snapshot = getattr(self, "_broker_sync", None)
@@ -17348,7 +17367,7 @@ class ExecutionEngine:
                     open_orders_for_reconcile = tuple(
                         getattr(sync_snapshot, "open_orders", ()) or ()
                     )
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     open_orders_for_reconcile = ()
 
         durable_reconcile_fn = getattr(self, "_reconcile_durable_intents", None)
@@ -17356,7 +17375,7 @@ class ExecutionEngine:
             try:
                 durable_reconcile_fn(open_orders=open_orders_for_reconcile)
                 context["durable_intent_reconcile"] = True
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 context["durable_intent_reconcile_error"] = str(exc)
 
         artifact_reconcile_fn = getattr(
@@ -17371,7 +17390,7 @@ class ExecutionEngine:
                     "attempted": True,
                     "open_orders": int(len(open_orders_for_reconcile)),
                 }
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 context["pending_artifact_reconcile_error"] = str(exc)
 
         context["success"] = not any(
@@ -17453,7 +17472,7 @@ class ExecutionEngine:
                     client=None,
                     paper_buying_power="100000",
                 )
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 self.stats.setdefault("failover_failures", 0)
                 self.stats["failover_failures"] += 1
                 self._mark_failover_provider_cooldown(
@@ -17515,7 +17534,7 @@ class ExecutionEngine:
                 continue
             try:
                 response = submit(payload)
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 self.stats.setdefault("failover_failures", 0)
                 self.stats["failover_failures"] += 1
                 self._mark_failover_provider_cooldown(
@@ -17648,7 +17667,7 @@ class ExecutionEngine:
                     "AI_TRADING_ORDER_SUBMIT_RATE_LIMIT_STATE_PATH",
                     "/tmp/ai-trading-order-submit-rate-limit.json",
                 )
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 raw_state_path = None
         if raw_state_path in (None, ""):
             raw_state_path = _runtime_env(
@@ -17661,7 +17680,7 @@ class ExecutionEngine:
             if _config_get_env is not None:
                 try:
                     data_dir = _config_get_env("AI_TRADING_DATA_DIR", None)
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     data_dir = None
             if data_dir not in (None, ""):
                 state_path = Path(str(data_dir)) / state_path
@@ -17697,7 +17716,7 @@ class ExecutionEngine:
             return state
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             return state
         if not isinstance(payload, Mapping):
             return state
@@ -17769,7 +17788,7 @@ class ExecutionEngine:
                 return wait_seconds, wait_reason
         except TimeoutError:
             return 0.05, "submit_rate_lock_busy"
-        except Exception as exc:
+        except LIVE_TRADING_FALLBACK_EXC as exc:
             logger.debug(
                 "ORDER_SUBMIT_RATE_LIMIT_STATE_FAILED",
                 extra={"error": str(exc), "path": str(state_path)},
@@ -17856,7 +17875,7 @@ class ExecutionEngine:
                     cooldown_until,
                 )
                 self._write_submit_rate_limit_state(state_path, state)
-        except Exception as exc:
+        except LIVE_TRADING_FALLBACK_EXC as exc:
             logger.debug(
                 "ORDER_SUBMIT_RATE_LIMIT_COOLDOWN_WRITE_FAILED",
                 extra={"error": str(exc), "path": str(state_path)},
@@ -17952,7 +17971,7 @@ class ExecutionEngine:
             if raw_notional not in (None, "") and quantity:
                 try:
                     price_hint = _safe_decimal(raw_notional) / Decimal(quantity)
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     price_hint = None
         if side_lower == "sell":
             adjusted_qty, clip_context = self._clip_sell_quantity_to_available_position(
@@ -18340,7 +18359,7 @@ class ExecutionEngine:
                             0.0,
                             (datetime.now(UTC) - quote_ts.astimezone(UTC)).total_seconds() * 1000.0,
                         )
-                    except Exception:
+                    except LIVE_TRADING_FALLBACK_EXC:
                         quote_age_ms = quote_age_ms
             if quote_age_ms is None and isinstance(fallback_age, (int, float)):
                 try:
@@ -18359,7 +18378,7 @@ class ExecutionEngine:
 
             try:
                 provider_source_str = str(provider_source).strip().lower() if provider_source is not None else ""
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 provider_source_str = ""
             provider_source_non_primary = bool(
                 provider_source_str
@@ -18394,7 +18413,7 @@ class ExecutionEngine:
                     or provider_monitor.is_disabled("alpaca")
                     or provider_monitor.is_disabled("alpaca_sip")
                 )
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 degrade_due_monitor = is_safe_mode_active()
             degrade_active = degrade_due_provider or degrade_due_age or degrade_due_monitor
             nbbo_gate_required = require_nbbo and degrade_active and not closing_position
@@ -18673,7 +18692,7 @@ class ExecutionEngine:
             if raw_notional not in (None, "") and quantity:
                 try:
                     price_hint = _safe_decimal(raw_notional) / Decimal(quantity)
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     price_hint = None
         if side_lower == "sell":
             adjusted_qty, clip_context = self._clip_sell_quantity_to_available_position(
@@ -19053,7 +19072,7 @@ class ExecutionEngine:
                     0.0,
                     (datetime.now(UTC) - quote_ts.astimezone(UTC)).total_seconds() * 1000.0,
                 )
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 quote_age_ms = quote_age_ms
         elif isinstance(fallback_age, (int, float)):
             fresh = float(fallback_age) <= float(_max_quote_staleness_seconds())
@@ -19323,7 +19342,7 @@ class ExecutionEngine:
         side_token = getattr(side, "value", side)
         try:
             side_str_for_validation = side_token if isinstance(side_token, str) else str(side_token)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             side_str_for_validation = str(side_token)
         normalized_side_input = self._normalized_order_side(side_str_for_validation)
         if normalized_side_input is None:
@@ -19336,11 +19355,11 @@ class ExecutionEngine:
         mapped_side = self._map_core_side(side)
         try:
             side_lower = str(mapped_side).lower()
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             side_lower = str(mapped_side)
         try:
             quantity = int(qty)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             quantity = qty
         closing_position = _effective_closing_position(
             self,
@@ -19859,7 +19878,7 @@ class ExecutionEngine:
         market_on_degraded = False
         try:
             cfg = get_trading_config()
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             cfg = None
         (
             require_nbbo,
@@ -19881,7 +19900,7 @@ class ExecutionEngine:
                 if cfg is not None:
                     try:
                         widen_candidate = getattr(cfg, "degraded_feed_limit_widen_bps", None)
-                    except Exception:
+                    except LIVE_TRADING_FALLBACK_EXC:
                         widen_candidate = None
                     if widen_candidate not in (None, ""):
                         try:
@@ -19945,7 +19964,7 @@ class ExecutionEngine:
                         0.0,
                         (datetime.now(UTC) - quote_ts.astimezone(UTC)).total_seconds() * 1000.0,
                     )
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     quote_age_ms = quote_age_ms
             if not synthetic_quote:
                 synthetic_quote = bool(quote_payload_for_provider.get("synthetic"))
@@ -19974,7 +19993,7 @@ class ExecutionEngine:
             provider_source_str = (
                 str(provider_source).strip().lower() if provider_source is not None else ""
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             provider_source_str = ""
         provider_source_non_primary = bool(
             provider_source_str
@@ -20079,7 +20098,7 @@ class ExecutionEngine:
 
         try:
             cfg = get_trading_config()
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             cfg = None
         min_quote_fresh_ms = 1500
         degraded_mode = "widen"
@@ -20100,11 +20119,11 @@ class ExecutionEngine:
                 degraded_widen_bps = 0
             try:
                 require_realtime_nbbo = bool(getattr(cfg, "execution_require_realtime_nbbo", require_realtime_nbbo))
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 require_realtime_nbbo = True
             try:
                 market_on_degraded = bool(getattr(cfg, "execution_market_on_degraded", market_on_degraded))
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 market_on_degraded = False
 
         degrade_due_age = quote_age_ms is not None and quote_age_ms > float(min_quote_fresh_ms)
@@ -20114,7 +20133,7 @@ class ExecutionEngine:
                 or provider_monitor.is_disabled("alpaca")
                 or provider_monitor.is_disabled("alpaca_sip")
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             degrade_due_monitor = is_safe_mode_active()
         degrade_due_provider = provider_for_log != "alpaca"
         degrade_active = degrade_due_provider or degrade_due_age or degrade_due_monitor
@@ -20226,7 +20245,7 @@ class ExecutionEngine:
                         "reason": "primary_quote_required",
                     },
                 )
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 logger.debug("ORDER_SKIPPED_LOG_FAILED", exc_info=exc)
             self._record_dual_feed_decision(
                 symbol=symbol,
@@ -20253,7 +20272,7 @@ class ExecutionEngine:
             if basis_candidate:
                 try:
                     slippage_basis = str(basis_candidate)
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     slippage_basis = None
         if slippage_basis is None:
             if price_hint is not None:
@@ -20293,7 +20312,7 @@ class ExecutionEngine:
                         "nbbo_gate_required": bool(nbbo_gate_required),
                     },
                 )
-        except Exception as exc:
+        except LIVE_TRADING_FALLBACK_EXC as exc:
             logger.debug("DEGRADED_GATE_PREFLIGHT_LOG_FAILED", exc_info=exc)
 
         if (
@@ -20404,7 +20423,7 @@ class ExecutionEngine:
                             fallback_age_ms = (
                                 datetime.now(UTC) - fallback_ts.astimezone(UTC)
                             ).total_seconds() * 1000.0
-                        except Exception:
+                        except LIVE_TRADING_FALLBACK_EXC:
                             fallback_age_ms = None
                 if fallback_age_ms is not None:
                     try:
@@ -20471,7 +20490,7 @@ class ExecutionEngine:
                     quote_fresh_ms=quote_age_ms_value,
                     safe_mode=is_safe_mode_active(),
                 )
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 logger.debug("RUNTIME_MARKET_STATE_SYNC_FAILED", exc_info=True)
         if degrade_active and degrade_blocks_entries and not closing_position:
             logger.warning(
@@ -21375,13 +21394,13 @@ class ExecutionEngine:
         if client is not None:
             try:
                 _, positions_before = self._fetch_broker_state()
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 logger.debug("BROKER_PREFETCH_FAILED", extra={"symbol": symbol}, exc_info=True)
             else:
                 pre_positions_map = _positions_to_quantity_map(positions_before)
             try:
                 _, cash_before = self._fetch_account_state()
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 logger.debug("ACCOUNT_PREFETCH_FAILED", extra={"symbol": symbol}, exc_info=True)
             else:
                 pre_cash_balance = cash_before
@@ -21454,14 +21473,14 @@ class ExecutionEngine:
                 params = _EXEC_PARAMS if isinstance(_EXEC_PARAMS, dict) else {}
                 raw_threshold = params.get("MAX_SLIPPAGE_BPS", 0)
                 slippage_threshold_bps = float(raw_threshold or 0)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 hash_fn = None
                 slippage_threshold_bps = 0.0
 
             if slippage_threshold_bps > 0:
                 try:
                     base_price = float(price_for_slippage)
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     base_price = None
 
                 if base_price is not None and math.isfinite(base_price) and base_price > 0:
@@ -21665,7 +21684,7 @@ class ExecutionEngine:
                 fallback_market_retry_enabled = bool(
                     getattr(cfg, "execution_market_on_fallback", False)
                 )
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 env_flag = _resolve_bool_env("EXECUTION_MARKET_ON_FALLBACK")
                 if env_flag is None:
                     env_flag = _resolve_bool_env("AI_TRADING_EXEC_MARKET_FALLBACK")
@@ -21954,7 +21973,7 @@ class ExecutionEngine:
                 initial_status_explicit = final_order.get("status") not in (None, "")
             else:
                 initial_status_explicit = getattr(final_order, "status", None) not in (None, "")
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             initial_status_explicit = False
 
         def _status_payload() -> dict[str, Any]:
@@ -22112,7 +22131,7 @@ class ExecutionEngine:
                             get_by_client = getattr(client, "get_order_by_client_order_id", None)
                             if callable(get_by_client) and client_order_id_hint:
                                 refreshed = get_by_client(str(client_order_id_hint))
-                    except Exception:
+                    except LIVE_TRADING_FALLBACK_EXC:
                         logger.debug(
                             "ORDER_STATUS_POLL_FAILED",
                             extra={"symbol": symbol},
@@ -22449,12 +22468,12 @@ class ExecutionEngine:
             post_qty = post_positions_map.get(symbol_key, 0.0)
             try:
                 position_changed = not math.isclose(post_qty, pre_qty, rel_tol=1e-6, abs_tol=0.0001)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 position_changed = post_qty != pre_qty
             if pre_cash_balance is not None and post_cash_balance is not None:
                 try:
                     cash_changed = not math.isclose(post_cash_balance, pre_cash_balance, rel_tol=1e-6, abs_tol=0.05)
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     cash_changed = post_cash_balance != pre_cash_balance
             reconcile_summary = {
                 "symbol": symbol,
@@ -22470,7 +22489,7 @@ class ExecutionEngine:
                 self._update_position_tracker_snapshot(positions_list)
             try:
                 self._update_broker_snapshot(open_orders_list, positions_list)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 logger.debug(
                     "BROKER_SYNC_UPDATE_FAILED",
                     extra={"symbol": symbol},
@@ -22540,7 +22559,7 @@ class ExecutionEngine:
         # Only mark as failed when broker reports a terminal failure.
         try:
             order_status_lower = str(status).lower() if status is not None else ""
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             order_status_lower = str(status or "")
         terminal_failures = {
             "rejected",
@@ -22647,7 +22666,7 @@ class ExecutionEngine:
             if isinstance(fill_ts_raw, datetime):
                 try:
                     fill_timestamp = fill_ts_raw.astimezone(UTC)
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     fill_timestamp = fill_ts_raw.replace(tzinfo=UTC)
             elif fill_ts_raw not in (None, ""):
                 text = str(fill_ts_raw).strip()
@@ -22988,7 +23007,7 @@ class ExecutionEngine:
         try:
             value_obj = getattr(side, "value", side)
             value = str(value_obj).strip().lower()
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("ORDER_SIDE_NORMALIZE_FAILED", extra={"side": side}, exc_info=True)
             return None
         if "." in value:
@@ -23008,7 +23027,7 @@ class ExecutionEngine:
         if context:
             try:
                 self._long_only_context = {k: context[k] for k in context.keys()}
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 self._long_only_context = dict(context)
         if previous_reason != normalized_reason:
             logger.info("EXECUTION_LONG_ONLY_MODE", extra={"reason": normalized_reason})
@@ -23016,7 +23035,7 @@ class ExecutionEngine:
         if ctx_obj is not None:
             try:
                 setattr(ctx_obj, "allow_short_selling", False)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 logger.debug("CTX_LONG_ONLY_FLAG_SET_FAILED", exc_info=True)
 
     def long_only_mode_active(self) -> bool:
@@ -23028,7 +23047,7 @@ class ExecutionEngine:
     def _order_flip_mode(self) -> str:
         try:
             cfg = get_trading_config()
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("ORDER_FLIP_MODE_CONFIG_UNAVAILABLE", exc_info=True)
             return "cancel_then_submit"
         policy = getattr(cfg, "order_flip_mode", "cancel_then_submit")
@@ -23047,7 +23066,7 @@ class ExecutionEngine:
             orders = list_orders(status="open", symbols=[symbol])  # type: ignore[call-arg]
         except TypeError:
             orders = list_orders(status="open")  # type: ignore[call-arg]
-        except Exception as exc:
+        except LIVE_TRADING_FALLBACK_EXC as exc:
             logger.debug(
                 "OPPOSITE_GUARD_LIST_FAILED",
                 extra={"symbol": symbol, "error": str(exc)},
@@ -23062,7 +23081,7 @@ class ExecutionEngine:
                 try:
                     if str(order_symbol).strip().upper() != symbol.upper():
                         continue
-                except Exception as exc:
+                except LIVE_TRADING_FALLBACK_EXC as exc:
                     logger.debug(
                         "OPPOSITE_GUARD_SYMBOL_NORMALIZE_FAILED",
                         extra={"symbol": symbol},
@@ -23088,7 +23107,7 @@ class ExecutionEngine:
             order_id_str = str(order_id)
             try:
                 self._cancel_order_alpaca(order_id_str)
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 logger.warning(
                     "CANCEL_OPPOSITE_FAILED",
                     extra={"symbol": symbol, "desired_side": desired_side, "order_id": order_id_str, "error": str(exc)},
@@ -23098,7 +23117,7 @@ class ExecutionEngine:
             while monotonic_time() < deadline:
                 try:
                     status_info = self._get_order_status_alpaca(order_id_str)
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     break
                 status_val = _extract_value(status_info, "status")
                 if status_val:
@@ -23121,7 +23140,7 @@ class ExecutionEngine:
         if callable(get_position):
             try:
                 position_obj = get_position(symbol)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 position_obj = None
         if position_obj is None:
             list_positions = getattr(client, "list_positions", None)
@@ -23131,7 +23150,7 @@ class ExecutionEngine:
                         if str(_extract_value(pos, "symbol") or "").upper() == symbol.upper():
                             position_obj = pos
                             break
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     logger.debug(
                         "POSITION_LIST_SCAN_FAILED",
                         extra={"symbol": symbol},
@@ -23155,13 +23174,13 @@ class ExecutionEngine:
         qty_raw = _extract_value(position_obj, "qty", "quantity", "position")
         try:
             qty_decimal = _safe_decimal(qty_raw)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("POSITION_QTY_PARSE_FAILED", extra={"symbol": symbol, "qty_raw": qty_raw}, exc_info=True)
             return 0
         try:
             side_val = _extract_value(position_obj, "side")
             normalized_side = self._normalized_order_side(side_val)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             normalized_side = None
         qty_int = int(qty_decimal.copy_abs()) if qty_decimal is not None else 0
         if normalized_side == "sell":
@@ -23219,7 +23238,7 @@ class ExecutionEngine:
         tracker = getattr(self, "_position_tracker", None)
         try:
             symbol_key = str(symbol or "").upper()
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             symbol_key = str(symbol)
 
         if isinstance(tracker, dict):
@@ -23232,7 +23251,7 @@ class ExecutionEngine:
         elif tracker is not None:
             try:
                 raw = getattr(tracker, symbol_key, None)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 raw = None
             if raw is None:
                 get = getattr(tracker, "get", None)
@@ -23245,7 +23264,7 @@ class ExecutionEngine:
                     pass
         try:
             return int(self._position_quantity(symbol))
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "ORDER_VALIDATION_POSITION_LOOKUP_FAILED",
                 extra={"symbol": symbol},
@@ -23257,7 +23276,7 @@ class ExecutionEngine:
         position_before = self._resolve_position_before(symbol)
         try:
             side_str = getattr(side, "value", side)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             side_str = side
         logger.error(
             "ORDER_VALIDATION_FAILED",
@@ -23286,7 +23305,7 @@ class ExecutionEngine:
                 continue
             try:
                 symbol_key = str(symbol_val).upper()
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 symbol_key = str(symbol_val)
 
             qty_decimal = _safe_decimal(
@@ -23294,10 +23313,10 @@ class ExecutionEngine:
             )
             try:
                 qty_abs = int(qty_decimal.copy_abs()) if qty_decimal is not None else 0
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 try:
                     qty_abs = _safe_int(qty_decimal, 0)
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     qty_abs = 0
             side_val = _extract_value(pos, "side")
             normalized_side = self._normalized_order_side(side_val)
@@ -23318,7 +23337,7 @@ class ExecutionEngine:
             from ai_trading.oms.event_store import EventStore
 
             store = EventStore()
-        except Exception as exc:
+        except LIVE_TRADING_FALLBACK_EXC as exc:
             self._runtime_snapshot_store_init_failed = True
             logger.warning(
                 "RUNTIME_SNAPSHOT_STORE_INIT_FAILED",
@@ -23514,7 +23533,7 @@ class ExecutionEngine:
                 client_order_id=_stable_order_id(symbol, "cover"),
                 reduce_only=True,
             )
-        except Exception as exc:
+        except LIVE_TRADING_FALLBACK_EXC as exc:
             logger.warning(
                 "COVER_ORDER_SUBMIT_FAILED",
                 extra={"symbol": symbol, "quantity": cover_qty, "error": str(exc)},
@@ -23732,7 +23751,7 @@ class ExecutionEngine:
                 return None
             try:
                 text = str(value).strip().lower()
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 logger.debug("TIME_IN_FORCE_NORMALIZE_FAILED", extra={"value": value}, exc_info=True)
                 return None
             if not text:
@@ -23744,7 +23763,7 @@ class ExecutionEngine:
         runtime_tif: Any | None = None
         try:
             runtime_tif = getattr(get_trading_config(), "execution_time_in_force", None)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             runtime_tif = None
 
         candidates: tuple[Any | None, ...] = (
@@ -24111,7 +24130,7 @@ class ExecutionEngine:
         ).strip() or "America/New_York"
         try:
             tz = ZoneInfo(tz_name)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             tz_name = "America/New_York"
             tz = ZoneInfo(tz_name)
         session_key = datetime.now(tz).date().isoformat()
@@ -24308,7 +24327,7 @@ class ExecutionEngine:
             )
             temp_path.replace(latest_path)
             self._runtime_perf_report_last_persist_mono = now_mono
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "RUNTIME_PERFORMANCE_REPORT_PERSIST_FAILED",
                 extra={"path": str(latest_path)},
@@ -24535,7 +24554,7 @@ class ExecutionEngine:
                         "open_orders": int(len(open_orders_for_reconcile)),
                         "positions": int(len(getattr(snapshot, "positions", ()) or ())),
                     }
-                except Exception as exc:
+                except LIVE_TRADING_FALLBACK_EXC as exc:
                     attempt_context["broker_sync_error"] = str(exc)
             if not open_orders_for_reconcile:
                 sync_snapshot = getattr(self, "_broker_sync", None)
@@ -24544,7 +24563,7 @@ class ExecutionEngine:
                         open_orders_for_reconcile = tuple(
                             getattr(sync_snapshot, "open_orders", ()) or ()
                         )
-                    except Exception:
+                    except LIVE_TRADING_FALLBACK_EXC:
                         open_orders_for_reconcile = ()
 
             intent_reconcile_fn = getattr(self, "_reconcile_durable_intents", None)
@@ -24555,7 +24574,7 @@ class ExecutionEngine:
                         "attempted": True,
                         "open_orders": int(len(open_orders_for_reconcile)),
                     }
-                except Exception as exc:
+                except LIVE_TRADING_FALLBACK_EXC as exc:
                     attempt_context["intent_reconcile_error"] = str(exc)
 
             artifact_reconcile_fn = getattr(
@@ -24570,14 +24589,14 @@ class ExecutionEngine:
                         "attempted": True,
                         "open_orders": int(len(open_orders_for_reconcile)),
                     }
-                except Exception as exc:
+                except LIVE_TRADING_FALLBACK_EXC as exc:
                     attempt_context["pending_artifact_reconcile_error"] = str(exc)
 
             backfill_fn = getattr(self, "_backfill_pending_tca_from_fill_events", None)
             if callable(backfill_fn):
                 try:
                     backfill_result = backfill_fn()
-                except Exception as exc:
+                except LIVE_TRADING_FALLBACK_EXC as exc:
                     attempt_context["tca_backfill_error"] = str(exc)
                 else:
                     if isinstance(backfill_result, Mapping):
@@ -24587,7 +24606,7 @@ class ExecutionEngine:
             if callable(finalize_fn):
                 try:
                     finalize_result = finalize_fn()
-                except Exception as exc:
+                except LIVE_TRADING_FALLBACK_EXC as exc:
                     attempt_context["tca_finalize_error"] = str(exc)
                 else:
                     if isinstance(finalize_result, Mapping):
@@ -24617,7 +24636,7 @@ class ExecutionEngine:
                     retry_report,
                     thresholds=thresholds,
                 )
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 attempt_context["reason"] = "reevaluation_failed"
                 attempt_context["error"] = str(exc)
                 retry_context["attempts"].append(attempt_context)
@@ -25063,7 +25082,7 @@ class ExecutionEngine:
         ).strip() or "America/New_York"
         try:
             tz = ZoneInfo(tz_name)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             tz_name = "America/New_York"
             tz = ZoneInfo(tz_name)
 
@@ -25135,7 +25154,7 @@ class ExecutionEngine:
                         if ts_text.endswith("Z"):
                             ts_text = f"{ts_text[:-1]}+00:00"
                         ts_utc = datetime.fromisoformat(ts_text)
-                    except Exception:
+                    except LIVE_TRADING_FALLBACK_EXC:
                         continue
                     if ts_utc.tzinfo is None:
                         ts_utc = ts_utc.replace(tzinfo=UTC)
@@ -25163,7 +25182,7 @@ class ExecutionEngine:
                     bucket["accepted_records"] += float(max(0, accepted_records))
                     bucket["expected_edge_sum"] += float(expected_edge)
                     sampled_rows += 1
-        except Exception as exc:
+        except LIVE_TRADING_FALLBACK_EXC as exc:
             logger.debug(
                 "RUNTIME_GONOGO_HOURLY_GUARD_READ_FAILED",
                 extra={"path": str(gate_log_path), "cause": exc.__class__.__name__, "detail": str(exc)},
@@ -25291,7 +25310,7 @@ class ExecutionEngine:
         ).strip() or "America/New_York"
         try:
             tz = ZoneInfo(tz_name)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             tz_name = "America/New_York"
             tz = ZoneInfo(tz_name)
         today = datetime.now(tz).date().isoformat()
@@ -25735,7 +25754,7 @@ class ExecutionEngine:
                 try:
                     mtime_dt = datetime.fromtimestamp(path_obj.stat().st_mtime, tz=UTC)
                     age_s = max((now_utc - mtime_dt).total_seconds(), 0.0)
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     exists = False
                     age_s = None
             is_stale = (not exists) or (age_s is not None and age_s > float(max_age_s))
@@ -26421,7 +26440,7 @@ class ExecutionEngine:
         ).strip() or "America/New_York"
         try:
             tz = ZoneInfo(tz_name)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             tz_name = "America/New_York"
             tz = ZoneInfo(tz_name)
         today = datetime.now(tz).date().isoformat()
@@ -26735,7 +26754,7 @@ class ExecutionEngine:
         ).strip() or "America/New_York"
         try:
             tz = ZoneInfo(tz_name)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             tz_name = "America/New_York"
             tz = ZoneInfo(tz_name)
         now_local = datetime.now(tz)
@@ -27353,7 +27372,7 @@ class ExecutionEngine:
             if not math.isfinite(remaining) or remaining <= 0.0:
                 return None
             return max(1.0, min(float(remaining), 24.0 * 3600.0))
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "SUBMIT_NO_RESULT_BACKOFF_SESSION_CLOSE_CALC_FAILED",
                 exc_info=True,
@@ -28282,7 +28301,7 @@ class ExecutionEngine:
                     "AI_TRADING_EXECUTION_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
                     default=None,
                 )
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 trade_fill_source_raw = None
         if trade_fill_source_raw in (None, ""):
             trade_fill_source_raw = _runtime_env(
@@ -28295,7 +28314,7 @@ class ExecutionEngine:
                     "AI_TRADING_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
                     default=None,
                 )
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 trade_fill_source_raw = None
         if trade_fill_source_raw in (None, ""):
             trade_fill_source_raw = _runtime_env(
@@ -28912,7 +28931,7 @@ class ExecutionEngine:
                 thresholds=effective_thresholds,
                 gate_passed=bool(context.get("gate_passed", allowed)),
             )
-        except Exception as exc:
+        except LIVE_TRADING_FALLBACK_EXC as exc:
             fail_closed_effective = bool(fail_closed)
             fail_closed_forced = False
             if not fail_closed_effective and not _pytest_mode_active():
@@ -30163,7 +30182,7 @@ class ExecutionEngine:
             # the payload and can raise if the body is plain text.
             try:
                 detail = getattr(exc, "message", None)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 detail = getattr(exc, "_error", None)
             if isinstance(detail, dict):
                 detail = detail.get("message") or detail.get("detail")
@@ -30239,7 +30258,7 @@ class ExecutionEngine:
             attempts += 1
             try:
                 recovered = get_by_client(token)
-            except Exception as err:
+            except LIVE_TRADING_FALLBACK_EXC as err:
                 if _is_missing_order_lookup_error(err):
                     recovered = None
                 else:
@@ -30335,7 +30354,7 @@ class ExecutionEngine:
                     orders_resp = method(**query_kwargs)  # type: ignore[misc]
                 except TypeError:
                     continue
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     logger.debug(
                         "ORDER_LOOKUP_RECENT_QUERY_FAILED",
                         extra={
@@ -30523,7 +30542,7 @@ class ExecutionEngine:
 
         try:
             account_snapshot = self._get_account_snapshot()
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             account_snapshot = None
 
         closing_position = bool(
@@ -30597,7 +30616,7 @@ class ExecutionEngine:
             if callable(submit):
                 try:
                     resp = submit(order_data)
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     resp = None
         else:
             if self.trading_client is None:
@@ -30674,7 +30693,7 @@ class ExecutionEngine:
                         if candidate is None:
                             try:
                                 candidate = tif_enum[tif_lookup]  # type: ignore[index]
-                            except Exception:
+                            except LIVE_TRADING_FALLBACK_EXC:
                                 candidate = None
                         if candidate is not None:
                             tif_member = candidate
@@ -30932,7 +30951,7 @@ class ExecutionEngine:
             snapped_replacement_price = float(
                 Money(replacement_price).quantize(tick_size).amount
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "ORDER_TTL_REPLACE_PRICE_NORMALIZE_FAILED",
                 extra={"symbol": symbol, "replacement_price": replacement_price},
@@ -30957,7 +30976,7 @@ class ExecutionEngine:
         if existing_order_id:
             try:
                 self._cancel_order_alpaca(existing_order_id)
-            except Exception as exc:
+            except LIVE_TRADING_FALLBACK_EXC as exc:
                 logger.warning(
                     "ORDER_TTL_CANCEL_FAILED",
                     extra={
@@ -30969,7 +30988,7 @@ class ExecutionEngine:
                 )
         try:
             replacement = self._submit_order_to_alpaca(replacement_payload)
-        except Exception as exc:
+        except LIVE_TRADING_FALLBACK_EXC as exc:
             logger.error(
                 "ORDER_TTL_REPLACE_FAILED",
                 extra={
@@ -31079,7 +31098,7 @@ class ExecutionEngine:
                 return None
             try:
                 text = str(value).strip()
-            except Exception:  # pragma: no cover - defensive
+            except LIVE_TRADING_FALLBACK_EXC:  # pragma: no cover - defensive
                 logger.debug("BROKER_SNAPSHOT_SYMBOL_NORMALIZE_FAILED", exc_info=True)
                 return None
             return text.upper() or None
@@ -31089,7 +31108,7 @@ class ExecutionEngine:
                 return None
             try:
                 token = str(value).strip().lower()
-            except Exception:  # pragma: no cover - defensive
+            except LIVE_TRADING_FALLBACK_EXC:  # pragma: no cover - defensive
                 logger.debug("BROKER_SNAPSHOT_SIDE_NORMALIZE_FAILED", exc_info=True)
                 return None
             if token in {"buy", "long", "cover"}:
@@ -31153,7 +31172,7 @@ class ExecutionEngine:
         self._open_order_qty_index = qty_index
         try:
             self._update_position_tracker_snapshot(list(positions_tuple))
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
                 "BROKER_SYNC_POSITION_TRACKER_UPDATE_FAILED",
                 exc_info=True,
@@ -31165,7 +31184,7 @@ class ExecutionEngine:
                 open_buy_by_symbol=buy_index,
                 open_sell_by_symbol=sell_index,
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("BROKER_SYNC_RUNTIME_SNAPSHOT_EMIT_FAILED", exc_info=True)
         return snapshot
 
@@ -31206,7 +31225,7 @@ class ExecutionEngine:
                 def lookup_order_by_id(order_id: str) -> Any | None:
                     try:
                         return get_by_id(str(order_id))
-                    except Exception as err:
+                    except LIVE_TRADING_FALLBACK_EXC as err:
                         if _is_missing_order_lookup_error(err):
                             return None
                         raise
@@ -31220,7 +31239,7 @@ class ExecutionEngine:
                 def lookup_order_by_client_order_id(client_order_id: str) -> Any | None:
                     try:
                         return get_by_client(str(client_order_id))
-                    except Exception as err:
+                    except LIVE_TRADING_FALLBACK_EXC as err:
                         if _is_missing_order_lookup_error(err):
                             return None
                         raise
@@ -31230,7 +31249,7 @@ class ExecutionEngine:
                 )
         try:
             reconcile_fn(**kwargs)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("OMS_INTENT_RECONCILE_FAILED", exc_info=True)
 
     def _load_pending_candidates_from_durable_intents(
@@ -31246,7 +31265,7 @@ class ExecutionEngine:
             return {}
         try:
             intents = list(store.get_open_intents())
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("OMS_INTENT_PENDING_BOOTSTRAP_FAILED", exc_info=True)
             return {}
 
@@ -31263,7 +31282,7 @@ class ExecutionEngine:
             if raw_metadata not in (None, ""):
                 try:
                     parsed_metadata = json.loads(str(raw_metadata))
-                except Exception:
+                except LIVE_TRADING_FALLBACK_EXC:
                     parsed_metadata = None
                 if isinstance(parsed_metadata, dict):
                     metadata = parsed_metadata
@@ -31345,7 +31364,7 @@ class ExecutionEngine:
                 continue
             try:
                 row = json.loads(line)
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 continue
             order_id_raw = row.get("order_id")
             if order_id_raw in (None, ""):
@@ -31475,7 +31494,7 @@ class ExecutionEngine:
                     client_ref = ref_client_id or (key if key != ref_order_id else None)
                     if client_ref:
                         refreshed = get_by_client(client_ref)
-            except Exception as err:
+            except LIVE_TRADING_FALLBACK_EXC as err:
                 if _is_missing_order_lookup_error(err):
                     lookup_not_found += 1
                     refreshed = {
@@ -31662,7 +31681,7 @@ class ExecutionEngine:
                     if isinstance(fill_ts_raw, datetime):
                         try:
                             fill_timestamp = fill_ts_raw.astimezone(UTC)
-                        except Exception:
+                        except LIVE_TRADING_FALLBACK_EXC:
                             fill_timestamp = fill_ts_raw.replace(tzinfo=UTC)
                     elif fill_ts_raw not in (None, ""):
                         fill_text = str(fill_ts_raw).strip()
@@ -31884,7 +31903,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
                     open_orders_resp = list_orders(status="open")  # type: ignore[call-arg]
             if open_orders_resp is not None:
                 open_orders_list = list(open_orders_resp)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("BROKER_SYNC_OPEN_ORDERS_FAILED", exc_info=True)
 
         try:
@@ -31898,7 +31917,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
                     positions_resp = list_positions()
             if positions_resp is not None:
                 positions_list = list(positions_resp)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("BROKER_SYNC_POSITIONS_FAILED", exc_info=True)
 
         return (open_orders_list, positions_list)
@@ -31909,7 +31928,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         if getattr(self, "trading_client", None) is None:
             try:
                 self._ensure_initialized()
-            except Exception:
+            except LIVE_TRADING_FALLBACK_EXC:
                 logger.debug("BROKER_SYNC_INITIALIZE_FAILED", exc_info=True)
         open_orders, positions = self._fetch_broker_state()
         account_snapshot, _ = self._fetch_account_state()
@@ -31919,14 +31938,14 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         self._reconcile_durable_intents(open_orders=open_orders)
         try:
             snapshot = self._update_broker_snapshot(open_orders, positions)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("BROKER_SYNC_UPDATE_FAILED", exc_info=True)
             snapshot = super().synchronize_broker_state()
         try:
             self._reconcile_pending_order_runtime_artifacts(
                 open_orders=getattr(snapshot, "open_orders", ()) or (),
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.warning(
                 "PENDING_ORDER_RECONCILE_FAILED",
                 extra={
@@ -31937,7 +31956,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
             )
         try:
             self._backfill_pending_tca_from_fill_events()
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.warning(
                 "TCA_BACKFILL_RECONCILE_FAILED",
                 extra={
@@ -31948,7 +31967,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
             )
         try:
             self._finalize_stale_pending_tca_events()
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.warning(
                 "TCA_STALE_PENDING_FINALIZE_FAILED",
                 extra={
@@ -31960,7 +31979,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         try:
             open_orders_count = len(getattr(snapshot, "open_orders", ()) or ())
             self._maybe_recover_order_ack_timeout(open_orders_count=open_orders_count)
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("ORDER_ACK_TIMEOUT_RECOVERY_CHECK_FAILED", exc_info=True)
         try:
             reduction_positions = getattr(snapshot, "positions", ()) or positions
@@ -31968,7 +31987,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
                 positions=tuple(reduction_positions),
                 account_snapshot=account_snapshot,
             )
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.warning(
                 "EXPOSURE_NORMALIZE_SHORT_REDUCTION_FAILED",
                 extra={
@@ -31990,7 +32009,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
             return (None, None)
         try:
             account = get_account()
-        except Exception:
+        except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("BROKER_ACCOUNT_FETCH_FAILED", exc_info=True)
             return (None, None)
         return account, _extract_cash_balance(account)
@@ -32000,7 +32019,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         if hasattr(mgr, "recalc_all"):
             try:
                 mgr.recalc_all()
-            except Exception:  # pragma: no cover - defensive best effort
+            except LIVE_TRADING_FALLBACK_EXC:  # pragma: no cover - defensive best effort
                 logger.debug("TRAILING_STOP_RECALC_FAILED", exc_info=True)
 
 

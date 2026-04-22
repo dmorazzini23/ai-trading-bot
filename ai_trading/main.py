@@ -32,6 +32,24 @@ from ai_trading.execution.live_trading import APIError, NonRetryableBrokerError
 from ai_trading.execution import timing as execution_timing
 from ai_trading.utils.datetime import ensure_datetime
 
+MAIN_FALLBACK_EXC: tuple[type[Exception], ...] = (
+    APIError,
+    ArithmeticError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    ImportError,
+    KeyError,
+    LookupError,
+    NameError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 _MANAGED_GET_ENV_READY = False
 _MANAGED_GET_ENV: Callable[..., Any] | None = None
 
@@ -69,7 +87,7 @@ def _raw_env(name: str, default: Any = None) -> Any:
         value = _MANAGED_GET_ENV(name, None, resolve_aliases=False)
     except TypeError:
         value = _MANAGED_GET_ENV(name, None)
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         return default
     if value is None:
         return default
@@ -150,7 +168,7 @@ def _resolve_info_log_ttl_seconds(env_name: str, default_seconds: float) -> floa
 
     try:
         ttl = float(get_env(env_name, default_seconds, cast=float))
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         ttl = float(default_seconds)
     if ttl < 0.0:
         return 0.0
@@ -249,7 +267,7 @@ def _maybe_trigger_market_close_training(now_est: datetime | None = None) -> Non
             _release_market_close_training(date_key)
             return
         _invoke_market_close_training()
-    except Exception as exc:  # pragma: no cover - defensive fail-open
+    except MAIN_FALLBACK_EXC as exc:  # pragma: no cover - defensive fail-open
         _release_market_close_training(date_key)
         logger.exception(
             "MARKET_CLOSE_TRAINING_TRIGGER_FAILED",
@@ -261,7 +279,7 @@ def _http_profile_logging_enabled() -> bool:
     truthy = {"1", "true", "yes", "on"}
     try:
         value = get_env("HTTP_PROFILE_LOG_ENABLED", "0", cast=bool)
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         raw = str(_managed_env("HTTP_PROFILE_LOG_ENABLED", "") or "").strip().lower()
         return raw in truthy
     if isinstance(value, str):
@@ -270,7 +288,7 @@ def _http_profile_logging_enabled() -> bool:
         return value
     try:
         return bool(int(value))
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug(
             "HTTP_PROFILE_LOG_ENABLED_PARSE_FALLBACK",
             extra={"raw_value": value},
@@ -305,7 +323,7 @@ from ai_trading.position_sizing import resolve_max_position_size, _get_equity_fr
 
 try:  # prefer modern budget context
     from ai_trading.core.budget import set_cycle_budget_context
-except Exception:  # pragma: no cover - fallback when budget module unavailable
+except MAIN_FALLBACK_EXC:  # pragma: no cover - fallback when budget module unavailable
     from contextlib import nullcontext
 
     def set_cycle_budget_context(*args, **kwargs):  # type: ignore[override]
@@ -316,7 +334,7 @@ try:
         emit_cycle_budget_summary,
         clear_cycle_budget_context,
     )
-except Exception:  # pragma: no cover - fallback when bot engine unavailable
+except MAIN_FALLBACK_EXC:  # pragma: no cover - fallback when bot engine unavailable
 
     def emit_cycle_budget_summary(logger: logging.Logger) -> None:
         _ = logger
@@ -354,7 +372,7 @@ def _config_snapshot(cfg: Any) -> dict[str, Any]:
 
     try:
         return copy.deepcopy(cfg.to_dict())
-    except Exception:  # pragma: no cover - defensive fallback
+    except MAIN_FALLBACK_EXC:  # pragma: no cover - defensive fallback
         logger.debug("CONFIG_SNAPSHOT_DEEPCOPY_FAILED", exc_info=True)
         return {"__repr__": repr(cfg)}
 
@@ -382,7 +400,7 @@ def _resolve_cached_context(
             runtime = runtime_builder(cfg)
             try:
                 runtime.cfg = cfg
-            except Exception:  # pragma: no cover - runtime without cfg attribute
+            except MAIN_FALLBACK_EXC:  # pragma: no cover - runtime without cfg attribute
                 logger.debug("RUNTIME_CFG_ASSIGN_FAILED_REBUILD", exc_info=True)
             _STATE_CACHE = state
             _RUNTIME_CACHE = runtime
@@ -393,7 +411,7 @@ def _resolve_cached_context(
             runtime = cached_runtime
             try:
                 runtime.cfg = cfg
-            except Exception:  # pragma: no cover - runtime without cfg attribute
+            except MAIN_FALLBACK_EXC:  # pragma: no cover - runtime without cfg attribute
                 logger.debug("RUNTIME_CFG_ASSIGN_FAILED_REUSE", exc_info=True)
             reused = True
 
@@ -410,7 +428,7 @@ def _reset_warmup_cooldown_timestamp() -> None:
         try:
             if hasattr(state, "last_run_at"):
                 setattr(state, "last_run_at", None)
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug("WARMUP_COOLDOWN_RESET_FAILED", exc_info=True)
             return
 
@@ -425,7 +443,7 @@ def _normalize_execution_phase(value: Any) -> str:
 def _current_service_snapshot() -> dict[str, Any]:
     try:
         snapshot = runtime_state.observe_service_status()
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug("SERVICE_STATUS_OBSERVE_FAILED", exc_info=True)
         return {}
     if not isinstance(snapshot, dict):
@@ -464,7 +482,7 @@ def _set_execution_phase(
             phase=phase_token,
             cycle_index=cycle_index,
         )
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug("SERVICE_STATUS_PHASE_UPDATE_FAILED", exc_info=True)
         return
     if _LAST_EXECUTION_PHASE != phase_token or previous_phase != phase_token:
@@ -537,13 +555,13 @@ def _refresh_active_service_status(
     if provider is None:
         try:
             observed_provider = runtime_state.observe_data_provider_state()
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             observed_provider = {}
         provider = observed_provider if isinstance(observed_provider, Mapping) else {}
     if broker is None:
         try:
             observed_broker = runtime_state.observe_broker_status()
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             observed_broker = {}
         broker = observed_broker if isinstance(observed_broker, Mapping) else {}
 
@@ -771,7 +789,7 @@ def _provider_fallback_active_for_timeframes(
         for tf_key, tf_active in timeframe_state.items():
             try:
                 tf_token = str(tf_key).strip().lower()
-            except Exception:
+            except MAIN_FALLBACK_EXC:
                 tf_token = str(tf_key)
             if not tf_token:
                 continue
@@ -785,7 +803,7 @@ def _provider_fallback_active_for_timeframes(
                 try:
                     if bool(tf_active):
                         return True
-                except Exception:
+                except MAIN_FALLBACK_EXC:
                     continue
         return False
     return bool(provider_state.get("using_backup"))
@@ -829,11 +847,11 @@ def _emit_cycle_market_snapshot(*, cycle_index: int, closed: bool, interval_s: i
         return
     try:
         provider_state = runtime_state.observe_data_provider_state()
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         provider_state = {}
     try:
         quote_state = runtime_state.observe_quote_status()
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         quote_state = {}
     quote_allowed_raw: Any = None
     quote_status_token = ""
@@ -841,7 +859,7 @@ def _emit_cycle_market_snapshot(*, cycle_index: int, closed: bool, interval_s: i
         quote_allowed_raw = quote_state.get("allowed")
         try:
             quote_status_token = str(quote_state.get("status") or "").strip().lower()
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             quote_status_token = ""
     quote_allowed_value: bool | None
     if quote_status_token in {"", "unknown"}:
@@ -852,11 +870,11 @@ def _emit_cycle_market_snapshot(*, cycle_index: int, closed: bool, interval_s: i
         quote_allowed_value = None
     try:
         broker_state = runtime_state.observe_broker_status()
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         broker_state = {}
     try:
         service_state = runtime_state.observe_service_status()
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         service_state = {}
     provider_age_s = _timestamp_age_seconds(provider_state.get("updated"))
     logger.info(
@@ -936,7 +954,7 @@ def _emit_cycle_slo_alerts(
 
     try:
         provider_state = runtime_state.observe_data_provider_state()
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         provider_state = {}
     provider_age_s = _timestamp_age_seconds(provider_state.get("updated"))
     stale_warn_s = float(get_env("AI_TRADING_SLO_PROVIDER_TELEMETRY_STALE_WARN_SEC", 300, cast=float))
@@ -1105,7 +1123,7 @@ def _maybe_build_bad_session_replay_dataset(
 
     try:
         from ai_trading.replay.bad_session import build_replay_dataset_from_bad_session
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug("BAD_SESSION_REPLAY_IMPORT_FAILED", exc_info=True)
         return
 
@@ -1116,7 +1134,7 @@ def _maybe_build_bad_session_replay_dataset(
             output_dir=output_dir,
             seed=seed,
         )
-    except Exception as exc:
+    except MAIN_FALLBACK_EXC as exc:
         logger.warning(
             "BAD_SESSION_REPLAY_BUILD_FAILED",
             extra={
@@ -1217,7 +1235,7 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
         residual_drift_psi, residual_drift_samples = _extract_metric(residual_drift_status)
         order_pacing_cap_hit_rate_pct, pacing_samples = _extract_metric(pacing_status)
         pending_oldest_age_sec, pending_samples = _extract_metric(pending_status)
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug("LIVE_KPI_SLO_SNAPSHOT_FAILED", exc_info=True)
 
     try:
@@ -1225,7 +1243,7 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
         current_drawdown = getattr(bot_engine_module, "_current_drawdown", None)
         if callable(current_drawdown):
             drawdown = float(current_drawdown() or 0.0)
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug("LIVE_KPI_DRAWDOWN_SNAPSHOT_FAILED", exc_info=True)
 
     live_kpis = {
@@ -1315,7 +1333,7 @@ def _resolve_runtime_promotion_strategies(promotion_manager: Any) -> list[str]:
                 strategy = str(info.get("strategy") or "").strip()
                 if strategy:
                     strategies.add(strategy)
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug("PROMOTION_RUNTIME_STRATEGY_DISCOVERY_FAILED", exc_info=True)
 
     if not strategies:
@@ -1341,7 +1359,7 @@ def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None
 
     try:
         from ai_trading.governance.promotion import get_promotion_manager
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug("LIVE_KPI_PROMOTION_IMPORT_FAILED", exc_info=True)
         return
 
@@ -1370,7 +1388,7 @@ def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None
                 force=True,
                 allow_rollback=False,
             )
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug(
                 "LIVE_KPI_CONTROL_BAND_EVAL_FAILED",
                 extra={"strategy": strategy},
@@ -1406,7 +1424,7 @@ def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None
                 force=True,
                 allow_rollback=True,
             )
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug(
                 "LIVE_KPI_CONTROL_BAND_ROLLBACK_EVAL_FAILED",
                 extra={"strategy": strategy},
@@ -1459,7 +1477,7 @@ def _emit_data_config_log(settings: Any, cfg_obj: Any) -> None:
     adjustment_for_log = getattr(settings, "alpaca_adjustment", "")
     try:
         trading_cfg = get_trading_config()
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug("TRADING_CONFIG_LOG_SNAPSHOT_UNAVAILABLE", exc_info=True)
         trading_cfg = None
     if trading_cfg is not None:
@@ -1537,7 +1555,7 @@ def _log_config_effective_summary(cfg: Any) -> None:
             "CONFIG_EFFECTIVE_SUMMARY",
             extra=extra_payload,
         )
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         debug_log = getattr(logger, "debug", None)
         if callable(debug_log):
             debug_log("CONFIG_EFFECTIVE_SUMMARY_FAILED", exc_info=True)
@@ -1562,7 +1580,11 @@ def _is_test_mode() -> bool:
             return False
         return candidate.lower() not in {"0", "false", "no", "off"}
 
-    return any(_flag_enabled(flag) for flag in ("PYTEST_RUNNING", "TESTING"))
+    return (
+        any(_flag_enabled(flag) for flag in ("PYTEST_RUNNING", "TESTING"))
+        or bool(str(_managed_env("PYTEST_CURRENT_TEST", "") or "").strip())
+        or "pytest" in sys.modules
+    )
 
 
 def preflight_import_health() -> bool:
@@ -1614,12 +1636,12 @@ def preflight_import_health() -> bool:
                 candidate_cfg = None
                 try:
                     candidate_cfg = get_trading_config()
-                except Exception:
+                except MAIN_FALLBACK_EXC:
                     candidate_cfg = None
                 settings_obj = None
                 try:
                     settings_obj = get_settings()
-                except Exception:
+                except MAIN_FALLBACK_EXC:
                     settings_obj = None
                 for attr in ("paper", "alpaca_base_url", "alpaca_has_sip", "alpaca_allow_sip"):
                     value = None
@@ -1716,7 +1738,7 @@ def run_cycle() -> None:
             try:
                 set_service_available(bool(value))
                 return
-            except Exception:
+            except MAIN_FALLBACK_EXC:
                 pass
         alpaca_namespace["_ALPACA_SERVICE_AVAILABLE"] = bool(value)
 
@@ -1724,7 +1746,7 @@ def run_cycle() -> None:
         if callable(is_service_available):
             try:
                 return bool(is_service_available())
-            except Exception:
+            except MAIN_FALLBACK_EXC:
                 pass
         return bool(alpaca_namespace.get("_ALPACA_SERVICE_AVAILABLE", True))
 
@@ -1765,7 +1787,7 @@ def run_cycle() -> None:
         cfg = get_trading_config()
         rth_only = bool(getattr(cfg, "rth_only", True))
         allow_extended = bool(getattr(cfg, "allow_extended", False))
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         rth_only = True
         allow_extended = False
     allow_after_hours = bool(get_env("ALLOW_AFTER_HOURS", "0", cast=bool))
@@ -1790,7 +1812,7 @@ def run_cycle() -> None:
                         reason="market_closed",
                         timeframe="1Min",
                     )
-                except Exception:
+                except MAIN_FALLBACK_EXC:
                     logger.debug(
                         "MARKET_CLOSED_PROVIDER_RUNTIME_STATE_UPDATE_FAILED",
                         exc_info=True,
@@ -1803,7 +1825,7 @@ def run_cycle() -> None:
                     try:
                         from ai_trading.core.bot_engine import BotState, get_ctx
                         from ai_trading.core.runtime import build_runtime, enhance_runtime_with_context
-                    except Exception:
+                    except MAIN_FALLBACK_EXC:
                         if _should_emit_info_log(
                             "MARKET_CLOSED_BROKER_SYNC_IMPORT_FAILED",
                             ttl_seconds=300.0,
@@ -1830,11 +1852,11 @@ def run_cycle() -> None:
                                 snapshot = engine_obj.synchronize_broker_state()
                                 try:
                                     open_orders_count = len(getattr(snapshot, "open_orders", ()) or ())
-                                except Exception:
+                                except MAIN_FALLBACK_EXC:
                                     open_orders_count = 0
                                 try:
                                     positions_count = len(getattr(snapshot, "positions", ()) or ())
-                                except Exception:
+                                except MAIN_FALLBACK_EXC:
                                     positions_count = 0
                                 try:
                                     runtime_state.update_broker_status(
@@ -1844,7 +1866,7 @@ def run_cycle() -> None:
                                         open_orders_count=int(open_orders_count),
                                         positions_count=int(positions_count),
                                     )
-                                except Exception:
+                                except MAIN_FALLBACK_EXC:
                                     logger.debug(
                                         "MARKET_CLOSED_BROKER_SYNC_RUNTIME_STATE_UPDATE_FAILED",
                                         exc_info=True,
@@ -1856,7 +1878,7 @@ def run_cycle() -> None:
                                         "positions": int(positions_count),
                                     },
                                 )
-                        except Exception:
+                        except MAIN_FALLBACK_EXC:
                             if _should_emit_info_log(
                                 "MARKET_CLOSED_BROKER_SYNC_FAILED",
                                 ttl_seconds=300.0,
@@ -1866,7 +1888,7 @@ def run_cycle() -> None:
                                     exc_info=True,
                                 )
                 return
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
 
     if not _alpaca_service_available():
@@ -1886,7 +1908,7 @@ def run_cycle() -> None:
 
     try:
         alpaca_get("/v2/account/configurations", timeout=5)
-    except Exception as exc:  # pragma: no cover - defensive
+    except MAIN_FALLBACK_EXC as exc:  # pragma: no cover - defensive
         # Handle stale-module exception identity mismatches during reload-heavy
         # test flows by matching the canonical auth exception name as fallback.
         is_auth_failure = (
@@ -1947,7 +1969,7 @@ def run_cycle() -> None:
     if callable(provider_check):
         try:
             provider_disabled = not bool(provider_check())
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except MAIN_FALLBACK_EXC as exc:  # pragma: no cover - defensive logging
             logger.warning(
                 "PRIMARY_PROVIDER_STATUS_ERROR",
                 extra={"detail": str(exc), "exc_type": exc.__class__.__name__},
@@ -1963,7 +1985,7 @@ def run_cycle() -> None:
         else:
             try:
                 provider_state_snapshot = runtime_state.observe_data_provider_state()
-            except Exception:
+            except MAIN_FALLBACK_EXC:
                 provider_state_snapshot = {}
             if isinstance(provider_state_snapshot, Mapping):
                 status_token = str(provider_state_snapshot.get("status") or "").lower()
@@ -1991,7 +2013,7 @@ def run_cycle() -> None:
         if callable(cycle_getter) and isinstance(logged_cycles, set):
             try:
                 logged_cycles.add(str(cycle_getter()))
-            except Exception:  # pragma: no cover - best effort dedupe
+            except MAIN_FALLBACK_EXC:  # pragma: no cover - best effort dedupe
                 logger.debug("SAFE_MODE_LOG_DEDUPE_UPDATE_FAILED", exc_info=True)
         _interruptible_sleep(5.0)
         return
@@ -2006,7 +2028,7 @@ def run_cycle() -> None:
                 "min_quote_freshness_ms": int(getattr(cfg, "min_quote_freshness_ms", 1500)),
             },
         )
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug("EXEC_CONFIG_RESOLVED_LOG_FAILED", exc_info=True)
 
     # Carry through a pre-resolved max position size if available on Settings.
@@ -2015,10 +2037,10 @@ def run_cycle() -> None:
     if mps is not None:
         try:
             object.__setattr__(cfg, "max_position_size", float(mps))
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             try:
                 setattr(cfg, "max_position_size", float(mps))
-            except Exception:  # pragma: no cover - defensive
+            except MAIN_FALLBACK_EXC:  # pragma: no cover - defensive
                 logger.debug("MAX_POSITION_SIZE_ASSIGN_FAILED", exc_info=True)
 
     state, runtime, _ = _resolve_cached_context(cfg, BotState, build_runtime)
@@ -2031,7 +2053,7 @@ def run_cycle() -> None:
     if not isinstance(getattr(runtime, "state", None), dict):
         try:
             runtime.state = {}
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug("RUNTIME_STATE_DICT_INIT_FAILED", exc_info=True)
     runtime_state_map = getattr(runtime, "state", None)
     if isinstance(runtime_state_map, dict):
@@ -2056,7 +2078,7 @@ def run_cycle() -> None:
                 open_orders,
                 require_confirmation=True,
             )
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug("STARTUP_PENDING_RECONCILE_SKIPPED", exc_info=True)
         else:
             now_dt = datetime.now(UTC)
@@ -2067,7 +2089,7 @@ def run_cycle() -> None:
                 status_val = getattr(status_raw, "value", status_raw)
                 try:
                     status = str(status_val).lower()
-                except Exception:
+                except MAIN_FALLBACK_EXC:
                     status = ""
                 if status not in {"new", "pending_new"}:
                     continue
@@ -2079,7 +2101,7 @@ def run_cycle() -> None:
                         continue
                     try:
                         submitted = ensure_datetime(raw_ts)
-                    except Exception:
+                    except MAIN_FALLBACK_EXC:
                         continue
                     age_s = int(max(0.0, (now_dt - submitted).total_seconds()))
                     break
@@ -2103,7 +2125,7 @@ def run_cycle() -> None:
                 if should_cancel:
                     try:
                         cancel_all_open_orders(runtime)
-                    except Exception as exc:
+                    except MAIN_FALLBACK_EXC as exc:
                         extra = {
                             "canceled_ids": pending_ids[:20],
                             "cleanup_after_s": cleanup_after_int,
@@ -2177,7 +2199,7 @@ def get_memory_optimizer():
         return _NULL_MEMORY_OPTIMIZER
     try:
         from ai_trading.utils import memory_optimizer
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug("MEMORY_OPTIMIZER_IMPORT_FAILED", exc_info=True)
         return _NULL_MEMORY_OPTIMIZER
 
@@ -2267,7 +2289,7 @@ def _install_signal_handlers() -> None:
     def _handler(signum, frame):  # pragma: no cover - exercised via unit tests
         try:
             signame = signal.Signals(signum).name
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             signame = str(signum)
         logger.info("SERVICE_SIGNAL", extra={"signal": signame})
         request_stop(f"signal:{signame}")
@@ -2489,10 +2511,10 @@ def _validate_runtime_config(cfg, tcfg) -> None:
         for obj in targets:
             try:
                 setattr(obj, "equity", resolved_eq)
-            except Exception:
+            except MAIN_FALLBACK_EXC:
                 try:
                     object.__setattr__(obj, "equity", resolved_eq)
-                except Exception:  # pragma: no cover - defensive
+                except MAIN_FALLBACK_EXC:  # pragma: no cover - defensive
                     logger.debug("ACCOUNT_EQUITY_ASSIGN_FAILED", exc_info=True)
     else:
         logger.warning(
@@ -2502,10 +2524,10 @@ def _validate_runtime_config(cfg, tcfg) -> None:
         for obj in targets:
             try:
                 setattr(obj, "equity", None)
-            except Exception:
+            except MAIN_FALLBACK_EXC:
                 try:
                     object.__setattr__(obj, "equity", None)
-                except Exception:  # pragma: no cover - defensive
+                except MAIN_FALLBACK_EXC:  # pragma: no cover - defensive
                     logger.debug("ACCOUNT_EQUITY_CLEAR_FAILED", exc_info=True)
     try:
         force = (_CACHE.value is None) or (eq != prev_eq)
@@ -2734,7 +2756,7 @@ def run_bot(*_a, **_k) -> int:
     try:
         try:
             reload_env(override=False)
-        except Exception as exc:  # noqa: BLE001
+        except MAIN_FALLBACK_EXC as exc:  # noqa: BLE001
             logger.critical("ENV_LOAD_FAILED", extra={"error": str(exc)})
             return 1
         config = get_settings()
@@ -2746,7 +2768,7 @@ def run_bot(*_a, **_k) -> int:
         if callable(memory_optimizer):
             try:
                 memory_optimizer()
-            except Exception:
+            except MAIN_FALLBACK_EXC:
                 logger.debug("MEMORY_OPTIMIZER_DISABLED", exc_info=True)
         elif memory_optimizer:
             memory_optimizer.enable_low_memory_mode()
@@ -2782,7 +2804,7 @@ def run_flask_app(
     if callable(suppress_startup_noise):
         try:
             suppress_startup_noise()
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug("FLASK_STARTUP_BANNER_SUPPRESS_FAILED", exc_info=True)
 
     def _mask_identifier(value: str | None, keep: int = 4) -> str:
@@ -2797,7 +2819,7 @@ def run_flask_app(
         snapshot: dict[str, Any] = {"available": False}
         try:
             from ai_trading.core import bot_engine as _bot_engine
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug("BROKER_DIAG_IMPORT_FAILED", exc_info=True)
             return snapshot
 
@@ -2814,7 +2836,7 @@ def run_flask_app(
             else:
                 orders_list = list(orders)
                 snapshot["open_orders"] = len(orders_list)
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug("BROKER_DIAG_OPEN_ORDERS_FAILED", exc_info=True)
 
         try:
@@ -2826,7 +2848,7 @@ def run_flask_app(
                 else:
                     positions_list = list(positions)
                     snapshot["positions"] = len(positions_list)
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug("BROKER_DIAG_POSITIONS_FAILED", exc_info=True)
 
         try:
@@ -2844,7 +2866,7 @@ def run_flask_app(
                     if identifier:
                         acct_payload["id_masked"] = _mask_identifier(str(identifier))
                     snapshot["account"] = acct_payload
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug("BROKER_DIAG_ACCOUNT_FAILED", exc_info=True)
 
         return snapshot
@@ -2855,7 +2877,7 @@ def run_flask_app(
     elif hasattr(application, "config"):
         try:
             application.config = {"broker_snapshot_fn": _broker_snapshot}
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug("APP_CONFIG_ASSIGN_FALLBACK_FAILED", exc_info=True)
     debug = run_kwargs.pop("debug", False)
     run_kwargs.setdefault("use_reloader", False)
@@ -3030,7 +3052,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
             logger.info("HEALTH_SERVER_STARTED", extra={"port": health_port})
         else:
             logger.info("HEALTH_SERVER_PORT_SHARED", extra={"port": port})
-    except Exception as _exc:  # pragma: no cover - defensive
+    except MAIN_FALLBACK_EXC as _exc:  # pragma: no cover - defensive
         logger.warning("HEALTH_SERVER_START_FAILED", extra={"error": str(_exc)})
 
     retry_budget = max(wait_window, 0.0)
@@ -3142,11 +3164,11 @@ def start_api_with_signal(api_ready: threading.Event, api_error: threading.Event
         return
     try:
         start_api(api_ready)
-    except Exception as exc:  # noqa: BLE001
+    except MAIN_FALLBACK_EXC as exc:  # noqa: BLE001
         logger.error("Failed to start API", exc_info=True)
         try:
             setattr(api_error, "exception", exc)
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug("API_ERROR_EXCEPTION_ATTR_SET_FAILED", exc_info=True)
         api_error.set()
 
@@ -3188,7 +3210,7 @@ def _init_http_session(cfg, retries: int = 3, delay: float = 1.0) -> bool:
                     _retries = int(_managed_env(f"HTTP_RETRIES_{key}", "2") or "2")
                     _bof = float(_managed_env(f"HTTP_BACKOFF_{key}", "0.2") or "0.2")
                     mount_host_retry_profile(session, host, total_retries=_retries, backoff_factor=_bof, pool_maxsize=int(getattr(cfg, "http_pool_maxsize", 32)))
-            except Exception:
+            except MAIN_FALLBACK_EXC:
                 logger.debug("HTTP_HOST_RETRY_PROFILE_INIT_FAILED", exc_info=True)
             set_global_session(session)
             logger.info(
@@ -3203,7 +3225,7 @@ def _init_http_session(cfg, retries: int = 3, delay: float = 1.0) -> bool:
                 },
             )
             return True
-        except Exception as exc:  # noqa: BLE001
+        except MAIN_FALLBACK_EXC as exc:  # noqa: BLE001
             logger.error(
                 "HTTP_SESSION_INIT_FAILED",
                 extra={"attempt": attempt, "error": str(exc)},
@@ -3301,13 +3323,13 @@ def _resolve_interval_autotune_settings(*, base_interval: int) -> dict[str, Any]
         over_utilization = float(
             get_env("AI_TRADING_INTERVAL_AUTOTUNE_OVER_UTILIZATION", 0.95, cast=float)
         )
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         over_utilization = 0.95
     try:
         under_utilization = float(
             get_env("AI_TRADING_INTERVAL_AUTOTUNE_UNDER_UTILIZATION", 0.65, cast=float)
         )
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         under_utilization = 0.65
     over_utilization = max(0.1, min(over_utilization, 2.0))
     under_utilization = max(0.0, min(under_utilization, over_utilization))
@@ -3459,14 +3481,14 @@ def main(argv: list[str] | None = None) -> None:
             reason="startup",
             cycle_index=0,
         )
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug("SERVICE_STATUS_WARMUP_INIT_FAILED", exc_info=True)
     # Initialize TradingConfig-backed overrides (import-safe)
     try:
         from ai_trading.core import bot_engine as _be
 
         _be.initialize_runtime_config()
-    except Exception:  # pragma: no cover - defensive
+    except MAIN_FALLBACK_EXC:  # pragma: no cover - defensive
         logger.debug("RUNTIME_CONFIG_INIT_SKIPPED", exc_info=True)
     try:
         _assert_singleton_api(S)
@@ -3512,7 +3534,7 @@ def main(argv: list[str] | None = None) -> None:
                 reason="api_start_failed",
                 cycle_index=0,
             )
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             logger.debug("SERVICE_STATUS_API_DEGRADED_UPDATE_FAILED", exc_info=True)
     allow_after_hours = bool(get_env("ALLOW_AFTER_HOURS", "0", cast=bool))
     try:
@@ -3526,7 +3548,7 @@ def main(argv: list[str] | None = None) -> None:
             else:
                 try:
                     nxt = next_market_open(now)
-                except Exception:
+                except MAIN_FALLBACK_EXC:
                     logger.error("NEXT_MARKET_OPEN_FAILED", exc_info=True)
                     raise SystemExit(1)
                 wait = max((nxt - now).total_seconds(), 0.0)
@@ -3551,7 +3573,7 @@ def main(argv: list[str] | None = None) -> None:
                 )
                 if sleep_for > 0:
                     _interruptible_sleep(sleep_for)
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
     # Align Settings.capital_cap with canonical env when provided.
     if not _is_test_mode():
@@ -3561,19 +3583,19 @@ def main(argv: list[str] | None = None) -> None:
                 _cap_val = float(_cap_env)
                 try:
                     setattr(S, "capital_cap", _cap_val)
-                except Exception:
+                except MAIN_FALLBACK_EXC:
                     try:
                         object.__setattr__(S, "capital_cap", _cap_val)
-                    except Exception:
+                    except MAIN_FALLBACK_EXC:
                         logger.debug("SETTINGS_CAPITAL_CAP_ASSIGN_FAILED", exc_info=True)
                 try:
                     setattr(config, "capital_cap", _cap_val)
-                except Exception:
+                except MAIN_FALLBACK_EXC:
                     try:
                         object.__setattr__(config, "capital_cap", _cap_val)
-                    except Exception:
+                    except MAIN_FALLBACK_EXC:
                         logger.debug("CONFIG_CAPITAL_CAP_ASSIGN_FAILED", exc_info=True)
-            except Exception:
+            except MAIN_FALLBACK_EXC:
                 logger.debug("AI_TRADING_CAPITAL_CAP_ENV_PARSE_FAILED", extra={"raw_value": _cap_env}, exc_info=True)
     if config is None:
         logger.critical(
@@ -3621,7 +3643,7 @@ def main(argv: list[str] | None = None) -> None:
     if test_mode and not run_warmup:
         try:
             key, secret, _ = _resolve_alpaca_env()
-        except Exception:
+        except MAIN_FALLBACK_EXC:
             key = _managed_env("ALPACA_API_KEY")
             secret = _managed_env("ALPACA_SECRET_KEY")
         run_warmup = not (key and secret)
@@ -3657,7 +3679,7 @@ def main(argv: list[str] | None = None) -> None:
                 "WARMUP_RECOVERED",
                 extra={"error": str(e), "exc_type": e.__class__.__name__},
             )
-        except Exception as e:  # noqa: BLE001
+        except MAIN_FALLBACK_EXC as e:  # noqa: BLE001
             _maybe_build_bad_session_replay_dataset(
                 trigger="warmup_run_cycle_unexpected_failure",
                 detail={"error": str(e), "exc_type": e.__class__.__name__},
@@ -3701,7 +3723,7 @@ def main(argv: list[str] | None = None) -> None:
                 reason="warmup_recovered_pending_runtime_health",
                 cycle_index=0,
             )
-    except Exception:
+    except MAIN_FALLBACK_EXC:
         logger.debug("SERVICE_STATUS_ACTIVE_UPDATE_FAILED", exc_info=True)
     S = get_settings()
     from ai_trading.utils.device import get_device  # AI-AGENT-REF: guard torch import
@@ -3752,7 +3774,7 @@ def main(argv: list[str] | None = None) -> None:
         while iterations <= 0 or count < iterations:
             try:
                 closed = not _is_market_open_base()
-            except Exception:
+            except MAIN_FALLBACK_EXC:
                 closed = False
             # Toggle HTTP session profile only when state changes
             if _http_closed_profile is None or closed != _http_closed_profile:
@@ -3766,7 +3788,7 @@ def main(argv: list[str] | None = None) -> None:
                             if _ewc:
                                 set_runtime_env_override("AI_TRADING_EXEC_WORKERS", _ewc)
                                 set_runtime_env_override("AI_TRADING_PRED_WORKERS", _ewc)
-                        except Exception:
+                        except MAIN_FALLBACK_EXC:
                             logger.debug("EXEC_WORKERS_CLOSED_HINT_SET_FAILED", exc_info=True)
                         session = build_retrying_session(
                             pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)),
@@ -3780,7 +3802,7 @@ def main(argv: list[str] | None = None) -> None:
                             host = _urlparse(str(getattr(S, "alpaca_base_url", ""))).netloc
                             if host:
                                 mount_host_retry_profile(session, host, total_retries=1, backoff_factor=0.1, pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)))
-                        except Exception:
+                        except MAIN_FALLBACK_EXC:
                             logger.debug("HTTP_PROFILE_CLOSED_HOST_MOUNT_FAILED", exc_info=True)
                         set_global_session(session)
                         if _http_profile_logging_enabled():
@@ -3802,7 +3824,7 @@ def main(argv: list[str] | None = None) -> None:
                                 # Clear only process-local closed-session hints.
                                 clear_runtime_env_override("AI_TRADING_EXEC_WORKERS")
                                 clear_runtime_env_override("AI_TRADING_PRED_WORKERS")
-                        except Exception:
+                        except MAIN_FALLBACK_EXC:
                             logger.debug("EXEC_WORKERS_CLOSED_HINT_CLEAR_FAILED", exc_info=True)
                         session = build_retrying_session(
                             pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)),
@@ -3824,7 +3846,7 @@ def main(argv: list[str] | None = None) -> None:
                                     or getattr(S, "http_backoff_factor", 0.3)
                                 )
                                 mount_host_retry_profile(session, host, total_retries=int(_retries), backoff_factor=float(_bof), pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)))
-                        except Exception:
+                        except MAIN_FALLBACK_EXC:
                             logger.debug("HTTP_PROFILE_OPEN_HOST_MOUNT_FAILED", exc_info=True)
                         set_global_session(session)
                         if _http_profile_logging_enabled():
@@ -3838,7 +3860,7 @@ def main(argv: list[str] | None = None) -> None:
                                 },
                             )
                     _http_closed_profile = closed
-                except Exception:
+                except MAIN_FALLBACK_EXC:
                     logger.debug("HTTP_PROFILE_SWITCH_FAILED", exc_info=True)
             raw_fraction = get_env(
                 "CYCLE_COMPUTE_BUDGET",
@@ -3891,13 +3913,13 @@ def main(argv: list[str] | None = None) -> None:
                                 )
                     try:
                         _cycle_stage_seconds.labels(stage="fetch").observe(max(0.0, monotonic_time() - _t0))  # type: ignore[call-arg]
-                    except Exception:
+                    except MAIN_FALLBACK_EXC:
                         logger.debug("CYCLE_STAGE_METRIC_OBSERVE_FETCH_FAILED", exc_info=True)
                     if budget.over_budget():
                         logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_FETCH"})
                         try:
                             _cycle_budget_over_total.labels(stage="fetch").inc()  # type: ignore[call-arg]
-                        except Exception:
+                        except MAIN_FALLBACK_EXC:
                             logger.debug("CYCLE_BUDGET_COUNTER_INC_FETCH_FAILED", exc_info=True)
                     _t1 = monotonic_time()
                     if budget is not None:
@@ -3916,13 +3938,13 @@ def main(argv: list[str] | None = None) -> None:
                     compute_elapsed_ms = max(0.0, (monotonic_time() - _t1) * 1000.0)
                     try:
                         _cycle_stage_seconds.labels(stage="compute").observe(compute_elapsed_ms / 1000.0)  # type: ignore[call-arg]
-                    except Exception:
+                    except MAIN_FALLBACK_EXC:
                         logger.debug("CYCLE_STAGE_METRIC_OBSERVE_COMPUTE_FAILED", exc_info=True)
                     if budget.over_budget():
                         logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_COMPUTE"})
                         try:
                             _cycle_budget_over_total.labels(stage="compute").inc()  # type: ignore[call-arg]
-                        except Exception:
+                        except MAIN_FALLBACK_EXC:
                             logger.debug("CYCLE_BUDGET_COUNTER_INC_COMPUTE_FAILED", exc_info=True)
                     try:
                         phase = _current_execution_phase()
@@ -3930,11 +3952,11 @@ def main(argv: list[str] | None = None) -> None:
                         execution_gate_open = phase in {"active", "runtime", "ready"}
                         try:
                             provider_state = runtime_state.observe_data_provider_state()
-                        except Exception:
+                        except MAIN_FALLBACK_EXC:
                             provider_state = {}
                         try:
                             broker_state = runtime_state.observe_broker_status()
-                        except Exception:
+                        except MAIN_FALLBACK_EXC:
                             broker_state = {}
                         _refresh_active_service_status(
                             cycle_index=cycle_index,
@@ -3974,7 +3996,7 @@ def main(argv: list[str] | None = None) -> None:
                         if not rl_expected:
                             try:
                                 rl_expected = bool(get_env("USE_RL_AGENT", False, cast=bool))
-                            except Exception:
+                            except MAIN_FALLBACK_EXC:
                                 rl_expected = False
                         liveness_breaches = check_model_liveness(
                             market_open=not closed,
@@ -4005,9 +4027,9 @@ def main(argv: list[str] | None = None) -> None:
                             _maybe_evaluate_live_kpi_control_band_rollbacks(
                                 cycle_index=cycle_index
                             )
-                        except Exception:
+                        except MAIN_FALLBACK_EXC:
                             logger.debug("LIVE_KPI_CONTROL_BAND_EVALUATION_FAILED", exc_info=True)
-                    except Exception:
+                    except MAIN_FALLBACK_EXC:
                         logger.debug("MODEL_LIVENESS_EVALUATION_FAILED", exc_info=True)
                     execute_seconds = execution_timing.cycle_seconds()
                     with StageTimer(
@@ -4018,19 +4040,19 @@ def main(argv: list[str] | None = None) -> None:
                         pass
                     try:
                         _cycle_stage_seconds.labels(stage="execute").observe(max(0.0, execute_seconds))  # type: ignore[call-arg]
-                    except Exception:
+                    except MAIN_FALLBACK_EXC:
                         logger.debug("CYCLE_STAGE_METRIC_OBSERVE_EXECUTE_FAILED", exc_info=True)
                     if budget.over_budget():
                         logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_EXECUTE"})
                         try:
                             _cycle_budget_over_total.labels(stage="execute").inc()  # type: ignore[call-arg]
-                        except Exception:
+                        except MAIN_FALLBACK_EXC:
                             logger.debug("CYCLE_BUDGET_COUNTER_INC_EXECUTE_FAILED", exc_info=True)
                     if budget is not None:
                         try:
                             elapsed_ms = int(max(0.0, budget.elapsed_ms()))
                             budget_ms = int(max(0.0, budget.ms))
-                        except Exception:
+                        except MAIN_FALLBACK_EXC:
                             elapsed_ms = None
                             budget_ms = None
                         if elapsed_ms is not None and budget_ms is not None:
@@ -4054,7 +4076,7 @@ def main(argv: list[str] | None = None) -> None:
                                 )
                 except (ValueError, TypeError):
                     logger.exception("run_cycle failed")
-            except Exception as exc:
+            except MAIN_FALLBACK_EXC as exc:
                 logger.error(
                     "SCHEDULER_RUN_CYCLE_EXCEPTION",
                     extra={"cycle_index": cycle_index, "iteration": cycle_index},
@@ -4072,7 +4094,7 @@ def main(argv: list[str] | None = None) -> None:
                 count = cycle_index
                 try:
                     backoff_seconds = int(effective_interval)
-                except Exception:
+                except MAIN_FALLBACK_EXC:
                     backoff_seconds = interval
                 backoff_seconds = max(1, min(30, backoff_seconds))
                 _interruptible_sleep(backoff_seconds)
@@ -4088,7 +4110,7 @@ def main(argv: list[str] | None = None) -> None:
                 budget_elapsed_ms = float(max(0.0, budget.elapsed_ms()))
                 budget_limit_ms = float(max(0.0, budget.ms))
                 budget_overrun = bool(budget.over_budget())
-            except Exception:
+            except MAIN_FALLBACK_EXC:
                 budget_elapsed_ms = None
                 budget_limit_ms = None
                 budget_overrun = False
@@ -4120,7 +4142,7 @@ def main(argv: list[str] | None = None) -> None:
                 liveness_snapshot: dict[str, Any] | None = None
                 try:
                     liveness_snapshot = get_model_liveness_snapshot()
-                except Exception:
+                except MAIN_FALLBACK_EXC:
                     logger.debug("MODEL_LIVENESS_SNAPSHOT_FAILED", exc_info=True)
                 logger.info(
                     "HEALTH_TICK",
@@ -4236,7 +4258,7 @@ def _emit_capture_handler_record(detail: str, action: str) -> None:
         record.action = action
         try:
             handler.emit(record)
-        except Exception:  # pragma: no cover - defensive guard for custom handlers
+        except MAIN_FALLBACK_EXC:  # pragma: no cover - defensive guard for custom handlers
             continue
 
 
