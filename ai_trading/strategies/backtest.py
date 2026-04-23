@@ -4,6 +4,7 @@ Backtesting engine and performance analysis for strategies.
 Provides comprehensive backtesting capabilities and
 performance analysis for institutional trading strategies.
 """
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import math
 import random
 import statistics
@@ -20,7 +21,7 @@ from .base import BaseStrategy, StrategySignal
 # Optional numpy dependency used for noise; provide lightweight fallback for linting
 try:  # pragma: no cover
     import numpy as np  # type: ignore
-except Exception:  # pragma: no cover
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover
     class _NP:
         @staticmethod
         def sqrt(x):
@@ -100,7 +101,7 @@ class BacktestEngine:
             rand_fn = rng.random
             uniform_fn = rng.uniform
             normal_fn = rng.normal
-        except Exception:  # pragma: no cover - fallback for minimal numpy stubs
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - fallback for minimal numpy stubs
             fallback_rng = random.Random(self.random_seed)
             rand_fn = fallback_rng.random
             uniform_fn = fallback_rng.uniform
@@ -159,7 +160,7 @@ class BacktestEngine:
         if callable(iso):
             try:
                 return str(iso())
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 return str(value)
         return str(value)
 

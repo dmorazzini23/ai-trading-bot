@@ -4,6 +4,7 @@ Sentiment analysis module for AI trading bot.
 This module provides sentiment analysis functionality using FinBERT and NewsAPI,
 extracted from bot_engine.py to enable standalone imports and testing.
 """
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import time as pytime
 from datetime import datetime
 from threading import Lock
@@ -110,7 +111,7 @@ def _load_transformers(log=logger):
         model.to(_device)
         model.eval()
         _transformers_bundle = (torch, tokenizer, model)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         if "transformers" not in _SENT_DEPS_LOGGED:
             log.warning(
                 "SENTIMENT_OPTIONAL_DEP_MISSING", extra={"package": "transformers"}

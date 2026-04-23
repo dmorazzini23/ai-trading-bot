@@ -1,5 +1,6 @@
 """Helpers for canonical decision recording within the netting cycle."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections import Counter
 from dataclasses import dataclass, field
@@ -74,7 +75,7 @@ class DecisionRecorder:
         gates = self.dedupe_gate_root_causes(gates)
         try:
             setattr(record, "gates", list(gates))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             pass
         for gate_text in gates:
             self.decision_gate_counts[gate_text] += 1

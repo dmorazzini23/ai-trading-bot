@@ -1,6 +1,7 @@
 """OMS reconciliation invariants over durable intents and immutable events."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from typing import Any
 
@@ -23,7 +24,7 @@ def evaluate_oms_reconciliation_invariants(
     try:
         from ai_trading.oms.event_store import EventStore
         from ai_trading.oms.intent_store import IntentStore
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {"available": False, "ok": False, "error": str(exc)}
 
     intent_store = IntentStore(path=intent_store_path, url=database_url)
@@ -93,11 +94,11 @@ def evaluate_oms_reconciliation_invariants(
     finally:
         try:
             intent_store.close()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("OMS_INVARIANTS_INTENT_STORE_CLOSE_FAILED", exc_info=True)
         try:
             event_store.close()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("OMS_INVARIANTS_EVENT_STORE_CLOSE_FAILED", exc_info=True)
 
     total_violations = int(sum(int(value) for value in violations.values()))
@@ -122,7 +123,7 @@ def evaluate_oms_lifecycle_parity_invariants(
     try:
         from ai_trading.oms.event_store import EventStore
         from ai_trading.oms.intent_store import IntentStore
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {"available": False, "ok": False, "error": str(exc)}
 
     intent_store = IntentStore(path=intent_store_path, url=database_url)
@@ -261,11 +262,11 @@ def evaluate_oms_lifecycle_parity_invariants(
     finally:
         try:
             intent_store.close()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("OMS_PARITY_INTENT_STORE_CLOSE_FAILED", exc_info=True)
         try:
             event_store.close()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("OMS_PARITY_EVENT_STORE_CLOSE_FAILED", exc_info=True)
 
     total_violations = int(sum(int(value) for value in violations.values()))

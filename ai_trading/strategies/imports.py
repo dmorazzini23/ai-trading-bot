@@ -1,6 +1,7 @@
 """Lazy loaded imports for strategy-related dependencies."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from ai_trading.logging import get_logger
 
@@ -90,7 +91,7 @@ def get_ta():
             )
             _TA = ta
             TA_AVAILABLE = True
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             TA_AVAILABLE = False
             logger.warning("TA library unavailable", extra={"error": str(exc)})
             raise ImportError(

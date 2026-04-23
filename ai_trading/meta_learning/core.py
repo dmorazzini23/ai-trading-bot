@@ -5,6 +5,7 @@ arbitrary file access. Supported checkpoint formats use verified joblib
 artifacts for model objects and JSON for simple payloads.
 """
 
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from importlib.util import find_spec
 from ai_trading.config import get_settings
 from ai_trading.config.management import get_env
@@ -46,7 +47,7 @@ from ai_trading.models.artifacts import load_verified_joblib_artifact, write_art
 
 try:  # pragma: no cover - optional sklearn import
     from sklearn.exceptions import InconsistentVersionWarning as _InconsistentVersionWarning
-except Exception:  # pragma: no cover - fallback when sklearn missing
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - fallback when sklearn missing
     _InconsistentVersionWarning = None
 
 # Base directory for path validation
@@ -137,7 +138,7 @@ def _emit_meta_retrain_alert(
         from ai_trading.monitoring.alerts import emit_runtime_alert
 
         emit_runtime_alert(event, severity=severity, details=details)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("META_RETRAIN_ALERT_EMIT_FAILED", exc_info=True)
 
 
@@ -152,7 +153,7 @@ class _FallbackRidgeModel:
         if np_mod is None:
             try:
                 values = [float(value) for value in y]
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 values = []
             if values:
                 self.bias = float(sum(values) / len(values))
@@ -170,7 +171,7 @@ class _FallbackRidgeModel:
                     self.bias = float(np_mod.average(y_arr, weights=w_arr))
                     return self
             self.bias = float(np_mod.mean(y_arr))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             pass
         return self
 
@@ -178,7 +179,7 @@ class _FallbackRidgeModel:
         np_mod = _import_numpy(optional=True)
         try:
             sample_count = max(int(len(X)), 0)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             sample_count = 0
         if np_mod is None:
             return [self.bias for _ in range(sample_count)]
@@ -215,7 +216,7 @@ def _coerce_positive_numeric(values: dict[str, Any], require_decimal: bool = Fal
         try:
             series = pd_mod.Series(values, dtype="object")
             numeric = pd_mod.to_numeric(series, errors="coerce")
-        except Exception:  # pragma: no cover - defensive guard
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive guard
             return None
         if numeric.isna().any():
             return None
@@ -1003,7 +1004,7 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='runtime/meta
             fallback_series = df['entry_price']
             exit_series = exit_series.where(exit_series.apply(_is_strict_decimal), fallback_series)
             df['exit_price'] = exit_series
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             df['exit_price'] = df['entry_price']
     # ``cols_list`` is reused for header checks below; avoid recomputing.
     entry_decimal_mask = pd.Series(False, index=df.index)

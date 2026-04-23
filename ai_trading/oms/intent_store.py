@@ -1,6 +1,7 @@
 """Durable OMS intent store with transactional idempotency semantics."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -54,7 +55,7 @@ try:
 
     _SQLALCHEMY_AVAILABLE = True
     _SQLALCHEMY_IMPORT_ERROR: Exception | None = None
-except Exception as exc:  # pragma: no cover - exercised in environments missing sqlalchemy
+except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - exercised in environments missing sqlalchemy
     _SQLALCHEMY_AVAILABLE = False
     _SQLALCHEMY_IMPORT_ERROR = exc
     MetaData = None  # type: ignore[assignment,misc]
@@ -370,7 +371,7 @@ class IntentStore:
                 from ai_trading.oms.event_store import EventStore
 
                 self._event_store = EventStore(url=self._database_url)
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 self._event_store_init_failed = True
                 logger.warning(
                     "OMS_EVENT_STORE_INIT_FAILED",
@@ -404,7 +405,7 @@ class IntentStore:
                 fill_id=fill_id,
                 error_code=error_code,
             )
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             logger.warning(
                 "OMS_EVENT_APPEND_FAILED",
                 extra={
@@ -855,7 +856,7 @@ class IntentStore:
             if self._event_store is not None:
                 try:
                     self._event_store.close()
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     logger.debug("INTENT_STORE_EVENT_STORE_CLOSE_FAILED", exc_info=True)
                 finally:
                     self._event_store = None
@@ -863,5 +864,5 @@ class IntentStore:
                 return
             try:
                 self._engine.dispose()
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("INTENT_STORE_CLOSE_FAILED", exc_info=True)

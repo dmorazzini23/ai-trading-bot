@@ -5,6 +5,7 @@ This module provides a standardized runtime context that ensures consistent
 access to trading parameters and configuration across the system.
 """
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 from .protocols import AllocatorProtocol
@@ -120,7 +121,7 @@ def build_runtime(cfg: Any, **kwargs: Any) -> BotRuntime:
     if getattr(cfg, "capital_cap", None) is None:
         try:
             object.__setattr__(cfg, "capital_cap", params["CAPITAL_CAP"])
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("CAPITAL_CAP_DEFAULT_ASSIGN_FAILED", exc_info=True)
 
     mode = str(getattr(cfg, "max_position_mode", "STATIC")).upper()
@@ -155,7 +156,7 @@ def build_runtime(cfg: Any, **kwargs: Any) -> BotRuntime:
             )
         except RuntimeError as exc:
             return _fallback_sizing(str(exc))
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             logger.warning(
                 "POSITION_SIZING_RESOLVE_FAILED",
                 extra={"mode": mode, "error": str(exc), "error_type": type(exc).__name__},
@@ -201,10 +202,10 @@ def build_runtime(cfg: Any, **kwargs: Any) -> BotRuntime:
     if getattr(cfg, "max_position_size", None) != resolved:
         try:
             object.__setattr__(cfg, "max_position_size", float(resolved))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             try:
                 setattr(cfg, "max_position_size", float(resolved))
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("MAX_POSITION_SIZE_ASSIGN_FAILED", exc_info=True)
     if resolved <= 0:
         raise ValueError("AI_TRADING_SIGNAL_MAX_POSITION_SIZE must be positive")
@@ -216,7 +217,7 @@ def build_runtime(cfg: Any, **kwargs: Any) -> BotRuntime:
 
         if getattr(be, "MAX_POSITION_SIZE", None) != float(resolved):
             be.MAX_POSITION_SIZE = float(resolved)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("BOT_ENGINE_MAX_POSITION_SIZE_SYNC_FAILED", exc_info=True)
     if sizing_meta.get("source") == "fallback":
         logger.warning("POSITION_SIZING_FALLBACK", extra={**sizing_meta, "resolved": resolved})

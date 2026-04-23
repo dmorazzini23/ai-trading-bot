@@ -7,6 +7,7 @@ rather than an exception.  Callers can treat an empty result as "no data"
 without needing to handle errors themselves.
 """
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,7 @@ def load_trades(path: str | Path = "data/trades.csv", **read_csv_kwargs: Any):
 
     try:  # Import inside function to keep pandas out of module import time
         import pandas as pd  # type: ignore
-    except Exception as exc:  # pragma: no cover - environment specific
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - environment specific
         log.warning("pandas is required to load trade data: %s", exc)
         return None
 
@@ -50,6 +51,6 @@ def load_trades(path: str | Path = "data/trades.csv", **read_csv_kwargs: Any):
 
     try:
         return pd.read_csv(file_path, **kwargs)
-    except Exception as exc:  # pragma: no cover - unexpected parsing issues
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - unexpected parsing issues
         log.warning("failed to read trade file %s: %s", file_path, exc)
         return pd.DataFrame()

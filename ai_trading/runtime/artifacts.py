@@ -1,6 +1,7 @@
 """Helpers for resolving runtime artifact paths consistently."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import os
 import tempfile
@@ -33,7 +34,7 @@ def _iter_runtime_roots() -> list[Path]:
         from ai_trading.paths import DATA_DIR
 
         managed_root = Path(DATA_DIR).expanduser()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         managed_root = None
     if managed_root is not None and managed_root.is_absolute():
         key = str(managed_root)

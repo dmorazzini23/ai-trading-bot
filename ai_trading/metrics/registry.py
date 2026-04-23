@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from types import SimpleNamespace
 
@@ -10,7 +11,7 @@ def _create_registry():
 
     try:
         registry = CollectorRegistry()  # type: ignore[call-arg]
-    except Exception:  # pragma: no cover - optional dependency missing
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency missing
         return SimpleNamespace(_names_to_collectors={})
     if not hasattr(registry, "register") and not hasattr(registry, "_names_to_collectors"):
         return SimpleNamespace(_names_to_collectors={})

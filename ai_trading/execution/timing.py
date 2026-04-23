@@ -6,6 +6,7 @@ The trading loop records timing metadata for each broker submission so that
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import os
 import threading
@@ -68,7 +69,7 @@ def _record_span(elapsed: float, meta: CycleMetadata) -> None:
     if callback is not None:
         try:
             callback(clamped, meta)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             # Individual callbacks should never break execution timing.
             module_logger.debug("EXECUTION_TIMING_CALLBACK_FAILED", exc_info=True)
 
@@ -92,7 +93,7 @@ def record_cycle_wall(elapsed: float, metadata: Mapping[str, Any] | None = None)
     if callback is not None and metadata is not None:
         try:
             callback(clamped, dict(metadata))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             module_logger.debug("EXECUTION_TIMING_WALL_CALLBACK_FAILED", exc_info=True)
 
 
@@ -105,7 +106,7 @@ def execution_span(logger: Any, **extra: Any):
     if logger is not None:
         try:
             logger.info("EXECUTE_TIMING_START", extra=payload)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             module_logger.debug("EXECUTE_TIMING_START_LOG_FAILED", exc_info=True)
     try:
         yield
@@ -117,5 +118,5 @@ def execution_span(logger: Any, **extra: Any):
         if logger is not None:
             try:
                 logger.info("EXECUTE_TIMING_END", extra=payload_end)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 module_logger.debug("EXECUTE_TIMING_END_LOG_FAILED", exc_info=True)

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Canonical Alpaca client helpers shared by runtime modules."""
 
@@ -54,7 +55,7 @@ def _get_bot_logger_once() -> Any:
         bot_engine_module = _get_bot_engine_module()
     except COMMON_EXC:
         return _shared_logger_once or logger_once
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("BOT_ENGINE_MODULE_LOOKUP_FAILED", exc_info=True)
         return _shared_logger_once or logger_once
 
@@ -147,7 +148,7 @@ def _validate_trading_api(api: Any) -> bool:
                     )
                     if enum_cls is not None:
                         enum_val = getattr(enum_cls, str(status).upper(), status)
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     logger.debug("LIST_ORDERS_STATUS_ENUM_MAP_FAILED", exc_info=True)
 
                 # Prefer building a filter object when available to be compatible
@@ -162,7 +163,7 @@ def _validate_trading_api(api: Any) -> bool:
                         filter_obj = GetOrdersRequest(status=enum_val)
                     except TypeError:
                         filter_obj = GetOrdersRequest(statuses=[enum_val])
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     if accepts_filter and accepts_var_kwargs:
                         filter_obj = {"status": enum_val}
                     logger.debug("LIST_ORDERS_FILTER_BUILD_FAILED", exc_info=True)
@@ -177,7 +178,7 @@ def _validate_trading_api(api: Any) -> bool:
                             "LIST_ORDERS_FILTER_CALL_TYPE_ERROR",
                             exc_info=True,
                         )
-                    except Exception:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         raise
 
                 if accepts_status and not accepts_var_kwargs:
@@ -228,7 +229,7 @@ def _validate_trading_api(api: Any) -> bool:
                     "ALPACA_LIST_POSITIONS_PATCH_FAILED",
                     key="alpaca_list_positions_patch_failed",
                 )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             # Non-fatal; caller may handle attribute absence
             logger.debug("LIST_POSITIONS_PATCH_FAILED", exc_info=True)
 
@@ -269,7 +270,7 @@ def _validate_trading_api(api: Any) -> bool:
                     "alpaca.trading.requests", fromlist=["CancelOrdersRequest"]
                 )
                 CancelOrdersRequest = getattr(requests_mod, "CancelOrdersRequest", None)
-            except Exception as exc:  # pragma: no cover - defensive fallback
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive fallback
                 log_once.error(
                     "ALPACA_CANCEL_ORDERS_REQUEST_IMPORT_FAILED",
                     key="alpaca_cancel_orders_request_import_failed",
@@ -391,7 +392,7 @@ def list_open_orders(api: Any):
         status_value = getattr(status_raw, "value", status_raw)
         try:
             status_text = str(status_value).strip().lower()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             status_text = ""
         if status_text in active_statuses:
             filtered.append(order)
@@ -512,7 +513,7 @@ def _initialize_alpaca_clients() -> bool:
                 try:
                     from ai_trading.config.management import reload_env
                     reload_env(override=False)
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     logger.debug("RELOAD_ENV_AFTER_RESOLUTION_FAILURE_FAILED", exc_info=True)
                 continue
             log_once.error("ALPACA_CLIENT_INIT_FAILED - env", key="alpaca_client_init_failed")

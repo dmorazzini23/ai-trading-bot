@@ -1,5 +1,6 @@
 """Broker submit outcome handling for the live netting cycle."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -102,7 +103,7 @@ def execute_netting_submission(
             metadata=(dict(order_lineage_metadata) or None),
         )
         breakers.record_success("broker_submit")
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         error_info = classify_exception_func(exc, dependency="broker_submit", symbol=symbol)
         breakers.record_failure("broker_submit", error_info)
         handle_error_func(error_info, state=state, ctx=runtime, symbol=symbol)

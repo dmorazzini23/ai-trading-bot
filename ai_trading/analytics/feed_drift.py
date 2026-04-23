@@ -1,6 +1,7 @@
 """Feed drift helpers for execution-vs-reference diagnostics."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from datetime import UTC, datetime, timedelta
 import math
@@ -117,7 +118,7 @@ def _alpaca_data_get(path: str, *, params: Mapping[str, Any] | None = None) -> M
     url = f"{base}/{path.lstrip('/')}"
     try:
         payload = alpaca_get(url, params=dict(params or {}))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("REFERENCE_DATA_FETCH_FAILED", extra={"url": url}, exc_info=True)
         return None
     if isinstance(payload, Mapping):

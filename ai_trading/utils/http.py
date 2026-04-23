@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import asyncio
 import threading
@@ -54,7 +55,7 @@ def _int_env(name: str, default: int) -> int:
         return default
     try:
         return int(_strip_inline_comment(str(raw)))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return default
 
 
@@ -64,7 +65,7 @@ def _float_env(name: str, default: float) -> float:
         return default
     try:
         return float(_strip_inline_comment(str(raw)))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return default
 from ai_trading.logging import get_logger
 from ai_trading.utils.retry import retry_call
@@ -135,7 +136,7 @@ def _host_from_url(url: str) -> str:
     try:
         parsed = urlparse(url)
         host = parsed.netloc or ""
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         host = ""
     host = host.strip().lower()
     return host or "default"

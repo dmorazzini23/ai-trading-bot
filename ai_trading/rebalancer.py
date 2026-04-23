@@ -1,4 +1,5 @@
 """Portfolio rebalancing utilities with tax awareness and advanced features."""
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.logging import get_logger
 import math
 import threading
@@ -8,7 +9,7 @@ from typing import Any
 import numpy as np
 try:  # pragma: no cover - Alpaca optional
     from alpaca.common.exceptions import APIError as _ImportedAlpacaAPIError
-except Exception:  # ImportError
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # ImportError
     class _FallbackAlpacaAPIError(Exception):
         """Fallback when Alpaca SDK is absent."""
     APIError: type[Exception] = _FallbackAlpacaAPIError
@@ -26,7 +27,7 @@ def _resolve_portfolio_callable(name: str):
 
 try:  # pragma: no cover - allow tests to inject stubs
     _compute_portfolio_weights = _resolve_portfolio_callable("compute_portfolio_weights")
-except Exception:
+except AI_TRADING_FALLBACK_EXCEPTIONS:
     _compute_portfolio_weights = None
 
 def compute_portfolio_weights(*args, **kwargs):
@@ -51,7 +52,7 @@ def apply_no_trade_bands(current: dict[str, float], target: dict[str, float], ba
             if isinstance(band_bps, dict):
                 return float(band_bps.get(sym, 25.0)) / 10000.0
             return float(band_bps) / 10000.0
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             return 0.0025
     out = {}
     for sym, tgt in target.items():
@@ -65,7 +66,7 @@ def apply_no_trade_bands(current: dict[str, float], target: dict[str, float], ba
 from ai_trading.core.constants import RISK_PARAMETERS
 try:  # pragma: no cover - allow tests to inject stubs
     _create_portfolio_optimizer = _resolve_portfolio_callable("create_portfolio_optimizer")
-except Exception:
+except AI_TRADING_FALLBACK_EXCEPTIONS:
     _create_portfolio_optimizer = None
 
 def create_portfolio_optimizer(*args, **kwargs):

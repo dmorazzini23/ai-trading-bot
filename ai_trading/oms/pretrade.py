@@ -1,5 +1,6 @@
 """OMS pre-trade controls for size, collars, duplicates, and throttles."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections import deque
 from dataclasses import dataclass
@@ -553,7 +554,7 @@ def _intent_regular_hours_open(intent: OrderIntent) -> bool:
         return False
     try:
         session = session_info(session_date)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         ts_et = ts.astimezone(ZoneInfo("America/New_York"))
         minute_of_day = (ts_et.hour * 60) + ts_et.minute
         return ts_et.weekday() < 5 and ((9 * 60) + 30) <= minute_of_day < (16 * 60)

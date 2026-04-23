@@ -1,5 +1,6 @@
 """Market data contract normalization and validation."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -35,11 +36,11 @@ def _coerce_datetime_index(df: Any) -> Any:
             try:
                 df = df.set_index(candidate)
                 break
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 continue
     try:
         df.index = pd.to_datetime(df.index, utc=True, errors="coerce")
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return df
     return df
 
@@ -99,7 +100,7 @@ def validate_bars(
         try:
             if pd.isna(last_row[col]):
                 return DataContractResult(False, "NAN_LAST_BAR", {"column": col})
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             return DataContractResult(False, "NAN_LAST_BAR", {"column": col})
     last_ts = df.index[-1]
     if last_ts.tzinfo is None:

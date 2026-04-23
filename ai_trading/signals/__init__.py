@@ -1,6 +1,7 @@
 """Simple signal generation module for tests."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 import logging
@@ -19,7 +20,7 @@ if TYPE_CHECKING:  # pragma: no cover - used for type hints
 
 try:  # pragma: no cover - alpaca may be missing in tests
     from alpaca.common.exceptions import APIError as _ImportedAPIError
-except Exception:  # ImportError
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # ImportError
     class _FallbackAPIError(Exception):
         """Fallback APIError when alpaca package is absent."""
 
@@ -77,7 +78,7 @@ def _get_numpy():
         import numpy as np  # type: ignore
 
         return np
-    except Exception:  # ImportError or others
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # ImportError or others
         logger.debug("NUMPY_IMPORT_FAILED", exc_info=True)
         return None
 
@@ -86,7 +87,7 @@ def _get_pandas():
     try:
         if pd is None or not hasattr(pd, "DataFrame"):
             return None
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("PANDAS_HANDLE_CHECK_FAILED", exc_info=True)
         return None
     return pd
@@ -97,7 +98,7 @@ def _get_pandas_ta():
         import pandas_ta as ta  # type: ignore
 
         return ta
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("PANDAS_TA_IMPORT_FAILED", exc_info=True)
         return None
 
@@ -107,7 +108,7 @@ def _get_gaussian_hmm():
         from hmmlearn.hmm import GaussianHMM  # type: ignore
 
         return GaussianHMM
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("GAUSSIAN_HMM_IMPORT_FAILED", exc_info=True)
         return None
 
@@ -602,7 +603,7 @@ def detect_market_regime_hmm(df, n_components: int = 3, window_size: int = 1000,
         try:
             from numpy.linalg import LinAlgError as _LinAlgError
             _lin_alg_error = cast(type[Exception], _LinAlgError)
-        except Exception:  # pragma: no cover - fallback definition
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - fallback definition
 
             class _FallbackLinAlgError(Exception):
                 pass
@@ -1245,7 +1246,7 @@ class SignalDecisionPipeline:
             from ai_trading.execution.slippage_log import get_ewma_cost_bps
 
             slippage_bp = float(get_ewma_cost_bps(symbol, default=2.0))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             slippage_bp = 2.0
         spread_bp = max(1.0, min(5.0, slippage_bp))  # bound spread guess
         spread_cost = spread_bp / 10000 * notional

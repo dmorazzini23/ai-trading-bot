@@ -1,6 +1,7 @@
 """Netting target/runtime orchestration helpers extracted from ``bot_engine.py``."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import copy
 import math
@@ -13,7 +14,7 @@ from ai_trading.risk.portfolio_limits import PortfolioLimitsResult
 def _copy_value(value: Any) -> Any:
     try:
         return copy.deepcopy(value)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return value
 
 
@@ -71,7 +72,7 @@ def _sorted_values(raw: Any) -> list[Any]:
         return []
     try:
         return sorted(raw)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return sorted(str(item) for item in raw)
 
 
@@ -362,7 +363,7 @@ def prepare_portfolio_optimizer_runtime(
                 }
             )
             context["active"] = True
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             optimizer = None
             enabled = False
             context["active"] = False

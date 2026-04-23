@@ -1,5 +1,6 @@
 """Pre-cycle bootstrap for ``run_all_trades_worker``."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -135,7 +136,7 @@ def prepare_run_all_trades_cycle(
                     "objective": effective_policy.objective.objective_name,
                 },
             )
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             logger.warning(
                 "RUN_MANIFEST_WRITE_FAILED error=%s",
                 str(exc),
@@ -182,7 +183,7 @@ def prepare_run_all_trades_cycle(
             if engine_obj is not None and hasattr(engine_obj, "synchronize_broker_state"):
                 try:
                     broker_snapshot = engine_obj.synchronize_broker_state()
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
                 else:
                     record_broker_sync_metrics_func(state, broker_snapshot)
@@ -290,12 +291,12 @@ def prepare_run_all_trades_cycle(
 
     try:
         safe_mode_live = provider_monitor.is_safe_mode_active()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         safe_mode_live = False
     if safe_mode_live and safe_mode_blocks_trading_func():
         try:
             version, reason = provider_monitor.safe_mode_cycle_marker()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             version, reason = (None, safe_mode_reason_func())
         last_cleared = getattr(state, "_safe_mode_cancel_version", None)
         if version is None or version != last_cleared:

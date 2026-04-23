@@ -1,6 +1,7 @@
 """Finnhub optional dependency handling."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from datetime import datetime
 from typing import Any
@@ -40,7 +41,7 @@ def _build_fetcher() -> Any | None:
         return None
     try:
         import finnhub  # type: ignore
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         if "finnhub" not in _SENT_DEPS_LOGGED:
             logger_once.warning(
                 "FINNHUB_OPTIONAL_DEP_MISSING",
@@ -55,7 +56,7 @@ def _build_fetcher() -> Any | None:
         from finnhub.exceptions import FinnhubAPIException as _FHExc  # type: ignore
 
         globals()["FinnhubAPIException"] = _FHExc  # type: ignore[assignment]
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         # Keep the local placeholder if import fails
         logger.debug("FINNHUB_EXCEPTION_CLASS_IMPORT_FAILED", exc_info=True)
 
@@ -104,7 +105,7 @@ def _build_fetcher() -> Any | None:
                     resp = func(symbol, resolution, int(start.timestamp()), int(end.timestamp()))
                 else:
                     raise e
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 # Any finnhub client/network error results in empty DataFrame
                 logger.debug("FINNHUB_STOCK_CANDLE_FALLBACK_FAILED", extra={"symbol": symbol}, exc_info=True)
                 return pd.DataFrame()
@@ -127,7 +128,7 @@ def _build_fetcher() -> Any | None:
                 # Drop obviously invalid rows if lengths were inconsistent
                 df = df.dropna(subset=["timestamp"]).reset_index(drop=True)
                 return df
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("FINNHUB_CANDLE_DF_BUILD_FAILED", extra={"symbol": symbol}, exc_info=True)
                 return pd.DataFrame()
 

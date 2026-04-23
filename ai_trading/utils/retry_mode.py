@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import inspect
 import time
@@ -22,12 +23,12 @@ def _is_real_tenacity(mod: types.ModuleType) -> bool:
         metadata.version("tenacity")
     except metadata.PackageNotFoundError:
         return False
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return False
 
     try:
         path = inspect.getfile(mod)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return False
 
     path_lc = path.lower()
@@ -79,7 +80,7 @@ try:  # pragma: no cover - optional tenacity import
     _wait_fixed = _wait_fixed_impl
     _retry_if_exception_type = _retry_if_exception_type_impl
     HAS_TENACITY = True
-except Exception:  # pragma: no cover - tenacity missing
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - tenacity missing
     HAS_TENACITY = False
     _stop_after_attempt = _fallback_stop_after_attempt
     _wait_fixed = _fallback_wait_fixed

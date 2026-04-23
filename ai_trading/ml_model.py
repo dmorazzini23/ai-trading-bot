@@ -5,6 +5,7 @@ within the local ``models`` directory.
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import hashlib
 import importlib
@@ -30,7 +31,7 @@ try:  # pragma: no cover - optional heavy dependency
 
     with parallel_backend("loky", n_jobs=1):
         pass
-except Exception:  # pragma: no cover
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover
     joblib = None  # type: ignore
 
     def parallel_backend(*args, **kwargs):  # type: ignore[override]
@@ -49,7 +50,7 @@ logger = logging.getLogger(__name__)
 def _require_pandas():
     try:
         return importlib.import_module("pandas")
-    except Exception as exc:  # pragma: no cover - optional dependency
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - optional dependency
         raise ImportError("pandas is required for ML model operations") from exc
 
 
@@ -62,7 +63,7 @@ def _require_joblib():
 def _require_sklearn_linear_regression():
     try:
         from sklearn.linear_model import LinearRegression
-    except Exception as exc:  # pragma: no cover - optional dependency
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - optional dependency
         raise ImportError("scikit-learn is required for model training") from exc
     return LinearRegression
 
@@ -70,7 +71,7 @@ def _require_sklearn_linear_regression():
 def _mean_squared_error(y_true: Any, y_pred: Any) -> float:
     try:
         from sklearn.metrics import mean_squared_error
-    except Exception as exc:  # pragma: no cover - optional dependency
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - optional dependency
         raise ImportError("scikit-learn is required for model evaluation") from exc
     return float(mean_squared_error(y_true, y_pred))
 
@@ -305,7 +306,7 @@ def ensure_default_models(symbols: Sequence[str] | None = None) -> None:
                     "MODEL_DOWNLOADED",
                     extra={"symbol": sym, "url": url, "path": str(path)},
                 )
-            except Exception as exc:  # noqa: BLE001 - network errors vary
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # noqa: BLE001 - network errors vary
                 logger.warning(
                     "MODEL_DOWNLOAD_FAILED",
                     extra={"symbol": sym, "url": url, "error": str(exc)},
@@ -316,7 +317,7 @@ def ensure_default_models(symbols: Sequence[str] | None = None) -> None:
             )
             try:
                 train_and_save_model(sym, models_dir)
-            except Exception as exc:  # noqa: BLE001
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.error(
                     "MODEL_TRAIN_FAILED",
                     extra={"symbol": sym, "error": str(exc)},

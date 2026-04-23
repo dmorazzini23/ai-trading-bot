@@ -5,6 +5,7 @@ Ensures reproducible training and inference by managing random seeds,
 model hashes, and data specifications.
 """
 
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import hashlib
 import json
 from ai_trading.logging import get_logger
@@ -45,7 +46,7 @@ def set_random_seeds(seed: int = 42) -> None:
         ) from exc
     try:
         lgb.reset_parameter({"seed": seed})  # type: ignore[attr-defined]
-    except Exception:  # pragma: no cover - best effort
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - best effort
         pass
     os.putenv("PYTHONHASHSEED", str(seed))
     logger.info(f"Set random seeds to {seed} for reproducible results")

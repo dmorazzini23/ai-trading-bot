@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import os
 import tempfile
@@ -25,7 +26,7 @@ def _json_default(value: Any) -> str:
     if callable(isoformat):
         try:
             return str(isoformat())
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             return str(value)
     return str(value)
 
@@ -188,7 +189,7 @@ def load_policy_rollback_state() -> dict[str, Any]:
         return {"updated_at": None, "disabled_slices": [], "diagnostics": {}}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         _log.debug("POLICY_ROLLBACK_STATE_READ_FAILED", exc_info=True)
         return {"updated_at": None, "disabled_slices": [], "diagnostics": {}}
     if not isinstance(payload, Mapping):
@@ -249,7 +250,7 @@ def load_policy_runtime_toggles() -> dict[str, Any]:
     if path.exists():
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             _log.debug("POLICY_RUNTIME_TOGGLES_READ_FAILED", exc_info=True)
         else:
             if isinstance(payload, Mapping):
@@ -301,7 +302,7 @@ def load_policy_runtime_toggles() -> dict[str, Any]:
             updated_at=cast(str | None, fallback.get("updated_at")),
             source_updated_at=cast(str | None, fallback.get("source_updated_at")),
         )
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         _log.warning(
             "POLICY_RUNTIME_TOGGLES_WRITE_FAILED",
             extra={"path": str(policy_runtime_toggles_path(for_write=True)), "error": str(exc)},
@@ -342,7 +343,7 @@ def ensure_policy_learning_artifacts(
                 "POLICY_ABLATION_STATE_BOOTSTRAPPED",
                 extra={"path": str(state_path), "ts": ts},
             )
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             context["state_error"] = str(exc)
             _log.warning(
                 "POLICY_ABLATION_STATE_BOOTSTRAP_FAILED",
@@ -359,7 +360,7 @@ def ensure_policy_learning_artifacts(
                 "POLICY_ABLATION_EVENTS_BOOTSTRAPPED",
                 extra={"path": str(events_path), "ts": ts},
             )
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             context["events_error"] = str(exc)
             _log.warning(
                 "POLICY_ABLATION_EVENTS_BOOTSTRAP_FAILED",
@@ -388,7 +389,7 @@ def ensure_policy_learning_artifacts(
                 "POLICY_RUNTIME_TOGGLES_BOOTSTRAPPED",
                 extra={"path": str(runtime_toggles_path), "ts": ts},
             )
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             context["runtime_toggles_error"] = str(exc)
             _log.warning(
                 "POLICY_RUNTIME_TOGGLES_BOOTSTRAP_FAILED",

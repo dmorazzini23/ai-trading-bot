@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from typing import Final
 
 from ai_trading.config import management as config
@@ -14,7 +15,7 @@ def _resolve_timeout() -> float:
         )
         if t > 0:
             return t
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         pass
     return _DEFAULT_TIMEOUT
 

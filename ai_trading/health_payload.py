@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import json
 import time as pytime
@@ -21,7 +22,7 @@ _HEALTH_SNAPSHOT_CACHE: dict[str, dict[str, Any]] = {}
 def _safe_observe(observer: Callable[[], Any], default: Any) -> Any:
     try:
         return observer()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return default
 
 
@@ -164,7 +165,7 @@ def _env_bool(name: str, default: bool) -> bool:
         from ai_trading.config.management import get_env
 
         return bool(get_env(name, default, cast=bool))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return bool(default)
 
 
@@ -181,7 +182,7 @@ def _env_float(name: str, default: float) -> float:
 
         raw = get_env(name, default, cast=float)
         return float(raw if raw is not None else default)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return float(default)
 
 
@@ -230,7 +231,7 @@ def _cached_background_snapshot(
         def _refresh() -> None:
             try:
                 snapshot = dict(builder())
-            except Exception as exc:  # pragma: no cover - defensive
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
                 snapshot = {
                     **dict(placeholder),
                     "ok": False,
@@ -265,7 +266,7 @@ def _market_is_closed_now() -> bool:
         from ai_trading.utils.base import is_market_open as _is_market_open_base
 
         return not bool(_is_market_open_base())
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return False
 
 
@@ -278,7 +279,7 @@ def _model_liveness_snapshot() -> dict[str, Any]:
         snapshot = get_model_liveness_snapshot()
         if isinstance(snapshot, dict):
             return snapshot
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         pass
     return {}
 
@@ -312,7 +313,7 @@ def _database_readiness_snapshot() -> dict[str, Any]:
             )
             or ""
         ).strip()
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {"enabled": True, "configured": False, "ok": False, "error": str(exc)}
 
     if not configured_database_url and not configured_store_path:
@@ -341,7 +342,7 @@ def _database_readiness_snapshot() -> dict[str, Any]:
         payload["configured"] = True
         payload["expected_revision"] = expected_revision
         return payload
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {
             "enabled": True,
             "configured": True,
@@ -354,7 +355,7 @@ def _database_readiness_snapshot() -> dict[str, Any]:
         if store is not None:
             try:
                 store.close()
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 pass
 
 
@@ -413,7 +414,7 @@ def _oms_invariants_snapshot() -> dict[str, Any]:
         payload = dict(summary)
         payload["enabled"] = True
         return payload
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
 
 
@@ -472,7 +473,7 @@ def _oms_lifecycle_parity_snapshot() -> dict[str, Any]:
         payload = dict(summary)
         payload["enabled"] = True
         return payload
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
 
 
@@ -501,7 +502,7 @@ def _replay_live_parity_gate_snapshot(
         return summarize_replay_live_parity_gate(
             oms_lifecycle_parity=oms_lifecycle_parity,
         )
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
 
 
@@ -546,7 +547,7 @@ def _read_json_mapping_artifact(
         return ({}, resolved)
     try:
         parsed = json.loads(resolved.read_text(encoding="utf-8"))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return ({}, resolved)
     if isinstance(parsed, dict):
         return (dict(parsed), resolved)
@@ -614,7 +615,7 @@ def _runtime_performance_snapshot() -> dict[str, Any]:
             )
             or "runtime/runtime_performance_report_latest.json"
         ).strip()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         latest_path = "runtime/runtime_performance_report_latest.json"
     payload, resolved = _read_json_mapping_artifact(
         configured_path=latest_path,
@@ -705,7 +706,7 @@ def _manual_override_snapshot() -> dict[str, Any]:
             )
             or "runtime/policy_runtime_toggles.json"
         ).strip()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         toggle_path = "runtime/policy_runtime_toggles.json"
     payload, resolved = _read_json_mapping_artifact(
         configured_path=toggle_path,
@@ -753,14 +754,14 @@ def build_alpaca_health_payload(
             payload["has_secret"] = bool(payload["has_secret"] or has_secret)
             if not payload.get("base_url"):
                 payload["base_url"] = str(get_alpaca_base_url() or "")
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             pass
 
         try:
             from ai_trading.alpaca_api import ALPACA_AVAILABLE as alpaca_sdk_ok
 
             payload["sdk_ok"] = bool(payload["sdk_ok"] or alpaca_sdk_ok)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             pass
 
     if payload.get("base_url"):
@@ -1339,7 +1340,7 @@ def build_api_health_payload(
 
     try:
         from ai_trading.alpaca_api import ALPACA_AVAILABLE as alpaca_sdk_available
-    except Exception as exc:  # pragma: no cover - defensive
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
         alpaca_import_ok = False
         errors.append(str(exc) or exc.__class__.__name__)
         sdk_ok = False
@@ -1355,7 +1356,7 @@ def build_api_health_payload(
             key, secret, base_url = _resolve_alpaca_env()
             base_url = str(base_url or "")
             paper = bool(base_url and "paper" in base_url.lower())
-        except Exception as exc:  # pragma: no cover - defensive
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
             errors.append(str(exc) or exc.__class__.__name__)
             trading_client, key, secret, base_url, paper = (None, None, None, "", False)
 
@@ -1363,7 +1364,7 @@ def build_api_health_payload(
         from ai_trading.config.management import is_shadow_mode
 
         shadow = bool(is_shadow_mode())
-    except Exception as exc:  # pragma: no cover - defensive
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
         errors.append(str(exc) or exc.__class__.__name__)
         shadow = False
 
@@ -1470,7 +1471,7 @@ def build_health_json_response(
         return dict(payload) if status == 200 else (dict(payload), status)
     try:
         response.status_code = status
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         pass
     return response
 
@@ -1492,11 +1493,11 @@ def register_healthz_routes(
         try:
             payload = dict(payload_builder())
             return response_builder(payload, 200)
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             if logger is not None:
                 try:
                     logger.exception(error_event, exc_info=exc)
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     pass
             fallback_payload = build_health_exception_payload(exc, service_name=service_name)
             return response_builder(fallback_payload, 500)

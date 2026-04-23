@@ -5,6 +5,7 @@ Provides process-wide rate limiting with burst capacity, jittered refill,
 and async-safe interfaces to prevent 429 errors and API throttling.
 """
 
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import asyncio
 from ai_trading.logging import get_logger
 from ai_trading.config.management import get_env
@@ -368,7 +369,7 @@ def get_rate_limiter() -> RateLimiter:
         raw_rpm = get_env("ALPACA_RATE_LIMIT_PER_MIN", "200", cast=str, resolve_aliases=False)
         try:
             rpm = int(str(raw_rpm).strip())
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.warning("Invalid ALPACA_RATE_LIMIT_PER_MIN=%r; defaulting to 200", raw_rpm)
             rpm = 200
         if rpm < 1:

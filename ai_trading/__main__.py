@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import argparse
 import json
@@ -30,7 +31,7 @@ logger = get_logger(__name__)
 def _env_value(name: str, default: Any = None) -> Any:
     try:
         return get_env(name, default, resolve_aliases=False)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return default
 
 
@@ -91,7 +92,7 @@ def _run_loop(fn: Callable[[], None], args: argparse.Namespace, label: str) -> N
                 fn()
             except (ValueError, HTTPError) as e:
                 logger.warning("%s recoverable error: %s", label, e, exc_info=True)
-            except Exception as e:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as e:
                 logger.error("%s failed: %s", label, e, exc_info=True)
                 raise
             if args.once:
@@ -110,7 +111,7 @@ def _run_loop(fn: Callable[[], None], args: argparse.Namespace, label: str) -> N
         # Log and return to allow the supervisor to decide on restart policy.
         try:
             code = int(getattr(e, "code", 1) or 0)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             code = 1
         logger.error("%s exited with code %s; continuing", label, code, exc_info=True)
         return
@@ -204,7 +205,7 @@ def _validate_env_alias_consistency() -> None:
 
 try:
     _StartupConfig.model_rebuild()
-except Exception:  # pragma: no cover - defensive
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
     logger.debug("STARTUP_CONFIG_MODEL_REBUILD_FAILED", exc_info=True)
 
 
@@ -339,7 +340,7 @@ def _validate_startup_config() -> _StartupConfig:
             except ValidationError as exc:
                 logger.error("CONFIG_VALIDATION_FAILED", extra={"errors": exc.errors()})
                 raise SystemExit(f"Invalid configuration: {exc}") from exc
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 feed_value = "iex"
         timeframe_value = (
             timeframe_env
@@ -364,7 +365,7 @@ def _print_resolved_config() -> int:
     try:
         from ai_trading.config.management import canonical_env_map, get_trading_config, validate_no_deprecated_env
         from ai_trading.config.runtime import CONFIG_SPECS
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.error("PRINT_CONFIG_IMPORT_FAILED", extra={"error": str(exc)})
         return 1
 
@@ -555,7 +556,7 @@ def main(argv: list[str] | None = None) -> int:
         if pytest_running and not getattr(args, "dry_run", False):
             try:
                 _ = _validate_startup_config
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("STARTUP_CONFIG_GUARD_SKIPPED", exc_info=True)
             return 0
         stop_event.clear()
@@ -595,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
             # Tolerate non-float intervals; main() will clamp/parse again
             if args.interval is not None:
                 mapped_argv.extend(["--interval", str(args.interval)])
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("CLI_INTERVAL_ARG_MAPPING_FAILED", exc_info=True)
         if getattr(args, "once", False):
             mapped_argv.extend(["--iterations", "1"])
@@ -636,7 +637,7 @@ def main(argv: list[str] | None = None) -> int:
             logger.warning("dry-run: ignoring startup exception: %s", e)
             return 0
         return 1
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.exception("unexpected startup error")
         return 1
 
@@ -660,5 +661,5 @@ if __name__ == "__main__":
 
             if _env_text("PYTEST_RUNNING") == "1":
                 _sys.modules.pop(__name__, None)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("PYTEST_MAIN_MODULE_CLEANUP_FAILED", exc_info=True)

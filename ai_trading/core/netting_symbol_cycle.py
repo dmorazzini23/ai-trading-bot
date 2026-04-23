@@ -1,5 +1,6 @@
 """Per-symbol coordination for the live netting cycle."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -388,7 +389,7 @@ def process_netting_symbol(
                 cached_event_risk = bool(
                     processor.is_near_event_func(symbol, days=processor.event_blackout_days)
                 )
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 cached_event_risk = False
                 processor.logger.debug(
                     "EVENT_BLACKOUT_CHECK_FAILED",

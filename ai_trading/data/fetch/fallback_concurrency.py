@@ -1,5 +1,6 @@
 # ai_trading/data/fetch/fallback_concurrency.py
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import threading
 from contextlib import contextmanager
@@ -38,7 +39,7 @@ def _resolve_limit_from_env() -> int:
     for key in _ENV_PRIORITY:
         try:
             candidate = get_env(key, None)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             candidate = None
         limit = _coerce_limit(candidate)
         if limit is not None:

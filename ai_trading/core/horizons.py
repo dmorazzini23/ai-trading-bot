@@ -1,5 +1,6 @@
 """Sleeve horizon parsing and configuration helpers."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from typing import Iterable
 
@@ -35,7 +36,7 @@ def _resolve_sleeve_symbol_cap(cfg: object, raw_cap: float) -> float:
         align_enabled = bool(
             get_env("AI_TRADING_SLEEVE_SYMBOL_CAP_ALIGN_ENABLED", True, cast=bool)
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         align_enabled = True
     cap = max(0.0, float(raw_cap or 0.0))
     if not align_enabled:
@@ -48,7 +49,7 @@ def _resolve_sleeve_symbol_cap(cfg: object, raw_cap: float) -> float:
         align_mult = float(
             get_env("AI_TRADING_SLEEVE_SYMBOL_CAP_ALIGN_MULTIPLIER", 1.0, cast=float)
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         align_mult = 1.0
     align_mult = max(0.1, min(align_mult, 5.0))
     effective_global_cap = max(0.0, global_cap * align_mult)

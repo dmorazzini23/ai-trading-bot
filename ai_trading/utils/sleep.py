@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 import inspect
@@ -24,7 +25,7 @@ _os_level_sleep = None if _initial_freezegun_sleep else _real_sleep
 
 try:  # pragma: no cover - optional dependency
     import freezegun.api as _freezegun_api  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency
     _freezegun_api = None  # type: ignore
 
 
@@ -67,7 +68,7 @@ def _freezegun_active(runtime_sleep: Callable | None = None) -> bool:
 
     try:
         factories = getattr(_freezegun_api, "freeze_factories", ())
-    except Exception:  # pragma: no cover - defensive
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
         return False
     return bool(factories)
 
@@ -81,7 +82,7 @@ def _monotonic_now() -> float:
             if callable(func):
                 try:
                     return float(func())
-                except Exception:  # pragma: no cover - defensive
+                except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                     continue
     return monotonic_time()
 
@@ -106,7 +107,7 @@ def _resolve_sleep():
             # implementation.
             try:
                 reloaded_time = importlib.import_module("time")
-            except Exception:  # pragma: no cover - defensive guard
+            except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive guard
                 reloaded_time = _time
             reload_sleep = getattr(reloaded_time, "sleep", None)
             if callable(reload_sleep):

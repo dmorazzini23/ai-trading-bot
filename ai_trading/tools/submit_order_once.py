@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import argparse
 import sys
@@ -47,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         from ai_trading.env import ensure_dotenv_loaded
 
         ensure_dotenv_loaded(args.dotenv)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         # Continue; downstream calls will still function with process env
         logger.debug("DOTENV_LOAD_FAILED", exc_info=True)
 
@@ -84,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     except HTTPError as e:
         logger.error("ORDER_SUBMIT_HTTP_ERROR", extra={"error": str(e)})
         return 2
-    except Exception as e:  # pragma: no cover - defensive
+    except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - defensive
         logger.error("ORDER_SUBMIT_ERROR", extra={"error": str(e)})
         return 1
 

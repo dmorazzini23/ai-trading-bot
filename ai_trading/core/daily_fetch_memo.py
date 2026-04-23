@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import time
 from contextlib import suppress
@@ -73,7 +74,7 @@ def get_daily_df_memoized(
         if callable(empty_attr):
             try:
                 empty_value = empty_attr()
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 empty_value = None
             if isinstance(empty_value, bool):
                 return empty_value
@@ -134,7 +135,7 @@ def get_daily_df_memoized(
 
     try:
         normalized = normalize_ohlcv_df(df)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         normalized = df
 
     refreshed_at = time.time()

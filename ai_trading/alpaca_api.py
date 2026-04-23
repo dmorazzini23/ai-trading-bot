@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import datetime as dt
 from datetime import timezone
 import json
@@ -13,7 +14,7 @@ from threading import RLock
 _imported_trading_client: type[Any] | None
 try:
     from alpaca.trading.client import TradingClient as _TradingClientImported
-except Exception:
+except AI_TRADING_FALLBACK_EXCEPTIONS:
     _imported_trading_client = None
     ALPACA_AVAILABLE = False
 else:
@@ -28,7 +29,7 @@ def _default_execution_feed() -> str:
         from ai_trading.data.feed_roles import get_execution_feed
 
         return get_execution_feed()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return str(
             _managed_env("ALPACA_EXECUTION_FEED", None, cast=str)
             or _managed_env("ALPACA_DATA_FEED", "iex", cast=str)
@@ -46,7 +47,7 @@ try:  # pragma: no cover - exercised via stub classes in tests
         StopOrderRequest as _ImportedStopOrderRequest,
         StopLimitOrderRequest as _ImportedStopLimitOrderRequest,
     )
-except Exception:
+except AI_TRADING_FALLBACK_EXCEPTIONS:
     _MarketOrderRequest = None
     _LimitOrderRequest = None
     _StopOrderRequest = None
@@ -114,7 +115,7 @@ def _lazy_http_session() -> "Optional[HTTPSession]":
         from ai_trading.net.http import get_http_session  # local import breaks the cycle
 
         return get_http_session()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         _log.debug("HTTP_SESSION_LAZY_IMPORT_FAILED", exc_info=True)
         return None
 
@@ -214,7 +215,7 @@ def _managed_env(
                 cast=cast,
                 resolve_aliases=resolve_aliases,
             )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         _log.debug("ALPACA_MANAGED_ENV_LOOKUP_FAILED", extra={"key": key}, exc_info=True)
     return default
 
@@ -284,7 +285,7 @@ def initialize() -> None:
                 importlib.import_module("alpaca.data.historical")
             except ModuleNotFoundError:
                 importlib.import_module("alpaca.data")
-    except Exception as exc:  # pragma: no cover - exercised in tests
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - exercised in tests
         raise RuntimeError("alpaca-py SDK is required") from exc
 
 
@@ -383,7 +384,7 @@ def _ensure_trading_client_cls():
     global TradingClient, ALPACA_AVAILABLE
     try:
         from alpaca.trading.client import TradingClient as _TradingClient
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         TradingClient = None
         ALPACA_AVAILABLE = False
         return None
@@ -459,7 +460,7 @@ class TradingClientAdapter:
         CancelOrdersRequest: Any | None
         try:  # pragma: no cover - exercised indirectly in integration tests
             from alpaca.trading.requests import CancelOrdersRequest  # type: ignore
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             CancelOrdersRequest = None
 
         if CancelOrdersRequest is None:
@@ -508,7 +509,7 @@ def get_data_client_cls():
         from alpaca.data.historical.stock import StockHistoricalDataClient  # type: ignore
 
         return StockHistoricalDataClient
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         class _UnavailableDataClient:
             def __init__(self, *_a, **_k):
                 self._reason = "alpaca-py StockHistoricalDataClient not available"
@@ -523,7 +524,7 @@ def get_api_error_cls():
     """Return the Alpaca APIError class via lazy import."""
     try:
         from alpaca.common.exceptions import APIError  # type: ignore
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         class _FallbackAPIError(Exception):
             """Fallback APIError when alpaca-py is unavailable."""
 
@@ -539,7 +540,7 @@ def _data_classes():
         from alpaca.data import StockBarsRequest as _StockBarsRequest, TimeFrame as _TimeFrame, TimeFrameUnit as _TimeFrameUnit  # type: ignore
 
         return _StockBarsRequest, _TimeFrame, _TimeFrameUnit
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         _log.debug("ALPACA_DATA_CLASSES_IMPORT_FAILED", exc_info=True)
         return StockBarsRequest, TimeFrame, TimeFrameUnit
 
@@ -598,14 +599,14 @@ def _coerce_timeframe_for_request(
     try:
         if isinstance(tf_obj, timeframe_cls):
             return tf_obj
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         _log.debug("TIMEFRAME_INSTANCE_CHECK_FAILED", exc_info=True)
 
     amount = 1
     unit_token: str | None = None
     try:
         amount = int(getattr(tf_obj, "amount", 1) or 1)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         amount = 1
 
     unit_obj = getattr(tf_obj, "unit", None)
@@ -614,7 +615,7 @@ def _coerce_timeframe_for_request(
         if unit_token is None:
             try:
                 unit_token = str(unit_obj)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 unit_token = None
 
     if not unit_token:
@@ -629,7 +630,7 @@ def _coerce_timeframe_for_request(
                 or getattr(fallback_unit, "value", None)
                 or (str(fallback_unit) if fallback_unit is not None else None)
             )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             unit_token = unit_token or "Day"
 
     if amount < 1:
@@ -697,7 +698,7 @@ def _coerce_timeframe_for_request(
             try:
                 if prebuilt is not None and isinstance(prebuilt, timeframe_cls):
                     return prebuilt
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 continue
 
     constructors = [
@@ -710,12 +711,12 @@ def _coerce_timeframe_for_request(
     for builder in constructors:
         try:
             candidate = builder()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             continue
         try:
             if isinstance(candidate, timeframe_cls):
                 return candidate
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             _log.debug("TIMEFRAME_CANDIDATE_INSTANCE_CHECK_FAILED", exc_info=True)
             return candidate
 
@@ -826,7 +827,7 @@ def _bars_time_window(timeframe: Any) -> tuple[dt.datetime, dt.datetime]:
 
     try:  # pragma: no cover - imported lazily
         TimeFrame = get_timeframe_cls()
-    except Exception:  # pragma: no cover - optional dependency missing
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency missing
         TimeFrame = None
 
     is_daily = False
@@ -929,7 +930,7 @@ def get_bars_df(
     if callable(data_classes_factory):
         try:
             _req_cls, request_timeframe_cls, request_timeframe_unit_cls = data_classes_factory()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             request_timeframe_cls = None
             request_timeframe_unit_cls = None
 
@@ -1073,7 +1074,7 @@ def get_bars_df(
                     )
                     try:
                         time_mod.sleep(delay)
-                    except Exception:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         _log.debug("RATE_LIMIT_BACKOFF_SLEEP_FAILED", exc_info=True)
                     continue
                 raise
@@ -1094,11 +1095,11 @@ def get_bars_df(
                     )
                     try:
                         time_mod.sleep(delay)
-                    except Exception:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         _log.debug("NETWORK_RETRY_BACKOFF_SLEEP_FAILED", exc_info=True)
                     continue
                 raise
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 error = exc
                 submit_last_error = exc
                 raise
@@ -1110,7 +1111,7 @@ def get_bars_df(
                     )
                     if error is not None:
                         errors_total.inc()
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     _log.debug("ALPACA_FETCH_METRICS_RECORD_FAILED", exc_info=True)
         else:
             if submit_last_error is not None:
@@ -1235,7 +1236,7 @@ def _record_client_order_id(client: Any | None, idempotency_key: str | None) -> 
             try:
                 setattr(client, attr, [])
                 collection = getattr(client, attr)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 continue
 
         if not hasattr(collection, "append"):
@@ -1243,7 +1244,7 @@ def _record_client_order_id(client: Any | None, idempotency_key: str | None) -> 
 
         try:
             collection.append(idempotency_key)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             continue
 
 
@@ -1345,7 +1346,7 @@ def _sdk_submit(
                 request_kwargs["client_order_id"] = idempotency_key
             try:
                 request_obj = req_cls(**request_kwargs)  # type: ignore[misc]
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 request_obj = None
 
     extra_kwargs: dict[str, Any] = {}
@@ -1378,7 +1379,7 @@ def _sdk_submit(
 
         if is_test_runtime():
             disable_retry = True
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         _log.debug("PYTEST_MODE_DETECT_FAILED", exc_info=True)
     selected_retry = None if disable_retry else retry
     call = submit if selected_retry is None else _with_retry(submit)
@@ -1389,7 +1390,7 @@ def _sdk_submit(
             order = call(order_data=request_obj, **extra_kwargs)
         else:
             order = call(**legacy_kwargs)
-    except Exception as e:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as e:
         _err = e
         raise
     finally:
@@ -1398,7 +1399,7 @@ def _sdk_submit(
             _alpaca_call_latency.observe(max(0.0, monotonic_time() - _start_t))
             if _err is not None:
                 _alpaca_errors_total.inc()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             _log.debug("ALPACA_SUBMIT_METRICS_RECORD_FAILED", exc_info=True)
     if hasattr(order, "_raw"):
         data = dict(order._raw)  # type: ignore[attr-defined]
@@ -1407,7 +1408,7 @@ def _sdk_submit(
     else:
         try:
             data = json.loads(json.dumps(order))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             data = {
                 "id": getattr(order, "id", None),
                 "symbol": symbol,
@@ -1480,12 +1481,12 @@ def _http_submit(
             latency_hist.observe(max(0.0, monotonic_time() - _start_t))
             if _err is not None or resp.status_code >= 400:  # type: ignore[name-defined]
                 errors_counter.inc()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             _log.debug("ALPACA_HTTP_POST_METRICS_RECORD_FAILED", exc_info=True)
 
     try:
         content: dict[str, Any] | None = resp.json()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         content = None
 
     if resp.status_code >= 400:
@@ -1533,7 +1534,7 @@ def submit_order(
             from ai_trading.config.management import reload_trading_config
 
             reload_trading_config()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             _log.debug("TRADING_CONFIG_RELOAD_FOR_PYTEST_FAILED", exc_info=True)
 
     cfg = _AlpacaConfig.from_env()
@@ -1711,12 +1712,12 @@ def alpaca_get(
             status = getattr(resp, "status_code", 0) if resp is not None else 0
             if _err is not None or status >= 400:
                 errors_counter.inc()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             _log.debug("ALPACA_GET_METRICS_RECORD_FAILED", exc_info=True)
 
     try:
         content = resp.json() if resp is not None else None
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         content = None
 
     status_code = getattr(resp, "status_code", 0)

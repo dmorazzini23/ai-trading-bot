@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import hashlib
 import json
@@ -212,7 +213,7 @@ def _coerce_timestamp_value(raw: Any) -> str:
     if callable(iso):
         try:
             return str(iso())
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             return str(raw)
     return str(raw)
 
@@ -500,7 +501,7 @@ class BacktestEngine:
         if hasattr(raw_value, "iloc"):
             try:
                 raw_value = raw_value.iloc[-1]
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 return None
         try:
             value = float(raw_value)

@@ -1,6 +1,7 @@
 """Configuration package exposing typed runtime settings."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import logging
 from collections.abc import Iterator
@@ -98,7 +99,7 @@ def safe_settings() -> Settings:
 
     try:
         settings_obj = get_settings()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         settings_obj = None
     if settings_obj is None:
         pytest_running = _env_is_truthy("PYTEST_RUNNING")
@@ -150,7 +151,7 @@ def set_data_feed_intraday(feed: str | None) -> str:
         setattr(_CFG, "data_feed_intraday", DATA_FEED_INTRADAY)
         setattr(_CFG, "alpaca_execution_feed", ALPACA_EXECUTION_FEED)
         setattr(_CFG, "alpaca_data_feed", ALPACA_EXECUTION_FEED)
-    except Exception:  # pragma: no cover - defensive fallback
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
         pass
     return DATA_FEED_INTRADAY
 
@@ -161,7 +162,7 @@ def refresh_data_feed_intraday(feed: str | None = None) -> str:
     if feed is None:
         try:
             cfg = get_trading_config()
-        except Exception:  # pragma: no cover - defensive fallback
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
             cfg = _CFG
         feed = getattr(cfg, "data_feed_intraday", getattr(cfg, "alpaca_data_feed", "iex"))
     return set_data_feed_intraday(feed)
@@ -380,7 +381,7 @@ def validate_environment() -> None:
         snapshot = merged_env_snapshot()
         try:
             validate_required_env(env=snapshot)
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             logger.exception("CONFIG_ENV_VALIDATION_FAILED")
             raise RuntimeError(f"Configuration validation failed: {exc}") from exc
         logger.debug("CONFIG_ENV_VALIDATION_SUCCESS")

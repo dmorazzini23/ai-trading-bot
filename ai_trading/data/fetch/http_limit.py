@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import contextlib
 import threading
@@ -12,7 +13,7 @@ _HOST_LOCK = threading.RLock()
 def _current_limit() -> int:
     try:
         return max(1, int(get_env("HTTP_HOST_LIMIT", "8", cast=str)))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return 8
 
 

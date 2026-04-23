@@ -1,5 +1,6 @@
 """Pre-approval symbol orchestration for the live netting cycle."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass
 import math
@@ -124,7 +125,7 @@ def prepare_netting_symbol_approval(
                     opening_notional_allowed, opening_notional_context = min_notional_precheck_fn(
                         precheck_order_payload
                     )
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     opening_notional_allowed, opening_notional_context = True, {}
                 opening_notional_context = (
                     dict(opening_notional_context)
@@ -175,7 +176,7 @@ def prepare_netting_symbol_approval(
                         opening_min_notional = float(min_notional_fn(symbol=symbol) or 0.0)
                     except TypeError:
                         opening_min_notional = float(min_notional_fn() or 0.0)
-                    except Exception:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         opening_min_notional = 0.0
                     if opening_min_notional > 0.0:
                         opening_notional = abs(float(delta_shares_value) * float(price))
@@ -205,7 +206,7 @@ def prepare_netting_symbol_approval(
             if callable(cooldown_fn):
                 try:
                     cooldown_allowed, cooldown_context = cooldown_fn(symbol=symbol, side=side)
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     cooldown_allowed, cooldown_context = True, {}
                 if not bool(cooldown_allowed):
                     blocked_reason = "ENTRY_CONSTRAINED_SYMBOL_REENTRY_COOLDOWN_PRECHECK"
@@ -228,7 +229,7 @@ def prepare_netting_symbol_approval(
         if callable(duplicate_fn):
             try:
                 duplicate_suppressed = bool(duplicate_fn(symbol, side))
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 duplicate_suppressed = False
             if duplicate_suppressed:
                 blocked_reason = "DUPLICATE_INTENT_PRECHECK"
@@ -271,7 +272,7 @@ def prepare_netting_symbol_approval(
             if callable(adaptive_cost_hook):
                 try:
                     adaptive_cost_result = adaptive_cost_hook()
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     adaptive_cost_result = {}
                 if isinstance(adaptive_cost_result, Mapping):
                     adaptive_cost_context = dict(adaptive_cost_result)
@@ -289,7 +290,7 @@ def prepare_netting_symbol_approval(
             if callable(opening_ramp_hook):
                 try:
                     opening_ramp_result = opening_ramp_hook()
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     opening_ramp_result = {}
                 if isinstance(opening_ramp_result, Mapping):
                     opening_ramp_context = dict(opening_ramp_result)

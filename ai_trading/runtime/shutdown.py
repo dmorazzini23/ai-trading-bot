@@ -8,6 +8,7 @@ running loops.
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import logging
 import signal
@@ -53,7 +54,7 @@ def request_stop(reason: str | None = None) -> None:
 def _handle_signal(signum: int, frame: Optional[FrameType]) -> None:  # pragma: no cover - exercised via integration
     try:
         signame = signal.Signals(signum).name
-    except Exception:  # pragma: no cover - very defensive
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - very defensive
         signame = str(signum)
     request_stop(f"signal:{signame}")
 

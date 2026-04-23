@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Helpers for working with HTTP fallback cache responses.
 
@@ -28,7 +29,7 @@ def resp_json(resp: Any) -> Any:
     try:
         if hasattr(resp, "json"):
             return resp.json()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("RESPONSE_JSON_METHOD_FAILED", exc_info=True)
 
     raw: Any = None
@@ -36,7 +37,7 @@ def resp_json(resp: Any) -> Any:
     for attr in ("data", "text", "content"):
         try:
             value = getattr(resp, attr)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             continue
         else:
             if value is not None:
@@ -46,13 +47,13 @@ def resp_json(resp: Any) -> Any:
     if raw is None and hasattr(resp, "read"):
         try:
             raw = resp.read()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             raw = None
 
     if raw is None and hasattr(resp, "body"):
         try:
             raw = resp.body
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             raw = None
 
     if raw is None:
@@ -63,7 +64,7 @@ def resp_json(resp: Any) -> Any:
             raw = raw.decode("utf-8", errors="ignore")
         elif not isinstance(raw, str):
             raw = str(raw)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("RESPONSE_JSON_COERCE_TO_STRING_FAILED", exc_info=True)
         return {}
 
@@ -73,7 +74,7 @@ def resp_json(resp: Any) -> Any:
 
     try:
         return json.loads(raw)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("RESPONSE_JSON_PARSE_FAILED", exc_info=True)
         return {}
 

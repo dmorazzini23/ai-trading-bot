@@ -1,6 +1,7 @@
 """Host-level concurrency limit helpers with peak tracking."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import asyncio
 import json
@@ -33,7 +34,7 @@ def _peak_path() -> Path:
     if raw:
         try:
             return Path(raw)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("PEAK_PATH_ENV_PARSE_FAILED", extra={"raw": raw}, exc_info=True)
     return Path(_DEFAULT_PEAK_PATH)
 
@@ -42,7 +43,7 @@ def _load_peak_from_disk() -> int:
     path = _peak_path()
     try:
         data = json.loads(path.read_text())
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("PEAK_FILE_READ_FAILED", extra={"path": str(path)}, exc_info=True)
         return 0
     value = data.get("peak") if isinstance(data, dict) else None
@@ -56,18 +57,18 @@ def _persist_peak(value: int) -> None:
     path = _peak_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("PEAK_DIR_CREATE_FAILED", extra={"path": str(path.parent)}, exc_info=True)
     tmp_path = path.with_suffix(".tmp")
     payload = json.dumps({"peak": int(value)})
     try:
         tmp_path.write_text(payload)
         tmp_path.replace(path)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("PEAK_FILE_WRITE_FAILED", extra={"path": str(path)}, exc_info=True)
         try:
             tmp_path.unlink(missing_ok=True)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("PEAK_TEMP_FILE_CLEANUP_FAILED", extra={"path": str(tmp_path)}, exc_info=True)
 
 
@@ -89,7 +90,7 @@ def record_peak(value: int) -> None:
     if persist_value is not None:
         try:
             _persist_peak(persist_value)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("PEAK_PERSIST_FAILED", extra={"value": persist_value}, exc_info=True)
 
 
@@ -98,7 +99,7 @@ def _normalize_host(host: str | None) -> str:
     if callable(normalizer):
         try:
             return cast(str, normalizer(host))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("HOST_NORMALIZER_DELEGATE_FAILED", extra={"host": host}, exc_info=True)
     normalized = (host or "").strip().lower()
     return normalized or _DEFAULT_HOST_KEY
@@ -125,7 +126,7 @@ def _get_sync_semaphore(host: str) -> threading.Semaphore:
     if callable(getter):
         try:
             semaphore = getter(host)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("SYNC_HOST_LIMITER_FETCH_FAILED", extra={"host": host}, exc_info=True)
             semaphore = None
         else:
@@ -145,7 +146,7 @@ def _get_async_semaphore(host: str) -> asyncio.Semaphore:
     if callable(getter):
         try:
             semaphore = getter(host)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("ASYNC_HOST_LIMITER_FETCH_FAILED", extra={"host": host}, exc_info=True)
             semaphore = None
         else:
@@ -232,7 +233,7 @@ def _build_async_limiter(host: str | None) -> tuple[AbstractAsyncContextManager[
         try:
             limiter = limiter_cls(host)
             return limiter, False  # type: ignore[return-value]
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("ASYNC_HOST_LIMITER_BUILD_FAILED", extra={"host": host}, exc_info=True)
     return _FallbackAsyncLimiter(host), True
 

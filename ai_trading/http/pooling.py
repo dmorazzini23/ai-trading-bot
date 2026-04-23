@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import asyncio
 import importlib
@@ -21,7 +22,7 @@ if isinstance(_previous_host_semaphores, WeakKeyDictionary):
 elif hasattr(_previous_host_semaphores, "clear"):
     try:
         _previous_host_semaphores.clear()  # type: ignore[call-arg]  # pragma: no cover - defensive guard for exotic reload state
-    except Exception:  # pragma: no cover - defensive guard for exotic reload state
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive guard for exotic reload state
         logger.debug("HOST_SEMAPHORE_CLEAR_FAILED", exc_info=True)
 
 if "_LIMIT_CACHE" in globals():
@@ -99,7 +100,7 @@ def _env_raw(key: str, default: str | None = None) -> str | None:
 
     try:
         value = config.get_env(key, default, resolve_aliases=False)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return default
     if value is None:
         return None
@@ -112,7 +113,7 @@ def _load_fallback_concurrency_module() -> ModuleType | None:
         return module
     try:
         return importlib.import_module("ai_trading.data.fallback.concurrency")
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("FALLBACK_CONCURRENCY_IMPORT_FAILED", exc_info=True)
         return None
 
@@ -127,12 +128,12 @@ def _invalidate_fallback_pooling_state() -> None:
     if callable(invalidator):
         try:
             invalidator()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("FALLBACK_POOLING_INVALIDATE_FAILED", exc_info=True)
         return
     try:
         module._POOLING_LIMIT_STATE = None  # type: ignore[attr-defined]
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("FALLBACK_POOLING_STATE_RESET_FAILED", exc_info=True)
 
 
@@ -171,18 +172,18 @@ def _set_pooling_limit_state(limit: int, version: int) -> None:
         try:
             recorder(limit, version)
             return
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("FALLBACK_POOLING_RECORD_FAILED", exc_info=True)
     try:
         module._POOLING_LIMIT_STATE = (max(1, int(limit)), int(version))  # type: ignore[attr-defined]
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("FALLBACK_POOLING_STATE_SET_FAILED", exc_info=True)
         return
     local_version = getattr(module, "_LOCAL_POOLING_VERSION", None)
     if isinstance(local_version, int) and version > local_version:
         try:
             module._LOCAL_POOLING_VERSION = version  # type: ignore[attr-defined]
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("FALLBACK_POOLING_LOCAL_VERSION_SET_FAILED", exc_info=True)
 
 
@@ -263,7 +264,7 @@ def _annotate_semaphore_metadata(
     try:
         setattr(semaphore, "_ai_trading_host_limit", limit)
         setattr(semaphore, "_ai_trading_host_limit_version", version)
-    except Exception:  # pragma: no cover - attribute assignment failure should not break runtime
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - attribute assignment failure should not break runtime
         logger.debug("SEMAPHORE_METADATA_ANNOTATE_FAILED", exc_info=True)
 
 
@@ -288,7 +289,7 @@ def _clear_all_loop_semaphores() -> None:
                 del _RETIRED_SEMAPHORES[:-8]
         try:
             host_map.clear()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             _HOST_SEMAPHORES.pop(loop, None)
 
 
@@ -375,7 +376,7 @@ def _compute_limit(raw: str | None = None) -> int:
             )
         )
         return max(1, limit)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("HOST_LIMIT_CONFIG_FALLBACK_FAILED", exc_info=True)
         return _DEFAULT_LIMIT
 
@@ -398,7 +399,7 @@ def _read_limit_source(
 
     try:
         cfg = config.get_trading_config()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         cfg = None
 
     config_id: int | None = None
@@ -407,7 +408,7 @@ def _read_limit_source(
         config_id = id(cfg)
         try:
             limit_value = getattr(cfg, "host_concurrency_limit", _DEFAULT_LIMIT)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             limit_value = _DEFAULT_LIMIT
 
     try:
@@ -805,7 +806,7 @@ def get_host_limiter(host: str):
             limiter = threading.Semaphore(limit_value)
             try:
                 setattr(limiter, "_ai_trading_host_limit", limit_value)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("THREADING_LIMITER_METADATA_SET_FAILED", exc_info=True)
             _HOST_LIMITERS[key] = limiter
         return limiter
@@ -835,7 +836,7 @@ def _purge_closed_loops() -> None:
     for loop in list(_HOST_SEMAPHORES.keys()):
         try:
             closed = loop.is_closed()
-        except Exception:  # pragma: no cover - defensive
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             closed = False
         if closed:
             _HOST_SEMAPHORES.pop(loop, None)

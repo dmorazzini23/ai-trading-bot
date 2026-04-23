@@ -1,5 +1,6 @@
 """Execution helpers for isolated subprocess and worker environments."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from typing import Iterable, Mapping, Sequence
 
@@ -35,7 +36,7 @@ def sanitize_worker_env_value(value: object | None) -> str:
         return ""
     try:
         raw = str(value).strip()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return ""
     if not raw:
         return ""

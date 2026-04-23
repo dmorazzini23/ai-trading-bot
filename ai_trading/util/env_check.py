@@ -1,3 +1,4 @@
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import importlib
 import importlib.machinery
 import importlib.util
@@ -24,7 +25,7 @@ def _managed_env_value(name: str) -> str | None:
             continue
         try:
             value = getter(name, None, cast=str, resolve_aliases=False)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             continue
         if value in (None, ""):
             continue
@@ -53,7 +54,7 @@ def _resolve_spec_origin() -> Path | None:
     for finder in finders:
         try:
             spec = finder("dotenv")
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             continue
         if spec is None:
             continue
@@ -62,7 +63,7 @@ def _resolve_spec_origin() -> Path | None:
             continue
         try:
             return Path(origin).resolve()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             continue
     return None
 
@@ -130,7 +131,7 @@ def ensure_python_dotenv_is_real_package() -> None:
     if isinstance(raw_spec_origin, str) and raw_spec_origin:
         try:
             spec_origin = Path(raw_spec_origin).resolve()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             spec_origin = None
     if spec_origin is not None:
         origin = spec_origin

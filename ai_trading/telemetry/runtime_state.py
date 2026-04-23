@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Lightweight runtime telemetry state shared across health surfaces."""
 
@@ -234,7 +235,7 @@ def update_data_provider_state(
     if data_status is not None:
         try:
             updates["data_status"] = str(data_status)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             updates["data_status"] = data_status
     if "reason_code" not in updates:
         if using_backup is True:
@@ -247,7 +248,7 @@ def update_data_provider_state(
     if timeframe is not None:
         try:
             candidate = str(timeframe).strip()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             candidate = str(timeframe)
         timeframe_key = candidate or None
 

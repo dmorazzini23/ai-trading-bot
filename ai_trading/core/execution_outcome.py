@@ -1,5 +1,6 @@
 """Helpers for normalizing broker submission outcomes and post-submit telemetry."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -180,7 +181,7 @@ def build_order_metrics_and_tca(
             order_ts=now,
             fill_ts=order_state.fill_timestamp if persistable_fill else None,
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         metrics = {}
         fill_price = None
         persistable_fill = False
@@ -305,7 +306,7 @@ def build_order_metrics_and_tca(
                 tca_payload["pending_reason"] = order_state.status_token or "no_fill"
                 tca_payload["order_status"] = order_state.status_text
             write_tca_record_func(resolved_tca_path, tca_payload)
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             logger.warning(
                 "TCA_WRITE_FAILED path=%s error=%s",
                 resolved_tca_path,

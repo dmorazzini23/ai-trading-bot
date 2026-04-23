@@ -1,5 +1,6 @@
 """Startup run-manifest writer for reproducibility and auditability."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import hashlib
 import json
@@ -22,7 +23,7 @@ def _git_commit_hash() -> str | None:
             capture_output=True,
             text=True,
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return None
     value = (completed.stdout or "").strip()
     return value or None
@@ -77,7 +78,7 @@ def _default_manifest_path() -> str:
 
     try:
         value = get_env("AI_TRADING_RUN_MANIFEST_PATH", "runtime/run_manifest.json")
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         value = "runtime/run_manifest.json"
     normalized = str(value or "").strip()
     return normalized or "runtime/run_manifest.json"

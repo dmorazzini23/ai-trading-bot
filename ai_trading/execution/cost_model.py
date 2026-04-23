@@ -1,6 +1,7 @@
 """Bounded execution cost model calibrated from realized TCA records."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -209,7 +210,7 @@ class CostModel:
         try:
             with target.open("r", encoding="utf-8") as handle:
                 payload = json.load(handle)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             return cls()
         if not isinstance(payload, Mapping):
             return cls()

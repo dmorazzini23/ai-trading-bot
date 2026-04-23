@@ -1,6 +1,7 @@
 """Lightweight execution guard rails for live trading hotfixes."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import datetime as _dt
 from decimal import Decimal
@@ -42,7 +43,7 @@ def _coerce_timestamp(value: Any) -> _dt.datetime | None:
     if isinstance(value, (int, float)):
         try:
             return _dt.datetime.fromtimestamp(float(value), tz=_dt.timezone.utc)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("TIMESTAMP_FROM_EPOCH_FAILED", extra={"value": value}, exc_info=True)
             return None
     if isinstance(value, _dt.datetime):
@@ -50,7 +51,7 @@ def _coerce_timestamp(value: Any) -> _dt.datetime | None:
             return value.replace(tzinfo=_dt.timezone.utc)
         try:
             return value.astimezone(_dt.timezone.utc)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("TIMESTAMP_TZ_NORMALIZE_FAILED", extra={"value": value}, exc_info=True)
             return None
     return None
@@ -70,7 +71,7 @@ def _is_stale(quote: dict[str, Any], now: _dt.datetime, max_age_sec: int) -> Tup
         return True, "quote_timestamp_missing"
     try:
         age = (now - dt_val).total_seconds()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("QUOTE_STALENESS_AGE_COMPUTE_FAILED", exc_info=True)
         return True, "quote_timestamp_missing"
     if age > float(max_age_sec):
@@ -81,7 +82,7 @@ def _is_stale(quote: dict[str, Any], now: _dt.datetime, max_age_sec: int) -> Tup
 def _require_bid_ask() -> bool:
     try:
         cfg = get_trading_config()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("REQUIRE_BID_ASK_CONFIG_UNAVAILABLE", exc_info=True)
         return True
     return bool(getattr(cfg, "execution_require_bid_ask", True))
@@ -90,13 +91,13 @@ def _require_bid_ask() -> bool:
 def _max_age_seconds() -> int:
     try:
         cfg = get_trading_config()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("MAX_AGE_SECONDS_CONFIG_UNAVAILABLE", exc_info=True)
         return 60
     value = getattr(cfg, "execution_max_staleness_sec", 60)
     try:
         return int(value)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("MAX_AGE_SECONDS_PARSE_FAILED", extra={"value": value}, exc_info=True)
         return 60
 

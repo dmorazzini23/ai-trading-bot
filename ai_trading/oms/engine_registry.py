@@ -1,6 +1,7 @@
 """Shared SQLAlchemy engine registry for OMS Postgres backends."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from threading import RLock
 from typing import Any, Callable, TypeVar
@@ -53,5 +54,5 @@ def reset_shared_engines() -> None:
             dispose = getattr(engine, "dispose", None)
             if callable(dispose):
                 dispose()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("OMS_SHARED_ENGINE_DISPOSE_FAILED", exc_info=True)

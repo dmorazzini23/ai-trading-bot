@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 from dataclasses import dataclass
@@ -12,12 +13,12 @@ logger = get_logger(__name__)
 try:
     import requests  # type: ignore[import-untyped]
     REQUESTS_AVAILABLE = True
-except Exception:
+except AI_TRADING_FALLBACK_EXCEPTIONS:
     requests = None  # type: ignore[assignment]
     REQUESTS_AVAILABLE = False
 try:
     from requests.adapters import HTTPAdapter  # type: ignore[import-untyped]
-except Exception:  # pragma: no cover - requests missing
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - requests missing
     HTTPAdapter = cast("type[object]", object)
 from urllib3.util.retry import Retry
 from ai_trading.utils import clamp_request_timeout
@@ -32,7 +33,7 @@ def ensure_urllib3_disable_warnings() -> None:
 
     try:
         urllib3 = importlib.import_module("urllib3")
-    except Exception:  # pragma: no cover - urllib3 not installed
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - urllib3 not installed
         logger.debug("URLLIB3_IMPORT_FAILED", exc_info=True)
         return
 
@@ -46,7 +47,7 @@ def ensure_urllib3_disable_warnings() -> None:
 
         try:
             setattr(urllib3, "disable_warnings", _noop_disable_warnings)
-        except Exception:  # pragma: no cover - attribute assignment failed
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - attribute assignment failed
             logger.debug("URLLIB3_DISABLE_WARNINGS_ATTR_SET_FAILED", exc_info=True)
             return
         disable_warnings = getattr(urllib3, "disable_warnings", None)
@@ -62,7 +63,7 @@ def ensure_urllib3_disable_warnings() -> None:
 
     try:
         disable_warnings(warning_category)
-    except Exception:  # pragma: no cover - downstream failure should not break imports
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - downstream failure should not break imports
         logger.debug("URLLIB3_DISABLE_WARNINGS_CALL_FAILED", exc_info=True)
 
 
@@ -107,7 +108,7 @@ class TimeoutSession(_SessionBase):
         if callable(requests_get):
             try:
                 patched_requests_get = getattr(requests_get, "__module__", "") != "requests.api"
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("REQUESTS_GET_MODULE_INSPECT_FAILED", exc_info=True)
                 patched_requests_get = True
         if testing_flag or pytest_flag or patched_requests_get:
@@ -360,12 +361,12 @@ def reload_host_limit_if_env_changed(
         return snapshot
     try:
         from ai_trading.http import pooling as _pooling
-    except Exception:  # pragma: no cover - pooling optional during stubbed tests
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - pooling optional during stubbed tests
         logger.debug("POOLING_MODULE_IMPORT_FAILED", exc_info=True)
     else:
         try:
             _pooling.reload_host_limit_if_env_changed()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("POOLING_LIMIT_RELOAD_FAILED", exc_info=True)
     return _HOST_LIMIT_CONTROLLER.reload_if_changed(target)
 

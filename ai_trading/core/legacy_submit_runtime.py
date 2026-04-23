@@ -1,6 +1,7 @@
 """Legacy/non-netting submit runtime extracted from ``bot_engine.py``."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 import math
@@ -26,7 +27,7 @@ def _mapping_dict(value: Any) -> dict[str, Any]:
         return {}
     try:
         return dict(value)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return {}
 
 
@@ -140,7 +141,7 @@ def _record_skip_submit(
             detail=detail,
             context=dict(context or {}),
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         be.logger.debug("LEGACY_SUBMIT_SKIP_HANDLER_FAILED", exc_info=True)
 
 
@@ -156,13 +157,13 @@ def _attach_order_identity(order: Any, *, client_order_id: str) -> None:
         return
     try:
         current = getattr(order, "client_order_id", None)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         current = None
     if current not in (None, "", 0):
         return
     try:
         setattr(order, "client_order_id", client_order_id)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         pass
 
 
@@ -206,7 +207,7 @@ def _record_legacy_ledger_submission(
                 ),
             )
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         be_logger = importlib.import_module("ai_trading.core.bot_engine").logger
         be_logger.debug("LEGACY_LEDGER_RECORD_FAILED", exc_info=True)
 
@@ -279,7 +280,7 @@ def _resolve_execution_intent_context(
         require_realtime_nbbo = bool(
             getattr(cfg, "execution_require_realtime_nbbo", require_realtime_nbbo_default)
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         require_realtime_nbbo = require_realtime_nbbo_default
     require_realtime_nbbo = bool(
         require_realtime_nbbo
@@ -387,7 +388,7 @@ def submit_order_runtime(
     if price_source_label in (None, ""):
         try:
             price_source_label = be.get_price_source(symbol)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             price_source_label = None
     if annotation_price_source in (None, "") and price_source_label not in (None, ""):
         annotations["price_source"] = price_source_label
@@ -400,7 +401,7 @@ def submit_order_runtime(
     if not fallback_flag and normalized_price_source is not None:
         try:
             fallback_flag = not be._is_primary_price_source(normalized_price_source)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             be.logger.debug("PRICE_SOURCE_FALLBACK_FLAG_PARSE_FAILED", exc_info=True)
     if fallback_flag:
         annotations["using_fallback_price"] = True

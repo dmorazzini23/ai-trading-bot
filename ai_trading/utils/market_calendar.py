@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Lightweight NYSE calendar helpers with 2024-2025 overrides.
 
@@ -111,7 +112,7 @@ def is_trading_day(d: date) -> bool:
         if callable(valid_days):
             try:
                 days = valid_days(start_date=d, end_date=d)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 pass
             else:
                 try:

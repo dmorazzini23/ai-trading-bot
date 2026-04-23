@@ -6,6 +6,7 @@ boolean indicating whether the cache update succeeded.
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import os
 import warnings
@@ -45,7 +46,7 @@ def download_and_cache(
     """
     try:
         import yfinance as yf  # type: ignore  # local import
-    except Exception:  # pragma: no cover - optional dependency
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency
         return False
 
     cache_updated = False

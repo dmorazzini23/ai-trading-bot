@@ -6,6 +6,7 @@ Reconciles local trading state with broker truth by:
 2. Comparing with local state
 3. Fixing drifts (cancel stale locals, resync quantities)
 """
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -282,7 +283,7 @@ def reconcile_with_broker(
                 unrealized_pnl=float(getattr(pos, "unrealized_pl", 0.0)),
                 timestamp=safe_utcnow(),
             )
-    except Exception as e:  # pragma: no cover - network issues
+    except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - network issues
         logger.error(f"Failed to fetch broker positions: {e}")
 
     # Fetch open broker orders if supported
@@ -309,7 +310,7 @@ def reconcile_with_broker(
                 filled_price=getattr(ord_obj, "filled_avg_price", None),
                 timestamp=safe_utcnow(),
             )
-    except Exception as e:  # pragma: no cover - network issues
+    except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - network issues
         logger.error(f"Failed to fetch broker orders: {e}")
 
     return reconciler.full_reconciliation(
@@ -368,7 +369,7 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
                 if broker_status == OrderStatus.FILLED:
                     side_mult = 1 if getattr(order.side, "value", order.side) == OrderSide.BUY.value else -1
                     local_positions[order.symbol] = local_positions.get(order.symbol, 0) + side_mult * filled_qty
-        except Exception as e:  # pragma: no cover - defensive
+        except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - defensive
             logger.error(f"Failed to update order {order.id}: {e}")
 
     # Perform reconciliation against broker state

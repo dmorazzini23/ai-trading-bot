@@ -1,6 +1,7 @@
 """Prepare-run runtime helpers extracted from ``bot_engine.py``."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 from typing import Any
@@ -44,7 +45,7 @@ def truncate_degraded_candidates(
         cfg_obj = getattr(runtime, "cfg", None)
         if cfg_obj is not None:
             cfg_limit = getattr(cfg_obj, "degraded_max_candidates", None)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         cfg_limit = None
 
     max_candidates: int | None = None
@@ -58,7 +59,7 @@ def truncate_degraded_candidates(
             max_candidates = int(
                 be.get_env("TRADING__DEGRADED_MAX_CANDIDATES", "3", cast=int)
             )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             max_candidates = 3
     if max_candidates <= 0:
         max_candidates = 1
@@ -102,7 +103,7 @@ def prepare_run(
             be.cancel_all_open_orders(runtime)
             try:
                 setattr(state, "_open_order_cleanup_done", True)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 # Best effort bookkeeping; do not block startup if state is immutable.
                 be.logger.debug("OPEN_ORDER_CLEANUP_BOOKKEEPING_FAILED", exc_info=True)
         be.audit_positions(runtime)
@@ -154,7 +155,7 @@ def prepare_run(
         failsoft_enabled = bool(getattr(cfg_obj, "safe_mode_failsoft", True))
         if not failsoft_enabled and degraded_mode not in {"block", "hard_block"}:
             degraded_mode = "block"
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         skip_on_disabled = False
         degraded_mode = "block"
     failsoft_cycle = be._failsoft_mode_active()

@@ -1,6 +1,7 @@
 """Helpers for lazily loading heavy third-party modules."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 from functools import lru_cache
@@ -60,7 +61,7 @@ def load_pandas_ta() -> ModuleType | None:
     """Return :mod:`pandas_ta` if available, logging once when missing."""
     try:
         return importlib.import_module("pandas_ta")
-    except Exception:  # pragma: no cover - optional dependency
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency
         get_logger(__name__).info(
             "PANDAS_TA_MISSING", extra={"hint": "pip install pandas-ta"}
         )

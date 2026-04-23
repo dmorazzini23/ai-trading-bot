@@ -6,6 +6,7 @@ validated for writability on import so startup fails fast on misconfiguration.
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import contextlib
 import errno
@@ -26,7 +27,7 @@ def _managed_env(name: str, default: str | None = None) -> str | None:
         from ai_trading.config.management import get_env
 
         value = get_env(name, default, cast=str)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         value = default
     if value in (None, ""):
         return default

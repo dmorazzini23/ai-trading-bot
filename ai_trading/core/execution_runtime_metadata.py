@@ -1,6 +1,7 @@
 """Execution runtime metadata helpers extracted from ``bot_engine.py``."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import copy
 import importlib
@@ -17,7 +18,7 @@ def _bot_engine() -> Any:
 def _copy_value(value: Any) -> Any:
     try:
         return copy.deepcopy(value)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return value
 
 
@@ -180,7 +181,7 @@ def load_execution_prerank_runtime_state(runtime: Any) -> ExecutionPreRankRuntim
         prerank_cycle = 1
     try:
         setattr(runtime, "_execution_prerank_cycle_idx", prerank_cycle)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         be.logger.debug("EXECUTION_CANDIDATE_PRERANK_CYCLE_SET_FAILED", exc_info=True)
 
     last_selected_cycles: dict[str, int] = {}
@@ -229,7 +230,7 @@ def store_execution_prerank_runtime_state(
                 history[symbol] = cycle_value
     try:
         setattr(runtime, "_execution_candidate_last_selected_cycle", history)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         be.logger.debug("EXECUTION_CANDIDATE_PRERANK_HISTORY_SET_FAILED", exc_info=True)
 
 

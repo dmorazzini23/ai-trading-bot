@@ -4,6 +4,7 @@ Lightweight slippage/cost logging with per-symbol EWMA feedback.
 Designed to be import-light and safe in constrained environments.
 """
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -83,10 +84,10 @@ def record_fill(
             with SLIPPAGE_LOG_PATH.open("a", newline="") as f:
                 w = csv.writer(f)
                 w.writerow([ts, symbol, side, int(qty or 0), f"{expected_price}", f"{fill_price}", f"{bps:.4f}"])
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             # Logging to disk is best-effort only.
             pass
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("SLIPPAGE_LOG_FAILED", exc_info=True)
 
 
@@ -98,6 +99,6 @@ def get_ewma_cost_bps(symbol: str, default: float = 2.0) -> float:
     st = _EWMA_BPS.get(symbol)
     try:
         return float(abs(st.value)) if st is not None else float(default)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return float(default)
 

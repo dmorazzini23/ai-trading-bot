@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 import importlib.util
@@ -13,7 +14,7 @@ def _ensure_dotenv_module() -> tuple[object | None, bool]:
 
     try:  # pragma: no cover - import resolution validated by tests
         module = importlib.import_module("dotenv")
-    except Exception:  # pragma: no cover - fallback path when python-dotenv missing
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - fallback path when python-dotenv missing
         logging.getLogger(__name__).debug("DOTENV_IMPORT_FAILED", exc_info=True)
         return None, False
 
@@ -49,7 +50,7 @@ def load_dotenv_if_present(
         return False
     try:
         _dotenv.load_dotenv(dotenv_path=dotenv_path, override=override)  # type: ignore[union-attr]
-    except Exception:  # pragma: no cover - defensive logging is handled upstream
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive logging is handled upstream
         logging.getLogger(__name__).debug(
             "DOTENV_LOAD_FAILED",
             extra={"dotenv_path": dotenv_path},
@@ -78,7 +79,7 @@ def _log_env_loaded(source: str, *, override: bool) -> None:
                 f"ENV_LOADED_FROM {override_text}",
                 extra={"key": f"env_loaded:{source}", "dotenv_path": source},
             )
-    except Exception:  # pragma: no cover - keep env init resilient
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - keep env init resilient
         logging.getLogger(__name__).debug("ENV_LOADED_LOG_EMIT_FAILED", exc_info=True)
         return
 
@@ -117,7 +118,7 @@ def ensure_dotenv_loaded(dotenv_path: str | None = None) -> None:
     if runtime_loaded or loaded:
         try:
             refresh_alpaca_credentials_cache()
-        except Exception:  # pragma: no cover - keep env init resilient
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - keep env init resilient
             logging.getLogger(__name__).debug("ALPACA_CREDENTIAL_CACHE_REFRESH_FAILED", exc_info=True)
 
 

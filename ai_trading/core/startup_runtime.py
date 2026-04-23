@@ -1,6 +1,7 @@
 """Legacy startup/control-plane helpers extracted from ``bot_engine.py``."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import asyncio
 import importlib
@@ -42,7 +43,7 @@ def _update_service_status_safe(be: Any, *, status: str, reason: str) -> None:
         return
     try:
         update_service_status(status=status, reason=reason)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         log_debug = getattr(getattr(be, "logger", None), "debug", None)
         if callable(log_debug):
             log_debug("RUNTIME_SERVICE_STATUS_UPDATE_FAILED", exc_info=True)
@@ -60,7 +61,7 @@ def _run_trade_updates_stream(be: Any, ctx: Any, start_trade_updates_stream: Any
                 running=ctx.stream_event,
             )
         )
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         be.logger.warning(
             "TRADE_UPDATES_STREAM_FAILED",
             extra={
@@ -80,7 +81,7 @@ def _run_trade_updates_stream(be: Any, ctx: Any, start_trade_updates_stream: Any
     if callable(is_set):
         try:
             stream_still_running = bool(is_set())
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             stream_still_running = False
     if stream_still_running:
         be.logger.warning(
@@ -155,7 +156,7 @@ def initial_rebalance_runtime(ctx: Any, symbols: list[str]) -> None:
             try:
                 df_daily = ctx.data_fetcher.get_daily_df(ctx, symbol)
                 price = be.get_latest_close(df_daily)
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 be.logger.warning(
                     "INITIAL_REBALANCE_PRICE_LOAD_FAILED",
                     extra={
@@ -402,7 +403,7 @@ def configure_main_runtime_jobs(ctx: Any) -> None:
                 if delay_seconds > 0.0:
                     time.sleep(delay_seconds)
                 schedule_run_all_trades_runtime(ctx)
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 be.logger.exception("gather_minute_data_with_delay failed: %s", exc)
 
         be.schedule.every(1).minutes.do(
@@ -410,7 +411,7 @@ def configure_main_runtime_jobs(ctx: Any) -> None:
         )
         try:
             gather_minute_data_with_delay()
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             be.logger.exception("Initial data fetch failed", exc_info=exc)
 
         be.schedule.every(1).minutes.do(
@@ -437,7 +438,7 @@ def configure_main_runtime_jobs(ctx: Any) -> None:
         def _run_reference_reconcile_with_guard() -> None:
             try:
                 run_reference_reconciliation_once()
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 be.logger.warning(
                     "REFERENCE_RECONCILE_FAILED",
                     extra={
@@ -473,7 +474,7 @@ def configure_main_runtime_jobs(ctx: Any) -> None:
             target=lambda: _run_trade_updates_stream(be, ctx, start_trade_updates_stream),
             daemon=True,
         ).start()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         setattr(ctx, "_runtime_jobs_configured", False)
         raise
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import json
 import logging
@@ -11,7 +12,7 @@ from ai_trading.exc import COMMON_EXC
 
 try:  # pragma: no cover - defensive import guard
     import unittest.mock as _mock_mod
-except Exception:  # pragma: no cover - fallback when mock is unavailable
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - fallback when mock is unavailable
     _MOCK_TYPES: tuple[type[Any], ...] = ()
 else:  # pragma: no cover - exercised via logging tests
     _MOCK_TYPES = tuple(
@@ -79,7 +80,7 @@ class JSONFormatter(logging.Formatter):
                 return tolist_attr()
             except COMMON_EXC:
                 pass
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 pass
         return str(obj)
 

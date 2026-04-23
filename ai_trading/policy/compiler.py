@@ -6,6 +6,7 @@ execution gates.
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import hashlib
 import json
@@ -326,7 +327,7 @@ def _read_env_file(path: str | None) -> dict[str, str]:
             ):
                 value = value[1:-1]
             parsed[env_key] = value
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return {}
     return parsed
 

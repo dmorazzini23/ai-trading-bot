@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import argparse
 import json
@@ -104,7 +105,7 @@ def run_incident_replay(argv: list[str] | None = None) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     try:
         run_incident_replay(argv)
-    except Exception as exc:  # pragma: no cover - CLI defensive branch
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - CLI defensive branch
         logger.error("INCIDENT_REPLAY_FAILED", extra={"error": str(exc)}, exc_info=True)
         return 1
     return 0

@@ -1,5 +1,6 @@
 """Indicator helpers for signal generation."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -31,7 +32,7 @@ def _validate_ohlcv(df: Any):
     try:
         df = df.copy()
         df["close"] = pd.to_numeric(df["close"], errors="raise")
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         raise ValueError("Column 'close' must be numeric") from exc
     return df
 
@@ -68,7 +69,7 @@ def psar(df: Any) -> Any:
         psar_df = ta.psar(df["high"], df["low"], df["close"])
         df["psar_long"] = psar_df["PSARl_0.02_0.2"].astype(float)
         df["psar_short"] = psar_df["PSARs_0.02_0.2"].astype(float)
-    except Exception as exc:  # pragma: no cover - optional dependency behaviour
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - optional dependency behaviour
         logger.warning("PSAR_CALC_FAILED", extra={"cause": exc.__class__.__name__})
         approx = ((df["high"] + df["low"]) / 2).astype(float)
         df["psar_long"] = approx

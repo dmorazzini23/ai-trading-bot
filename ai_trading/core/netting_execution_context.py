@@ -1,5 +1,6 @@
 """Global execution-control context for the live netting cycle."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
@@ -169,7 +170,7 @@ def _build_slo_derisk_state(
         pending_oldest_age_sec, pending_samples = _extract_slo_derisk_metric(
             monitor.get_slo_status("pending_oldest_age_sec")
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("SLO_DERISK_SNAPSHOT_FAILED", exc_info=True)
 
     reject_breached = reject_samples >= min_samples and reject_rate_pct >= max_reject_rate_pct
@@ -418,7 +419,7 @@ def _build_gate_auto_disable_state(
                 }
                 if marginal_contribution_bps < float(gate_auto_disable_min_contribution_bps):
                     ineffective_gate_blocklist.add(str(gate_name))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("GATE_AUTO_DISABLE_EVALUATION_FAILED", exc_info=True)
         (
             ineffective_gate_blocklist,
@@ -553,7 +554,7 @@ def build_netting_execution_context(
     if candidate_expected_net_edge:
         try:
             expected_net_edge_cycle = float(max(candidate_expected_net_edge.values()))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             expected_net_edge_cycle = 0.0
     pending_symbol_count = len(blocked_symbols)
     previous_tier_raw = str(

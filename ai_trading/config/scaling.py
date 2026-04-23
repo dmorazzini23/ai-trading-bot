@@ -1,5 +1,6 @@
 """Helpers for building lightweight scaling config from environment."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import json
 from dataclasses import dataclass
@@ -40,7 +41,7 @@ def _coerce(value: str) -> Any:
         if any(ch in value for ch in (".", "e", "E")):
             return float(value)
         return int(value)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return value
 
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import functools
 import builtins
@@ -174,7 +175,7 @@ def retry(
                     break
             except TypeError:
                 break
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 break
     base = max(0.0, float(delay))
     factor = max(0.0, float(backoff))
@@ -253,7 +254,7 @@ def retry(
             while True:
                 try:
                     return fn(*args, **kwargs)
-                except Exception as exc:
+                except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                     # Determine if this exception is retryable under the provided
                     # policy. Support either a predicate via `retry` (from
                     # retry_if_exception_type) or the `exceptions` tuple.
@@ -267,7 +268,7 @@ def retry(
                             if not isinstance(exc_types, tuple):
                                 exc_types = (exc_types,)  # type: ignore[assignment]
                             should_retry = isinstance(exc, exc_types)
-                    except Exception:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         # If the retry policy itself errors, fail safe to no-retry
                         should_retry = False
 

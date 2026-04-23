@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import logging
 from typing import Any, Callable, Mapping, cast
@@ -14,7 +15,7 @@ try:  # pragma: no cover - exercised via tests that stub Flask
     _flask_blueprint = _FlaskBlueprint
     _flask_current_app = _FlaskCurrentApp
     _flask_jsonify = _FlaskJsonify
-except Exception:  # pragma: no cover - allow import without Flask
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - allow import without Flask
     pass
 
 from .env_diag import gather_env_diag
@@ -32,7 +33,7 @@ def _invoke_snapshot(snapshot_fn: Callable[[], Mapping[str, Any]] | None) -> Map
         return None
     try:
         snapshot = snapshot_fn()
-    except Exception:  # pragma: no cover - diagnostics should never raise
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - diagnostics should never raise
         logger.debug("BROKER_DIAG_SNAPSHOT_FAILED", exc_info=True)
         return {"error": "snapshot_failed"}
     if isinstance(snapshot, Mapping):
@@ -49,7 +50,7 @@ if diag_bp is not None:
         try:
             current = cast(Any, _flask_current_app)
             app = current._get_current_object() if current is not None else None
-        except Exception:  # pragma: no cover - defensive guard in tests
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive guard in tests
             app = None
         snapshot_fn = app.config.get("broker_snapshot_fn") if getattr(app, "config", None) else None
         broker_snapshot = _invoke_snapshot(snapshot_fn)

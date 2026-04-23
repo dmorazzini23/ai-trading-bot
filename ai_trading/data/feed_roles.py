@@ -1,6 +1,7 @@
 """Helpers for separating execution and reference Alpaca feed selection."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from typing import Literal
 
@@ -31,11 +32,11 @@ def _settings_feed(attr: str) -> str | None:
         from ai_trading.settings import get_settings
 
         settings = get_settings()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return None
     try:
         value = getattr(settings, attr, None)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return None
     if value in (None, ""):
         return None

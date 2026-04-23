@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from pathlib import Path
 
@@ -24,7 +25,7 @@ def resolve_governance_base_path(configured: str | None = None) -> Path:
                 )
                 or ""
             ).strip()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             configured_token = ""
     if configured_token:
         resolved = Path(configured_token).expanduser()
@@ -42,7 +43,7 @@ def resolve_governance_base_path(configured: str | None = None) -> Path:
             )
             or "runtime"
         ).strip() or "runtime"
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         output_dir = "runtime"
     base = Path(output_dir).expanduser()
     if not base.is_absolute():

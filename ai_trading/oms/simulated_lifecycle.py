@@ -1,6 +1,7 @@
 """Shared OMS lifecycle driver for simulated/backtest execution paths."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -63,7 +64,7 @@ class SimulatedLifecycleDriver:
                 url=self._database_url,
                 event_dual_write_enabled=self._enabled,
             )
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             self._store_init_failed = True
             logger.warning(
                 "SIM_OMS_INTENT_STORE_INIT_FAILED",
@@ -78,7 +79,7 @@ class SimulatedLifecycleDriver:
         if callable(iso):
             try:
                 return str(iso())
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 return str(value)
         return str(value)
 
@@ -133,7 +134,7 @@ class SimulatedLifecycleDriver:
             )
             if not str(record.broker_order_id or "").strip():
                 store.mark_submitted(record.intent_id, resolved_broker_order_id)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.warning(
                 "SIM_OMS_INTENT_OPEN_FAILED",
                 extra={
@@ -222,7 +223,7 @@ class SimulatedLifecycleDriver:
                 final_status=normalized_terminal,
                 last_error=(str(last_error) if last_error not in (None, "") else None),
             )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.warning(
                 "SIM_OMS_INTENT_CLOSE_FAILED",
                 extra={
@@ -244,7 +245,7 @@ class SimulatedLifecycleDriver:
             return
         try:
             store.close()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("SIM_OMS_INTENT_STORE_CLOSE_FAILED", exc_info=True)
 
 

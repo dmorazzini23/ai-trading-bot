@@ -1,5 +1,6 @@
 """Canonical market/execution snapshot contracts."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -63,7 +64,7 @@ def bar_from_frame(
             return None
         ts_value = index[-1]
         row = iloc[-1]
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return None
     row_map = row.to_dict() if hasattr(row, "to_dict") else {}
     payload: dict[str, Any] = dict(row_map) if isinstance(row_map, Mapping) else {}

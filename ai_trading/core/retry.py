@@ -1,5 +1,6 @@
 """Retry helpers for idempotent dependency reads."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import random
 import time
@@ -36,7 +37,7 @@ def retry_idempotent(
             result = fn()
             breakers.record_success(dep)
             return result
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             attempts += 1
             info = classify_exception(
                 exc,

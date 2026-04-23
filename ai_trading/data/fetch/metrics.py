@@ -1,5 +1,6 @@
 """Lightweight in-memory counters for data-fetch operations."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections import Counter
 from threading import Lock
@@ -26,7 +27,7 @@ def register_provider_disable(provider: str) -> None:
         from ai_trading.data.provider_monitor import provider_monitor as _pm
 
         count = int(getattr(_pm, "disable_counts", {}).get(provider, 0))
-    except Exception:  # pragma: no cover - defensive fallback
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
         count = _PROVIDER_DISABLE_TOTALS.get(provider, 0)
     if count > 0:
         _PROVIDER_DISABLE_TOTALS[provider] = max(
@@ -144,7 +145,7 @@ def _current_value(metric: object) -> int:
         return 0
     try:
         return int(value.get())
-    except Exception:  # pragma: no cover - defensive
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
         logger.debug("METRIC_CURRENT_VALUE_READ_FAILED", exc_info=True)
         return 0
 
@@ -184,7 +185,7 @@ def inc_backup_provider_used(provider: str, symbol: str, *, increment: bool | No
         if increment:
             metric.inc()
         prom_value = _current_value(metric)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         prom_value = 0
     return prom_value or local_value
 
@@ -213,7 +214,7 @@ def inc_provider_disable_total(provider: str) -> int:
     try:
         metric = _provider_disable_total_counter.labels(provider=provider)
         metric.inc()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("PROVIDER_DISABLE_TOTAL_METRIC_INC_FAILED", extra={"provider": provider}, exc_info=True)
     return total
 
@@ -231,7 +232,7 @@ def provider_disabled(provider: str) -> int:
             if provider == 'alpaca' and any(key.startswith('alpaca_') for key in disabled):
                 return 1
             return 0
-        except Exception:  # pragma: no cover - defensive fallback
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
             logger.debug("PROVIDER_DISABLED_FALLBACK_LOOKUP_FAILED", extra={"provider": provider}, exc_info=True)
             return 0
     return value

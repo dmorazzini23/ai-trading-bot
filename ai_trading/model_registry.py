@@ -7,6 +7,7 @@ the governance subsystem.  The legacy helper functions (``register_model``,
 provides a richer interface for integration tests and promotion logic.
 """
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import hashlib
 import inspect
@@ -36,7 +37,7 @@ def _load_registry() -> dict[str, Any]:
         if _REGISTRY_PATH.exists():
             payload = json.loads(_REGISTRY_PATH.read_text())
             return payload if isinstance(payload, dict) else {}
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("MODEL_REGISTRY_LOAD_FAILED", exc_info=True)
     return {}
 
@@ -45,7 +46,7 @@ def _save_registry(reg: dict[str, Any]) -> None:
     try:
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
         _REGISTRY_PATH.write_text(json.dumps(reg, indent=2))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("MODEL_REGISTRY_SAVE_FAILED", exc_info=True)
 
 
@@ -93,7 +94,7 @@ def record_evaluation(symbol: str, metrics: dict[str, Any]) -> None:
         payload = {"symbol": symbol, "ts": datetime.now(UTC).isoformat(), **metrics}
         with (_EVAL_DIR / f"{symbol}.jsonl").open("a") as f:
             f.write(json.dumps(payload) + "\n")
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("MODEL_EVAL_WRITE_FAILED", exc_info=True)
 
 
@@ -104,7 +105,7 @@ def list_evaluations(symbol: str, limit: int = 100) -> list[dict[str, Any]]:
             return []
         lines = path.read_text().splitlines()[-limit:]
         return [json.loads(l) for l in lines if l.strip()]
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("MODEL_EVAL_READ_FAILED", exc_info=True)
         return []
 

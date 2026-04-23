@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Utilities for closing out short positions."""
 
@@ -30,7 +31,7 @@ def short_close(api: Any, submit: Callable[[str, int, str], Any]) -> int:
     if hasattr(api, "list_positions"):
         try:
             positions = api.list_positions() or []
-        except Exception:  # pragma: no cover - defensive
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             logger.warning("LIST_POSITIONS_FAIL", exc_info=True)
             positions = []
     submitted = 0

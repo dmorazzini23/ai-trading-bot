@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import datetime as _dt
 import datetime as _dt
@@ -56,7 +57,7 @@ def _provider_decision_window() -> float:
     window: float | None = None
     try:
         window = get_env("AI_TRADING_PROVIDER_DECISION_SECS", None, cast=float)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         window = None
     if window is None:
         window = 120.0
@@ -72,7 +73,7 @@ def _provider_switch_cooldown_seconds() -> float:
         return 0.0
     try:
         value = float(getter())
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return 0.0
     return max(value, 0.0)
 
@@ -83,7 +84,7 @@ def _disable_primary_provider() -> None:
         return
     try:
         provider_monitor.disable("alpaca", duration=duration)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         pass
 
 
@@ -140,7 +141,7 @@ def _next_feed(cur_feed: str) -> str | None:
     except ValueError:
         try:
             limit = max_data_fallbacks()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             limit = 1
         if limit <= 0:
             return None
@@ -256,7 +257,7 @@ def _fetch_feed(
     enable_http = bool(getattr(_fetch_module, "_ENABLE_HTTP_FALLBACK", False))
     try:
         fallback_budget = int(max_data_fallbacks())
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         fallback_budget = 0
     if empty_error and attempts >= _EMPTY_BAR_MAX_RETRIES:
         fetch_skips = getattr(_fetch_module, "_SKIPPED_SYMBOLS", None)

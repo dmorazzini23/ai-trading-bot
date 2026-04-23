@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import time
 import sys
@@ -30,11 +31,11 @@ def _is_empty_bars_error(exc: BaseException) -> bool:
         try:
             if isinstance(exc, candidate):
                 return True
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             continue
     try:
         return exc.__class__.__name__ == "EmptyBarsError"
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return False
 
 
@@ -78,7 +79,7 @@ def fetch_with_retries(
     while True:
         try:
             data = fetch_fn()
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             if not _is_empty_bars_error(exc):
                 raise
             attempts += 1
@@ -88,7 +89,7 @@ def fetch_with_retries(
             if window_has_trading_session is not None and attempts >= 1:
                 try:
                     has_session = window_has_trading_session()
-                except Exception:  # pragma: no cover - defensive safeguard
+                except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive safeguard
                     has_session = True
                 if not has_session:
                     logger.debug(

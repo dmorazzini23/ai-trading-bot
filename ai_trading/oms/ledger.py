@@ -1,5 +1,6 @@
 """Persistent OMS ledger for idempotent client order IDs."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import hashlib
 import json
@@ -65,7 +66,7 @@ class OrderLedger:
                     self._seen.add(str(client_order_id))
         except FileNotFoundError:
             return
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             logger.warning("LEDGER_LOAD_FAILED", extra={"error": str(exc)})
 
     def seen_client_order_id(self, client_order_id: str) -> bool:

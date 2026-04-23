@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import math
 from dataclasses import asdict, dataclass
@@ -237,7 +238,7 @@ def fetch_market_movers(
             last_updated=_parse_datetime(payload.get("last_updated"), default=now or _now_utc()),
             used_fallback=False,
         )
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.warning(
             "ALPACA_SCREENER_REFRESH_FAILED",
             extra={
@@ -307,7 +308,7 @@ def fetch_most_actives(
             last_updated=_parse_datetime(payload.get("last_updated"), default=now or _now_utc()),
             used_fallback=False,
         )
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.warning(
             "ALPACA_SCREENER_REFRESH_FAILED",
             extra={

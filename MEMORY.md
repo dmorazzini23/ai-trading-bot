@@ -6,4 +6,4 @@
 - `/healthz` is served on `http://127.0.0.1:9001/healthz`
 - OpenClaw is loopback-only on `127.0.0.1:18789`
 - Slack is the primary operator-facing surface
-- Use `coder` for implementation, `ops` for runtime/service work, and `auditor` for review
+- Use `/model`, `/mode`, and `/think` to control the active OpenClaw model and reasoning level directly

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import logging
 from functools import lru_cache
 
@@ -9,6 +10,6 @@ def missing(pkg: str, feature: str) -> bool:
     try:
         __import__(pkg)
         return False
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.warning("Optional feature '%s' disabled: missing dependency '%s'", feature, pkg)
         return True

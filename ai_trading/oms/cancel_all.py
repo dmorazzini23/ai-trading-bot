@@ -1,5 +1,6 @@
 """Utilities for cancel-all order hygiene operations."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -68,7 +69,7 @@ def cancel_all_open_orders(ctx: Any) -> CancelAllResult:
 
     try:
         open_orders = _list_open_orders(api)
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.warning("CANCEL_ALL_LIST_FAILED", extra={"error": str(exc)})
         return CancelAllResult(
             total_open=0,
@@ -85,7 +86,7 @@ def cancel_all_open_orders(ctx: Any) -> CancelAllResult:
         try:
             _cancel_order(api, order)
             cancelled += 1
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             failed += 1
             errors.append(
                 {

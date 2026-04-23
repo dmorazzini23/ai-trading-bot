@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Summarize realized trade and decision-gate performance from runtime artifacts."""
 
@@ -1306,7 +1307,7 @@ def _summarize_broker_open_positions() -> dict[str, Any]:
             "broker_open_position_snapshots": broker_position_snapshots,
             "broker_open_positions_error": None,
         }
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {
             "broker_open_positions_available": False,
             "broker_open_position_count": 0,
@@ -1561,20 +1562,20 @@ def _load_trade_rows(path: Path) -> list[dict[str, Any]]:
     if suffix in {".parquet", ".pq"}:
         try:
             frame = pd.read_parquet(path)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             try:
                 frame = pd.read_pickle(path)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 frame = None
     elif suffix in {".pkl", ".pickle"}:
         try:
             frame = pd.read_pickle(path)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             frame = None
     elif suffix == ".csv":
         try:
             frame = pd.read_csv(path)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             frame = None
     if frame is None:
         return []
@@ -3434,7 +3435,7 @@ def summarize_gate_effectiveness(
             summary["daily_gate_stats"] = _summarize_gate_effectiveness_daily(
                 resolved_gate_log
             )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             summary["daily_gate_stats"] = []
     if not path.exists():
         return summary
@@ -3922,7 +3923,7 @@ def summarize_oms_event_tca() -> dict[str, Any]:
         summary["enabled"] = True
         summary["available"] = True
         return summary
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {"enabled": True, "available": False, "error": str(exc)}
 
 
@@ -3970,7 +3971,7 @@ def summarize_oms_invariants() -> dict[str, Any]:
         summary["enabled"] = True
         summary["available"] = True
         return summary
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
 
 
@@ -4018,7 +4019,7 @@ def summarize_oms_lifecycle_parity() -> dict[str, Any]:
         summary["enabled"] = True
         summary["available"] = True
         return summary
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
 
 

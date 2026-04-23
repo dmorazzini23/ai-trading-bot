@@ -1,5 +1,6 @@
 """Kelly Criterion implementation for optimal position sizing."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import math
 import statistics
 from dataclasses import dataclass
@@ -83,7 +84,7 @@ def get_default_config() -> TradingConfig:
     loader = _CONFIG_LOADER or _strict_env_loader
     try:
         candidate = loader()
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.error("Kelly default config loader failed: %s", exc)
         candidate = _build_safe_default()
     if not isinstance(candidate, TradingConfig):  # pragma: no cover - defensive
@@ -264,12 +265,12 @@ class KellyCalculator:
         try:
             lb = getattr(cfg, "lookback_periods", None)
             self.lookback_periods = lb if isinstance(lb, int) and lb > 0 else 252
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             self.lookback_periods = 252
         try:
             rf = getattr(cfg, "rebalance_frequency", None)
             self.rebalance_frequency = rf if isinstance(rf, int) and rf > 0 else 21
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             self.rebalance_frequency = 21
         self.calculation_history = []
         logger.info('KellyCalculator initialized')

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import argparse
 from collections import Counter
@@ -308,7 +309,7 @@ def _load_replay_model_context(args: argparse.Namespace) -> ReplayModelContext |
         return None
     try:
         model = load_verified_joblib_artifact(model_path)
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.warning(
             "OFFLINE_REPLAY_MODEL_LOAD_FAILED",
             extra={"model_path": str(model_path), "error": str(exc)},
@@ -372,7 +373,7 @@ def _safe_rsi(close_values: np.ndarray) -> np.ndarray:
     try:
         out = rsi_indicator(tuple(close_values.tolist()), 14)
         arr = np.asarray(out, dtype=float)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return cast(np.ndarray, np.zeros_like(close_values, dtype=float))
     if arr.size != close_values.size:
         return cast(np.ndarray, np.zeros_like(close_values, dtype=float))
@@ -686,7 +687,7 @@ def _compute_model_signal(
                 "OFFLINE_REPLAY_MODEL_SCORING_SIZE_MISMATCH",
                 extra={"symbol": symbol, "expected": int(probs.size), "actual": int(pred_probs.size)},
             )
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.warning(
             "OFFLINE_REPLAY_MODEL_SCORING_FAILED",
             extra={"symbol": symbol, "error": str(exc)},
@@ -1801,7 +1802,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         payload = _run_replay(args)
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.error("OFFLINE_REPLAY_FAILED", extra={"error": str(exc)}, exc_info=True)
         return 1
 

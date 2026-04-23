@@ -11,6 +11,7 @@ ensures a trade log exists and adds a bit of behaviour used by tests:
   header.
 """
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from pathlib import Path
 import csv
@@ -82,7 +83,7 @@ def run_all_trades(
     for sym in symbols:
         try:
             res = api(sym)
-        except Exception as exc:  # pragma: no cover - exercised in tests
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - exercised in tests
             logger.warning("API_ERROR", exc_info=exc)
             continue
         results.append(res)

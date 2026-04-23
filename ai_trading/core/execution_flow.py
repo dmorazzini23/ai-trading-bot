@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Execution flow helpers decoupled from bot_engine."""
 
@@ -45,7 +46,7 @@ def poll_order_fill_status(ctx: Any, order_id: str, timeout: int | float = 120) 
     start_wall = pytime.time()
     try:
         start_monotonic = pytime.monotonic()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         start_monotonic = None
     synthetic_elapsed = 0.0
     interval = 0.2 if timeout_s <= 1 else min(1.0, max(0.2, timeout_s / 10))
@@ -59,12 +60,12 @@ def poll_order_fill_status(ctx: Any, order_id: str, timeout: int | float = 120) 
         if start_monotonic is not None:
             try:
                 monotonic_elapsed = max(0.0, float(pytime.monotonic() - start_monotonic))
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 monotonic_elapsed = 0.0
             elapsed = max(elapsed, monotonic_elapsed)
         try:
             wall_elapsed = max(0.0, float(pytime.time() - start_wall))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             wall_elapsed = 0.0
         return max(elapsed, wall_elapsed)
 
@@ -88,7 +89,7 @@ def poll_order_fill_status(ctx: Any, order_id: str, timeout: int | float = 120) 
                 if hasattr(obj, target):
                     try:
                         setattr(obj, target, value)
-                    except Exception:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         # Ignore read-only attributes from broker SDKs
                         logger.debug(
                             "ORDER_ATTR_NORMALIZE_SET_FAILED",
@@ -288,12 +289,12 @@ def vwap_pegged_submit(
                     if slippage_total:
                         try:
                             slippage_total.inc(abs(slip))  # type: ignore[union-attr]
-                        except Exception:
+                        except AI_TRADING_FALLBACK_EXCEPTIONS:
                             logger.debug("VWAP_SLIPPAGE_TOTAL_METRIC_INC_FAILED", exc_info=True)
                     if slippage_count:
                         try:
                             slippage_count.inc()  # type: ignore[union-attr]
-                        except Exception:
+                        except AI_TRADING_FALLBACK_EXCEPTIONS:
                             logger.debug("VWAP_SLIPPAGE_COUNT_METRIC_INC_FAILED", exc_info=True)
                     _slippage_log.append((symbol, vwap_price, fill_price, datetime.now(UTC)))
                     with slippage_lock:  # type: ignore[arg-type]
@@ -302,7 +303,7 @@ def vwap_pegged_submit(
                                 csv.writer(sf).writerow(
                                     [utc_now_iso(), symbol, vwap_price, fill_price, slip]
                                 )
-                        except Exception:
+                        except AI_TRADING_FALLBACK_EXCEPTIONS:
                             logger.debug("VWAP_SLIPPAGE_LOG_APPEND_FAILED", exc_info=True)
                 break
             except APIError as e:
@@ -364,13 +365,13 @@ def send_exit_order(
                 continue
             try:
                 snapshot_qty = abs(int(float(getattr(raw_pos, "qty", 0) or 0.0)))
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 snapshot_qty = 0
             break
     try:
         pos = ctx.api.get_position(symbol)
         held_qty = abs(int(float(getattr(pos, "qty", 0) or 0.0)))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         held_qty = snapshot_qty
     if held_qty <= 0 and snapshot_qty > 0:
         held_qty = snapshot_qty
@@ -412,7 +413,7 @@ def send_exit_order(
                     time_in_force=TimeInForce.DAY,
                 ),
             )
-    except Exception as e:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as e:
         logger.error(
             "BROKER_OP_FAILED",
             extra={
@@ -524,7 +525,7 @@ def pov_submit(
         except APIError as e:
             logger.warning(f"[pov_submit] Alpaca quote failed for {symbol}: {e}")
             spread = 0.0
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             spread = 0.0
 
         vol = float(df["volume"].iloc[-1])
@@ -566,7 +567,7 @@ def pov_submit(
                 partial_fill_summaries.append(partial_summary)
                 logger.warning("POV_SLICE_PARTIAL_FILL", extra=partial_summary)
             placed = new_total_filled
-        except Exception as e:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as e:
             logger.exception(
                 f"[pov_submit] submit_order failed on slice, aborting: {e}",
                 extra={"symbol": symbol},
@@ -662,7 +663,7 @@ def execute_entry(ctx: Any, symbol: str, qty: int, side: str) -> None:
         if buying_pw <= 0:
             logger.info("NO_BUYING_POWER", extra={"symbol": symbol})
             return
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.warning("Failed to get buying power for %s: %s", symbol, exc)
         return
     if qty is None or qty <= 0 or not np.isfinite(qty):
@@ -737,7 +738,7 @@ def execute_exit(ctx: Any, state: Any, symbol: str, qty: int) -> None:
     send_exit_order(ctx, symbol, qty, exit_price, "manual_exit")
     try:
         ctx.trade_logger.log_exit(state, symbol, exit_price)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("TRADE_LOG_EXIT_RECORD_FAILED", extra={"symbol": symbol}, exc_info=True)
     with targets_lock:
         ctx.take_profit_targets.pop(symbol, None)

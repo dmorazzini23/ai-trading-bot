@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import json
 import hmac
@@ -36,7 +37,7 @@ def _managed_env(name: str, default: Any = None) -> Any:
         if name in {"PYTEST_RUNNING", "PYTEST_CURRENT_TEST", "TESTING"}:
             return _managed_get_env(name, default, resolve_aliases=False)
         return _managed_get_env(name, default)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return default
 
 _log = get_logger(__name__)
@@ -162,7 +163,7 @@ def run_standalone_healthcheck_app(
             "HEALTHCHECK_PORT_CONFLICT",
             extra={"host": host, "port": port, "error": str(exc)},
         )
-    except Exception as exc:  # pragma: no cover - defensive
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
         active_logger.warning(
             "HEALTH_SERVER_START_FAILED",
             extra={"host": host, "port": port, "error": str(exc)},
@@ -556,7 +557,7 @@ def suppress_flask_startup_noise() -> None:
 
         if hasattr(_flask_cli, "show_server_banner"):
             _flask_cli.show_server_banner = lambda *_args, **_kwargs: None
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         _log.debug("FLASK_STARTUP_BANNER_SUPPRESS_FAILED", exc_info=True)
 
 
@@ -582,7 +583,7 @@ def _normalize_health_payload(raw: Mapping | None) -> dict[str, Any]:
     if not timestamp_val:
         try:
             payload["timestamp"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             payload["timestamp"] = ""
     payload.setdefault("ok", False)
     payload["ok"] = bool(payload["ok"])
@@ -603,7 +604,7 @@ def create_app(
     """Create and configure the Flask application."""
     try:
         FlaskClass = import_module("flask.app").Flask
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         FlaskClass = Flask
     app = FlaskClass(__name__)
 
@@ -686,7 +687,7 @@ def create_app(
         serialization_failed = False
         try:
             response = jsonify(dict(sanitized_payload))
-        except Exception as exc:  # pragma: no cover - defensive fallback
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive fallback
             response = None
             serialization_failed = True
             fallback_used = True
@@ -705,7 +706,7 @@ def create_app(
             if has_get_data and has_status:
                 try:
                     response.status_code = status
-                except Exception:  # pragma: no cover - defensive
+                except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                     pass
                 return response
 
@@ -752,7 +753,7 @@ def create_app(
 
         try:
             body = json.dumps(sanitized_payload, default=str)
-        except Exception as exc:  # pragma: no cover - defensive
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
             _log.exception("HEALTH_JSON_ENCODE_FAILED", exc_info=exc)
             serialization_failed = True
             extra_reason = str(exc).strip() or exc.__class__.__name__ or "serialization_error"
@@ -806,7 +807,7 @@ def create_app(
         if callable(response_factory):
             try:
                 response = response_factory(payload)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 response = None
             if response is not None:
                 if isinstance(response, Mapping):
@@ -820,7 +821,7 @@ def create_app(
             if response is not None:
                 try:
                     response.status_code = status
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     pass
                 return response
         return payload if status == 200 else (payload, status)
@@ -936,7 +937,7 @@ def create_app(
                 if callable(getattr(resp, "get_json", None)):
                     try:
                         payload = resp.get_json()
-                    except Exception:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         payload = resp
                 if isinstance(payload, Mapping):
                     payload_dict = dict(payload)
@@ -947,7 +948,7 @@ def create_app(
                 normalized_payload = _normalize_health_payload(payload_dict)
                 try:
                     body = json.dumps(normalized_payload, default=str)
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     fallback_payload = _normalize_health_payload(
                         {
                             "ok": False,
@@ -988,7 +989,7 @@ def create_app(
             if callable(snapshot_fn):
                 try:
                     snapshot = snapshot_fn()
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     _log.debug("BROKER_DIAG_SNAPSHOT_FAILED", exc_info=True)
                     payload["broker"] = {"error": "snapshot_failed"}
                 else:
@@ -997,7 +998,7 @@ def create_app(
                     else:
                         payload["broker"] = {"error": "snapshot_invalid"}
             return _safe_response(payload, status=200)
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             _log.warning("DIAG_UNAVAILABLE", extra={"error": str(exc)})
             return _safe_response({"ok": False, "error": "diagnostics unavailable"}, status=503)
 
@@ -1365,7 +1366,7 @@ def create_app(
             if callable(getattr(resp, "get_json", None)):
                 try:
                     payload = resp.get_json()
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     payload = resp
             if isinstance(payload, Mapping):
                 payload_dict = dict(payload)
@@ -1376,7 +1377,7 @@ def create_app(
             normalized_payload = _normalize_health_payload(payload_dict)
             try:
                 body = json.dumps(normalized_payload, default=str)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 fallback_payload = _normalize_health_payload(
                     {
                         "ok": False,

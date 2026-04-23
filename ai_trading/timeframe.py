@@ -8,6 +8,7 @@ underlying SDK changes implementation details.
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from typing import Any
 
@@ -44,7 +45,7 @@ def _resolve_timeframe_unit_cls() -> Any:
 
         if all(hasattr(_FallbackUnit, name) for name in ("Minute", "Hour", "Day", "Week", "Month")):
             return _FallbackUnit
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("FALLBACK_TIMEFRAME_UNIT_IMPORT_FAILED", exc_info=True)
 
     class _UnitFallback:
@@ -66,7 +67,7 @@ class TimeFrame(_BaseTimeFrame):  # type: ignore[misc]
             unit = getattr(unit_cls, "Day", "Day")
         try:
             super().__init__(amount, unit)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug(
                 "TIMEFRAME_BASE_INIT_FAILED",
                 extra={"amount": amount, "unit": unit},
@@ -76,7 +77,7 @@ class TimeFrame(_BaseTimeFrame):  # type: ignore[misc]
             # base-class validation can crash. Keep a lightweight usable object.
             try:
                 amount_value = int(amount)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 amount_value = 1
             if amount_value <= 0:
                 amount_value = 1
@@ -115,7 +116,7 @@ def canonicalize_timeframe(tf: Any) -> TimeFrame:
     try:
         if isinstance(tf, TimeFrame) and tf.__class__ is TimeFrame:
             return tf
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("TIMEFRAME_INSTANCE_CHECK_FAILED", exc_info=True)
 
     unit_cls = _resolve_timeframe_unit_cls()
@@ -131,7 +132,7 @@ def canonicalize_timeframe(tf: Any) -> TimeFrame:
                 name = getattr(unit, "name", str(unit)).capitalize()
                 unit = getattr(unit_cls, name, unit_cls.Day)
             return TimeFrame(int(amount), unit)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("TIMEFRAME_ATTR_COERCE_FAILED", exc_info=True)
 
     try:
@@ -159,7 +160,7 @@ def canonicalize_timeframe(tf: Any) -> TimeFrame:
                 }.get(unit_name, unit_name)
                 unit = getattr(unit_cls, unit_name, unit_cls.Day)
                 return TimeFrame(amt, unit)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("TIMEFRAME_STRING_PARSE_FAILED", extra={"value": tf}, exc_info=True)
 
     return TimeFrame()

@@ -4,6 +4,7 @@ Enhanced Pre-Trade Validation System.
 Comprehensive pre-trade checks including liquidity analysis, risk validation,
 compliance checks, and market condition assessment for institutional trading.
 """
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -72,7 +73,7 @@ class MarketHoursValidator:
         if self._mcal is not None:
             try:
                 self._calendar = self._mcal.get_calendar('XNYS')
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 self._calendar = None
         logger.debug('MarketHoursValidator initialized')
 
@@ -103,7 +104,7 @@ class MarketHoursValidator:
                             # Normalize to UTC for comparison
                             open_utc = open_ts.tz_convert('UTC') if getattr(open_ts, 'tz', None) else open_ts
                             close_utc = close_ts.tz_convert('UTC') if getattr(close_ts, 'tz', None) else close_ts
-                        except Exception:
+                        except AI_TRADING_FALLBACK_EXCEPTIONS:
                             # last-resort: compare as-is
                             open_utc, close_utc = open_ts, close_ts
                         now_utc = pd.Timestamp(check_time)

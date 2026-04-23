@@ -6,6 +6,7 @@ and real-time execution monitoring with institutional controls.
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.logging import get_logger
 import builtins
 import hashlib
@@ -24,7 +25,7 @@ from urllib.parse import urlparse
 
 try:  # pragma: no cover - Alpaca SDK optional in tests
     from alpaca.common.exceptions import APIError as _ImportedAPIError
-except Exception:  # ImportError
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # ImportError
 
     class _FallbackAPIError(Exception):
         """Fallback when Alpaca SDK is unavailable."""
@@ -32,6 +33,12 @@ except Exception:  # ImportError
     APIError: type[Exception] = _FallbackAPIError
 else:
     APIError = _ImportedAPIError
+
+
+EXECUTION_ENGINE_FALLBACK_EXCEPTIONS: tuple[type[Exception], ...] = (
+    *AI_TRADING_FALLBACK_EXCEPTIONS,
+    APIError,
+)
 
 
 from ai_trading.logging.emit_once import emit_once
@@ -110,7 +117,7 @@ def _safe_counter_inc(
         payload.update(extra)
     try:
         counter.inc(float(amount))
-    except Exception as exc:
+    except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as exc:
         logger.debug("METRIC_INCREMENT_FAILED", extra=payload, exc_info=exc)
 
 from ai_trading.monitoring.order_health_monitor import (
@@ -258,7 +265,7 @@ def _normalize_order_side(side: OrderSide | str | None) -> OrderSide | None:
         return None
     try:
         return OrderSide(str(side).lower())
-    except Exception:
+    except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
         logger.debug("ORDER_SIDE_NORMALIZE_FAILED", extra={"side": side}, exc_info=True)
         return None
 
@@ -286,7 +293,7 @@ def _deterministic_fill_jitter_ratio(*parts: Any) -> float:
     if callable(patched_hash) and patched_hash is not builtins.hash:
         try:
             bucket = int(patched_hash("|".join(str(part) for part in parts))) % 100
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             bucket = 0
         return (bucket - 50) / 10000.0
 
@@ -517,7 +524,7 @@ class ExecutionResult(str):
         candidate = getattr(raw_side, "value", raw_side)
         try:
             normalized = str(candidate).strip().lower()
-        except Exception:  # pragma: no cover - defensive
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             logger.debug("ORDER_EVENT_SIDE_NORMALIZE_FAILED", exc_info=True)
             return None
         if not normalized:
@@ -542,7 +549,7 @@ class ExecutionResult(str):
             return None
         try:
             text = str(sym).strip()
-        except Exception:  # pragma: no cover - defensive
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             logger.debug("ORDER_EVENT_SYMBOL_NORMALIZE_FAILED", exc_info=True)
             return None
         return text or None
@@ -555,7 +562,7 @@ class ExecutionResult(str):
             return None
         try:
             return OrderStatus(str(status))
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             logger.debug("ORDER_STATUS_NORMALIZE_FAILED", extra={"status": status}, exc_info=True)
             return None
 
@@ -693,7 +700,7 @@ class OrderManager:
                     "database_name": database_name,
                 },
             )
-        except Exception as exc:  # pragma: no cover - defensive
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
             logger.warning(
                 "OMS_INTENT_STORE_INIT_FAILED",
                 extra={
@@ -788,7 +795,7 @@ class OrderManager:
                 record.intent_id,
                 stale_after_seconds=max(1, int(stale_after_seconds)),
             )
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             logger.debug("OMS_EXTERNAL_INTENT_CLAIM_FAILED", exc_info=True)
         return str(record.intent_id)
 
@@ -870,7 +877,7 @@ class OrderManager:
         if reported_qty <= 0.0:
             try:
                 persisted_fills = store.list_fills(resolved_intent_id)
-            except Exception:
+            except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                 persisted_fills = []
             if persisted_fills:
                 reported_qty = float(
@@ -976,7 +983,7 @@ class OrderManager:
 
         try:
             open_intents = self._intent_store.get_open_intents()
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             logger.debug("OMS_INTENT_RECONCILE_LOAD_FAILED", exc_info=True)
             summary["errors"] += 1
             return summary
@@ -1019,7 +1026,7 @@ class OrderManager:
                 fetched = list_orders_fn(status="open")  # type: ignore[misc]
             except TypeError:
                 fetched = list_orders_fn()  # type: ignore[misc]
-            except Exception:
+            except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                 logger.debug("OMS_INTENT_RECONCILE_BROKER_FETCH_FAILED", exc_info=True)
                 summary["errors"] += 1
                 fetched = ()
@@ -1077,7 +1084,7 @@ class OrderManager:
                                 intent.intent_id,
                                 str(raw_order_id),
                             )
-                        except Exception:
+                        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                             logger.debug(
                                 "OMS_INTENT_RECONCILE_MARK_SUBMITTED_FAILED",
                                 exc_info=True,
@@ -1114,7 +1121,7 @@ class OrderManager:
                             f"{stale_age_seconds if stale_age_seconds is not None else 'stale'}s"
                         ),
                     )
-                except Exception:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                     logger.debug(
                         "OMS_INTENT_RECONCILE_CLOSE_STALE_SUBMIT_FAILED",
                         extra={"intent_id": intent.intent_id},
@@ -1130,7 +1137,7 @@ class OrderManager:
                 if callable(get_order_by_id_fn) and intent.broker_order_id:
                     try:
                         recovered_order = get_order_by_id_fn(str(intent.broker_order_id))
-                    except Exception:
+                    except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                         logger.debug(
                             "OMS_INTENT_RECONCILE_ORDER_LOOKUP_FAILED",
                             extra={
@@ -1148,7 +1155,7 @@ class OrderManager:
                         recovered_order = get_order_by_client_order_id_fn(
                             str(intent.intent_id)
                         )
-                    except Exception:
+                    except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                         logger.debug(
                             "OMS_INTENT_RECONCILE_CLIENT_LOOKUP_FAILED",
                             extra={"intent_id": intent.intent_id},
@@ -1220,7 +1227,7 @@ class OrderManager:
                                 filled_qty=recovered_filled_qty,
                                 fill_price=recovered_fill_price,
                             )
-                        except Exception:
+                        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                             logger.debug(
                                 "OMS_INTENT_RECONCILE_CLOSE_FAILED",
                                 extra={
@@ -1325,7 +1332,7 @@ class OrderManager:
                                 "price_source": getattr(quote_info, "source", "unknown"),
                             },
                         )
-                except Exception as e:  # pragma: no cover - diagnostics only
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - diagnostics only
                     logger.debug(
                         "EXPECTED_PRICE_REFRESH_FAILED",
                         extra={
@@ -1401,7 +1408,7 @@ class OrderManager:
                     else:
                         self._intent_by_order_id[order.id] = order.id
                     self._intent_reported_fill_qty.setdefault(order.id, 0.0)
-                except Exception:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                     logger.debug("OMS_INTENT_LOOKUP_FAILED", exc_info=True)
                     self._intent_by_order_id[order.id] = order.id
             self.orders[order.id] = order
@@ -1464,7 +1471,7 @@ class OrderManager:
             if self._intent_store is not None:
                 try:
                     self._intent_store.record_submit_error(order.id, str(e))
-                except Exception:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                     logger.debug("OMS_INTENT_SUBMIT_ERROR_RECORD_FAILED", exc_info=True)
             return None
 
@@ -1585,7 +1592,7 @@ class OrderManager:
             else:
                 try:
                     age_seconds = (current_time - order.created_at).total_seconds()
-                except Exception:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                     age_seconds = float("inf")
             if age_seconds > self.order_timeout:
                 expired_orders.append(order_id)
@@ -1668,7 +1675,7 @@ class OrderManager:
         try:
             try:
                 self._sync_intent_with_order_event(order, event_type)
-            except Exception:
+            except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                 logger.debug("OMS_INTENT_SYNC_FAILED", exc_info=True)
             for callback in self.execution_callbacks:
                 try:
@@ -1781,7 +1788,7 @@ class ExecutionEngine:
         emit_once(logger, "EXECUTION_ENGINE_INIT", "info", "ExecutionEngine initialized")
         try:
             self.order_manager.add_execution_callback(self._handle_execution_event)
-        except Exception:  # pragma: no cover - defensive, callbacks optional in some tests
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive, callbacks optional in some tests
             logger.debug("EXECUTION_CALLBACK_REGISTRATION_FAILED", exc_info=True)
 
     def _load_execution_cost_model(self) -> None:
@@ -1856,7 +1863,7 @@ class ExecutionEngine:
                         "lookback_days": lookback_days,
                     },
                 )
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             self.logger.debug("EXEC_COST_MODEL_LOAD_FAILED", exc_info=True)
             self._execution_cost_model = None
 
@@ -1878,7 +1885,7 @@ class ExecutionEngine:
             from ai_trading.execution.slippage_log import get_ewma_cost_bps
 
             tca_hint = get_ewma_cost_bps(symbol, default=2.0)
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             tca_hint = None
         try:
             estimate = model.estimate_cost_bps(
@@ -1887,7 +1894,7 @@ class ExecutionEngine:
                 participation_rate=participation_rate,
                 tca_cost_bps=tca_hint,
             )
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             self.logger.debug("EXEC_COST_ESTIMATE_FAILED", exc_info=True)
             return None
         if not math.isfinite(estimate) or estimate <= 0:
@@ -1912,7 +1919,7 @@ class ExecutionEngine:
                 ExecutionPolicy,
                 select_execution_policy,
             )
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             self.logger.debug("EXEC_POLICY_SELECTOR_IMPORT_FAILED", exc_info=True)
             return {"selected": False}
 
@@ -2129,7 +2136,7 @@ class ExecutionEngine:
         if not isinstance(resolved_order_type, OrderType):
             try:
                 resolved_order_type = OrderType(str(order_type).lower())
-            except Exception:
+            except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                 resolved_order_type = OrderType.MARKET
 
         duration_raw = (
@@ -2406,7 +2413,7 @@ class ExecutionEngine:
         try:
             # Best-effort cleanup of very old tracked orders
             self.cleanup_stale_orders()
-        except Exception as exc:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as exc:
             # Never allow lifecycle hooks to raise
             logger.debug("START_CYCLE_CLEANUP_FAILED", exc_info=exc)
 
@@ -2463,7 +2470,7 @@ class ExecutionEngine:
                 return None
             try:
                 text = str(value).strip()
-            except Exception:  # pragma: no cover - defensive
+            except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 self.logger.debug("BROKER_SNAPSHOT_SYMBOL_NORMALIZE_FAILED", exc_info=True)
                 return None
             if not text:
@@ -2475,7 +2482,7 @@ class ExecutionEngine:
                 return None
             try:
                 text = str(value).strip().lower()
-            except Exception:  # pragma: no cover - defensive
+            except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 self.logger.debug("BROKER_SNAPSHOT_SIDE_NORMALIZE_FAILED", exc_info=True)
                 return None
             if text in {"buy", "long", "cover"}:
@@ -2539,7 +2546,7 @@ class ExecutionEngine:
         self._open_order_qty_index = qty_index
         try:
             self._update_position_tracker_snapshot(positions_tuple)
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             self.logger.debug(
                 "BROKER_SYNC_POSITION_TRACKER_UPDATE_FAILED",
                 exc_info=True,
@@ -2551,7 +2558,7 @@ class ExecutionEngine:
                 open_buy_by_symbol=buy_index,
                 open_sell_by_symbol=sell_index,
             )
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             self.logger.debug("BROKER_SYNC_RUNTIME_SNAPSHOT_EMIT_FAILED", exc_info=True)
         return snapshot
 
@@ -2628,7 +2635,7 @@ class ExecutionEngine:
             from ai_trading.oms.event_store import EventStore
 
             self._runtime_snapshot_store = EventStore()
-        except Exception as exc:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as exc:
             self._runtime_snapshot_store_init_failed = True
             self.logger.warning(
                 "RUNTIME_SNAPSHOT_STORE_INIT_FAILED",
@@ -2658,7 +2665,7 @@ class ExecutionEngine:
             from ai_trading.oms.event_store import EventStore
 
             self._execution_audit_store = EventStore()
-        except Exception as exc:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as exc:
             self._execution_audit_store_init_failed = True
             self.logger.warning(
                 "EXECUTION_AUDIT_STORE_INIT_FAILED",
@@ -2715,7 +2722,7 @@ class ExecutionEngine:
                     payload=payload,
                 )
             )
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             logger.debug("PARENT_EXECUTION_SUMMARY_PERSIST_FAILED", exc_info=True)
             return False
 
@@ -2974,7 +2981,7 @@ class ExecutionEngine:
             if getattr(ord_obj, "status", "").lower() == "new":
                 self.broker_interface.cancel_order(order_id)
             return True
-        except Exception as exc:  # pragma: no cover - broker interface may vary
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - broker interface may vary
             logger.debug("Failed to cancel stale order %s: %s", order_id, exc)
             return False
 
@@ -3094,7 +3101,7 @@ class ExecutionEngine:
                             "requested_qty": int(rq),
                         },
                     )
-                except Exception as exc:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as exc:
                     self.logger.debug("QUANTITY_MISMATCH_LOG_FAILED", exc_info=exc)
 
             # Choose the more reliable filled metric: prefer broker value only when it matches calculation
@@ -3124,7 +3131,7 @@ class ExecutionEngine:
                 # Human-readable detail to satisfy substring checks in some tests
                 try:
                     self.logger.info(f"PARTIAL_FILL_DETAILS requested={int(rq)} filled={int(filled_for_eval)}")
-                except Exception as exc:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as exc:
                     self.logger.debug("PARTIAL_FILL_DETAIL_LOG_FAILED", exc_info=exc)
                 # Thresholds per tests:
                 # - LOW at <= 20%
@@ -3256,7 +3263,7 @@ class ExecutionEngine:
                             cap_value = float(current_cap) if current_cap is not None else float(
                                 EXECUTION_PARAMETERS.get("MAX_SLIPPAGE_BPS", 50)
                             )
-                        except Exception:
+                        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                             cap_value = float(EXECUTION_PARAMETERS.get("MAX_SLIPPAGE_BPS", 50))
                         derived_cap = max(cap_value, cost_floor_bps * 2.0)
                         kwargs["max_slippage_bps"] = derived_cap
@@ -3339,7 +3346,7 @@ class ExecutionEngine:
                                     "price_source": getattr(quote_info, "source", "unknown"),
                                 },
                             )
-                    except Exception as e:  # pragma: no cover - diagnostics only
+                    except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - diagnostics only
                         logger.debug(
                             "EXPECTED_PRICE_FETCH_FAILED",
                             extra={"symbol": symbol, "cause": e.__class__.__name__},
@@ -3406,7 +3413,7 @@ class ExecutionEngine:
 
                         twap_min_qty = int(_EXECUTION_PARAMETERS.get("TWAP_MIN_QTY", 5000))
                         use_twap = quantity >= twap_min_qty
-                    except Exception:
+                    except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                         use_twap = False
                 if use_twap and kwargs.get("execution_algorithm") is None:
                     order.execution_algorithm = ExecutionAlgorithm.TWAP
@@ -3473,7 +3480,7 @@ class ExecutionEngine:
                             quantity,
                             self._coerce_signal_weight(explicit_signal_weight, signal),
                         )
-                    except Exception:
+                    except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                         self.logger.debug("ALGO_PARENT_ROUTE_FALLBACK_TO_DIRECT", exc_info=True)
             if self.order_manager.submit_order(order):
                 self.execution_stats["total_orders"] += 1
@@ -3548,7 +3555,7 @@ class ExecutionEngine:
         else:
             try:
                 order_type = OrderType(str(order_type_value).lower())
-            except Exception:
+            except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                 order_type = OrderType.MARKET
         asset_class = kwargs.pop("asset_class", None)
         parent_order_id = str(
@@ -3906,7 +3913,7 @@ class ExecutionEngine:
             else:
                 try:
                     normalized_order_type = OrderType(str(per_order_type).lower())
-                except Exception:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                     normalized_order_type = order_type
 
             submitted = False
@@ -4116,7 +4123,7 @@ class ExecutionEngine:
                 for key in fee_keys:
                     try:
                         candidate = fill.get(key)
-                    except Exception:
+                    except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                         candidate = None
                     try:
                         parsed = float(candidate) if candidate is not None else None
@@ -4228,9 +4235,9 @@ class ExecutionEngine:
                     fill_price=price,
                     timestamp=timestamp if isinstance(timestamp, datetime) else datetime.now(UTC),
                 )
-            except Exception:
+            except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                 logger.debug("SLIPPAGE_EWMA_UPDATE_FAILED", exc_info=True)
-        except Exception:  # pragma: no cover - persistence best effort
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:  # pragma: no cover - persistence best effort
             logger.debug("META_TRADE_PERSIST_FAILED", exc_info=True)
 
     def _forward_risk_fill(self, order: Order, delta_qty: int, meta: _SignalMeta) -> bool:
@@ -4253,7 +4260,7 @@ class ExecutionEngine:
                 fill_signal = replace(cast(Any, signal), weight=weight_delta)
             else:
                 fill_signal = signal.__class__(**{**getattr(signal, "__dict__", {}), "weight": weight_delta})
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             self.logger.debug(
                 "RISK_FILL_SIGNAL_CLONE_FAILED",
                 extra={"symbol": getattr(signal, "symbol", None)},
@@ -4297,7 +4304,7 @@ class ExecutionEngine:
                     return float(p) if p is not None else None
                 except (TypeError, ValueError):
                     return None
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             self.logger.debug("EXPECTED_PRICE_GUESS_FAILED", extra={"symbol": symbol}, exc_info=True)
             return None
         return None
@@ -4310,7 +4317,7 @@ class ExecutionEngine:
                 if isinstance(vol, (int, float)) and vol > 0:
                     factor = max(0.5, min(3.0, vol / 0.02))
                     return base_bps * factor
-        except Exception as exc:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as exc:
             self.logger.debug("VOLATILITY_LOOKUP_FAILED", extra={"symbol": symbol}, exc_info=exc)
         return base_bps
 
@@ -4329,7 +4336,7 @@ class ExecutionEngine:
         """
         try:
             diff_bps = ((delayed_price - reference_price) / reference_price) * 10000 if reference_price else 0.0
-        except Exception:
+        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             diff_bps = 0.0
         order.slippage_bps = diff_bps
         side = _normalize_order_side(getattr(order, "side", None))
@@ -4362,7 +4369,7 @@ class ExecutionEngine:
             if order.price is not None:
                 try:
                     base_price = float(order.price)
-                except Exception:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                     base_price = 100.0
                 had_manual_price = True
             else:
@@ -4374,7 +4381,7 @@ class ExecutionEngine:
                     expected = float(order.price)
                 else:
                     expected = float(base_price)
-            except Exception:
+            except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                 expected = float(base_price)
 
             price_source = (
@@ -4386,19 +4393,19 @@ class ExecutionEngine:
             )
             try:
                 base_threshold_candidate = float(base_threshold_env)
-            except Exception:
+            except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                 base_threshold_candidate = float(order.max_slippage_bps)
             if not math.isfinite(base_threshold_candidate) or base_threshold_candidate <= 0:
                 try:
                     base_threshold_candidate = float(EXECUTION_PARAMETERS.get("MAX_SLIPPAGE_BPS", 50))
-                except Exception:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                     base_threshold_candidate = 50.0
             if apply_slippage_controls:
                 base_threshold = base_threshold_candidate
                 if had_manual_price:
                     try:
                         manual_threshold = float(order.max_slippage_bps)
-                    except Exception:
+                    except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                         manual_threshold = base_threshold
                     else:
                         if math.isfinite(manual_threshold) and manual_threshold > 0:
@@ -4416,7 +4423,7 @@ class ExecutionEngine:
                 try:
                     tick = TICK_BY_SYMBOL.get(order.symbol)
                     order.expected_price = Money(base_price, tick)
-                except Exception as exc:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as exc:
                     self.logger.debug(
                         "EXPECTED_PRICE_ASSIGN_FAILED",
                         extra={"symbol": order.symbol, "order_id": order.id},
@@ -4427,7 +4434,7 @@ class ExecutionEngine:
                     expected = float(order.expected_price)
                 else:
                     expected = float(base_price)
-            except Exception:
+            except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                 expected = float(base_price)
             if not math.isfinite(expected) or expected <= 0:
                 expected = float(base_price or 1.0)
@@ -4455,7 +4462,7 @@ class ExecutionEngine:
                 if not math.isfinite(effective_threshold) or effective_threshold <= 0:
                     try:
                         effective_threshold = float(EXECUTION_PARAMETERS.get("MAX_SLIPPAGE_BPS", 50))
-                    except Exception:
+                    except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                         effective_threshold = 50.0
             if testing_mode and adverse_predicted_bps > effective_threshold and effective_threshold > 0:
                 tolerance_default = EXECUTION_PARAMETERS.get("SLIPPAGE_LIMIT_TOLERANCE_BPS", 25.0)
@@ -4464,7 +4471,7 @@ class ExecutionEngine:
                 )
                 try:
                     tolerance_bps = float(tolerance_env)
-                except Exception:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                     tolerance_bps = float(tolerance_default)
                 if not math.isfinite(tolerance_bps) or tolerance_bps < 0:
                     tolerance_bps = float(tolerance_default)
@@ -4482,7 +4489,7 @@ class ExecutionEngine:
                     base_price = float(order.price)
                     try:
                         order.expected_price = Money(base_price, tick)
-                    except Exception:
+                    except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                         order.expected_price = Money(base_price)
                 order.order_type = OrderType.LIMIT
                 logger.warning(
@@ -4545,7 +4552,7 @@ class ExecutionEngine:
                 # Ensure float accumulation to avoid Decimal/float TypeError
                 try:
                     nv = float(getattr(order, "notional_value", 0.0))
-                except Exception:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                     try:
                         avg = getattr(order, "average_fill_price", None)
                         nv = (
@@ -4553,7 +4560,7 @@ class ExecutionEngine:
                             if avg is not None
                             else float(base_price) * float(order.quantity)
                         )
-                    except Exception:
+                    except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                         nv = float(order.quantity) * float(base_price)
                 self.execution_stats["total_volume"] += nv
                 fill_time = (order.executed_at - order.created_at).total_seconds()
@@ -4569,17 +4576,17 @@ class ExecutionEngine:
                         expected = float(order.price)
                     else:
                         expected = float(base_price)
-                except Exception:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                     expected = float(base_price)
                 if not math.isfinite(expected) or expected <= 0:
                     expected = float(base_price or 1.0)
                 try:
                     actual = float(order.average_fill_price) if order.average_fill_price is not None else expected
-                except Exception:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                     actual = expected
                 try:
                     limit_price_val = float(order.price) if order.price is not None else None
-                except Exception:
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
                     limit_price_val = None
                 if limit_price_val and limit_price_val > 0 and side is not None:
                     side_value = getattr(side, "value", str(side)).lower()

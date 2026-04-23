@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """ThreadPool executors for compute/prediction with resource guardrails.
 
@@ -47,11 +48,11 @@ def _ensure_executors() -> None:
     # Clamp to [1, cpu] to respect resource guardrails
     try:
         exec_workers = max(1, min(int(exec_workers), max(1, cpu)))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         exec_workers = default_workers
     try:
         pred_workers = max(1, min(int(pred_workers), max(1, cpu)))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         pred_workers = default_workers
     executor = ThreadPoolExecutor(max_workers=exec_workers)
     prediction_executor = ThreadPoolExecutor(max_workers=pred_workers)
@@ -65,7 +66,7 @@ def cleanup_executors() -> None:
             executor.shutdown(wait=True, cancel_futures=True)
             logger.debug("Main executor shutdown successfully")
             executor = None
-    except Exception as e:  # defensive: never raise in cleanup
+    except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # defensive: never raise in cleanup
         logger.warning("Error shutting down main executor: %s", e)
 
     try:
@@ -73,7 +74,7 @@ def cleanup_executors() -> None:
             prediction_executor.shutdown(wait=True, cancel_futures=True)
             logger.debug("Prediction executor shutdown successfully")
             prediction_executor = None
-    except Exception as e:  # defensive: never raise in cleanup
+    except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # defensive: never raise in cleanup
         logger.warning("Error shutting down prediction executor: %s", e)
 
 

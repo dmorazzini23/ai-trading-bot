@@ -4,6 +4,7 @@ Provides helpers to bootstrap the trading context without triggering
 heavy imports at module import time.
 """
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from types import SimpleNamespace
 from typing import Any
@@ -40,7 +41,7 @@ def start(api: Any | None = None):
     if hasattr(ctx, "_ensure_initialized"):
         try:
             ctx._ensure_initialized()  # type: ignore[attr-defined]
-        except Exception:  # pragma: no cover - defensive
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             logger.debug("RUNNER_CONTEXT_INIT_FAILED", exc_info=True)
     try:
         inner_ctx = object.__getattribute__(ctx, "_context")
@@ -55,7 +56,7 @@ def start(api: Any | None = None):
             inner = SimpleNamespace()
             try:
                 object.__setattr__(ctx, "_fallback_context", inner)
-            except Exception:  # pragma: no cover - defensive
+            except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 logger.debug("RUNNER_FALLBACK_CONTEXT_SET_FAILED", exc_info=True)
     else:
         inner = inner_ctx
@@ -68,7 +69,7 @@ def start(api: Any | None = None):
         if existing_api is None:
             try:
                 existing_api = getattr(inner, "api")
-            except Exception:  # pragma: no cover - defensive
+            except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 existing_api = None
 
     if api is not None:
@@ -78,7 +79,7 @@ def start(api: Any | None = None):
         bot_engine.ensure_alpaca_attached(inner)
         try:
             existing_api = getattr(inner, "api")
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             existing_api = getattr(getattr(inner, "__dict__", {}), "get", lambda *_a, **_k: None)("api")
         if existing_api is None:
             if _allow_test_api_stub():
@@ -95,15 +96,15 @@ def start(api: Any | None = None):
         if final_api is None:
             try:
                 final_api = getattr(inner, "api")
-            except Exception:  # pragma: no cover - defensive
+            except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 final_api = None
     if final_api is not None:
         try:
             setattr(ctx, "api", final_api)
-        except Exception:  # pragma: no cover - defensive
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             try:
                 object.__setattr__(ctx, "api", final_api)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("RUNNER_FINAL_API_ATTACH_FAILED", exc_info=True)
     return inner
 

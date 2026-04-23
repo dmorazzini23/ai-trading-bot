@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import time as _time
 from time import perf_counter as _perf
@@ -14,7 +15,7 @@ def _managed_env(name: str, default: str) -> str:
         from ai_trading.config.management import get_env as _get_env
 
         value = _get_env(name, default, cast=str, resolve_aliases=False)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         value = default
     if value in (None, ""):
         return default

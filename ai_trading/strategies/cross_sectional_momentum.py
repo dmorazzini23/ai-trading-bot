@@ -1,6 +1,7 @@
 """Cross-sectional momentum strategy sleeve."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from typing import Any
 
@@ -48,7 +49,7 @@ class CrossSectionalMomentumStrategy(BaseStrategy):
         for symbol in symbols:
             try:
                 df = fetcher.get_daily_df(ctx, symbol)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 continue
             if df is None or getattr(df, "empty", True) or "close" not in getattr(df, "columns", []):
                 continue
@@ -67,7 +68,7 @@ class CrossSectionalMomentumStrategy(BaseStrategy):
             try:
                 now_px = float(series.iloc[-1])
                 then_px = float(series.iloc[-1 - self.lookback])
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 continue
             if then_px <= 0:
                 continue

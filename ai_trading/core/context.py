@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Context utilities and lightweight singleton access."""
 
@@ -33,7 +34,7 @@ def get_context() -> SimpleNamespace:
     settings: Any
     try:
         settings = get_settings()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         from ai_trading.config import safe_settings
 
         settings = safe_settings()
@@ -44,14 +45,14 @@ def get_context() -> SimpleNamespace:
     api_key = getattr(settings, "alpaca_api_key", None)
     try:
         secret_key = get_alpaca_secret_key_plain()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         secret_key = None
     base_url = str(getattr(settings, "alpaca_base_url", "") or "")
     is_paper = "paper" in base_url.lower()
 
     try:  # pragma: no cover - exercised in integration tests
         from alpaca.trading.client import TradingClient  # type: ignore
-    except Exception:  # pragma: no cover - client unavailable
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - client unavailable
         trading_client: AlpacaTradingClient | None = None
     else:
         try:
@@ -60,12 +61,12 @@ def get_context() -> SimpleNamespace:
                 secret_key=secret_key,
                 paper=is_paper,
             )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             trading_client = None
 
     try:  # pragma: no cover - exercised in integration tests
         from alpaca.data.historical.stock import StockHistoricalDataClient  # type: ignore
-    except Exception:  # pragma: no cover - client unavailable
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - client unavailable
         data_client: AlpacaStockHistoricalDataClient | None = None
     else:
         try:
@@ -73,7 +74,7 @@ def get_context() -> SimpleNamespace:
                 api_key=api_key,
                 secret_key=secret_key,
             )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             data_client = None
 
     _CTX = SimpleNamespace(

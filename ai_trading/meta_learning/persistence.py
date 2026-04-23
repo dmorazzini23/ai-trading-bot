@@ -6,11 +6,13 @@ dependencies in lean deployments.
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+import pickle
 import shutil
 from typing import Any, TYPE_CHECKING
 
@@ -41,6 +43,10 @@ _PATCHED_PARQUET = False
 _READ_FAILURE_LOGGED: set[tuple[str, str, str]] = set()
 _WRITE_FALLBACK_LOGGED: set[str] = set()
 _PARQUET_PICKLE_MIGRATION_LOGGED: set[str] = set()
+META_LEARNING_PERSISTENCE_FALLBACK_EXCEPTIONS: tuple[type[Exception], ...] = (
+    *AI_TRADING_FALLBACK_EXCEPTIONS,
+    pickle.UnpicklingError,
+)
 
 
 def _pytest_active() -> bool:
@@ -71,7 +77,7 @@ def _patch_parquet_fallback(pd: Any) -> None:
         except (ImportError, ModuleNotFoundError, ValueError, OSError) as exc:
             try:
                 return pd.read_pickle(path)
-            except Exception:
+            except META_LEARNING_PERSISTENCE_FALLBACK_EXCEPTIONS:
                 raise exc
 
     pd.read_parquet = _read_parquet  # type: ignore[assignment]
@@ -307,7 +313,7 @@ def _read_parquet(path: Path) -> "pd.DataFrame" | None:
         if sidecar.exists():
             try:
                 return pd.read_pickle(sidecar)
-            except Exception:
+            except META_LEARNING_PERSISTENCE_FALLBACK_EXCEPTIONS:
                 return None
         return None
     try:
@@ -316,7 +322,7 @@ def _read_parquet(path: Path) -> "pd.DataFrame" | None:
         if _is_parquet_path(path) and _looks_like_pickle(path):
             try:
                 migrated = pd.read_pickle(path)
-            except Exception:
+            except META_LEARNING_PERSISTENCE_FALLBACK_EXCEPTIONS:
                 migrated = None
             if migrated is not None:
                 _attempt_parquet_migration(path, migrated)
@@ -325,11 +331,11 @@ def _read_parquet(path: Path) -> "pd.DataFrame" | None:
         if sidecar.exists():
             try:
                 return pd.read_pickle(sidecar)
-            except Exception:
+            except META_LEARNING_PERSISTENCE_FALLBACK_EXCEPTIONS:
                 pass
         try:
             return pd.read_pickle(path)
-        except Exception:
+        except META_LEARNING_PERSISTENCE_FALLBACK_EXCEPTIONS:
             pass
         detail = str(exc)
         detail_lower = detail.lower()
@@ -374,7 +380,7 @@ def _write_parquet(
             sidecar = _pickle_sidecar_path(path)
             try:
                 normalized.to_pickle(sidecar)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.warning(
                     "TRADE_HISTORY_WRITE_FAILED",
                     extra={"path": str(path), "cause": exc.__class__.__name__, "detail": str(exc)},
@@ -401,7 +407,7 @@ def _write_parquet(
                 extra={"path": str(path), "cause": exc.__class__.__name__, "detail": str(exc)},
             )
         return False
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.warning(
             "TRADE_HISTORY_WRITE_FAILED",
             extra={"path": str(path), "cause": exc.__class__.__name__, "detail": str(exc)},
@@ -462,9 +468,9 @@ def _broker_rows(broker: Any) -> Iterable[dict[str, Any]]:
                 try:
                     orders = getattr(broker, name)()
                     break
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     continue
-            except Exception as exc:  # pragma: no cover - defensive
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
                 logger.debug(
                     "TRADE_HISTORY_BROKER_FETCH_FAILED",
                     exc_info=True,

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections.abc import Mapping
 from json import JSONDecodeError
@@ -53,7 +54,7 @@ class ReconciliationService:
                         for symbol, snapshot in live_position_snapshots.items()
                     },
                 )
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("RECONCILIATION_POSITION_SNAPSHOT_SET_FAILED", exc_info=True)
             with targets_lock:
                 symbols_with_targets = list(getattr(ctx, "stop_targets", {}).keys()) + list(

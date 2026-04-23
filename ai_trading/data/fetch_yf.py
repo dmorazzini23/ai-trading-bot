@@ -1,6 +1,7 @@
 """Yahoo Finance batch download helpers."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import datetime as dt
 import hashlib
@@ -14,7 +15,7 @@ import pandas as pd
 
 try:  # optional dependency; tests stub behaviour when absent
     import yfinance as yf
-except Exception:  # pragma: no cover - optional dependency missing
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency missing
     yf = None
 
 from ai_trading.config.management import get_env
@@ -54,7 +55,7 @@ def _yf_cache_dir() -> Path:
     cache_dir = Path(get_env("YF_CACHE_DIR", "/var/cache/ai-trading-bot/yf"))
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("YF_CACHE_DIR_CREATE_FAILED", extra={"path": str(cache_dir)}, exc_info=True)
     return cache_dir
 
@@ -120,7 +121,7 @@ def normalize_yf_interval(interval: str | None) -> str | None:
         return None
     try:
         lowered = str(interval).strip().lower()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("YF_INTERVAL_NORMALIZE_FAILED", extra={"interval": interval}, exc_info=True)
         return None
     if not lowered:
@@ -135,7 +136,7 @@ def _cache_read_or_none(key: str) -> Optional[pd.DataFrame]:
         return None
     try:
         return pd.read_parquet(path)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("YF_CACHE_READ_FAILED", extra={"path": str(path)}, exc_info=True)
         return None
 
@@ -144,7 +145,7 @@ def _cache_write(key: str, df: pd.DataFrame) -> None:
     path = _yf_cache_dir() / key
     try:
         df.to_parquet(path)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("YF_CACHE_WRITE_FAILED", extra={"path": str(path)}, exc_info=True)
 
 
@@ -178,7 +179,7 @@ def fetch_yf_batched(
                         interval=normalized_interval,
                     )
                     break
-                except Exception as exc:  # pragma: no cover - network error surface
+                except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - network error surface
                     _sleep_backoff(attempt)
                     df = None
             if df is None:

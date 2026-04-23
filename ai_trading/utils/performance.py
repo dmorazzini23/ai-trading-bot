@@ -1,6 +1,7 @@
 """Performance optimizations for AI trading system."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import functools
 import hashlib
@@ -342,7 +343,7 @@ def benchmark_operation(operation_name: str, operation_func: Callable, *args, **
     pd = load_pandas()
     try:
         import psutil
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         psutil = None
     gc.collect()
     if psutil is not None:

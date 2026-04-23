@@ -4,6 +4,7 @@ Order idempotency module to prevent duplicate orders on retries.
 Provides TTL cache keyed by (symbol, side, qty, intent_ts_bucket) to ensure
 orders are idempotent across retry attempts.
 """
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import hashlib
 import threading
 from dataclasses import dataclass
@@ -277,10 +278,10 @@ class OrderIdempotencyCache:
                 if age > ttl_seconds:
                     try:
                         del self._cache[key_hash]
-                    except Exception:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         try:
                             self._cache.pop(key_hash, None)  # type: ignore[attr-defined]
-                        except Exception:
+                        except AI_TRADING_FALLBACK_EXCEPTIONS:
                             pass
                     return None
             if isinstance(entry, dict):

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from typing import Any, TYPE_CHECKING, cast
 
@@ -55,7 +56,7 @@ def fetch(
     try:  # pragma: no cover - fast path when bars available
         from ai_trading.data.bars import BarsFetchFailed as _bars_fetch_failed_cls
         bars_fetch_failed_cls = cast(type[BaseException], _bars_fetch_failed_cls)
-    except Exception:  # pragma: no cover - defensive guard
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive guard
         bars_fetch_failed_cls = None
 
     if bars_fetch_failed_cls is not None and isinstance(response, bars_fetch_failed_cls):

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Utility helpers for handling Alpaca IEX feed fallbacks.
 
@@ -55,7 +56,7 @@ def _resolve_fetch_callable(name: str, fallback: Any) -> Any:
         candidate = getattr(fetch_mod, name, None)
         if callable(candidate):
             return candidate
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         pass
     return fallback
 
@@ -68,7 +69,7 @@ def _resolve_fetch_value(name: str, fallback: Any) -> Any:
         if not isinstance(fetch_mod, types.ModuleType):
             fetch_mod = importlib.import_module("ai_trading.data.fetch")
         return getattr(fetch_mod, name, fallback)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return fallback
 
 
@@ -132,7 +133,7 @@ def fetch_bars(
             ),
             1,
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         required_failures = max(int(_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD), 1)
 
     # If previous attempts yielded an empty IEX response we skip straight to SIP

@@ -4,6 +4,7 @@ Market Regime Detection for Dynamic Trading Thresholds.
 This module identifies market regimes (trending, ranging, volatile, crisis) to
 dynamically adjust trading frequency and portfolio rebalancing thresholds.
 """
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import math
 import sys
 import statistics
@@ -36,7 +37,7 @@ def _coerce_market_regime(regime: Any) -> Any:
     raw_value = getattr(regime, "value", regime)
     try:
         return regime_type(raw_value)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return getattr(regime_type, "NORMAL", MarketRegime.NORMAL)
 
 

@@ -1,6 +1,7 @@
 """Utilities for normalizing and caching Alpaca price quote feeds."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import sys
 from typing import Dict, Literal
@@ -34,7 +35,7 @@ def _normalize_feed(value: str | None, *, role: FeedRole = "execution") -> str |
     valid_feeds = _VALID_REFERENCE_FEEDS if role == "reference" else _VALID_EXEC_FEEDS
     try:
         lowered = str(value).strip().lower()
-    except Exception:  # pragma: no cover - defensive
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
         logger.debug("FEED_VALUE_NORMALIZE_FAILED", extra={"value": value}, exc_info=True)
         return None
     if not lowered:
@@ -62,7 +63,7 @@ def _sip_disabled_env(py_mode: bool) -> bool:
     _ = py_mode
     try:
         resolved = resolve_alpaca_feed("sip")
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("SIP_DISABLED_ENV_RESOLVE_FAILED", exc_info=True)
         return True
     return str(resolved).strip().lower() != "sip"
@@ -178,7 +179,7 @@ def _sip_unauthorized() -> bool:
         return False
     try:
         from ai_trading.data import fetch as data_fetcher  # local import to avoid cycles
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("SIP_UNAUTHORIZED_FETCH_IMPORT_FAILED", exc_info=True)
         return False
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Monitoring utilities for external data providers.
 
@@ -59,7 +60,7 @@ def _env_value(
 
     try:
         return get_env(name, default, cast=cast, resolve_aliases=False)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return default
 
 
@@ -94,7 +95,7 @@ def _reason_is_critical(reason: str | None) -> bool:
         return False
     try:
         normalized = str(reason).strip().lower()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         normalized = str(reason).lower()
     if not normalized:
         return False
@@ -161,7 +162,7 @@ def _resolve_switch_cooldown_seconds() -> int:
     candidate: int | None = None
     try:
         settings = get_settings()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         settings = None
     if settings is not None:
         for attr in ("provider_switch_cooldown_sec", "provider_switch_cooldown_seconds"):
@@ -176,20 +177,20 @@ def _resolve_switch_cooldown_seconds() -> int:
     if candidate is None:
         try:
             candidate = get_env("AI_TRADING_PROVIDER_SWITCH_COOLDOWN_SEC", None, cast=int)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             candidate = None
     if candidate is None:
         raw = _env_text("AI_TRADING_PROVIDER_SWITCH_COOLDOWN_SEC").strip()
         if raw:
             try:
                 candidate = int(raw)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 candidate = None
     if candidate is None:
         candidate = 900
     try:
         return max(int(candidate), 0)
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.debug(
             "PROVIDER_SWITCH_COOLDOWN_PARSE_FAILED",
             extra={"value": candidate},
@@ -204,7 +205,7 @@ def _resolve_health_passes_required() -> int:
     candidate: int | None = None
     try:
         settings = get_settings()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         settings = None
     if settings is not None:
         for attr in ("provider_health_passes_required", "provider_health_passes"):
@@ -219,25 +220,25 @@ def _resolve_health_passes_required() -> int:
     if candidate is None:
         try:
             candidate = get_env("AI_TRADING_PROVIDER_HEALTH_PASSES_REQUIRED", None, cast=int)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             candidate = None
     if candidate is None:
         try:
             candidate = get_env("HEALTH_RECOVERY_PASSES", None, cast=int)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             candidate = None
     if candidate is None:
         raw = _env_text("AI_TRADING_PROVIDER_HEALTH_PASSES_REQUIRED").strip()
         if raw:
             try:
                 candidate = int(raw)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 candidate = None
     if candidate is None:
         candidate = 4
     try:
         return max(int(candidate), 1)
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.debug(
             "PROVIDER_HEALTH_PASSES_PARSE_FAILED",
             extra={"value": candidate},
@@ -255,7 +256,7 @@ def _resolve_primary_recovery_bias_settings() -> tuple[bool, int, float]:
             False,
             cast=bool,
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         enabled_raw = False
     if isinstance(enabled_raw, bool):
         enabled = enabled_raw
@@ -269,7 +270,7 @@ def _resolve_primary_recovery_bias_settings() -> tuple[bool, int, float]:
                 cast=int,
             )
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         min_passes = 2
     min_passes = max(min_passes, 1)
     try:
@@ -280,7 +281,7 @@ def _resolve_primary_recovery_bias_settings() -> tuple[bool, int, float]:
                 cast=float,
             )
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         cooldown_scale = 0.5
     if not math.isfinite(cooldown_scale):
         cooldown_scale = 0.5
@@ -309,13 +310,13 @@ def _resolve_safe_mode_recovery_passes() -> int:
     candidate: int | None = None
     try:
         resolved = get_env("HEALTH_RECOVERY_PASSES", None, cast=int)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         resolved = None
     if resolved is not None:
         candidate = resolved
     try:
         resolved = get_env("AI_TRADING_SAFE_MODE_HEALTH_PASSES", None, cast=int)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         resolved = None
     if resolved is not None:
         candidate = resolved
@@ -323,19 +324,19 @@ def _resolve_safe_mode_recovery_passes() -> int:
     if raw:
         try:
             candidate = int(raw)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("HEALTH_RECOVERY_PASSES_PARSE_FAILED", extra={"raw": raw}, exc_info=True)
     raw = _env_text("AI_TRADING_SAFE_MODE_HEALTH_PASSES").strip()
     if raw:
         try:
             candidate = int(raw)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("SAFE_MODE_HEALTH_PASSES_PARSE_FAILED", extra={"raw": raw}, exc_info=True)
     if candidate is None:
         candidate = _resolve_health_passes_required()
     try:
         return max(int(candidate), 1)
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.debug(
             "SAFE_MODE_RECOVERY_PASSES_PARSE_FAILED",
             extra={"value": candidate},
@@ -350,14 +351,14 @@ def _resolve_primary_dwell_seconds() -> float:
     candidate: float | None = None
     try:
         candidate = float(get_env("DATA_PROVIDER_PRIMARY_DWELL_SECONDS", None, cast=float))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         candidate = None
     if candidate is None:
         raw = _env_text("DATA_PROVIDER_PRIMARY_DWELL_SECONDS").strip()
         if raw:
             try:
                 candidate = float(raw)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 candidate = None
     if candidate is None:
         candidate = 600.0
@@ -379,7 +380,7 @@ def _resolve_gap_ratio_trigger() -> float:
     candidates: list[float] = []
     try:
         env_val = get_env("AI_TRADING_GAP_RATIO_SAFE_MODE", None, cast=float)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         env_val = None
     if env_val is not None:
         try:
@@ -398,7 +399,7 @@ def _resolve_gap_ratio_trigger() -> float:
     else:
         try:
             resolved = max(max(candidates), 0.0)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             resolved = 0.01
     _prime_gap_ratio_cache(resolved)
     return resolved
@@ -410,7 +411,7 @@ def _resolve_gap_missing_trigger() -> int:
     candidates: list[int] = []
     try:
         env_val = get_env("AI_TRADING_GAP_MISSING_SAFE_MODE", None, cast=int)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         env_val = None
     if env_val is not None:
         try:
@@ -427,7 +428,7 @@ def _resolve_gap_missing_trigger() -> int:
         return 3
     try:
         resolved = max(max(candidates), 1)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         resolved = 3
     return resolved
 
@@ -439,7 +440,7 @@ def _quote_recovery_age_limit_ms() -> float:
     for key in ("QUOTE_MAX_AGE_MS", "TRADING__MIN_QUOTE_FRESHNESS_MS"):
         try:
             value = get_env(key, None, cast=float)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             value = None
         if value is not None:
             candidate = float(value)
@@ -448,7 +449,7 @@ def _quote_recovery_age_limit_ms() -> float:
         candidate = 2000.0
     try:
         return max(float(candidate), 0.0)
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.debug(
             "QUOTE_RECOVERY_AGE_PARSE_FAILED",
             extra={"value": candidate},
@@ -468,7 +469,7 @@ def _failsoft_gap_ratio_limit() -> float:
     ):
         try:
             env_val = get_env(key, None, cast=float)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             env_val = None
         if env_val is not None:
             try:
@@ -485,7 +486,7 @@ def _failsoft_gap_ratio_limit() -> float:
         return 0.08
     try:
         return max(max(candidates), 0.0)
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.debug(
             "FAILSOFT_GAP_RATIO_PARSE_FAILED",
             extra={"candidates": candidates},
@@ -544,13 +545,13 @@ def _current_intraday_feed() -> str:
             return str(get_execution_feed(normalized))
     try:
         from ai_trading.config import DATA_FEED_INTRADAY as _CFG_FEED  # local import to avoid cycles
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         _CFG_FEED = None
     feed = _CFG_FEED
     if feed in (None, ""):
         try:
             settings = get_settings()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             settings = None
         if settings is not None:
             feed = (
@@ -697,7 +698,7 @@ def _resolve_halt_flag_path() -> str:
 
     try:
         settings = get_settings()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         settings = None
     if settings is not None:
         path = getattr(settings, "halt_flag_path", None)
@@ -774,7 +775,7 @@ def safe_mode_degraded_only() -> bool:
 def _safe_mode_failsoft_enabled() -> bool:
     try:
         return bool(get_env("TRADING__SAFE_MODE_FAILSOFT", True, cast=bool))
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.debug("SAFE_MODE_FAILSOFT_CONFIG_FAILED", exc_info=exc)
         return True
 
@@ -954,7 +955,7 @@ def _trigger_provider_safe_mode(
                 "Alpaca minute feed outage detected",
                 metadata=metadata_payload,
             )
-        except Exception:  # pragma: no cover - alerting best effort
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - alerting best effort
             logger.exception(
                 "PROVIDER_OUTAGE_ALERT_FAILED",
                 extra={"reason": reason},
@@ -979,7 +980,7 @@ def _trigger_provider_safe_mode(
         if callable(notify_fn):
             version, _marker_reason = safe_mode_cycle_marker()
             notify_fn(reason=reason, version=version)
-    except Exception:  # pragma: no cover - defensive logging
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive logging
         logger.debug(
             "SAFE_MODE_FETCH_NOTIFY_FAILED",
             extra={"reason": reason},
@@ -990,7 +991,7 @@ def _trigger_provider_safe_mode(
         for provider in ("alpaca", "alpaca_sip"):
             try:
                 monitor.disable(provider)
-            except Exception:  # pragma: no cover - disable guard
+            except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - disable guard
                 logger.exception(
                     "PROVIDER_SAFE_MODE_DISABLE_FAILED",
                     extra={"provider": provider, "reason": reason},
@@ -1052,7 +1053,7 @@ def _maybe_clear_safe_mode(
         clear_fn = getattr(_data_fetch_mod, "clear_safe_mode_cycle", None)
         if callable(clear_fn):
             clear_fn()
-    except Exception:  # pragma: no cover - optional telemetry
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional telemetry
         logger.debug("SAFE_MODE_FETCH_CLEAR_FAILED", exc_info=True)
 
 
@@ -1193,7 +1194,7 @@ def _update_gap_diagnostics(provider_key: str, metadata: Mapping[str, Any], *, s
     samples_bucket.append(sample_payload)
     try:
         update_data_provider_state(gap_ratio_recent=ratio_val)
-    except Exception:  # pragma: no cover - telemetry best effort
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - telemetry best effort
         logger.debug("GAP_RATIO_RUNTIME_STATE_UPDATE_FAILED", exc_info=True)
 
 
@@ -1279,7 +1280,7 @@ def _resolve_max_cooldown() -> float:
     candidate: float | None = None
     try:
         settings = get_settings()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         settings = None
     if settings is not None:
         raw_value = getattr(settings, "provider_max_cooldown_seconds", None)
@@ -1290,7 +1291,7 @@ def _resolve_max_cooldown() -> float:
     if candidate is None:
         try:
             new_env = get_env("PROVIDER_MAX_COOLDOWN_SECONDS", None, cast=float)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             new_env = None
         if new_env is not None:
             try:
@@ -1300,7 +1301,7 @@ def _resolve_max_cooldown() -> float:
     if candidate is None:
         try:
             env_value = get_env("DATA_PROVIDER_MAX_COOLDOWN", None, cast=float)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             env_value = None
         if env_value is not None:
             try:
@@ -1334,7 +1335,7 @@ def _resolve_switch_quiet_seconds() -> float:
 
     try:
         settings = get_settings()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         settings = None
     if settings is not None:
         raw_value = getattr(settings, "provider_switch_quiet_seconds", None)
@@ -1347,7 +1348,7 @@ def _resolve_switch_quiet_seconds() -> float:
 
     try:
         env_value = get_env("PROVIDER_SWITCH_QUIET_SECONDS", None, cast=float)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         env_value = None
     if env_value is not None:
         try:
@@ -1368,7 +1369,7 @@ def _resolve_switch_quiet_seconds() -> float:
 def _logging_dedupe_ttl() -> int:
     try:
         settings = get_settings()
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.debug("LOGGING_DEDUPE_TTL_SETTINGS_FAILED", exc_info=exc)
         return 0
     ttl = getattr(settings, "logging_dedupe_ttl_s", 0)
@@ -1527,16 +1528,16 @@ _STAY_LOG_INTERVAL = 60.0
 def _decision_window_seconds() -> int:
     try:
         value = get_env("AI_TRADING_PROVIDER_DECISION_SECS", None, cast=int)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         value = None
     if value is None:
         try:
             value = int(_env_text("AI_TRADING_PROVIDER_DECISION_SECS"))
-        except Exception:  # pragma: no cover - defensive env parsing fallback
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive env parsing fallback
             value = None
     try:
         seconds = int(value) if value is not None else _DEFAULT_DECISION_SECS
-    except Exception:  # pragma: no cover - defensive conversion
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive conversion
         seconds = _DEFAULT_DECISION_SECS
     return max(seconds, 0)
 
@@ -1634,7 +1635,7 @@ class ProviderMonitor:
                         "primary_dwell_secs": int(self.primary_dwell_seconds),
                     },
                 )
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("PROVIDER_MONITOR_CONFIG_LOG_FAILED", exc_info=True)
         self._last_switchover_provider: str | None = None
         self._last_switchover_ts: float = 0.0
@@ -1705,7 +1706,7 @@ class ProviderMonitor:
         _SAFE_MODE_DEGRADED_ONLY = False
         try:
             reset_data_provider_state()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("DATA_PROVIDER_STATE_RESET_FAILED", exc_info=True)
 
     def _refresh_runtime_limits(self) -> None:
@@ -1791,7 +1792,7 @@ class ProviderMonitor:
                 cooldown_hint = max(float(self.cooldown), 60.0)
                 try:
                     self.disable(normalized, duration=cooldown_hint, reason="backup_quality")
-                except Exception:  # pragma: no cover - defensive
+                except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                     logger.exception(
                         "PROVIDER_DISABLE_FAILED",
                         extra={"provider": normalized, "reason": reason},
@@ -1820,7 +1821,7 @@ class ProviderMonitor:
                     f"Data provider {provider} failure",
                     metadata=metadata,
                 )
-            except Exception:  # pragma: no cover - alerting best effort
+            except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - alerting best effort
                 logger.exception("ALERT_FAILURE", extra={"provider": provider})
             self.disable(provider)
 
@@ -1850,7 +1851,7 @@ class ProviderMonitor:
                 self.disabled_since.pop(key, None)
                 try:
                     provider_disabled.labels(provider=key).set(0)
-                except Exception:  # pragma: no cover - defensive
+                except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                     logger.debug("PROVIDER_DISABLED_METRIC_RESET_FAILED", extra={"provider": key}, exc_info=True)
         if not self.consecutive_switches_by_provider:
             self.consecutive_switches = 0
@@ -1858,7 +1859,7 @@ class ProviderMonitor:
         self.disabled_since.pop(provider, None)
         try:
             provider_disabled.labels(provider=provider).set(0)
-        except Exception:  # pragma: no cover - defensive
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             logger.debug("PROVIDER_DISABLED_METRIC_CLEAR_FAILED", extra={"provider": provider}, exc_info=True)
         if provider.startswith("alpaca"):
             global _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON, _SAFE_MODE_DEGRADED_ONLY
@@ -1920,7 +1921,7 @@ class ProviderMonitor:
         )
         try:
             self.disable(from_key, duration=self.max_cooldown)
-        except Exception:  # pragma: no cover - defensive disable
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive disable
             logger.exception(
                 "PROVIDER_DISABLE_FAILED",
                 extra={"provider": from_key},
@@ -2096,13 +2097,13 @@ class ProviderMonitor:
                     "Consecutive provider switchovers",
                     metadata={"count": streak},
                 )
-            except Exception:  # pragma: no cover - alerting best effort
+            except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - alerting best effort
                 logger.exception("ALERT_FAILURE", extra={"provider": to_key})
             self._alert_cooldown_until[from_key] = now + timedelta(seconds=cooldown_window)
             # Back off the failing provider more aggressively to avoid thrashing
             try:
                 self.disable(from_key, duration=self.max_cooldown)
-            except Exception:  # pragma: no cover - defensive disable
+            except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive disable
                 logger.exception(
                     "PROVIDER_DISABLE_FAILED",
                     extra={"provider": from_key},
@@ -2201,7 +2202,7 @@ class ProviderMonitor:
             from ai_trading.data.fetch.metrics import register_provider_disable
 
             register_provider_disable(provider)
-        except Exception:  # pragma: no cover - defensive
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             logger.debug("REGISTER_PROVIDER_DISABLE_FAILED", extra={"provider": provider}, exc_info=True)
         provider_disabled.labels(provider=provider).set(1)
         logger.warning(
@@ -2219,7 +2220,7 @@ class ProviderMonitor:
         if cb:
             try:
                 cb(timedelta(seconds=cooldown_s))
-            except Exception:  # pragma: no cover - defensive
+            except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 logger.exception("PROVIDER_DISABLE_CALLBACK_ERROR", extra={"provider": provider})
 
     def is_disabled(self, provider: str) -> bool:
@@ -2249,7 +2250,7 @@ class ProviderMonitor:
                             "disable_count": total_count,
                         },
                     )
-                except Exception:  # pragma: no cover - alerting best effort
+                except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - alerting best effort
                     logger.exception("ALERT_FAILURE", extra={"provider": provider})
             logger.info(
                 "DATA_PROVIDER_RECOVERED",
@@ -2282,14 +2283,14 @@ class ProviderMonitor:
         strict_enabled = False
         try:
             from ai_trading.data import fetch
-        except Exception:  # pragma: no cover - defensive import guard
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive import guard
             fetch = None
         if fetch is not None:
             strict_checker = getattr(fetch, "_strict_data_gating_enabled", None)
             if callable(strict_checker):
                 try:
                     strict_enabled = bool(strict_checker())
-                except Exception:  # pragma: no cover - defensive gating check
+                except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive gating check
                     strict_enabled = False
         env_allowed = _env_text("ALPACA_SIP_ENABLED", "0").strip().lower() in {"1", "true"}
         allowed = strict_enabled and env_allowed

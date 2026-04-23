@@ -1,6 +1,7 @@
 """Decision-event emission helpers for immutable OMS audit persistence."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections.abc import Mapping
 import hashlib
@@ -306,7 +307,7 @@ def _resolve_event_store() -> Any | None:
             from ai_trading.oms.event_store import EventStore
 
             _EVENT_STORE = EventStore()
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             _EVENT_STORE_INIT_FAILED = True
             logger.warning(
                 "DECISION_EVENT_STORE_INIT_FAILED",
@@ -325,7 +326,7 @@ def reset_decision_event_store_cache() -> None:
         if _EVENT_STORE is not None:
             try:
                 _EVENT_STORE.close()
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 pass
         _EVENT_STORE = None
         _EVENT_STORE_INIT_FAILED = False
@@ -360,7 +361,7 @@ def emit_decision_event_from_payload(
     ).normalized()
     try:
         decision_persisted = bool(store.append_decision_event(decision))
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.warning(
             "DECISION_EVENT_APPEND_FAILED",
             extra={"symbol": symbol, "error": str(exc)},
@@ -401,7 +402,7 @@ def emit_decision_event_from_payload(
                 },
             )
         )
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.warning(
             "DECISION_OMS_EVENT_APPEND_FAILED",
             extra={"symbol": symbol, "error": str(exc)},

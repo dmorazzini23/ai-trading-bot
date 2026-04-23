@@ -1,5 +1,6 @@
 """Load a trained RL policy and produce trade signals with unified action space."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.logging import get_logger
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -112,7 +113,7 @@ class UnifiedRLInference:
             if action_mask is not None:
                 try:
                     mask_array = np.asarray(action_mask, dtype=np.float32).reshape(-1)
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     mask_array = None
             action_masked = False
             if (

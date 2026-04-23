@@ -1,6 +1,7 @@
 """Governance and reconciliation helpers extracted from ``bot_engine.py``."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 from collections.abc import Mapping
@@ -79,7 +80,7 @@ def run_netting_cycle_governance(state: Any) -> NettingGovernanceSnapshot:
             now=now,
             market_open_now=market_open_now,
         )
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         state.halt_trading = True
         state.halt_reason = str(exc) or "GOVERNANCE_GUARD_FAILED"
         be.logger.error(
@@ -186,7 +187,7 @@ def run_reconciliation_if_due(
         breakers.record_success("broker_positions")
         state.recon_halt = False
         return True
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         error_info = be.classify_exception(exc, dependency="broker_positions")
         breakers.record_failure("broker_positions", error_info)
         state.recon_halt = True

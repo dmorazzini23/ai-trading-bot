@@ -7,6 +7,7 @@ key in ``extra`` matching a reserved field is automatically prefixed with
 sanitizing adapter for all modules.
 """
 
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import atexit
 import contextlib
 import csv
@@ -44,7 +45,7 @@ def _runtime_env(name: str, default: str | None = None) -> str | None:
     if callable(getter):
         try:
             managed_value = getter(name, default)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             managed_value = None
         if managed_value not in (None, ""):
             return str(managed_value)
@@ -91,7 +92,7 @@ def _monotonic_time() -> float:
         except (RuntimeError, StopIteration):  # pragma: no cover - platform specific/test stubs
             if _LAST_MONOTONIC is not None:
                 return _LAST_MONOTONIC
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             pass
         else:
             _LAST_MONOTONIC = value
@@ -118,7 +119,7 @@ def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> Non
     try:
         from ai_trading.logging_filters import SecretFilter as _SecretFilter
         secret_filter_type: type[logging.Filter] | None = _SecretFilter
-    except Exception:  # pragma: no cover - optional dependency guard
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency guard
         secret_filter_type = None
 
     try:
@@ -1067,7 +1068,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         # Reduce noisy HTTP libraries unless explicitly requested
         try:
             http_env_default = config.get_env("LOG_LEVEL_HTTP", "WARNING")
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             http_env_default = _runtime_env("LOG_LEVEL_HTTP", "WARNING")
         http_level_name = getattr(S, "log_level_http", http_env_default)
         http_level = getattr(logging, str(http_level_name).upper(), logging.WARNING)

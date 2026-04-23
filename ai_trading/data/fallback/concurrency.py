@@ -8,6 +8,7 @@ with those structures.
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import asyncio
 import sys
@@ -35,12 +36,12 @@ logger = get_logger(__name__)
 
 try:  # pragma: no cover - optional during stubbed tests
     from ai_trading.net import http_host_limit as _http_host_limit
-except Exception:  # pragma: no cover - fallback when module unavailable
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - fallback when module unavailable
     _http_host_limit = None
 
 try:  # pragma: no cover - optional during stubbed tests
     from ai_trading.http import pooling as _http_pooling
-except Exception:  # pragma: no cover - pooling optional during stubbed tests
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - pooling optional during stubbed tests
     _pooling_host_limit = None
     _pooling_get_host_semaphore = None
     _pooling_reload_host_limit = None
@@ -63,7 +64,7 @@ else:  # pragma: no cover - exercised in integration tests
 
 try:  # pragma: no cover - optional dependency; only present under tests
     import freezegun.api as _freezegun_api
-except Exception:  # pragma: no cover - freezegun not installed in production
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - freezegun not installed in production
     _freezegun_api = None
 
 
@@ -147,14 +148,14 @@ def _get_effective_host_limit() -> int | None:
     if callable(_pooling_reload_host_limit):
         try:
             snapshot = _normalise_pooling_state(_pooling_reload_host_limit())
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("POOLING_LIMIT_RELOAD_FAILED", exc_info=True)
             snapshot = None
 
     if snapshot is None and callable(_pooling_get_limit_snapshot):
         try:
             snapshot = _normalise_pooling_state(_pooling_get_limit_snapshot())
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("POOLING_LIMIT_SNAPSHOT_FETCH_FAILED", exc_info=True)
             snapshot = None
 
@@ -167,7 +168,7 @@ def _get_effective_host_limit() -> int | None:
 
     try:
         limit = int(_pooling_host_limit())
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("POOLING_HOST_LIMIT_RESOLVE_FAILED", exc_info=True)
         return None
 
@@ -188,7 +189,7 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
         return None
     try:
         semaphore = _pooling_get_host_semaphore()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("POOLING_HOST_SEMAPHORE_FETCH_FAILED", exc_info=True)
         return None
     if not isinstance(semaphore, asyncio.Semaphore):
@@ -213,7 +214,7 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
             refreshed = _pooling_refresh_host_semaphore(loop=current_loop)
         except TypeError:
             refreshed = _pooling_refresh_host_semaphore()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("POOLING_HOST_SEMAPHORE_REFRESH_FAILED", exc_info=True)
             return None
         if isinstance(refreshed, asyncio.Semaphore):
@@ -307,7 +308,7 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
     for attr_name in ("_loop", "_bound_loop"):
         try:
             candidate = getattr(obj, attr_name)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             continue
         if candidate is not None:
             bound_loop = candidate
@@ -403,10 +404,10 @@ def _assign_dataclass_attr(target: object, name: str, value: object) -> bool:
     try:
         setattr(target, name, value)
         return True
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         try:
             object.__setattr__(target, name, value)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug(
                 "DATACLASS_ATTR_ASSIGN_FAILED",
                 extra={"target_type": type(target).__name__, "name": name},
@@ -436,7 +437,7 @@ def _recreate_dataclass_if_needed(
     if is_frozen or has_slots:
         try:
             return replace(cast(Any, obj), **mutated_fields)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("DATACLASS_REPLACE_FAILED_FALLBACK_ASSIGN", exc_info=True)
             for name, value in mutated_fields.items():
                 _assign_dataclass_attr(obj, name, value)
@@ -452,7 +453,7 @@ def _recreate_dataclass_if_needed(
 
     try:
         return replace(cast(Any, obj), **mutated_fields)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("DATACLASS_REPLACE_FAILED_FINAL", exc_info=True)
         return obj
 
@@ -490,7 +491,7 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
         try:
             mapping_factory = cast(Callable[[Iterable[tuple[object, object]]], object], type(obj))
             return mapping_factory(updates)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("MAPPING_REBUILD_FAILED", exc_info=True)
             return dict(updates)
 
@@ -539,7 +540,7 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
         if isinstance(obj, frozenset):
             try:
                 return type(obj)(sequence_items)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("FROZENSET_REBUILD_FAILED", exc_info=True)
                 return frozenset(sequence_items)
 
@@ -611,7 +612,7 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
                 if new_value is not value:
                     try:
                         setattr(obj, name, new_value)
-                    except Exception:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         logger.debug(
                             "SLOT_ATTR_REBIND_FAILED",
                             extra={"target_type": type(obj).__name__, "name": name},
@@ -628,7 +629,7 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
             if new_value is not value:
                 try:
                     setattr(obj, name, new_value)
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     logger.debug(
                         "OBJECT_ATTR_REBIND_FAILED",
                         extra={"target_type": type(obj).__name__, "name": name},
@@ -701,12 +702,12 @@ def _patch_monotonic_for_tests() -> tuple[bool, tuple[object, object | None]]:
     if callable(real_monotonic) and fake_monotonic is not real_monotonic:
         try:
             _freezegun_api.fake_monotonic = real_monotonic
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("FREEZEGUN_MONOTONIC_RESTORE_FAILED", exc_info=True)
     if callable(real_monotonic_ns) and fake_monotonic_ns is not real_monotonic_ns:
         try:
             _freezegun_api.fake_monotonic_ns = real_monotonic_ns
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("FREEZEGUN_MONOTONIC_NS_RESTORE_FAILED", exc_info=True)
 
     if callable(real_monotonic) and time.monotonic is not real_monotonic:
@@ -719,7 +720,7 @@ def _patch_monotonic_for_tests() -> tuple[bool, tuple[object, object | None]]:
     ):
         try:
             time.monotonic_ns = real_monotonic_ns  # type: ignore[assignment]
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("TIME_MONOTONIC_NS_PATCH_FAILED", exc_info=True)
         else:
             patched = True
@@ -731,12 +732,12 @@ def _restore_monotonic(original: tuple[object, object | None]) -> None:
     """Revert ``time.monotonic`` back to the caller-provided originals."""
     try:
         time.monotonic = original[0]  # type: ignore[assignment]
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("TIME_MONOTONIC_RESTORE_FAILED", exc_info=True)
     try:
         if hasattr(time, "monotonic_ns") and original[1] is not None:
             time.monotonic_ns = original[1]  # type: ignore[assignment]
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("TIME_MONOTONIC_NS_RESTORE_FAILED", exc_info=True)
 
 
@@ -764,12 +765,12 @@ def _update_peak_counters(peak_this_run: int) -> None:
         if _http_host_limit is not None:
             try:
                 _http_host_limit.record_peak(PEAK_SIMULTANEOUS_WORKERS)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("HOST_LIMIT_PEAK_RECORD_FAILED", exc_info=True)
         if callable(_pooling_record_concurrency):
             try:
                 _pooling_record_concurrency(int(PEAK_SIMULTANEOUS_WORKERS))
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("POOLING_CONCURRENCY_RECORD_FAILED", exc_info=True)
 
 
@@ -788,7 +789,7 @@ def _release_host_permit() -> None:
 if _http_host_limit is not None:
     try:
         _stored_peak = int(_http_host_limit.current_peak())
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         _stored_peak = 0
     else:
         PEAK_SIMULTANEOUS_WORKERS = max(PEAK_SIMULTANEOUS_WORKERS, _stored_peak)
@@ -861,7 +862,7 @@ async def run_with_concurrency(
                 host_semaphore = asyncio.Semaphore(sem_limit)
                 try:
                     setattr(host_semaphore, "_ai_trading_host_limit", sem_limit)
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     logger.debug("HOST_SEMAPHORE_LIMIT_ATTR_SET_FAILED", exc_info=True)
             if host_semaphore is not None:
                 sem_limit = _normalise_positive_int(
@@ -871,7 +872,7 @@ async def run_with_concurrency(
                     limit = min(limit, sem_limit)
         try:
             asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("EVENT_LOOP_POLICY_RESET_FAILED", exc_info=True)
         # Use a minimal scheduler in test mode to avoid cross-loop deadlocks.
         symbols_list = list(symbols)
@@ -977,7 +978,7 @@ async def run_with_concurrency(
             if not testing_mode and callable(_pooling_refresh_host_semaphore):
                 try:
                     refreshed = _pooling_refresh_host_semaphore(loop=loop)
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     refreshed = None
             if isinstance(refreshed, asyncio.Semaphore):
                 host_semaphore = refreshed

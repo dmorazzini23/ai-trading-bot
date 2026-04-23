@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -100,7 +101,7 @@ def get_alpaca_config() -> AlpacaConfig:
                     feed = alt
             else:
                 logging.getLogger(__name__).warning('ALPACA_CLIENT_NO_GET_ACCOUNT')
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             pass
     return AlpacaConfig(
         base_url=base_url,

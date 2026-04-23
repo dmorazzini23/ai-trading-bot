@@ -1,6 +1,7 @@
 """Legacy strategy-cycle orchestration extracted from ``bot_engine.py``."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 from collections.abc import Iterable, Mapping, Sequence
@@ -581,12 +582,12 @@ def run_multi_strategy_cycle(ctx: Any) -> None:
                     price_source_label = quote_source
                 elif price_source is not None:
                     price_source_label = price_source
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 price_source_label = None
             if price_source_label in (None, ""):
                 try:
                     price_source_label = get_price_source(sig.symbol)
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     price_source_label = None
             if price_source_label is not None:
                 annotations["price_source"] = price_source_label
@@ -656,7 +657,7 @@ def run_multi_strategy_cycle(ctx: Any) -> None:
                     open_buy_qty, open_sell_qty = engine_for_delta.open_order_totals(
                         sig.symbol
                     )
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     open_buy_qty = open_sell_qty = 0
             position_qty = _current_qty(ctx, sig.symbol)
             delta_qty = _delta_quantity(
@@ -690,7 +691,7 @@ def run_multi_strategy_cycle(ctx: Any) -> None:
             if result is not None:
                 try:
                     state.execution_metrics.submitted += 1
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     logger.debug(
                         "EXECUTION_METRIC_SUBMITTED_INCREMENT_FAILED",
                         exc_info=True,
@@ -964,7 +965,7 @@ def process_symbols_cycle(
                 data_freshness_sec=freshness,
                 metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
             )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("PROCESS_SYMBOL_DECISION_RECORD_FAILED", exc_info=True)
 
     filtered: list[str] = []
@@ -1251,7 +1252,7 @@ def process_symbols_cycle(
         try:
             setattr(exec_engine, "_adaptive_new_orders_cap", adaptive_cap)
             setattr(exec_engine, "_adaptive_new_orders_details", adaptive_details)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("ADAPTIVE_ORDER_CAP_SET_FAILED", exc_info=True)
         if adaptive_cap is not None:
             logger.info(
@@ -1272,7 +1273,7 @@ def process_symbols_cycle(
         if callable(start_hook):
             try:
                 start_hook()
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 logger.warning(
                     "EXECUTION_START_CYCLE_FAILED",
                     extra={

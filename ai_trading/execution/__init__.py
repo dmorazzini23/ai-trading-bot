@@ -1,6 +1,7 @@
 """Execution Module - Institutional Grade Order Management with Enhanced Debugging."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 from dataclasses import dataclass
@@ -132,7 +133,7 @@ def _load_execution_settings() -> Tuple[Any, str | None]:
 
     try:
         settings = _get_execution_settings()
-    except Exception as exc:  # pragma: no cover - configuration load failure
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - configuration load failure
         _logger.error(
             "EXECUTION_SETTINGS_LOAD_FAILED",
             extra={"error": str(exc)},
@@ -198,7 +199,7 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
                     "missing_module": missing_mod,
                 },
             )
-        except Exception as exc:  # pragma: no cover - runtime guard
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - runtime guard
             reason = reason or "import_failed"
             _logger.error(
                 "EXECUTION_ENGINE_IMPORT_FAILED",
@@ -290,7 +291,7 @@ SwingTradingMode: Any
 # Optional submodule: algorithms
 try:  # pragma: no cover - optional dependency
     from . import algorithms
-except Exception:  # noqa: BLE001 - broad to guard optional deps
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
     algorithms = None
 
 # Optional utilities guarded against missing dependencies
@@ -306,7 +307,7 @@ try:  # pragma: no cover - optional dependency
         log_position_change,
         log_signal_to_execution,
     )
-except Exception:  # noqa: BLE001 - broad to guard optional deps
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
     ExecutionPhase = OrderStatus = None
     enable_debug_mode = get_debug_tracker = None
     get_execution_statistics = None
@@ -320,7 +321,7 @@ try:  # pragma: no cover - optional dependency
         LiquidityManager,
         MarketHours,
     )
-except Exception:  # noqa: BLE001 - broad to guard optional deps
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
     LiquidityAnalyzer = LiquidityLevel = None
     LiquidityManager = MarketHours = None
 
@@ -337,7 +338,7 @@ try:  # pragma: no cover - optional dependency
         record_trade_pnl,
         update_position_for_pnl,
     )
-except Exception:  # noqa: BLE001 - broad to guard optional deps
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
     PnLEvent = PnLSource = None
     explain_recent_pnl_changes = get_pnl_attribution_stats = None
     get_pnl_attributor = get_portfolio_pnl_summary = None
@@ -356,7 +357,7 @@ try:  # pragma: no cover - optional dependency
         stop_position_monitoring,
         update_bot_position,
     )
-except Exception:  # noqa: BLE001 - broad to guard optional deps
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
     PositionDiscrepancy = None
     adjust_bot_position = force_position_reconciliation = None
     get_position_discrepancies = get_position_reconciler = None
@@ -365,17 +366,17 @@ except Exception:  # noqa: BLE001 - broad to guard optional deps
 
 try:  # pragma: no cover - optional dependency
     from .transaction_costs import estimate_cost
-except Exception:  # noqa: BLE001 - broad to guard optional deps
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
     estimate_cost = None
 
 try:  # pragma: no cover - optional dependency
     from .production_engine import ProductionExecutionCoordinator
-except Exception:  # noqa: BLE001 - broad to guard optional deps
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
     ProductionExecutionCoordinator = None
 
 try:  # pragma: no cover - optional dependency
     from .swing_mode import SwingTradingMode, disable_swing_mode, enable_swing_mode, get_swing_mode
-except Exception:  # noqa: BLE001 - broad to guard optional deps
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
     SwingTradingMode = None
     get_swing_mode = enable_swing_mode = disable_swing_mode = None
 

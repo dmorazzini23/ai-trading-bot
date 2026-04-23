@@ -4,6 +4,7 @@ Exports are resolved lazily to keep package import side-effect free.
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import os
 import errno
@@ -62,7 +63,7 @@ def _ensure_writable_runtime_dirs() -> None:
 
     try:
         from ai_trading.config.management import get_env, set_runtime_env_override
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return
 
     fallback_root = (Path(tempfile.gettempdir()).expanduser() / "ai-trading-bot").resolve()
@@ -77,7 +78,7 @@ def _ensure_writable_runtime_dirs() -> None:
             current_raw = get_env(env_key, "", cast=str, resolve_aliases=False)
         except TypeError:
             current_raw = get_env(env_key, "", cast=str)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             current_raw = ""
         current_path = Path(str(current_raw or "").strip()).expanduser() if current_raw else None
         if current_path is not None and _is_writable_directory(current_path):
@@ -98,20 +99,20 @@ def _configure_test_runtime_overrides() -> None:
             is_test_runtime,
             set_runtime_env_override,
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return
 
     try:
         if not bool(is_test_runtime()):
             return
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return
 
     try:
         model_url = get_env("DEFAULT_MODEL_URL", "", cast=str, resolve_aliases=False)
     except TypeError:
         model_url = get_env("DEFAULT_MODEL_URL", "", cast=str)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         model_url = ""
     if str(model_url or "").strip():
         return
@@ -132,13 +133,13 @@ def _install_test_runtime_override_guard() -> None:
 
     try:
         from ai_trading.config import management as config_management
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return
 
     try:
         if not bool(config_management.is_test_runtime()):
             return
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return
 
     original_clear = getattr(config_management, "clear_runtime_env_overrides", None)
@@ -170,18 +171,18 @@ def _install_test_meta_learning_write_fallback() -> None:
 
     try:
         from ai_trading.config.management import get_env, is_test_runtime
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return
 
     try:
         if not bool(is_test_runtime()):
             return
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return
 
     try:
         from ai_trading.meta_learning import core as meta_learning_core
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return
 
     original = getattr(meta_learning_core, "save_model_checkpoint", None)
@@ -203,7 +204,7 @@ def _install_test_meta_learning_write_fallback() -> None:
                 get_env("AI_TRADING_DATA_DIR", "/tmp/ai-trading-bot/data", cast=str)
                 or "/tmp/ai-trading-bot/data"
             ).strip()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             runtime_root = "/tmp/ai-trading-bot/data"
         fallback_root = (Path(runtime_root).expanduser().resolve() / "meta_learning")
         fallback_root.mkdir(parents=True, exist_ok=True)

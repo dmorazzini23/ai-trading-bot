@@ -1,5 +1,6 @@
 """Fail-fast runtime contract helpers for paper/live execution."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from typing import Any, Mapping
 
@@ -61,7 +62,7 @@ def require_no_stubs(ctx: Any, *, execution_mode: str | None = None) -> None:
             try:
                 if _value_is_stub(getattr(ctx, attr, False)):
                     violations.append(attr)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 continue
 
     runtime = None

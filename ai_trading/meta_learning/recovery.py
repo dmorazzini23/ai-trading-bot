@@ -1,5 +1,6 @@
 """Fallback data recovery utilities for meta-learning."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from pathlib import Path
 from datetime import UTC, datetime
@@ -45,7 +46,7 @@ def _implement_fallback_data_recovery(path: str | Path, min_samples: int = 0) ->
         return
     try:
         df = pandas.read_csv(p)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         df = pandas.DataFrame(columns=list(_COLUMNS))
     if len(df) >= min_samples:
         return
@@ -67,7 +68,7 @@ def _implement_fallback_data_recovery(path: str | Path, min_samples: int = 0) ->
     ]
     try:
         df = pandas.concat([df, pandas.DataFrame(placeholders)], ignore_index=True)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         df = pandas.DataFrame(placeholders)
     df.to_csv(p, index=False)
 

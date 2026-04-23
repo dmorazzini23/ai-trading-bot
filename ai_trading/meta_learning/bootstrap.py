@@ -1,5 +1,6 @@
 """Helpers for generating bootstrap training data."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from pathlib import Path
 from typing import Any, List
@@ -18,18 +19,18 @@ def _generate_bootstrap_training_data(path: str | Path, sample_size: int) -> Lis
     """
     try:
         df = pd.read_csv(path)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("BOOTSTRAP_TRAINING_CSV_READ_FAILED", extra={"path": str(path)}, exc_info=True)
         return []
     if getattr(df, "empty", True):
         return []
     try:
         df = df.dropna()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("BOOTSTRAP_TRAINING_DROPNA_FAILED", exc_info=True)
     try:
         records = df.to_dict("records")
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("BOOTSTRAP_TRAINING_TO_DICT_FAILED", exc_info=True)
         return []
     rows: list[dict[str, Any]] = []

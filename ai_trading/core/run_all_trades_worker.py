@@ -1,6 +1,7 @@
 """Runtime worker orchestration extracted from ``bot_engine.py``."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 import logging
@@ -45,7 +46,7 @@ def _run_finalizer_hook(
 ) -> None:
     try:
         func(*args, **kwargs)
-    except Exception as exc:  # pragma: no cover - defensive boundary
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive boundary
         _log_finalizer_hook_failure(be, hook=hook_name, exc=exc)
 
 
@@ -57,7 +58,7 @@ def _observe_cycle_execute_latency(be: Any, execution_stage_start: float | None)
             max(0.0, be.monotonic_time() - execution_stage_start),
             {"stage": "cycle_execute"},
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         be.logger.debug("CYCLE_EXECUTE_LATENCY_OBSERVE_FAILED", exc_info=True)
 
 
@@ -93,7 +94,7 @@ def _finalize_run_all_trades_cycle(
 
     try:
         last_loop_duration = be.monotonic_time() - loop_start
-    except Exception as exc:  # pragma: no cover - defensive boundary
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive boundary
         _log_finalizer_hook_failure(be, hook="last_loop_duration", exc=exc)
         last_loop_duration = getattr(state, "last_loop_duration", 0.0)
 

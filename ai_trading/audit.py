@@ -1,3 +1,4 @@
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import csv
 import inspect
 import os
@@ -38,7 +39,7 @@ def _resolve_log_path() -> str:
                 return str(cfg_path)
             # Provide a conventional default when config exists but lacks the attribute
             return os.path.join("data", DEFAULT_LOG_FILE)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("AUDIT_LOG_PATH_CONFIG_LOOKUP_FAILED", exc_info=True)
     return DEFAULT_LOG_FILE
 
@@ -59,7 +60,7 @@ def fix_file_permissions(path: str | os.PathLike, _header: list[str] | None = No
         if hasattr(_pm, "fix_file_permissions"):
             _pm.fix_file_permissions(path)  # type: ignore[arg-type]
             return True
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("PROCESS_MANAGER_PERMISSION_FIX_FAILED", exc_info=True)
     try:
         from ai_trading.utils import process_manager as _pm2  # type: ignore
@@ -67,7 +68,7 @@ def fix_file_permissions(path: str | os.PathLike, _header: list[str] | None = No
         if hasattr(_pm2, "fix_file_permissions"):
             _pm2.fix_file_permissions(path)  # type: ignore[arg-type]
             return True
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("UTILS_PROCESS_MANAGER_PERMISSION_FIX_FAILED", exc_info=True)
     return False
 
@@ -124,9 +125,9 @@ def _find_pytest_tmpdir() -> Path | None:
                 p = Path(cand)
                 if p.exists() and p.is_dir():
                     return p
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 continue
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("PYTEST_TMPDIR_STACK_SCAN_FAILED", exc_info=True)
         return None
     # Fallback: Derive from PYTEST_CURRENT_TEST by scanning /tmp
@@ -153,7 +154,7 @@ def _find_pytest_tmpdir() -> Path | None:
             if candidates:
                 candidates.sort()
                 return candidates[-1][1]
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("PYTEST_TMPDIR_FALLBACK_SCAN_FAILED", exc_info=True)
     return None
 
@@ -302,7 +303,7 @@ def log_trade(
                 repair_attempted = True
                 try:
                     fix_file_permissions(path, header_fields)
-                except Exception as fix_exc:  # pragma: no cover - defensive logging
+                except AI_TRADING_FALLBACK_EXCEPTIONS as fix_exc:  # pragma: no cover - defensive logging
                     logger.exception(
                         "TRADE_LOG_PERMISSION_FIX_FAILED",
                         extra={"path": str(path), "phase": phase, "error": str(fix_exc)},

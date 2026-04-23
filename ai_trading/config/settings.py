@@ -1,3 +1,4 @@
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import sys
 from functools import lru_cache
 from typing import Any, cast
@@ -20,7 +21,7 @@ def _managed_env(name: str, default: str | None = None) -> str | None:
     if callable(getter):
         try:
             value = getter(name, default, cast=str, resolve_aliases=False)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             value = default
         return None if value is None else str(value)
 
@@ -28,7 +29,7 @@ def _managed_env(name: str, default: str | None = None) -> str | None:
     if fallback_field:
         try:
             settings_obj = _base_get_settings()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             return default
         candidate = getattr(settings_obj, fallback_field, default)
         return None if candidate is None else str(candidate)
@@ -78,7 +79,7 @@ def provider_priority(s: Settings | None = None) -> tuple[str, ...]:
     try:
         from ai_trading.utils.env import resolve_alpaca_feed
         sip_allowed = str(resolve_alpaca_feed("sip")).strip().lower() == "sip"
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         sip_allowed = False
     if sip_allowed:
         return ('alpaca_iex', 'alpaca_sip', 'yahoo')

@@ -8,6 +8,7 @@ call :func:`get_trading_config` when runtime settings are required.
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import copy
 import hashlib
@@ -33,7 +34,7 @@ def _management_module() -> Any | None:
         return module
     try:
         return importlib.import_module("ai_trading.config.management")
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return None
 
 
@@ -44,7 +45,7 @@ def _managed_env_snapshot() -> dict[str, str]:
         return {}
     try:
         raw_snapshot = getter()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return {}
     return {
         str(key): str(value)
@@ -59,7 +60,7 @@ def _managed_env_value(key: str) -> str | None:
     if callable(getter):
         try:
             value = getter(key, None, cast=str, resolve_aliases=False)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             value = None
         if value not in (None, ""):
             return str(value)
@@ -2361,12 +2362,12 @@ def ensure_trading_config_current(keys: Iterable[str] | None = None) -> TradingC
     if refresh_side_effects:
         try:
             from ai_trading.utils.env import refresh_alpaca_credentials_cache
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             pass
         else:
             try:
                 refresh_alpaca_credentials_cache()
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 pass
 
     return get_trading_config()
@@ -2481,7 +2482,7 @@ def _is_live_like_env(env_map: Mapping[str, Any]) -> bool:
             continue
         try:
             return _parse_execution_mode(str(raw_mode)) == "live"
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             normalized = _normalize_env_label(raw_mode)
             return normalized in _LIVE_ENV_VALUES
     return False
@@ -2494,7 +2495,7 @@ def _normalize_for_conflict_compare(spec: ConfigSpec, raw_value: Any) -> Any:
     try:
         parsed = _cast_value(spec, text)
         return _validate_bounds(spec, parsed)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return text.strip()
 
 
@@ -2880,7 +2881,7 @@ def _build_value(spec: ConfigSpec, env_map: Mapping[str, str]) -> Any:
         return spec.default
     try:
         value = _cast_value(spec, raw_value)
-    except Exception as exc:  # noqa: BLE001 - convert to user message
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # noqa: BLE001 - convert to user message
         raise RuntimeError(
             f"Failed to parse environment variable {found_key}={raw_value!r}: {exc}"
         ) from exc

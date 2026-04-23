@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Strategy profile loader (opt-in).
 
@@ -46,7 +47,7 @@ def lookup_overrides(profile: dict[str, Any] | None, symbol: str, strategy: str)
     sym = symbol.upper()
     try:
         return dict(profile.get("symbols", {}).get(sym, {}).get(strategy, {}) or {})
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return {}
 
 

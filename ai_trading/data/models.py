@@ -9,6 +9,7 @@ underlying model performs validation.
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from typing import Any, cast
 
@@ -34,7 +35,7 @@ def _resolve_data_bindings() -> tuple[type[Any], type[Any], Any]:
             cast(type[Any], timeframe_cls),
             timeframe_unit_cls,
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return (
             cast(type[Any], get_stock_bars_request_cls()),
             cast(type[Any], get_timeframe_cls()),
@@ -50,7 +51,7 @@ def _resolve_timeframe_unit_type() -> Any:
     try:
         _, _, timeframe_unit_cls = _resolve_data_bindings()
         return timeframe_unit_cls
-    except Exception:  # pragma: no cover - unit class optional
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - unit class optional
         logger.debug("TIMEFRAME_UNIT_CLASS_LOAD_FAILED", exc_info=True)
         return None
 
@@ -69,26 +70,26 @@ def _coerce_timeframe(tf: Any) -> Any:
     try:
         if isinstance(coerced, TimeFrameType):
             return coerced
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("TIMEFRAME_INSTANCE_CHECK_FAILED", exc_info=True)
 
     amount = getattr(coerced, "amount", None)
     unit = getattr(coerced, "unit", None)
     try:
         amount_val = int(amount) if amount is not None else 1
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         amount_val = 1
 
     try:
         if unit_cls is not None and unit is not None and not isinstance(unit, unit_cls):
             name = getattr(unit, "name", str(unit)).capitalize()
             unit = getattr(unit_cls, name, getattr(unit_cls, "Day", unit))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         unit = getattr(unit_cls, "Day", unit)
 
     try:
         return TimeFrameType(amount_val, unit if unit is not None else getattr(unit_cls, "Day", unit))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("TIMEFRAME_CONSTRUCTION_FAILED", exc_info=True)
         return TimeFrameType()  # type: ignore[call-arg]
 

@@ -1,5 +1,6 @@
 """Preparation helpers for the live netting cycle."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -112,7 +113,7 @@ def prepare_netting_cycle_inputs(
     if not symbols:
         try:
             symbols = load_candidate_universe_func(runtime)
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             logger.warning(
                 "NETTING_UNIVERSE_LOAD_FAILED",
                 extra={"error": str(exc)},
@@ -197,7 +198,7 @@ def prepare_netting_cycle_inputs(
             jitter=0.1,
             context={"scope": "netting"},
         )
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         error_info = classify_exception_func(exc, dependency="broker_positions")
         breakers.record_failure("broker_positions", error_info)
         handle_error_func(error_info, state=state, ctx=runtime)
@@ -265,7 +266,7 @@ def prepare_netting_cycle_inputs(
         try:
             setattr(exec_engine, "_adaptive_new_orders_cap", adaptive_cap)
             setattr(exec_engine, "_adaptive_new_orders_details", adaptive_details)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("ADAPTIVE_ORDER_CAP_SET_FAILED", exc_info=True)
         adaptive_signature = (
             adaptive_cap,
@@ -293,22 +294,22 @@ def prepare_netting_cycle_inputs(
         if callable(resolve_submit_cap):
             try:
                 max_new_orders_per_cycle, cap_source = resolve_submit_cap()
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("NETTING_ORDER_CAP_RESOLVE_FAILED", exc_info=True)
                 max_new_orders_per_cycle = None
                 cap_source = "error"
 
     try:
         symbols_per_order = int(get_env("AI_TRADING_EXEC_SYMBOLS_PER_ORDER", 6, cast=int))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         symbols_per_order = 6
     try:
         symbol_budget_min = int(get_env("AI_TRADING_EXEC_SYMBOL_BUDGET_MIN", 12, cast=int))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         symbol_budget_min = 12
     try:
         symbol_budget_max = int(get_env("AI_TRADING_EXEC_SYMBOL_BUDGET_MAX", 120, cast=int))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         symbol_budget_max = 120
     symbols_per_order = max(1, min(symbols_per_order, 50))
     symbol_budget_min = max(1, min(symbol_budget_min, 500))

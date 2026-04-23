@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from ai_trading.logging import get_logger
 from ai_trading.telemetry import runtime_state
@@ -132,7 +133,7 @@ def compute_portfolio_weights(ctx, symbols: list[str]) -> dict[str, float]:
                 from ai_trading.config import get_settings  # lazy
 
                 method = getattr(get_settings(), 'PORTFOLIO_WEIGHT_METHOD', 'inverse_price')
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 method = 'inverse_price'
         method = str(method).lower()
         closes = {s: get_execution_latest_price(ctx, s) for s in symbols}
@@ -152,7 +153,7 @@ def compute_portfolio_weights(ctx, symbols: list[str]) -> dict[str, float]:
                     if r.empty:
                         continue
                     vols[s] = float(r.rolling(20).std().dropna().iloc[-1]) if len(r) >= 20 else float(r.std())
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     continue
             vols = {s: v for s, v in vols.items() if isinstance(v, float) and v > 0}
             if vols:
@@ -234,7 +235,7 @@ def log_portfolio_summary(ctx) -> None:
         if engine is not None and hasattr(engine, 'get_pending_orders'):
             try:
                 pending_orders_list = engine.get_pending_orders()
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 pending_orders_list = []
         if pending_orders_list:
             for pending in pending_orders_list:

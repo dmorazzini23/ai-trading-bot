@@ -1,5 +1,6 @@
 """Execute the main run-all-trades worker cycle outside ``bot_engine.py``."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 import time
@@ -34,7 +35,7 @@ def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> d
         gate = summarize_replay_live_parity_gate(
             oms_lifecycle_parity=oms_lifecycle_parity,
         )
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         gate = {
             "enabled": True,
             "available": False,
@@ -58,7 +59,7 @@ def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> d
                 status="degraded",
                 reason="replay_live_parity_gate_failed",
             )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             be.logger.debug("REPLAY_PARITY_RUNTIME_STATE_UPDATE_FAILED", exc_info=True)
     return gate
 
@@ -171,7 +172,7 @@ def execute_run_all_trades_cycle(
                     try:
                         start_hook()
                         cycle_started = True
-                    except Exception as exc:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                         be.logger.warning(
                             "EXECUTION_START_CYCLE_FAILED",
                             extra={"cause": exc.__class__.__name__, "detail": str(exc)},
@@ -183,14 +184,14 @@ def execute_run_all_trades_cycle(
                 provider_using_backup = False
                 try:
                     provider_state_after = be.runtime_state.observe_data_provider_state()
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     provider_state_after = {}
                 if isinstance(provider_state_after, dict):
                     try:
                         provider_status_after = str(
                             provider_state_after.get("status") or ""
                         ).strip().lower()
-                    except Exception:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         provider_status_after = ""
                     provider_using_backup = bool(provider_state_after.get("using_backup"))
                     timeframe_state_after = provider_state_after.get("timeframes")
@@ -229,7 +230,7 @@ def execute_run_all_trades_cycle(
                     ):
                         try:
                             broker_snapshot = engine_for_sync.synchronize_broker_state()
-                        except Exception:
+                        except AI_TRADING_FALLBACK_EXCEPTIONS:
                             be.logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
             finally:
                 if cycle_started and cycle_engine is not None:
@@ -237,7 +238,7 @@ def execute_run_all_trades_cycle(
                     if callable(end_hook):
                         try:
                             end_hook()
-                        except Exception as exc:
+                        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                             be.logger.warning(
                                 "EXECUTION_END_CYCLE_FAILED",
                                 extra={"cause": exc.__class__.__name__, "detail": str(exc)},
@@ -396,12 +397,12 @@ def execute_run_all_trades_cycle(
 
         try:
             provider_state = be.runtime_state.observe_data_provider_state()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             provider_state = {}
         data_status = None
         try:
             data_status = str(provider_state.get("data_status") or "").strip().lower()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             data_status = None
         if data_status in {"empty", "degraded"} and be.is_safe_mode_active():
             be.logger.warning(
@@ -428,7 +429,7 @@ def execute_run_all_trades_cycle(
         if callable(primary_provider_fn):
             try:
                 primary_disabled = not bool(primary_provider_fn())
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 primary_disabled = False
         if primary_disabled:
             be.runtime_state.update_data_provider_state(
@@ -519,7 +520,7 @@ def execute_run_all_trades_cycle(
                 return None
             try:
                 return engine_obj.synchronize_broker_state()
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 be.logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
                 return None
 
@@ -582,7 +583,7 @@ def execute_run_all_trades_cycle(
         provider_using_backup = False
         try:
             provider_state_post = be.runtime_state.observe_data_provider_state()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             provider_state_post = {}
         if isinstance(provider_state_post, dict):
             provider_using_backup = bool(provider_state_post.get("using_backup"))
@@ -633,7 +634,7 @@ def execute_run_all_trades_cycle(
             state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
             try:
                 state.execution_metrics.positions = len(pos_list)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 be.logger.debug(
                     "EXECUTION_METRIC_POSITIONS_ASSIGN_FAILED",
                     exc_info=True,
@@ -689,7 +690,7 @@ def execute_run_all_trades_cycle(
             )
             try:
                 state.execution_metrics.exposure_pct = float(exposure)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 be.logger.debug("EXECUTION_METRIC_EXPOSURE_ASSIGN_FAILED", exc_info=True)
             provider_mode = "alpaca"
             try:
@@ -697,7 +698,7 @@ def execute_run_all_trades_cycle(
                     provider_mode = "backup/synthetic"
                 elif be.provider_monitor.is_disabled("alpaca_sip"):
                     provider_mode = "backup/synthetic"
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 if getattr(state, "prefer_backup_quotes", False):
                     provider_mode = "backup/synthetic"
             state.execution_metrics.provider_mode = provider_mode

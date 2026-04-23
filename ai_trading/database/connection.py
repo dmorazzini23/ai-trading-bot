@@ -1,6 +1,7 @@
 """Database connection management backed by SQLAlchemy sessions."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -45,7 +46,7 @@ def _redact_connection_string(connection_string: str) -> str:
         return raw
     try:
         url = make_url(raw)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         if "@" in raw and "://" in raw:
             scheme, _, rest = raw.partition("://")
             _, _, host = rest.rpartition("@")

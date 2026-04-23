@@ -1,3 +1,4 @@
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import logging
 import re
 import sys
@@ -23,7 +24,7 @@ def _runtime_env_snapshot() -> dict[str, str]:
         return {}
     try:
         snapshot = snapshot_getter()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return {}
     return {
         str(k): str(v)
@@ -52,7 +53,7 @@ class SecretFilter(logging.Filter):
                     or "TOKEN" in kl
                 ):
                     vals.add(str(v))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             return vals
         return vals
 
@@ -62,7 +63,7 @@ class SecretFilter(logging.Filter):
             for val in candidates:
                 if val and val in out:
                     out = out.replace(val, _ENV_MASK)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             return text
         return out
 
@@ -90,8 +91,8 @@ class SecretFilter(logging.Filter):
                         for k, v in list(record.args.items()):
                             if isinstance(v, str) and v in candidates:
                                 record.args[k] = _ENV_MASK
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     pass
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             pass
         return True

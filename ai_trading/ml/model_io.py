@@ -1,6 +1,7 @@
 """JSON-safe model persistence helpers for simple research artifacts."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import json
 from pathlib import Path
@@ -21,7 +22,7 @@ def save_model(model: Any, path: str | Path) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     try:
         p.write_text(json.dumps(model, indent=2, sort_keys=True), encoding="utf-8")
-    except Exception as exc:  # pragma: no cover - defensive
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.error(
             "MODEL_SAVE_ERROR", extra={"path": str(p), "error": str(exc)}
         )
@@ -43,7 +44,7 @@ def load_model(path: str | Path) -> Any:
         raise RuntimeError(f"Model file not found: '{p}'")
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except Exception as exc:  # pragma: no cover - defensive
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.error(
             "MODEL_LOAD_ERROR", extra={"path": str(p), "error": str(exc)}
         )

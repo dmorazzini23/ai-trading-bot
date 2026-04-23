@@ -5,6 +5,7 @@ Implements out-of-fold stacking with purged time-series splits to avoid leakage.
 Optionally applies meta-labeling by training a classifier to gate base signals.
 """
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -21,7 +22,7 @@ def _safe_import_sklearn():
         from sklearn.ensemble import RandomForestRegressor
         from sklearn.preprocessing import StandardScaler
         from sklearn.pipeline import make_pipeline
-    except Exception as exc:  # pragma: no cover
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover
         raise ImportError("scikit-learn is required for stacking models") from exc
     return Ridge, LogisticRegression, RandomForestRegressor, StandardScaler, make_pipeline
 
@@ -94,13 +95,13 @@ class StackingMetaModel:
                 fitted = base
                 try:
                     fitted = m() if m is not None else base
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     fitted = base
                 fitted.fit(X, y)
                 self.base_models_.append(fitted)
             self._fitted = True
             return self
-        except Exception as e:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as e:
             logger.error("STACKING_FIT_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
             raise
 
@@ -115,6 +116,6 @@ class StackingMetaModel:
                 return np.asarray(prob * base_avg, dtype=float)
             else:
                 return np.asarray(self.meta_model_.predict(meta_X), dtype=float)
-        except Exception as e:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as e:
             logger.error("STACKING_PREDICT_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
             raise

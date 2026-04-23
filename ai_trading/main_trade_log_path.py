@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import csv
 import os
@@ -22,7 +23,7 @@ def _is_dir_writable(dir_path: Path) -> bool:
     gid = os.getegid()
     try:
         groups = set(os.getgroups())
-    except Exception:  # pragma: no cover - platform specific
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - platform specific
         groups = {gid}
     import stat as _stat
     if uid == st.st_uid:

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import argparse
 import json
@@ -115,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         payload = build_runtime_gonogo_status()
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         if args.json:
             sys.stdout.write(
                 f"{json.dumps({'state': 'ERROR', 'error': str(exc)}, sort_keys=True)}\n"

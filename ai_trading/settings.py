@@ -1,5 +1,6 @@
 """Runtime settings with env aliases and safe defaults."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import json
 from datetime import timedelta
 from functools import lru_cache
@@ -10,7 +11,7 @@ import sys
 from pydantic import AliasChoices, BaseModel, Field, SecretStr, computed_field, field_validator, model_validator
 try:  # Prefer pydantic-settings v2 API
     import pydantic_settings as _pydantic_settings
-except Exception:  # pragma: no cover - fallback to pydantic v1 style
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - fallback to pydantic v1 style
     from pydantic import BaseSettings as _BaseSettings
 
     _SettingsConfigDict: Any = None
@@ -37,7 +38,7 @@ def _default_backup_provider_for_mode(mode: Any) -> str:
 
 try:
     from pydantic.fields import FieldInfo as _FieldInfo
-except Exception:  # pragma: no cover - pydantic may be missing in tests
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - pydantic may be missing in tests
     _FIELD_INFO_TYPES: tuple[type[Any], ...] = ()
 else:
     _FIELD_INFO_TYPES = (_FieldInfo,)
@@ -122,7 +123,7 @@ def _propagate_default_feed(feed: str) -> None:
                 if target is not None:
                     setattr(mod, handler, normalized)
                     break
-            except Exception:  # pragma: no cover - defensive
+            except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 logger.debug("DEFAULT_FEED_PROPAGATE_FAILED", extra={"module": mod_name, "handler": handler})
                 break
 
@@ -671,7 +672,7 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
             try:
                 # Pydantic v2: defaults are stored on model_fields
                 return cls.model_fields[info.field_name].default
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 return v
         return v
 
@@ -703,13 +704,13 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
         """Force IEX feed unless SIP explicitly allowed."""
         try:
             from ai_trading.utils.env import resolve_alpaca_feed
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             resolve_alpaca_feed = None
         sip_allowed = False
         if callable(resolve_alpaca_feed):
             try:
                 sip_allowed = str(resolve_alpaca_feed("sip")).strip().lower() == "sip"
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 sip_allowed = False
         if v == "sip" and not sip_allowed:
             logger.warning("SIP_FEED_DISABLED", extra={"requested": "sip", "using": "iex"})
@@ -737,7 +738,7 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
 
         try:
             from ai_trading.config.management import get_env as _get_env
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             _get_env = None
 
         execution_configured = None
@@ -749,7 +750,7 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
                     cast=str,
                     resolve_aliases=False,
                 )
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 execution_configured = None
         if execution_configured in (None, ""):
             execution_value = str(self.alpaca_data_feed or "iex").strip().lower()
@@ -776,7 +777,7 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
         if _is_field_info(v) or v is None:
             try:
                 default = cls.model_fields[info.field_name].default
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 default = ("sip",)
             return tuple(default or ())
         if isinstance(v, str):
@@ -816,7 +817,7 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
         if _is_field_info(v) or v is None:
             try:
                 default = cls.model_fields[info.field_name].default
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 default = ("alpaca_iex", "yahoo")
             return tuple(default or ())
         if isinstance(v, str):

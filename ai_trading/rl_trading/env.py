@@ -1,5 +1,6 @@
 """Trading environment with configurable action space and hard risk constraints."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections import deque
 from dataclasses import dataclass
@@ -7,7 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 try:  # optional dependency
     import numpy as np
-except Exception:  # noqa: BLE001 - numpy is optional until env used
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - numpy is optional until env used
     np = None
 
 from ai_trading.logging import get_logger

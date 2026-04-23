@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import time as _time_module
 from datetime import UTC, datetime, timedelta, tzinfo, date as _date
 from time import time as _time
@@ -114,7 +115,7 @@ def monotonic_time() -> float:
                 value = None
             else:
                 value = None
-        except Exception:  # pragma: no cover - defensive: patched clocks may raise other errors
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive: patched clocks may raise other errors
             value = None
         else:
             _LAST_MONOTONIC_VALUE = value

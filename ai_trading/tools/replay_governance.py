@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import argparse
 import json
@@ -236,7 +237,7 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     try:
         payload = run_replay_governance(argv)
-    except Exception as exc:  # pragma: no cover - defensive CLI branch
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive CLI branch
         logger.error("REPLAY_GOVERNANCE_TOOL_FAILED", extra={"error": str(exc)}, exc_info=True)
         return 1
     sys.stdout.write(f"{json.dumps(payload, sort_keys=True, indent=2, default=str)}\n")

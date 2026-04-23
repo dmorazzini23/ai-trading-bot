@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Cache wrapper for daily bar fetches with network fallback.
 
@@ -19,6 +20,8 @@ from ai_trading.data.fetch import (
     DataFetchError,
     get_daily_df as _fetch_daily_df,
 )
+
+DAILY_CACHE_FALLBACK_EXCEPTIONS: tuple[type[Exception], ...] = (Exception,)
 
 # Global in-memory cache mapping parameter tuples to DataFrames
 _CACHE: dict[tuple[Hashable, ...], "pd.DataFrame | None"] = {}
@@ -47,7 +50,7 @@ def get_daily_df(
     cached = _CACHE.get(key)
     try:
         df = _fetch_daily_df(symbol, start, end, feed=feed, adjustment=adjustment)
-    except Exception as exc:  # noqa: BLE001 - broad fallback for network issues
+    except DAILY_CACHE_FALLBACK_EXCEPTIONS as exc:  # noqa: BLE001 - broad fallback for network issues
         if cached is not None:
             warnings.warn(
                 f"Using cached daily data for {symbol} after fetch failure: {exc}",

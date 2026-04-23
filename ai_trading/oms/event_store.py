@@ -1,6 +1,7 @@
 """Immutable OMS/decision event store with opt-in JSONL fallback writes."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict
@@ -45,7 +46,7 @@ try:
 
     _SQLALCHEMY_AVAILABLE = True
     _SQLALCHEMY_IMPORT_ERROR: Exception | None = None
-except Exception as exc:  # pragma: no cover
+except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover
     _SQLALCHEMY_AVAILABLE = False
     _SQLALCHEMY_IMPORT_ERROR = exc
     MetaData = None  # type: ignore[assignment,misc]
@@ -574,7 +575,7 @@ class EventStore:
                 db_persisted = True
             except IntegrityError:
                 db_persisted = False
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 logger.warning(
                     "OMS_EVENT_DB_WRITE_FAILED",
                     extra={
@@ -670,7 +671,7 @@ class EventStore:
                 db_persisted = True
             except IntegrityError:
                 db_persisted = False
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 logger.warning(
                     "DECISION_EVENT_DB_WRITE_FAILED",
                     extra={
@@ -742,7 +743,7 @@ class EventStore:
                 db_persisted = True
             except IntegrityError:
                 db_persisted = False
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 logger.warning(
                     "POSITION_SNAPSHOT_DB_WRITE_FAILED",
                     extra={
@@ -816,7 +817,7 @@ class EventStore:
                 db_persisted = True
             except IntegrityError:
                 db_persisted = False
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 logger.warning(
                     "RISK_SNAPSHOT_DB_WRITE_FAILED",
                     extra={
@@ -946,7 +947,7 @@ class EventStore:
                 row = conn.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).first()
             if row is not None and len(row) > 0:
                 payload["current_revision"] = str(row[0])
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             return payload
 
         if expected:
@@ -974,7 +975,7 @@ class EventStore:
             else:
                 payload["ok"] = bool(at_head)
             return payload
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             payload["error"] = str(exc)
             return payload
 
@@ -986,7 +987,7 @@ class EventStore:
         with self._lock:
             try:
                 self._engine.dispose()
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("EVENT_STORE_CLOSE_FAILED", exc_info=True)
 
 

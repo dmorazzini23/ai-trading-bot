@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -8,7 +9,7 @@ from math import floor, isclose
 from types import SimpleNamespace
 from typing import Any
 
-from ai_trading.alpaca_api import ALPACA_AVAILABLE, get_trading_client_cls
+from ai_trading.alpaca_api import ALPACA_AVAILABLE, get_api_error_cls, get_trading_client_cls
 from ai_trading.config.management import get_env
 from ai_trading.exc import HTTPError, RequestException
 from ai_trading.logging import EmitOnceLogger, get_logger
@@ -17,6 +18,12 @@ from ai_trading.settings import get_alpaca_secret_key_plain
 
 _log = get_logger(__name__)
 _once_logger = EmitOnceLogger(_log.logger)
+POSITION_SIZING_FALLBACK_EXCEPTIONS: tuple[type[Exception], ...] = (
+    *AI_TRADING_FALLBACK_EXCEPTIONS,
+    HTTPError,
+    RequestException,
+    get_api_error_cls(),
+)
 
 @dataclass
 class _Cache:
@@ -211,7 +218,7 @@ def _reset_log_throttle(message: str) -> None:
     """Ensure throttle filter does not suppress repeated critical warnings."""
     try:
         from ai_trading.logging import _THROTTLE_FILTER
-    except Exception:  # pragma: no cover - defensive import
+    except POSITION_SIZING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive import
         _log.debug("LOG_THROTTLE_FILTER_IMPORT_FAILED", exc_info=True)
         return
     state = getattr(_THROTTLE_FILTER, "_state", None)
@@ -220,7 +227,7 @@ def _reset_log_throttle(message: str) -> None:
         return
     try:
         cm = lock if hasattr(lock, "__enter__") else nullcontext()
-    except Exception:  # pragma: no cover - defensive
+    except POSITION_SIZING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
         cm = nullcontext()
     with cm:
         state.pop(message, None)
@@ -299,7 +306,7 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
                 "ALPACA_CLIENT_NO_GET_ACCOUNT",
                 extra={"client": type(client).__name__, "reason": reason},
             )
-        except Exception as e:  # noqa: BLE001 - log and fallback to HTTP
+        except POSITION_SIZING_FALLBACK_EXCEPTIONS as e:  # noqa: BLE001 - log and fallback to HTTP
             reason = f"sdk_error:{type(e).__name__}"
             _CACHE.equity_error = reason
             _log.warning(
@@ -355,7 +362,7 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
             extra={"url": url, "error": str(e), "reason": reason},
         )
         return _handle_equity_failure(reason)
-    except Exception as exc:  # log and propagate unexpected errors
+    except POSITION_SIZING_FALLBACK_EXCEPTIONS as exc:  # log and propagate unexpected errors
         _update_equity_cache(None, source=None, error=f"unexpected_error:{type(exc).__name__}")
         _log.exception("ALPACA_UNEXPECTED_ERROR", extra={"url": url})
         raise
@@ -427,10 +434,10 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                     for obj in (cfg, tcfg):
                         try:
                             obj.equity = eq
-                        except Exception:
+                        except POSITION_SIZING_FALLBACK_EXCEPTIONS:
                             try:
                                 object.__setattr__(obj, "equity", eq)
-                            except Exception:  # pragma: no cover - defensive
+                            except POSITION_SIZING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                                 _log.debug("AUTO_SIZING_EQUITY_ASSIGN_FAILED", exc_info=True)
                 else:
                     eq = None
@@ -513,7 +520,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                         "AUTO_SIZING_ABORTED",
                         extra={"reason": reason, "capital_cap": cap},
                     )
-                except Exception:  # pragma: no cover - defensive
+                except POSITION_SIZING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                     _log.debug("AUTO_SIZING_ABORT_LOG_EMIT_FAILED", exc_info=True)
             try:
                 import logging as _logging
@@ -547,12 +554,12 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                                         throttle = flt
                                         break
                                 handler.handle(record)
-                            except Exception:  # pragma: no cover - defensive
+                            except POSITION_SIZING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                                 continue
                             finally:
                                 if throttle is not None:
                                     handler.addFilter(throttle)
-            except Exception:  # pragma: no cover - defensive
+            except POSITION_SIZING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 _log.debug("AUTO_SIZING_ABORT_HANDLER_RESTORE_FAILED", exc_info=True)
             raise RuntimeError(f"AUTO sizing aborted: {reason}")
         _log.info(

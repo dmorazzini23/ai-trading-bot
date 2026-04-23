@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Heartbeat helpers with provider fallback."""
 
@@ -29,7 +30,7 @@ def heartbeat(primary: Callable[[], Any], fallback: Callable[[], Any]) -> Any:
     """
     try:
         return primary()
-    except Exception:  # pragma: no cover - best effort
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - best effort
         logger.warning("HEARTBEAT_FALLBACK_TRIGGERED")
         mark_yahoo()
         return fallback()

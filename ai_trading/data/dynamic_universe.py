@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import json
 from dataclasses import asdict, dataclass, field
@@ -179,7 +180,7 @@ def _resolve_asset(runtime, symbol: str) -> Any:
         try:
             asset = get_asset(symbol)
             break
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             logger.debug(
                 "DYNAMIC_UNIVERSE_ASSET_LOOKUP_FAILED",
                 extra={"symbol": symbol, "detail": str(exc)},
@@ -205,7 +206,7 @@ def _resolve_liquidity(runtime, symbol: str, fallback_price: float) -> tuple[flo
     if callable(get_daily_df):
         try:
             frame = get_daily_df(runtime, symbol)
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             logger.debug(
                 "DYNAMIC_UNIVERSE_LIQUIDITY_FETCH_FAILED",
                 extra={"symbol": symbol, "detail": str(exc)},
@@ -220,7 +221,7 @@ def _resolve_liquidity(runtime, symbol: str, fallback_price: float) -> tuple[flo
                     )
                     volume = _safe_float(getattr(last_row, "get", lambda *_a: None)("volume"))
                     dollar_volume = last_price * max(volume, 0.0)
-                except Exception as exc:
+                except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                     logger.debug(
                         "DYNAMIC_UNIVERSE_LIQUIDITY_PARSE_FAILED",
                         extra={"symbol": symbol, "detail": str(exc)},
@@ -242,7 +243,7 @@ def _short_overlay_enabled() -> bool:
     allow_shorts = bool(get_env("TRADING__ALLOW_SHORTS", True, cast=bool))
     try:
         cfg = get_trading_config()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return allow_shorts
     sleeve_enabled = bool(getattr(cfg, "sleeve_longshort_enabled", True))
     return allow_shorts and sleeve_enabled

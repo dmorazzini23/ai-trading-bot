@@ -35,20 +35,12 @@
 - Primary DM destination: `D0AUCEGTFGV`
 - Paired user id: `U0900J4TTB9`
 - Slash commands exposed in Slack:
-  `/openclaw`, `/help`, `/agentstatus`, `/subagents`, `/agents`, `/focus`, `/unfocus`, `/model`, `/think`, `/new`, `/reset`, `/compact`
-- Spawn a lane from Slack:
-  `/subagents spawn ops <task>`
-  `/subagents spawn coder <task>`
-  `/subagents spawn auditor <task>`
-  `/subagents spawn deep-coder <task>`
-- Keep a thread on one lane:
-  `/agents`
-  `/focus <target>`
-  `/unfocus`
+  `/openclaw`, `/help`, `/agentstatus`, `/model`, `/mode`, `/think`, `/new`, `/reset`, `/compact`
 - Change session behavior from Slack:
+  `/model codex/gpt-5.4-mini`
   `/model codex/gpt-5.4`
-  `/think high`
-  `/think xhigh`
+  `/mode`
+  `/think off|minimal|low|medium|high`
 
 ## Hooks
 

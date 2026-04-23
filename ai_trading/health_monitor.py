@@ -7,6 +7,7 @@ AI-AGENT-REF: Production health monitoring for institutional trading
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import asyncio
 import contextlib
 from ai_trading.logging import get_logger
@@ -24,7 +25,7 @@ from ai_trading.config import get_settings
 try:  # pragma: no cover - flask.testing is optional
     from flask.testing import FlaskClient
     FLASK_TESTING_AVAILABLE = True
-except Exception:  # ImportError, AttributeError, etc.
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # ImportError, AttributeError, etc.
     FLASK_TESTING_AVAILABLE = False
 
     class FlaskClient:  # type: ignore[no-redef]

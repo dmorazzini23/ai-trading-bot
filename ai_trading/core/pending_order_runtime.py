@@ -1,6 +1,7 @@
 """Pending-order runtime helpers extracted from ``bot_engine.py``."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 import logging
@@ -41,7 +42,7 @@ def record_pending_order_slo_metrics(
             "pending_oldest_age_sec",
             float(max(float(oldest_pending_age_s or 0.0), 0.0)),
         )
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         be.logger.debug("PENDING_ORDER_SLO_RECORD_FAILED", exc_info=True)
 
 
@@ -151,7 +152,7 @@ def set_pending_blocked_symbols(runtime: Any, symbols: Iterable[str]) -> None:
     if state_obj is not None:
         try:
             setattr(state_obj, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, tuple(normalized))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             be.logger.debug("PENDING_BLOCKED_SYMBOLS_STATE_SET_FAILED", exc_info=True)
 
 

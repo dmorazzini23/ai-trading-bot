@@ -1,5 +1,6 @@
 """Model artifact manifest helpers and checksum verification."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import hashlib
 import json
@@ -175,7 +176,7 @@ def load_verified_joblib_artifact(
     )
     try:
         return joblib.load(resolved)
-    except Exception as exc:  # noqa: BLE001 - joblib may surface multiple loader errors
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # noqa: BLE001 - joblib may surface multiple loader errors
         logger.error(
             "MODEL_ARTIFACT_LOAD_FAILED",
             extra={"model_path": str(resolved), "error": str(exc)},

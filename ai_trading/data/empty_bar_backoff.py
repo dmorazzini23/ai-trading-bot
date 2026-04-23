@@ -8,6 +8,7 @@ attempts and marking successful fetches.  Retry counts are tracked per
 configured limit is exceeded.
 """
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import sys
 from typing import cast
@@ -57,7 +58,7 @@ def _raise_empty_bars_error(message: str) -> None:
     for module in list(sys.modules.values()):
         try:
             candidate = getattr(module, "EmptyBarsError", None)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             continue
         if not isinstance(candidate, type):
             continue
@@ -97,7 +98,7 @@ def record_attempt(symbol: str, timeframe: str) -> int:
             fetch_skipped = getattr(fetch_mod, "_SKIPPED_SYMBOLS", None)
             if isinstance(fetch_skipped, set):
                 fetch_skipped.add(key)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             pass
     if cnt > MAX_EMPTY_RETRIES:
         _raise_empty_bars_error(
@@ -122,7 +123,7 @@ def mark_success(symbol: str, timeframe: str) -> None:
             fetch_skipped = getattr(fetch_mod, "_SKIPPED_SYMBOLS", None)
             if isinstance(fetch_skipped, set):
                 fetch_skipped.discard(key)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             pass
 
 

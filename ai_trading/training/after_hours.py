@@ -5,6 +5,7 @@ trains calibrated baseline ML models, and optionally trains an RL overlay.
 """
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import errno
 import hashlib
@@ -572,13 +573,13 @@ def _safe_rsi(close_values: np.ndarray) -> np.ndarray:
         return cast(np.ndarray, np.array([], dtype=float))
     try:
         out = rsi_indicator(tuple(close_values.tolist()), 14)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         out = None
     if out is None:
         return cast(np.ndarray, np.zeros_like(close_values, dtype=float))
     try:
         arr = np.asarray(out, dtype=float)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return cast(np.ndarray, np.zeros_like(close_values, dtype=float))
     if arr.size != close_values.size:
         return cast(np.ndarray, np.zeros_like(close_values, dtype=float))
@@ -703,7 +704,7 @@ def _fit_candidate_model(name: str, seed: int):
                 ),
             )
             return CalibratedClassifierCV(base, method="sigmoid", cv=3)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             return _FallbackProbabilityModel()
     if name == "histgb":
         from sklearn.calibration import CalibratedClassifierCV
@@ -1212,7 +1213,7 @@ def _evaluate_candidate(
                 y_train,
                 sample_weight=train_sample_weights,
             )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             continue
         probs = _predict_probabilities(model, X.iloc[test_idx])
         if probs.shape[0] != len(test_idx):
@@ -4012,7 +4013,7 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
             if isinstance(report.get("execution_vs_alpha"), Mapping)
             else {}
         )
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.warning(
             "AFTER_HOURS_RUNTIME_GONOGO_FAILED",
             extra={"cause": exc.__class__.__name__, "detail": str(exc)},
@@ -4507,19 +4508,19 @@ def _candidate_names() -> list[str]:
     names: list[str] = ["logreg"]
     try:
         from sklearn.ensemble import HistGradientBoostingClassifier  # noqa: F401
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         pass
     else:
         names.append("histgb")
     try:
         import lightgbm  # noqa: F401
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         pass
     else:
         names.append("lightgbm")
     try:
         import xgboost  # noqa: F401
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         pass
     else:
         names.append("xgboost")
@@ -4602,7 +4603,7 @@ def _fit_model_with_optional_sample_weight(
             return True
         except TypeError:
             pass
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.info(
                 "AFTER_HOURS_SAMPLE_WEIGHT_FIT_FAILED",
                 extra={"error": "sample_weight_fit_failed"},
@@ -4709,7 +4710,7 @@ def _build_hard_negative_sample_weights(dataset: Any) -> tuple[np.ndarray, dict[
                     report["prior_model_path"] = str(runtime_model_path)
                     report["prior_prob_threshold"] = float(high_conf_threshold)
                     report["prior_multiplier"] = float(high_conf_multiplier)
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 report["prior_model_error"] = str(exc)
 
     clip_max = max(
@@ -5038,7 +5039,7 @@ def _fit_edge_model_v2_bundle(
         return {}, report
     try:
         from sklearn.ensemble import HistGradientBoostingRegressor
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         report["reason"] = "missing_sklearn_regressor"
         report["error"] = str(exc)
         return {}, report
@@ -5089,7 +5090,7 @@ def _fit_edge_model_v2_bundle(
         _fit_model_with_optional_sample_weight(q10_model, X, y, sample_weight=sample_weights)
         _fit_model_with_optional_sample_weight(q50_model, X, y, sample_weight=sample_weights)
         _fit_model_with_optional_sample_weight(q90_model, X, y, sample_weight=sample_weights)
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         report["reason"] = "fit_failed"
         report["error"] = str(exc)
         return {}, report
@@ -5552,7 +5553,7 @@ def _new_rows_since_training_state(
     import pandas as pd
     try:
         label_ts = pd.to_datetime(dataset["label_ts"], utc=True, errors="coerce")
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         return int(len(dataset))
     if label_ts is None:
         return int(len(dataset))
@@ -5700,7 +5701,7 @@ def _maybe_train_rl_overlay(
         return {"enabled": False, "trained": False, "recommend_use_rl_agent": False}
     try:
         from ai_trading.rl_trading.train import RLTrainer, train_multi_seed
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {
             "enabled": True,
             "trained": False,
@@ -5888,7 +5889,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     reload_env(override=False)
     try:
         refresh_default_feed()
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.info(
             "AFTER_HOURS_FEED_REFRESH_SKIPPED",
             extra={"reason": "refresh_default_feed_failed"},

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import logging
 from datetime import datetime
@@ -10,6 +11,7 @@ from ai_trading.utils.lazy_imports import load_pandas
 pd = load_pandas()
 logger = logging.getLogger(__name__)
 _UTC_ZONE = ZoneInfo("UTC")
+STALENESS_GUARD_FALLBACK_EXCEPTIONS: tuple[type[Exception], ...] = (Exception,)
 
 
 def _ensure_data_fresh(
@@ -111,7 +113,7 @@ def ensure_data_fresh(
     for sym in symbols:
         try:
             df = fetcher.get_minute_df(sym, start, now)
-        except Exception as e:  # noqa: BLE001 - propagate as runtime error
+        except STALENESS_GUARD_FALLBACK_EXCEPTIONS as e:  # noqa: BLE001 - propagate as runtime error
             stale.append(f"{sym}(error={e})")
             continue
         try:

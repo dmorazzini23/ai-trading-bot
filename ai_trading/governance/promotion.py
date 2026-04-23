@@ -4,6 +4,7 @@ Model promotion pipeline for shadow-to-production governance.
 Manages the promotion process from shadow testing to production deployment
 with performance validation and safety checks.
 """
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import hashlib
 import json
 import math
@@ -169,13 +170,13 @@ class ModelPromotion:
     def _promotion_requires_approval(self) -> bool:
         try:
             return bool(get_env("AI_TRADING_PROMOTION_REQUIRE_APPROVAL", False, cast=bool))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             return False
 
     def _promotion_approval_max_age_hours(self) -> float:
         try:
             value = float(get_env("AI_TRADING_PROMOTION_APPROVAL_MAX_AGE_HOURS", 168.0, cast=float))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             value = 168.0
         if not math.isfinite(value):
             value = 168.0
@@ -184,7 +185,7 @@ class ModelPromotion:
     def _governance_event_store_enabled(self) -> bool:
         try:
             return bool(get_env("AI_TRADING_GOVERNANCE_EVENT_STORE_ENABLED", True, cast=bool))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             return True
 
     def _resolve_event_store(self) -> Any | None:
@@ -198,7 +199,7 @@ class ModelPromotion:
             from ai_trading.oms.event_store import EventStore
 
             self._event_store = EventStore()
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             self._event_store_init_failed = True
             self.logger.warning(
                 "GOVERNANCE_EVENT_STORE_INIT_FAILED",
@@ -213,7 +214,7 @@ class ModelPromotion:
         if callable(isoformat):
             try:
                 return str(isoformat())
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 return str(value)
         return str(value)
 
@@ -236,7 +237,7 @@ class ModelPromotion:
                 resolved_model_id,
                 verify_dataset_hash=False,
             )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             loaded_meta = {}
         if isinstance(loaded_meta, dict):
             combined_meta.update(loaded_meta)
@@ -383,7 +384,7 @@ class ModelPromotion:
                     payload=event_payload,
                 )
             )
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             self.logger.warning(
                 "GOVERNANCE_EVENT_APPEND_FAILED",
                 extra={"event_type": str(event_type), "error": str(exc)},
@@ -558,17 +559,17 @@ class ModelPromotion:
         if hasattr(frame_source, "columns") and hasattr(frame_source, "copy"):
             try:
                 frame = frame_source.copy()
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 frame = None
         elif isinstance(frame_source, list | tuple):
             try:
                 frame = pd.DataFrame(list(frame_source))
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 frame = None
         elif isinstance(frame_source, dict):
             try:
                 frame = pd.DataFrame(frame_source)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 frame = None
 
         if frame is None or frame.empty:
@@ -660,7 +661,7 @@ class ModelPromotion:
                     pwf_report.get("pass_ratio", 0.0) or 0.0
                 )
                 derived["purged_walk_forward_report"] = pwf_report
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 self.logger.debug("PROMOTION_PWF_AUTOVALIDATION_FAILED", exc_info=True)
 
         if needs_regime:
@@ -696,7 +697,7 @@ class ModelPromotion:
                 )
                 derived["regime_pass_ratio"] = float(regime_report.get("pass_ratio", 0.0) or 0.0)
                 derived["regime_split_report"] = regime_report
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 self.logger.debug("PROMOTION_REGIME_AUTOVALIDATION_FAILED", exc_info=True)
 
         if needs_calibration:
@@ -769,7 +770,7 @@ class ModelPromotion:
                         derived["live_calibration_ece"] = float(max(0.0, ece))
                         derived["live_calibration_brier"] = float(max(0.0, brier))
                         derived["calibration_samples"] = int(sample_count)
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 self.logger.debug("PROMOTION_CALIBRATION_AUTOVALIDATION_FAILED", exc_info=True)
 
         return derived
@@ -1686,7 +1687,7 @@ class ModelPromotion:
             rollback_enabled = bool(
                 get_env("AI_TRADING_PROMOTION_AUTO_ROLLBACK_ON_CONTROL_BAND", True, cast=bool)
             )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             rollback_enabled = True
         if not rollback_enabled:
             result["status"] = "disabled"

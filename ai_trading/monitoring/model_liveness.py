@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import json
 import os
@@ -54,7 +55,7 @@ class _LivenessBreach:
 def _env_bool(name: str, default: bool) -> bool:
     try:
         return bool(get_env(name, default, cast=bool))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         raw = str(get_env(name, default) or "").strip().lower()
         return raw in {"1", "true", "yes", "on"}
 
@@ -62,10 +63,10 @@ def _env_bool(name: str, default: bool) -> bool:
 def _env_float(name: str, default: float) -> float:
     try:
         return float(get_env(name, default, cast=float))
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         try:
             return float(get_env(name, default))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             return float(default)
 
 
@@ -370,7 +371,7 @@ class _ModelLivenessMonitor:
                 json.dumps(payload, sort_keys=True) + "\n",
             )
             payload["flag_path"] = str(flag_path)
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             logger.error(
                 "CANARY_AUTO_ROLLBACK_FLAG_WRITE_FAILED",
                 extra={"path": str(flag_path), "error": str(exc)},
@@ -386,7 +387,7 @@ class _ModelLivenessMonitor:
                     f"canary_auto_rollback {now_utc.isoformat()}\n",
                 )
                 payload["kill_switch_path"] = str(kill_switch_path)
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 logger.error(
                     "CANARY_AUTO_ROLLBACK_KILL_SWITCH_WRITE_FAILED",
                     extra={"path": str(kill_switch_path), "error": str(exc)},
@@ -410,7 +411,7 @@ class _ModelLivenessMonitor:
                 payload["command"] = rollback_command
                 payload["command_args"] = list(command_args)
                 payload["command_exit_code"] = int(completed.returncode)
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 payload["command"] = rollback_command
                 payload["command_error"] = str(exc)
                 logger.error(
@@ -533,7 +534,7 @@ def maybe_trigger_canary_auto_rollback(
                     context={},
                 )
             )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             continue
     return _MONITOR.maybe_trigger_canary_rollback(normalized, now=now)
 

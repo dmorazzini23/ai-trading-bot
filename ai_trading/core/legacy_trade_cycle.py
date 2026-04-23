@@ -1,5 +1,6 @@
 """Legacy trade decision flow extracted from ``bot_engine.py``."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 from datetime import UTC, datetime
@@ -71,7 +72,7 @@ def execute_legacy_trade_logic(
                 data_freshness_sec=freshness,
                 metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
             )
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             be.logger.debug("LEGACY_DECISION_RECORD_FAILED", exc_info=True)
 
     if not be.pre_trade_checks(ctx, state, symbol, balance, regime_ok):
@@ -310,7 +311,7 @@ def execute_legacy_trade_logic(
         cap_limit = be._metafallback_confidence_cap()
         try:
             local_threshold = min(float(local_threshold), float(cap_limit))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             local_threshold = min(local_threshold, cap_limit)
         local_threshold = max(local_threshold, be.get_conf_threshold())
     fallback_confidence_bonus = be.get_fallback_entry_confidence_bonus()

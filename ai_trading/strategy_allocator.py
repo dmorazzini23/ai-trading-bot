@@ -1,6 +1,7 @@
 """Strategy allocation with signal confirmation and hold protection."""
 
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import copy
 import logging
@@ -9,7 +10,7 @@ from typing import Any
 
 try:  # Local import to avoid cycles during docs builds
     from ai_trading.strategies.base import StrategySignal as _StrategySignalClass
-except Exception:  # pragma: no cover - optional at import time
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional at import time
     _STRATEGY_SIGNAL_CLASS: type[Any] | None = None
 else:
     _STRATEGY_SIGNAL_CLASS = _StrategySignalClass
@@ -25,7 +26,7 @@ _LIMIT_RE = re.compile(r"limit=([0-9.]+)%")
 def _resolve_allocator_eps() -> float:
     try:
         value = get_env("ALLOCATOR_EPS", None, cast=float)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         value = None
     try:
         if value is None:
@@ -79,7 +80,7 @@ class StrategyAllocator:
                 return value
         try:
             env_value = get_env("AI_TRADING_GAP_RATIO_LIMIT", None, cast=float)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             env_value = None
         value = self._coerce_float(env_value)
         if value is not None and value >= 0.0:
@@ -186,7 +187,7 @@ class StrategyAllocator:
             for key, value in changes.items():
                 try:
                     setattr(new_cfg, key, value)
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     logger.warning("Failed to set config attribute %s", key, exc_info=True)
         self.config = copy.deepcopy(new_cfg)
         self._ensure_config_attributes()
@@ -207,13 +208,13 @@ class StrategyAllocator:
                 if isinstance(self.config, TradingConfig):
                     try:
                         self.config._values[attr] = default
-                    except Exception:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         logger.debug("Failed to set TradingConfig value for %s", attr, exc_info=True)
                 else:
                     # Fallback for SimpleNamespace or other objects
                     try:
                         object.__setattr__(self.config, attr, default)
-                    except Exception:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         logger.debug("Failed to set config attribute %s", attr, exc_info=True)
 
     def allocate(self, signals_by_strategy: dict[str, list[Any]]) -> list[Any]:
@@ -300,7 +301,7 @@ class StrategyAllocator:
                 else:
                     try:
                         side_norm = str(side_value).strip().lower()
-                    except Exception:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         side_norm = ""
                     # Map aliases
                     if side_norm in ("long", "buy", "enter_long"):
@@ -370,7 +371,7 @@ class StrategyAllocator:
                         if not isinstance(avg_conf, (int, float)) or avg_conf < 0:
                             logger.warning("Invalid average confidence %s for %s", avg_conf, s.symbol)
                             continue
-                    except Exception as e:  # noqa: BLE001 - broad to log
+                    except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # noqa: BLE001 - broad to log
                         logger.warning("Error calculating average confidence for %s: %s", s.symbol, e)
                         continue
 
@@ -524,7 +525,7 @@ class StrategyAllocator:
         try:
             from ai_trading.data.provider_monitor import is_safe_mode_active
             degraded = bool(is_safe_mode_active())
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             degraded = False
         message = (
             "Portfolio allocation (theoretical, degraded feed): %s buys (total weight: %.3f), %s sells"

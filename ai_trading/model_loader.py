@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 """Model persistence utilities.
 
@@ -69,7 +70,7 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
         try:
             df["skew20"] = df["ret1"].rolling(20).skew()
             df["kurt20"] = df["ret1"].rolling(20).kurt()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             df["skew20"] = 0.0
             df["kurt20"] = 0.0
     if "volume" in df:
@@ -84,7 +85,7 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
         y = df["ret1"].fillna(0).cumsum().to_numpy()
         slope = np.polyfit(x, y, 1)[0]
         df["trend"] = slope
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         df["trend"] = 0.0
 
     # Label: next-period up/down
@@ -99,7 +100,7 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
         try:
             models_dir.mkdir(parents=True, exist_ok=True)
             joblib.dump(model, models_dir / f"{symbol}.pkl")
-        except Exception as exc:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             logger.warning("Failed saving model for %s: %s", symbol, exc)
         return model
 
@@ -118,7 +119,7 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
         yhat = pipe.predict(X[test_idx])
         try:
             scores.append(accuracy_score(y[test_idx], yhat))
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             continue
 
     # Final fit on all but last 5 samples to reduce leakage
@@ -172,9 +173,9 @@ def load_model(symbol: str) -> object:
                     Path(meta["path"]),
                     manifest_path=manifest_path if manifest_path else None,
                 )
-            except Exception as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 logger.warning("MODEL_REGISTRY_LOAD_FAILED for %s: %s", symbol, exc)
-    except Exception:
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
         pass
 
     dirs = (MODELS_DIR, INTERNAL_MODELS_DIR)
@@ -185,7 +186,7 @@ def load_model(symbol: str) -> object:
         if path.exists():
             try:
                 model = load_verified_joblib_artifact(path)
-            except Exception as exc:  # noqa: BLE001 - joblib may raise various errors
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # noqa: BLE001 - joblib may raise various errors
                 msg = f"Failed to load model for '{symbol}' at '{path}': {exc}"
                 logger.error(
                     "MODEL_LOAD_ERROR",

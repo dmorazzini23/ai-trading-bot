@@ -4,6 +4,7 @@ Production execution coordinator that integrates risk management and monitoring.
 Enhances the existing execution engine with comprehensive safety checks,
 real-time monitoring, and advanced risk management capabilities.
 """
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import asyncio
 import time
 from datetime import UTC, datetime, timedelta
@@ -52,7 +53,7 @@ class ProductionExecutionCoordinator:
             if not os.path.exists(sl_path):
                 with open(sl_path, 'w', newline='') as f:
                     csv.writer(f).writerow(["timestamp", "symbol", "expected", "actual", "slippage_cents"])
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("PRODUCTION_SLIPPAGE_LOG_INIT_FAILED", exc_info=True)
         logger.info(f'ProductionExecutionCoordinator initialized with equity=${account_equity:,.2f}')
 
@@ -102,13 +103,13 @@ class ProductionExecutionCoordinator:
                 S = get_settings()
                 prefer_limit = bool(getattr(S, 'exec_prefer_limit', False))
                 part_cap = float(getattr(S, 'exec_max_participation_rate', 0.05))
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 prefer_limit, part_cap = (False, 0.05)
             # Provide a default max_participation_rate if caller did not specify
             if 'max_participation_rate' not in md and part_cap is not None:
                 try:
                     md['max_participation_rate'] = max(0.0, min(1.0, float(part_cap)))
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     logger.debug("MAX_PARTICIPATION_RATE_PARSE_FAILED", exc_info=True)
             # Prefer limit orders when not urgent and a price/target is available
             urgency = md.get('urgency_level')
@@ -145,7 +146,7 @@ class ProductionExecutionCoordinator:
                     execution_time_ms = execution_result.execution_time_ms or 0.0
                 try:
                     await self._update_execution_statistics(execution_result.to_dict(), execution_time_ms)
-                except Exception as exc:
+                except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                     logger.error('EXECUTION_STATS_FINALIZE_FAILED', extra={'cause': exc.__class__.__name__, 'detail': str(exc)})
 
     async def _comprehensive_safety_check(self, order: Order) -> dict[str, Any]:
@@ -364,7 +365,7 @@ class ProductionExecutionCoordinator:
                                 'order_status': execution_result.get('status')
                             },
                         )
-                except Exception:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     logger.debug("SLIPPAGE_LOG_RECORD_FAILED", exc_info=True)
             else:
                 self.execution_stats['rejected_orders'] += 1
@@ -435,7 +436,7 @@ class ProductionExecutionCoordinator:
                 logger.debug('check_stops: inspected %d positions (%s)', len(positions), source)
         except (APIError, TimeoutError, ConnectionError, ValueError, TypeError) as e:
             logger.info('check_stops: suppressed exception: %s', e)
-        except Exception as e:  # pragma: no cover - defensive guardrail
+        except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - defensive guardrail
             logger.info('check_stops: suppressed exception: %s', e)
 
     def _snapshot_positions_for_stop_checks(self) -> tuple[list[Any], str]:

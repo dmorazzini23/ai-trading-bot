@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import os
 import sys
@@ -11,7 +12,7 @@ from pathlib import Path
 _load_dotenv: Callable[..., bool] | None
 try:
     from dotenv import load_dotenv as _load_dotenv
-except Exception:  # pragma: no cover - optional dependency may be absent
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency may be absent
     _load_dotenv = None
 
 _DOTENV_WARNING_EMITTED = False
@@ -274,7 +275,7 @@ def reload_env(path: str | os.PathLike[str] | None = None, override: bool = True
             reset_cached = getattr(config_pkg, "_reset_cached_settings", None)
             if callable(reset_cached):
                 reset_cached()
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             # Best-effort cache invalidation; runtime config reload still proceeds.
             pass
 
@@ -314,7 +315,7 @@ def _maybe_load_dotenv(path: os.PathLike[str] | str, *, override: bool = True) -
 
     try:
         _load_dotenv(dotenv_path=path, override=override)
-    except Exception as exc:  # pragma: no cover - logged for diagnostics
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - logged for diagnostics
         logger.warning(
             "PYTHON_DOTENV_LOAD_FAILED",
             extra={"path": os.fspath(path), "error": str(exc)},
@@ -619,7 +620,7 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
 
     try:
         cfg = get_trading_config()
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         raise RuntimeError(f"Unable to load trading configuration: {exc}") from exc
 
     provider_primary = getattr(cfg, "data_provider", None)

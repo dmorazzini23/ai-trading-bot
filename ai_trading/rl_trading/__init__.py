@@ -1,5 +1,6 @@
 """Reinforcement learning trading utilities with optional dependencies."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 import inspect
@@ -40,7 +41,7 @@ def _load_rl_stack() -> dict[str, Any] | None:
         sb3 = importlib.import_module("stable_baselines3")
         gym = importlib.import_module("gymnasium")
         importlib.import_module("torch")
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.exception("RL stack unavailable: %s", exc)
         return None
     global PPO, DummyVecEnv
@@ -74,7 +75,7 @@ class RLAgent:
             raise FileNotFoundError(f"RL model not found at {self.model_path}")
         try:
             self.model = PPO.load(self.model_path)
-        except Exception as exc:  # pragma: no cover - defensive guard
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive guard
             logger.error("RL model load failed for %s: %s", self.model_path, exc)
             raise RuntimeError(f"RL model load failed for {self.model_path}") from exc
 
@@ -210,5 +211,5 @@ def __dir__() -> list[str]:  # pragma: no cover - keep introspection predictable
 
 try:  # Eagerly import to keep a stable module reference for reloads.
     train = _load_train_module()
-except Exception:  # pragma: no cover - optional dependency missing or other import failure
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency missing or other import failure
     pass

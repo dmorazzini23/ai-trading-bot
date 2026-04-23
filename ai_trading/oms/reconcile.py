@@ -1,5 +1,6 @@
 """Broker reconciliation helpers."""
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -27,7 +28,7 @@ def fetch_broker_positions(api: Any) -> dict[str, float]:
                 qty = getattr(pos, "qty", 0)
                 if symbol:
                     positions[str(symbol)] = float(qty)
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.warning("BROKER_POSITIONS_FETCH_FAILED", extra={"error": str(exc)})
     return positions
 
@@ -49,7 +50,7 @@ def fetch_open_orders(api: Any) -> list[dict[str, Any]]:
                         "status": getattr(order, "status", None),
                     }
                 )
-    except Exception as exc:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.warning("BROKER_OPEN_ORDERS_FETCH_FAILED", extra={"error": str(exc)})
     return orders
 

@@ -4,13 +4,14 @@ The builder converts raw matrix inputs into feature states and applies optional
 train-split normalization so train/eval transformations stay leakage-safe.
 """
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass
 from typing import Any, cast
 
 try:  # optional dependency
     import numpy as np
-except Exception:  # noqa: BLE001 - numpy is optional until state builder is used
+except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - numpy is optional until state builder is used
     np = None
 
 from ai_trading.logging import get_logger

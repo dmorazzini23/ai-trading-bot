@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -97,15 +98,15 @@ def log_env_diag(
         if once:
             try:
                 from ai_trading.logging import logger_once
-            except Exception:
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger_once = None  # type: ignore[assignment]
             if logger_once is not None:
                 logger_once.info("ALPACA_DIAG", extra=payload, key="alpaca_diag_once")
                 return payload
         logger.info("ALPACA_DIAG", extra=payload)
-    except Exception:  # pragma: no cover - do not break startup on logging issues
+    except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - do not break startup on logging issues
         try:
             logger.debug("ALPACA_DIAG_LOG_FAILED", exc_info=True)
-        except Exception:
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
             pass
     return payload
