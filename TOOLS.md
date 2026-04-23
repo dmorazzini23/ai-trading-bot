@@ -22,6 +22,23 @@
 - OpenClaw gateway status:
   `openclaw gateway status --token $(cat ~/.openclaw/gateway.token)`
 
+## Conversational routing
+
+- Casual trading-status questions in Slack should trigger live checks automatically.
+- Preferred evidence order for `How is trading going?` style questions:
+  1. `/runtime-report today`
+  2. `/triage`
+  3. `/service status`
+  4. `curl -sS http://127.0.0.1:9001/healthz`
+  5. `journalctl -u ai-trading.service -n 50 --no-pager`
+- Reply with a short summary first, then the key blocker or healthy-state note.
+
+## Slack reply semantics
+
+- For the current Slack DM thread with Dom, plain assistant output is automatically delivered by OpenClaw.
+- Do not call the Slack tool to send the same primary reply back into the same DM.
+- Use the Slack tool only when the task itself is a Slack operation beyond the normal reply path.
+
 ## Narrow sudo for aiuser
 
 - `systemctl status ai-trading.service`
