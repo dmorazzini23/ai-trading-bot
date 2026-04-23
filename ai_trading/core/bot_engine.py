@@ -37935,6 +37935,17 @@ def _run_replay_governance(
         for token in raw_symbols.split(",")
         if token and token.strip()
     }
+    if not symbols and bool(
+        get_env("AI_TRADING_REPLAY_FALLBACK_TO_TICKERS_FILE", True, cast=bool)
+    ):
+        try:
+            symbols = {
+                str(symbol).strip().upper()
+                for symbol in load_tickers(TICKERS_FILE)
+                if str(symbol).strip()
+            }
+        except BOT_ENGINE_FALLBACK_EXC:
+            symbols = set()
     timeframes = {
         token.strip()
         for token in str(get_env("AI_TRADING_REPLAY_TIMEFRAMES", "5Min")).split(",")
@@ -38107,6 +38118,7 @@ def _run_replay_governance(
     output_dir = resolve_runtime_artifact_path(
         output_dir_raw,
         default_relative="runtime/replay_outputs",
+        for_write=True,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"replay_hash_{now.strftime('%Y%m%d')}.json"

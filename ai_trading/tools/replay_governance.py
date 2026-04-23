@@ -103,6 +103,7 @@ def _resolve_replay_output_path(now: datetime) -> Path:
     output_dir = resolve_runtime_artifact_path(
         output_dir_raw or "runtime/replay_outputs",
         default_relative="runtime/replay_outputs",
+        for_write=True,
     )
     return output_dir / f"replay_hash_{now.strftime('%Y%m%d')}.json"
 

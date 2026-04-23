@@ -132,6 +132,8 @@ def _maybe_refresh_replay_governance() -> dict[str, Any]:
         payload = run_replay_governance(
             [
                 "--force",
+                "--replay-output-dir",
+                str(runtime_root / "replay_outputs"),
                 "--summary-json",
                 str(runtime_root / "replay_governance_refresh_latest.json"),
             ]

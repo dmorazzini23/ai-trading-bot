@@ -140,6 +140,51 @@ def test_replay_governance_resolves_runtime_paths_against_data_dir(
     assert payload["source_path"] == str(data_root / "runtime" / "replay_data")
 
 
+def test_replay_governance_defaults_to_tickers_file_universe(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 2, 18, 23, 0, tzinfo=UTC)
+    tickers_path = tmp_path / "tickers.csv"
+    tickers_path.write_text("AAPL\nMSFT\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(bot_engine, "_replay_schedule_due", lambda *_args, **_kwargs: True)
+
+    def _load_bars(**kwargs):
+        captured["symbols"] = tuple(sorted(kwargs.get("symbols", ())))
+        return [
+            {
+                "symbol": "AAPL",
+                "ts": "2026-02-18T22:00:00+00:00",
+                "close": 189.5,
+                "side": "buy",
+                "qty": 1,
+                "client_order_id": "aapl-1",
+            },
+            {
+                "symbol": "TSLA",
+                "ts": "2026-02-18T22:01:00+00:00",
+                "close": 250.0,
+                "side": "buy",
+                "qty": 1,
+                "client_order_id": "tsla-1",
+            },
+        ]
+
+    monkeypatch.setattr(bot_engine, "_load_replay_bars", _load_bars)
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(tickers_path))
+    monkeypatch.setenv("AI_TRADING_REPLAY_SYMBOLS", "")
+    monkeypatch.setenv("AI_TRADING_REPLAY_OUTPUT_DIR", str(tmp_path / "outputs"))
+    monkeypatch.setenv("AI_TRADING_REPLAY_ENFORCE_OMS_GATES", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_SIMULATE_FILLS", "1")
+
+    state = _State()
+    bot_engine._run_replay_governance(state, now=now, market_open_now=False, force=True)
+
+    assert captured["symbols"] == ("AAPL", "MSFT")
+
+
 def test_replay_governance_force_bypasses_schedule_gate(
     monkeypatch,
     tmp_path: Path,

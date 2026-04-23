@@ -132,6 +132,40 @@ def test_operator_control_plane_services_endpoint(monkeypatch):
     assert payload["data"]["reconciliation"]["boundary_type"] == "facade"
 
 
+def test_operator_control_plane_services_uses_runtime_state_fast_path(monkeypatch):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
+    runtime_state.reset_all_states()
+    runtime_state.update_data_provider_state(status="healthy", active="alpaca")
+    runtime_state.update_broker_status(
+        connected=True,
+        status="connected",
+        open_orders_count=0,
+        positions_count=2,
+    )
+    runtime_state.update_service_status(status="ready", phase="active")
+
+    def _unexpected_snapshot(*, service_name: str):
+        raise AssertionError(f"unexpected full snapshot build for {service_name}")
+
+    monkeypatch.setattr(control_plane_mod, "build_control_plane_snapshot", _unexpected_snapshot)
+    app = create_app()
+    client = app.test_client()
+
+    try:
+        response = _get(client, "/operator/control-plane/services")
+    finally:
+        runtime_state.reset_all_states()
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["section"] == "services"
+    assert payload["data"]["execution"]["status"] == "connected"
+    assert payload["data"]["signal"]["status"] == "healthy"
+    assert payload["data"]["portfolio"]["status"] == "ready"
+
+
 def test_operator_control_plane_open_orders_uses_runtime_state_fast_path(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
     _configure_operator_auth(monkeypatch)

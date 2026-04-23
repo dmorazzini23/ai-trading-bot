@@ -45,6 +45,8 @@ class ControlPlaneService:
             raise KeyError(name)
         if key == "open_orders":
             return self._open_orders_section()
+        if key == "services":
+            return self._services_section()
         snapshot = self.snapshot()
         section = snapshot.get(key)
         if isinstance(section, Mapping):
@@ -79,6 +81,44 @@ class ControlPlaneService:
             "last_error": broker_state.get("last_error"),
             "updated": broker_state.get("updated"),
         }
+
+    def _services_section(self) -> dict[str, Any]:
+        return self.service_boundaries(snapshot=self._lightweight_snapshot())
+
+    def _lightweight_snapshot(self) -> dict[str, Any]:
+        provider_state = self._observe_mapping(runtime_state.observe_data_provider_state)
+        broker_state = self._observe_mapping(runtime_state.observe_broker_status)
+        service_state = self._observe_mapping(runtime_state.observe_service_status)
+        return {
+            "rollout": {
+                "status": service_state.get("status") or service_state.get("phase"),
+            },
+            "broker_health": {
+                "status": broker_state.get("status"),
+                "connected": broker_state.get("connected"),
+            },
+            "data_provider": {
+                "status": provider_state.get("status"),
+                "active": provider_state.get("active"),
+                "using_backup": provider_state.get("using_backup"),
+            },
+            "positions": {
+                "reconciliation_available": broker_state.get("positions_count") is not None,
+                "reconciliation_consistent": True,
+            },
+            "execution_quality": {},
+            "circuit_breakers": {},
+            "governance": {},
+            "manual_overrides": {},
+        }
+
+    @staticmethod
+    def _observe_mapping(observer: Any) -> dict[str, Any]:
+        try:
+            value = observer()
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            return {}
+        return dict(value) if isinstance(value, Mapping) else {}
 
     def service_boundaries(
         self,
