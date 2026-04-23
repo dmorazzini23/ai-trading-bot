@@ -943,11 +943,13 @@ class EventStore:
             "current_revision": None,
             "at_head": None,
             "available": False,
+            "managed": None,
         }
         try:
             inspector = inspect(self._engine)
             if not inspector.has_table("alembic_version"):
-                payload["reason"] = "alembic_version_missing"
+                payload["managed"] = False
+                payload["reason"] = "not_alembic_managed"
                 return payload
             with self._engine.connect() as conn:
                 result = conn.execute(text("SELECT version_num FROM alembic_version LIMIT 1"))
@@ -959,6 +961,7 @@ class EventStore:
             if row is not None and len(row) > 0:
                 payload["current_revision"] = str(row[0])
             payload["available"] = True
+            payload["managed"] = True
         except SQLAlchemyError:
             payload["reason"] = "migration_status_unavailable"
             return payload

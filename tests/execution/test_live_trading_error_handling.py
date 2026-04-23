@@ -84,6 +84,46 @@ def test_submit_limit_order_success_path(engine_factory):
     assert engine.stats["failed_orders"] == 0
 
 
+def test_submit_market_order_precheck_failure_records_skip(engine_factory):
+    engine = engine_factory()
+
+    def _reject_with_detail(_order):
+        engine._last_pre_execution_order_check_failure = {
+            "reason": "symbol_intraday_slippage_budget",
+            "context": {"breach_severity": "hard"},
+        }
+        return False
+
+    engine._pre_execution_order_checks = _reject_with_detail
+
+    result = engine.submit_market_order("AAPL", "buy", 1)
+
+    assert result is None
+    assert engine._last_submit_outcome.get("status") == "skipped"
+    assert engine._last_submit_outcome.get("reason") == "pre_execution_order_checks_failed"
+    assert engine._last_submit_outcome.get("detail") == "symbol_intraday_slippage_budget"
+
+
+def test_submit_limit_order_precheck_failure_records_skip(engine_factory):
+    engine = engine_factory()
+
+    def _reject_with_detail(_order):
+        engine._last_pre_execution_order_check_failure = {
+            "reason": "symbol_intraday_slippage_budget",
+            "context": {"breach_severity": "hard"},
+        }
+        return False
+
+    engine._pre_execution_order_checks = _reject_with_detail
+
+    result = engine.submit_limit_order("AAPL", "buy", 1, 123.45)
+
+    assert result is None
+    assert engine._last_submit_outcome.get("status") == "skipped"
+    assert engine._last_submit_outcome.get("reason") == "pre_execution_order_checks_failed"
+    assert engine._last_submit_outcome.get("detail") == "symbol_intraday_slippage_budget"
+
+
 def test_submit_limit_order_capacity_precheck_runs_once(engine_factory, monkeypatch):
     calls: list[tuple[Any, Any, Any, Any]] = []
 

@@ -164,9 +164,10 @@ def test_event_store_migration_status_handles_missing_alembic_table(tmp_path: Pa
 
     assert payload["expected_revision"] == "20260414_0001"
     assert payload["available"] is False
+    assert payload["managed"] is False
     assert payload["current_revision"] is None
     assert payload["at_head"] is None
-    assert payload["reason"] == "alembic_version_missing"
+    assert payload["reason"] == "not_alembic_managed"
 
 
 def test_event_store_health_reads_rollback_connections(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -222,6 +223,7 @@ def test_event_store_health_reads_rollback_connections(monkeypatch: pytest.Monke
     health = store.is_healthy(expected_revision="rev-1")
 
     assert migration["available"] is True
+    assert migration["managed"] is True
     assert migration["current_revision"] == "rev-1"
     assert health["connected"] is True
     assert health["ok"] is True

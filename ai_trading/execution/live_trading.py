@@ -18056,6 +18056,29 @@ class ExecutionEngine:
             precheck_order["account_snapshot"] = getattr(self, "_cycle_account", None)
 
         if not self._pre_execution_order_checks(precheck_order):
+            precheck_failure_raw = getattr(
+                self,
+                "_last_pre_execution_order_check_failure",
+                {},
+            )
+            precheck_detail: str | None = None
+            precheck_context: Mapping[str, Any] | None = None
+            if isinstance(precheck_failure_raw, Mapping):
+                detail_candidate = str(precheck_failure_raw.get("reason") or "").strip()
+                if detail_candidate:
+                    precheck_detail = detail_candidate
+                context_candidate = precheck_failure_raw.get("context")
+                if isinstance(context_candidate, Mapping):
+                    precheck_context = context_candidate
+            self._skip_submit(
+                symbol=symbol,
+                side=side_lower,
+                reason="pre_execution_order_checks_failed",
+                order_type="market",
+                detail=precheck_detail,
+                context=precheck_context,
+                submit_started_at=submit_started_at,
+            )
             return None
 
         precheck_quantity_raw = precheck_order.get("quantity")
@@ -18102,6 +18125,13 @@ class ExecutionEngine:
                 return None
 
         if not self._pre_execution_checks():
+            self._skip_submit(
+                symbol=symbol,
+                side=side_lower,
+                reason="pre_execution_checks_failed",
+                order_type=effective_order_type,
+                submit_started_at=submit_started_at,
+            )
             return None
         order_data = {
             "symbol": symbol,
@@ -18775,6 +18805,29 @@ class ExecutionEngine:
                 return None
             precheck_order["account_snapshot"] = getattr(self, "_cycle_account", None)
         if not self._pre_execution_order_checks(precheck_order):
+            precheck_failure_raw = getattr(
+                self,
+                "_last_pre_execution_order_check_failure",
+                {},
+            )
+            precheck_detail: str | None = None
+            precheck_context: Mapping[str, Any] | None = None
+            if isinstance(precheck_failure_raw, Mapping):
+                detail_candidate = str(precheck_failure_raw.get("reason") or "").strip()
+                if detail_candidate:
+                    precheck_detail = detail_candidate
+                context_candidate = precheck_failure_raw.get("context")
+                if isinstance(context_candidate, Mapping):
+                    precheck_context = context_candidate
+            self._skip_submit(
+                symbol=symbol,
+                side=side_lower,
+                reason="pre_execution_order_checks_failed",
+                order_type="limit",
+                detail=precheck_detail,
+                context=precheck_context,
+                submit_started_at=submit_started_at,
+            )
             return None
         precheck_quantity_raw = precheck_order.get("quantity")
         if precheck_quantity_raw in (None, ""):
@@ -18812,6 +18865,13 @@ class ExecutionEngine:
         if not self.is_initialized and not self._ensure_initialized():
             return None
         if not self._pre_execution_checks():
+            self._skip_submit(
+                symbol=symbol,
+                side=side_lower,
+                reason="pre_execution_checks_failed",
+                order_type="limit",
+                submit_started_at=submit_started_at,
+            )
             return None
         order_data = {
             "symbol": symbol,
@@ -26970,6 +27030,18 @@ class ExecutionEngine:
         if capture_ratio_min_fills is None:
             capture_ratio_min_fills = max(int(min_fills), 4)
         capture_ratio_min_fills = max(1, min(int(capture_ratio_min_fills), 10000))
+        capture_ratio_min_notional = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_CAPTURE_RATIO_MIN_NOTIONAL",
+            0.0,
+        )
+        if capture_ratio_min_notional is None or not math.isfinite(
+            float(capture_ratio_min_notional)
+        ):
+            capture_ratio_min_notional = 0.0
+        capture_ratio_min_notional = max(
+            0.0,
+            min(float(capture_ratio_min_notional), 1_000_000_000.0),
+        )
         capture_ratio_soft_floor = _config_float(
             "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_CAPTURE_RATIO_SOFT_FLOOR",
             0.18,
@@ -26991,6 +27063,7 @@ class ExecutionEngine:
         capture_ratio_state = "insufficient_samples"
         if (
             int(symbol_edge_samples) >= int(capture_ratio_min_fills)
+            and float(symbol_notional) >= float(capture_ratio_min_notional)
             and float(symbol_expected_edge_sum_bps) > 1e-9
         ):
             symbol_edge_capture_ratio = (
@@ -27032,6 +27105,7 @@ class ExecutionEngine:
                 "symbol_notional": float(symbol_notional),
                 "capture_ratio_guard_enabled": bool(capture_ratio_guard_enabled),
                 "capture_ratio_min_fills": int(capture_ratio_min_fills),
+                "capture_ratio_min_notional": float(capture_ratio_min_notional),
                 "capture_ratio_soft_floor": float(capture_ratio_soft_floor),
                 "capture_ratio_hard_floor": float(capture_ratio_hard_floor),
                 "symbol_edge_samples": int(symbol_edge_samples),
@@ -27196,6 +27270,7 @@ class ExecutionEngine:
             "symbol_fills": int(symbol_fills),
             "capture_ratio_guard_enabled": bool(capture_ratio_guard_enabled),
             "capture_ratio_min_fills": int(capture_ratio_min_fills),
+            "capture_ratio_min_notional": float(capture_ratio_min_notional),
             "capture_ratio_soft_floor": float(capture_ratio_soft_floor),
             "capture_ratio_hard_floor": float(capture_ratio_hard_floor),
             "symbol_edge_samples": int(symbol_edge_samples),
