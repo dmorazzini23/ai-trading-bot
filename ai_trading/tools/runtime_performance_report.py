@@ -22,6 +22,17 @@ from ai_trading.env import ensure_dotenv_loaded
 from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError as _SQLAlchemyError
+except ImportError:  # pragma: no cover - sqlalchemy is a runtime dependency
+    _SQLALCHEMY_FALLBACK_EXC: tuple[type[Exception], ...] = ()
+else:
+    _SQLALCHEMY_FALLBACK_EXC = (_SQLAlchemyError,)
+
+_RUNTIME_REPORT_FALLBACK_EXC: tuple[type[Exception], ...] = (
+    AI_TRADING_FALLBACK_EXCEPTIONS + _SQLALCHEMY_FALLBACK_EXC
+)
+
 _DEFAULT_TRADE_HISTORY_PATH = "runtime/trade_history.parquet"
 _DEFAULT_GATE_SUMMARY_PATH = "runtime/gate_effectiveness_summary.json"
 _DEFAULT_GATE_LOG_PATH = "runtime/gate_effectiveness.jsonl"
@@ -3971,8 +3982,14 @@ def summarize_oms_invariants() -> dict[str, Any]:
         summary["enabled"] = True
         summary["available"] = True
         return summary
-    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-        return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
+    except _RUNTIME_REPORT_FALLBACK_EXC as exc:
+        return {
+            "enabled": True,
+            "available": False,
+            "ok": False,
+            "reason": "oms_invariants_unavailable",
+            "error": str(exc),
+        }
 
 
 def summarize_oms_lifecycle_parity() -> dict[str, Any]:
@@ -4019,8 +4036,14 @@ def summarize_oms_lifecycle_parity() -> dict[str, Any]:
         summary["enabled"] = True
         summary["available"] = True
         return summary
-    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-        return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
+    except _RUNTIME_REPORT_FALLBACK_EXC as exc:
+        return {
+            "enabled": True,
+            "available": False,
+            "ok": False,
+            "reason": "oms_lifecycle_parity_unavailable",
+            "error": str(exc),
+        }
 
 
 def build_report(

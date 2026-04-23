@@ -747,6 +747,58 @@ def test_cached_background_snapshot_returns_placeholder_then_cached(monkeypatch)
     assert second["refreshing"] is False
 
 
+def test_expensive_health_snapshots_use_slow_refresh_default(monkeypatch):
+    captured: dict[str, float] = {}
+
+    def _cached_stub(*, name, ttl_seconds, placeholder, builder):
+        captured[name] = ttl_seconds
+        return dict(placeholder)
+
+    monkeypatch.setattr(health_payload_module, "_health_snapshot_cache_enabled", lambda: True)
+    monkeypatch.setattr(health_payload_module, "_env_float", lambda _name, default: default)
+    monkeypatch.setattr(health_payload_module, "_cached_background_snapshot", _cached_stub)
+
+    health_payload_module._oms_invariants_snapshot_cached()
+    health_payload_module._oms_lifecycle_parity_snapshot_cached()
+    health_payload_module._replay_live_parity_gate_snapshot_cached()
+
+    assert captured["oms_invariants"] == 300.0
+    assert captured["oms_lifecycle_parity"] == 300.0
+    assert captured["replay_live_parity_gate"] == 300.0
+
+
+def test_replay_live_parity_gate_does_not_cache_warming_oms_snapshot(monkeypatch):
+    monkeypatch.setattr(health_payload_module, "_health_snapshot_cache_enabled", lambda: True)
+    monkeypatch.setattr(
+        health_payload_module,
+        "_replay_live_parity_gate_snapshot",
+        lambda **_kwargs: {
+            "enabled": True,
+            "available": False,
+            "ok": False,
+            "reason": "oms_lifecycle_parity_available",
+        },
+    )
+
+    def _unexpected_cache(**_kwargs):
+        raise AssertionError("warming OMS parity should not seed replay gate cache")
+
+    monkeypatch.setattr(health_payload_module, "_cached_background_snapshot", _unexpected_cache)
+
+    payload = health_payload_module._replay_live_parity_gate_snapshot_cached(
+        oms_lifecycle_parity={
+            "enabled": True,
+            "available": False,
+            "ok": False,
+            "refreshing": True,
+            "reason": "warming_up",
+        },
+    )
+
+    assert payload["available"] is False
+    assert payload["reason"] == "oms_lifecycle_parity_available"
+
+
 def test_runtime_health_payload_replay_live_parity_requirement_marks_degraded(
     monkeypatch,
 ) -> None:

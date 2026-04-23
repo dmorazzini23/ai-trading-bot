@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 
 import ai_trading.governance.promotion as promotion_mod
+import ai_trading.services.control_plane as control_plane_mod
 
 from ai_trading.app import create_app
 from ai_trading.operator_presets import PresetValidationError, build_plan
+from ai_trading.telemetry import runtime_state
 
 
 def _operator_headers(
@@ -128,6 +130,41 @@ def test_operator_control_plane_services_endpoint(monkeypatch):
     assert "legacy_submit_runtime" in payload["data"]["execution"]["canonical_runtime_owner"][0]
     assert payload["data"]["portfolio"]["boundary_type"] == "facade"
     assert payload["data"]["reconciliation"]["boundary_type"] == "facade"
+
+
+def test_operator_control_plane_open_orders_uses_runtime_state_fast_path(monkeypatch):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
+    runtime_state.reset_broker_status()
+    runtime_state.update_broker_status(
+        connected=True,
+        latency_ms=12.5,
+        status="reachable",
+        open_orders_count=3,
+        positions_count=2,
+    )
+
+    def _unexpected_snapshot(*, service_name: str):
+        raise AssertionError(f"unexpected full snapshot build for {service_name}")
+
+    monkeypatch.setattr(control_plane_mod, "build_control_plane_snapshot", _unexpected_snapshot)
+    app = create_app()
+    client = app.test_client()
+
+    try:
+        response = _get(client, "/operator/control-plane/open-orders")
+    finally:
+        runtime_state.reset_broker_status()
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["section"] == "open-orders"
+    assert payload["data"]["source"] == "runtime_state"
+    assert payload["data"]["available"] is True
+    assert payload["data"]["open_orders_count"] == 3
+    assert payload["data"]["positions_count"] == 2
+    assert payload["data"]["broker_status"] == "reachable"
 
 
 def test_operator_manual_overrides_post_and_delete(monkeypatch, tmp_path):

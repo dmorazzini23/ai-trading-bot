@@ -26,7 +26,10 @@ import os
 from pathlib import Path
 from typing import Any
 
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.env import ensure_dotenv_loaded
+from ai_trading.governance.replay_live_parity import _load_latest_replay_governance_snapshot
+from ai_trading.tools.replay_governance import run_replay_governance
 from ai_trading.tools.runtime_performance_report import (
     build_report,
     evaluate_go_no_go,
@@ -77,6 +80,91 @@ def _prefer_runtime_root(path_value: Any, fallback_name: str) -> Path:
     if not candidate.exists() and canonical.exists():
         return canonical
     return candidate
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _maybe_refresh_replay_governance() -> dict[str, Any]:
+    if not _env_bool("AI_TRADING_RUNTIME_REPORT_REFRESH_REPLAY_GOVERNANCE", True):
+        return {"attempted": False, "reason": "disabled"}
+    snapshot = _load_latest_replay_governance_snapshot()
+    age_hours = snapshot.get("age_hours")
+    max_age_hours = float(snapshot.get("max_age_hours") or 96.0)
+    refresh_fraction = max(
+        0.1,
+        min(_env_float("AI_TRADING_RUNTIME_REPORT_REPLAY_REFRESH_FRACTION", 0.75), 0.95),
+    )
+    should_refresh = not bool(snapshot.get("available"))
+    if age_hours is not None:
+        should_refresh = should_refresh or float(age_hours) >= max_age_hours * refresh_fraction
+    if not should_refresh:
+        return {
+            "attempted": False,
+            "reason": "fresh",
+            "age_hours": age_hours,
+            "max_age_hours": max_age_hours,
+        }
+    lock_path = runtime_root / "replay_governance_refresh.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return {
+            "attempted": False,
+            "reason": "refresh_already_running",
+            "age_hours": age_hours,
+            "max_age_hours": max_age_hours,
+        }
+    try:
+        os.write(lock_fd, f"{datetime.now().isoformat()}\n".encode("utf-8"))
+        payload = run_replay_governance(
+            [
+                "--force",
+                "--summary-json",
+                str(runtime_root / "replay_governance_refresh_latest.json"),
+            ]
+        )
+        return {
+            "attempted": True,
+            "reason": "refreshed",
+            "previous_age_hours": age_hours,
+            "max_age_hours": max_age_hours,
+            "replay": payload.get("replay", {}),
+        }
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        failure = {
+            "attempted": True,
+            "reason": "refresh_failed",
+            "previous_age_hours": age_hours,
+            "max_age_hours": max_age_hours,
+            "error": str(exc),
+        }
+        (runtime_root / "replay_governance_refresh_latest.json").write_text(
+            json.dumps(failure, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return failure
+    finally:
+        os.close(lock_fd)
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+replay_refresh = _maybe_refresh_replay_governance()
 
 
 report = build_report(
@@ -153,6 +241,7 @@ report["go_no_go"] = evaluate_go_no_go(
     report,
     thresholds=resolve_runtime_gonogo_thresholds(),
 )
+report["replay_governance_refresh"] = replay_refresh
 report_targets = [
     runtime_root / "runtime_performance_report_latest.json",
     runtime_root / "daily_performance_report.json",

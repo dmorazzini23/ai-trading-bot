@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh AI Trading Replay Governance Artifact Daily
+
+[Timer]
+OnBootSec=20m
+OnCalendar=Mon..Fri 05:20 America/New_York
+RandomizedDelaySec=10m
+AccuracySec=1m
+Persistent=true
+Unit=ai-trading-replay-governance.service
+
+[Install]
+WantedBy=timers.target

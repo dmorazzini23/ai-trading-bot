@@ -12,6 +12,29 @@ def test_default_trade_history_path_uses_runtime_trade_history() -> None:
     assert rpt._DEFAULT_TRADE_HISTORY_PATH == "runtime/trade_history.parquet"
 
 
+def test_summarize_oms_lifecycle_parity_degrades_on_sqlalchemy_error(monkeypatch) -> None:
+    from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
+
+    import ai_trading.oms.invariants as invariants
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_OMS_LIFECYCLE_PARITY_ENABLED", "1")
+    monkeypatch.setattr(
+        invariants,
+        "evaluate_oms_lifecycle_parity_invariants",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            SQLAlchemyTimeoutError("QueuePool limit reached", None, None)
+        ),
+    )
+
+    summary = rpt.summarize_oms_lifecycle_parity()
+
+    assert summary["enabled"] is True
+    assert summary["available"] is False
+    assert summary["ok"] is False
+    assert summary["reason"] == "oms_lifecycle_parity_unavailable"
+    assert "QueuePool limit reached" in summary["error"]
+
+
 def test_build_report_summarizes_trade_and_gate_data(tmp_path: Path) -> None:
     trade_history_path = tmp_path / "trade_history.json"
     gate_summary_path = tmp_path / "gate_effectiveness_summary.json"

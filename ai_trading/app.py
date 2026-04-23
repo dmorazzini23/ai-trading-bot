@@ -366,6 +366,8 @@ def _request_headers() -> Mapping[str, Any]:
     headers = getattr(request_obj, "headers", None)
     if isinstance(headers, Mapping):
         return headers
+    if hasattr(headers, "items"):
+        return dict(headers.items())
     return {}
 
 

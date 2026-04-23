@@ -3,8 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.health_payload import build_control_plane_snapshot
 from ai_trading.services.risk_approval import RiskApprovalService
+from ai_trading.telemetry import runtime_state
 
 _CONTROL_PLANE_SECTION_KEYS = {
     "rollout": "rollout",
@@ -41,11 +43,42 @@ class ControlPlaneService:
         key = _CONTROL_PLANE_SECTION_KEYS.get(str(name or "").strip().lower())
         if not key:
             raise KeyError(name)
+        if key == "open_orders":
+            return self._open_orders_section()
         snapshot = self.snapshot()
         section = snapshot.get(key)
         if isinstance(section, Mapping):
             return dict(section)
         return {"value": section}
+
+    def _open_orders_section(self) -> dict[str, Any]:
+        try:
+            broker_state = runtime_state.observe_broker_status()
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+            return {
+                "available": False,
+                "source": "runtime_state",
+                "reason": "broker_status_unavailable",
+                "error": str(exc),
+            }
+        if not isinstance(broker_state, Mapping):
+            return {
+                "available": False,
+                "source": "runtime_state",
+                "reason": "broker_status_unavailable",
+            }
+        open_orders_count = broker_state.get("open_orders_count")
+        return {
+            "available": open_orders_count is not None,
+            "source": "runtime_state",
+            "open_orders_count": open_orders_count,
+            "positions_count": broker_state.get("positions_count"),
+            "broker_status": broker_state.get("status"),
+            "connected": broker_state.get("connected"),
+            "latency_ms": broker_state.get("latency_ms"),
+            "last_error": broker_state.get("last_error"),
+            "updated": broker_state.get("updated"),
+        }
 
     def service_boundaries(
         self,

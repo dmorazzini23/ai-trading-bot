@@ -20,7 +20,7 @@ Be useful in the way Dom actually wants:
 
 - Treat plain-English trading-status questions as live ops requests, not small talk.
 - If Dom asks things like `How is trading going today?`, `How's the bot doing?`, `Any issues this morning?`, `How are we doing?`, or similar, run live checks before answering.
-- For those questions, prefer a short synthesized answer grounded in current runtime state, using the same evidence as `/triage`, `/runtime-report today`, `/service status`, `/healthz`, and recent `ai-trading.service` logs when useful.
+- For those questions, prefer a short synthesized answer grounded in current runtime state, using `/triage`, `/service status`, `/healthz`, and recent `ai-trading.service` logs first, then `/runtime-report today` when report artifacts are available.
 - Do not answer trading-status questions with `I don't have visibility from this thread` unless live checks actually fail.
 - If the live checks fail, say what failed and give the next best command or recovery step.
 

@@ -9,6 +9,36 @@ from typing import Any
 from ai_trading.config.management import get_env
 from ai_trading.core.legacy_decision_journal import LegacyDecisionJournalRecorder
 
+_REPLAY_LIVE_PARITY_GATE_CACHE: dict[str, Any] = {
+    "updated_mono": 0.0,
+    "gate": None,
+}
+
+
+def _replay_live_parity_gate_cache_ttl_seconds() -> float:
+    return max(
+        0.0,
+        min(
+            float(
+                get_env(
+                    "AI_TRADING_REPLAY_LIVE_PARITY_GATE_CYCLE_TTL_SEC",
+                    300.0,
+                    cast=float,
+                )
+                or 0.0
+            ),
+            900.0,
+        ),
+    )
+
+
+def _cacheable_replay_live_parity_gate(gate: Any) -> bool:
+    return (
+        isinstance(gate, dict)
+        and bool(gate.get("enabled", False))
+        and bool(gate.get("available", True))
+    )
+
 
 def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> dict[str, Any]:
     default_required = not bool(
@@ -27,23 +57,39 @@ def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> d
     )
     if not enabled and not required:
         return {"enabled": False, "available": False, "ok": True, "status": "disabled"}
-    try:
-        from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
-        from ai_trading.tools.runtime_performance_report import summarize_oms_lifecycle_parity
+    ttl_seconds = _replay_live_parity_gate_cache_ttl_seconds()
+    now_mono = time.monotonic()
+    cached_gate = _REPLAY_LIVE_PARITY_GATE_CACHE.get("gate")
+    cached_age = now_mono - float(_REPLAY_LIVE_PARITY_GATE_CACHE.get("updated_mono") or 0.0)
+    gate: dict[str, Any] | None = None
+    if (
+        ttl_seconds > 0.0
+        and _cacheable_replay_live_parity_gate(cached_gate)
+        and cached_age <= ttl_seconds
+    ):
+        gate = dict(cached_gate)
+        gate["cache_age_s"] = round(float(cached_age), 3)
+    if gate is None:
+        try:
+            from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
+            from ai_trading.tools.runtime_performance_report import summarize_oms_lifecycle_parity
 
-        oms_lifecycle_parity = summarize_oms_lifecycle_parity()
-        gate = summarize_replay_live_parity_gate(
-            oms_lifecycle_parity=oms_lifecycle_parity,
-        )
-    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-        gate = {
-            "enabled": True,
-            "available": False,
-            "ok": False,
-            "status": "fail",
-            "reason": "replay_live_parity_gate_error",
-            "error": str(exc),
-        }
+            oms_lifecycle_parity = summarize_oms_lifecycle_parity()
+            gate = summarize_replay_live_parity_gate(
+                oms_lifecycle_parity=oms_lifecycle_parity,
+            )
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+            gate = {
+                "enabled": True,
+                "available": False,
+                "ok": False,
+                "status": "fail",
+                "reason": "replay_live_parity_gate_error",
+                "error": str(exc),
+            }
+        if _cacheable_replay_live_parity_gate(gate):
+            _REPLAY_LIVE_PARITY_GATE_CACHE["updated_mono"] = now_mono
+            _REPLAY_LIVE_PARITY_GATE_CACHE["gate"] = dict(gate)
     setattr(state, "replay_live_parity_gate", gate)
     setattr(runtime, "replay_live_parity_gate", gate)
     if required and gate.get("enabled", False) and not bool(gate.get("ok")):

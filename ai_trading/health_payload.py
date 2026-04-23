@@ -15,6 +15,17 @@ from ai_trading.settings import get_backup_data_provider
 from ai_trading.telemetry import runtime_state
 from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
 
+try:
+    from sqlalchemy.exc import SQLAlchemyError as _SQLAlchemyError
+except ImportError:  # pragma: no cover - sqlalchemy is a runtime dependency
+    _SQLALCHEMY_FALLBACK_EXC: tuple[type[Exception], ...] = ()
+else:
+    _SQLALCHEMY_FALLBACK_EXC = (_SQLAlchemyError,)
+
+_HEALTH_FALLBACK_EXC: tuple[type[Exception], ...] = (
+    AI_TRADING_FALLBACK_EXCEPTIONS + _SQLALCHEMY_FALLBACK_EXC
+)
+
 _HEALTH_SNAPSHOT_CACHE_LOCK = Lock()
 _HEALTH_SNAPSHOT_CACHE: dict[str, dict[str, Any]] = {}
 
@@ -231,7 +242,7 @@ def _cached_background_snapshot(
         def _refresh() -> None:
             try:
                 snapshot = dict(builder())
-            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
+            except _HEALTH_FALLBACK_EXC as exc:  # pragma: no cover - defensive
                 snapshot = {
                     **dict(placeholder),
                     "ok": False,
@@ -414,8 +425,14 @@ def _oms_invariants_snapshot() -> dict[str, Any]:
         payload = dict(summary)
         payload["enabled"] = True
         return payload
-    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-        return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
+    except _HEALTH_FALLBACK_EXC as exc:
+        return {
+            "enabled": True,
+            "available": False,
+            "ok": False,
+            "reason": "oms_invariants_unavailable",
+            "error": str(exc),
+        }
 
 
 def _oms_invariants_snapshot_cached() -> dict[str, Any]:
@@ -423,7 +440,7 @@ def _oms_invariants_snapshot_cached() -> dict[str, Any]:
         return _oms_invariants_snapshot()
     return _cached_background_snapshot(
         name="oms_invariants",
-        ttl_seconds=_health_snapshot_ttl_seconds("oms_invariants", 15.0),
+        ttl_seconds=_health_snapshot_ttl_seconds("oms_invariants", 300.0),
         placeholder={
             "enabled": True,
             "available": False,
@@ -473,8 +490,14 @@ def _oms_lifecycle_parity_snapshot() -> dict[str, Any]:
         payload = dict(summary)
         payload["enabled"] = True
         return payload
-    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-        return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
+    except _HEALTH_FALLBACK_EXC as exc:
+        return {
+            "enabled": True,
+            "available": False,
+            "ok": False,
+            "reason": "oms_lifecycle_parity_unavailable",
+            "error": str(exc),
+        }
 
 
 def _oms_lifecycle_parity_snapshot_cached() -> dict[str, Any]:
@@ -482,7 +505,7 @@ def _oms_lifecycle_parity_snapshot_cached() -> dict[str, Any]:
         return _oms_lifecycle_parity_snapshot()
     return _cached_background_snapshot(
         name="oms_lifecycle_parity",
-        ttl_seconds=_health_snapshot_ttl_seconds("oms_lifecycle_parity", 15.0),
+        ttl_seconds=_health_snapshot_ttl_seconds("oms_lifecycle_parity", 300.0),
         placeholder={
             "enabled": True,
             "available": False,
@@ -514,9 +537,21 @@ def _replay_live_parity_gate_snapshot_cached(
         return _replay_live_parity_gate_snapshot(
             oms_lifecycle_parity=oms_lifecycle_parity,
         )
+    if isinstance(oms_lifecycle_parity, Mapping) and (
+        bool(oms_lifecycle_parity.get("refreshing"))
+        or str(oms_lifecycle_parity.get("reason") or "").strip().lower()
+        == "warming_up"
+        or (
+            bool(oms_lifecycle_parity.get("enabled", False))
+            and not bool(oms_lifecycle_parity.get("available", True))
+        )
+    ):
+        return _replay_live_parity_gate_snapshot(
+            oms_lifecycle_parity=oms_lifecycle_parity,
+        )
     return _cached_background_snapshot(
         name="replay_live_parity_gate",
-        ttl_seconds=_health_snapshot_ttl_seconds("replay_live_parity_gate", 15.0),
+        ttl_seconds=_health_snapshot_ttl_seconds("replay_live_parity_gate", 300.0),
         placeholder={
             "enabled": True,
             "available": False,

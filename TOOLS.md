@@ -14,23 +14,31 @@
 ## Commands
 
 - Health:
-  `curl -sS http://127.0.0.1:9001/healthz`
+  `ai-trading-local-check health`
 - Trading service status:
-  `systemctl status ai-trading.service --no-pager`
+  `ai-trading-local-check service`
 - Trading service logs:
-  `journalctl -u ai-trading.service -n 50 --no-pager`
+  `ai-trading-local-check logs 50`
 - OpenClaw gateway status:
-  `openclaw gateway status --token $(cat ~/.openclaw/gateway.token)`
+  `openclaw-admin gateway status`
+
+## Local loopback checks
+
+- Do not use `web_fetch` for `http://127.0.0.1:*`, `http://localhost:*`, or other private/internal service URLs; OpenClaw's SSRF guard blocks those requests by design.
+- Use local shell commands instead:
+  - `ai-trading-local-check health`
+  - `ai-trading-local-check triage`
+  - `curl -fsS http://127.0.0.1:9001/healthz`
 
 ## Conversational routing
 
 - Casual trading-status questions in Slack should trigger live checks automatically.
 - Preferred evidence order for `How is trading going?` style questions:
-  1. `/runtime-report today`
-  2. `/triage`
-  3. `/service status`
-  4. `curl -sS http://127.0.0.1:9001/healthz`
-  5. `journalctl -u ai-trading.service -n 50 --no-pager`
+  1. `/triage`
+  2. `/service status`
+  3. `ai-trading-local-check health`
+  4. `ai-trading-local-check logs 50`
+  5. `/runtime-report today`
 - Reply with a short summary first, then the key blocker or healthy-state note.
 
 ## Slack reply semantics
