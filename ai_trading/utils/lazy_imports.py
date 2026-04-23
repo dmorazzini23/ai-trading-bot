@@ -62,7 +62,7 @@ def load_pandas_ta() -> ModuleType | None:
     try:
         return importlib.import_module("pandas_ta")
     except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency
-        get_logger(__name__).info(
+        get_logger(__name__).debug(
             "PANDAS_TA_MISSING", extra={"hint": "pip install pandas-ta"}
         )
         return None

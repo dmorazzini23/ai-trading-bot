@@ -36,12 +36,13 @@ try:
         UniqueConstraint,
         create_engine,
         func,
+        inspect,
         insert,
         select,
         text,
     )
     from sqlalchemy.engine import Engine
-    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.exc import IntegrityError, SQLAlchemyError
     from sqlalchemy.orm import sessionmaker
 
     _SQLALCHEMY_AVAILABLE = True
@@ -941,13 +942,28 @@ class EventStore:
             "expected_revision": expected,
             "current_revision": None,
             "at_head": None,
+            "available": False,
         }
         try:
+            inspector = inspect(self._engine)
+            if not inspector.has_table("alembic_version"):
+                payload["reason"] = "alembic_version_missing"
+                return payload
             with self._engine.connect() as conn:
-                row = conn.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).first()
+                result = conn.execute(text("SELECT version_num FROM alembic_version LIMIT 1"))
+                try:
+                    row = result.first()
+                finally:
+                    result.close()
+                    conn.rollback()
             if row is not None and len(row) > 0:
                 payload["current_revision"] = str(row[0])
+            payload["available"] = True
+        except SQLAlchemyError:
+            payload["reason"] = "migration_status_unavailable"
+            return payload
         except AI_TRADING_FALLBACK_EXCEPTIONS:
+            payload["reason"] = "migration_status_unavailable"
             return payload
 
         if expected:
@@ -965,7 +981,11 @@ class EventStore:
         }
         try:
             with self._engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
+                result = conn.execute(text("SELECT 1"))
+                try:
+                    result.close()
+                finally:
+                    conn.rollback()
             payload["connected"] = True
             migration = self.migration_status(expected_revision=expected_revision)
             payload["migration"] = migration

@@ -1055,13 +1055,52 @@ class OrderManager:
             1,
             int(get_env("AI_TRADING_OMS_RECONCILE_SUBMIT_STALE_SEC", "90", cast=int)),
         )
+        pending_submit_stale_seconds = max(
+            1,
+            int(
+                get_env(
+                    "AI_TRADING_OMS_RECONCILE_PENDING_SUBMIT_STALE_SEC",
+                    str(submitting_stale_seconds),
+                    cast=int,
+                )
+            ),
+        )
         now_utc = safe_utcnow()
         for intent in open_intents:
             summary["intents_checked"] += 1
             intent_status = str(intent.status or "").strip().upper()
 
             if intent_status == "PENDING_SUBMIT":
-                summary["pending_submit"] += 1
+                updated_at = self._parse_iso_utc(intent.updated_at)
+                stale_age_seconds: int | None = None
+                if updated_at is not None:
+                    age_seconds = max(
+                        0.0,
+                        (now_utc - updated_at).total_seconds(),
+                    )
+                    if age_seconds < pending_submit_stale_seconds:
+                        summary["pending_submit"] += 1
+                        continue
+                    stale_age_seconds = int(age_seconds)
+
+                try:
+                    self._intent_store.close_intent(
+                        intent.intent_id,
+                        final_status="FAILED",
+                        last_error=(
+                            "submit never claimed after "
+                            f"{stale_age_seconds if stale_age_seconds is not None else 'stale'}s"
+                        ),
+                    )
+                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
+                    logger.debug(
+                        "OMS_INTENT_RECONCILE_CLOSE_STALE_PENDING_SUBMIT_FAILED",
+                        extra={"intent_id": intent.intent_id},
+                        exc_info=True,
+                    )
+                    summary["errors"] += 1
+                else:
+                    summary["marked_failed"] += 1
                 continue
 
             matched_order: Any | None = None
@@ -1098,7 +1137,7 @@ class OrderManager:
             # from broker snapshots for a short interval after restart.
             if intent_status == "SUBMITTING":
                 updated_at = self._parse_iso_utc(intent.updated_at)
-                stale_age_seconds: int | None = None
+                submit_stale_age_seconds: int | None = None
                 if updated_at is not None:
                     age_seconds = max(
                         0.0,
@@ -1107,7 +1146,7 @@ class OrderManager:
                     if age_seconds < submitting_stale_seconds:
                         summary["deferred_submitting"] += 1
                         continue
-                    stale_age_seconds = int(age_seconds)
+                    submit_stale_age_seconds = int(age_seconds)
 
                 # If a submitting intent has aged past the reconciliation grace
                 # window and still cannot be matched or recovered, treat it as
@@ -1118,7 +1157,7 @@ class OrderManager:
                         final_status="FAILED",
                         last_error=(
                             "submit ack missing after "
-                            f"{stale_age_seconds if stale_age_seconds is not None else 'stale'}s"
+                            f"{submit_stale_age_seconds if submit_stale_age_seconds is not None else 'stale'}s"
                         ),
                     )
                 except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:

@@ -27,6 +27,19 @@ def test_run_dispatch_calls_both_connectors() -> None:
         calls["slack_eod"] = args
         return {"sent": False, "reason": "market_not_closed"}
 
+    def _openclaw(args: dict[str, Any]) -> dict[str, Any]:
+        calls["openclaw"] = args
+        return {"sent": False, "reason": "no_incident_triggered"}
+
+    def _incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
+        calls["incident_snapshot"] = args
+        return {
+            "should_alert": False,
+            "fingerprint": "fp-1",
+            "snapshot": {"health_status": "ready"},
+            "triggers": [],
+        }
+
     def _oncall(args: dict[str, Any]) -> dict[str, Any]:
         calls["oncall"] = args
         return {"sent": False, "reason": "no_incident_triggered"}
@@ -40,17 +53,21 @@ def test_run_dispatch_calls_both_connectors() -> None:
         },
         slack_notifier=_slack,
         slack_eod_notifier=_slack_eod,
+        openclaw_notifier=_openclaw,
+        incident_snapshot_builder=_incident_snapshot,
         linear_creator=_linear,
         oncall_notifier=_oncall,
     )
     assert payload["ok"] is True
     assert payload["slack"]["attempted"] is True
     assert payload["slack_eod"]["attempted"] is True
+    assert payload["openclaw"]["attempted"] is True
     assert payload["linear"]["attempted"] is True
     assert payload["oncall"]["attempted"] is True
     assert calls["slack"]["webhook_url"] == "https://hooks.slack.test/abc"
     assert calls["slack_eod"]["webhook_url"] == "https://hooks.slack.test/abc"
     assert calls["slack_eod"]["require_after_hours_training"] is True
+    assert "health_timeout_s" not in calls["incident_snapshot"]
     assert calls["linear"]["team_id"] == "team123"
 
 
@@ -59,6 +76,16 @@ def test_run_dispatch_skips_missing_credentials() -> None:
         env={},
         slack_notifier=lambda args: {"unused": args},
         slack_eod_notifier=lambda args: {"unused": args},
+        openclaw_notifier=lambda args: {
+            "sent": False,
+            "reason": "missing_openclaw_target",
+        },
+        incident_snapshot_builder=lambda args: {
+            "should_alert": True,
+            "fingerprint": "fp-missing-target",
+            "snapshot": {},
+            "triggers": ["health_degraded"],
+        },
         linear_creator=lambda args: {"unused": args},
         oncall_notifier=lambda args: {"unused": args},
     )
@@ -67,6 +94,8 @@ def test_run_dispatch_skips_missing_credentials() -> None:
     assert payload["slack"]["skipped_reason"] == "missing_webhook"
     assert payload["slack_eod"]["attempted"] is False
     assert payload["slack_eod"]["skipped_reason"] == "missing_webhook"
+    assert payload["openclaw"]["attempted"] is True
+    assert payload["openclaw"]["result"]["reason"] == "missing_openclaw_target"
     assert payload["linear"]["attempted"] is False
     assert payload["linear"]["skipped_reason"] == "missing_api_key_or_team_id"
     assert payload["oncall"]["attempted"] is False
@@ -81,6 +110,13 @@ def test_run_dispatch_captures_connector_errors() -> None:
         env={"AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc"},
         slack_notifier=_broken_slack,
         slack_eod_notifier=lambda args: {"sent": False, "reason": "market_not_closed"},
+        openclaw_notifier=lambda args: {"sent": False, "reason": "no_incident_triggered"},
+        incident_snapshot_builder=lambda args: {
+            "should_alert": False,
+            "fingerprint": "fp-1",
+            "snapshot": {},
+            "triggers": [],
+        },
         linear_creator=lambda args: {"created": False},
         oncall_notifier=lambda args: {"sent": False, "reason": "disabled"},
     )
@@ -107,6 +143,8 @@ def test_run_dispatch_forwards_oncall_jsm_ticket_env() -> None:
         },
         slack_notifier=lambda args: {"unused": args},
         slack_eod_notifier=lambda args: {"unused": args},
+        openclaw_notifier=lambda args: {"unused": args},
+        incident_snapshot_builder=lambda args: {"unused": args},
         linear_creator=lambda args: {"unused": args},
         oncall_notifier=_oncall,
     )
@@ -140,6 +178,8 @@ def test_run_dispatch_forwards_incident_realism_and_concentration_thresholds() -
         },
         slack_notifier=_slack,
         slack_eod_notifier=lambda args: {"unused": args},
+        openclaw_notifier=lambda args: {"unused": args},
+        incident_snapshot_builder=lambda args: {"unused": args},
         linear_creator=lambda args: {"unused": args},
         oncall_notifier=_oncall,
     )
@@ -183,14 +223,61 @@ def test_run_dispatch_forwards_shared_health_timeout() -> None:
         },
         slack_notifier=_slack,
         slack_eod_notifier=_slack_eod,
+        openclaw_notifier=lambda args: (
+            calls.__setitem__("openclaw", args) or {"sent": False, "reason": "no_incident_triggered"}
+        ),
+        incident_snapshot_builder=lambda args: (
+            calls.__setitem__("incident_snapshot", args)
+            or {
+                "should_alert": False,
+                "fingerprint": "fp-1",
+                "snapshot": {},
+                "triggers": [],
+            }
+        ),
         linear_creator=_linear,
         oncall_notifier=_oncall,
     )
     assert payload["ok"] is True
     assert calls["slack"]["health_timeout_s"] == 5.5
     assert calls["slack_eod"]["health_timeout_s"] == 5.5
+    assert calls["incident_snapshot"]["health_timeout_s"] == 5.5
     assert calls["linear"]["health_timeout_s"] == 5.5
     assert calls["oncall"]["health_timeout_s"] == 5.5
+
+
+def test_run_dispatch_openclaw_alert_uses_snapshot_builder() -> None:
+    calls: dict[str, dict[str, Any]] = {}
+
+    def _incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
+        calls["incident_snapshot"] = args
+        return {
+            "should_alert": True,
+            "fingerprint": "fp-openclaw",
+            "incident_signature": "sig-openclaw",
+            "snapshot": {"health_status": "degraded", "health_ok": False},
+            "triggers": ["health_degraded"],
+        }
+
+    def _openclaw(args: dict[str, Any]) -> dict[str, Any]:
+        calls["openclaw"] = args
+        return {"sent": True, "status_code": 202}
+
+    payload = dispatch.run_dispatch(
+        env={"AI_TRADING_CONNECTOR_OPENCLAW_ENABLED": "1"},
+        slack_notifier=lambda args: {"unused": args},
+        slack_eod_notifier=lambda args: {"unused": args},
+        openclaw_notifier=_openclaw,
+        incident_snapshot_builder=_incident_snapshot,
+        linear_creator=lambda args: {"unused": args},
+        oncall_notifier=lambda args: {"unused": args},
+    )
+
+    assert payload["ok"] is True
+    assert payload["openclaw"]["attempted"] is True
+    assert payload["openclaw"]["result"]["sent"] is True
+    assert calls["openclaw"]["snapshot_result"]["fingerprint"] == "fp-openclaw"
+    assert calls["openclaw"]["env"]["AI_TRADING_CONNECTOR_OPENCLAW_ENABLED"] == "1"
 
 
 def test_load_runtime_env_defaults_populates_missing_values(tmp_path: Path) -> None:

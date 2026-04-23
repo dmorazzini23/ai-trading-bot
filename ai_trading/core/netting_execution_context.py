@@ -432,7 +432,7 @@ def _build_gate_auto_disable_state(
             now=now,
         )
         if ineffective_gate_blocklist:
-            logger.warning(
+            logger.info(
                 "GATE_AUTO_DISABLE_APPLIED",
                 extra={
                     "disabled_gates": sorted(ineffective_gate_blocklist),

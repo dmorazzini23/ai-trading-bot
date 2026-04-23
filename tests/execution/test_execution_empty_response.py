@@ -396,6 +396,69 @@ def test_execute_order_recovers_submit_no_result_from_recent_orders_scan(monkeyp
     assert "submit_no_result" not in reasons
 
 
+def test_execute_order_submit_no_result_treats_alpaca_404_lookup_as_not_found(monkeypatch):
+    engine = _make_engine(monkeypatch, response={"status": "accepted"})
+    reasons: list[str] = []
+
+    class _ImportedLookupAPIError(Exception):
+        def __init__(self, message: str, *, status_code: int | None = None, code=None):
+            super().__init__(message)
+            self.status_code = status_code
+            self.code = code
+
+        @property
+        def message(self) -> str:
+            return str(self)
+
+    class _CompatLookupAPIError(_ImportedLookupAPIError):
+        pass
+
+    class _Lookup404Client:
+        def get_order_by_client_order_id(self, _client_order_id):
+            raise _ImportedLookupAPIError(
+                '{"code":40410000,"message":"order not found"}',
+                status_code=404,
+                code=40410000,
+            )
+
+        def list_orders(self, **_kwargs):
+            return []
+
+    engine.trading_client = _Lookup404Client()
+    monkeypatch.setattr(live_trading, "_AlpacaAPIError", _ImportedLookupAPIError)
+    monkeypatch.setattr(live_trading, "APIError", _CompatLookupAPIError)
+    monkeypatch.setattr(
+        live_trading,
+        "LIVE_TRADING_ORDER_LOOKUP_EXC",
+        live_trading.LIVE_TRADING_FALLBACK_EXC + (_ImportedLookupAPIError,),
+    )
+    monkeypatch.setattr(
+        engine,
+        "submit_limit_order",
+        types.MethodType(lambda self, *_a, **_k: None, engine),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_record_submit_failure",
+        types.MethodType(
+            lambda self, **kwargs: reasons.append(str(kwargs.get("reason") or "")),
+            engine,
+        ),
+    )
+
+    result = engine.execute_order(
+        "AAPL",
+        "buy",
+        1,
+        order_type="limit",
+        limit_price=100.0,
+        client_order_id="recover-cid-exec-404",
+    )
+
+    assert result is None
+    assert reasons[-1] == "submit_no_result"
+
+
 def test_execute_order_submit_no_result_records_client_order_id(monkeypatch):
     engine = _make_engine(monkeypatch, response={"status": "accepted"})
     captured: list[dict[str, object]] = []

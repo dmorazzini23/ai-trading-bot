@@ -92,6 +92,49 @@ def test_reconcile_stale_submitting_intent_fails_closed(
     ]
 
 
+def test_reconcile_stale_pending_submit_intent_fails_closed(
+    monkeypatch,
+) -> None:
+    class _Store:
+        def __init__(self, intents):
+            self._intents = intents
+            self.closed = []
+
+        def get_open_intents(self):
+            return list(self._intents)
+
+        def close_intent(self, intent_id: str, *, final_status: str, last_error: str | None = None):
+            self.closed.append((intent_id, final_status, last_error))
+
+    intent = SimpleNamespace(
+        intent_id="intent-stale-pending-submit",
+        status="PENDING_SUBMIT",
+        broker_order_id=None,
+        updated_at="2026-04-22T00:00:00+00:00",
+    )
+    store = _Store([intent])
+    manager = OrderManager.__new__(OrderManager)
+    setattr(manager, "_intent_store", store)
+
+    monkeypatch.setenv("AI_TRADING_OMS_RECONCILE_PENDING_SUBMIT_STALE_SEC", "1")
+    monkeypatch.setattr(
+        "ai_trading.execution.engine.safe_utcnow",
+        lambda: datetime(2026, 4, 22, 2, 13, 20, tzinfo=UTC),
+    )
+
+    summary = manager.reconcile_open_intents(broker_orders=[])
+
+    assert summary["intents_checked"] == 1
+    assert summary["marked_failed"] == 1
+    assert store.closed == [
+        (
+            "intent-stale-pending-submit",
+            "FAILED",
+            "submit never claimed after 8000s",
+        )
+    ]
+
+
 def test_reconcile_missing_open_orders_closes_intent_on_terminal_broker_lookup(
     monkeypatch,
     tmp_path,

@@ -8,9 +8,11 @@ import os
 import re
 import sys
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,6 +23,8 @@ _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 SlackIncidentNotifier = Callable[[dict[str, Any]], dict[str, Any]]
 SlackEodNotifier = Callable[[dict[str, Any]], dict[str, Any]]
+OpenClawIncidentNotifier = Callable[[dict[str, Any]], dict[str, Any]]
+IncidentSnapshotBuilder = Callable[[dict[str, Any]], dict[str, Any]]
 LinearCreator = Callable[[dict[str, Any]], dict[str, Any]]
 OncallNotifier = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -44,6 +48,18 @@ def _float_env(value: str | None) -> float | None:
         return None
     try:
         return float(text)
+    except ValueError:
+        return None
+
+
+def _int_env(value: str | None) -> int | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return int(text)
     except ValueError:
         return None
 
@@ -109,6 +125,8 @@ def _load_runtime_env_defaults(
 def _load_connector_callables() -> tuple[
     SlackIncidentNotifier,
     SlackEodNotifier,
+    OpenClawIncidentNotifier,
+    IncidentSnapshotBuilder,
     LinearCreator,
     OncallNotifier,
 ]:
@@ -119,9 +137,301 @@ def _load_connector_callables() -> tuple[
     return (
         slack_srv.tool_notify_incident_channel,
         slack_srv.tool_notify_eod_summary,
+        _notify_openclaw_incident,
+        slack_srv.tool_runtime_incident_snapshot,
         linear_srv.tool_create_regression_issue,
         oncall_srv.tool_notify_oncall_incident,
     )
+
+
+def _parse_iso_ts(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _load_state(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_state(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _resolve_openclaw_runtime_target(env_map: Mapping[str, str]) -> dict[str, str] | None:
+    explicit_url = (
+        env_map.get("AI_TRADING_OPENCLAW_RUNTIME_WEBHOOK_URL")
+        or env_map.get("OPENCLAW_RUNTIME_WEBHOOK_URL")
+        or ""
+    ).strip()
+    explicit_token = (
+        env_map.get("AI_TRADING_OPENCLAW_HOOK_TOKEN")
+        or env_map.get("OPENCLAW_HOOK_TOKEN")
+        or ""
+    ).strip()
+    if explicit_url and explicit_token:
+        return {"url": explicit_url, "token": explicit_token}
+
+    raw_cfg_path = (
+        env_map.get("AI_TRADING_OPENCLAW_CONFIG_PATH")
+        or env_map.get("OPENCLAW_CONFIG_PATH")
+        or "~/.openclaw/openclaw.json"
+    ).strip()
+    cfg_path = Path(raw_cfg_path).expanduser()
+    cfg = _read_json_file(cfg_path)
+    hooks = cfg.get("hooks") if isinstance(cfg.get("hooks"), dict) else {}
+    token = str(hooks.get("token") or "").strip()
+    hook_path = str(hooks.get("path") or "/hooks").strip() or "/hooks"
+    if not token:
+        return None
+    hook_path = "/" + hook_path.strip("/ ")
+    gateway_url = (
+        env_map.get("AI_TRADING_OPENCLAW_GATEWAY_URL")
+        or env_map.get("OPENCLAW_GATEWAY_URL")
+        or "http://127.0.0.1:18789"
+    ).strip().rstrip("/")
+    return {
+        "url": f"{gateway_url}{hook_path}/runtime",
+        "token": token,
+    }
+
+
+def _post_openclaw_runtime_event(
+    *,
+    url: str,
+    token: str,
+    payload: dict[str, Any],
+    timeout_s: float,
+    idempotency_key: str | None,
+) -> dict[str, Any]:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib_request.Request(
+        url=url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            **(
+                {"Idempotency-Key": idempotency_key}
+                if idempotency_key
+                else {}
+            ),
+        },
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=timeout_s) as response:
+            raw_body = response.read().decode("utf-8", errors="replace").strip()
+            parsed: Any = None
+            if raw_body:
+                try:
+                    parsed = json.loads(raw_body)
+                except json.JSONDecodeError:
+                    parsed = raw_body
+            return {
+                "status_code": int(response.getcode()),
+                "body": parsed,
+            }
+    except urllib_error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"OpenClaw webhook returned HTTP {exc.code}: {details or exc.reason}"
+        ) from exc
+    except urllib_error.URLError as exc:
+        raise RuntimeError(f"OpenClaw webhook request failed: {exc.reason}") from exc
+
+
+def _build_openclaw_runtime_payload(snapshot_result: dict[str, Any]) -> dict[str, Any]:
+    snapshot = snapshot_result.get("snapshot") if isinstance(snapshot_result.get("snapshot"), dict) else {}
+    triggers_raw = snapshot_result.get("triggers")
+    triggers = [str(item).strip() for item in triggers_raw if str(item).strip()] if isinstance(triggers_raw, list) else []
+    health_status = str(snapshot.get("health_status") or "unknown").strip()
+    health_reason = str(snapshot.get("health_reason") or "unknown").strip()
+    provider_status = str(snapshot.get("provider_status") or "unknown").strip()
+    broker_status = str(snapshot.get("broker_status") or "unknown").strip()
+    failed_checks = snapshot.get("go_no_go_failed_checks")
+    failed_checks_list = [str(item).strip() for item in failed_checks if str(item).strip()] if isinstance(failed_checks, list) else []
+    severity = "warning"
+    if not bool(snapshot.get("health_ok", False)) or failed_checks_list:
+        severity = "error"
+    if health_status.lower() not in {"ready", "ok", "healthy"} and health_status:
+        severity = "error"
+    if broker_status.lower() in {"down", "disconnected", "unreachable"}:
+        severity = "critical"
+    summary_parts = []
+    if triggers:
+        summary_parts.append(f"Incident triggers: {', '.join(triggers[:3])}")
+    else:
+        summary_parts.append("Runtime incident connector forced an alert.")
+    summary_parts.append(f"health={health_status} ({health_reason})")
+    summary = " | ".join(summary_parts)
+    suggested_action = "Run /triage immediately."
+    if severity == "warning":
+        suggested_action = "Run /triage soon and confirm whether intervention is needed."
+    details = {
+        "triggers": triggers,
+        "health_status": health_status,
+        "health_reason": health_reason,
+        "provider_status": provider_status,
+        "provider_reason": snapshot.get("provider_reason"),
+        "broker_status": broker_status,
+        "go_no_go_failed_checks": failed_checks_list,
+        "top_rejection_concentration_gate": snapshot.get("top_rejection_concentration_gate"),
+        "top_rejection_concentration_ratio": snapshot.get("top_rejection_concentration_ratio"),
+        "fingerprint": snapshot_result.get("fingerprint"),
+        "snapshot_timestamp": snapshot.get("timestamp"),
+    }
+    return {
+        "source": "runtime",
+        "service": "ai-trading.service",
+        "severity": severity,
+        "summary": summary,
+        "suggestedAction": suggested_action,
+        "details": details,
+    }
+
+
+def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
+    snapshot_result = args.get("snapshot_result")
+    if not isinstance(snapshot_result, dict):
+        raise RuntimeError("snapshot_result is required")
+    env_map = args.get("env")
+    if not isinstance(env_map, Mapping):
+        raise RuntimeError("env is required")
+    force = bool(args.get("force"))
+    triggers_raw = snapshot_result.get("triggers")
+    triggers = [str(item).strip() for item in triggers_raw if str(item).strip()] if isinstance(triggers_raw, list) else []
+    should_alert = bool(snapshot_result.get("should_alert")) or force
+    fingerprint = str(snapshot_result.get("fingerprint") or "").strip()
+    signature = str(snapshot_result.get("incident_signature") or fingerprint)
+    snapshot = snapshot_result.get("snapshot") if isinstance(snapshot_result.get("snapshot"), dict) else {}
+    if not should_alert:
+        return {
+            "sent": False,
+            "reason": "no_incident_triggered",
+            "fingerprint": fingerprint,
+            "incident_signature": signature,
+            "snapshot": snapshot,
+            "triggers": triggers,
+        }
+
+    state_path_raw = str(args.get("state_path") or "").strip()
+    state_path = Path(state_path_raw) if state_path_raw else Path("/var/lib/ai-trading-bot/runtime/openclaw_incident_state.json")
+    prior = _load_state(state_path)
+    prior_fp = str(prior.get("fingerprint") or "").strip()
+    prior_signature = str(prior.get("incident_signature") or "").strip()
+    prior_sent_at = _parse_iso_ts(prior.get("sent_at"))
+    on_change_only = bool(args.get("on_change_only", True))
+    repeat_cooldown_minutes = int(args.get("repeat_cooldown_minutes") or 0)
+    min_interval_minutes = int(args.get("min_interval_minutes") or 0)
+    now = datetime.now(UTC)
+    if (
+        min_interval_minutes > 0
+        and prior_sent_at is not None
+        and not force
+    ):
+        elapsed = now - prior_sent_at
+        min_interval = timedelta(minutes=min_interval_minutes)
+        if elapsed < min_interval:
+            return {
+                "sent": False,
+                "reason": "min_interval_active",
+                "fingerprint": fingerprint,
+                "incident_signature": signature,
+                "snapshot": snapshot,
+                "triggers": triggers,
+                "next_eligible_at": (prior_sent_at + min_interval).isoformat().replace("+00:00", "Z"),
+            }
+    if on_change_only and prior_signature and prior_signature == signature and not force:
+        if repeat_cooldown_minutes > 0 and prior_sent_at is not None:
+            elapsed = now - prior_sent_at
+            cooldown = timedelta(minutes=repeat_cooldown_minutes)
+            if elapsed < cooldown:
+                return {
+                    "sent": False,
+                    "reason": "repeat_cooldown_active",
+                    "fingerprint": fingerprint,
+                    "incident_signature": signature,
+                    "snapshot": snapshot,
+                    "triggers": triggers,
+                    "next_eligible_at": (prior_sent_at + cooldown).isoformat().replace("+00:00", "Z"),
+                }
+        else:
+            return {
+                "sent": False,
+                "reason": "duplicate_signature",
+                "fingerprint": fingerprint,
+                "incident_signature": signature,
+                "snapshot": snapshot,
+                "triggers": triggers,
+            }
+    if on_change_only and prior_fp == fingerprint and not force:
+        return {
+            "sent": False,
+            "reason": "duplicate_fingerprint",
+            "fingerprint": fingerprint,
+            "incident_signature": signature,
+            "snapshot": snapshot,
+            "triggers": triggers,
+        }
+
+    target = _resolve_openclaw_runtime_target(env_map)
+    if target is None:
+        return {
+            "sent": False,
+            "reason": "missing_openclaw_target",
+            "fingerprint": fingerprint,
+            "incident_signature": signature,
+            "snapshot": snapshot,
+            "triggers": triggers,
+        }
+    timeout_s = float(args.get("timeout_s") or 5.0)
+    post_result = _post_openclaw_runtime_event(
+        url=target["url"],
+        token=target["token"],
+        payload=_build_openclaw_runtime_payload(snapshot_result),
+        timeout_s=timeout_s,
+        idempotency_key=fingerprint or None,
+    )
+    state_payload = {
+        "fingerprint": fingerprint,
+        "incident_signature": signature,
+        "sent_at": _utc_now_iso(),
+        "triggers": triggers,
+        "snapshot": snapshot,
+        "status_code": post_result["status_code"],
+    }
+    _save_state(state_path, state_payload)
+    return {
+        "sent": True,
+        "fingerprint": fingerprint,
+        "incident_signature": signature,
+        "snapshot": snapshot,
+        "triggers": triggers,
+        "status_code": post_result["status_code"],
+        "state_path": str(state_path),
+        "target_url": target["url"],
+    }
 
 
 def run_dispatch(
@@ -129,6 +439,8 @@ def run_dispatch(
     env: Mapping[str, str] | None = None,
     slack_notifier: SlackIncidentNotifier,
     slack_eod_notifier: SlackEodNotifier,
+    openclaw_notifier: OpenClawIncidentNotifier,
+    incident_snapshot_builder: IncidentSnapshotBuilder,
     linear_creator: LinearCreator,
     oncall_notifier: OncallNotifier,
 ) -> dict[str, Any]:
@@ -137,6 +449,7 @@ def run_dispatch(
         "started_at": datetime.now(UTC).isoformat(),
         "slack": {"enabled": False, "attempted": False},
         "slack_eod": {"enabled": False, "attempted": False},
+        "openclaw": {"enabled": False, "attempted": False},
         "linear": {"enabled": False, "attempted": False},
         "oncall": {"enabled": False, "attempted": False},
         "errors": [],
@@ -210,6 +523,90 @@ def run_dispatch(
             summary["slack"]["skipped_reason"] = "missing_webhook"
     else:
         summary["slack"]["skipped_reason"] = "disabled"
+
+    openclaw_enabled = _bool_env(
+        env_map.get("AI_TRADING_CONNECTOR_OPENCLAW_ENABLED"),
+        default=True,
+    )
+    summary["openclaw"]["enabled"] = openclaw_enabled
+    if openclaw_enabled:
+        openclaw_args: dict[str, Any] = {
+            "on_change_only": _bool_env(
+                env_map.get("AI_TRADING_CONNECTOR_OPENCLAW_ON_CHANGE_ONLY"),
+                default=True,
+            ),
+            "env": env_map,
+        }
+        health_timeout_s = _float_env(
+            env_map.get("AI_TRADING_CONNECTOR_HEALTH_TIMEOUT_S")
+        )
+        if health_timeout_s is not None:
+            openclaw_args["health_timeout_s"] = health_timeout_s
+            openclaw_args["timeout_s"] = health_timeout_s
+        min_capture = (env_map.get("AI_TRADING_INCIDENT_MIN_CAPTURE_RATIO") or "").strip()
+        if min_capture:
+            try:
+                openclaw_args["min_capture_ratio"] = float(min_capture)
+            except ValueError:
+                pass
+        for arg_name, env_name in {
+            "min_edge_realism_ratio": "AI_TRADING_INCIDENT_MIN_EDGE_REALISM_RATIO",
+            "min_expected_edge_bps_for_realism": "AI_TRADING_INCIDENT_MIN_EXPECTED_EDGE_BPS_FOR_REALISM",
+            "max_rejection_concentration_ratio": "AI_TRADING_INCIDENT_MAX_REJECTION_CONCENTRATION_RATIO",
+        }.items():
+            raw = (env_map.get(env_name) or "").strip()
+            if not raw:
+                continue
+            try:
+                openclaw_args[arg_name] = float(raw)
+            except ValueError:
+                continue
+        min_rejected = (
+            env_map.get("AI_TRADING_INCIDENT_MIN_REJECTED_RECORDS_FOR_CONCENTRATION")
+            or ""
+        ).strip()
+        if min_rejected:
+            try:
+                openclaw_args["min_rejected_records_for_concentration"] = int(min_rejected)
+            except ValueError:
+                pass
+        state_path = (env_map.get("AI_TRADING_OPENCLAW_INCIDENT_STATE_PATH") or "").strip()
+        if state_path:
+            openclaw_args["state_path"] = state_path
+        repeat_cooldown_minutes = _int_env(
+            env_map.get("AI_TRADING_OPENCLAW_INCIDENT_REPEAT_COOLDOWN_MINUTES")
+            or env_map.get("AI_TRADING_SLACK_INCIDENT_REPEAT_COOLDOWN_MINUTES")
+        )
+        if repeat_cooldown_minutes is not None:
+            openclaw_args["repeat_cooldown_minutes"] = repeat_cooldown_minutes
+        min_interval_minutes = _int_env(
+            env_map.get("AI_TRADING_OPENCLAW_INCIDENT_MIN_INTERVAL_MINUTES")
+            or env_map.get("AI_TRADING_SLACK_INCIDENT_MIN_INTERVAL_MINUTES")
+        )
+        if min_interval_minutes is not None:
+            openclaw_args["min_interval_minutes"] = min_interval_minutes
+        if _bool_env(
+            env_map.get("AI_TRADING_CONNECTOR_OPENCLAW_FORCE"),
+            default=False,
+        ):
+            openclaw_args["force"] = True
+
+        summary["openclaw"]["attempted"] = True
+        try:
+            snapshot_result = incident_snapshot_builder(openclaw_args)
+            openclaw_args["snapshot_result"] = snapshot_result
+            summary["openclaw"]["result"] = openclaw_notifier(openclaw_args)
+        except Exception as exc:  # pragma: no cover - runtime guard
+            summary["openclaw"]["error"] = str(exc)
+            summary["errors"].append(
+                {
+                    "connector": "openclaw",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+    else:
+        summary["openclaw"]["skipped_reason"] = "disabled"
 
     slack_eod_enabled = _bool_env(
         env_map.get("AI_TRADING_CONNECTOR_SLACK_EOD_ENABLED"),
@@ -413,10 +810,19 @@ def run_dispatch(
 def main(argv: list[str] | None = None) -> int:
     _ = argv
     _load_runtime_env_defaults()
-    slack_notifier, slack_eod_notifier, linear_creator, oncall_notifier = _load_connector_callables()
+    (
+        slack_notifier,
+        slack_eod_notifier,
+        openclaw_notifier,
+        incident_snapshot_builder,
+        linear_creator,
+        oncall_notifier,
+    ) = _load_connector_callables()
     summary = run_dispatch(
         slack_notifier=slack_notifier,
         slack_eod_notifier=slack_eod_notifier,
+        openclaw_notifier=openclaw_notifier,
+        incident_snapshot_builder=incident_snapshot_builder,
         linear_creator=linear_creator,
         oncall_notifier=oncall_notifier,
     )

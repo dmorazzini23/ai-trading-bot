@@ -163,6 +163,12 @@ LIVE_TRADING_FALLBACK_EXC: tuple[type[Exception], ...] = (
     ValueError,
 )
 
+LIVE_TRADING_ORDER_LOOKUP_EXC: tuple[type[Exception], ...] = LIVE_TRADING_FALLBACK_EXC
+if _AlpacaAPIError is not None and issubclass(_AlpacaAPIError, Exception):
+    LIVE_TRADING_ORDER_LOOKUP_EXC = LIVE_TRADING_FALLBACK_EXC + (
+        cast(type[Exception], _AlpacaAPIError),
+    )
+
 
 _BROKER_UNAUTHORIZED_BACKOFF_SECONDS = 120.0
 
@@ -30256,7 +30262,7 @@ class ExecutionEngine:
             attempts += 1
             try:
                 recovered = get_by_client(token)
-            except LIVE_TRADING_FALLBACK_EXC as err:
+            except LIVE_TRADING_ORDER_LOOKUP_EXC as err:
                 if _is_missing_order_lookup_error(err):
                     recovered = None
                 else:

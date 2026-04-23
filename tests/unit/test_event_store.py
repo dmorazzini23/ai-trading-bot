@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_trading.oms import event_store as event_store_module
 from ai_trading.oms.event_store import EventStore
 from ai_trading.oms.event_types import DecisionEvent
 
@@ -154,3 +155,75 @@ def test_event_store_risk_snapshots_are_idempotent(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert int(rows[0]["positions_count"]) == 3
     assert int(rows[0]["open_orders_count"]) == 2
+
+
+def test_event_store_migration_status_handles_missing_alembic_table(tmp_path: Path) -> None:
+    store = EventStore(url=f"sqlite:///{tmp_path / 'migration_status.db'}")
+
+    payload = store.migration_status(expected_revision="20260414_0001")
+
+    assert payload["expected_revision"] == "20260414_0001"
+    assert payload["available"] is False
+    assert payload["current_revision"] is None
+    assert payload["at_head"] is None
+    assert payload["reason"] == "alembic_version_missing"
+
+
+def test_event_store_health_reads_rollback_connections(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = EventStore(url="sqlite://")
+
+    class _DummyResult:
+        def __init__(self, row):
+            self._row = row
+            self.closed = False
+
+        def first(self):
+            return self._row
+
+        def close(self):
+            self.closed = True
+
+    class _DummyConnection:
+        def __init__(self):
+            self.rollback_count = 0
+            self._rows = [("rev-1",), None, ("rev-1",)]
+            self.results: list[_DummyResult] = []
+
+        def execute(self, _stmt):
+            row = self._rows.pop(0) if self._rows else None
+            result = _DummyResult(row)
+            self.results.append(result)
+            return result
+
+        def rollback(self):
+            self.rollback_count += 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    dummy_conn = _DummyConnection()
+
+    class _DummyInspector:
+        @staticmethod
+        def has_table(_name: str) -> bool:
+            return True
+
+    class _DummyEngine:
+        def connect(self):
+            return dummy_conn
+
+    monkeypatch.setattr(store, "_engine", _DummyEngine())
+    monkeypatch.setattr(event_store_module, "inspect", lambda _engine: _DummyInspector())
+
+    migration = store.migration_status(expected_revision="rev-1")
+    health = store.is_healthy(expected_revision="rev-1")
+
+    assert migration["available"] is True
+    assert migration["current_revision"] == "rev-1"
+    assert health["connected"] is True
+    assert health["ok"] is True
+    assert dummy_conn.rollback_count == 3
+    assert all(result.closed for result in dummy_conn.results)

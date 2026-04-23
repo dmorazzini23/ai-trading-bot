@@ -164,7 +164,7 @@ def prepare_netting_cycle_inputs(
             ]
         symbols = selected_symbols
         if not state.canary_mode_logged:
-            logger.warning(
+            logger.info(
                 "CANARY_MODE_ACTIVE",
                 extra={
                     "symbols": sorted(str(symbol).upper() for symbol in symbols),

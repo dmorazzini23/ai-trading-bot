@@ -7347,7 +7347,7 @@ class _LazyModule(types.ModuleType):
                 self._module = importlib.import_module(self.__name__)
             except COMMON_EXC:
                 self._failed = True
-                logger.info(
+                logger.debug(
                     f"{self.__name__.upper()}_MISSING",
                     extra={"hint": f"pip install {self.__name__}"},
                 )
@@ -39052,7 +39052,11 @@ def _update_rollout_governance_state(
         state.burn_in_ready != previous_burn_in_ready
         or state.burn_in_block_reason != previous_burn_in_reason
     ):
-        level = logging.INFO if state.burn_in_ready else logging.WARNING
+        level = (
+            logging.INFO
+            if state.burn_in_ready or execution_mode in {"paper", "sim"}
+            else logging.WARNING
+        )
         logger.log(
             level,
             "PAPER_BURN_IN_STATUS",
