@@ -281,7 +281,7 @@ class DashboardDataProvider:
                 "latency": latency,
                 "last_updated": latest["timestamp"].isoformat(),
             }
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError, AttributeError) as e:
             logger.error(f"Error generating system health: {e}")
             return {"status": "error", "cpu_usage": 0, "memory_usage": 0}
 

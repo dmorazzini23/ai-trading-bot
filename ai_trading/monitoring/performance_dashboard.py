@@ -123,7 +123,15 @@ class PerformanceMetrics:
         """Calculate win rate and related statistics."""
         try:
             if not self.trades:
-                return {'win_rate': 0.0, 'avg_win': 0.0, 'avg_loss': 0.0, 'profit_factor': 0.0}
+                return {
+                    'win_rate': 0.0,
+                    'avg_win': 0.0,
+                    'avg_loss': 0.0,
+                    'profit_factor': 0.0,
+                    'total_trades': 0,
+                    'winning_trades': 0,
+                    'losing_trades': 0,
+                }
             winning_trades = [t for t in self.trades if t['net_pnl'] > 0]
             losing_trades = [t for t in self.trades if t['net_pnl'] < 0]
             win_rate = len(winning_trades) / len(self.trades) if self.trades else 0.0
