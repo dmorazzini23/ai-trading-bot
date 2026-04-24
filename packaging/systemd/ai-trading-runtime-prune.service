@@ -1,7 +1,6 @@
 [Unit]
 Description=Prune AI Trading Runtime JSONL Artifacts
 After=ai-trading.service
-OnFailure=ai-trading-systemd-failure-alert@%p.service
 
 [Service]
 Type=oneshot

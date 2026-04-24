@@ -92,6 +92,36 @@ def test_reconcile_stale_submitting_intent_fails_closed(
     ]
 
 
+def test_reconcile_submitting_without_timestamp_defers() -> None:
+    class _Store:
+        def __init__(self, intents):
+            self._intents = intents
+            self.closed = []
+
+        def get_open_intents(self):
+            return list(self._intents)
+
+        def close_intent(self, intent_id: str, *, final_status: str, last_error: str | None = None):
+            self.closed.append((intent_id, final_status, last_error))
+
+    intent = SimpleNamespace(
+        intent_id="intent-submitting-no-timestamp",
+        status="SUBMITTING",
+        broker_order_id=None,
+        updated_at=None,
+    )
+    store = _Store([intent])
+    manager = OrderManager.__new__(OrderManager)
+    setattr(manager, "_intent_store", store)
+
+    summary = manager.reconcile_open_intents(broker_orders=[])
+
+    assert summary["intents_checked"] == 1
+    assert summary["deferred_submitting"] == 1
+    assert summary["marked_failed"] == 0
+    assert store.closed == []
+
+
 def test_reconcile_stale_pending_submit_intent_fails_closed(
     monkeypatch,
 ) -> None:

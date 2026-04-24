@@ -2,7 +2,6 @@
 Description=Refresh AI Trading Replay Governance Artifact
 After=network-online.target ai-trading.service
 Wants=network-online.target
-OnFailure=ai-trading-systemd-failure-alert@%p.service
 
 [Service]
 Type=oneshot

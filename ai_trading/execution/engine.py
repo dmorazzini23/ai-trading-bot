@@ -1073,15 +1073,17 @@ class OrderManager:
             if intent_status == "PENDING_SUBMIT":
                 updated_at = self._parse_iso_utc(intent.updated_at)
                 stale_age_seconds: int | None = None
-                if updated_at is not None:
-                    age_seconds = max(
-                        0.0,
-                        (now_utc - updated_at).total_seconds(),
-                    )
-                    if age_seconds < pending_submit_stale_seconds:
-                        summary["pending_submit"] += 1
-                        continue
-                    stale_age_seconds = int(age_seconds)
+                if updated_at is None:
+                    summary["pending_submit"] += 1
+                    continue
+                age_seconds = max(
+                    0.0,
+                    (now_utc - updated_at).total_seconds(),
+                )
+                if age_seconds < pending_submit_stale_seconds:
+                    summary["pending_submit"] += 1
+                    continue
+                stale_age_seconds = int(age_seconds)
 
                 try:
                     self._intent_store.close_intent(
@@ -1138,15 +1140,17 @@ class OrderManager:
             if intent_status == "SUBMITTING":
                 updated_at = self._parse_iso_utc(intent.updated_at)
                 submit_stale_age_seconds: int | None = None
-                if updated_at is not None:
-                    age_seconds = max(
-                        0.0,
-                        (now_utc - updated_at).total_seconds(),
-                    )
-                    if age_seconds < submitting_stale_seconds:
-                        summary["deferred_submitting"] += 1
-                        continue
-                    submit_stale_age_seconds = int(age_seconds)
+                if updated_at is None:
+                    summary["deferred_submitting"] += 1
+                    continue
+                age_seconds = max(
+                    0.0,
+                    (now_utc - updated_at).total_seconds(),
+                )
+                if age_seconds < submitting_stale_seconds:
+                    summary["deferred_submitting"] += 1
+                    continue
+                submit_stale_age_seconds = int(age_seconds)
 
                 # If a submitting intent has aged past the reconciliation grace
                 # window and still cannot be matched or recovered, treat it as

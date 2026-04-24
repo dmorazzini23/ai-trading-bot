@@ -77,7 +77,6 @@ Use a JSON object with env keys:
   "ALPACA_API_KEY": "...",
   "ALPACA_SECRET_KEY": "...",
   "AI_TRADING_SLACK_WEBHOOK_URL": "...",
-  "AI_TRADING_LINEAR_API_KEY": "...",
   "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD": "..."
 }
 ```

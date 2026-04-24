@@ -12,16 +12,12 @@ dispatch = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(dispatch)
 
 
-def test_run_dispatch_calls_both_connectors() -> None:
+def test_run_dispatch_calls_active_connectors() -> None:
     calls: dict[str, dict[str, Any]] = {}
 
     def _slack(args: dict[str, Any]) -> dict[str, Any]:
         calls["slack"] = args
         return {"sent": True}
-
-    def _linear(args: dict[str, Any]) -> dict[str, Any]:
-        calls["linear"] = args
-        return {"created": False, "reason": "no_runtime_regression_detected"}
 
     def _slack_eod(args: dict[str, Any]) -> dict[str, Any]:
         calls["slack_eod"] = args
@@ -40,35 +36,23 @@ def test_run_dispatch_calls_both_connectors() -> None:
             "triggers": [],
         }
 
-    def _oncall(args: dict[str, Any]) -> dict[str, Any]:
-        calls["oncall"] = args
-        return {"sent": False, "reason": "no_incident_triggered"}
-
     payload = dispatch.run_dispatch(
         env={
             "AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc",
-            "AI_TRADING_LINEAR_API_KEY": "lin_key",
-            "AI_TRADING_LINEAR_TEAM_ID": "team123",
-            "AI_TRADING_CONNECTOR_ONCALL_ENABLED": "1",
         },
         slack_notifier=_slack,
         slack_eod_notifier=_slack_eod,
         openclaw_notifier=_openclaw,
         incident_snapshot_builder=_incident_snapshot,
-        linear_creator=_linear,
-        oncall_notifier=_oncall,
     )
     assert payload["ok"] is True
     assert payload["slack"]["attempted"] is True
     assert payload["slack_eod"]["attempted"] is True
     assert payload["openclaw"]["attempted"] is True
-    assert payload["linear"]["attempted"] is True
-    assert payload["oncall"]["attempted"] is True
     assert calls["slack"]["webhook_url"] == "https://hooks.slack.test/abc"
     assert calls["slack_eod"]["webhook_url"] == "https://hooks.slack.test/abc"
     assert calls["slack_eod"]["require_after_hours_training"] is True
     assert "health_timeout_s" not in calls["incident_snapshot"]
-    assert calls["linear"]["team_id"] == "team123"
 
 
 def test_run_dispatch_skips_missing_credentials() -> None:
@@ -86,8 +70,6 @@ def test_run_dispatch_skips_missing_credentials() -> None:
             "snapshot": {},
             "triggers": ["health_degraded"],
         },
-        linear_creator=lambda args: {"unused": args},
-        oncall_notifier=lambda args: {"unused": args},
     )
     assert payload["ok"] is True
     assert payload["slack"]["attempted"] is False
@@ -96,10 +78,6 @@ def test_run_dispatch_skips_missing_credentials() -> None:
     assert payload["slack_eod"]["skipped_reason"] == "missing_webhook"
     assert payload["openclaw"]["attempted"] is True
     assert payload["openclaw"]["result"]["reason"] == "missing_openclaw_target"
-    assert payload["linear"]["attempted"] is False
-    assert payload["linear"]["skipped_reason"] == "missing_api_key_or_team_id"
-    assert payload["oncall"]["attempted"] is False
-    assert payload["oncall"]["skipped_reason"] == "disabled"
 
 
 def test_run_dispatch_captures_connector_errors() -> None:
@@ -117,60 +95,32 @@ def test_run_dispatch_captures_connector_errors() -> None:
             "snapshot": {},
             "triggers": [],
         },
-        linear_creator=lambda args: {"created": False},
-        oncall_notifier=lambda args: {"sent": False, "reason": "disabled"},
     )
     assert payload["ok"] is False
     assert len(payload["errors"]) == 1
     assert payload["errors"][0]["connector"] == "slack"
 
 
-def test_run_dispatch_forwards_oncall_jsm_ticket_env() -> None:
-    captured: dict[str, Any] = {}
-
-    def _oncall(args: dict[str, Any]) -> dict[str, Any]:
-        captured.update(args)
-        return {"sent": False, "reason": "no_incident_triggered"}
-
-    payload = dispatch.run_dispatch(
-        env={
-            "AI_TRADING_CONNECTOR_ONCALL_ENABLED": "1",
-            "AI_TRADING_ONCALL_PROVIDERS": "jsm_ticket",
-            "AI_TRADING_JSM_SITE_URL": "https://example.atlassian.net",
-            "AI_TRADING_JSM_TICKET_PROJECT_KEY": "OPS",
-            "AI_TRADING_JSM_TICKET_ISSUE_TYPE": "Task",
-            "AI_TRADING_JSM_TICKET_LABELS": "ai-trading,runtime-incident",
-        },
-        slack_notifier=lambda args: {"unused": args},
-        slack_eod_notifier=lambda args: {"unused": args},
-        openclaw_notifier=lambda args: {"unused": args},
-        incident_snapshot_builder=lambda args: {"unused": args},
-        linear_creator=lambda args: {"unused": args},
-        oncall_notifier=_oncall,
-    )
-    assert payload["ok"] is True
-    assert payload["oncall"]["attempted"] is True
-    assert captured["providers"] == "jsm_ticket"
-    assert captured["jsm_site_url"] == "https://example.atlassian.net"
-    assert captured["jsm_ticket_project_key"] == "OPS"
-
-
 def test_run_dispatch_forwards_incident_realism_and_concentration_thresholds() -> None:
     slack_args: dict[str, Any] = {}
-    oncall_args: dict[str, Any] = {}
+    incident_snapshot_args: dict[str, Any] = {}
+    openclaw_args: dict[str, Any] = {}
 
     def _slack(args: dict[str, Any]) -> dict[str, Any]:
         slack_args.update(args)
         return {"sent": False, "reason": "no_incident_triggered"}
 
-    def _oncall(args: dict[str, Any]) -> dict[str, Any]:
-        oncall_args.update(args)
+    def _incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
+        incident_snapshot_args.update(args)
+        return {"should_alert": False, "fingerprint": "fp-1", "snapshot": {}, "triggers": []}
+
+    def _openclaw(args: dict[str, Any]) -> dict[str, Any]:
+        openclaw_args.update(args)
         return {"sent": False, "reason": "no_incident_triggered"}
 
     payload = dispatch.run_dispatch(
         env={
             "AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc",
-            "AI_TRADING_CONNECTOR_ONCALL_ENABLED": "1",
             "AI_TRADING_INCIDENT_MIN_EDGE_REALISM_RATIO": "0.40",
             "AI_TRADING_INCIDENT_MIN_EXPECTED_EDGE_BPS_FOR_REALISM": "0.8",
             "AI_TRADING_INCIDENT_MAX_REJECTION_CONCENTRATION_RATIO": "0.70",
@@ -178,20 +128,19 @@ def test_run_dispatch_forwards_incident_realism_and_concentration_thresholds() -
         },
         slack_notifier=_slack,
         slack_eod_notifier=lambda args: {"unused": args},
-        openclaw_notifier=lambda args: {"unused": args},
-        incident_snapshot_builder=lambda args: {"unused": args},
-        linear_creator=lambda args: {"unused": args},
-        oncall_notifier=_oncall,
+        openclaw_notifier=_openclaw,
+        incident_snapshot_builder=_incident_snapshot,
     )
     assert payload["ok"] is True
     assert slack_args["min_edge_realism_ratio"] == 0.40
     assert slack_args["min_expected_edge_bps_for_realism"] == 0.8
     assert slack_args["max_rejection_concentration_ratio"] == 0.70
     assert slack_args["min_rejected_records_for_concentration"] == 25
-    assert oncall_args["min_edge_realism_ratio"] == 0.40
-    assert oncall_args["min_expected_edge_bps_for_realism"] == 0.8
-    assert oncall_args["max_rejection_concentration_ratio"] == 0.70
-    assert oncall_args["min_rejected_records_for_concentration"] == 25
+    assert incident_snapshot_args["min_edge_realism_ratio"] == 0.40
+    assert incident_snapshot_args["min_expected_edge_bps_for_realism"] == 0.8
+    assert incident_snapshot_args["max_rejection_concentration_ratio"] == 0.70
+    assert incident_snapshot_args["min_rejected_records_for_concentration"] == 25
+    assert openclaw_args["snapshot_result"]["fingerprint"] == "fp-1"
 
 
 def test_run_dispatch_forwards_shared_health_timeout() -> None:
@@ -205,20 +154,9 @@ def test_run_dispatch_forwards_shared_health_timeout() -> None:
         calls["slack_eod"] = args
         return {"sent": False, "reason": "market_not_closed"}
 
-    def _linear(args: dict[str, Any]) -> dict[str, Any]:
-        calls["linear"] = args
-        return {"created": False, "reason": "no_runtime_regression_detected"}
-
-    def _oncall(args: dict[str, Any]) -> dict[str, Any]:
-        calls["oncall"] = args
-        return {"sent": False, "reason": "no_incident_triggered"}
-
     payload = dispatch.run_dispatch(
         env={
             "AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc",
-            "AI_TRADING_LINEAR_API_KEY": "lin_key",
-            "AI_TRADING_LINEAR_TEAM_ID": "team123",
-            "AI_TRADING_CONNECTOR_ONCALL_ENABLED": "1",
             "AI_TRADING_CONNECTOR_HEALTH_TIMEOUT_S": "5.5",
         },
         slack_notifier=_slack,
@@ -235,15 +173,11 @@ def test_run_dispatch_forwards_shared_health_timeout() -> None:
                 "triggers": [],
             }
         ),
-        linear_creator=_linear,
-        oncall_notifier=_oncall,
     )
     assert payload["ok"] is True
     assert calls["slack"]["health_timeout_s"] == 5.5
     assert calls["slack_eod"]["health_timeout_s"] == 5.5
     assert calls["incident_snapshot"]["health_timeout_s"] == 5.5
-    assert calls["linear"]["health_timeout_s"] == 5.5
-    assert calls["oncall"]["health_timeout_s"] == 5.5
 
 
 def test_run_dispatch_openclaw_alert_uses_snapshot_builder() -> None:
@@ -269,8 +203,6 @@ def test_run_dispatch_openclaw_alert_uses_snapshot_builder() -> None:
         slack_eod_notifier=lambda args: {"unused": args},
         openclaw_notifier=_openclaw,
         incident_snapshot_builder=_incident_snapshot,
-        linear_creator=lambda args: {"unused": args},
-        oncall_notifier=lambda args: {"unused": args},
     )
 
     assert payload["ok"] is True
@@ -284,7 +216,7 @@ def test_load_runtime_env_defaults_populates_missing_values(tmp_path: Path) -> N
     runtime_env = tmp_path / ".env.runtime"
     runtime_env.write_text(
         "AI_TRADING_SLACK_WEBHOOK_URL=https://hooks.slack.test/from-runtime\n"
-        "AI_TRADING_LINEAR_API_KEY=lin_from_runtime\n",
+        "AI_TRADING_OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789\n",
         encoding="utf-8",
     )
     env: dict[str, str] = {}
@@ -294,7 +226,7 @@ def test_load_runtime_env_defaults_populates_missing_values(tmp_path: Path) -> N
     assert summary["loaded"] is True
     assert summary["applied"] == 2
     assert env["AI_TRADING_SLACK_WEBHOOK_URL"] == "https://hooks.slack.test/from-runtime"
-    assert env["AI_TRADING_LINEAR_API_KEY"] == "lin_from_runtime"
+    assert env["AI_TRADING_OPENCLAW_GATEWAY_URL"] == "http://127.0.0.1:18789"
 
 
 def test_load_runtime_env_defaults_does_not_override_existing(tmp_path: Path) -> None:

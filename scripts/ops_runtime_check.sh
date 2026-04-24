@@ -27,9 +27,7 @@ echo "=== MCP tool catalogs ==="
 "${PYTHON_BIN}" tools/mcp_broker_server.py --list-tools | jq .
 "${PYTHON_BIN}" tools/mcp_ops_server.py --list-tools | jq .
 "${PYTHON_BIN}" tools/mcp_slack_alerts_server.py --list-tools | jq .
-"${PYTHON_BIN}" tools/mcp_oncall_alerts_server.py --list-tools | jq .
 "${PYTHON_BIN}" tools/mcp_metrics_query_server.py --list-tools | jq .
-"${PYTHON_BIN}" tools/mcp_linear_issues_server.py --list-tools | jq .
 "${PYTHON_BIN}" tools/mcp_secrets_manager_server.py --list-tools | jq .
 "${PYTHON_BIN}" tools/mcp_sql_analytics_server.py --list-tools | jq .
 "${PYTHON_BIN}" tools/mcp_market_events_server.py --list-tools | jq .
@@ -63,16 +61,6 @@ echo "=== Slack incident snapshot ==="
 echo "=== Metrics backend status ==="
 "${PYTHON_BIN}" tools/mcp_metrics_query_server.py \
   --call metrics_backend_status \
-  --args '{}' | jq .
-
-echo "=== Linear regression snapshot ==="
-"${PYTHON_BIN}" tools/mcp_linear_issues_server.py \
-  --call runtime_regression_snapshot \
-  --args '{}' | jq .
-
-echo "=== On-call incident snapshot ==="
-"${PYTHON_BIN}" tools/mcp_oncall_alerts_server.py \
-  --call runtime_incident_snapshot \
   --args '{}' | jq .
 
 echo "=== Secrets backend status ==="

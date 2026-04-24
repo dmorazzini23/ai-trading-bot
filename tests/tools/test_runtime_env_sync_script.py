@@ -112,11 +112,10 @@ def test_render_runtime_env_excludes_selected_managed_keys(
                 "AI_TRADING_AWS_SECRET_ID=ai-trading/prod",
                 (
                     "AI_TRADING_EXCLUDED_MANAGED_SECRET_KEYS="
-                    "AI_TRADING_LINEAR_API_KEY,AI_TRADING_JSM_OPS_API_TOKEN"
+                    "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD"
                 ),
                 "ALPACA_API_KEY=local-key",
-                "AI_TRADING_LINEAR_API_KEY=",
-                "AI_TRADING_JSM_OPS_API_TOKEN=",
+                "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD=",
             ]
         )
         + "\n",
@@ -129,8 +128,7 @@ def test_render_runtime_env_excludes_selected_managed_keys(
         assert profile == ""
         return {
             "ALPACA_API_KEY": "remote-key",
-            "AI_TRADING_LINEAR_API_KEY": "remote-linear",
-            "AI_TRADING_JSM_OPS_API_TOKEN": "remote-jsm",
+            "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD": "remote-prom-password",
         }
 
     monkeypatch.setattr(runtime_env_sync, "_fetch_aws_secret_payload", _fake_fetch)
@@ -139,6 +137,8 @@ def test_render_runtime_env_excludes_selected_managed_keys(
     rendered_lines = rendered.splitlines()
 
     assert "ALPACA_API_KEY=remote-key" in rendered
-    assert not any(line.startswith("AI_TRADING_LINEAR_API_KEY=") for line in rendered_lines)
-    assert not any(line.startswith("AI_TRADING_JSM_OPS_API_TOKEN=") for line in rendered_lines)
+    assert not any(
+        line.startswith("AI_TRADING_PROM_REMOTE_WRITE_PASSWORD=")
+        for line in rendered_lines
+    )
     assert summary["manager_overrides_applied"] == 1
