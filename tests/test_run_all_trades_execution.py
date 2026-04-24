@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -384,6 +385,7 @@ def test_execute_cycle_logs_symbol_scoped_pending_block_then_runs_netting(
 
     assert emitted
     assert emitted[0]["message"] == "PENDING_ORDERS_SYMBOL_BLOCK_ACTIVE"
-    assert emitted[0]["extra"]["blocked_symbols_count"] == 2
-    assert emitted[0]["extra"]["blocked_symbols"] == ["AAPL", "MSFT"]
+    extra = cast(dict[str, Any], emitted[0]["extra"])
+    assert extra["blocked_symbols_count"] == 2
+    assert extra["blocked_symbols"] == ["AAPL", "MSFT"]
     assert data_provider_updates[0]["status"] == "healthy"

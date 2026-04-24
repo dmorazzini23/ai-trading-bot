@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -38,7 +39,13 @@ def _order(
     quantity: int = 10,
     price: float | None = 100.0,
 ) -> Order:
-    return Order(symbol=symbol, side=side, quantity=quantity, order_type=OrderType.LIMIT, price=price)
+    return Order(
+        symbol=symbol,
+        side=side,
+        quantity=quantity,
+        order_type=OrderType.LIMIT,
+        price=cast(Any, price),
+    )
 
 
 def test_run_helper_returns_coordinator() -> None:
@@ -62,7 +69,7 @@ def test_submit_order_request_rejects_invalid_request(monkeypatch) -> None:
 
 def test_submit_order_request_forwards_metadata(monkeypatch) -> None:
     coordinator = _coordinator(monkeypatch)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     async def _submit_order(**kwargs):
         captured.update(kwargs)
@@ -101,7 +108,7 @@ def test_submit_order_applies_limit_preference_and_finalizes_stats(monkeypatch) 
         "get_settings",
         lambda: SimpleNamespace(exec_prefer_limit=True, exec_max_participation_rate=0.2),
     )
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     async def _safety(order):
         captured["safety_order_type"] = order.order_type
@@ -149,7 +156,7 @@ def test_submit_order_applies_limit_preference_and_finalizes_stats(monkeypatch) 
     assert result.status == "success"
     assert captured["safety_order_type"] is OrderType.LIMIT
     assert captured["max_participation_rate"] == pytest.approx(0.2)
-    executed = captured["executed_order"]
+    executed = cast(Any, captured["executed_order"])
     assert executed.quantity == 3
     assert float(executed.price) == pytest.approx(101.5)
     assert captured["post"] == (3, "success", 10)
@@ -318,9 +325,9 @@ def test_post_execution_processing_alert_paths(monkeypatch) -> None:
 def test_position_tracking_statistics_summary_and_cancel(monkeypatch) -> None:
     coordinator = _coordinator(monkeypatch)
     buy = _order(quantity=10, price=100.0)
-    buy.average_fill_price = 100.0
+    buy.average_fill_price = cast(Any, 100.0)
     sell = _order(side=OrderSide.SELL, quantity=4, price=110.0)
-    sell.average_fill_price = 110.0
+    sell.average_fill_price = cast(Any, 110.0)
 
     coordinator._update_position_tracking(buy)
     coordinator._update_position_tracking(sell)
@@ -359,11 +366,11 @@ def test_position_tracking_statistics_summary_and_cancel(monkeypatch) -> None:
 
 def test_stop_snapshot_helpers_and_account_update(monkeypatch) -> None:
     coordinator = _coordinator(monkeypatch)
-    coordinator.current_positions = {
+    coordinator.current_positions = cast(dict[str, dict[str, Any]], {
         "AAPL": {"quantity": "5"},
         "BAD": {"quantity": "not-a-number"},
-        "MSFT": SimpleNamespace(qty=2),
-    }
+        "MSFT": cast(Any, SimpleNamespace(qty=2)),
+    })
 
     ledger_positions, source = coordinator._snapshot_positions_for_stop_checks()
     assert source == "ledger"
@@ -371,11 +378,11 @@ def test_stop_snapshot_helpers_and_account_update(monkeypatch) -> None:
     assert [pos.qty for pos in ledger_positions] == [5.0, 0.0, 2.0]
 
     broker_positions = [SimpleNamespace(symbol="TSLA", qty=1)]
-    coordinator.broker = SimpleNamespace(list_positions=lambda: broker_positions)
+    setattr(cast(Any, coordinator), "broker", SimpleNamespace(list_positions=lambda: broker_positions))
     broker_snapshot, source = coordinator._snapshot_positions_for_stop_checks()
     assert broker_snapshot is broker_positions
     assert source == "broker"
-    assert coordinator._resolve_broker_like_interface() is coordinator.broker
+    assert coordinator._resolve_broker_like_interface() is getattr(coordinator, "broker")
 
     updated: list[float] = []
     monkeypatch.setattr(coordinator.halt_manager, "update_equity", lambda value: updated.append(value))

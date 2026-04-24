@@ -11,7 +11,7 @@ np = pytest.importorskip("numpy")
 from ai_trading.risk.engine import RiskEngine, TradeSignal
 
 
-def _signal(**updates: Any) -> TradeSignal:
+def _signal(**updates: Any) -> Any:
     base = {
         "symbol": "AAPL",
         "side": "buy",
@@ -70,7 +70,7 @@ def test_available_exposure_clamps_invalid_cap() -> None:
     engine.global_limit = 0.8
     engine.exposure = {"equity": 0.25}
 
-    assert engine.available_exposure(cap="bad") == pytest.approx(0.55)
+    assert engine.available_exposure(cap=cast(Any, "bad")) == pytest.approx(0.55)
 
 
 def test_refresh_positions_rebuilds_exposure_from_broker_positions() -> None:
@@ -164,7 +164,11 @@ def test_update_exposure_requires_context_and_swallows_refresh_errors(
     with pytest.raises(RuntimeError):
         engine.update_exposure()
 
-    engine.refresh_positions = lambda _api: (_ for _ in ()).throw(ValueError("bad positions"))  # type: ignore[method-assign]
+    setattr(
+        cast(Any, engine),
+        "refresh_positions",
+        lambda _api: (_ for _ in ()).throw(ValueError("bad positions")),
+    )
     with caplog.at_level(logging.WARNING):
         engine.update_exposure(types.SimpleNamespace(api=object()))
 
@@ -197,8 +201,8 @@ def test_position_size_rejects_invalid_cash_or_price(cash: float, price: float) 
 
 def test_position_size_falls_back_when_account_equity_invalid(caplog: pytest.LogCaptureFixture) -> None:
     engine = _engine()
-    engine._get_atr_data = lambda _symbol: None  # type: ignore[method-assign]
-    engine.check_max_drawdown = lambda _api: True  # type: ignore[method-assign]
+    setattr(cast(Any, engine), "_get_atr_data", lambda _symbol: None)
+    setattr(cast(Any, engine), "check_max_drawdown", lambda _api: True)
     api = types.SimpleNamespace(get_account=lambda: types.SimpleNamespace(equity="bad"))
 
     with caplog.at_level(logging.WARNING):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 
 from ai_trading import health_monitor as hm
 
@@ -18,7 +19,11 @@ def test_health_checker_handles_dict_unexpected_exception_and_timeout():
                 "details": {"latency": 12},
             },
         )
-        unexpected_checker = hm.HealthChecker("raw", hm.ComponentType.API_SERVICE, lambda: object())
+        unexpected_checker = hm.HealthChecker(
+            "raw",
+            hm.ComponentType.API_SERVICE,
+            cast(Any, lambda: object()),
+        )
 
         def broken_check():
             raise ValueError("bad check")
@@ -85,10 +90,10 @@ def test_monitoring_loop_runs_one_iteration_and_stops(monkeypatch):
     async def sleep(_seconds):
         calls.append("sleep")
 
-    monitor.run_all_checks = run_all_checks
-    monitor._collect_system_metrics = lambda: calls.append("metrics")
-    monitor._process_alerts = lambda: calls.append("alerts")
-    monitor._cleanup_history = lambda: calls.append("cleanup")
+    monkeypatch.setattr(monitor, "run_all_checks", run_all_checks)
+    monkeypatch.setattr(monitor, "_collect_system_metrics", lambda: calls.append("metrics"))
+    monkeypatch.setattr(monitor, "_process_alerts", lambda: calls.append("alerts"))
+    monkeypatch.setattr(monitor, "_cleanup_history", lambda: calls.append("cleanup"))
     monkeypatch.setattr(hm.asyncio, "sleep", sleep)
 
     monitor.running = True
@@ -109,7 +114,7 @@ def test_start_and_stop_monitoring_cancel_task(monkeypatch):
                 canceled["value"] = True
                 raise
 
-        monitor._monitoring_loop = loop
+        monkeypatch.setattr(monitor, "_monitoring_loop", loop)
 
         await monitor.start_monitoring()
         assert monitor.running
@@ -155,7 +160,7 @@ def test_process_alerts_emits_critical_failure_and_latency_alerts():
     )
     monitor.health_history = [result]
     alerts: list[str] = []
-    monitor._send_alert = lambda message, result: alerts.append(message)
+    setattr(cast(Any, monitor), "_send_alert", lambda message, result: alerts.append(message))
 
     monitor._process_alerts()
 

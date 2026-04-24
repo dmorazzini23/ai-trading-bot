@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -11,9 +12,9 @@ from ai_trading.monitoring.order_health_monitor import OrderInfo
 
 
 def test_order_validation_helpers_and_stale_cleanup(monkeypatch):
-    assert eng._ensure_positive_qty("2.5") == 2.5
+    assert eng._ensure_positive_qty(cast(Any, "2.5")) == 2.5
     assert eng._ensure_valid_price(None) is None
-    assert eng._ensure_valid_price("101.25") == 101.25
+    assert eng._ensure_valid_price(cast(Any, "101.25")) == 101.25
     assert eng._normalize_order_side("buy") is OrderSide.BUY
     assert eng._normalize_order_side("unknown") is None
     assert eng._as_bool("YES")
@@ -99,7 +100,7 @@ def test_order_fill_cancel_and_dict_representation():
 
 def test_execution_result_normalizes_side_status_quantities_and_weight():
     order = eng.Order("AAPL", OrderSide.BUY, 10)
-    result = eng.ExecutionResult(order, "partially_filled", "4", "10", 0.5)
+    result = eng.ExecutionResult(order, "partially_filled", cast(Any, "4"), cast(Any, "10"), 0.5)
 
     assert str(result) == order.id
     assert result.side == "buy"
@@ -109,14 +110,14 @@ def test_execution_result_normalizes_side_status_quantities_and_weight():
     assert result.fill_ratio == 0.4
     assert result.filled_weight == pytest.approx(0.2)
 
-    order.side = "sell_short"
+    setattr(cast(Any, order), "side", "sell_short")
     assert result.side == "sell"
-    order.side = "cover"
+    setattr(cast(Any, order), "side", "cover")
     assert result.side == "buy"
-    order.side = "nonsense"
+    setattr(cast(Any, order), "side", "nonsense")
     assert result.side is None
 
-    empty = eng.ExecutionResult(None, "not-a-status", None, "bad", "bad")
+    empty = eng.ExecutionResult(None, "not-a-status", None, cast(Any, "bad"), cast(Any, "bad"))
     assert empty.status is None
     assert empty.side is None
     assert empty.symbol is None
@@ -156,7 +157,7 @@ def test_execution_algorithm_slices_and_quantity_helpers():
         algorithm=eng.ExecutionAlgorithm.MARKET,
         total_quantity=5,
         side=OrderSide.SELL,
-        order_type="unknown",
+        order_type=cast(Any, "unknown"),
         kwargs={"duration_minutes": "bad"},
     )
 

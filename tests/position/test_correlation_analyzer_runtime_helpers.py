@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import Mock
 
 import pandas as pd
@@ -171,33 +172,33 @@ def test_concentration_classifiers_and_sector_correlation_defaults() -> None:
 
 def test_should_reduce_position_uses_analysis_sector_and_position_size(monkeypatch) -> None:
     analyzer = PortfolioCorrelationAnalyzer()
-    analyzer.last_analysis = SimpleNamespace(
+    analyzer.last_analysis = cast(Any, SimpleNamespace(
         reduce_exposure_symbols=["AAPL"],
         sector_exposures=[],
         largest_position_pct=0.0,
         total_value=100_000.0,
-    )
+    ))
     assert analyzer.should_reduce_position("AAPL", []) == (
         True,
         "High correlation/concentration risk",
     )
 
-    analyzer.last_analysis = SimpleNamespace(
+    analyzer.last_analysis = cast(Any, SimpleNamespace(
         reduce_exposure_symbols=[],
         sector_exposures=[
             SectorExposure("Technology", ["MSFT"], 50_000.0, 50.0, ConcentrationLevel.HIGH, 0.0)
         ],
         largest_position_pct=0.0,
         total_value=100_000.0,
-    )
+    ))
     assert analyzer.should_reduce_position("MSFT", [])[0] is True
 
-    analyzer.last_analysis = SimpleNamespace(
+    analyzer.last_analysis = cast(Any, SimpleNamespace(
         reduce_exposure_symbols=[],
         sector_exposures=[],
         largest_position_pct=45.0,
         total_value=100_000.0,
-    )
+    ))
     monkeypatch.setattr(
         analyzer,
         "_extract_position_data",
@@ -211,15 +212,15 @@ def test_should_reduce_position_uses_analysis_sector_and_position_size(monkeypat
 
 def test_correlation_adjustment_factor_thresholds() -> None:
     analyzer = PortfolioCorrelationAnalyzer()
-    analyzer.last_analysis = SimpleNamespace(position_correlations=[])
+    analyzer.last_analysis = cast(Any, SimpleNamespace(position_correlations=[]))
     assert analyzer.get_correlation_adjustment_factor("AAPL") == 1.0
 
     for corr_value, expected in [(0.9, 0.6), (0.7, 0.8), (0.2, 1.2), (0.45, 1.0)]:
-        analyzer.last_analysis = SimpleNamespace(
+        analyzer.last_analysis = cast(Any, SimpleNamespace(
             position_correlations=[
                 PositionCorrelation("AAPL", "MSFT", corr_value, CorrelationStrength.HIGH, 30, pd.Timestamp.utcnow().to_pydatetime())
             ]
-        )
+        ))
         assert analyzer.get_correlation_adjustment_factor("AAPL") == expected
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 from ai_trading.monitoring import performance_dashboard as pd
 
@@ -92,7 +93,7 @@ def test_dashboard_update_routes_anomalies_and_threshold_alerts():
             self.alerts.append(args)
 
     alert_manager = AlertManager()
-    dashboard = pd.PerformanceDashboard(alert_manager)
+    dashboard = pd.PerformanceDashboard(cast(Any, alert_manager))
     dashboard.metrics.current_metrics = {
         "sharpe_ratio": -1.0,
         "max_drawdown": 0.25,

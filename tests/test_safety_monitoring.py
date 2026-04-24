@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 from ai_trading.safety import monitoring
 
@@ -119,7 +120,7 @@ def test_send_alert_handles_callback_failures():
 def test_kill_switch_detects_file_and_triggers_monitor(tmp_path):
     monitor = monitoring.SafetyMonitor()
     reasons: list[str] = []
-    monitor.emergency_stop = lambda reason: reasons.append(reason)
+    setattr(cast(Any, monitor), "emergency_stop", lambda reason: reasons.append(reason))
     kill_switch = monitoring.KillSwitch(monitor)
     kill_switch.kill_file_path = str(tmp_path / "KILL_SWITCH.flag")
     (tmp_path / "KILL_SWITCH.flag").write_text("stop", encoding="utf-8")

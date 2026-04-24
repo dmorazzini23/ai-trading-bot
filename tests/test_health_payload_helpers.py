@@ -12,7 +12,7 @@ def test_dedupe_flags_drops_blank_and_preserves_order() -> None:
 
 
 def test_attention_flags_optional_contract_failures_are_opt_in() -> None:
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "provider_state": {"using_backup": False, "safe_mode": False},
         "broker_state": {"open_orders_count": 0, "positions_count": 0},
         "service_state": {"status": "ready"},

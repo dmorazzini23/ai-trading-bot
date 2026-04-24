@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 import numpy as np
 import pytest
 
 pd = pytest.importorskip("pandas")
+from pandas import DataFrame
 
 from ai_trading import signals
 
 
-def _market_frame(rows: int = 60) -> pd.DataFrame:
+def _market_frame(rows: int = 60) -> DataFrame:
     close = pd.Series(np.linspace(100.0, 112.0, rows))
     return pd.DataFrame(
         {
@@ -60,7 +62,7 @@ def test_generate_signal_validates_inputs_and_handles_values():
     with pytest.raises(ValueError, match="df cannot be empty"):
         signals.generate_signal(pd.DataFrame({"edge": []}), column="edge")
     with pytest.raises(TypeError, match="column must be a string"):
-        signals.generate_signal(frame, column=123)
+        signals.generate_signal(frame, column=cast(Any, 123))
     with pytest.raises(ValueError, match="not found"):
         signals.generate_signal(frame, column="missing")
 

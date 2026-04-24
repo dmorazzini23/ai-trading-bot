@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -40,7 +40,7 @@ class _Ledger:
 
 
 def _cfg(**updates: Any) -> SimpleNamespace:
-    base = {
+    base: dict[str, Any] = {
         "max_order_dollars": 0.0,
         "max_order_shares": 0,
         "price_collar_pct": 0.20,
@@ -80,11 +80,11 @@ def _intent(**updates: Any) -> OrderIntent:
         "liquidity_bucket": "NORMAL",
     }
     base.update(updates)
-    return OrderIntent(**base)
+    return OrderIntent(**cast(Any, base))
 
 
 def _limiter(**updates: Any) -> SlidingWindowRateLimiter:
-    base = {"global_orders_per_min": 100, "per_symbol_orders_per_min": 100}
+    base: dict[str, Any] = {"global_orders_per_min": 100, "per_symbol_orders_per_min": 100}
     base.update(updates)
     return SlidingWindowRateLimiter(**base)
 

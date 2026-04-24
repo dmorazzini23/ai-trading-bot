@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 import pandas as pd
 import pytest
@@ -189,7 +190,7 @@ def test_exit_urgency_and_trend_helpers() -> None:
     assert analyzer._calculate_trend([1.0, 2.0]) == 0.0  # noqa: SLF001
     assert analyzer._calculate_trend([1.0, 2.0, 3.0, 4.0]) > 0.0  # noqa: SLF001
     assert analyzer._calculate_trend([4.0, 3.0, 2.0, 1.0]) < 0.0  # noqa: SLF001
-    assert analyzer._calculate_trend(["bad", object(), None]) == 0.0  # noqa: SLF001
+    assert analyzer._calculate_trend(cast(list[float], ["bad", object(), None])) == 0.0  # noqa: SLF001
 
 
 def test_get_market_data_prefers_minute_then_daily_and_handles_errors() -> None:

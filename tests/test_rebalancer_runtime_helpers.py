@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pandas as pd
 import pytest
@@ -32,7 +33,7 @@ def test_apply_no_trade_bands_uses_symbol_overrides_and_invalid_fallback() -> No
     adjusted = rebalancer.apply_no_trade_bands(
         current,
         target,
-        band_bps={"AAPL": 25.0, "MSFT": "bad"},
+        band_bps=cast(dict[str, float], {"AAPL": 25.0, "MSFT": cast(Any, "bad")}),
     )
 
     assert adjusted["AAPL"] == 0.10

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 import pytest
 
@@ -47,7 +48,7 @@ def _quotes(count: int = 24) -> list[dict]:
 
 
 def _micro_data(**updates) -> MarketMicrostructureData:
-    payload = {
+    payload: dict[str, Any] = {
         "symbol": "AAPL",
         "timestamp": datetime.now(UTC),
         "bid_price": 99.95,
@@ -199,15 +200,15 @@ def test_execution_impact_confidence_and_market_impact_helpers() -> None:
     impact = engine.estimate_execution_impact(10_000, data)
 
     assert impact["participation_rate"] == pytest.approx(0.1)
-    assert impact["total_impact_bps"] > impact["spread_impact_bps"]
-    assert 0 <= impact["confidence_level"] <= 1
+    assert cast(float, impact["total_impact_bps"]) > cast(float, impact["spread_impact_bps"])
+    assert 0 <= cast(float, impact["confidence_level"]) <= 1
     assert engine._calculate_market_impact(0.0, data) >= 1.0  # noqa: SLF001
     assert engine._calculate_market_impact(10.0, data) <= 200.0  # noqa: SLF001
 
     low_conf = engine._assess_impact_confidence(  # noqa: SLF001
         _micro_data(bid_size=0, ask_size=0, spread_bps=80.0, order_flow_toxicity=0.8)
     )
-    assert low_conf < impact["confidence_level"]
+    assert low_conf < cast(float, impact["confidence_level"])
 
 
 def test_price_impact_volatility_autocorrelation_and_defaults() -> None:

@@ -60,6 +60,35 @@ def test_compute_limit_env_priority_and_config_fallback(monkeypatch):
     assert pooling._compute_limit("bad") == pooling._DEFAULT_LIMIT
 
 
+def test_compute_limit_reads_env_priority_when_raw_missing(monkeypatch):
+    values = {
+        "AI_TRADING_HOST_LIMIT": None,
+        "AI_TRADING_HTTP_HOST_LIMIT": None,
+        "HTTP_MAX_WORKERS": "7",
+        "HTTP_MAX_PER_HOST": "9",
+    }
+    monkeypatch.setattr(pooling, "_env_raw", lambda key, default=None: values.get(key, default))
+
+    assert pooling._compute_limit() == 7
+
+
+def test_read_limit_source_handles_config_errors(monkeypatch):
+    monkeypatch.setattr(pooling, "_env_raw", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        pooling.config,
+        "get_trading_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("config unavailable")),
+    )
+    monkeypatch.setattr(pooling, "AI_TRADING_FALLBACK_EXCEPTIONS", (RuntimeError,))
+
+    assert pooling._read_limit_source((None, None, None)) == (
+        pooling._DEFAULT_LIMIT,
+        None,
+        None,
+        None,
+    )
+
+
 def test_read_limit_source_prefers_env_then_config(monkeypatch):
     env_values = {
         "AI_TRADING_HOST_LIMIT": None,
@@ -143,6 +172,33 @@ def test_get_host_map_and_purge_closed_loops():
         closed_loop.close()
         pooling._purge_closed_loops()
         assert closed_loop not in pooling._HOST_SEMAPHORES
+    finally:
+        loop.close()
+
+
+def test_build_semaphore_without_bounded_semaphore(monkeypatch):
+    monkeypatch.setattr(pooling.asyncio, "BoundedSemaphore", None, raising=False)
+
+    semaphore = pooling._build_semaphore(2, 11)
+
+    assert isinstance(semaphore, asyncio.Semaphore)
+    assert getattr(semaphore, "_ai_trading_host_limit") == 2
+    assert getattr(semaphore, "_ai_trading_host_limit_version") == 11
+
+
+def test_clear_all_loop_semaphores_retires_cached_records():
+    _reset_pooling_state()
+    loop = asyncio.new_event_loop()
+    try:
+        first = pooling._get_or_create_loop_semaphore(
+            loop,
+            "api",
+            pooling.HostLimitSnapshot(2, 1),
+        )
+        pooling._clear_all_loop_semaphores()
+
+        assert pooling._HOST_SEMAPHORES.get(loop) == {}
+        assert first in pooling._RETIRED_SEMAPHORES
     finally:
         loop.close()
 
@@ -251,6 +307,34 @@ def test_async_host_limiter_from_url_acquires_and_releases(monkeypatch):
 
     asyncio.run(run())
     assert calls == ["api.alpaca.markets"]
+
+
+def test_public_limiter_factories_normalize_hosts():
+    host_limiter = pooling.limit_host("API.Alpaca.Markets")
+    async_limiter = pooling.host_limiter_async("DATA.Alpaca.Markets")
+
+    assert isinstance(host_limiter, pooling.AsyncHostLimiter)
+    assert isinstance(async_limiter, pooling.AsyncHostLimiter)
+    assert host_limiter._host == "api.alpaca.markets"
+    assert async_limiter._host == "data.alpaca.markets"
+
+
+def test_async_host_limiter_ignores_release_value_error():
+    class ReleaseRaises:
+        async def acquire(self):
+            return None
+
+        def release(self):
+            raise ValueError("already released")
+
+    limiter = pooling.AsyncHostLimiter("api")
+    limiter._semaphore = ReleaseRaises()  # type: ignore[assignment]
+    limiter._acquired = True
+
+    asyncio.run(limiter.__aexit__(None, None, None))
+
+    assert limiter._semaphore is None
+    assert limiter._acquired is False
 
 
 def test_async_host_limiter_cleans_up_failed_acquire(monkeypatch):

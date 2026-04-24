@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 
 from ai_trading.monitoring import dashboard
 
@@ -71,7 +72,7 @@ def _collector(now: datetime) -> SimpleNamespace:
 def test_realtime_metrics_summaries_and_cache():
     now = datetime.now(UTC)
     collector = _collector(now)
-    realtime = dashboard.RealtimeMetrics(collector)
+    realtime = dashboard.RealtimeMetrics(cast(Any, collector))
 
     pnl = realtime.get_current_pnl()
     assert pnl["realized_pnl"] == 40.0
@@ -93,12 +94,12 @@ def test_realtime_metrics_summaries_and_cache():
 
 def test_realtime_metrics_empty_collectors_return_defaults():
     realtime = dashboard.RealtimeMetrics(
-        SimpleNamespace(
+        cast(Any, SimpleNamespace(
             trade_metrics=[],
             portfolio_metrics=[],
             risk_metrics=[],
             execution_metrics=[],
-        )
+        ))
     )
 
     assert realtime.get_current_pnl() == {"realized_pnl": 0.0, "trade_count": 0, "win_rate": 0.0}
@@ -129,7 +130,11 @@ def test_dashboard_data_provider_aggregates_activity_alerts_health_and_charts():
         alerts=[critical, info],
         get_active_alerts=lambda: [critical, info],
     )
-    provider = dashboard.DashboardDataProvider(collector, PerfMonitor(), alert_manager)
+    provider = dashboard.DashboardDataProvider(
+        cast(Any, collector),
+        cast(Any, PerfMonitor()),
+        cast(Any, alert_manager),
+    )
 
     data = provider.get_dashboard_data(time_range=timedelta(hours=2))
     activity = provider.get_trading_activity_summary(time_range=timedelta(hours=1))
@@ -161,7 +166,11 @@ def test_dashboard_data_provider_uses_performance_metrics_fallback_and_defaults(
     )
     perf_monitor = SimpleNamespace(get_performance_metrics=lambda: {"fallback": True})
     alert_manager = SimpleNamespace(alerts=[], get_active_alerts=lambda: [])
-    provider = dashboard.DashboardDataProvider(collector, perf_monitor, alert_manager)
+    provider = dashboard.DashboardDataProvider(
+        cast(Any, collector),
+        cast(Any, perf_monitor),
+        cast(Any, alert_manager),
+    )
 
     data = provider.get_dashboard_data()
     activity = provider.get_trading_activity_summary()
@@ -189,7 +198,11 @@ def test_dashboard_error_paths_degrade_to_empty_payloads():
         alerts=[SimpleNamespace(timestamp="not-a-date", severity=dashboard.AlertSeverity.INFO)],
         get_active_alerts=lambda: (_ for _ in ()).throw(TypeError("alerts unavailable")),
     )
-    provider = dashboard.DashboardDataProvider(broken_collector, object(), broken_alerts)
+    provider = dashboard.DashboardDataProvider(
+        cast(Any, broken_collector),
+        cast(Any, object()),
+        cast(Any, broken_alerts),
+    )
 
     data = provider.get_dashboard_data()
     activity = provider.get_trading_activity_summary()

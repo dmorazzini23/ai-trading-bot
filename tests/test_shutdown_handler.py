@@ -187,7 +187,7 @@ def test_signal_setup_failure_and_signal_handler_delegation(monkeypatch):
         calls.append("scheduled")
         return None
 
-    handler.shutdown = fake_shutdown
+    monkeypatch.setattr(handler, "shutdown", fake_shutdown)
     monkeypatch.setattr(sh.asyncio, "create_task", fake_create_task)
 
     handler._signal_handler(signal.SIGTERM, None)

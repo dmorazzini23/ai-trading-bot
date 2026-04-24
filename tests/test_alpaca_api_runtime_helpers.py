@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import types
+from typing import Any
 
 import pytest
 
@@ -46,7 +47,7 @@ def test_http_shim_adds_post_method_to_minimal_session(monkeypatch):
 
     assert result == {"method": "POST", "url": "https://example.test/orders", "timeout": 3}
     assert calls == [("POST", "https://example.test/orders", 3, {"json": {"symbol": "AAPL"}})]
-    assert session.post is post
+    assert getattr(session, "post") is post
 
 
 def test_http_shim_sets_public_attributes_on_underlying_session(monkeypatch):
@@ -170,7 +171,7 @@ def test_trading_client_adapter_proxies_helpers_and_cancel_by_id():
 
 def test_trading_client_adapter_uses_cancel_orders_request_variants(monkeypatch):
     monkeypatch.setattr(alpaca_api, "AI_TRADING_FALLBACK_EXCEPTIONS", (ImportError,))
-    captured: list[object] = []
+    captured: list[Any] = []
 
     class Client:
         def cancel_orders(self, request=None):
@@ -185,7 +186,7 @@ def test_trading_client_adapter_uses_cancel_orders_request_variants(monkeypatch)
 
 def test_trading_client_adapter_tries_keyword_cancel_order_signatures(monkeypatch):
     monkeypatch.setattr(alpaca_api, "AI_TRADING_FALLBACK_EXCEPTIONS", (ImportError,))
-    calls: list[tuple[object | None, object | None]] = []
+    calls: list[tuple[Any | None, Any | None]] = []
 
     class Client:
         def cancel_orders(self, request=None, cancel_orders_request=None):

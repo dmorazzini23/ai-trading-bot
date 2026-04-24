@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pandas as pd
 import pytest
@@ -62,7 +63,7 @@ def _level(
 
 def test_format_and_float_helpers_handle_bad_values() -> None:
     assert _fmt(1.2345678) == "1.234568"
-    assert _fmt("bad") == "nan"
+    assert _fmt(cast(Any, "bad")) == "nan"
     assert _to_float("3.5") == 3.5
     assert _to_float("bad") is None
     assert _to_float(float("nan")) is None
@@ -137,7 +138,7 @@ def test_merge_and_directional_correction_for_long_and_short() -> None:
 
     assert manager._merge_stop_prices(100.0, 105.0, "long") == 105.0  # noqa: SLF001
     assert manager._merge_stop_prices(100.0, 95.0, "short") == 95.0  # noqa: SLF001
-    assert manager._merge_stop_prices("bad", 95.0, "short") == 95.0  # noqa: SLF001
+    assert manager._merge_stop_prices(cast(Any, "bad"), 95.0, "short") == 95.0  # noqa: SLF001
 
     long_level = _level(side="long", current_price=100.0, stop_price=105.0)
     short_level = _level(side="short", current_price=100.0, stop_price=95.0)
@@ -167,7 +168,7 @@ def test_initial_atr_momentum_time_and_breakeven_helpers(monkeypatch) -> None:
 
     assert manager._calculate_time_decay_multiplier(7) == 1.0  # noqa: SLF001
     assert manager._calculate_time_decay_multiplier(22) == pytest.approx(0.75)  # noqa: SLF001
-    assert manager._calculate_time_decay_multiplier("bad") == 1.0  # noqa: SLF001
+    assert manager._calculate_time_decay_multiplier(cast(Any, "bad")) == 1.0  # noqa: SLF001
 
     assert manager._calculate_breakeven_distance(_level(current_price=110.0, entry_price=100.0)) is not None  # noqa: SLF001
     assert manager._calculate_breakeven_distance(_level(current_price=101.0, entry_price=100.0)) is None  # noqa: SLF001

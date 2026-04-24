@@ -162,7 +162,10 @@ class PerformanceBasedAllocator:
                 if field not in trade_result:
                     logger.warning('Trade result missing required field %s for strategy %s', field, strategy_name)
                     return
-            trade_record = {**trade_result, 'recorded_at': datetime.now(UTC), 'return_pct': trade_result['pnl'] / abs(trade_result['entry_price'] * trade_result.get('quantity', 1))}
+            notional = abs(trade_result['entry_price'] * trade_result.get('quantity', 1))
+            if notional <= 0:
+                raise ValueError('trade notional must be positive')
+            trade_record = {**trade_result, 'recorded_at': datetime.now(UTC), 'return_pct': trade_result['pnl'] / notional}
             self.strategy_trades[strategy_name].append(trade_record)
             logger.debug('Recorded trade for strategy %s: PnL=%.2f, Return=%.4f', strategy_name, trade_result['pnl'], trade_record['return_pct'])
         except (KeyError, ValueError, TypeError) as e:
