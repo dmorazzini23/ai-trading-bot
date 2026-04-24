@@ -9,29 +9,46 @@ import pytest
 from ai_trading import alpaca_api
 
 
+def _alpaca_api_module() -> types.ModuleType:
+    """Return the real Alpaca API module even if a lazy proxy is installed."""
+
+    real = getattr(alpaca_api, "_real", None)
+    if isinstance(real, types.ModuleType):
+        return real
+    load = getattr(alpaca_api, "_load", None)
+    if callable(load):
+        loaded = load()
+        if isinstance(loaded, types.ModuleType):
+            return loaded
+    return alpaca_api
+
+
 def test_active_namespace_falls_back_when_module_entry_is_not_module(monkeypatch):
-    monkeypatch.setitem(alpaca_api.sys.modules, "ai_trading.alpaca_api", object())
+    api = _alpaca_api_module()
+    monkeypatch.setitem(api.sys.modules, "ai_trading.alpaca_api", object())
 
-    namespace = alpaca_api._active_alpaca_api_namespace()
+    namespace = api._active_alpaca_api_namespace()
 
-    assert namespace is alpaca_api.__dict__
+    assert namespace is api.__dict__
 
 
 def test_get_http_session_caches_lazy_session_and_raises_when_missing(monkeypatch):
+    api = _alpaca_api_module()
     session = types.SimpleNamespace()
-    monkeypatch.setattr(alpaca_api, "_HTTP_SESSION", None)
-    monkeypatch.setattr(alpaca_api, "_lazy_http_session", lambda: session)
+    monkeypatch.setattr(api, "_HTTP_SESSION", None)
+    monkeypatch.setattr(api, "_lazy_http_session", lambda: session)
 
-    assert alpaca_api._get_http_session() is session
-    assert alpaca_api._get_http_session() is session
+    assert api._get_http_session() is session
+    assert api._get_http_session() is session
 
-    monkeypatch.setattr(alpaca_api, "_HTTP_SESSION", None)
-    monkeypatch.setattr(alpaca_api, "_lazy_http_session", lambda: None)
+    monkeypatch.setattr(api, "_HTTP_SESSION", None)
+    monkeypatch.setattr(api, "_lazy_http_session", lambda: None)
     with pytest.raises(RuntimeError, match="HTTP session is not available yet"):
-        alpaca_api._get_http_session()
+        api._get_http_session()
 
 
 def test_http_shim_adds_post_method_to_minimal_session(monkeypatch):
+    api = _alpaca_api_module()
     calls: list[tuple[str, str, float | int | None, dict[str, object]]] = []
 
     class MinimalSession:
@@ -40,9 +57,9 @@ def test_http_shim_adds_post_method_to_minimal_session(monkeypatch):
             return {"method": method, "url": url, "timeout": timeout}
 
     session = MinimalSession()
-    monkeypatch.setattr(alpaca_api, "_HTTP_SESSION", session)
+    monkeypatch.setattr(api, "_HTTP_SESSION", session)
 
-    post = alpaca_api._HTTPShim().post
+    post = api._HTTPShim().post
     result = post("https://example.test/orders", json={"symbol": "AAPL"}, timeout=3)
 
     assert result == {"method": "POST", "url": "https://example.test/orders", "timeout": 3}
@@ -51,10 +68,11 @@ def test_http_shim_adds_post_method_to_minimal_session(monkeypatch):
 
 
 def test_http_shim_sets_public_attributes_on_underlying_session(monkeypatch):
+    api = _alpaca_api_module()
     session = types.SimpleNamespace()
-    monkeypatch.setattr(alpaca_api, "_HTTP_SESSION", session)
+    monkeypatch.setattr(api, "_HTTP_SESSION", session)
 
-    shim = alpaca_api._HTTPShim()
+    shim = api._HTTPShim()
     shim.headers = {"Authorization": "Bearer token"}
     shim._local = "value"
 
@@ -63,6 +81,7 @@ def test_http_shim_sets_public_attributes_on_underlying_session(monkeypatch):
 
 
 def test_managed_env_delegates_to_config_get_env(monkeypatch):
+    api = _alpaca_api_module()
     from ai_trading.config import management as config_management
 
     calls: list[tuple[str, object, object, bool]] = []
@@ -73,7 +92,7 @@ def test_managed_env_delegates_to_config_get_env(monkeypatch):
 
     monkeypatch.setattr(config_management, "get_env", fake_get_env)
 
-    result = alpaca_api._managed_env(
+    result = api._managed_env(
         "ALPACA_DATA_FEED",
         "iex",
         cast=str,
@@ -85,13 +104,14 @@ def test_managed_env_delegates_to_config_get_env(monkeypatch):
 
 
 def test_shadow_mode_and_env_resolver_fallbacks(monkeypatch):
+    api = _alpaca_api_module()
     from ai_trading.config import management as config_management
 
     monkeypatch.setattr(config_management, "is_shadow_mode", lambda: "yes")
-    assert alpaca_api.is_shadow_mode() is True
+    assert api.is_shadow_mode() is True
 
     monkeypatch.delattr(config_management, "is_shadow_mode", raising=False)
-    assert alpaca_api.is_shadow_mode() is False
+    assert api.is_shadow_mode() is False
 
     monkeypatch.setattr(
         config_management,
@@ -99,7 +119,7 @@ def test_shadow_mode_and_env_resolver_fallbacks(monkeypatch):
         lambda: ("key", "secret", "https://paper-api.alpaca.markets"),
         raising=False,
     )
-    assert alpaca_api._resolve_alpaca_env() == (
+    assert api._resolve_alpaca_env() == (
         "key",
         "secret",
         "https://paper-api.alpaca.markets",
@@ -111,36 +131,40 @@ def test_shadow_mode_and_env_resolver_fallbacks(monkeypatch):
         lambda: ("bad", "shape"),
         raising=False,
     )
-    assert alpaca_api._resolve_alpaca_env() == alpaca_api._default_resolve_alpaca_env()
+    assert api._resolve_alpaca_env() == api._default_resolve_alpaca_env()
 
 
 def test_make_client_order_id_uses_minute_bucket_and_uuid_prefix(monkeypatch):
-    monkeypatch.setattr(alpaca_api.time, "time", lambda: 125.0)
+    api = _alpaca_api_module()
+    monkeypatch.setattr(api.time, "time", lambda: 125.0)
     monkeypatch.setattr(
-        alpaca_api.uuid,
+        api.uuid,
         "uuid4",
         lambda: types.SimpleNamespace(hex="abcdef1234567890"),
     )
 
-    assert alpaca_api._make_client_order_id("trade") == "trade-2-abcdef12"
+    assert api._make_client_order_id("trade") == "trade-2-abcdef12"
 
 
 def test_get_trading_client_cls_returns_unavailable_sentinel(monkeypatch):
-    monkeypatch.setattr(alpaca_api, "_ensure_trading_client_cls", lambda: None)
+    api = _alpaca_api_module()
+    monkeypatch.setattr(api, "_ensure_trading_client_cls", lambda: None)
 
-    cls = alpaca_api.get_trading_client_cls()
+    cls = api.get_trading_client_cls()
 
     with pytest.raises(RuntimeError, match="TradingClient not available"):
         cls()
 
 
 def test_get_trading_client_cls_returns_loaded_class(monkeypatch):
+    api = _alpaca_api_module()
+
     class FakeTradingClient:
         pass
 
-    monkeypatch.setattr(alpaca_api, "_ensure_trading_client_cls", lambda: FakeTradingClient)
+    monkeypatch.setattr(api, "_ensure_trading_client_cls", lambda: FakeTradingClient)
 
-    assert alpaca_api.get_trading_client_cls() is FakeTradingClient
+    assert api.get_trading_client_cls() is FakeTradingClient
 
 
 def test_trading_client_adapter_proxies_helpers_and_cancel_by_id():

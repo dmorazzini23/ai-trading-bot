@@ -66,12 +66,14 @@
 - Primary DM destination: `D0AUCEGTFGV`
 - Paired user id: `U0900J4TTB9`
 - Slash commands exposed in Slack:
-  `/openclaw`, `/help`, `/agentstatus`, `/model`, `/mode`, `/think`, `/new`, `/reset`, `/compact`
+  `/openclaw`, `/model`, `/models`, `/mode`, `/think`, `/new`, `/reset`, `/compact`
   `/claw`, `/preset`, `/triage`, `/service`, `/runtime-report`, `/git-review`, `/deploy-checklist`, `/review`
   `/watch`, `/changes`, `/digest`, `/incident`, `/explain`, `/fix`, `/evidence`
 - Change session behavior from Slack:
   `/model codex/gpt-5.4`
-  `/mode`
+  `/models`
+  `/mode medium`
+  `/mode codex/gpt-5.4 medium`
   `/think off|minimal|low|medium|high`
 - Operator palette:
   `/claw status|triage|service|runtime|changes|deploy|review|preset|watch|incident|digest|help`

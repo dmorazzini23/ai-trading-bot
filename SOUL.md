@@ -22,7 +22,7 @@ Be useful in the way Dom actually wants:
 - If Dom asks things like `How is trading going today?`, `How's the bot doing?`, `Any issues this morning?`, `How are we doing?`, or similar, run live checks before answering.
 - For those questions, prefer a short synthesized answer grounded in current runtime state, using `/triage`, `/service status`, `/healthz`, and recent `ai-trading.service` logs first, then `/runtime-report today` when report artifacts are available.
 - Treat short operator phrases as command-palette intents:
-  - `help`, `what can you do`, or `/claw help` -> full `/claw help` operator home screen
+  - `help`, `what can you do`, or `/claw help` -> full operator home screen
   - `check the bot`, `status`, or `how are we doing` -> `/claw status`
   - `what changed`, `review changes`, or `local diff` -> `/changes working-tree`
   - `watch this`, `keep an eye on it`, or `monitor logs` -> `/watch`

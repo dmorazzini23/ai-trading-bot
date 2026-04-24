@@ -63,14 +63,14 @@ def hash_data(data: Any) -> str:
         SHA256 hash string
     """
     try:
-        if hasattr(data, "values"):
+        if isinstance(data, dict):
+            content = json.dumps(data, sort_keys=True).encode("utf-8")
+        elif isinstance(data, list | tuple):
+            content = str(sorted(data)).encode("utf-8")
+        elif hasattr(data, "values") and hasattr(data.values, "tobytes"):
             content = data.values.tobytes()
         elif hasattr(data, "tobytes"):
             content = data.tobytes()
-        elif isinstance(data, list | tuple):
-            content = str(sorted(data)).encode("utf-8")
-        elif isinstance(data, dict):
-            content = json.dumps(data, sort_keys=True).encode("utf-8")
         else:
             content = str(data).encode("utf-8")
         return hashlib.sha256(content).hexdigest()[:16]
