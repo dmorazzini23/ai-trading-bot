@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -17,6 +18,128 @@ def test_extract_api_error_metadata_handles_sparse_exception():
 
     assert metadata["detail"] == "broken"
     assert metadata["error_type"] == "CustomError"
+
+
+def test_fallback_api_error_parses_json_payload_and_http_status():
+    http_error = SimpleNamespace(response=SimpleNamespace(status_code=418))
+
+    err = live_trading._FallbackAPIError(
+        '{"message": "teapot", "code": "short_and_stout"}',
+        http_error=http_error,
+    )
+
+    assert err.message == "teapot"
+    assert err.code == "short_and_stout"
+    assert err.status_code == 418
+
+
+def test_fallback_api_error_keeps_plain_message_when_metadata_is_unreadable():
+    class BrokenHTTPError:
+        @property
+        def response(self):
+            raise RuntimeError("response unavailable")
+
+    err = live_trading._FallbackAPIError(
+        "plain broker failure",
+        http_error=BrokenHTTPError(),
+        code="plain",
+        status_code=429,
+    )
+
+    assert err.message == "plain broker failure"
+    assert err.code == "plain"
+    assert err.status_code == 429
+
+
+def test_lookup_and_duplicate_error_classifiers_use_metadata():
+    missing = live_trading._FallbackAPIError(
+        "order disappeared",
+        code="40410000",
+        status_code=500,
+    )
+    duplicate = live_trading._FallbackAPIError(
+        "client_order_id must be unique",
+        code="other",
+        status_code=422,
+    )
+    wrong_status = live_trading._FallbackAPIError(
+        "client_order_id must be unique",
+        status_code=400,
+    )
+
+    assert live_trading._is_missing_order_lookup_error(missing)
+    assert live_trading._is_duplicate_client_order_id_error(duplicate)
+    assert not live_trading._is_duplicate_client_order_id_error(wrong_status)
+
+
+def test_retry_after_parser_accepts_seconds_dates_and_header_objects():
+    future = datetime.now(UTC) + timedelta(seconds=60)
+
+    class HeaderBag:
+        def get(self, key):
+            if key == "Retry-After":
+                return "3.5"
+            return None
+
+    header_error = live_trading._FallbackAPIError(
+        "rate limited",
+        http_error=SimpleNamespace(response=SimpleNamespace(headers=HeaderBag())),
+    )
+
+    assert live_trading._parse_retry_after_seconds("-2") == 0.0
+    assert live_trading._parse_retry_after_seconds("nan") is None
+    assert live_trading._parse_retry_after_seconds(future.strftime("%a, %d %b %Y %H:%M:%S GMT")) > 0.0
+    assert live_trading._extract_retry_after_seconds(header_error) == pytest.approx(3.5)
+
+
+def test_retry_after_header_get_failure_degrades_to_none():
+    class BrokenHeaders:
+        def get(self, _key):
+            raise RuntimeError("header lookup failed")
+
+    err = live_trading._FallbackAPIError(
+        "rate limited",
+        http_error=SimpleNamespace(response=SimpleNamespace(headers=BrokenHeaders())),
+    )
+
+    assert live_trading._extract_retry_after_seconds(err) is None
+
+
+@pytest.mark.parametrize(
+    "detail, expected",
+    [
+        ("insufficient buying power", "insufficient_buying_power"),
+        ("outside price band", "limit_up_down"),
+        ("minimum price increment rejected", "price_increment"),
+        ("market is closed", "market_closed"),
+    ],
+)
+def test_classify_rejection_reason_common_broker_details(detail, expected):
+    assert live_trading._classify_rejection_reason(detail) == expected
+
+
+def test_market_retry_requires_fallback_price_and_price_like_metadata():
+    metadata = {"detail": "limit price outside NBBO", "status_code": "422"}
+
+    assert live_trading._should_retry_limit_as_market(metadata, using_fallback_price=True)
+    assert not live_trading._should_retry_limit_as_market(metadata, using_fallback_price=False)
+    assert live_trading._should_retry_limit_as_market(
+        {"code": "40010003"},
+        using_fallback_price=True,
+    )
+
+
+def test_submit_no_result_error_fingerprint_normalizes_details():
+    assert live_trading._submit_no_result_error_fingerprint(
+        reason="submit_no_result",
+        detail="Missing_Client_Order_ID from broker",
+        status_code="422",
+    ) == "422:missing_client_order_id"
+    assert live_trading._submit_no_result_error_fingerprint(
+        reason="submit_no_result_timeout",
+        detail="connection reset by peer",
+    ) == "connection"
+    assert live_trading._submit_no_result_error_fingerprint(reason="broker_reject") is None
 
 
 def test_submit_limit_order_handles_timeout_without_unboundlocalerror(monkeypatch, caplog):

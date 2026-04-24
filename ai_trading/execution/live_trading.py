@@ -37,6 +37,7 @@ from ai_trading.math.money import Money
 from ai_trading.config.settings import get_settings
 from ai_trading.config import EXECUTION_MODE, SAFE_MODE_ALLOW_PAPER, get_trading_config
 from ai_trading.broker.adapters import build_broker_adapter
+from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.execution.guards import (
     can_execute,
     quote_fresh_enough,
@@ -17749,10 +17750,7 @@ class ExecutionEngine:
             "last_refill_epoch": float(state.get("last_refill_epoch", 0.0)),
             "cooldown_until_epoch": float(state.get("cooldown_until_epoch", 0.0)),
         }
-        path.write_text(
-            json.dumps(serializable, sort_keys=True),
-            encoding="utf-8",
-        )
+        atomic_write_text(path, json.dumps(serializable, sort_keys=True))
 
     def _reserve_submit_rate_limit_wait(
         self,

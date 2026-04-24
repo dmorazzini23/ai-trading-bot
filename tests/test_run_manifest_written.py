@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import ai_trading.runtime.run_manifest as run_manifest
 from ai_trading.runtime.run_manifest import write_run_manifest
 
 
@@ -23,6 +25,20 @@ def test_run_manifest_written(tmp_path: Path) -> None:
     assert payload["mode"] == "paper"
     assert payload["runtime_contract"]["stubs_enabled"] is False
     assert payload["resolved_config_hash"]
+
+
+def test_run_manifest_git_hash_uses_bounded_timeout(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_run(*_args, **kwargs):
+        captured.update(kwargs)
+        raise subprocess.TimeoutExpired(cmd="git", timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr(run_manifest.subprocess, "run", _fake_run)
+    monkeypatch.setenv("AI_TRADING_RUN_MANIFEST_GIT_TIMEOUT_SEC", "0.01")
+
+    assert run_manifest._git_commit_hash() is None
+    assert captured["timeout"] == 0.1
 
 
 def test_run_manifest_uses_env_path_when_cfg_missing(

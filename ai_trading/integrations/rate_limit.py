@@ -32,12 +32,12 @@ class TokenBucket:
 
     def __post_init__(self):
         self.tokens = float(self.capacity)
-        self.last_refill = time.time()
+        self.last_refill = time.monotonic()
 
     def _refill(self) -> None:
         """Refill tokens based on elapsed time."""
-        now = time.time()
-        elapsed = now - self.last_refill
+        now = time.monotonic()
+        elapsed = max(0.0, now - self.last_refill)
         if elapsed > 0:
             jitter_factor = 0.9 + 0.2 * random.random()
             tokens_to_add = elapsed * self.refill_rate * jitter_factor
@@ -188,7 +188,7 @@ class RateLimiter:
             return True
         if timeout is None:
             timeout = config.queue_timeout
-        start_time = time.time()
+        start_time = time.monotonic()
         async with self._async_lock:
             self._metrics[route]["requests"] += 1
             can_proceed, wait_time = self._check_limits(route, tokens)
@@ -201,7 +201,7 @@ class RateLimiter:
             self.logger.debug(f"Rate limiting {route}: waiting {wait_time:.2f}s")
             await asyncio.sleep(wait_time)
             can_proceed, additional_wait = self._check_limits(route, tokens)
-            actual_wait = time.time() - start_time
+            actual_wait = time.monotonic() - start_time
             self._metrics[route]["wait_time_total"] += actual_wait
             self._metrics[route]["max_wait_time"] = max(self._metrics[route]["max_wait_time"], actual_wait)
             if can_proceed:
@@ -228,7 +228,7 @@ class RateLimiter:
             return True
         if timeout is None:
             timeout = config.queue_timeout
-        start_time = time.time()
+        start_time = time.monotonic()
         with self._lock:
             self._metrics[route]["requests"] += 1
             can_proceed, wait_time = self._check_limits(route, tokens)
@@ -242,7 +242,7 @@ class RateLimiter:
         psleep(wait_time)
         with self._lock:
             can_proceed, additional_wait = self._check_limits(route, tokens)
-            actual_wait = time.time() - start_time
+            actual_wait = time.monotonic() - start_time
             self._metrics[route]["wait_time_total"] += actual_wait
             self._metrics[route]["max_wait_time"] = max(self._metrics[route]["max_wait_time"], actual_wait)
             if can_proceed:
@@ -273,6 +273,21 @@ class RateLimiter:
         finally:
             pass
 
+    def _route_status_unlocked(self, route: str) -> dict[str, Any]:
+        bucket = self._route_buckets.get(route)
+        config = self._route_configs.get(route)
+        metrics = self._metrics.get(route, {})
+        if bucket is None:
+            return {"error": f"Route {route} not found"}
+        return {
+            "route": route,
+            "available_tokens": bucket.available_tokens(),
+            "capacity": config.capacity if config else 0,
+            "refill_rate": config.refill_rate if config else 0,
+            "enabled": config.enabled if config else False,
+            "metrics": dict(metrics),
+        }
+
     def get_status(self, route: str | None = None) -> dict[str, Any]:
         """
         Get rate limiter status.
@@ -285,19 +300,7 @@ class RateLimiter:
         """
         with self._lock:
             if route is not None:
-                bucket = self._route_buckets.get(route)
-                config = self._route_configs.get(route)
-                metrics = self._metrics.get(route, {})
-                if bucket is None:
-                    return {"error": f"Route {route} not found"}
-                return {
-                    "route": route,
-                    "available_tokens": bucket.available_tokens(),
-                    "capacity": config.capacity if config else 0,
-                    "refill_rate": config.refill_rate if config else 0,
-                    "enabled": config.enabled if config else False,
-                    "metrics": dict(metrics),
-                }
+                return self._route_status_unlocked(route)
             status: dict[str, Any] = {
                 "global": {
                     "available_tokens": self._global_bucket.available_tokens(),
@@ -307,7 +310,7 @@ class RateLimiter:
                 "routes": {},
             }
             for route_name in self._route_buckets:
-                route_status = self.get_status(route_name)
+                route_status = self._route_status_unlocked(route_name)
                 if "error" not in route_status:
                     status["routes"][route_name] = route_status
             return status

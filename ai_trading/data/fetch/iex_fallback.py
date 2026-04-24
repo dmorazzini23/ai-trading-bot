@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import Any
 
 from ai_trading.utils.env import get_alpaca_data_base_url, get_alpaca_http_headers
+from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import get_logger
 from .fallback_order import demote_provider, promote_high_resolution
@@ -172,7 +173,12 @@ def fetch_bars(
         }
         data_base = get_alpaca_data_base_url()
         headers = get_alpaca_http_headers()
-        resp = session.get(f"{data_base}/v2/stocks/bars", params=params, headers=headers)
+        resp = session.get(
+            f"{data_base}/v2/stocks/bars",
+            params=params,
+            headers=headers,
+            timeout=clamp_request_timeout(10.0),
+        )
         payload = resp.json()
         bars = payload.get("bars") or []
         if bars:

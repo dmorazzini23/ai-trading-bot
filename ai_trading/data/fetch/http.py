@@ -4,6 +4,7 @@ from typing import Any
 
 from . import _HTTP_SESSION, _SIP_UNAUTHORIZED
 from ai_trading.net.http import HTTPSession
+from ai_trading.utils.http import clamp_request_timeout
 
 
 def get(
@@ -42,7 +43,12 @@ def get(
     if session is None or not hasattr(session, "get"):
         raise ValueError("session_required")
 
-    return session.get(url, **kwargs)
+    timeout = kwargs.pop("timeout", None)
+    if timeout is None:
+        timeout = clamp_request_timeout(10.0)
+    else:
+        timeout = clamp_request_timeout(timeout)
+    return session.get(url, timeout=timeout, **kwargs)
 
 
 __all__ = ["get"]

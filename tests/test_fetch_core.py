@@ -25,6 +25,7 @@ def test_fetch_uses_session():
     resp = fetch("https://example.com", session=sess)
     assert sess.called
     assert resp.url == "https://example.com"
+    assert resp.kwargs["timeout"] is not None
 
 
 def test_fetch_propagates_bars_sentinel():

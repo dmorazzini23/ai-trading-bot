@@ -27,7 +27,7 @@ class TokenBucket:
         self.capacity = capacity
         self.name = name
         self.tokens = float(capacity)
-        self.last_update = time.time()
+        self.last_update = time.monotonic()
         self.lock = Lock()
     
     def consume(self, tokens: int = 1, block: bool = True, timeout: Optional[float] = None) -> bool:
@@ -102,8 +102,8 @@ class TokenBucket:
     def _refill(self):
         """Refill tokens based on elapsed time."""
         
-        now = time.time()
-        elapsed = now - self.last_update
+        now = time.monotonic()
+        elapsed = max(0.0, now - self.last_update)
         
         # Add tokens based on time elapsed
         new_tokens = elapsed * self.rate

@@ -11,8 +11,26 @@ from typing import Any, Mapping
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
+from ai_trading.runtime.atomic_io import atomic_write_text
 
 logger = get_logger(__name__)
+
+
+def _git_timeout_seconds() -> float:
+    try:
+        raw_timeout = get_env(
+            "AI_TRADING_RUN_MANIFEST_GIT_TIMEOUT_SEC",
+            2.0,
+            cast=float,
+            resolve_aliases=False,
+        )
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        raw_timeout = 2.0
+    try:
+        timeout = float(raw_timeout)
+    except (TypeError, ValueError):
+        timeout = 2.0
+    return max(0.1, min(timeout, 10.0))
 
 
 def _git_commit_hash() -> str | None:
@@ -22,8 +40,9 @@ def _git_commit_hash() -> str | None:
             check=True,
             capture_output=True,
             text=True,
+            timeout=_git_timeout_seconds(),
         )
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
+    except AI_TRADING_FALLBACK_EXCEPTIONS + (subprocess.SubprocessError,):
         return None
     value = (completed.stdout or "").strip()
     return value or None
@@ -166,11 +185,11 @@ def write_run_manifest(
         latest_json_path = target.with_suffix("")
         if latest_json_path.suffix.lower() != ".json":
             latest_json_path = target.with_suffix(".json")
-        latest_json_path.write_text(serialized, encoding="utf-8")
+        atomic_write_text(latest_json_path, serialized)
         wrote_mirror = True
         mirror_path = str(latest_json_path)
     else:
-        target.write_text(serialized, encoding="utf-8")
+        atomic_write_text(target, serialized)
     logger.info(
         "RUN_MANIFEST_WRITTEN",
         extra={

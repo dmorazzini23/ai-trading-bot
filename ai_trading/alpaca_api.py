@@ -162,7 +162,18 @@ class _HTTPShim:
                 # Provide a best-effort default when the underlying session
                 # lacks ``post`` (e.g. minimal test stubs without requests).
                 def _post(url, *args, **kwargs):
-                    return session.request("POST", url, *args, **kwargs)
+                    timeout = kwargs.pop("timeout", None)
+                    if timeout is None:
+                        timeout = clamp_request_timeout(10.0)
+                    else:
+                        timeout = clamp_request_timeout(timeout)
+                    return session.request(
+                        "POST",
+                        url,
+                        *args,
+                        timeout=timeout,
+                        **kwargs,
+                    )
 
                 setattr(session, "post", _post)
                 return getattr(session, name)

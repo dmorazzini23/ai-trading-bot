@@ -9,6 +9,7 @@ if TYPE_CHECKING:  # pragma: no cover - import for typing only
 
 from ai_trading.net.http import HTTPSession
 from ai_trading.integrations.rate_limit import get_rate_limiter
+from ai_trading.utils.http import clamp_request_timeout
 
 
 _rate_limiter = get_rate_limiter()
@@ -48,7 +49,12 @@ def fetch(
     if not _rate_limiter.acquire_sync(route):
         raise RuntimeError("rate_limit_exceeded")
 
-    response = session.get(url, **kwargs)
+    timeout = kwargs.pop("timeout", None)
+    if timeout is None:
+        timeout = clamp_request_timeout(10.0)
+    else:
+        timeout = clamp_request_timeout(timeout)
+    response = session.get(url, timeout=timeout, **kwargs)
 
     bars_fetch_failed_cls: type[BaseException] | None = None
 

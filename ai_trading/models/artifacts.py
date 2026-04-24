@@ -13,6 +13,7 @@ import joblib
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
+from ai_trading.runtime.atomic_io import atomic_write_text
 
 logger = get_logger(__name__)
 
@@ -79,8 +80,7 @@ def write_artifact_manifest(
         metadata=metadata,
     )
     destination = Path(manifest_path) if manifest_path else default_manifest_path(model_path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(asdict(manifest), sort_keys=True), encoding="utf-8")
+    atomic_write_text(destination, json.dumps(asdict(manifest), sort_keys=True))
     return destination
 
 

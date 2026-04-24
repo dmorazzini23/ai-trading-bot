@@ -1265,7 +1265,9 @@ async def run_with_concurrency(limit: int, coros):
         async with semaphore:
             try:
                 result = await coro
-            except BaseException as exc:  # noqa: BLE001 - surface alongside results
+            except asyncio.CancelledError:
+                raise
+            except FETCH_FALLBACK_EXCEPTIONS as exc:
                 return index, exc
             return index, result
 
@@ -1275,26 +1277,33 @@ async def run_with_concurrency(limit: int, coros):
     iterator = iter(coros)
 
     iterator_exhausted = False
-    while pending or not iterator_exhausted:
-        while len(pending) < max_concurrency and not iterator_exhausted:
-            try:
-                coro = next(iterator)
-            except StopIteration:
-                iterator_exhausted = True
+    try:
+        while pending or not iterator_exhausted:
+            while len(pending) < max_concurrency and not iterator_exhausted:
+                try:
+                    coro = next(iterator)
+                except StopIteration:
+                    iterator_exhausted = True
+                    break
+                pending.add(asyncio.create_task(_run(total, coro)))
+                total += 1
+
+            if not pending:
                 break
-            pending.add(asyncio.create_task(_run(total, coro)))
-            total += 1
 
-        if not pending:
-            break
-
-        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            index, value = task.result()
-            results[index] = value
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                index, value = task.result()
+                results[index] = value
+    except asyncio.CancelledError:
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        raise
 
     ordered_results = [results[i] for i in range(total)] if total else []
-    succeeded = sum(1 for item in ordered_results if not isinstance(item, Exception))
+    succeeded = sum(1 for item in ordered_results if not isinstance(item, BaseException))
     failed = total - succeeded
     return ordered_results, succeeded, failed
 

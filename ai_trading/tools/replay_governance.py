@@ -16,6 +16,7 @@ from ai_trading.config.management import (
 from ai_trading.core import bot_engine
 from ai_trading.env import ensure_dotenv_loaded
 from ai_trading.logging import get_logger
+from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 logger = get_logger(__name__)
@@ -182,10 +183,9 @@ def _apply_runtime_overrides(args: argparse.Namespace) -> list[str]:
 
 
 def _write_summary(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    atomic_write_text(
+        path,
         json.dumps(payload, sort_keys=True, indent=2, default=str) + "\n",
-        encoding="utf-8",
     )
 
 

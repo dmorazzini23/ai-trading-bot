@@ -128,8 +128,15 @@ def test_iex_empty_records_consecutive_failures(monkeypatch):
         def __init__(self) -> None:
             self.calls: list[tuple[str, dict[str, object] | None]] = []
 
-        def get(self, url: str, params: dict[str, object] | None = None, headers: dict[str, str] | None = None) -> StubResp:
+        def get(
+            self,
+            url: str,
+            params: dict[str, object] | None = None,
+            headers: dict[str, str] | None = None,
+            timeout: float | tuple[float, float] | None = None,
+        ) -> StubResp:
             self.calls.append((url, params))
+            assert timeout is not None
             return StubResp([])
 
     session = StubSession()

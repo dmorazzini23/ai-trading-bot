@@ -20,7 +20,13 @@
 - Trading service logs:
   `ai-trading-local-check logs 50`
 - OpenClaw gateway status:
-  `openclaw-admin gateway status`
+  `ai-trading-local-check openclaw`
+- Runtime report:
+  `ai-trading-local-check report recent`
+- Repo change summary:
+  `ai-trading-local-check changes working-tree`
+- Deploy readiness:
+  `ai-trading-local-check deploy-checklist readiness`
 
 ## Local loopback checks
 
@@ -61,11 +67,23 @@
 - Paired user id: `U0900J4TTB9`
 - Slash commands exposed in Slack:
   `/openclaw`, `/help`, `/agentstatus`, `/model`, `/mode`, `/think`, `/new`, `/reset`, `/compact`
+  `/claw`, `/preset`, `/triage`, `/service`, `/runtime-report`, `/git-review`, `/deploy-checklist`, `/review`
+  `/watch`, `/changes`, `/digest`, `/incident`, `/explain`, `/fix`, `/evidence`
 - Change session behavior from Slack:
-  `/model codex/gpt-5.4-mini`
   `/model codex/gpt-5.4`
   `/mode`
   `/think off|minimal|low|medium|high`
+- Operator palette:
+  `/claw status|triage|service|runtime|changes|deploy|review|preset|watch|incident|digest|help`
+- Operator home screen:
+  `/claw help`
+  Shows grouped examples for Start here, Service, Runtime, Review, Presets, and Aliases.
+- Safe local checks behind those commands:
+  `ai-trading-local-check triage`
+  `ai-trading-local-check report recent`
+  `ai-trading-local-check changes working-tree`
+  `ai-trading-local-check deploy-checklist readiness`
+  `ai-trading-local-check watch service 5m`
 
 ## Hooks
 
