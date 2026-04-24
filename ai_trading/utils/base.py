@@ -840,6 +840,8 @@ def validate_ohlcv(df: DataFrame, required: list[str] | None = None, require_mon
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f"missing columns: {missing}")
+    if len(df) == 0:
+        raise ValueError("no rows")
     ts = df["timestamp"]
     timestamp_types = (pd.Timestamp, datetime)
     if not isinstance(ts.iloc[0], timestamp_types):
@@ -848,8 +850,6 @@ def validate_ohlcv(df: DataFrame, required: list[str] | None = None, require_mon
         raise ValueError("timestamp contains NaT/invalid values")
     if require_monotonic and (not ts.is_monotonic_increasing):
         raise ValueError("timestamp is not monotonic increasing")
-    if len(df) == 0:
-        raise ValueError("no rows")
     if not {"open", "high", "low", "close"}.issubset(df.columns):
         raise ValueError("OHLC columns incomplete")
 
@@ -882,9 +882,10 @@ def get_column(
     for col in options:
         if col in df.columns:
             if dtype is not None:
-                if dtype == "datetime64[ns]" and pd.api.types.is_datetime64_any_dtype(df[col]):
-                    continue
-                elif not pd.api.types.is_dtype_equal(df[col].dtype, dtype):
+                valid_datetime = dtype == "datetime64[ns]" and pd.api.types.is_datetime64_any_dtype(
+                    df[col]
+                )
+                if not valid_datetime and not pd.api.types.is_dtype_equal(df[col].dtype, dtype):
                     raise TypeError(f"{label}: column '{col}' is not of dtype {dtype}, got {df[col].dtype}")
             if must_be_monotonic and (not df[col].is_monotonic_increasing):
                 raise ValueError(f"{label}: column '{col}' is not monotonic increasing")
