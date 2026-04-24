@@ -18233,6 +18233,15 @@ class ExecutionEngine:
                 payload,
                 extra=detail_payload,
             )
+            self._skip_submit(
+                symbol=symbol,
+                side=side_lower,
+                reason=skip_reason,
+                order_type=effective_order_type,
+                detail=skip_reason,
+                context=payload if isinstance(payload, Mapping) else None,
+                submit_started_at=submit_started_at,
+            )
             return None
         if self.shadow_mode:
             self.stats["total_orders"] += 1
@@ -18963,6 +18972,15 @@ class ExecutionEngine:
                 skip_reason,
                 payload,
                 extra=detail_payload,
+            )
+            self._skip_submit(
+                symbol=symbol,
+                side=side_lower,
+                reason=skip_reason,
+                order_type="limit",
+                detail=skip_reason,
+                context=payload if isinstance(payload, Mapping) else None,
+                submit_started_at=submit_started_at,
             )
             return None
         if self.shadow_mode:
@@ -31530,12 +31548,42 @@ class ExecutionEngine:
             max_checks = 25
         max_checks = max(1, min(int(max_checks), 200))
 
+        fresh_lookup_grace_s = _config_float(
+            "AI_TRADING_PENDING_RECONCILE_FRESH_LOOKUP_GRACE_SEC",
+            30.0,
+        )
+        if fresh_lookup_grace_s is None:
+            fresh_lookup_grace_s = 30.0
+        fresh_lookup_grace_s = max(0.0, min(float(fresh_lookup_grace_s), 300.0))
+
+        def _pending_entry_age_seconds(entry: Mapping[str, Any]) -> float | None:
+            updated_raw = _extract_value(entry, "updated_at", "ts", "timestamp")
+            if updated_raw in (None, ""):
+                return None
+            if isinstance(updated_raw, datetime):
+                updated_dt = updated_raw
+            else:
+                updated_text = str(updated_raw).strip()
+                if updated_text.endswith("Z"):
+                    updated_text = f"{updated_text[:-1]}+00:00"
+                try:
+                    updated_dt = datetime.fromisoformat(updated_text)
+                except ValueError:
+                    return None
+            if updated_dt.tzinfo is None:
+                updated_dt = updated_dt.replace(tzinfo=UTC)
+            else:
+                updated_dt = updated_dt.astimezone(UTC)
+            return max(0.0, (now_dt - updated_dt).total_seconds())
+
         checked = 0
         reconciled = 0
         reconciled_terminal = 0
         lookup_failed = 0
         lookup_not_found = 0
-        now_iso = datetime.now(UTC).isoformat()
+        lookup_deferred_fresh = 0
+        now_dt = datetime.now(UTC)
+        now_iso = now_dt.isoformat()
 
         for pending_key, pending_raw in list(store.items()):
             if checked >= max_checks:
@@ -31593,16 +31641,37 @@ class ExecutionEngine:
                         },
                     )
                 else:
-                    lookup_failed += 1
-                logger.debug(
-                    "PENDING_ORDER_RECONCILE_LOOKUP_FAILED",
-                    extra={
-                        "pending_key": key,
-                        "order_id": ref_order_id,
-                        "client_order_id": ref_client_id,
-                    },
-                    exc_info=True,
-                )
+                    pending_age_s = _pending_entry_age_seconds(entry)
+                    if (
+                        pending_age_s is not None
+                        and pending_age_s <= fresh_lookup_grace_s
+                    ):
+                        lookup_deferred_fresh += 1
+                        logger.debug(
+                            "PENDING_ORDER_RECONCILE_LOOKUP_DEFERRED_FRESH",
+                            extra={
+                                "pending_key": key,
+                                "order_id": ref_order_id,
+                                "client_order_id": ref_client_id,
+                                "pending_age_s": round(float(pending_age_s), 3),
+                                "fresh_lookup_grace_s": round(
+                                    float(fresh_lookup_grace_s),
+                                    3,
+                                ),
+                            },
+                            exc_info=True,
+                        )
+                    else:
+                        lookup_failed += 1
+                        logger.debug(
+                            "PENDING_ORDER_RECONCILE_LOOKUP_FAILED",
+                            extra={
+                                "pending_key": key,
+                                "order_id": ref_order_id,
+                                "client_order_id": ref_client_id,
+                            },
+                            exc_info=True,
+                        )
                 if refreshed is None:
                     continue
             if refreshed is None:
@@ -31917,15 +31986,17 @@ class ExecutionEngine:
                     "terminal": int(max(reconciled_terminal, 0)),
                     "lookup_failed": int(max(lookup_failed, 0)),
                     "lookup_not_found": int(max(lookup_not_found, 0)),
+                    "lookup_deferred_fresh": int(max(lookup_deferred_fresh, 0)),
                 },
             )
-        elif checked or lookup_failed or lookup_not_found:
+        elif checked or lookup_failed or lookup_not_found or lookup_deferred_fresh:
             logger.info(
                 "PENDING_ORDER_RECONCILE_NOOP",
                 extra={
                     "checked": int(max(checked, 0)),
                     "lookup_failed": int(max(lookup_failed, 0)),
                     "lookup_not_found": int(max(lookup_not_found, 0)),
+                    "lookup_deferred_fresh": int(max(lookup_deferred_fresh, 0)),
                 },
             )
         self._pending_orders = store

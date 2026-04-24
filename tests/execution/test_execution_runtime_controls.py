@@ -133,6 +133,85 @@ def _disable_new_global_controls(monkeypatch):
     monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RAMP_ENABLED", "0")
 
 
+def test_market_sell_long_only_skip_records_submit_outcome(monkeypatch):
+    engine = _engine_stub()
+    engine.trading_client = object()
+    engine.is_initialized = True
+    engine._cycle_account = SimpleNamespace()
+    engine._position_quantity = lambda symbol: 0
+    engine._refresh_settings = lambda: None
+    engine._warmup_data_only_mode_active = lambda: False
+    engine._broker_lock_suppressed = lambda **_: False
+    engine._clip_sell_quantity_to_available_position = lambda **kwargs: (
+        int(kwargs["requested_qty"]),
+        {},
+    )
+    engine._resolve_time_in_force = lambda value: value or "day"
+    engine._pre_execution_checks = lambda: True
+    engine._pre_execution_order_checks = lambda order: True
+    engine._resolve_capacity_account_snapshot = lambda broker, snapshot: snapshot
+    engine._record_execution_quality_event = lambda payload: None
+
+    monkeypatch.setattr(lt, "_runtime_trading_config", lambda: None)
+    monkeypatch.setattr(
+        lt,
+        "_effective_execution_quote_policy",
+        lambda *_, **__: (False, False, False),
+    )
+    monkeypatch.setattr(
+        lt,
+        "_short_sale_precheck",
+        lambda *_, **__: (
+            False,
+            {"symbol": "MSFT", "side": "sell", "reason": "long_only_config"},
+            "long_only",
+        ),
+    )
+
+    assert engine.submit_market_order("MSFT", "sell", 1) is None
+    assert engine._last_submit_outcome["status"] == "skipped"
+    assert engine._last_submit_outcome["reason"] == "shorting_disabled"
+    assert engine._last_submit_outcome["symbol"] == "MSFT"
+    assert engine._last_submit_outcome["side"] == "sell"
+    assert engine._cycle_order_outcomes[-1]["status"] == "skipped"
+    assert engine._cycle_order_outcomes[-1]["reason"] == "shorting_disabled"
+
+
+def test_pending_order_reconcile_defers_fresh_lookup_failure(monkeypatch, caplog):
+    engine = _engine_stub()
+    engine._pending_orders = {
+        "ord-fresh": {
+            "status": "pending_new",
+            "symbol": "AAPL",
+            "side": "buy",
+            "qty": 1,
+            "order_id": "ord-fresh",
+            "client_order_id": "cid-fresh",
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+    }
+
+    def _raise_lookup(_order_id: str) -> None:
+        raise RuntimeError("broker lookup warming up")
+
+    engine.trading_client = SimpleNamespace(get_order_by_id=_raise_lookup)
+    monkeypatch.setenv("AI_TRADING_PENDING_RECONCILE_FRESH_LOOKUP_GRACE_SEC", "30")
+
+    caplog.set_level(logging.INFO)
+    engine._reconcile_pending_order_runtime_artifacts(open_orders=[])
+
+    summaries = [
+        record
+        for record in caplog.records
+        if record.message == "PENDING_ORDER_RECONCILE_NOOP"
+    ]
+    assert summaries
+    summary = summaries[-1]
+    assert getattr(summary, "lookup_failed") == 0
+    assert getattr(summary, "lookup_deferred_fresh") == 1
+    assert "ord-fresh" in engine._pending_orders
+
+
 def test_pending_new_timeout_policy_cancel(monkeypatch, caplog):
     engine = _engine_stub()
     now_dt = datetime.now(UTC)
