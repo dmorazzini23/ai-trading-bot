@@ -82,6 +82,16 @@ Use these stable strings to anchor surgical edits:
 - Validate the surface that matches the deployment mode:
   - packaged main service: `curl -sS http://127.0.0.1:9001/healthz`
   - standalone health app: `curl -sS http://127.0.0.1:${HEALTHCHECK_PORT}/healthz`
+- **Repo ownership:** this checkout is owned by `aiuser`. Do not run repo-local
+  development commands with `sudo` because they create root-owned source files,
+  caches, test artifacts, venv packages, and model directories that later break
+  tests and editing. Use the repo venv as `aiuser`, for example
+  `./venv/bin/python`, `./venv/bin/pytest`, `./venv/bin/ruff`, and
+  `./venv/bin/mypy`. `sudo` is acceptable for system-level service control that
+  does not write into the checkout, such as
+  `sudo systemctl restart ai-trading.service`,
+  `sudo systemctl status ai-trading.service`, and
+  `sudo journalctl -u ai-trading.service`.
 - Health endpoints must degrade gracefully (never raise uncaught exceptions); log structured diagnostics.
 - Keep health response construction and route registration on the shared canonical path; entrypoints may adapt payload context but must not fork health semantics.
 - Respect fail-fast configuration: missing required env vars should raise immediately with actionable errors.
@@ -94,3 +104,5 @@ Use these stable strings to anchor surgical edits:
 - Adding raw `print` statements or silent exception handling.
 - Migrating runtime off pinned `alpaca-py` without explicit approval.
 - Conflating API and health ports, or assuming shared-port deployment without checking `HEALTHCHECK_PORT`.
+- Running `sudo pytest`, `sudo python`, `sudo pip`, `sudo git`, or other
+  repo-local write commands from `/home/aiuser/ai-trading-bot`.
