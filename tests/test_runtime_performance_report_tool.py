@@ -1369,6 +1369,166 @@ def test_build_report_can_fallback_to_broker_positions_for_extreme_mismatch(
     assert reconciliation["symbol_mismatch_count"] == 0
 
 
+def test_build_report_keeps_broker_flat_when_fill_events_are_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    fill_events_path = tmp_path / "fill_events.jsonl"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "AAPL",
+                    "side": "buy",
+                    "qty": 1,
+                    "pnl": 1.0,
+                    "entry_price": 100.0,
+                    "exit_price": 101.0,
+                    "timestamp": "2026-03-01T15:00:00+00:00",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fill_events_path.write_text(
+        json.dumps(
+            {
+                "symbol": "AAPL",
+                "side": "buy",
+                "qty": 10,
+                "entry_price": 100.0,
+                "entry_time": "2026-03-01T15:00:00+00:00",
+                "order_id": "ord-stale",
+                "fill_id": "fill-stale",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 0,
+                "total_accepted_records": 0,
+                "total_rejected_records": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        rpt,
+        "_summarize_broker_open_positions",
+        lambda: {
+            "broker_open_positions_available": True,
+            "broker_open_position_count": 0,
+            "broker_open_positions": {},
+            "broker_open_positions_error": None,
+        },
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+        fill_events_path=fill_events_path,
+    )
+
+    trade = report["trade_history"]
+    assert trade["reconciliation_open_positions_source"] == "broker_open_positions"
+    reconciliation = trade["open_position_reconciliation"]
+    assert reconciliation["available"] is True
+    assert reconciliation["source"] == "broker_open_positions"
+    assert reconciliation["symbol_mismatch_count"] == 0
+
+
+def test_build_report_scopes_trade_history_to_canary_symbols(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    fill_events_path = tmp_path / "fill_events.jsonl"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "AAPL",
+                    "side": "buy",
+                    "qty": 1,
+                    "pnl": 4.0,
+                    "entry_price": 100.0,
+                    "exit_price": 104.0,
+                    "timestamp": "2026-03-01T15:00:00+00:00",
+                    "source": "live",
+                },
+                {
+                    "symbol": "MMM",
+                    "side": "buy",
+                    "qty": 1,
+                    "pnl": -50.0,
+                    "entry_price": 100.0,
+                    "exit_price": 50.0,
+                    "timestamp": "2026-03-01T15:00:00+00:00",
+                    "source": "live",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fill_events_path.write_text(
+        json.dumps(
+            {
+                "symbol": "MMM",
+                "side": "buy",
+                "qty": 10,
+                "entry_price": 100.0,
+                "entry_time": "2026-03-01T15:00:00+00:00",
+                "order_id": "ord-filtered",
+                "fill_id": "fill-filtered",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 0,
+                "total_accepted_records": 0,
+                "total_rejected_records": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_CANARY_SYMBOLS", "AAPL,MSFT")
+    monkeypatch.delenv("AI_TRADING_RUNTIME_GONOGO_SYMBOLS", raising=False)
+    monkeypatch.setattr(
+        rpt,
+        "_summarize_broker_open_positions",
+        lambda: {
+            "broker_open_positions_available": True,
+            "broker_open_position_count": 0,
+            "broker_open_positions": {},
+            "broker_open_positions_error": None,
+        },
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+        fill_events_path=fill_events_path,
+    )
+
+    trade = report["trade_history"]
+    assert trade["symbol_scope"] == ["AAPL", "MSFT"]
+    assert trade["records"] == 1
+    assert trade["records_unfiltered"] == 2
+    assert trade["fill_events_records"] == 0
+    assert trade["closed_trades"] == 1
+    assert trade["pnl_sum"] == pytest.approx(4.0)
+
+
 def test_build_report_ignores_non_fill_tca_status_rows(tmp_path: Path) -> None:
     trade_history_path = tmp_path / "trade_history.json"
     gate_summary_path = tmp_path / "gate_effectiveness_summary.json"

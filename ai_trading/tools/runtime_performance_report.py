@@ -1546,6 +1546,48 @@ def _normalise_trade_fill_source(value: Any) -> str:
     return "all"
 
 
+def _runtime_gonogo_symbol_scope() -> set[str]:
+    raw = str(
+        get_env(
+            "AI_TRADING_RUNTIME_GONOGO_SYMBOLS",
+            "",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or ""
+    ).strip()
+    if not raw:
+        raw = str(
+            get_env(
+                "AI_TRADING_CANARY_SYMBOLS",
+                "",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or ""
+        ).strip()
+    if not raw or raw.lower() in {"all", "*", "none", "disabled"}:
+        return set()
+    return {
+        token.strip().upper()
+        for token in raw.replace(";", ",").split(",")
+        if token.strip()
+    }
+
+
+def _filter_rows_by_symbol(
+    rows: list[dict[str, Any]],
+    symbols: set[str],
+) -> list[dict[str, Any]]:
+    if not symbols:
+        return rows
+    return [
+        row
+        for row in rows
+        if str(row.get("symbol") or "").strip().upper() in symbols
+    ]
+
+
 def _aggregate_trade_metric_rows(
     rows: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
@@ -2849,27 +2891,11 @@ def _choose_reconciliation_positions(
     fill_map = _normalise_position_map(fill_positions)
     if not fill_map:
         return None, "trade_history"
-    if not trade_map:
-        return fill_map, "fill_events"
     if not broker_available:
+        if not trade_map:
+            return fill_map, "fill_events"
         return None, "trade_history"
     broker_map = _normalise_position_map(broker_positions)
-    if not broker_map:
-        return None, "trade_history"
-
-    trade_score = _position_delta_score(trade_map, broker_map)
-    fill_score = _position_delta_score(fill_map, broker_map)
-    selected_map: dict[str, float]
-    selected_source: str
-    selected_score: tuple[float, int, float]
-    if fill_score < trade_score:
-        selected_map = fill_map
-        selected_source = "fill_events"
-        selected_score = fill_score
-    else:
-        selected_map = trade_map
-        selected_source = "trade_history"
-        selected_score = trade_score
 
     fallback_to_broker_enabled = bool(
         get_env(
@@ -2901,6 +2927,37 @@ def _choose_reconciliation_positions(
             )
         ),
     )
+
+    if not trade_map and not broker_map:
+        return None, "trade_history"
+    if not trade_map:
+        fill_score = _position_delta_score(fill_map, broker_map)
+        fill_ratio = _position_delta_ratio(
+            total_abs_delta=fill_score[0],
+            candidate_positions=fill_map,
+            broker_positions=broker_map,
+        )
+        if bool(fallback_to_broker_enabled) and (
+            float(fill_ratio) >= float(fallback_ratio_threshold)
+            or int(fill_score[1]) >= int(fallback_mismatch_threshold)
+        ):
+            return broker_map, "broker_open_positions"
+        return fill_map, "fill_events"
+
+    trade_score = _position_delta_score(trade_map, broker_map)
+    fill_score = _position_delta_score(fill_map, broker_map)
+    selected_map: dict[str, float]
+    selected_source: str
+    selected_score: tuple[float, int, float]
+    if fill_score < trade_score:
+        selected_map = fill_map
+        selected_source = "fill_events"
+        selected_score = fill_score
+    else:
+        selected_map = trade_map
+        selected_source = "trade_history"
+        selected_score = trade_score
+
     selected_total_abs_delta, selected_mismatch_count, _selected_max_abs = selected_score
     selected_ratio = _position_delta_ratio(
         total_abs_delta=selected_total_abs_delta,
@@ -2955,6 +3012,13 @@ def summarize_trade_history(
         return summary
 
     records = _load_trade_rows(path)
+    symbol_scope = _runtime_gonogo_symbol_scope()
+    if symbol_scope:
+        records_unfiltered = len(records)
+        records = _filter_rows_by_symbol(records, symbol_scope)
+        summary["symbol_scope"] = sorted(symbol_scope)
+        summary["records_unfiltered"] = int(records_unfiltered)
+        summary["records_filtered_out"] = int(records_unfiltered - len(records))
     summary["records"] = len(records)
     if not records:
         summary["pnl_available"] = False
@@ -2974,6 +3038,13 @@ def summarize_trade_history(
     fill_open_lot_count = 0
     if resolved_fill_events_path.exists():
         fill_records = _load_trade_rows(resolved_fill_events_path)
+        if symbol_scope:
+            fill_records_unfiltered = len(fill_records)
+            fill_records = _filter_rows_by_symbol(fill_records, symbol_scope)
+            summary["fill_events_records_unfiltered"] = int(fill_records_unfiltered)
+            summary["fill_events_records_filtered_out"] = int(
+                fill_records_unfiltered - len(fill_records)
+            )
         summary["fill_events_records"] = int(len(fill_records))
         if fill_records:
             fill_events = _extract_fill_events(
