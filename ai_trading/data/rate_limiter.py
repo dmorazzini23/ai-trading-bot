@@ -145,7 +145,7 @@ class RateLimiterManager:
                 logger.info(
                     "RATE_LIMITER_CREATED",
                     extra={
-                        "name": name,
+                        "limiter_name": name,
                         "rate": rate,
                         "capacity": capacity
                     }

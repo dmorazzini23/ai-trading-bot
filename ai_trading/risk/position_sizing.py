@@ -186,6 +186,9 @@ class DynamicPositionSizer:
                 'risk_metrics': {},
                 'warnings': [],
             }
+            if account_equity <= 0 or entry_price <= 0:
+                result['warnings'].append('Invalid account equity or entry price')
+                return result
             atr_value = float(market_data.get('atr', 0.0) or 0.0)
             returns = historical_data.get('returns', [])
             trade_history: list[dict[str, Any]] = list(historical_data.get('trade_history', []) or [])

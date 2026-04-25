@@ -44,13 +44,18 @@ def resp_json(resp: Any) -> Any:
                 raw = value
                 break
 
-    if raw is None and hasattr(resp, "read"):
+    if raw is None:
         try:
-            raw = resp.read()
+            read = getattr(resp, "read", None)
         except AI_TRADING_FALLBACK_EXCEPTIONS:
-            raw = None
+            read = None
+        if callable(read):
+            try:
+                raw = read()
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
+                raw = None
 
-    if raw is None and hasattr(resp, "body"):
+    if raw is None:
         try:
             raw = resp.body
         except AI_TRADING_FALLBACK_EXCEPTIONS:

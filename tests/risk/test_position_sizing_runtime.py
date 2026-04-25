@@ -76,6 +76,30 @@ def test_dynamic_position_size_records_positive_kelly_method() -> None:
     assert result["risk_metrics"]["kelly_stats"]["total_trades"] == 30
 
 
+def test_dynamic_position_size_error_path_and_large_position_warning() -> None:
+    sizer = DynamicPositionSizer(RiskLevel.AGGRESSIVE)
+
+    error_result = sizer.calculate_optimal_position(
+        symbol="BAD",
+        account_equity=100_000.0,
+        entry_price=0.0,
+        market_data={"atr": 1.0},
+        historical_data={"returns": [0.01, -0.01] * 10},
+    )
+    large_result = sizer.calculate_optimal_position(
+        symbol="BIG",
+        account_equity=100_000.0,
+        entry_price=100.0,
+        market_data={"atr": 0.5},
+        historical_data={"returns": [0.001, -0.001] * 10},
+    )
+
+    assert error_result["recommended_size"] == 0
+    assert error_result["warnings"] == ["Invalid account equity or entry price"]
+    assert large_result["recommended_size"] == 100
+    assert "Large position size relative to account" in large_result["warnings"]
+
+
 def test_dynamic_scaling_orders_and_risk_estimate() -> None:
     sizer = DynamicPositionSizer()
 
@@ -116,3 +140,26 @@ def test_portfolio_position_manager_assesses_updates_and_summarizes_positions() 
 
     manager.update_position("AAPL", size=0, entry_price=100.0)
     assert "AAPL" not in manager.get_portfolio_summary()["positions"]
+
+
+def test_portfolio_position_manager_risk_reduction_and_error_paths() -> None:
+    manager = PortfolioPositionManager(max_portfolio_risk=0.01)
+    manager.total_risk_exposure = 0.009
+
+    reduced = manager.assess_new_position(
+        "MSFT",
+        proposed_size=100,
+        entry_price=10.0,
+        account_equity=100_000.0,
+    )
+
+    assert reduced["approved"] is False
+    assert reduced["adjusted_size"] == 20
+    assert reduced["risk_impact"] == pytest.approx(0.005)
+    assert "Portfolio risk limit requires size reduction" in reduced["warnings"][0]
+    assert reduced["recommendations"] == ["Consider splitting order across multiple sessions"]
+
+    manager.current_positions = {"BAD": {"notional_value": "not-a-number"}}
+    manager._recalculate_risk_exposure()
+    assert manager.total_risk_exposure == 0.0
+    assert "error" in manager.get_portfolio_summary()

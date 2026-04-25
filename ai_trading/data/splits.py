@@ -226,6 +226,7 @@ def validate_no_leakage(train_indices: np.ndarray, test_indices: np.ndarray, tim
         True if no leakage detected, False otherwise
     """
     try:
+        pd = load_pandas()
         overlap = np.intersect1d(train_indices, test_indices)
         if len(overlap) > 0:
             logger.error(f'Direct index overlap detected: {len(overlap)} indices')
@@ -234,15 +235,15 @@ def validate_no_leakage(train_indices: np.ndarray, test_indices: np.ndarray, tim
             if len(train_indices) > 0 and len(test_indices) > 0:
                 max_train_time = timeline[train_indices].max()
                 min_test_time = timeline[test_indices].min()
+                if t1 is not None:
+                    for train_idx in train_indices:
+                        if train_idx < len(t1):
+                            obs_end = t1.iloc[train_idx]
+                            if pd.notna(obs_end) and obs_end >= min_test_time:
+                                logger.error(f'Training observation {train_idx} ends in test period')
+                                return False
                 if max_train_time >= min_test_time:
                     logger.warning('Potential temporal leakage: training data overlaps test period')
-                    if t1 is not None:
-                        for train_idx in train_indices:
-                            if train_idx < len(t1):
-                                obs_end = t1.iloc[train_idx]
-                                if pd.notna(obs_end) and obs_end >= min_test_time:
-                                    logger.error(f'Training observation {train_idx} ends in test period')
-                                    return False
         logger.debug('No data leakage detected')
         return True
     except (ValueError, TypeError) as e:

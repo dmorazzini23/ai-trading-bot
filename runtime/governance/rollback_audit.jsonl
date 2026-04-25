@@ -1,0 +1,4 @@
+{"breaches": {"reject_rate": 0.21428571428571427}, "from_model_id": null, "reason": "live_kpi_control_band_breach", "status": "pending", "strategy": "ml_edge", "to_model_id": null, "ts": "2024-01-02T15:04:05+00:00"}
+{"from_model_id": "ml_edge-logreg-f63b24c8-20260406203917-ef1b6f73", "reason": "live_kpi_control_band_breach", "status": "skipped_no_previous_model", "strategy": "ml_edge", "to_model_id": null, "ts": "2024-01-02T15:04:05+00:00"}
+{"breaches": {"reject_rate": 0.06}, "from_model_id": null, "reason": "live_kpi_control_band_breach", "status": "pending", "strategy": "ml_edge", "to_model_id": null, "ts": "2024-01-02T15:04:05+00:00"}
+{"from_model_id": "ml_edge-logreg-f63b24c8-20260406203917-ef1b6f73", "reason": "live_kpi_control_band_breach", "status": "skipped_no_previous_model", "strategy": "ml_edge", "to_model_id": null, "ts": "2024-01-02T15:04:05+00:00"}
