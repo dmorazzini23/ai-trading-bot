@@ -31418,7 +31418,7 @@ class ExecutionEngine:
         max_scan_lines = _config_int("AI_TRADING_PENDING_RECONCILE_ARTIFACT_SCAN_LINES", 2000)
         if max_scan_lines is None:
             max_scan_lines = 2000
-        max_scan_lines = max(100, min(int(max_scan_lines), 20000))
+        max_scan_lines = max(100, min(int(max_scan_lines), 100000))
 
         max_candidates = _config_int("AI_TRADING_PENDING_RECONCILE_ARTIFACT_MAX_CANDIDATES", 50)
         if max_candidates is None:
@@ -31428,11 +31428,9 @@ class ExecutionEngine:
         durable_candidates = self._load_pending_candidates_from_durable_intents(
             max_candidates=max_candidates,
         )
-        if durable_candidates:
-            return durable_candidates
 
         if not self._runtime_exec_event_persistence_enabled():
-            return {}
+            return durable_candidates
 
         configured_path = str(
             _runtime_env("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
@@ -31445,14 +31443,15 @@ class ExecutionEngine:
         try:
             raw_lines = order_events_path.read_text(encoding="utf-8").splitlines()
         except OSError:
-            return {}
+            return durable_candidates
         if not raw_lines:
-            return {}
+            return durable_candidates
         if len(raw_lines) > max_scan_lines:
             raw_lines = raw_lines[-max_scan_lines:]
 
         candidates: dict[str, dict[str, Any]] = {}
         seen_order_ids: set[str] = set()
+        terminal_order_ids: set[str] = set()
         for raw_line in reversed(raw_lines):
             line = raw_line.strip()
             if not line:
@@ -31472,6 +31471,7 @@ class ExecutionEngine:
                 continue
             seen_order_ids.add(order_id)
             if status in _TERMINAL_ORDER_STATUSES:
+                terminal_order_ids.add(order_id)
                 continue
             qty_value = _safe_float(row.get("quantity"))
             if qty_value is None:
@@ -31482,6 +31482,7 @@ class ExecutionEngine:
                 "symbol": str(row.get("symbol") or "").strip().upper(),
                 "side": self._normalized_order_side(row.get("side")),
                 "qty": int(max(float(qty_value or 0.0), 0.0)),
+                "filled_qty": _safe_float(row.get("filled_qty")) or 0.0,
                 "order_type": str(row.get("order_type") or "").strip().lower() or None,
                 "expected_price": expected_price,
                 "client_order_id": row.get("client_order_id"),
@@ -31491,7 +31492,30 @@ class ExecutionEngine:
             }
             if len(candidates) >= max_candidates:
                 break
-        return candidates
+        if not durable_candidates:
+            return candidates
+        merged: dict[str, dict[str, Any]] = {}
+        for order_id, durable_candidate in durable_candidates.items():
+            if order_id in terminal_order_ids:
+                continue
+            candidate = dict(durable_candidate)
+            artifact_candidate = candidates.get(order_id)
+            if isinstance(artifact_candidate, Mapping):
+                for key in (
+                    "status",
+                    "filled_qty",
+                    "event_seq",
+                    "updated_at",
+                    "expected_price",
+                    "client_order_id",
+                ):
+                    if artifact_candidate.get(key) not in (None, ""):
+                        candidate[key] = artifact_candidate.get(key)
+            merged[order_id] = candidate
+        for order_id, artifact_candidate in candidates.items():
+            if order_id not in merged and len(merged) < max_candidates:
+                merged[order_id] = artifact_candidate
+        return merged
 
     def _reconcile_pending_order_runtime_artifacts(self, *, open_orders: Iterable[Any]) -> None:
         """Best-effort reconciliation of local pending cache with broker terminal state."""
@@ -31582,8 +31606,20 @@ class ExecutionEngine:
         lookup_failed = 0
         lookup_not_found = 0
         lookup_deferred_fresh = 0
+        lookup_stale_terminalized = 0
         now_dt = datetime.now(UTC)
         now_iso = now_dt.isoformat()
+
+        stale_lookup_terminalize_s = _config_float(
+            "AI_TRADING_PENDING_RECONCILE_STALE_LOOKUP_TERMINALIZE_SEC",
+            21600.0,
+        )
+        if stale_lookup_terminalize_s is None:
+            stale_lookup_terminalize_s = 21600.0
+        stale_lookup_terminalize_s = max(
+            0.0,
+            min(float(stale_lookup_terminalize_s), 30.0 * 24.0 * 3600.0),
+        )
 
         for pending_key, pending_raw in list(store.items()):
             if checked >= max_checks:
@@ -31662,16 +31698,51 @@ class ExecutionEngine:
                             exc_info=True,
                         )
                     else:
-                        lookup_failed += 1
-                        logger.debug(
-                            "PENDING_ORDER_RECONCILE_LOOKUP_FAILED",
-                            extra={
-                                "pending_key": key,
-                                "order_id": ref_order_id,
+                        if (
+                            pending_age_s is not None
+                            and pending_age_s >= stale_lookup_terminalize_s
+                        ):
+                            lookup_stale_terminalized += 1
+                            refreshed = {
+                                "id": ref_order_id,
                                 "client_order_id": ref_client_id,
-                            },
-                            exc_info=True,
-                        )
+                                "symbol": _extract_value(entry, "symbol"),
+                                "side": _extract_value(entry, "side"),
+                                "qty": _extract_value(entry, "qty", "quantity"),
+                                "limit_price": _extract_value(
+                                    entry,
+                                    "limit_price",
+                                    "expected_price",
+                                    "price",
+                                ),
+                                "status": "canceled",
+                                "filled_qty": _extract_value(entry, "filled_qty") or 0,
+                            }
+                            logger.info(
+                                "PENDING_ORDER_RECONCILE_STALE_LOOKUP_TERMINALIZED",
+                                extra={
+                                    "pending_key": key,
+                                    "order_id": ref_order_id,
+                                    "client_order_id": ref_client_id,
+                                    "previous_status": prev_status,
+                                    "pending_age_s": round(float(pending_age_s), 3),
+                                    "stale_lookup_terminalize_s": round(
+                                        float(stale_lookup_terminalize_s),
+                                        3,
+                                    ),
+                                },
+                            )
+                        else:
+                            lookup_failed += 1
+                            logger.debug(
+                                "PENDING_ORDER_RECONCILE_LOOKUP_FAILED",
+                                extra={
+                                    "pending_key": key,
+                                    "order_id": ref_order_id,
+                                    "client_order_id": ref_client_id,
+                                },
+                                exc_info=True,
+                            )
                 if refreshed is None:
                     continue
             if refreshed is None:
@@ -31987,9 +32058,18 @@ class ExecutionEngine:
                     "lookup_failed": int(max(lookup_failed, 0)),
                     "lookup_not_found": int(max(lookup_not_found, 0)),
                     "lookup_deferred_fresh": int(max(lookup_deferred_fresh, 0)),
+                    "lookup_stale_terminalized": int(
+                        max(lookup_stale_terminalized, 0)
+                    ),
                 },
             )
-        elif checked or lookup_failed or lookup_not_found or lookup_deferred_fresh:
+        elif (
+            checked
+            or lookup_failed
+            or lookup_not_found
+            or lookup_deferred_fresh
+            or lookup_stale_terminalized
+        ):
             logger.info(
                 "PENDING_ORDER_RECONCILE_NOOP",
                 extra={
@@ -31997,6 +32077,9 @@ class ExecutionEngine:
                     "lookup_failed": int(max(lookup_failed, 0)),
                     "lookup_not_found": int(max(lookup_not_found, 0)),
                     "lookup_deferred_fresh": int(max(lookup_deferred_fresh, 0)),
+                    "lookup_stale_terminalized": int(
+                        max(lookup_stale_terminalized, 0)
+                    ),
                 },
             )
         self._pending_orders = store

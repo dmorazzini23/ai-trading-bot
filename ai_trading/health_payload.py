@@ -993,9 +993,13 @@ def build_runtime_health_payload(
     if offhours_market_closed_ready:
         overall_ok = True
         degraded = False
+        service_payload["status"] = "ready"
+        service_payload["reason"] = "market_closed"
     elif warmup_market_closed_ready:
         overall_ok = True
         degraded = False
+        service_payload["status"] = "ready"
+        service_payload["reason"] = "market_closed"
     if force_ok_for_pytest:
         overall_ok = True
     require_database_ready = _env_bool("AI_TRADING_HEALTH_REQUIRE_DB_READY", False)

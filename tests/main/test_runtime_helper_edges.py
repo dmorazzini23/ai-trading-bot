@@ -121,6 +121,11 @@ def test_execution_phase_snapshot_and_update_failure_paths(monkeypatch) -> None:
         ({"status": "ready", "data_status": "empty"}, {"status": "ready"}, ("degraded", "data_unavailable")),
         ({"status": "ready", "using_backup": True}, {"status": "ready"}, ("degraded", "provider_fallback_active")),
         ({"status": "healthy"}, {"status": "connected"}, ("ready", "runtime_health_ok")),
+        (
+            {"status": "warming_up", "data_status": "warming_up", "reason": "market_closed"},
+            {"status": "connected"},
+            ("ready", "market_closed"),
+        ),
         ({"status": "unknown"}, {"status": "connected"}, ("warming_up", "provider_status_unknown")),
         ({"status": "ready"}, {"status": "unknown"}, ("warming_up", "broker_status_unknown")),
         ({"status": "warming"}, {"status": "connecting"}, ("warming_up", "runtime_health_pending")),

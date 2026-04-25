@@ -511,6 +511,8 @@ def _resolve_active_service_status(
 
     provider_status = str(provider.get("status") or "").strip().lower()
     provider_reason = str(provider.get("reason") or "").strip()
+    provider_reason_token = provider_reason.strip().lower()
+    provider_reason_code = str(provider.get("reason_code") or "").strip().lower()
     data_status = str(provider.get("data_status") or "").strip().lower()
     using_backup = bool(provider.get("using_backup"))
 
@@ -533,6 +535,11 @@ def _resolve_active_service_status(
         return ("degraded", "data_unavailable")
     if using_backup:
         return ("degraded", provider_reason or "provider_fallback_active")
+    if broker_ready and (
+        provider_reason_token == "market_closed"
+        or provider_reason_code == "market_closed"
+    ):
+        return ("ready", "market_closed")
     if provider_ready and broker_ready:
         return ("ready", "runtime_health_ok")
     if provider_status in {"", "unknown"}:

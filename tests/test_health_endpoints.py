@@ -235,6 +235,8 @@ def test_health_market_closed_offhours_reports_healthy(monkeypatch):
     assert payload["ok"] is True
     assert payload["status"] == "healthy"
     assert payload["reason"] == "market_closed"
+    assert payload["service_state"]["status"] == "ready"
+    assert payload["service_state"]["reason"] == "market_closed"
     assert "market_closed_non_flat_positions" in payload["attention_flags"]
     assert "market_closed_open_orders" in payload["attention_flags"]
 

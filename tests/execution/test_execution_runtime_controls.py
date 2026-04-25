@@ -212,6 +212,99 @@ def test_pending_order_reconcile_defers_fresh_lookup_failure(monkeypatch, caplog
     assert "ord-fresh" in engine._pending_orders
 
 
+def test_pending_order_reconcile_terminalizes_stale_lookup_failure(monkeypatch, caplog):
+    engine = _engine_stub()
+    old_ts = (datetime.now(UTC) - timedelta(hours=8)).isoformat()
+    engine._pending_orders = {
+        "ord-stale": {
+            "status": "partially_filled",
+            "symbol": "HD",
+            "side": "buy",
+            "qty": 9,
+            "filled_qty": 5,
+            "order_id": "ord-stale",
+            "client_order_id": "cid-stale",
+            "updated_at": old_ts,
+            "expected_price": 320.285,
+            "event_seq": 2,
+        }
+    }
+    recorded: list[dict[str, Any]] = []
+    engine._record_runtime_order_event = lambda payload: recorded.append(dict(payload))
+
+    def _raise_lookup(_order_id: str) -> None:
+        raise RuntimeError("broker lookup unavailable for archived order")
+
+    engine.trading_client = SimpleNamespace(get_order_by_id=_raise_lookup)
+    monkeypatch.setenv("AI_TRADING_PENDING_RECONCILE_STALE_LOOKUP_TERMINALIZE_SEC", "3600")
+
+    caplog.set_level(logging.INFO)
+    engine._reconcile_pending_order_runtime_artifacts(open_orders=[])
+
+    assert any(
+        record.message == "PENDING_ORDER_RECONCILE_STALE_LOOKUP_TERMINALIZED"
+        for record in caplog.records
+    )
+    assert any(
+        row.get("event") == "final_state"
+        and row.get("order_id") == "ord-stale"
+        and row.get("status") == "canceled"
+        and row.get("filled_qty") == 5.0
+        for row in recorded
+    )
+    assert engine._pending_orders == {}
+
+
+def test_pending_candidate_bootstrap_enriches_durable_intent_from_artifact(monkeypatch, tmp_path):
+    engine = _engine_stub()
+    order_events_path = tmp_path / "runtime" / "order_events.jsonl"
+    order_events_path.parent.mkdir(parents=True, exist_ok=True)
+    order_events_path.write_text(
+        json.dumps(
+            {
+                "event": "status_transition",
+                "order_id": "ord-partial",
+                "client_order_id": "cid-partial",
+                "status": "partially_filled",
+                "symbol": "HD",
+                "side": "buy",
+                "quantity": 9,
+                "filled_qty": 5,
+                "event_seq": 2,
+                "ts": "2026-04-02T18:08:28+00:00",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class _IntentStore:
+        def get_open_intents(self):
+            return [
+                SimpleNamespace(
+                    broker_order_id="ord-partial",
+                    intent_id="cid-partial",
+                    status="pending_new",
+                    symbol="HD",
+                    side="buy",
+                    quantity=9,
+                    metadata_json=None,
+                    updated_at="2026-04-02T18:07:35+00:00",
+                )
+            ]
+
+    engine.order_manager = SimpleNamespace(_intent_store=_IntentStore())
+    monkeypatch.setenv("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
+
+    candidates = engine._load_pending_candidates_from_runtime_order_events()
+
+    assert candidates["ord-partial"]["status"] == "partially_filled"
+    assert candidates["ord-partial"]["filled_qty"] == 5.0
+    assert candidates["ord-partial"]["event_seq"] == 2
+
+
 def test_pending_new_timeout_policy_cancel(monkeypatch, caplog):
     engine = _engine_stub()
     now_dt = datetime.now(UTC)
