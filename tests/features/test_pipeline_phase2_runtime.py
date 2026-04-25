@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -90,7 +91,31 @@ def test_build_features_error_paths_raise_for_unfit_or_bad_fit() -> None:
         builder.fit([1, 2, 3])  # type: ignore[arg-type]
 
 
-def test_create_feature_pipeline_uses_requested_scaler_and_none() -> None:
+def test_create_feature_pipeline_uses_requested_scaler_and_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Pipeline:
+        def __init__(self, steps: list[tuple[str, Any]]) -> None:
+            self.steps = steps
+
+    class StandardScaler:
+        pass
+
+    class RobustScaler:
+        pass
+
+    monkeypatch.setattr(pipe_mod, "sklearn_available", True)
+    monkeypatch.setattr(
+        pipe_mod,
+        "load_sklearn_preprocessing",
+        lambda: SimpleNamespace(StandardScaler=StandardScaler, RobustScaler=RobustScaler),
+    )
+    monkeypatch.setattr(
+        pipe_mod,
+        "load_sklearn_pipeline",
+        lambda: SimpleNamespace(Pipeline=Pipeline),
+    )
+
     standard = pipe_mod.create_feature_pipeline("standard", {"regime_span": 10})
     robust = pipe_mod.create_feature_pipeline("robust", {"regime_span": 10})
     none = pipe_mod.create_feature_pipeline("none", {"regime_span": 10})

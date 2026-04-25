@@ -68,6 +68,9 @@ class TurnoverBudget:
     remaining_turnover: float = 1.0
     total_budget: float = 1.0
 
+    def __post_init__(self) -> None:
+        self.remaining_turnover = max(0.0, float(self.total_budget) - float(self.used_turnover))
+
     def add_trade(self, trade_value: float, portfolio_value: float) -> bool:
         """
         Add trade to turnover budget.
@@ -302,6 +305,7 @@ class AdaptiveRiskController:
                 if available_turnover > 0:
                     scale_factor = available_turnover / trade_value
                     target_value = current_value + (target_value - current_value) * scale_factor
+                    self.turnover_budget.add_trade(abs(target_value - current_value), portfolio_value)
                     self.logger.warning(f'Scaled trade for {symbol} due to turnover limit: factor={scale_factor:.2%}')
                 else:
                     target_value = current_value

@@ -93,6 +93,7 @@ def test_record_failure_opens_circuit_and_success_resets(monkeypatch: pytest.Mon
 
 def test_rate_limit_fallback_uses_similar_symbol_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sentiment.pytime, "time", lambda: 100.0)
+    monkeypatch.setattr(sentiment, "_try_alternative_sentiment_sources", lambda _ticker: None)
     sentiment._sentiment_cache["MSFT"] = (99.0, 0.5)
 
     score = sentiment._handle_rate_limit_with_enhanced_strategies("AAPL")
@@ -104,6 +105,7 @@ def test_rate_limit_fallback_uses_sector_proxy_and_final_neutral(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sentiment.pytime, "time", lambda: 200.0)
+    monkeypatch.setattr(sentiment, "_try_alternative_sentiment_sources", lambda _ticker: None)
     sentiment._sentiment_cache["XLK"] = (190.0, 0.6)
 
     assert sentiment._handle_rate_limit_with_enhanced_strategies("NVDA") == pytest.approx(0.36)

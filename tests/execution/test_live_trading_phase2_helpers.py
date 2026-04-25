@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from importlib import reload
 from types import SimpleNamespace
 from typing import Any
 
@@ -183,6 +184,7 @@ def test_short_sale_precheck_blocks_account_and_asset_restrictions(monkeypatch: 
 
 
 def test_capacity_helper_adapts_account_kwarg_and_side_semantics() -> None:
+    reload(lt)
     calls: list[tuple[Any, Any, Any, Any, Any, Any]] = []
 
     def _preflight(symbol: str, side: str, price: float, qty: int, broker: object, *, account: object | None = None) -> lt.CapacityCheck:

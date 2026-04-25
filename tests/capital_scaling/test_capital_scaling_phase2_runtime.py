@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 
 import pytest
 
 from ai_trading import capital_scaling
+
+
+@pytest.fixture(autouse=True)
+def _reload_capital_scaling() -> None:
+    importlib.reload(capital_scaling)
 
 
 def test_capital_scaling_engine_updates_baseline_and_current_scale() -> None:
