@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -24,7 +25,10 @@ _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SlackIncidentNotifier = Callable[[dict[str, Any]], dict[str, Any]]
 SlackEodNotifier = Callable[[dict[str, Any]], dict[str, Any]]
 OpenClawIncidentNotifier = Callable[[dict[str, Any]], dict[str, Any]]
+OpenClawModelReadinessNotifier = Callable[[dict[str, Any]], dict[str, Any]]
 IncidentSnapshotBuilder = Callable[[dict[str, Any]], dict[str, Any]]
+
+
 def _bool_env(value: str | None, *, default: bool) -> bool:
     if value is None:
         return default
@@ -48,6 +52,15 @@ def _float_env(value: str | None) -> float | None:
         return None
 
 
+def _float_value(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _int_env(value: str | None) -> int | None:
     if value is None:
         return None
@@ -57,6 +70,15 @@ def _int_env(value: str | None) -> int | None:
     try:
         return int(text)
     except ValueError:
+        return None
+
+
+def _int_value(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
         return None
 
 
@@ -122,6 +144,7 @@ def _load_connector_callables() -> tuple[
     SlackIncidentNotifier,
     SlackEodNotifier,
     OpenClawIncidentNotifier,
+    OpenClawModelReadinessNotifier,
     IncidentSnapshotBuilder,
 ]:
     from tools import mcp_slack_alerts_server as slack_srv
@@ -130,6 +153,7 @@ def _load_connector_callables() -> tuple[
         slack_srv.tool_notify_incident_channel,
         slack_srv.tool_notify_eod_summary,
         _notify_openclaw_incident,
+        _notify_openclaw_rl_overlay_readiness,
         slack_srv.tool_runtime_incident_snapshot,
     )
 
@@ -426,6 +450,320 @@ def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _resolve_after_hours_latest_path(env_map: Mapping[str, str]) -> Path:
+    raw = str(
+        env_map.get("AI_TRADING_AFTER_HOURS_REPORT_LATEST_PATH")
+        or "/var/lib/ai-trading-bot/runtime/research_reports/after_hours_training_latest.json"
+    ).strip()
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = (REPO_ROOT / path).resolve()
+    return path
+
+
+def _after_hours_report_bundle(env_map: Mapping[str, str]) -> dict[str, Any]:
+    latest_path = _resolve_after_hours_latest_path(env_map)
+    payload = _read_json_file(latest_path)
+    report_path = latest_path
+    if not payload:
+        state_path = Path(
+            str(
+                env_map.get("AI_TRADING_AFTER_HOURS_STATE_PATH")
+                or "/var/lib/ai-trading-bot/runtime/after_hours_training_state.json"
+            ).strip()
+        ).expanduser()
+        if not state_path.is_absolute():
+            state_path = (REPO_ROOT / state_path).resolve()
+        state = _read_json_file(state_path)
+        state_report_path = str(state.get("report_path") or "").strip()
+        if state_report_path:
+            report_path = Path(state_report_path).expanduser()
+            payload = _read_json_file(report_path)
+    report_obj = payload.get("report") if isinstance(payload.get("report"), dict) else payload
+    return {
+        "latest_path": str(latest_path),
+        "report_path": str(payload.get("report_path") or report_path),
+        "daily_report_path": payload.get("daily_report_path"),
+        "updated_at": payload.get("updated_at") or report_obj.get("ts"),
+        "report": report_obj if isinstance(report_obj, dict) else {},
+    }
+
+
+def _selected_after_hours_candidate(report: Mapping[str, Any]) -> dict[str, Any]:
+    candidates = report.get("candidate_metrics")
+    if isinstance(candidates, list):
+        dict_candidates = [item for item in candidates if isinstance(item, dict)]
+        for item in dict_candidates:
+            if bool(item.get("selected", False)):
+                return dict(item)
+        if dict_candidates:
+            return dict(
+                sorted(
+                    dict_candidates,
+                    key=lambda item: int(item.get("rank") or 9999),
+                )[0]
+            )
+    metrics = report.get("metrics")
+    return dict(metrics) if isinstance(metrics, dict) else {}
+
+
+def _readiness_required_runtime_checks(env_map: Mapping[str, str]) -> list[str]:
+    raw = str(
+        env_map.get("AI_TRADING_OPENCLAW_RL_READINESS_REQUIRED_RUNTIME_CHECKS")
+        or "open_position_reconciliation_consistent,live_samples_sufficient"
+    )
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _evaluate_rl_overlay_readiness(env_map: Mapping[str, str]) -> dict[str, Any]:
+    bundle = _after_hours_report_bundle(env_map)
+    report = bundle["report"] if isinstance(bundle.get("report"), dict) else {}
+    candidate = _selected_after_hours_candidate(report)
+    reasons: list[str] = []
+
+    if not report:
+        reasons.append("after_hours_report_missing")
+
+    min_expectancy_bps = _float_env(
+        env_map.get("AI_TRADING_OPENCLAW_RL_READINESS_MIN_EXPECTANCY_BPS")
+    )
+    if min_expectancy_bps is None:
+        min_expectancy_bps = 0.0
+    min_profitable_folds = _int_env(
+        env_map.get("AI_TRADING_OPENCLAW_RL_READINESS_MIN_PROFITABLE_FOLDS")
+    )
+    if min_profitable_folds is None:
+        min_profitable_folds = 1
+
+    expectancy_bps = _float_value(candidate.get("mean_expectancy_bps"))
+    profitable_folds = _int_value(candidate.get("profitable_fold_count"))
+    if expectancy_bps is None or expectancy_bps <= min_expectancy_bps:
+        reasons.append("expectancy_not_positive")
+    if profitable_folds is None or profitable_folds < min_profitable_folds:
+        reasons.append("profitable_folds_insufficient")
+
+    orientation = str(
+        report.get("score_orientation")
+        or candidate.get("score_orientation")
+        or ""
+    ).strip().lower()
+    if orientation != "direct":
+        reasons.append("score_orientation_not_direct")
+
+    label_quality = report.get("label_quality")
+    require_clean_labels = _bool_env(
+        env_map.get("AI_TRADING_OPENCLAW_RL_READINESS_REQUIRE_CLEAN_LABELS"),
+        default=True,
+    )
+    label_warnings: list[str] = []
+    timestamp_violations = 0
+    duplicate_symbol_ts_rows = 0
+    if isinstance(label_quality, Mapping):
+        raw_warnings = label_quality.get("warnings")
+        if isinstance(raw_warnings, list):
+            label_warnings = [str(item) for item in raw_warnings if str(item).strip()]
+        timestamp_violations = int(label_quality.get("timestamp_order_violations") or 0)
+        duplicate_symbol_ts_rows = int(
+            label_quality.get("duplicate_symbol_timestamp_rows") or 0
+        )
+    elif require_clean_labels:
+        reasons.append("label_quality_missing")
+    if require_clean_labels and label_warnings:
+        reasons.append("label_quality_warnings_present")
+    if require_clean_labels and timestamp_violations > 0:
+        reasons.append("label_timestamp_order_violations")
+    if require_clean_labels and duplicate_symbol_ts_rows > 0:
+        reasons.append("label_duplicate_symbol_timestamp_rows")
+
+    runtime_gate = report.get("runtime_performance_gate")
+    runtime_checks = (
+        runtime_gate.get("checks")
+        if isinstance(runtime_gate, Mapping) and isinstance(runtime_gate.get("checks"), Mapping)
+        else {}
+    )
+    failed_required_runtime_checks: list[str] = []
+    for check_name in _readiness_required_runtime_checks(env_map):
+        if runtime_checks.get(check_name) is False:
+            failed_required_runtime_checks.append(check_name)
+    if failed_required_runtime_checks:
+        reasons.append("runtime_data_quality_checks_failed")
+
+    rl_overlay_enabled = _bool_env(
+        env_map.get("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED"),
+        default=False,
+    )
+    only_when_disabled = _bool_env(
+        env_map.get("AI_TRADING_OPENCLAW_RL_READINESS_ONLY_WHEN_RL_OVERLAY_DISABLED"),
+        default=True,
+    )
+    if only_when_disabled and rl_overlay_enabled:
+        reasons.append("rl_overlay_already_enabled")
+
+    model_payload = report.get("model") if isinstance(report.get("model"), Mapping) else {}
+    observed = {
+        "model_id": model_payload.get("model_id")
+        or model_payload.get("id")
+        or report.get("model_id")
+        or candidate.get("model_id")
+        or "",
+        "model_name": candidate.get("name") or report.get("model_name") or "",
+        "report_path": bundle.get("report_path"),
+        "updated_at": bundle.get("updated_at"),
+        "mean_expectancy_bps": expectancy_bps,
+        "min_expectancy_bps": float(min_expectancy_bps),
+        "profitable_fold_count": profitable_folds,
+        "min_profitable_folds": int(min_profitable_folds),
+        "mean_hit_rate": _float_value(candidate.get("mean_hit_rate")),
+        "score_orientation": orientation or None,
+        "label_quality_warnings": label_warnings,
+        "timestamp_order_violations": timestamp_violations,
+        "duplicate_symbol_timestamp_rows": duplicate_symbol_ts_rows,
+        "failed_required_runtime_checks": failed_required_runtime_checks,
+        "rl_overlay_enabled": rl_overlay_enabled,
+        "use_rl_agent": _bool_env(env_map.get("USE_RL_AGENT"), default=False),
+    }
+    fingerprint_material = {
+        "model_id": observed["model_id"],
+        "report_path": observed["report_path"],
+        "criteria": {
+            "min_expectancy_bps": observed["min_expectancy_bps"],
+            "min_profitable_folds": observed["min_profitable_folds"],
+            "required_runtime_checks": _readiness_required_runtime_checks(env_map),
+        },
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_material, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    ready = not reasons
+    return {
+        "ready": ready,
+        "should_alert": ready,
+        "reason": "criteria_met" if ready else "criteria_not_met",
+        "failed_reasons": reasons,
+        "fingerprint": fingerprint,
+        "observed": observed,
+    }
+
+
+def _build_openclaw_rl_overlay_readiness_payload(
+    readiness_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    observed = (
+        readiness_result.get("observed")
+        if isinstance(readiness_result.get("observed"), Mapping)
+        else {}
+    )
+    summary = (
+        "After-hours ML candidate is ready to consider re-enabling RL overlay training."
+    )
+    return {
+        "source": "runtime",
+        "service": "ai-trading.service",
+        "severity": "info",
+        "summary": summary,
+        "suggestedAction": (
+            "Review the report, then set AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED=1 "
+            "if you want RL overlay training to resume. Keep USE_RL_AGENT=0 unless "
+            "live RL is separately approved."
+        ),
+        "details": {
+            "event_type": "after_hours_rl_overlay_readiness",
+            "reason": readiness_result.get("reason"),
+            "failed_reasons": list(readiness_result.get("failed_reasons") or []),
+            "model_id": observed.get("model_id"),
+            "model_name": observed.get("model_name"),
+            "report_path": observed.get("report_path"),
+            "mean_expectancy_bps": observed.get("mean_expectancy_bps"),
+            "profitable_fold_count": observed.get("profitable_fold_count"),
+            "mean_hit_rate": observed.get("mean_hit_rate"),
+            "score_orientation": observed.get("score_orientation"),
+            "label_quality_warnings": observed.get("label_quality_warnings"),
+            "failed_required_runtime_checks": observed.get(
+                "failed_required_runtime_checks"
+            ),
+            "rl_overlay_enabled": observed.get("rl_overlay_enabled"),
+            "use_rl_agent": observed.get("use_rl_agent"),
+            "fingerprint": readiness_result.get("fingerprint"),
+        },
+    }
+
+
+def _notify_openclaw_rl_overlay_readiness(args: dict[str, Any]) -> dict[str, Any]:
+    readiness_result = args.get("readiness_result")
+    if not isinstance(readiness_result, dict):
+        raise RuntimeError("readiness_result is required")
+    env_map = args.get("env")
+    if not isinstance(env_map, Mapping):
+        raise RuntimeError("env is required")
+
+    fingerprint = str(readiness_result.get("fingerprint") or "").strip()
+    should_alert = bool(readiness_result.get("should_alert", False)) or bool(
+        args.get("force")
+    )
+    if not should_alert:
+        return {
+            "sent": False,
+            "reason": readiness_result.get("reason") or "criteria_not_met",
+            "fingerprint": fingerprint,
+            "readiness": readiness_result,
+        }
+
+    state_path_raw = str(
+        args.get("state_path")
+        or env_map.get("AI_TRADING_OPENCLAW_RL_READINESS_STATE_PATH")
+        or "/var/lib/ai-trading-bot/runtime/openclaw_rl_overlay_readiness_state.json"
+    ).strip()
+    state_path = Path(state_path_raw).expanduser()
+    prior = _load_state(state_path)
+    if (
+        bool(args.get("on_change_only", True))
+        and str(prior.get("fingerprint") or "").strip() == fingerprint
+        and not bool(args.get("force"))
+    ):
+        return {
+            "sent": False,
+            "reason": "duplicate_fingerprint",
+            "fingerprint": fingerprint,
+            "state_path": str(state_path),
+            "readiness": readiness_result,
+        }
+
+    target = _resolve_openclaw_runtime_target(env_map)
+    if target is None:
+        return {
+            "sent": False,
+            "reason": "missing_openclaw_target",
+            "fingerprint": fingerprint,
+            "readiness": readiness_result,
+        }
+
+    timeout_s = float(args.get("timeout_s") or 5.0)
+    post_result = _post_openclaw_runtime_event(
+        url=target["url"],
+        token=target["token"],
+        payload=_build_openclaw_rl_overlay_readiness_payload(readiness_result),
+        timeout_s=timeout_s,
+        idempotency_key=fingerprint or None,
+    )
+    _save_state(
+        state_path,
+        {
+            "fingerprint": fingerprint,
+            "sent_at": _utc_now_iso(),
+            "readiness": readiness_result,
+            "status_code": post_result["status_code"],
+        },
+    )
+    return {
+        "sent": True,
+        "fingerprint": fingerprint,
+        "status_code": post_result["status_code"],
+        "state_path": str(state_path),
+        "target_url": target["url"],
+        "readiness": readiness_result,
+    }
+
+
 def run_dispatch(
     *,
     env: Mapping[str, str] | None = None,
@@ -433,6 +771,7 @@ def run_dispatch(
     slack_eod_notifier: SlackEodNotifier,
     openclaw_notifier: OpenClawIncidentNotifier,
     incident_snapshot_builder: IncidentSnapshotBuilder,
+    openclaw_model_readiness_notifier: OpenClawModelReadinessNotifier | None = None,
 ) -> dict[str, Any]:
     env_map = os.environ if env is None else env
     summary: dict[str, Any] = {
@@ -440,6 +779,7 @@ def run_dispatch(
         "slack": {"enabled": False, "attempted": False},
         "slack_eod": {"enabled": False, "attempted": False},
         "openclaw": {"enabled": False, "attempted": False},
+        "openclaw_model_readiness": {"enabled": False, "attempted": False},
         "errors": [],
     }
 
@@ -596,6 +936,58 @@ def run_dispatch(
     else:
         summary["openclaw"]["skipped_reason"] = "disabled"
 
+    model_readiness_enabled = _bool_env(
+        env_map.get("AI_TRADING_CONNECTOR_OPENCLAW_MODEL_READINESS_ENABLED"),
+        default=False,
+    )
+    summary["openclaw_model_readiness"]["enabled"] = model_readiness_enabled
+    if model_readiness_enabled:
+        model_readiness_args: dict[str, Any] = {
+            "env": env_map,
+            "on_change_only": _bool_env(
+                env_map.get("AI_TRADING_CONNECTOR_OPENCLAW_MODEL_READINESS_ON_CHANGE_ONLY"),
+                default=True,
+            ),
+        }
+        health_timeout_s = _float_env(
+            env_map.get("AI_TRADING_CONNECTOR_HEALTH_TIMEOUT_S")
+        )
+        if health_timeout_s is not None:
+            model_readiness_args["timeout_s"] = health_timeout_s
+        state_path = (
+            env_map.get("AI_TRADING_OPENCLAW_RL_READINESS_STATE_PATH") or ""
+        ).strip()
+        if state_path:
+            model_readiness_args["state_path"] = state_path
+        if _bool_env(
+            env_map.get("AI_TRADING_CONNECTOR_OPENCLAW_MODEL_READINESS_FORCE"),
+            default=False,
+        ):
+            model_readiness_args["force"] = True
+
+        summary["openclaw_model_readiness"]["attempted"] = True
+        try:
+            readiness_result = _evaluate_rl_overlay_readiness(env_map)
+            model_readiness_args["readiness_result"] = readiness_result
+            notifier = (
+                openclaw_model_readiness_notifier
+                or _notify_openclaw_rl_overlay_readiness
+            )
+            summary["openclaw_model_readiness"]["result"] = notifier(
+                model_readiness_args
+            )
+        except Exception as exc:  # pragma: no cover - runtime guard
+            summary["openclaw_model_readiness"]["error"] = str(exc)
+            summary["errors"].append(
+                {
+                    "connector": "openclaw_model_readiness",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+    else:
+        summary["openclaw_model_readiness"]["skipped_reason"] = "disabled"
+
     slack_eod_enabled = _bool_env(
         env_map.get("AI_TRADING_CONNECTOR_SLACK_EOD_ENABLED"),
         default=True,
@@ -664,6 +1056,7 @@ def main(argv: list[str] | None = None) -> int:
         slack_notifier,
         slack_eod_notifier,
         openclaw_notifier,
+        openclaw_model_readiness_notifier,
         incident_snapshot_builder,
     ) = _load_connector_callables()
     summary = run_dispatch(
@@ -671,6 +1064,7 @@ def main(argv: list[str] | None = None) -> int:
         slack_eod_notifier=slack_eod_notifier,
         openclaw_notifier=openclaw_notifier,
         incident_snapshot_builder=incident_snapshot_builder,
+        openclaw_model_readiness_notifier=openclaw_model_readiness_notifier,
     )
     print(json.dumps(summary, sort_keys=True))
 

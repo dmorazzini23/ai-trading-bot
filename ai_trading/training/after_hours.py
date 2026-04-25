@@ -1125,6 +1125,135 @@ def _model_quality_diagnostics(
     }
 
 
+def _label_quality_diagnostics(
+    dataset: Any,
+    *,
+    score_orientation_report: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Summarize target/timestamp quality behind after-hours model candidates."""
+
+    if dataset is None or len(dataset) <= 0:
+        return {
+            "rows": 0,
+            "valid_rows": 0,
+            "positive_label_rate": 0.0,
+            "mean_realized_edge_bps": 0.0,
+            "timestamp_order_violations": 0,
+            "duplicate_symbol_timestamp_rows": 0,
+            "score_orientation_warning": False,
+            "warnings": [],
+        }
+
+    import pandas as pd
+
+    row_count = int(len(dataset))
+    labels = np.asarray(dataset["label"], dtype=float)
+    edges = np.asarray(dataset["realized_edge_bps"], dtype=float)
+    valid = np.isfinite(labels) & np.isfinite(edges)
+    valid_rows = int(np.sum(valid))
+    warnings: list[str] = []
+
+    if valid_rows <= 0:
+        warnings.append("no_valid_labels")
+        return {
+            "rows": row_count,
+            "valid_rows": 0,
+            "positive_label_rate": 0.0,
+            "mean_realized_edge_bps": 0.0,
+            "timestamp_order_violations": 0,
+            "duplicate_symbol_timestamp_rows": 0,
+            "score_orientation_warning": False,
+            "warnings": warnings,
+        }
+
+    valid_labels = labels[valid]
+    valid_edges = edges[valid]
+    positive_label_rate = float(np.mean(valid_labels > 0.0))
+    mean_edge = float(np.mean(valid_edges))
+    median_edge = float(np.median(valid_edges))
+
+    timestamp_order_violations = 0
+    duplicate_symbol_timestamp_rows = 0
+    label_horizon_hours: dict[str, float | None] = {
+        "min": None,
+        "median": None,
+        "max": None,
+    }
+    try:
+        timestamps = pd.to_datetime(dataset["timestamp"], utc=True, errors="coerce")
+        label_timestamps = pd.to_datetime(dataset["label_ts"], utc=True, errors="coerce")
+        horizon_hours = (
+            (label_timestamps - timestamps).dt.total_seconds() / 3600.0
+        ).to_numpy(dtype=float)
+        valid_horizon = horizon_hours[np.isfinite(horizon_hours)]
+        timestamp_order_violations = int(np.sum(valid_horizon <= 0.0))
+        if valid_horizon.size > 0:
+            label_horizon_hours = {
+                "min": float(np.min(valid_horizon)),
+                "median": float(np.median(valid_horizon)),
+                "max": float(np.max(valid_horizon)),
+            }
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        warnings.append("timestamp_quality_unavailable")
+
+    try:
+        duplicate_symbol_timestamp_rows = int(
+            dataset.duplicated(subset=["symbol", "timestamp"]).sum()
+        )
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        warnings.append("duplicate_symbol_timestamp_unavailable")
+
+    if positive_label_rate < 0.05:
+        warnings.append("very_low_positive_label_rate")
+    elif positive_label_rate > 0.95:
+        warnings.append("very_high_positive_label_rate")
+    if timestamp_order_violations > 0:
+        warnings.append("label_timestamp_not_after_feature_timestamp")
+    if duplicate_symbol_timestamp_rows > 0:
+        warnings.append("duplicate_symbol_timestamp_rows")
+
+    orientation = ""
+    expectancy_delta_bps = 0.0
+    inverse_applied = False
+    if isinstance(score_orientation_report, Mapping):
+        orientation = str(score_orientation_report.get("orientation") or "").strip().lower()
+        expectancy_delta_bps = float(
+            _as_float(score_orientation_report.get("expectancy_delta_bps")) or 0.0
+        )
+        inverse_applied = bool(score_orientation_report.get("inverse_applied", False))
+    score_orientation_warning = bool(
+        orientation == "inverse" or inverse_applied or expectancy_delta_bps < 0.0
+    )
+    if score_orientation_warning:
+        warnings.append("score_orientation_inverse_or_negative_delta")
+
+    return {
+        "rows": row_count,
+        "valid_rows": valid_rows,
+        "symbol_count": int(len(set(np.asarray(dataset["symbol"]).astype(str)))),
+        "positive_label_rate": positive_label_rate,
+        "mean_realized_edge_bps": mean_edge,
+        "median_realized_edge_bps": median_edge,
+        "positive_edge_mean_bps": (
+            float(np.mean(valid_edges[valid_edges > 0.0]))
+            if np.any(valid_edges > 0.0)
+            else 0.0
+        ),
+        "negative_edge_mean_bps": (
+            float(np.mean(valid_edges[valid_edges <= 0.0]))
+            if np.any(valid_edges <= 0.0)
+            else 0.0
+        ),
+        "label_horizon_hours": label_horizon_hours,
+        "timestamp_order_violations": timestamp_order_violations,
+        "duplicate_symbol_timestamp_rows": duplicate_symbol_timestamp_rows,
+        "score_orientation": orientation or None,
+        "score_expectancy_delta_bps": expectancy_delta_bps,
+        "score_orientation_warning": score_orientation_warning,
+        "warnings": sorted(set(warnings)),
+    }
+
+
 def _evaluate_candidate(
     name: str,
     dataset: Any,
@@ -6107,6 +6236,10 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         selected_threshold=float(best.selected_threshold),
         score_orientation=str(best.score_orientation),
     )
+    label_quality = _label_quality_diagnostics(
+        dataset,
+        score_orientation_report=best.score_orientation_report,
+    )
     negative_symbol_penalties = _build_negative_symbol_penalty_map(model_quality)
     segment_sample_weights, segment_reweight_report = _build_segment_reweight_sample_weights(
         dataset,
@@ -6250,12 +6383,14 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     setattr(final_model, "regime_calibration_", best.regime_calibration)
     setattr(final_model, "edge_score_orientation_", str(best.score_orientation))
     setattr(final_model, "edge_score_orientation_report_", dict(best.score_orientation_report))
+    setattr(final_model, "edge_label_quality_", dict(label_quality))
     setattr(final_model, "edge_negative_symbol_penalties_", dict(negative_symbol_penalties))
     manifest_metadata["hard_negative_mining"] = dict(hard_negative_report)
     manifest_metadata["segment_reweighting"] = dict(segment_reweight_report)
     manifest_metadata["sample_weighting"] = dict(sample_weighting_report)
     manifest_metadata["score_orientation"] = str(best.score_orientation)
     manifest_metadata["score_orientation_report"] = dict(best.score_orientation_report)
+    manifest_metadata["label_quality"] = dict(label_quality)
     manifest_metadata["negative_symbol_penalties"] = dict(negative_symbol_penalties)
     manifest_metadata["edge_model_v2"] = dict(edge_model_v2_report)
     requested_model_dir = _resolve_after_hours_output_path(
@@ -6313,6 +6448,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "negative_symbol_penalties": dict(negative_symbol_penalties),
             "edge_model_v2": edge_model_v2_report,
             "model_quality": model_quality,
+            "label_quality": label_quality,
         },
         dataset_fingerprint=dataset_fp,
         tags=["after_hours", "cost_aware", "purged_walk_forward"],
@@ -6471,6 +6607,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "negative_symbol_penalties": dict(negative_symbol_penalties),
         "edge_model_v2": edge_model_v2_report,
         "model_quality": model_quality,
+        "label_quality": label_quality,
         "runtime_promotion": {
             "model_path": promoted_model_path,
             "manifest_path": promoted_manifest_path,
@@ -6581,6 +6718,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "negative_symbol_penalties": dict(negative_symbol_penalties),
         "edge_model_v2": edge_model_v2_report,
         "model_quality": model_quality,
+        "label_quality": label_quality,
         "model_selection_retune": model_selection_retune,
         "training_data_delta": training_data_delta,
         "promoted_model_path": promoted_model_path,

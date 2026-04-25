@@ -412,6 +412,34 @@ def test_orient_probabilities_for_edge_flips_when_high_scores_underperform(
     assert np.allclose(oriented, 1.0 - probs)
 
 
+def test_label_quality_diagnostics_flags_inverse_orientation() -> None:
+    timestamps = pd.date_range("2026-01-01", periods=4, tz=UTC)
+    dataset = pd.DataFrame(
+        {
+            "symbol": ["AAPL", "AAPL", "MSFT", "MSFT"],
+            "timestamp": timestamps,
+            "label_ts": timestamps + pd.Timedelta(days=1),
+            "label": [1, 0, 0, 1],
+            "realized_edge_bps": [10.0, -8.0, -6.0, 4.0],
+        }
+    )
+
+    diagnostics = after_hours._label_quality_diagnostics(
+        dataset,
+        score_orientation_report={
+            "orientation": "inverse",
+            "inverse_applied": True,
+            "expectancy_delta_bps": -12.0,
+        },
+    )
+
+    assert diagnostics["rows"] == 4
+    assert diagnostics["positive_label_rate"] == pytest.approx(0.5)
+    assert diagnostics["timestamp_order_violations"] == 0
+    assert diagnostics["score_orientation_warning"] is True
+    assert "score_orientation_inverse_or_negative_delta" in diagnostics["warnings"]
+
+
 def test_build_negative_symbol_penalty_map_from_model_quality(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -900,6 +928,7 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert "candidate_metrics" in report_payload
     assert "sensitivity_sweep" in report_payload
     assert "model_quality" in report_payload
+    assert "label_quality" in report_payload
     assert report_payload["model_quality"].get("score_orientation") in {"direct", "inverse"}
     assert "manifest_metadata" in report_payload["model"]
     assert "hard_negative_mining" in report_payload
@@ -915,6 +944,7 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert result["candidate_metrics"]
     assert "sensitivity_sweep" in result
     assert "model_quality" in result
+    assert "label_quality" in result
     assert "hard_negative_mining" in result
     assert "segment_reweighting" in result
     assert "sample_weighting" in result
@@ -924,12 +954,15 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert "score_decile_expectancy" in report_payload["model_quality"]
     assert "calibration_by_decile" in report_payload["model_quality"]
     assert "negative_expectancy_contribution_by_symbol" in report_payload["model_quality"]
+    assert "positive_label_rate" in report_payload["label_quality"]
+    assert "timestamp_order_violations" in report_payload["label_quality"]
 
     import joblib
 
     trained_model = joblib.load(result["model_path"])
     assert hasattr(trained_model, "hard_negative_weighted_fit_")
     assert hasattr(trained_model, "edge_model_v2_bundle_")
+    assert hasattr(trained_model, "edge_label_quality_")
     assert isinstance(getattr(trained_model, "edge_model_v2_bundle_"), dict)
 
     manifest_payload = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
@@ -939,6 +972,7 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert "sample_weighting" in manifest_payload["metadata"]
     assert "negative_symbol_penalties" in manifest_payload["metadata"]
     assert "score_orientation" in manifest_payload["metadata"]
+    assert "label_quality" in manifest_payload["metadata"]
 
 
 def test_after_hours_training_skips_when_no_new_signal_data(

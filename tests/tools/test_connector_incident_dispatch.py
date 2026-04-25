@@ -212,6 +212,151 @@ def test_run_dispatch_openclaw_alert_uses_snapshot_builder() -> None:
     assert calls["openclaw"]["env"]["AI_TRADING_CONNECTOR_OPENCLAW_ENABLED"] == "1"
 
 
+def test_run_dispatch_openclaw_model_readiness_notifies_when_ready(
+    tmp_path: Path,
+) -> None:
+    calls: dict[str, dict[str, Any]] = {}
+    report_path = tmp_path / "after_hours_training_latest.json"
+    report_path.write_text(
+        dispatch.json.dumps(
+            {
+                "updated_at": "2026-04-25T00:00:00Z",
+                "report_path": str(report_path),
+                "report": {
+                    "model": {"model_id": "ml-ready-1"},
+                    "score_orientation": "direct",
+                    "label_quality": {
+                        "warnings": [],
+                        "timestamp_order_violations": 0,
+                        "duplicate_symbol_timestamp_rows": 0,
+                    },
+                    "runtime_performance_gate": {
+                        "checks": {
+                            "live_samples_sufficient": True,
+                            "open_position_reconciliation_consistent": True,
+                        }
+                    },
+                    "candidate_metrics": [
+                        {
+                            "selected": True,
+                            "name": "histgb",
+                            "mean_expectancy_bps": 1.2,
+                            "mean_hit_rate": 0.51,
+                            "profitable_fold_count": 1,
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _readiness(args: dict[str, Any]) -> dict[str, Any]:
+        calls["readiness"] = args
+        return {"sent": True, "fingerprint": args["readiness_result"]["fingerprint"]}
+
+    payload = dispatch.run_dispatch(
+        env={
+            "AI_TRADING_CONNECTOR_OPENCLAW_MODEL_READINESS_ENABLED": "1",
+            "AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED": "0",
+            "AI_TRADING_AFTER_HOURS_REPORT_LATEST_PATH": str(report_path),
+            "AI_TRADING_CONNECTOR_OPENCLAW_ENABLED": "0",
+            "AI_TRADING_CONNECTOR_SLACK_ENABLED": "0",
+            "AI_TRADING_CONNECTOR_SLACK_EOD_ENABLED": "0",
+        },
+        slack_notifier=lambda args: {"unused": args},
+        slack_eod_notifier=lambda args: {"unused": args},
+        openclaw_notifier=lambda args: {"unused": args},
+        incident_snapshot_builder=lambda args: {
+            "should_alert": False,
+            "fingerprint": "fp-unused",
+            "snapshot": {},
+            "triggers": [],
+        },
+        openclaw_model_readiness_notifier=_readiness,
+    )
+
+    assert payload["ok"] is True
+    assert payload["openclaw_model_readiness"]["attempted"] is True
+    readiness = calls["readiness"]["readiness_result"]
+    assert readiness["ready"] is True
+    assert readiness["observed"]["model_id"] == "ml-ready-1"
+    assert readiness["observed"]["mean_expectancy_bps"] == 1.2
+    assert readiness["observed"]["profitable_fold_count"] == 1
+
+
+def test_run_dispatch_openclaw_model_readiness_blocks_unclean_candidate(
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "after_hours_training_latest.json"
+    report_path.write_text(
+        dispatch.json.dumps(
+            {
+                "report": {
+                    "model": {"model_id": "ml-not-ready-1"},
+                    "score_orientation": "inverse",
+                    "label_quality": {"warnings": ["score_orientation_inverse"]},
+                    "runtime_performance_gate": {
+                        "checks": {
+                            "live_samples_sufficient": False,
+                            "open_position_reconciliation_consistent": True,
+                        }
+                    },
+                    "candidate_metrics": [
+                        {
+                            "selected": True,
+                            "name": "histgb",
+                            "mean_expectancy_bps": -0.5,
+                            "mean_hit_rate": 0.10,
+                            "profitable_fold_count": 0,
+                        }
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: dict[str, dict[str, Any]] = {}
+
+    def _readiness(args: dict[str, Any]) -> dict[str, Any]:
+        calls["readiness"] = args
+        return {
+            "sent": False,
+            "reason": args["readiness_result"]["reason"],
+            "readiness": args["readiness_result"],
+        }
+
+    payload = dispatch.run_dispatch(
+        env={
+            "AI_TRADING_CONNECTOR_OPENCLAW_MODEL_READINESS_ENABLED": "1",
+            "AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED": "0",
+            "AI_TRADING_AFTER_HOURS_REPORT_LATEST_PATH": str(report_path),
+            "AI_TRADING_CONNECTOR_OPENCLAW_ENABLED": "0",
+            "AI_TRADING_CONNECTOR_SLACK_ENABLED": "0",
+            "AI_TRADING_CONNECTOR_SLACK_EOD_ENABLED": "0",
+        },
+        slack_notifier=lambda args: {"unused": args},
+        slack_eod_notifier=lambda args: {"unused": args},
+        openclaw_notifier=lambda args: {"unused": args},
+        incident_snapshot_builder=lambda args: {
+            "should_alert": False,
+            "fingerprint": "fp-unused",
+            "snapshot": {},
+            "triggers": [],
+        },
+        openclaw_model_readiness_notifier=_readiness,
+    )
+
+    assert payload["ok"] is True
+    readiness = calls["readiness"]["readiness_result"]
+    assert readiness["ready"] is False
+    assert "expectancy_not_positive" in readiness["failed_reasons"]
+    assert "profitable_folds_insufficient" in readiness["failed_reasons"]
+    assert "score_orientation_not_direct" in readiness["failed_reasons"]
+    assert "label_quality_warnings_present" in readiness["failed_reasons"]
+    assert "runtime_data_quality_checks_failed" in readiness["failed_reasons"]
+
+
 def test_load_runtime_env_defaults_populates_missing_values(tmp_path: Path) -> None:
     runtime_env = tmp_path / ".env.runtime"
     runtime_env.write_text(
