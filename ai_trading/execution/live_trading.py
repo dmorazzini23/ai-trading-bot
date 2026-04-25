@@ -17798,7 +17798,7 @@ class ExecutionEngine:
                 extra={"error": str(exc), "path": str(state_path)},
                 exc_info=True,
             )
-            return 0.0, None
+            return 0.05, "submit_rate_state_error"
 
     def _acquire_submit_rate_limit_permit(
         self,

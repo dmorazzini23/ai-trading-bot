@@ -11,9 +11,11 @@ from functools import lru_cache
 import json
 import math
 from pathlib import Path
+from queue import Empty, Queue
 from statistics import median
 import sys
-from typing import Any, Mapping, Sequence
+import threading
+from typing import Any, Mapping, Sequence, cast
 from zoneinfo import ZoneInfo
 
 from ai_trading.config.management import get_env, is_test_runtime
@@ -1270,62 +1272,110 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
     }
 
 
+def _broker_open_positions_unavailable(reason: str) -> dict[str, Any]:
+    return {
+        "broker_open_positions_available": False,
+        "broker_open_position_count": 0,
+        "broker_open_positions": {},
+        "broker_open_position_snapshots": {},
+        "broker_open_positions_error": reason,
+    }
+
+
+def _bounded_runtime_report_call(
+    *,
+    fn: Any,
+    timeout_seconds: float,
+) -> tuple[bool, Any]:
+    result_queue: Queue[Any] = Queue(maxsize=1)
+
+    def _worker() -> None:
+        try:
+            result_queue.put(fn())
+        except _RUNTIME_REPORT_FALLBACK_EXC as exc:  # pragma: no cover - exercised via result path
+            result_queue.put(exc)
+
+    worker = threading.Thread(
+        target=_worker,
+        name="runtime-report-bounded-call",
+        daemon=True,
+    )
+    worker.start()
+    worker.join(float(timeout_seconds))
+    if worker.is_alive():
+        return False, None
+    try:
+        return True, result_queue.get_nowait()
+    except Empty:
+        return True, RuntimeError("runtime_report_bounded_call_no_result")
+
+
+def _fetch_broker_open_positions_snapshot() -> dict[str, Any]:
+    from ai_trading.alpaca_api import _get_rest
+
+    client = _get_rest(bars=False)
+    positions_raw: Any
+    if hasattr(client, "get_all_positions"):
+        positions_raw = client.get_all_positions() or []
+    elif hasattr(client, "list_positions"):
+        positions_raw = client.list_positions() or []
+    else:
+        return {
+            "broker_open_positions_available": False,
+            "broker_open_position_count": 0,
+            "broker_open_positions": {},
+            "broker_open_position_snapshots": {},
+            "broker_open_positions_error": "positions_method_unavailable",
+        }
+
+    broker_positions: dict[str, float] = {}
+    broker_position_snapshots: dict[str, dict[str, Any]] = {}
+    for row in positions_raw:
+        snapshot = position_snapshot_from_position(row, provider="alpaca")
+        if snapshot is None:
+            continue
+        broker_positions[snapshot.symbol] = float(snapshot.qty)
+        broker_position_snapshots[snapshot.symbol] = snapshot.to_dict()
+
+    broker_positions = dict(sorted(broker_positions.items()))
+    broker_position_snapshots = dict(sorted(broker_position_snapshots.items()))
+    return {
+        "broker_open_positions_available": True,
+        "broker_open_position_count": len(broker_positions),
+        "broker_open_positions": broker_positions,
+        "broker_open_position_snapshots": broker_position_snapshots,
+        "broker_open_positions_error": None,
+    }
+
+
 def _summarize_broker_open_positions() -> dict[str, Any]:
     """Best-effort broker snapshot for current open positions."""
 
     if is_test_runtime(include_pytest_module=True):
-        return {
-            "broker_open_positions_available": False,
-            "broker_open_position_count": 0,
-            "broker_open_positions": {},
-            "broker_open_position_snapshots": {},
-            "broker_open_positions_error": "disabled_in_test_runtime",
-        }
+        return _broker_open_positions_unavailable("disabled_in_test_runtime")
 
-    try:
-        from ai_trading.alpaca_api import _get_rest
+    timeout_seconds = _as_float(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_BROKER_OPEN_POSITIONS_TIMEOUT_SECONDS",
+            5.0,
+            cast=float,
+        )
+    )
+    if timeout_seconds is None or timeout_seconds <= 0.0:
+        timeout_seconds = 5.0
 
-        client = _get_rest(bars=False)
-        positions_raw: Any
-        if hasattr(client, "get_all_positions"):
-            positions_raw = client.get_all_positions() or []
-        elif hasattr(client, "list_positions"):
-            positions_raw = client.list_positions() or []
-        else:
-            return {
-                "broker_open_positions_available": False,
-                "broker_open_position_count": 0,
-                "broker_open_positions": {},
-                "broker_open_position_snapshots": {},
-                "broker_open_positions_error": "positions_method_unavailable",
-            }
+    completed, result = _bounded_runtime_report_call(
+        fn=_fetch_broker_open_positions_snapshot,
+        timeout_seconds=float(timeout_seconds),
+    )
+    if not completed:
+        return _broker_open_positions_unavailable(
+            f"broker_open_positions_timeout_after_{float(timeout_seconds):.3f}s"
+        )
 
-        broker_positions: dict[str, float] = {}
-        broker_position_snapshots: dict[str, dict[str, Any]] = {}
-        for row in positions_raw:
-            snapshot = position_snapshot_from_position(row, provider="alpaca")
-            if snapshot is None:
-                continue
-            broker_positions[snapshot.symbol] = float(snapshot.qty)
-            broker_position_snapshots[snapshot.symbol] = snapshot.to_dict()
-
-        broker_positions = dict(sorted(broker_positions.items()))
-        broker_position_snapshots = dict(sorted(broker_position_snapshots.items()))
-        return {
-            "broker_open_positions_available": True,
-            "broker_open_position_count": len(broker_positions),
-            "broker_open_positions": broker_positions,
-            "broker_open_position_snapshots": broker_position_snapshots,
-            "broker_open_positions_error": None,
-        }
-    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-        return {
-            "broker_open_positions_available": False,
-            "broker_open_position_count": 0,
-            "broker_open_positions": {},
-            "broker_open_position_snapshots": {},
-            "broker_open_positions_error": str(exc),
-        }
+    if isinstance(result, Exception):
+        return _broker_open_positions_unavailable(str(result))
+    return cast(dict[str, Any], result)
 
 
 def _normalise_iso_date(value: Any) -> str | None:
@@ -3919,17 +3969,39 @@ def summarize_oms_event_tca() -> dict[str, Any]:
             cast=int,
         )
     )
+    timeout_seconds = _as_float(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_OMS_EVENT_TCA_TIMEOUT_SECONDS",
+            5.0,
+            cast=float,
+        )
+    )
+    if timeout_seconds is None or timeout_seconds <= 0.0:
+        timeout_seconds = 5.0
     try:
         from ai_trading.tca.event_analytics import summarize_oms_event_tca
 
-        payload = summarize_oms_event_tca(
-            database_url=(database_url or None),
-            intent_store_path=(intent_store_path or None),
-            lookback_days=(
-                int(lookback_days) if lookback_days is not None and lookback_days >= 0 else None
+        completed, payload = _bounded_runtime_report_call(
+            fn=lambda: summarize_oms_event_tca(
+                database_url=(database_url or None),
+                intent_store_path=(intent_store_path or None),
+                lookback_days=(
+                    int(lookback_days)
+                    if lookback_days is not None and lookback_days >= 0
+                    else None
+                ),
+                limit=max(1, int(limit if limit is not None else 50000)),
             ),
-            limit=max(1, int(limit if limit is not None else 50000)),
+            timeout_seconds=float(timeout_seconds),
         )
+        if not completed:
+            return {
+                "enabled": True,
+                "available": False,
+                "error": f"oms_event_tca_timeout_after_{float(timeout_seconds):.3f}s",
+            }
+        if isinstance(payload, Exception):
+            raise payload
         summary = dict(payload) if isinstance(payload, Mapping) else {}
         summary["enabled"] = True
         summary["available"] = True
@@ -3970,14 +4042,36 @@ def summarize_oms_invariants() -> dict[str, Any]:
             cast=int,
         )
     )
+    timeout_seconds = _as_float(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_OMS_INVARIANTS_TIMEOUT_SECONDS",
+            5.0,
+            cast=float,
+        )
+    )
+    if timeout_seconds is None or timeout_seconds <= 0.0:
+        timeout_seconds = 5.0
     try:
         from ai_trading.oms.invariants import evaluate_oms_reconciliation_invariants
 
-        payload = evaluate_oms_reconciliation_invariants(
-            database_url=(database_url or None),
-            intent_store_path=(intent_store_path or None),
-            limit=max(1, int(limit if limit is not None else 5000)),
+        completed, payload = _bounded_runtime_report_call(
+            fn=lambda: evaluate_oms_reconciliation_invariants(
+                database_url=(database_url or None),
+                intent_store_path=(intent_store_path or None),
+                limit=max(1, int(limit if limit is not None else 5000)),
+            ),
+            timeout_seconds=float(timeout_seconds),
         )
+        if not completed:
+            return {
+                "enabled": True,
+                "available": False,
+                "ok": False,
+                "reason": "oms_invariants_timeout",
+                "error": f"oms_invariants_timeout_after_{float(timeout_seconds):.3f}s",
+            }
+        if isinstance(payload, Exception):
+            raise payload
         summary = dict(payload) if isinstance(payload, Mapping) else {}
         summary["enabled"] = True
         summary["available"] = True
@@ -4024,14 +4118,36 @@ def summarize_oms_lifecycle_parity() -> dict[str, Any]:
             cast=int,
         )
     )
+    timeout_seconds = _as_float(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_OMS_LIFECYCLE_PARITY_TIMEOUT_SECONDS",
+            5.0,
+            cast=float,
+        )
+    )
+    if timeout_seconds is None or timeout_seconds <= 0.0:
+        timeout_seconds = 5.0
     try:
         from ai_trading.oms.invariants import evaluate_oms_lifecycle_parity_invariants
 
-        payload = evaluate_oms_lifecycle_parity_invariants(
-            database_url=(database_url or None),
-            intent_store_path=(intent_store_path or None),
-            limit=max(1, int(limit if limit is not None else 5000)),
+        completed, payload = _bounded_runtime_report_call(
+            fn=lambda: evaluate_oms_lifecycle_parity_invariants(
+                database_url=(database_url or None),
+                intent_store_path=(intent_store_path or None),
+                limit=max(1, int(limit if limit is not None else 5000)),
+            ),
+            timeout_seconds=float(timeout_seconds),
         )
+        if not completed:
+            return {
+                "enabled": True,
+                "available": False,
+                "ok": False,
+                "reason": "oms_lifecycle_parity_timeout",
+                "error": f"oms_lifecycle_parity_timeout_after_{float(timeout_seconds):.3f}s",
+            }
+        if isinstance(payload, Exception):
+            raise payload
         summary = dict(payload) if isinstance(payload, Mapping) else {}
         summary["enabled"] = True
         summary["available"] = True

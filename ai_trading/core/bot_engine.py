@@ -329,19 +329,19 @@ def _is_alpaca_auth_error(exc: BaseException) -> bool:
     return _is_alpaca_error_instance(exc, "AlpacaAuthenticationError", AlpacaAuthenticationError)
 
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from alpaca.common.exceptions import APIError  # type: ignore
-    from alpaca.trading.client import TradingClient  # type: ignore
+try:
+    from alpaca.common.exceptions import APIError as _AlpacaAPIError  # type: ignore
+except ImportError:
+    APIError = cast(Any, None)
 else:
-    class APIError(Exception):
-        """Fallback APIError when alpaca-py is unavailable."""
+    APIError = _AlpacaAPIError
 
-        pass
-
-    # Provide a placeholder TradingClient so tests can import the symbol when
-    # Alpaca SDK is not installed.
-    class TradingClient:  # type: ignore[empty-body]
-        pass
+try:
+    from alpaca.trading.client import TradingClient as _AlpacaTradingClient  # type: ignore
+except ImportError:
+    TradingClient = cast(Any, None)
+else:
+    TradingClient = _AlpacaTradingClient
 
 from ai_trading.config.management import (
     get_env,
@@ -900,14 +900,14 @@ def _coverage_recovery_event(resolved_feed: str | None) -> str:
         return "COVERAGE_RECOVERY"
     return f"COVERAGE_RECOVERY_{feed_token}"
 
-try:  # pragma: no cover
-    from alpaca.data.historical.stock import StockHistoricalDataClient  # type: ignore
-except ImportError:  # pragma: no cover
-    class StockHistoricalDataClient:  # type: ignore[no-redef]
-        """Fallback when alpaca-py is unavailable."""
-
-        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401, ARG002
-            raise ImportError("alpaca-py not installed")
+try:
+    from alpaca.data.historical.stock import (
+        StockHistoricalDataClient as _AlpacaStockHistoricalDataClient,
+    )  # type: ignore
+except ImportError:
+    StockHistoricalDataClient = cast(Any, None)
+else:
+    StockHistoricalDataClient = _AlpacaStockHistoricalDataClient
 
 _ALPACA_DATA_CLIENT_AVAILABLE = True
 
@@ -7666,165 +7666,23 @@ def _ensure_alpaca_classes() -> None:
     if all(item is not None for item in assigned) and _ALPACA_IMPORT_ERROR is None:
         return
     _ALPACA_IMPORT_ERROR = None
-    fatal_error: BaseException | None = None
-    _StockLatestQuoteRequestResolved: type[Any]
-    _MarketOrderRequestResolved: type[Any]
-    _LimitOrderRequestResolved: type[Any]
-    _StopOrderRequestResolved: type[Any]
-    _StopLimitOrderRequestResolved: type[Any]
-    _OrderSideResolved: Any
-    _OrderStatusResolved: Any
-    _TimeInForceResolved: Any
-    _QuoteResolved: type[Any]
-    _OrderResolved: type[Any]
 
-    try:  # pragma: no cover - independent imports with fallbacks
-        from alpaca.data.requests import (
-            StockLatestQuoteRequest as _StockLatestQuoteRequestImported,
-        )
-        _StockLatestQuoteRequestResolved = _StockLatestQuoteRequestImported
-    except COMMON_EXC as exc:  # pragma: no cover - missing optional dependency
-        if not isinstance(exc, ImportError):
-            fatal_error = fatal_error or exc
-        from dataclasses import dataclass, field
-        from typing import Any as _Any
-
-        @dataclass(init=False)
-        class _StockLatestQuoteRequestFallback:  # pragma: no cover - lightweight fallback
-            symbol_or_symbols: _Any
-            feed: _Any | None = None
-            currency: _Any | None = None
-            _extra: dict[str, _Any] = field(default_factory=dict)
-
-            def __init__(
-                self,
-                *,
-                symbol_or_symbols: _Any,
-                feed: _Any | None = None,
-                currency: _Any | None = None,
-                **kwargs: _Any,
-            ) -> None:
-                self.symbol_or_symbols = symbol_or_symbols
-                self.feed = feed
-                self.currency = currency
-                self._extra = dict(kwargs)
-                for key, value in kwargs.items():
-                    setattr(self, key, value)
-        _StockLatestQuoteRequestResolved = _StockLatestQuoteRequestFallback
-    try:
-        from alpaca.trading.requests import (
-            MarketOrderRequest as _MarketOrderRequestImported,
-            LimitOrderRequest as _LimitOrderRequestImported,
-            StopOrderRequest as _StopOrderRequestImported,
-            StopLimitOrderRequest as _StopLimitOrderRequestImported,
-        )
-        _MarketOrderRequestResolved = _MarketOrderRequestImported
-        _LimitOrderRequestResolved = _LimitOrderRequestImported
-        _StopOrderRequestResolved = _StopOrderRequestImported
-        _StopLimitOrderRequestResolved = _StopLimitOrderRequestImported
-    except COMMON_EXC as exc:
-        if not isinstance(exc, ImportError):
-            fatal_error = fatal_error or exc
-        from dataclasses import dataclass
-
-        @dataclass
-        class _MarketOrderRequestFallback:  # pragma: no cover - minimal request object
-            symbol: str
-            qty: int
-            side: Any
-            time_in_force: Any
-            limit_price: float | None = None
-            stop_price: float | None = None
-            client_order_id: str | None = None
-
-        @dataclass
-        class _LimitOrderRequestFallback:  # pragma: no cover - minimal request object
-            symbol: str
-            qty: int
-            side: Any
-            time_in_force: Any
-            limit_price: float
-            client_order_id: str | None = None
-
-        @dataclass
-        class _StopOrderRequestFallback:  # pragma: no cover - minimal request object
-            symbol: str
-            qty: int
-            side: Any
-            time_in_force: Any
-            stop_price: float
-            client_order_id: str | None = None
-
-        @dataclass
-        class _StopLimitOrderRequestFallback:  # pragma: no cover - minimal request object
-            symbol: str
-            qty: int
-            side: Any
-            time_in_force: Any
-            limit_price: float
-            stop_price: float
-            client_order_id: str | None = None
-        _MarketOrderRequestResolved = _MarketOrderRequestFallback
-        _LimitOrderRequestResolved = _LimitOrderRequestFallback
-        _StopOrderRequestResolved = _StopOrderRequestFallback
-        _StopLimitOrderRequestResolved = _StopLimitOrderRequestFallback
-    try:
-        from alpaca.trading.enums import (
-            OrderSide as _OrderSideImported,
-            OrderStatus as _OrderStatusImported,
-            TimeInForce as _TimeInForceImported,
-        )
-        _OrderSideResolved = _OrderSideImported
-        _OrderStatusResolved = _OrderStatusImported
-        _TimeInForceResolved = _TimeInForceImported
-    except COMMON_EXC as exc:
-        if not isinstance(exc, ImportError):
-            fatal_error = fatal_error or exc
-        from enum import Enum
-
-        class _OrderSideFallback(str, Enum):  # pragma: no cover - fallback enum
-            BUY = "buy"
-            SELL = "sell"
-
-        class _OrderStatusFallback(str, Enum):  # pragma: no cover - fallback enum
-            NEW = "new"
-            PARTIALLY_FILLED = "partially_filled"
-            FILLED = "filled"
-            CANCELED = "canceled"
-            REJECTED = "rejected"
-            EXPIRED = "expired"
-
-        class _TimeInForceFallback(str, Enum):  # pragma: no cover - fallback enum
-            DAY = "day"
-            GTC = "gtc"
-        _OrderSideResolved = _OrderSideFallback
-        _OrderStatusResolved = _OrderStatusFallback
-        _TimeInForceResolved = _TimeInForceFallback
-    try:
-        from alpaca.data.models import Quote as _QuoteImported  # type: ignore
-        _QuoteResolved = _QuoteImported
-    except COMMON_EXC as exc:
-        if not isinstance(exc, ImportError):
-            fatal_error = fatal_error or exc
-        from dataclasses import dataclass
-
-        @dataclass
-        class _QuoteFallback:  # pragma: no cover - minimal quote stub
-            bid_price: float | None = None
-            ask_price: float | None = None
-        _QuoteResolved = _QuoteFallback
-    try:
-        from alpaca.trading.models import Order as _OrderImported  # type: ignore
-        _OrderResolved = _OrderImported
-    except COMMON_EXC as exc:
-        if not isinstance(exc, ImportError):
-            fatal_error = fatal_error or exc
-        from dataclasses import dataclass
-
-        @dataclass
-        class _OrderFallback:  # pragma: no cover - minimal order stub
-            id: str | None = None
-        _OrderResolved = _OrderFallback
+    from alpaca.data.models import Quote as _QuoteResolved  # type: ignore
+    from alpaca.data.requests import (
+        StockLatestQuoteRequest as _StockLatestQuoteRequestResolved,
+    )
+    from alpaca.trading.enums import (
+        OrderSide as _OrderSideResolved,
+        OrderStatus as _OrderStatusResolved,
+        TimeInForce as _TimeInForceResolved,
+    )
+    from alpaca.trading.models import Order as _OrderResolved  # type: ignore
+    from alpaca.trading.requests import (
+        LimitOrderRequest as _LimitOrderRequestResolved,
+        MarketOrderRequest as _MarketOrderRequestResolved,
+        StopLimitOrderRequest as _StopLimitOrderRequestResolved,
+        StopOrderRequest as _StopOrderRequestResolved,
+    )
 
     Quote = _QuoteResolved
     Order = _OrderResolved
@@ -7837,9 +7695,6 @@ def _ensure_alpaca_classes() -> None:
     StopLimitOrderRequest = _StopLimitOrderRequestResolved
     StockLatestQuoteRequest = _StockLatestQuoteRequestResolved
 
-    if fatal_error is not None:
-        _ALPACA_IMPORT_ERROR = fatal_error
-
 
 def _stock_quote_request_ready() -> bool:
     """Return ``True`` when ``StockLatestQuoteRequest`` can be instantiated."""
@@ -7850,11 +7705,6 @@ def _stock_quote_request_ready() -> bool:
         return False
     _ensure_alpaca_classes()
     return StockLatestQuoteRequest is not None
-
-
-# Ensure fallback classes are available during import when Alpaca SDK is missing.
-if not ALPACA_AVAILABLE:
-    _ensure_alpaca_classes()
 
 
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml

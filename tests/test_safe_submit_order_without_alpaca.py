@@ -1,4 +1,4 @@
-"""Regression tests ensuring safe order submission without Alpaca SDK."""
+"""Regression tests for no-shim behavior when the Alpaca SDK is unavailable."""
 
 from __future__ import annotations
 
@@ -110,23 +110,20 @@ def _reset_alpaca_symbols(bot_engine, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bot_engine, "ALPACA_AVAILABLE", False, raising=False)
 
 
-_ensure_numpy_stub()
-_ensure_optional_stubs()
-
-
 @pytest.fixture(autouse=True)
 def _restore_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PYTEST_RUNNING", "1")
 
 
-def test_ensure_alpaca_classes_assigns_fallbacks(monkeypatch: pytest.MonkeyPatch):
+def test_ensure_alpaca_classes_fails_without_sdk(monkeypatch: pytest.MonkeyPatch):
     _block_alpaca_imports(monkeypatch)
 
     from ai_trading.core import bot_engine
 
     _reset_alpaca_symbols(bot_engine, monkeypatch)
 
-    bot_engine._ensure_alpaca_classes()
+    with pytest.raises(ModuleNotFoundError):
+        bot_engine._ensure_alpaca_classes()
 
     for attr in (
         "Quote",
@@ -140,12 +137,7 @@ def test_ensure_alpaca_classes_assigns_fallbacks(monkeypatch: pytest.MonkeyPatch
         "StopLimitOrderRequest",
         "StockLatestQuoteRequest",
     ):
-        assert getattr(bot_engine, attr) is not None
-    assert bot_engine._ALPACA_IMPORT_ERROR is None
-    assert getattr(bot_engine.OrderSide, "BUY", None)
-    filled_member = getattr(bot_engine.OrderStatus, "FILLED", None)
-    assert filled_member is not None
-    assert str(getattr(filled_member, "value", filled_member)).lower() == "filled"
+        assert getattr(bot_engine, attr) is None
 
 
 def test_safe_submit_order_without_alpaca(monkeypatch: pytest.MonkeyPatch):
@@ -246,19 +238,21 @@ def test_safe_submit_order_without_alpaca_order_data(monkeypatch: pytest.MonkeyP
     assert getattr(order, "status", "") == "filled"
     assert api.calls, "submit_order should receive request object"
     sent_request = api.calls[-1]
-    assert isinstance(sent_request, bot_engine.MarketOrderRequest)
+    assert isinstance(sent_request, SimpleNamespace)
     assert getattr(sent_request, "symbol", "") == "MSFT"
     assert getattr(sent_request, "qty", 0) == 3
 
 
-def test_live_trading_request_helper_survives_missing_shims(
+def test_live_trading_request_helper_fails_without_sdk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _block_alpaca_imports(monkeypatch)
 
     import ai_trading.execution.live_trading as live_trading
+    from ai_trading.core import bot_engine
 
     importlib.reload(live_trading)
+    _reset_alpaca_symbols(bot_engine, monkeypatch)
 
     for name in [m for m in list(sys.modules) if m.startswith("ai_trading.alpaca")]:
         monkeypatch.delitem(sys.modules, name, raising=False)
@@ -268,17 +262,5 @@ def test_live_trading_request_helper_survives_missing_shims(
     monkeypatch.setattr(live_trading, "OrderSide", None, raising=False)
     monkeypatch.setattr(live_trading, "TimeInForce", None, raising=False)
 
-    market_cls, limit_cls, side_enum, tif_enum = live_trading._ensure_request_models()
-
-    assert market_cls is not None
-    assert limit_cls is not None
-    assert side_enum is not None
-    assert tif_enum is not None
-
-    order = market_cls(
-        symbol="AAPL",
-        qty=1,
-        side=side_enum.BUY if hasattr(side_enum, "BUY") else "buy",
-        time_in_force=tif_enum.DAY if hasattr(tif_enum, "DAY") else "day",
-    )
-    assert getattr(order, "symbol", "") == "AAPL"
+    with pytest.raises(ModuleNotFoundError):
+        live_trading._ensure_request_models()

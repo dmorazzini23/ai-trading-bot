@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -33,6 +34,68 @@ def test_summarize_oms_lifecycle_parity_degrades_on_sqlalchemy_error(monkeypatch
     assert summary["ok"] is False
     assert summary["reason"] == "oms_lifecycle_parity_unavailable"
     assert "QueuePool limit reached" in summary["error"]
+
+
+def test_summarize_broker_open_positions_times_out(monkeypatch) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocked_snapshot() -> dict[str, object]:
+        started.set()
+        release.wait(timeout=5.0)
+        return {"broker_open_positions_available": True}
+
+    monkeypatch.setattr(rpt, "is_test_runtime", lambda include_pytest_module=True: False)
+    monkeypatch.setattr(rpt, "_fetch_broker_open_positions_snapshot", _blocked_snapshot)
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_PERF_BROKER_OPEN_POSITIONS_TIMEOUT_SECONDS",
+        "0.01",
+    )
+
+    try:
+        summary = rpt._summarize_broker_open_positions()
+    finally:
+        release.set()
+
+    assert started.is_set()
+    assert summary["broker_open_positions_available"] is False
+    assert summary["broker_open_position_count"] == 0
+    assert "broker_open_positions_timeout_after_" in summary["broker_open_positions_error"]
+
+
+def test_summarize_oms_invariants_times_out(monkeypatch) -> None:
+    import ai_trading.oms.invariants as invariants
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocked_invariants(**_kwargs: object) -> dict[str, object]:
+        started.set()
+        release.wait(timeout=5.0)
+        return {"ok": True}
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_OMS_INVARIANTS_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_PERF_OMS_INVARIANTS_TIMEOUT_SECONDS",
+        "0.01",
+    )
+    monkeypatch.setattr(
+        invariants,
+        "evaluate_oms_reconciliation_invariants",
+        _blocked_invariants,
+    )
+
+    try:
+        summary = rpt.summarize_oms_invariants()
+    finally:
+        release.set()
+
+    assert started.is_set()
+    assert summary["enabled"] is True
+    assert summary["available"] is False
+    assert summary["ok"] is False
+    assert summary["reason"] == "oms_invariants_timeout"
+    assert "oms_invariants_timeout_after_" in summary["error"]
 
 
 def test_build_report_summarizes_trade_and_gate_data(tmp_path: Path) -> None:

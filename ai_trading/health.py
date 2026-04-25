@@ -61,7 +61,7 @@ class HealthCheck:
         """
 
         host = self._get_ctx_attr("host", "0.0.0.0")
-        port = int(self._get_ctx_attr("port", 9001))
+        port = int(self._get_ctx_attr("port", 8081))
         run_standalone_healthcheck_app(self.app, host=host, port=port, logger=logger)
 
 

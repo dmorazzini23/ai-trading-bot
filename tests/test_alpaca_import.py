@@ -1,12 +1,14 @@
-"""Test for Alpaca import handling when packages are missing."""
+"""Test for Alpaca import handling when the required SDK is missing."""
 
 import sys
 from types import ModuleType
 from typing import Any, cast
 
+import pytest
+
 
 def test_ai_trading_import_without_alpaca(monkeypatch):
-    """Test that ai_trading can be imported even when alpaca packages are missing."""
+    """Runtime modules fail fast instead of installing Alpaca stand-ins."""
     restore_modules: dict[str, ModuleType | None] = {}
     target_prefixes = ("alpaca", "ai_trading")
     for name, module in list(sys.modules.items()):
@@ -23,19 +25,12 @@ def test_ai_trading_import_without_alpaca(monkeypatch):
         sys.modules["alpaca"] = None
         monkeypatch.setenv("TESTING", "true")
 
-        # This should not raise an exception.
+        # The package itself remains importable for diagnostics.
         import ai_trading
-        import ai_trading.core.bot_engine
 
-        # Check that ALPACA_AVAILABLE is False.
-        assert hasattr(ai_trading.core.bot_engine, "ALPACA_AVAILABLE")
-        assert ai_trading.core.bot_engine.ALPACA_AVAILABLE is False
-
-        # Check that fallback classes are present.
-        from ai_trading.core.bot_engine import OrderSide, TradingClient
-
-        assert TradingClient is not None
-        assert OrderSide is not None
+        assert ai_trading is not None
+        with pytest.raises(ModuleNotFoundError):
+            import ai_trading.core.bot_engine  # noqa: F401
     finally:
         for name in list(sys.modules):
             if name == target_prefixes[0] or name.startswith(f"{target_prefixes[0]}."):
