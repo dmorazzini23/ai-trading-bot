@@ -1,6 +1,6 @@
 # AGENTS: Operating Contract & Playbook
 
-**Last updated:** 2026-04-15
+**Last updated:** 2026-04-25
 **Runtime targets:** Ubuntu 24.04 • Python 3.12.3 • zoneinfo-only • API on :9001 • health on shared `:9001` or standalone `HEALTHCHECK_PORT` (default :8081)
 
 This document is the authoritative playbook for Codex-style editing in this repository. If reality drifts, update this file immediately.
@@ -8,12 +8,12 @@ This document is the authoritative playbook for Codex-style editing in this repo
 ---
 
 ## 1. Runtime Invariants
-- **Python:** 3.12 (`requires-python=">=3.12"`). Target `cp312` wheels only.
+- **Python:** 3.12 (`requires-python=">=3.12,<3.13"`). Target `cp312` wheels only.
 - **Timezones:** Use stdlib **zoneinfo** exclusively; `pytz` is forbidden.
 - **Service topology:**
   - Flask **API on :9001** (0.0.0.0:9001).
   - The main API serves `/health`, `/healthz`, and `/metrics` on `API_PORT`.
-  - A standalone health app may be launched with `RUN_HEALTHCHECK=1 python -m ai_trading.app` on `HEALTHCHECK_PORT` (default 8081).
+  - A standalone health app may be launched with `RUN_HEALTHCHECK=1 ./venv/bin/python -m ai_trading.app` on `HEALTHCHECK_PORT` (default 8081).
   - In the main runtime, if `HEALTHCHECK_PORT == API_PORT`, the API serves health endpoints on the shared port; otherwise an auxiliary health thread/process may bind `HEALTHCHECK_PORT`.
   - During startup validation, `RUN_HEALTHCHECK=1` requires `HEALTHCHECK_PORT != API_PORT`.
   - Health routes must be registered through the shared canonical helpers; do not add bespoke per-entrypoint health implementations.
@@ -48,12 +48,12 @@ This document is the authoritative playbook for Codex-style editing in this repo
 - Root-level `*_SUMMARY.md`, `*_FIX_*`, `*_REPORT.md`, `*_REMOVAL_*`, and similar implementation-snapshot documents are archival unless explicitly refreshed. Do not treat them as the sole source of truth for ports, env vars, entrypoints, or deployment behavior.
 
 ## 4. Validation Requirements
-Agents must run and report these checks when changing runtime or library code (docs-only changes may explain why checks were skipped):
-- `pytest -q`
-- `ruff` (limit to changed paths when possible)
-- `mypy` (at least on changed files/modules)
+Agents must run and report these checks when changing runtime or library code. During market hours, use targeted tests plus live runtime validation unless a broad test run is explicitly approved. Docs-only changes may explain why checks were skipped.
+- `./venv/bin/pytest -q`
+- `./venv/bin/ruff check` (limit to changed paths when possible)
+- `./venv/bin/mypy` (at least on changed files/modules)
 - `bash scripts/typecheck_strict.sh`
-- `python3 -m py_compile $(git ls-files '*.py')`
+- `./venv/bin/python -m py_compile $(git ls-files '*.py')`
 
 Always add or update unit tests when fixing bugs or adding behavior.
 
@@ -63,7 +63,7 @@ Always add or update unit tests when fixing bugs or adding behavior.
 Every agent-authored PR must include:
 - **WORKLOG** — summary of intent, root cause, and scope.
 - **PATCHSET** — list of `apply_patch` diffs (no file dumps or editors).
-- **VALIDATION** — commands executed (`pytest -q`, `ruff`, `mypy`, `py_compile`) with outcomes.
+- **VALIDATION** — commands executed (`./venv/bin/pytest -q`, `./venv/bin/ruff check`, `./venv/bin/mypy`, `./venv/bin/python -m py_compile $(git ls-files '*.py')`) with outcomes.
 - **RISK & ROLLBACK** — risk assessment and how to revert.
 
 ---
@@ -79,9 +79,15 @@ Use these stable strings to anchor surgical edits:
 
 ## 7. Operational Notes
 - The checked-in `packaging/systemd/ai-trading.service` currently exposes `/healthz` on `:9001` because it sets `HEALTHCHECK_PORT=9001`.
+- The checked-in `packaging/systemd/ai-trading-api.service` is a local debug facade on `:9002`; the main runtime service remains `ai-trading.service` on `:9001`.
 - Validate the surface that matches the deployment mode:
   - packaged main service: `curl -sS http://127.0.0.1:9001/healthz`
   - standalone health app: `curl -sS http://127.0.0.1:${HEALTHCHECK_PORT}/healthz`
+- During market hours, do not run broad `./venv/bin/pytest -q` unless explicitly
+  approved. Prefer live runtime validation for runtime changes:
+  `systemctl status ai-trading.service`,
+  `curl -sS http://127.0.0.1:9001/healthz`, and
+  `journalctl -u ai-trading.service`.
 - **Repo ownership:** this checkout is owned by `aiuser`. Do not run repo-local
   development commands with `sudo` because they create root-owned source files,
   caches, test artifacts, venv packages, and model directories that later break
