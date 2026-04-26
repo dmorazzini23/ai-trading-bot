@@ -54,6 +54,10 @@ logs/
 # Test artifacts
 htmlcov/
 coverage.xml
+coverage.json
+.coverage
+.coverage.*
+.ruff_cache/
 
 # Benchmark results
 .benchmarks/
@@ -102,6 +106,9 @@ patch_full_cleanup.patch
 /runtime/run_manifest.jsonl
 /runtime/research_reports/
 /runtime/archive/
+/runtime/*.db
+/runtime/governance/rollback_audit.jsonl
+/runtime/meta_retrain_history.json
 
 # Local OpenClaw workspace state
 .openclaw/
