@@ -65,8 +65,7 @@ def test_monotonic_time_runtime_error_from_generator(monkeypatch):
 
     def fake_monotonic():
         def _generator():
-            if False:  # pragma: no cover - generator marker
-                yield None
+            yield from ()
             raise StopIteration
 
         return next(_generator())

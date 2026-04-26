@@ -124,3 +124,88 @@ def test_fetch_feed_cooldown_skips_primary_after_fallback(monkeypatch):
     assert call_feeds == ["iex", "sip"], "cooldown should route to the alternate feed instead of retrying the primary"
     key = ("COOL", "1Min")
     assert key in fb._PROVIDER_COOLDOWNS
+
+
+def test_provider_decision_window_caches_defaults_and_clamps(monkeypatch):
+    fb._PROVIDER_DECISION_CACHE = (33.0, 100.0)
+    monkeypatch.setattr(fb, "monotonic_time", lambda: 120.0)
+    assert fb._provider_decision_window() == 33.0
+
+    fb._PROVIDER_DECISION_CACHE = (0.0, 0.0)
+    monkeypatch.setattr(fb, "monotonic_time", lambda: 120.0)
+    monkeypatch.setattr(fb, "get_env", lambda *args, **kwargs: -5.0)
+    assert fb._provider_decision_window() == 0.0
+
+    fb._PROVIDER_DECISION_CACHE = (0.0, 0.0)
+
+    def raise_config(*_args, **_kwargs):
+        raise ValueError("bad env")
+
+    monkeypatch.setattr(fb, "get_env", raise_config)
+    assert fb._provider_decision_window() == 120.0
+
+
+def test_provider_cooldown_helpers_expire_and_preserve_longer_window(monkeypatch):
+    key = ("COOLHELP", "1Min")
+    fb._PROVIDER_COOLDOWNS.clear()
+
+    monkeypatch.setattr(fb, "_provider_decision_window", lambda: 20.0)
+    monkeypatch.setattr(fb, "monotonic_time", lambda: 100.0)
+    fb._apply_provider_cooldown(key, symbol="COOLHELP", timeframe="1Min", provider="alpaca_iex")
+    assert fb._PROVIDER_COOLDOWNS[key] == 120.0
+
+    monkeypatch.setattr(fb, "_provider_decision_window", lambda: 10.0)
+    fb._apply_provider_cooldown(
+        key,
+        symbol="COOLHELP",
+        timeframe="1Min",
+        provider="alpaca_iex",
+        fallback_provider="yahoo",
+    )
+    assert fb._PROVIDER_COOLDOWNS[key] == 120.0
+
+    monkeypatch.setattr(fb, "monotonic_time", lambda: 119.0)
+    active, remaining = fb._primary_on_cooldown(key)
+    assert active is True
+    assert remaining == 1.0
+
+    monkeypatch.setattr(fb, "monotonic_time", lambda: 121.0)
+    active, remaining = fb._primary_on_cooldown(key)
+    assert active is False
+    assert remaining == 0.0
+    assert key not in fb._PROVIDER_COOLDOWNS
+
+
+def test_next_feed_respects_priority_budget_and_fallbacks(monkeypatch):
+    monkeypatch.setattr(fb, "provider_priority", lambda: ["alpaca_iex", "polygon", "alpaca_sip"])
+    monkeypatch.setattr(fb, "max_data_fallbacks", lambda: 2)
+    assert fb._next_feed("iex") == "sip"
+
+    monkeypatch.setattr(fb, "max_data_fallbacks", lambda: 1)
+    assert fb._next_feed("iex") == "sip"
+
+    monkeypatch.setattr(fb, "max_data_fallbacks", lambda: 0)
+    assert fb._next_feed("bogus") is None
+
+    def bad_budget():
+        raise ValueError("bad budget")
+
+    monkeypatch.setattr(fb, "max_data_fallbacks", bad_budget)
+    assert fb._next_feed("sip") == "iex"
+
+
+def test_http_fallback_disabled_unmapped_and_empty(monkeypatch):
+    start, end = _dt_range(1)
+    monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", False, raising=False)
+    monkeypatch.setattr(fb._fetch_module, "_ENABLE_HTTP_FALLBACK", False, raising=False)
+    assert fb._http_fallback("TEST", start, end, "1Min", from_feed="iex") is None
+
+    monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", True, raising=False)
+    monkeypatch.setattr(fb._fetch_module, "_ENABLE_HTTP_FALLBACK", True, raising=False)
+    monkeypatch.setattr(fb, "_canon_tf", lambda _timeframe: "2Hour")
+    assert fb._http_fallback("TEST", start, end, "2Hour", from_feed="iex") is None
+
+    empty = pd.DataFrame()
+    monkeypatch.setattr(fb, "_canon_tf", lambda _timeframe: "1Day")
+    monkeypatch.setattr(fb, "_backup_get_bars", lambda *_args, **_kwargs: empty)
+    assert fb._http_fallback("TEST", start, end, "1Day", from_feed="iex") is empty

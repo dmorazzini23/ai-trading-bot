@@ -117,3 +117,23 @@ def test_execute_netting_submission_returns_success_payload() -> None:
     assert result.order_payload["client_order_id"] == "cid-1"
     assert result.metrics == {"pnl": 1.0}
     assert result.tca_record == {"tca": True}
+
+
+def test_execute_netting_submission_does_not_count_rejected_order_as_submitted() -> None:
+    kwargs = _base_kwargs()
+    recorded_success: list[dict[str, Any]] = []
+    kwargs["normalize_submitted_order_func"] = lambda order, **kwargs: SimpleNamespace(
+        status_text="rejected",
+        status_token="rejected",
+    )
+    kwargs["record_successful_submission_func"] = lambda **record_kwargs: recorded_success.append(
+        dict(record_kwargs)
+    )
+
+    result = execute_netting_submission(**cast(Any, kwargs))
+
+    assert result.status == "rejected"
+    assert result.gates_added == ("BROKER_ORDER_REJECTED",)
+    assert result.attempted_increment == 1
+    assert result.submitted_increment == 0
+    assert recorded_success == []

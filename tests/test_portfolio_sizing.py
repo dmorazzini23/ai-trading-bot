@@ -144,6 +144,33 @@ def test_volatility_targeting_calculate_position_sizes_end_to_end() -> None:
     assert all("estimated_vol" in details for details in result.values())
 
 
+def test_volatility_targeting_preserves_short_signal_direction() -> None:
+    sizer = sizing.VolatilityTargetingSizer(min_weight=0.01, max_weight=0.9)
+    result = sizer.calculate_position_sizes(
+        signals={"LONG": 1.0, "SHORT": -0.5},
+        current_prices={"LONG": 100.0, "SHORT": 50.0},
+        portfolio_value=10_000.0,
+    )
+
+    assert result["LONG"]["weight"] > 0
+    assert result["LONG"]["shares"] > 0
+    assert result["SHORT"]["weight"] < 0
+    assert result["SHORT"]["shares"] < 0
+
+
+def test_position_size_callable_for_bot_engine_hook() -> None:
+    position_size = getattr(sizing, "position_size", None)
+
+    assert callable(position_size)
+    assert position_size(
+        "AAPL",
+        0.5,
+        100_000.0,
+        "moderate",
+        current_price=100.0,
+    ) == 25
+
+
 def test_volatility_targeting_calculate_position_sizes_safe_on_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

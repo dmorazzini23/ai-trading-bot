@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from ai_trading.core import bot_engine
+from ai_trading.oms import decision_events
 from ai_trading.oms.decision_events import reset_decision_event_store_cache
 from ai_trading.oms.event_store import EventStore
 
@@ -192,6 +193,26 @@ def test_write_decision_record_emits_decision_events_idempotently(
 
     assert len(decision_rows) == 1
     assert len(oms_rows) == 1
+
+
+def test_decision_event_sell_short_is_sell_action() -> None:
+    inferred = decision_events._decision_action(
+        {
+            "symbol": "AAPL",
+            "gates": ["OK_TRADE"],
+            "order": {"side": "sell_short", "qty": 2},
+        }
+    )
+    explicit = decision_events._decision_action(
+        {
+            "symbol": "AAPL",
+            "decision_action": "SELL_SHORT",
+            "order": {"side": "sell_short", "qty": 2},
+        }
+    )
+
+    assert inferred == "SELL"
+    assert explicit == "SELL"
 
 
 def test_tca_stale_block_reason_respects_latest_timestamp(

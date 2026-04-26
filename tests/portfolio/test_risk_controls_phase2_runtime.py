@@ -52,7 +52,7 @@ def test_adaptive_risk_controller_vol_kelly_drawdown_and_clusters(monkeypatch: p
         {"AAPL": 0.2, "MSFT": 0.2, "ZERO": 0.0},
     )
     assert kelly["AAPL"] > 0.0
-    assert kelly["MSFT"] == 0.0
+    assert kelly["MSFT"] < 0.0
     assert kelly["NEW"] == 0.0
     assert kelly["ZERO"] == 0.0
 
@@ -104,6 +104,34 @@ def test_cluster_limits_and_position_size_turnover_paths(monkeypatch: pytest.Mon
     assert targets["AAPL"] == pytest.approx(5_000.0)
     assert targets["MSFT"] == pytest.approx(0.0)
     assert controller.turnover_budget.remaining_turnover == pytest.approx(0.0)
+
+
+def test_adaptive_risk_controller_preserves_short_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = risk_controls.AdaptiveRiskController(
+        risk_controls.RiskBudget(max_turnover_daily=1.0)
+    )
+    monkeypatch.setattr(
+        controller,
+        "calculate_volatilities",
+        lambda _returns_data: {"AAPL": 0.2, "MSFT": 0.2},
+    )
+    monkeypatch.setattr(
+        controller,
+        "calculate_correlation_clusters",
+        lambda _returns_data: {"AAPL": 0, "MSFT": 1},
+    )
+
+    targets = controller.calculate_position_sizes(
+        {"AAPL": 1.0, "MSFT": -1.0},
+        _returns_frame(),
+        portfolio_value=100_000.0,
+        current_positions={"AAPL": 0.0, "MSFT": 0.0},
+    )
+
+    assert targets["AAPL"] > 0
+    assert targets["MSFT"] < 0
 
 
 def test_reset_summary_and_global_helpers(monkeypatch: pytest.MonkeyPatch) -> None:

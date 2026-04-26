@@ -25600,12 +25600,14 @@ def _enter_long(
                 final_score,
                 account_equity,
                 getattr(S, "risk_level", "moderate"),
+                current_price=current_price,
             )
             optimized_qty = min(optimized_qty, getattr(S, "max_position_size", 1000))
             if optimized_qty > 0:
                 raw_qty = optimized_qty
                 logger.debug("Sizing decided qty=%s for %s", raw_qty, symbol)
         except (
+            AttributeError,
             FileNotFoundError,
             PermissionError,
             IsADirectoryError,
@@ -39730,6 +39732,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 float(proposal.expected_cost_bps),
                 fee_bps=float(effective_policy.objective.fee_bps),
                 borrow_bps=float(effective_policy.objective.borrow_bps),
+                side="sell_short" if float(proposal.target_dollars) < 0.0 else "buy",
             )
             proposal.debug["expected_net_edge_bps"] = net_edge_bps
             if (
@@ -39782,6 +39785,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     float(effective_cost_bps),
                     fee_bps=float(effective_policy.objective.fee_bps),
                     borrow_bps=float(effective_policy.objective.borrow_bps),
+                    side="sell_short" if float(proposal.target_dollars) < 0.0 else "buy",
                 )
                 effective_edge_floor = max(
                     edge_min_expected_bps + max(edge_floor_adjust, 0.0) + max(edge_floor_buffer_bps, 0.0),
@@ -39979,6 +39983,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     float(proposal.expected_cost_bps),
                     fee_bps=float(effective_policy.objective.fee_bps),
                     borrow_bps=float(effective_policy.objective.borrow_bps),
+                    side="sell_short" if float(proposal.target_dollars) < 0.0 else "buy",
                 )
                 for proposal in target.proposals
             )

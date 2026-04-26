@@ -94,6 +94,38 @@ def test_execute_signal_orders_submits_expected_orders() -> None:
     assert calls == [("A", 1, "buy"), ("C", 1, "sell")]
 
 
+def test_execute_signal_orders_returns_only_successfully_submitted_orders() -> None:
+    calls: list[tuple[str, int, str]] = []
+
+    def _submit_order(symbol: str, qty: int, side: str) -> None:
+        calls.append((symbol, qty, side))
+        if symbol == "A":
+            raise ValueError("broker rejected")
+
+    ctx = types.SimpleNamespace(api=types.SimpleNamespace(submit_order=_submit_order))
+    signals = pd.Series([1, -1], index=["A", "C"])
+
+    orders = execute_signal_orders(ctx, signals, logger=_DummyLogger())
+
+    assert orders == [("C", "sell")]
+    assert calls == [("A", 1, "buy"), ("C", 1, "sell")]
+
+
+def test_execute_signal_orders_excludes_terminal_rejected_response() -> None:
+    ctx = types.SimpleNamespace(
+        api=types.SimpleNamespace(
+            submit_order=lambda symbol, _qty, _side: types.SimpleNamespace(
+                status="rejected" if symbol == "A" else "accepted"
+            )
+        )
+    )
+    signals = pd.Series([1, -1], index=["A", "C"])
+
+    orders = execute_signal_orders(ctx, signals, logger=_DummyLogger())
+
+    assert orders == [("C", "sell")]
+
+
 def test_ensure_portfolio_weights_requires_canonical_weights(monkeypatch) -> None:
     logger = _DummyLogger()
     monkeypatch.delattr(portfolio_mod, "compute_portfolio_weights", raising=False)

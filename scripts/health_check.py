@@ -44,15 +44,17 @@ class HealthCheckResult:
     details: dict[str, Any]
     timestamp: datetime
 
+HealthCheckCallable = Callable[[], HealthCheckResult]
+
 class HealthMonitor:
     """Comprehensive health monitoring for the trading bot."""
 
-    def __init__(self):
-        self.checks: dict[str, callable] = {}
+    def __init__(self) -> None:
+        self.checks: dict[str, HealthCheckCallable] = {}
         self.last_results: dict[str, HealthCheckResult] = {}
         self._lock = threading.RLock()
         self.circuit_breakers: dict[str, CircuitBreaker] = {}
-        self.alert_callback: Callable | None = None
+        self.alert_callback: Callable[..., None] | None = None
         self.production_monitor: ProductionMonitor | None = None
         self.check_latencies: dict[str, list[float]] = {}
         self.failure_counts: dict[str, int] = {}
@@ -66,12 +68,12 @@ class HealthMonitor:
         self.register_trading_checks()
         self.register_api_checks()
 
-    def register_check(self, name: str, check_func: callable):
+    def register_check(self, name: str, check_func: HealthCheckCallable) -> None:
         """Register a health check function."""
         with self._lock:
             self.checks[name] = check_func
 
-    def register_default_checks(self):
+    def register_default_checks(self) -> None:
         """Register standard health checks."""
         self.register_check('system_resources', self._check_system_resources)
         self.register_check('disk_space', self._check_disk_space)
@@ -79,17 +81,17 @@ class HealthMonitor:
         self.register_check('log_files', self._check_log_files)
         self.register_check('environment_variables', self._check_environment_variables)
 
-    def register_trading_checks(self):
+    def register_trading_checks(self) -> None:
         """Register trading-specific health checks."""
 
-    def register_api_checks(self):
+    def register_api_checks(self) -> None:
         """Register API connectivity health checks."""
 
-    def set_alert_callback(self, callback: Callable):
+    def set_alert_callback(self, callback: Callable[..., None]) -> None:
         """Set callback function for health alerts."""
         self.alert_callback = callback
 
-    def add_circuit_breaker(self, name: str, circuit_breaker: CircuitBreaker):
+    def add_circuit_breaker(self, name: str, circuit_breaker: CircuitBreaker) -> None:
         """Add circuit breaker for a service."""
         self.circuit_breakers[name] = circuit_breaker
 
@@ -247,7 +249,7 @@ def get_health_status() -> dict[str, Any]:
     overall_status = health_monitor.get_overall_status()
     return {'overall_status': overall_status.value, 'timestamp': datetime.now(UTC).isoformat(), 'checks': {name: {'status': result.status.value, 'message': result.message, 'details': result.details, 'timestamp': result.timestamp.isoformat()} for name, result in results.items()}}
 
-def log_health_summary():
+def log_health_summary() -> None:
     """Log a summary of system health."""
     try:
         status = get_health_status()
@@ -271,12 +273,12 @@ if __name__ == '__main__':
     status = get_health_status()
     logging.info(str(json.dumps(status, indent=2)))
 
-def _check_trading_system(self) -> HealthCheckResult:
+def _check_trading_system(self: HealthMonitor) -> HealthCheckResult:
     """Check trading system health and status."""
     try:
         start_time = time.perf_counter()
-        details = {}
-        issues = []
+        details: dict[str, Any] = {}
+        issues: list[str] = []
         try:
             from ai_trading.core import bot_engine
             details['bot_engine'] = 'OK'
@@ -307,9 +309,9 @@ def _check_trading_system(self) -> HealthCheckResult:
             from ai_trading.defaults import has_default
 
             for name in ('hyperparams.json', 'best_hyperparams.json'):
-                status = 'EXISTS' if has_default(name) else 'MISSING'
-                details[f'packaged_default_{name}'] = status
-                if status != 'EXISTS':
+                packaged_status = 'EXISTS' if has_default(name) else 'MISSING'
+                details[f'packaged_default_{name}'] = packaged_status
+                if packaged_status != 'EXISTS':
                     issues.append(f'Missing packaged default: {name}')
         except ImportError as e:
             issues.append(f'packaged defaults import failed: {e}')
@@ -325,4 +327,4 @@ def _check_trading_system(self) -> HealthCheckResult:
         return HealthCheckResult(name='trading_system', status=status, message=message, details=details, timestamp=datetime.now(UTC))
     except (ValueError, TypeError) as e:
         return HealthCheckResult(name='trading_system', status=HealthStatus.CRITICAL, message=f'Failed to check trading system: {e}', details={'error': str(e)}, timestamp=datetime.now(UTC))
-HealthMonitor._check_trading_system = _check_trading_system
+setattr(HealthMonitor, '_check_trading_system', _check_trading_system)

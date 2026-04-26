@@ -14,11 +14,11 @@ def test_execution_result_exposes_side_and_symbol_for_buy():
     assert result.symbol == "AAPL"
 
 
-def test_execution_result_side_maps_short_variants_to_sell():
+def test_execution_result_side_preserves_short_variants():
     order = Order(symbol="TSLA", side=OrderSide.SELL_SHORT, quantity=1, order_type=OrderType.MARKET)
     result = ExecutionResult(order, "accepted", 0, 1, None)
 
-    assert result.side == "sell"
+    assert result.side == "sell_short"
 
 
 def test_execution_result_preserves_fractional_quantities():

@@ -79,6 +79,46 @@ COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
 
+def _risk_fraction(risk_level: Any) -> float:
+    """Return the maximum portfolio fraction for a risk-level token."""
+
+    level = str(getattr(risk_level, "value", risk_level) or "moderate").lower()
+    return {
+        "conservative": 0.02,
+        "moderate": 0.05,
+        "aggressive": 0.10,
+    }.get(level, 0.05)
+
+
+def position_size(
+    symbol: str,
+    signal_strength: float,
+    account_equity: float,
+    risk_level: Any = "moderate",
+    *,
+    current_price: float | None = None,
+) -> int:
+    """Calculate a bounded long-side share quantity for bot-engine sizing hooks."""
+
+    try:
+        if not str(symbol).strip():
+            return 0
+        equity = float(account_equity)
+        signal = float(signal_strength)
+        if not np.isfinite(equity) or equity <= 0 or not np.isfinite(signal) or signal <= 0:
+            return 0
+        target_notional = equity * _risk_fraction(risk_level) * min(signal, 1.0)
+        if current_price is not None:
+            price = float(current_price)
+            if not np.isfinite(price) or price <= 0:
+                return 0
+            return max(0, int(target_notional / price))
+        return max(0, int(target_notional))
+    except COMMON_EXC as e:
+        logger.warning("POSITION_SIZE_FAILED symbol=%s error=%s", symbol, e)
+        return 0
+
+
 def _import_clustering():
     from ai_trading.config import get_settings
     S = get_settings()
@@ -223,8 +263,8 @@ class VolatilityTargetingSizer:
             for symbol, signal in signals.items():
                 vol = volatilities.get(symbol, 0.2)
                 raw_weight = abs(signal) / vol
-                inv_vol_weights[symbol] = raw_weight
-            total_weight = sum(inv_vol_weights.values())
+                inv_vol_weights[symbol] = raw_weight if signal >= 0 else -raw_weight
+            total_weight = sum(abs(weight) for weight in inv_vol_weights.values())
             if total_weight > 0:
                 for symbol in inv_vol_weights:
                     inv_vol_weights[symbol] /= total_weight
@@ -232,19 +272,28 @@ class VolatilityTargetingSizer:
         except COMMON_EXC as e:
             logger.error(f'Error calculating inverse vol weights: {e}')
             n = len(signals)
-            return dict.fromkeys(signals, 1.0 / n)
+            fallback_weights = {}
+            for symbol, signal in signals.items():
+                try:
+                    sign = 1.0 if float(signal) >= 0 else -1.0
+                except (TypeError, ValueError):
+                    sign = 1.0
+                fallback_weights[symbol] = sign / n
+            return fallback_weights
 
     def _apply_position_limits(self, weights: dict[str, float]) -> dict[str, float]:
         """Apply minimum and maximum position limits."""
         try:
             adjusted_weights = {}
             for symbol, weight in weights.items():
-                if weight < self.min_weight:
+                sign = 1.0 if weight >= 0 else -1.0
+                abs_weight = abs(weight)
+                if abs_weight < self.min_weight:
                     adjusted_weights[symbol] = 0.0
                 else:
-                    adjusted_weights[symbol] = min(weight, self.max_weight)
-            adjusted_weights = {k: v for k, v in adjusted_weights.items() if v > 0}
-            total_weight = sum(adjusted_weights.values())
+                    adjusted_weights[symbol] = sign * min(abs_weight, self.max_weight)
+            adjusted_weights = {k: v for k, v in adjusted_weights.items() if abs(v) > 0}
+            total_weight = sum(abs(weight) for weight in adjusted_weights.values())
             if total_weight > 0:
                 for symbol in adjusted_weights:
                     adjusted_weights[symbol] /= total_weight

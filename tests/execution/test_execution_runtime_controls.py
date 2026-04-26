@@ -4045,6 +4045,48 @@ def test_execution_quality_event_enriches_phase_trace_and_error_code(monkeypatch
     assert payload["submit_no_result_error_fingerprint"]
 
 
+def test_persist_fill_derived_trade_record_preserves_sell_short_side(monkeypatch):
+    engine = _engine_stub()
+    fill_records: list[dict[str, Any]] = []
+    fill_events: list[dict[str, Any]] = []
+    reentry_sides: list[str] = []
+    tca_sides: list[str] = []
+
+    monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: True)
+    monkeypatch.setattr(lt, "record_trade_fill", lambda payload: fill_records.append(dict(payload)))
+    monkeypatch.setattr(engine, "_record_runtime_fill_event", lambda payload: fill_events.append(dict(payload)))
+    monkeypatch.setattr(engine, "_update_symbol_loss_cooldown_from_fill", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        engine,
+        "_arm_symbol_reentry_cooldown_from_fill",
+        lambda **kwargs: reentry_sides.append(str(kwargs["side"])),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_reconcile_pending_tca_from_fill",
+        lambda **kwargs: tca_sides.append(str(kwargs["side"])),
+    )
+
+    engine._persist_fill_derived_trade_record(
+        symbol="AAPL",
+        side="sell_short",
+        filled_qty=2.0,
+        fill_price=99.0,
+        expected_price=100.0,
+        order_id="ord-short-1",
+        client_order_id="cid-short-1",
+        order_status="filled",
+        signal=None,
+        timestamp=datetime(2026, 4, 26, tzinfo=UTC),
+        closing_position=False,
+    )
+
+    assert fill_records[-1]["side"] == "sell_short"
+    assert fill_events[-1]["side"] == "sell_short"
+    assert reentry_sides == ["sell_short"]
+    assert tca_sides == ["sell_short"]
+
+
 def test_submit_no_result_symbol_backoff_triggers_after_cluster(monkeypatch):
     engine = _engine_stub()
     monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: False)

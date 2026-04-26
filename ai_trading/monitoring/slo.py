@@ -207,19 +207,35 @@ class SLOMonitor:
             if metric_name is not None:
                 if metric_name not in self._slo_thresholds:
                     return {'error': f'SLO {metric_name} not found'}
-                threshold = self._slo_thresholds[metric_name]
-                status = self._slo_status[metric_name]
-                metrics = list(self._metrics[metric_name])
-                cutoff_time = datetime.now(UTC) - timedelta(minutes=threshold.window_minutes)
-                recent_metrics = [m for m in metrics if m.timestamp >= cutoff_time]
-                current_value = sum((m.value for m in recent_metrics)) / len(recent_metrics) if recent_metrics else None
-                return {'metric': metric_name, 'status': status.value, 'current_value': current_value, 'threshold': {'warning': threshold.warning_threshold, 'critical': threshold.critical_threshold, 'breach': threshold.breach_threshold}, 'window_minutes': threshold.window_minutes, 'sample_count': len(recent_metrics), 'description': threshold.description}
-            result = {}
-            for name in self._slo_thresholds:
-                status_info = self.get_slo_status(name)
-                if 'error' not in status_info:
-                    result[name] = status_info
-            return result
+                return self._get_slo_status_locked(metric_name)
+            return {name: self._get_slo_status_locked(name) for name in self._slo_thresholds}
+
+    def _get_slo_status_locked(self, metric_name: str) -> dict[str, Any]:
+        """Build status information while the monitor lock is held."""
+
+        threshold = self._slo_thresholds[metric_name]
+        status = self._slo_status[metric_name]
+        metrics = list(self._metrics[metric_name])
+        cutoff_time = datetime.now(UTC) - timedelta(minutes=threshold.window_minutes)
+        recent_metrics = [m for m in metrics if m.timestamp >= cutoff_time]
+        current_value = (
+            sum((m.value for m in recent_metrics)) / len(recent_metrics)
+            if recent_metrics
+            else None
+        )
+        return {
+            'metric': metric_name,
+            'status': status.value,
+            'current_value': current_value,
+            'threshold': {
+                'warning': threshold.warning_threshold,
+                'critical': threshold.critical_threshold,
+                'breach': threshold.breach_threshold,
+            },
+            'window_minutes': threshold.window_minutes,
+            'sample_count': len(recent_metrics),
+            'description': threshold.description,
+        }
 
     def get_alerts(self, limit: int=10) -> list[dict[str, Any]]:
         """

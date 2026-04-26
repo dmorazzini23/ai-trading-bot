@@ -5,9 +5,17 @@ from typing import Any
 
 from ai_trading.config.management import get_env, is_test_runtime
 
+_NON_ACCEPTED_ORDER_STATUSES = {"rejected", "canceled", "cancelled", "expired", "done_for_day"}
+
 
 class LegacyLiveExecutionBlockedError(RuntimeError):
     """Raised when legacy non-netting execution is attempted in live mode."""
+
+
+def _order_status_token(order: Any) -> str:
+    status = getattr(order, "status", None)
+    status_value = getattr(status, "value", status)
+    return str(status_value or "").strip().lower()
 
 
 def _execution_mode(ctx: Any) -> str:
@@ -116,7 +124,17 @@ class ExecutionService:
             api = getattr(ctx, "api", None)
             if api is not None and hasattr(api, "submit_order"):
                 try:
-                    api.submit_order(symbol, 1, side)
+                    order = api.submit_order(symbol, 1, side)
+                    status_token = _order_status_token(order)
+                    if status_token in _NON_ACCEPTED_ORDER_STATUSES:
+                        logger.error(
+                            "Broker did not accept test order for %s %s: status=%s",
+                            symbol,
+                            side,
+                            status_token,
+                        )
+                        continue
+                    orders.append((str(symbol), side))
                 except (
                     FileNotFoundError,
                     PermissionError,
@@ -133,7 +151,6 @@ class ExecutionService:
                         side,
                         exc,
                     )
-            orders.append((str(symbol), side))
         return orders
 
 

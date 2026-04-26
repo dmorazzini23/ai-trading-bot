@@ -105,7 +105,15 @@ def evaluate_execution_approval(
         ),
     )
     adjusted_delta_shares = int(approval.adjusted_delta_shares)
-    adjusted_side = "buy" if adjusted_delta_shares > 0 else "sell"
+    adjusted_target_shares = float(current_shares) + float(adjusted_delta_shares)
+    if adjusted_delta_shares > 0:
+        adjusted_side = "buy"
+    elif float(current_shares) > 0.0:
+        adjusted_side = "sell"
+    elif adjusted_target_shares < 0:
+        adjusted_side = "sell_short"
+    else:
+        adjusted_side = "sell"
     return ExecutionApprovalContext(
         approval=approval,
         adjusted_delta_shares=adjusted_delta_shares,

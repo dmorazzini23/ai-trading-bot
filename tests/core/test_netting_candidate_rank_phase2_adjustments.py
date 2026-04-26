@@ -73,6 +73,43 @@ def test_rank_netting_candidates_applies_execution_learning_and_rejection_penalt
     assert signal["expected_capture_fill_probability"] == pytest.approx(0.35)
 
 
+def test_rank_netting_candidates_uses_short_execution_learning_bucket() -> None:
+    kwargs = _base_kwargs()
+    now = kwargs["now"]
+    kwargs.update(
+        {
+            "targets": {
+                "AAPL": _make_target(
+                    symbol="AAPL",
+                    now=now,
+                    target_dollars=-1000.0,
+                    confidence=0.9,
+                    disagreement=0.8,
+                )
+            },
+            "execution_learning_rank_enabled": True,
+            "execution_learning_state": {
+                "buckets": {
+                    "AAPL:opening:trend:maker:sell_short": {
+                        "samples": 8,
+                        "mean_slippage_bps": 14.0,
+                        "mean_net_edge_bps": -3.0,
+                        "mean_adverse_selection_risk_bps": 2.0,
+                        "mean_realization_ratio": 0.4,
+                        "mean_fill_probability": 0.35,
+                    }
+                }
+            },
+        }
+    )
+
+    result = rank_netting_candidates(**kwargs)
+
+    signal = result.counterfactual_signal_by_symbol["AAPL"]
+    assert signal["execution_learning_source"] == "AAPL:opening:trend:maker:sell_short"
+    assert signal["execution_learning_penalty_bps"] > 0.0
+
+
 def test_rank_netting_candidates_promotes_live_bandit_and_counterfactual_bonus() -> None:
     kwargs = _base_kwargs()
     kwargs.update(

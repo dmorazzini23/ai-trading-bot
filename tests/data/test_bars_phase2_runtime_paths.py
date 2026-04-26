@@ -106,6 +106,8 @@ def test_safe_get_stock_bars_retries_unauthorized_feed_with_entitled_alt(
 
     monkeypatch.setattr(bars_mod, "_client_fetch_stock_bars", fake_client_fetch)
     monkeypatch.setattr(bars_mod, "_ensure_entitled_feed", lambda _client, _feed: next(feed_resolutions))
+    monkeypatch.setattr(bars_mod, "previous_trading_session", lambda _day: start.date())
+    monkeypatch.setattr(bars_mod, "rth_session_utc", lambda _day: (start, start + timedelta(hours=6)))
     monkeypatch.setattr(bars_mod.time, "sleep", lambda _seconds: None)
 
     frame = bars_mod.safe_get_stock_bars(Client(), request, "spy", context="daily")
@@ -134,6 +136,8 @@ def test_safe_get_stock_bars_minute_exception_recovers_from_minute_fallback(
 
     monkeypatch.setattr(bars_mod, "_client_fetch_stock_bars", lambda *_args: (_ for _ in ()).throw(ValueError("boom")))
     monkeypatch.setattr(bars_mod, "get_minute_df", lambda *_args, **_kwargs: fallback)
+    monkeypatch.setattr(bars_mod, "previous_trading_session", lambda _day: start.date())
+    monkeypatch.setattr(bars_mod, "rth_session_utc", lambda _day: (start, start + timedelta(hours=6)))
 
     frame = bars_mod.safe_get_stock_bars(Client(), request, "spy", context="minute")
 
@@ -229,3 +233,84 @@ def test_entitlement_helpers_collect_account_and_generation_sources() -> None:
 
     assert bars_mod._extract_entitlements(client) == {"iex", "sip"}
     assert bars_mod._extract_generation(client) == datetime(2026, 4, 20, 12, 0, tzinfo=UTC)
+
+
+def test_env_and_generation_helpers_handle_aliases_and_invalid_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    values = {
+        "ALPACA_SIP_ENTITLED": "yes",
+        "ALPACA_HAS_SIP": "0",
+        "ALPACA_ALLOW_SIP": "disabled",
+        "ALPACA_API_KEY": "key-123",
+    }
+
+    def fake_get_env(name: str, default: Any = None, **_kwargs: Any) -> Any:
+        if name == "BROKEN":
+            raise RuntimeError("bad env")
+        return values.get(name, default)
+
+    monkeypatch.setattr(bars_mod, "get_env", fake_get_env)
+
+    assert bars_mod._env_bool("ALPACA_SIP_ENTITLED") is True
+    assert bars_mod._env_bool("ALPACA_HAS_SIP") is False
+    assert bars_mod._env_explicit_false("ALPACA_ALLOW_SIP") is True
+    assert bars_mod._default_sip_entitled() is True
+    assert bars_mod._resolve_client_token(SimpleNamespace()) == "key-123"
+    assert bars_mod._resolve_client_token(SimpleNamespace(api_key="client-key")) == "client-key"
+
+    assert bars_mod._normalize_generation(1_775_000_000).tzinfo is UTC
+    assert bars_mod._normalize_generation("2026-04-20T12:00:00Z") == datetime(2026, 4, 20, 12, 0, tzinfo=UTC)
+    assert bars_mod._normalize_generation("not-a-date") is None
+    assert bars_mod._coerce_generation("") is None
+    assert bars_mod._coerce_generation("not-a-date") is None
+    assert bars_mod._coerce_generation(datetime(2026, 4, 20, 12, 0)) == datetime(2026, 4, 20, 12, 0, tzinfo=UTC).timestamp()
+
+
+def test_entitlement_cache_key_and_resolution_reflect_generation_and_env_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bars_mod._ENTITLE_CACHE.clear()
+    env_values = {
+        "PYTEST_RUNNING": "1",
+        "ALPACA_ALLOW_SIP": "0",
+        "ALPACA_SIP_ENTITLED": None,
+        "ALPACA_HAS_SIP": None,
+        "ALPACA_KEY": "key",
+        "ALPACA_API_KEY": None,
+        "ALPACA_SECRET": "secret",
+        "ALPACA_SECRET_KEY": None,
+    }
+
+    def fake_get_env(name: str, default: Any = None, **_kwargs: Any) -> Any:
+        return env_values.get(name, default)
+
+    class Client:
+        account_id = "42"
+        api_key = "client-token"
+        entitlements_generation = "2026-04-20T12:00:00Z"
+        entitlements = {"sip": True, "iex": True}
+
+    client = Client()
+    monkeypatch.setattr(bars_mod, "get_env", fake_get_env)
+
+    assert bars_mod._resolve_account_identifier(SimpleNamespace(account_number=" ACCT ")) == "ACCT"
+    assert bars_mod._resolve_account_identifier(SimpleNamespace(id=123.9)) == "123"
+    assert bars_mod._entitlement_cache_key(" acct ", 2.9, "token")[0:2] == ("acct", "2")
+    assert bars_mod._extract_snapshot_generation(SimpleNamespace(updated_at="2026-04-20T12:00:00Z"), 1.0) == datetime(
+        2026, 4, 20, 12, 0, tzinfo=UTC
+    ).timestamp()
+    assert bars_mod._cache_entry_feeds({"feeds": {"sip"}}) == {"sip"}
+    assert bars_mod._cache_entry_feeds({"feeds": None}) == set()
+    assert bars_mod._cache_entry_feeds("bad") == set()
+
+    assert bars_mod._get_entitled_feeds(client) == {"iex", "sip"}
+    assert bars_mod._ensure_entitled_feed(client, "sip") == "iex"
+    cache_entry = bars_mod._ENTITLE_CACHE[bars_mod._entitle_cache_key(client)]
+    assert cache_entry.feeds == {"iex"}
+    assert cache_entry.resolved == "iex"
+
+    env_values["ALPACA_ALLOW_SIP"] = "1"
+    client.entitlements_generation = "2026-04-20T12:05:00Z"
+    assert bars_mod._ensure_entitled_feed(client, "sip") == "sip"
+    cache_entry = bars_mod._ENTITLE_CACHE[bars_mod._entitle_cache_key(client)]
+    assert cache_entry.feeds == {"iex", "sip"}
+    assert cache_entry.resolved == "sip"

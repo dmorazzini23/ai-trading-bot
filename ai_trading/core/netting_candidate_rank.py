@@ -440,7 +440,7 @@ def rank_netting_candidates(  # noqa: PLR0913, C901
 
     for symbol, target in targets.items():
         raw_net_edge_total = float(net_edge_raw_by_symbol.get(symbol, 0.0) or 0.0)
-        candidate_side = "buy" if float(target.target_dollars) >= 0.0 else "sell"
+        candidate_side = "buy" if float(target.target_dollars) >= 0.0 else "sell_short"
         edge_realism_rank_factor = float(
             edge_realism_rank_factor_by_symbol.get(symbol, 1.0)
         )

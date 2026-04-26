@@ -12,14 +12,12 @@ from pydantic import ValidationError
 import pytest
 
 
-def test_pydantic_v2_migration_module_snippet():
-    """Ensure the migration snippet uses the correct import string."""
+def test_pydantic_v2_migration_example_removed():
+    """The old standalone migration example should not live in runtime code."""
     module_path = os.path.join(
         os.path.dirname(__file__), '..', 'ai_trading', 'config', 'pydantic_v2_migration.py'
     )
-    with open(module_path) as f:
-        content = f.read()
-    assert 'from pydantic import field_validator, Field' in content
+    assert not os.path.exists(module_path)
 
 
 def test_pydantic_v2_migration_syntax():

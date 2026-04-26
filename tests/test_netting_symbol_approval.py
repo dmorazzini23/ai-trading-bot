@@ -72,7 +72,11 @@ def _base_kwargs() -> dict[str, Any]:
 
 
 def test_prepare_netting_symbol_approval_blocks_when_sell_qty_unavailable() -> None:
-    result = prepare_netting_symbol_approval(**cast(Any, _base_kwargs()))
+    kwargs = _base_kwargs()
+    kwargs["current_shares"] = 5
+    kwargs["delta_shares"] = -3
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
 
     assert result.blocked_reason == "PRE_SUBMIT_INSUFFICIENT_POSITION_AVAILABLE"
     assert result.gates_added == ("PRE_SUBMIT_INSUFFICIENT_POSITION_AVAILABLE",)
@@ -103,3 +107,123 @@ def test_prepare_netting_symbol_approval_applies_approval_adjustment() -> None:
     assert result.side == "buy"
     assert result.opening_trade is True
     assert result.gates_added == ("APPROVAL_SCALE",)
+
+
+def test_prepare_netting_symbol_approval_allows_opening_short_without_long_inventory() -> None:
+    clip_calls: list[dict[str, Any]] = []
+    kwargs = _base_kwargs()
+    kwargs["current_shares"] = 0
+    kwargs["delta_shares"] = -4
+    kwargs["exec_engine"] = SimpleNamespace()
+
+    def _clip_sell_qty_to_available_position(**clip_kwargs: Any) -> tuple[int, dict[str, int]]:
+        clip_calls.append(dict(clip_kwargs))
+        return 0, {"available": 0}
+
+    kwargs["clip_sell_qty_to_available_position_func"] = _clip_sell_qty_to_available_position
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.blocked_reason is None
+    assert result.side == "sell_short"
+    assert result.delta_shares == -4
+    assert result.target_shares == -4
+    assert clip_calls == []
+
+
+def test_prepare_netting_symbol_approval_preserves_sell_short_after_approval_adjustment() -> None:
+    kwargs = _base_kwargs()
+    kwargs["current_shares"] = 0
+    kwargs["delta_shares"] = -10
+    kwargs["exec_engine"] = SimpleNamespace()
+    kwargs["clip_sell_qty_to_available_position_func"] = lambda **_kwargs: (
+        0,
+        {"available": 0},
+    )
+    kwargs["evaluate_execution_approval_func"] = lambda **_kwargs: SimpleNamespace(
+        approval=SimpleNamespace(allowed=True, reasons=["APPROVAL_SCALE"], expected_net_edge_bps=7.5),
+        adjusted_delta_shares=-3,
+        adjusted_side="sell",
+    )
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.side == "sell_short"
+    assert result.delta_shares == -3
+    assert result.target_shares == -3
+
+
+def test_prepare_netting_symbol_approval_closes_long_before_opening_short() -> None:
+    clip_calls: list[dict[str, Any]] = []
+    kwargs = _base_kwargs()
+    kwargs["current_shares"] = 5
+    kwargs["delta_shares"] = -10
+    kwargs["exec_engine"] = SimpleNamespace()
+
+    def _clip_sell_qty_to_available_position(**clip_kwargs: Any) -> tuple[int, dict[str, int]]:
+        clip_calls.append(dict(clip_kwargs))
+        return min(int(clip_kwargs["requested_qty"]), 5), {"available": 5}
+
+    kwargs["clip_sell_qty_to_available_position_func"] = _clip_sell_qty_to_available_position
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.blocked_reason is None
+    assert result.side == "sell"
+    assert result.delta_shares == -5
+    assert result.target_shares == 0
+    assert result.opening_trade is False
+    assert result.gates_added == ("PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION",)
+    assert clip_calls[0]["requested_qty"] == 10
+
+
+def test_prepare_netting_symbol_approval_clips_post_approval_long_to_short_adjustment() -> None:
+    kwargs = _base_kwargs()
+    kwargs["current_shares"] = 5
+    kwargs["delta_shares"] = -3
+    kwargs["exec_engine"] = SimpleNamespace()
+    kwargs["clip_sell_qty_to_available_position_func"] = lambda **clip_kwargs: (
+        min(int(clip_kwargs["requested_qty"]), 5),
+        {"available": 5},
+    )
+    kwargs["evaluate_execution_approval_func"] = lambda **_kwargs: SimpleNamespace(
+        approval=SimpleNamespace(allowed=True, reasons=["APPROVAL_SCALE"], expected_net_edge_bps=7.5),
+        adjusted_delta_shares=-8,
+        adjusted_side="sell_short",
+    )
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.side == "sell"
+    assert result.delta_shares == -5
+    assert result.target_shares == 0
+    assert result.opening_trade is False
+    assert result.gates_added == (
+        "APPROVAL_SCALE",
+        "PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION",
+    )
+
+
+def test_prepare_netting_symbol_approval_keeps_flip_close_as_sell_after_throttle() -> None:
+    kwargs = _base_kwargs()
+    kwargs["current_shares"] = 5
+    kwargs["delta_shares"] = -10
+    kwargs["exec_engine"] = SimpleNamespace()
+    kwargs["capacity_throttle_enabled"] = True
+    kwargs["capacity_spread_soft_bps"] = 5.0
+    kwargs["capacity_spread_hard_bps"] = 10.0
+    kwargs["capacity_min_scale"] = 0.5
+    kwargs["liq_features"] = SimpleNamespace(spread_bps=10.0, rolling_volume=10000.0)
+    kwargs["clip_sell_qty_to_available_position_func"] = lambda **clip_kwargs: (
+        min(int(clip_kwargs["requested_qty"]), 5),
+        {"available": 5},
+    )
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.side == "sell"
+    assert result.delta_shares == -2
+    assert result.target_shares == 3
+    assert result.opening_trade is False
+    assert "PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION" in result.gates_added
+    assert "CAPACITY_THROTTLE_SCALE" in result.gates_added

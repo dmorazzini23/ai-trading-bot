@@ -59,6 +59,43 @@ def test_evaluate_execution_approval_builds_candidate_and_context(monkeypatch) -
     assert result.sector_name == "TECH"
 
 
+def test_evaluate_execution_approval_keeps_long_to_short_adjustment_as_sell() -> None:
+    def _fake_approve(_policy, _candidate):
+        return ExecutionApproval(
+            allowed=True,
+            adjusted_delta_shares=-8,
+            expected_net_edge_bps=12.5,
+            reasons=("OK_EDGE",),
+        )
+
+    result = execution_guards.evaluate_execution_approval(
+        effective_policy=object(),
+        symbol="AAPL",
+        side="sell",
+        delta_shares=-3,
+        current_shares=5.0,
+        price=100.0,
+        expected_edge_total=15.0,
+        expected_cost_total=4.0,
+        proposals=[_Proposal(0.8, -800.0)],
+        spread_bps=10.0,
+        rolling_volume=25000.0,
+        pending_oldest_age_sec=0.0,
+        calibration_ok=True,
+        reject_rate_pct=0.0,
+        portfolio_current_gross=5000.0,
+        sector_gross={"TECH": 2000.0},
+        sector_name="TECH",
+        max_new_orders_per_cycle=3,
+        orders_submitted=1,
+        engine_cycle_new_orders_submitted=1,
+        safety_tier_raw="normal",
+        approval_func=_fake_approve,
+    )
+
+    assert result.adjusted_side == "sell"
+
+
 def test_build_portfolio_optimizer_positions_filters_invalid_values() -> None:
     positions = {
         "AAPL": 1,

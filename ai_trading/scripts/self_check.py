@@ -1,6 +1,6 @@
 import datetime as dt
+from typing import Any
 from zoneinfo import ZoneInfo
-from typing import TYPE_CHECKING
 
 from ai_trading.alpaca_api import (
     get_api_error_cls,
@@ -11,11 +11,8 @@ from ai_trading.config.management import get_env, validate_required_env
 from ai_trading.env import ensure_dotenv_loaded
 from ai_trading.logging import logger
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from alpaca.data.timeframe import TimeFrame as AlpacaTimeFrame  # type: ignore
 
-
-def _bars_time_window(timeframe: "AlpacaTimeFrame") -> tuple[dt.datetime, dt.datetime]:
+def _bars_time_window(timeframe: Any) -> tuple[dt.datetime, dt.datetime]:
     now = dt.datetime.now(tz=ZoneInfo("UTC"))
     end = now - dt.timedelta(minutes=1)
     if timeframe == TimeFrame.Day:

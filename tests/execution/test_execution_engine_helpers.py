@@ -111,7 +111,7 @@ def test_execution_result_normalizes_side_status_quantities_and_weight():
     assert result.filled_weight == pytest.approx(0.2)
 
     setattr(cast(Any, order), "side", "sell_short")
-    assert result.side == "sell"
+    assert result.side == "sell_short"
     setattr(cast(Any, order), "side", "cover")
     assert result.side == "buy"
     setattr(cast(Any, order), "side", "nonsense")

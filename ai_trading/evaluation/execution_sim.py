@@ -7,13 +7,26 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 
+def _as_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    token = str(value).strip().lower()
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    if token in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
 @dataclass(slots=True)
 class ExecutionSimConfig:
     """Configuration for fold-level executed-trade simulation."""
 
     signal_threshold: float = 0.0
-    transaction_cost_bps: float = 0.0
-    slippage_bps: float = 0.0
+    transaction_cost_bps: float = 1.0
+    slippage_bps: float = 5.0
     allow_short: bool = True
     max_abs_position: float = 1.0
 
@@ -29,15 +42,15 @@ class ExecutionSimConfig:
             signal_threshold = 0.0
         try:
             transaction_cost_bps = max(
-                0.0, float(source.get("transaction_cost_bps", 0.0) or 0.0)
+                0.0, float(source.get("transaction_cost_bps", 1.0) or 0.0)
             )
         except (TypeError, ValueError):
-            transaction_cost_bps = 0.0
+            transaction_cost_bps = 1.0
         try:
-            slippage_bps = max(0.0, float(source.get("slippage_bps", 0.0) or 0.0))
+            slippage_bps = max(0.0, float(source.get("slippage_bps", 5.0) or 0.0))
         except (TypeError, ValueError):
-            slippage_bps = 0.0
-        allow_short = bool(source.get("allow_short", True))
+            slippage_bps = 5.0
+        allow_short = _as_bool(source.get("allow_short", True), True)
         try:
             max_abs_position = max(0.0, float(source.get("max_abs_position", 1.0) or 0.0))
         except (TypeError, ValueError):

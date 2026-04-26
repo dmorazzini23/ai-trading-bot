@@ -3,6 +3,20 @@ from __future__ import annotations
 import numpy as np
 
 from ai_trading.evaluation.execution_sim import simulate_executed_trades
+from ai_trading.evaluation.execution_sim import ExecutionSimConfig
+
+
+def test_execution_sim_defaults_are_not_frictionless() -> None:
+    cfg = ExecutionSimConfig.from_mapping({})
+
+    assert cfg.transaction_cost_bps > 0.0
+    assert cfg.slippage_bps > 0.0
+
+
+def test_execution_sim_parses_string_false_for_short_mode() -> None:
+    cfg = ExecutionSimConfig.from_mapping({"allow_short": "false"})
+
+    assert cfg.allow_short is False
 
 
 def test_simulate_executed_trades_applies_costs() -> None:

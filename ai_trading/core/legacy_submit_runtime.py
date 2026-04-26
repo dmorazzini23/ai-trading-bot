@@ -652,6 +652,24 @@ def submit_order_runtime(
         )
         return None
 
+    status_token = be._normalize_order_status_token(
+        be._extract_order_value(order, "status")
+    )
+    if status_token in {"rejected", "canceled", "cancelled", "expired", "done_for_day"}:
+        reason_code = f"BROKER_ORDER_{status_token.upper()}".replace("CANCELLED", "CANCELED")
+        be._record_auth_forbidden_cooldown(
+            be.state,
+            symbol=symbol,
+            side=side_norm,
+            reason=reason_code,
+            now=datetime.now(UTC),
+        )
+        be.logger.warning(
+            "BROKER_ORDER_NOT_ACCEPTED",
+            extra={"symbol": symbol, "side": side_norm, "status": status_token},
+        )
+        return None
+
     _attach_order_identity(order, client_order_id=intent_context.client_order_id)
     _record_legacy_ledger_submission(
         ledger,

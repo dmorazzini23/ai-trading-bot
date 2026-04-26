@@ -1080,8 +1080,11 @@ def validate_pretrade(
         return False, "ORDER_SIZE_BLOCK", {"qty": qty_abs, "notional": notional_abs}
 
     reference = intent.mid if intent.mid and intent.mid > 0 else intent.last_price
+    current_symbol_notional: float | None = None
+    projected_symbol_notional: float | None = None
     if reference is not None and reference > 0:
-        signed_qty = qty_abs if str(intent.side).strip().lower() == "buy" else -qty_abs
+        side_token = str(intent.side).strip().lower()
+        signed_qty = qty_abs if side_token in {"buy", "buy_to_cover", "cover"} else -qty_abs
         current_symbol_qty = _ledger_position_qty(ledger, intent.symbol)
         if current_symbol_qty is not None:
             projected_symbol_notional = abs((current_symbol_qty + signed_qty) * float(reference))
@@ -1116,7 +1119,15 @@ def validate_pretrade(
     if max_sector_notional > 0 and reference and reference > 0 and intent.sector:
         sector_notional = _ledger_sector_notional(ledger, intent.sector)
         if sector_notional is not None:
-            projected_sector_notional = float(sector_notional) + notional_abs
+            if current_symbol_notional is not None and projected_symbol_notional is not None:
+                projected_sector_notional = max(
+                    0.0,
+                    float(sector_notional) - current_symbol_notional + projected_symbol_notional,
+                )
+            elif str(intent.side).strip().lower() in {"buy", "buy_to_cover", "cover", "sell_short", "short"}:
+                projected_sector_notional = float(sector_notional) + notional_abs
+            else:
+                projected_sector_notional = max(0.0, float(sector_notional) - notional_abs)
             if projected_sector_notional > max_sector_notional:
                 return (
                     False,

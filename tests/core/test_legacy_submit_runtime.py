@@ -159,6 +159,63 @@ def test_submit_order_records_auth_forbidden_cooldown_on_none_result(monkeypatch
     assert ("AAPL", "buy") in cooldowns
 
 
+def test_submit_order_does_not_record_rejected_broker_object(monkeypatch) -> None:
+    class _RejectedExecEngine(_DummyExecEngine):
+        def execute_order(
+            self,
+            symbol: str,
+            side: object,
+            qty: int,
+            *,
+            price: float | None = None,
+            **kwargs: object,
+        ) -> object:
+            self.calls.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": qty,
+                    "price": price,
+                    "kwargs": dict(kwargs),
+                }
+            )
+            return SimpleNamespace(id="broker-order-rejected", status="rejected")
+
+    recorded: list[object] = []
+
+    class _Ledger:
+        def record(self, entry: object) -> None:
+            recorded.append(entry)
+
+    engine = _RejectedExecEngine()
+    ctx = SimpleNamespace(market_data=None, api=SimpleNamespace(list_positions=lambda: []))
+
+    _reset_submit_state(monkeypatch)
+    setattr(bot_engine.state, "_oms_ledger", _Ledger())
+    monkeypatch.setattr(bot_engine, "_exec_engine", engine)
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda _cfg: (False, None))
+    monkeypatch.setattr(bot_engine, "_resolve_trading_config", lambda _ctx: _base_cfg(ledger_enabled=True))
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote_basis",
+        lambda *_args, **_kwargs: (
+            "broker_nbbo",
+            99.9,
+            100.1,
+            100.0,
+            100.1,
+            datetime.now(UTC),
+        ),
+    )
+
+    order = bot_engine.submit_order(ctx, "AAPL", 1, "buy", price=100.0)
+
+    assert order is None
+    assert len(engine.calls) == 1
+    assert recorded == []
+
+
 def test_submit_order_propagates_generated_identity_to_execution_engine(monkeypatch) -> None:
     engine = _DummyExecEngine()
     ctx = SimpleNamespace(market_data=None, api=SimpleNamespace(list_positions=lambda: []))

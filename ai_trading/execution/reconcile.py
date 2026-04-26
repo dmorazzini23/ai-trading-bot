@@ -363,12 +363,23 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
                 getattr(broker_order, "filled_qty", getattr(broker_order, "filled_quantity", order.filled_quantity))
             )
             if order.status != broker_status or order.filled_quantity != filled_qty:
+                previous_filled = _coerce_quantity(order.filled_quantity)
+                fill_delta = filled_qty - previous_filled
                 order.status = broker_status
                 order.filled_quantity = filled_qty
                 order.timestamp = safe_utcnow()
                 if broker_status == OrderStatus.FILLED:
-                    side_mult = 1 if getattr(order.side, "value", order.side) == OrderSide.BUY.value else -1
-                    local_positions[order.symbol] = local_positions.get(order.symbol, 0) + side_mult * filled_qty
+                    if fill_delta < 0:
+                        logger.warning(
+                            "Broker filled quantity decreased for %s: previous=%s broker=%s; ignoring negative delta",
+                            order.id,
+                            previous_filled,
+                            filled_qty,
+                        )
+                        fill_delta = 0
+                    if fill_delta > 0:
+                        side_mult = 1 if getattr(order.side, "value", order.side) == OrderSide.BUY.value else -1
+                        local_positions[order.symbol] = local_positions.get(order.symbol, 0) + side_mult * fill_delta
         except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - defensive
             logger.error(f"Failed to update order {order.id}: {e}")
 

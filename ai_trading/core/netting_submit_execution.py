@@ -9,6 +9,10 @@ from typing import Any, Callable, Mapping
 from ai_trading.config.management import get_env
 from ai_trading.core.errors import ErrorCategory
 
+_NON_ACCEPTED_ORDER_STATUSES = frozenset(
+    {"rejected", "canceled", "cancelled", "expired", "done_for_day"}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class NettingSubmitExecutionResult:
@@ -210,6 +214,33 @@ def execute_netting_submission(
         safe_float=safe_float,
         has_persistable_fill=has_persistable_fill_func,
     )
+    status_token = str(getattr(order_state, "status_token", "") or "").strip().lower()
+    if status_token in _NON_ACCEPTED_ORDER_STATUSES:
+        reason_code = f"BROKER_ORDER_{status_token.upper()}".replace("CANCELLED", "CANCELED")
+        record_auth_forbidden_cooldown_func(
+            state,
+            symbol=symbol,
+            side=side,
+            reason=reason_code,
+            now=now,
+        )
+        return NettingSubmitExecutionResult(
+            status=status_token,
+            gates_added=(reason_code,),
+            attempted_increment=1,
+            submitted_increment=0,
+            metrics=None,
+            tca_record=None,
+            order_payload={
+                "client_order_id": client_order_id,
+                "side": side,
+                "qty": abs(delta_shares),
+                "price": price,
+                "status": getattr(order_state, "status_text", status_token) or status_token,
+            },
+            decision_trace_id=decision_trace_id_for_order,
+            order_intent_contract=intent.to_contract(),
+        )
     record_successful_submission_func(
         ledger=ledger,
         state=state,

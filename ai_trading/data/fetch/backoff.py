@@ -147,7 +147,10 @@ def _next_feed(cur_feed: str) -> str | None:
             return None
         fallback_map = {"iex": "sip", "sip": "iex"}
         return fallback_map.get(cur_feed)
-    limit = max_data_fallbacks()
+    try:
+        limit = max_data_fallbacks()
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        limit = 1
     for prov in prio[idx + 1 : idx + 1 + limit]:
         if prov.startswith("alpaca_"):
             return prov.split("_", 1)[1]

@@ -226,6 +226,18 @@ def test_pretrade_blocks_projected_portfolio_and_intraday_limits(
     assert detail_key in details
 
 
+def test_pretrade_sector_cap_allows_risk_reducing_sell() -> None:
+    allowed, reason, details = _validate(
+        _intent(side="sell", qty=5, notional=500.0, sector="TECH"),
+        cfg=_cfg(max_sector_notional=1_600.0),
+        ledger=_Ledger(positions={"AAPL": 10.0}, sector_notional_map={"TECH": 2_000.0}),
+    )
+
+    assert allowed is True
+    assert reason == "OK"
+    assert details == {}
+
+
 @pytest.mark.parametrize(
     ("intent_updates", "reason", "scope"),
     [

@@ -15952,7 +15952,7 @@ class ExecutionEngine:
             return
 
         side_token = str(side or "").strip().lower()
-        side_normalized = "sell" if side_token in {"sell", "short", "sell_short"} else "buy"
+        side_normalized = "sell_short" if side_token in {"short", "sell_short"} else "sell" if side_token == "sell" else "buy"
         slippage_bps: float | None = None
         if expected_price is not None and expected_price > 0:
             try:

@@ -807,13 +807,15 @@ def compute_expected_net_edge_bps(
     *,
     fee_bps: float = 0.0,
     borrow_bps: float = 0.0,
+    side: str | None = None,
 ) -> float:
     """Return expected net edge after direct costs."""
 
     edge = max(0.0, float(expected_edge_bps))
     cost = max(0.0, float(expected_cost_bps))
     fee = max(0.0, float(fee_bps))
-    borrow = max(0.0, float(borrow_bps))
+    side_token = str(side or "").strip().lower()
+    borrow = max(0.0, float(borrow_bps)) if side_token in {"sell_short", "short"} else 0.0
     return edge - cost - fee - borrow
 
 
@@ -840,6 +842,7 @@ def approve_execution_candidate(policy: EffectivePolicy, candidate: ExecutionCan
         candidate.expected_cost_bps,
         fee_bps=policy.objective.fee_bps,
         borrow_bps=policy.objective.borrow_bps,
+        side=candidate.side,
     )
     if qty == 0:
         return ExecutionApproval(False, 0, net_edge_bps, ("ZERO_QTY",))

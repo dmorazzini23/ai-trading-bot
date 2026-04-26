@@ -3,16 +3,19 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 
 HOTPATHS = [
     "ai_trading/broker/adapters.py",
     "ai_trading/operator_presets.py",
-    "ai_trading/operator_ui.py",
 ]
 
 
 def test_no_broad_except_in_new_hotpaths() -> None:
+    missing_paths = [path for path in HOTPATHS if not Path(path).is_file()]
+    assert missing_paths == []
+
     result = subprocess.run(
         [sys.executable, "tools/audit_exceptions.py", "--paths", *HOTPATHS],
         capture_output=True,

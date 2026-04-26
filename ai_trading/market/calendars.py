@@ -8,6 +8,7 @@ from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from enum import Enum
+from zoneinfo import ZoneInfo
 logger = get_logger(__name__)
 
 class AssetClass(Enum):
@@ -28,17 +29,23 @@ class TradingSession:
     days_of_week: set[int]
     timezone_name: str = 'America/New_York'
 
-    def is_trading_day(self, dt: datetime) -> bool:
+    def _to_session_time(self, dt: datetime) -> datetime:
+        """Convert a timestamp to the session's market timezone."""
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(ZoneInfo(self.timezone_name))
+
+    def is_trading_day(self, dt: datetime | date) -> bool:
         """Check if given datetime falls on a trading day."""
+        if isinstance(dt, datetime):
+            dt = self._to_session_time(dt)
         return dt.weekday() in self.days_of_week
 
     def is_in_session(self, dt: datetime) -> bool:
         """Check if given datetime is within trading session."""
         if not self.is_trading_day(dt):
             return False
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-        market_time = dt.time()
+        market_time = self._to_session_time(dt).time()
         if self.start_time <= self.end_time:
             return self.start_time <= market_time <= self.end_time
         else:
@@ -130,7 +137,7 @@ class CalendarRegistry:
             return AssetClass.BOND
         return AssetClass.EQUITY
 
-    def is_trading_day(self, symbol: str, dt: datetime) -> bool:
+    def is_trading_day(self, symbol: str, dt: datetime | date) -> bool:
         """
         Check if given datetime is a trading day for symbol.
 
@@ -162,9 +169,10 @@ class CalendarRegistry:
             return False
         session = self.get_session(symbol)
         is_in_session = session.is_in_session(dt)
-        check_date = dt.date() if isinstance(dt, datetime) else dt.date()
+        session_dt = session._to_session_time(dt)
+        check_date = session_dt.date()
         if check_date in self._half_days:
-            market_time = dt.time()
+            market_time = session_dt.time()
             if market_time > time(13, 0):
                 return False
         return is_in_session
@@ -180,17 +188,18 @@ class CalendarRegistry:
         Returns:
             Tuple of (session_start, session_end) or (None, None) if not trading day
         """
-        if not self.is_trading_day(symbol, datetime.combine(trading_date, time.min)):
+        if not self.is_trading_day(symbol, trading_date):
             return (None, None)
         session = self.get_session(symbol)
-        session_start = datetime.combine(trading_date, session.start_time)
-        session_end = datetime.combine(trading_date, session.end_time)
+        session_tz = ZoneInfo(session.timezone_name)
+        session_start = datetime.combine(trading_date, session.start_time, tzinfo=session_tz)
+        session_end = datetime.combine(trading_date, session.end_time, tzinfo=session_tz)
         if session.start_time > session.end_time:
             session_end += timedelta(days=1)
         if trading_date in self._half_days:
-            session_end = datetime.combine(trading_date, time(13, 0))
-        session_start = session_start.replace(tzinfo=UTC)
-        session_end = session_end.replace(tzinfo=UTC)
+            session_end = datetime.combine(trading_date, time(13, 0), tzinfo=session_tz)
+        session_start = session_start.astimezone(UTC)
+        session_end = session_end.astimezone(UTC)
         return (session_start, session_end)
 
     def ensure_final_bar(self, symbol: str, timeframe: str) -> bool:
@@ -224,7 +233,7 @@ class CalendarRegistry:
         check_date = current_date + timedelta(days=1)
         max_days = 10
         for _ in range(max_days):
-            if self.is_trading_day(symbol, datetime.combine(check_date, time.min)):
+            if self.is_trading_day(symbol, check_date):
                 return check_date
             check_date += timedelta(days=1)
         return None

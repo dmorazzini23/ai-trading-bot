@@ -80,11 +80,11 @@ class WalkForwardEvaluator:
             ),
             "transaction_cost_bps": max(
                 0.0,
-                float(get_env("AI_TRADING_WALK_FORWARD_TRANSACTION_COST_BPS", 0.0, cast=float)),
+                float(get_env("AI_TRADING_WALK_FORWARD_TRANSACTION_COST_BPS", 1.0, cast=float)),
             ),
             "slippage_bps": max(
                 0.0,
-                float(get_env("AI_TRADING_WALK_FORWARD_SLIPPAGE_BPS", 0.0, cast=float)),
+                float(get_env("AI_TRADING_WALK_FORWARD_SLIPPAGE_BPS", 5.0, cast=float)),
             ),
             "allow_short": bool(get_env("AI_TRADING_WALK_FORWARD_ALLOW_SHORT", True, cast=bool)),
             "max_abs_position": max(

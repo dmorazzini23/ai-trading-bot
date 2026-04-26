@@ -13,13 +13,16 @@ import statistics
 import threading
 import time
 from collections import defaultdict, deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 import psutil
+
+P = ParamSpec('P')
+R = TypeVar('R')
 
 class HealthStatus(Enum):
     """Health check status levels."""
@@ -63,19 +66,19 @@ class HealthCheckResult:
 class CircuitBreaker:
     """Circuit breaker for external service protection."""
 
-    def __init__(self, failure_threshold: int=5, recovery_timeout: int=60, expected_exception: type=Exception):
+    def __init__(self, failure_threshold: int=5, recovery_timeout: int=60, expected_exception: type[BaseException]=Exception) -> None:
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.expected_exception = expected_exception
         self.failure_count = 0
-        self.last_failure_time = None
+        self.last_failure_time: float | None = None
         self.state = CircuitBreakerState.CLOSED
         self._lock = threading.RLock()
 
-    def __call__(self, func: Callable) -> Callable:
+    def __call__(self, func: Callable[P, R]) -> Callable[P, R]:
         """Decorator to apply circuit breaker to function."""
 
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             with self._lock:
                 if self.state == CircuitBreakerState.OPEN:
                     if self._should_attempt_reset():
@@ -93,14 +96,14 @@ class CircuitBreaker:
 
     def _should_attempt_reset(self) -> bool:
         """Check if enough time has passed to attempt reset."""
-        return self.last_failure_time and time.time() - self.last_failure_time >= self.recovery_timeout
+        return self.last_failure_time is not None and time.time() - self.last_failure_time >= self.recovery_timeout
 
-    def _on_success(self):
+    def _on_success(self) -> None:
         """Handle successful call."""
         self.failure_count = 0
         self.state = CircuitBreakerState.CLOSED
 
-    def _on_failure(self):
+    def _on_failure(self) -> None:
         """Handle failed call."""
         self.failure_count += 1
         self.last_failure_time = time.time()
@@ -110,22 +113,22 @@ class CircuitBreaker:
 class ProductionMonitor:
     """Production-grade monitoring system for trading bot."""
 
-    def __init__(self, alert_callback: Callable | None=None):
+    def __init__(self, alert_callback: Callable[..., None] | None=None) -> None:
         self.logger = logging.getLogger(__name__)
         self.alert_callback = alert_callback
-        self.metrics_history: deque = deque(maxlen=10000)
-        self.latency_tracker: dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
-        self.health_checks: dict[str, Callable] = {}
+        self.metrics_history: deque[PerformanceMetrics] = deque(maxlen=10000)
+        self.latency_tracker: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=1000))
+        self.health_checks: dict[str, Callable[[], HealthCheckResult]] = {}
         self.last_health_results: dict[str, HealthCheckResult] = {}
         self.circuit_breakers: dict[str, CircuitBreaker] = {}
         self.baseline_metrics: dict[str, float] = {}
         self.anomaly_thresholds: dict[str, float] = {'cpu_percent': 80.0, 'memory_percent': 85.0, 'order_latency_ms': 50.0, 'data_processing_latency_ms': 20.0}
         self.start_time = time.time()
         self._monitoring_active = False
-        self._monitor_thread = None
+        self._monitor_thread: threading.Thread | None = None
         self.performance_targets = {'order_execution_latency_ms': 10.0, 'data_processing_latency_ms': 5.0, 'cpu_utilization_percent': 70.0, 'memory_growth_percent_per_day': 1.0, 'uptime_percent': 99.9}
 
-    def start_monitoring(self, interval_seconds: int=30):
+    def start_monitoring(self, interval_seconds: int=30) -> None:
         """Start continuous monitoring."""
         if self._monitoring_active:
             return
@@ -134,14 +137,14 @@ class ProductionMonitor:
         self._monitor_thread.start()
         self.logger.info('Production monitoring started')
 
-    def stop_monitoring(self):
+    def stop_monitoring(self) -> None:
         """Stop continuous monitoring."""
         self._monitoring_active = False
         if self._monitor_thread:
             self._monitor_thread.join(timeout=5.0)
         self.logger.info('Production monitoring stopped')
 
-    def _monitoring_loop(self, interval_seconds: int):
+    def _monitoring_loop(self, interval_seconds: int) -> None:
         """Main monitoring loop."""
         while self._monitoring_active:
             try:
@@ -175,12 +178,12 @@ class ProductionMonitor:
         latencies = list(self.latency_tracker[operation])
         return statistics.mean(latencies) if latencies else 0.0
 
-    def track_latency(self, operation: str, latency_ms: float):
+    def track_latency(self, operation: str, latency_ms: float) -> None:
         """Track latency for an operation."""
         self.latency_tracker[operation].append(latency_ms)
 
     @contextmanager
-    def track_operation(self, operation: str):
+    def track_operation(self, operation: str) -> Iterator[None]:
         """Context manager to track operation latency."""
         start_time = time.perf_counter()
         try:
@@ -189,7 +192,7 @@ class ProductionMonitor:
             elapsed = (time.perf_counter() - start_time) * 1000
             self.track_latency(operation, elapsed)
 
-    def _check_anomalies(self, metrics: PerformanceMetrics):
+    def _check_anomalies(self, metrics: PerformanceMetrics) -> None:
         """Check for performance anomalies."""
         anomalies = []
         if metrics.cpu_percent > self.anomaly_thresholds['cpu_percent']:
@@ -203,11 +206,11 @@ class ProductionMonitor:
         if anomalies and self.alert_callback:
             self.alert_callback('PERFORMANCE_ANOMALY', anomalies)
 
-    def register_health_check(self, name: str, check_func: Callable[[], HealthCheckResult]):
+    def register_health_check(self, name: str, check_func: Callable[[], HealthCheckResult]) -> None:
         """Register a health check function."""
         self.health_checks[name] = check_func
 
-    def _run_health_checks(self):
+    def _run_health_checks(self) -> None:
         """Run all registered health checks."""
         for name, check_func in self.health_checks.items():
             try:
@@ -224,7 +227,7 @@ class ProductionMonitor:
         """Get latest health check results."""
         return self.last_health_results.copy()
 
-    def register_circuit_breaker(self, name: str, circuit_breaker: CircuitBreaker):
+    def register_circuit_breaker(self, name: str, circuit_breaker: CircuitBreaker) -> None:
         """Register a circuit breaker."""
         self.circuit_breakers[name] = circuit_breaker
 
@@ -232,7 +235,7 @@ class ProductionMonitor:
         """Get a circuit breaker by name."""
         return self.circuit_breakers.get(name)
 
-    def _log_performance_summary(self, metrics: PerformanceMetrics):
+    def _log_performance_summary(self, metrics: PerformanceMetrics) -> None:
         """Log performance summary."""
         self.logger.info(f'Performance: CPU={metrics.cpu_percent:.1f}% Memory={metrics.memory_percent:.1f}% OrderLatency={metrics.order_latency_ms:.1f}ms DataLatency={metrics.data_processing_latency_ms:.1f}ms')
 
@@ -247,7 +250,7 @@ class ProductionMonitor:
         report = {'timestamp': datetime.now(UTC).isoformat(), 'uptime_seconds': time.time() - self.start_time, 'metrics_collected': len(self.metrics_history), 'performance': {'cpu_percent': {'current': cpu_values[-1] if cpu_values else 0, 'average': statistics.mean(cpu_values) if cpu_values else 0, 'max': max(cpu_values) if cpu_values else 0, 'target': self.performance_targets['cpu_utilization_percent']}, 'memory_percent': {'current': memory_values[-1] if memory_values else 0, 'average': statistics.mean(memory_values) if memory_values else 0, 'max': max(memory_values) if memory_values else 0}, 'order_latency_ms': {'current': order_latency_values[-1] if order_latency_values else 0, 'average': statistics.mean(order_latency_values) if order_latency_values else 0, 'p95': statistics.quantiles(order_latency_values, n=20)[18] if len(order_latency_values) > 20 else 0, 'target': self.performance_targets['order_execution_latency_ms']}}, 'health_checks': {name: asdict(result) for name, result in self.last_health_results.items()}, 'circuit_breakers': {name: cb.state.value for name, cb in self.circuit_breakers.items()}}
         return report
 
-    def alert(self, level: str, message: str, details: dict | None=None):
+    def alert(self, level: str, message: str, details: dict[str, Any] | None=None) -> None:
         """Send alert through configured callback."""
         if self.alert_callback:
             self.alert_callback(level, message, details or {})
@@ -262,7 +265,7 @@ def get_production_monitor() -> ProductionMonitor:
         _production_monitor = ProductionMonitor()
     return _production_monitor
 
-def initialize_production_monitoring(alert_callback: Callable | None=None) -> ProductionMonitor:
+def initialize_production_monitoring(alert_callback: Callable[..., None] | None=None) -> ProductionMonitor:
     """Initialize production monitoring system."""
     global _production_monitor
     _production_monitor = ProductionMonitor(alert_callback)

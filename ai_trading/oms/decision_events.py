@@ -65,6 +65,8 @@ def _idempotency_key(payload: Mapping[str, Any]) -> str:
 
 def _decision_action(payload: Mapping[str, Any]) -> str:
     explicit = str(payload.get("decision_action") or "").strip().upper()
+    if explicit in {"SELL_SHORT", "SHORT"}:
+        return "SELL"
     if explicit in {"BUY", "SELL", "HOLD", "REDUCE", "EXIT"}:
         return explicit
 
@@ -72,7 +74,7 @@ def _decision_action(payload: Mapping[str, Any]) -> str:
     side = str(order_payload.get("side") or "").strip().lower()
     if side == "buy":
         return "BUY"
-    if side == "sell":
+    if side in {"sell", "sell_short", "short"}:
         return "SELL"
 
     gates_raw = payload.get("gates")

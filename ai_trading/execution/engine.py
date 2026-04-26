@@ -531,7 +531,9 @@ class ExecutionResult(str):
             return None
         if normalized in {"buy", "sell"}:
             return normalized
-        if normalized in {"short", "sell_short", "sell-short", "sell short", "exit"}:
+        if normalized in {"short", "sell_short", "sell-short", "sell short"}:
+            return "sell_short"
+        if normalized in {"exit"}:
             return "sell"
         if normalized in {"cover", "long"}:
             return "buy"

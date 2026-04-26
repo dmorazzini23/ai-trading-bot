@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from ai_trading.logging import get_logger
-from ai_trading.rl_trading import train as _train_mod
 from ai_trading.rl_trading import inference as _inf_mod
 import ai_trading.rl_trading as _rl  # noqa: F401
 

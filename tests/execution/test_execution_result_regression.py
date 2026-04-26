@@ -13,7 +13,7 @@ from ai_trading.execution.engine import ExecutionResult
     [
         ("buy", "buy"),
         ("sell", "sell"),
-        ("sell_short", "sell"),
+        ("sell_short", "sell_short"),
         ("cover", "buy"),
     ],
 )

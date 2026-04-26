@@ -208,8 +208,11 @@ class AdaptiveRiskController:
             kelly_fraction *= self.risk_budget.kelly_multiplier
             kelly_fraction *= self.drawdown_multiplier
             max_kelly = self.risk_budget.max_position_risk / volatility
-            kelly_fraction = min(kelly_fraction, max_kelly)
-            kelly_fractions[symbol] = max(0.0, kelly_fraction)
+            if kelly_fraction >= 0.0:
+                kelly_fraction = min(kelly_fraction, max_kelly)
+            else:
+                kelly_fraction = max(kelly_fraction, -max_kelly)
+            kelly_fractions[symbol] = kelly_fraction
         return kelly_fractions
 
     def update_drawdown_governor(self, portfolio_return: float, is_positive_day: bool) -> None:
@@ -285,7 +288,7 @@ class AdaptiveRiskController:
                 kelly_fraction = kelly_fractions[symbol]
                 volatility = volatilities[symbol]
                 position_value = kelly_fraction * portfolio_value
-                risk_contribution = position_value / portfolio_value * volatility
+                risk_contribution = abs(position_value) / portfolio_value * volatility
                 position_risks[symbol] = PositionRisk(symbol=symbol, position_value=position_value, daily_vol=volatility / np.sqrt(252), risk_contribution=risk_contribution, kelly_fraction=kelly_fraction, cluster_id=cluster_assignments.get(symbol, 0), weight=position_value / portfolio_value if portfolio_value > 0 else 0)
         cluster_risks = self.check_cluster_limits(position_risks, cluster_assignments)
         for cluster_risk in cluster_risks:

@@ -3,7 +3,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING, cast
+from typing import Any, cast
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
@@ -23,10 +23,6 @@ except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - requests missing
 from urllib3.util.retry import Retry
 from ai_trading.utils import clamp_request_timeout
 from urllib.parse import urlparse
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    import requests as requests_types
-
 
 def ensure_urllib3_disable_warnings() -> None:
     """Re-import ``urllib3`` and guarantee a callable ``disable_warnings`` attribute."""

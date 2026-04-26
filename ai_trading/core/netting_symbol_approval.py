@@ -10,6 +10,16 @@ from ai_trading.config.management import get_env
 from ai_trading.policy.compiler import SafetyTier
 
 
+def _side_for_delta(delta_shares: int, current_shares: int, target_shares: int) -> str:
+    if int(delta_shares) > 0:
+        return "buy"
+    if int(current_shares) > 0:
+        return "sell"
+    if int(target_shares) < 0:
+        return "sell_short"
+    return "sell"
+
+
 @dataclass(frozen=True, slots=True)
 class NettingSymbolApprovalResult:
     delta_shares: int
@@ -75,9 +85,13 @@ def prepare_netting_symbol_approval(
     delta_shares_value = int(delta_shares)
     target_shares = int(current_shares + delta_shares_value)
     target_dollars = float(target_shares * price)
-    side = "buy" if delta_shares_value > 0 else "sell"
+    side = _side_for_delta(delta_shares_value, int(current_shares), target_shares)
 
-    if side == "sell":
+    def _clip_sell_to_available_position() -> NettingSymbolApprovalResult | None:
+        nonlocal delta_shares_value, target_shares, target_dollars, side
+        side = _side_for_delta(delta_shares_value, int(current_shares), target_shares)
+        if side != "sell":
+            return None
         requested_sell_qty = abs(int(delta_shares_value))
         adjusted_sell_qty, sell_qty_clip_context = clip_sell_qty_to_available_position_func(
             symbol=symbol,
@@ -105,9 +119,16 @@ def prepare_netting_symbol_approval(
             delta_shares_value = -int(adjusted_sell_qty)
             target_shares = int(current_shares + delta_shares_value)
             target_dollars = float(target_shares * price)
-            gates_added.append("PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION")
+            if "PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION" not in gates_added:
+                gates_added.append("PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION")
             if sell_qty_clip_context:
                 snapshot_updates["pre_submit_sell_qty_clip"] = dict(sell_qty_clip_context)
+        side = _side_for_delta(delta_shares_value, int(current_shares), target_shares)
+        return None
+
+    blocked_by_sell_clip = _clip_sell_to_available_position()
+    if blocked_by_sell_clip is not None:
+        return blocked_by_sell_clip
 
     opening_trade = abs(current_shares + delta_shares_value) > abs(current_shares)
     if exec_engine is not None:
@@ -251,7 +272,12 @@ def prepare_netting_symbol_approval(
     expected_edge_total_raw = sum(
         max(float(proposal.expected_edge_bps), 0.0) for proposal in net_target.proposals
     )
-    expected_edge_realism_factor = float(edge_realism_rank_factor_by_symbol.get(symbol, 1.0))
+    parsed_edge_realism_factor = safe_float_func(
+        edge_realism_rank_factor_by_symbol.get(symbol, 1.0)
+    )
+    expected_edge_realism_factor = (
+        1.0 if parsed_edge_realism_factor is None else float(parsed_edge_realism_factor)
+    )
     expected_edge_total = float(expected_edge_total_raw)
     if edge_realism_apply_to_approval_enabled and float(expected_edge_total) > 0.0:
         expected_edge_total = float(expected_edge_total) * float(expected_edge_realism_factor)
@@ -313,7 +339,11 @@ def prepare_netting_symbol_approval(
             ),
         )
         fee_bps_est = max(0.0, float(effective_policy.objective.fee_bps))
-        borrow_bps_est = max(0.0, float(effective_policy.objective.borrow_bps))
+        borrow_bps_est = (
+            max(0.0, float(effective_policy.objective.borrow_bps))
+            if side == "sell_short"
+            else 0.0
+        )
         edge_margin_bps = max(
             0.0,
             float(
@@ -501,7 +531,9 @@ def prepare_netting_symbol_approval(
         delta_shares_value = int(approval_context.adjusted_delta_shares)
         target_shares = int(current_shares + delta_shares_value)
         target_dollars = float(target_shares * price)
-    side = approval_context.adjusted_side
+    blocked_by_sell_clip = _clip_sell_to_available_position()
+    if blocked_by_sell_clip is not None:
+        return blocked_by_sell_clip
     opening_trade = abs(current_shares + delta_shares_value) > abs(current_shares)
 
     if current_shares == 0 and alpha_decay_deweight_enabled:
@@ -553,6 +585,10 @@ def prepare_netting_symbol_approval(
                 delta_shares_value = scaled_qty
                 target_shares = int(current_shares + delta_shares_value)
                 target_dollars = float(target_shares * price)
+                blocked_by_sell_clip = _clip_sell_to_available_position()
+                if blocked_by_sell_clip is not None:
+                    return blocked_by_sell_clip
+                opening_trade = abs(current_shares + delta_shares_value) > abs(current_shares)
                 gates_added.append("ALPHA_DECAY_DEWEIGHT")
                 snapshot_updates["alpha_decay"] = {
                     "trades_in_window": trades_in_window,
@@ -616,6 +652,10 @@ def prepare_netting_symbol_approval(
                 delta_shares_value = throttled_qty
                 target_shares = int(current_shares + delta_shares_value)
                 target_dollars = float(target_shares * price)
+                blocked_by_sell_clip = _clip_sell_to_available_position()
+                if blocked_by_sell_clip is not None:
+                    return blocked_by_sell_clip
+                opening_trade = abs(current_shares + delta_shares_value) > abs(current_shares)
                 gates_added.append("CAPACITY_THROTTLE_SCALE")
                 snapshot_updates["capacity_throttle"] = {
                     "scale": capacity_scale,
