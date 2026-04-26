@@ -4087,6 +4087,125 @@ def test_persist_fill_derived_trade_record_preserves_sell_short_side(monkeypatch
     assert tca_sides == ["sell_short"]
 
 
+def test_live_side_normalizer_preserves_short_open_vocabulary():
+    engine = _engine_stub()
+    engine._position_tracker = {}
+    engine._position_tracker_last_sync_mono = 0.0
+
+    assert engine._normalized_order_side("sell_short") == "sell_short"
+    assert engine._normalized_order_side("short") == "sell_short"
+    assert engine._normalized_order_side("sellshort") == "sell_short"
+    assert engine._normalized_order_side("sell") == "sell"
+    assert engine._normalized_order_side("exit") == "sell"
+
+    engine.trading_client = SimpleNamespace(
+        get_position=lambda _symbol: SimpleNamespace(qty="7", side="sell_short")
+    )
+
+    assert engine._position_quantity("MSFT") == -7
+
+    engine._update_position_tracker_snapshot(
+        [SimpleNamespace(symbol="TSLA", qty="3", side="sell_short")]
+    )
+
+    assert engine._position_tracker["TSLA"] == -3
+
+
+def test_short_open_reentry_and_learning_buckets_keep_sell_short(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_SEC", "60")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_REGIME_ADAPTIVE_ENABLED",
+        "0",
+    )
+    monkeypatch.setattr(lt, "monotonic_time", lambda: 1000.0)
+    monkeypatch.setattr(
+        engine,
+        "_execution_time_of_day_regime",
+        lambda: {"session_regime": "opening"},
+    )
+
+    engine._arm_symbol_reentry_cooldown_from_fill(symbol="AAPL", side="sell_short")
+
+    assert ("AAPL", "sell_short") in engine._symbol_reentry_cooldown_until
+    allowed, context = engine._symbol_reentry_cooldown_allows_opening(
+        symbol="AAPL",
+        side="sell_short",
+    )
+    assert allowed is False
+    assert context["side"] == "sell_short"
+
+    bucket = engine._execution_learning_bucket_context(
+        symbol="AAPL",
+        side="sell_short",
+        market_regime="trend",
+        execution_profile_context={
+            "profile": "passive",
+            "session_regime": "opening",
+        },
+    )
+    assert bucket["side"] == "sell_short"
+    assert bucket["bucket_key"] == "opening:passive:sell_short"
+    assert bucket["symbol_bucket_key"] == "AAPL:opening:trend:passive:sell_short"
+
+
+def test_pending_reconcile_preserves_sell_short_fill_side(monkeypatch):
+    engine = _engine_stub()
+    old_ts = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
+    engine._pending_orders = {
+        "ord-short-reconcile": {
+            "status": "pending_new",
+            "symbol": "MSFT",
+            "side": "sell_short",
+            "qty": 4,
+            "filled_qty": 0,
+            "order_id": "ord-short-reconcile",
+            "client_order_id": "cid-short-reconcile",
+            "updated_at": old_ts,
+            "expected_price": 100.0,
+        }
+    }
+    persisted: list[dict[str, Any]] = []
+    order_events: list[dict[str, Any]] = []
+
+    engine.trading_client = SimpleNamespace(
+        get_order_by_id=lambda _order_id: {
+            "id": "ord-short-reconcile",
+            "client_order_id": "cid-short-reconcile",
+            "symbol": "MSFT",
+            "side": "sell_short",
+            "qty": "4",
+            "filled_qty": "4",
+            "filled_avg_price": "99.5",
+            "status": "filled",
+            "filled_at": datetime(2026, 4, 26, tzinfo=UTC).isoformat(),
+        }
+    )
+    monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: True)
+    monkeypatch.setattr(engine, "_record_runtime_order_event", lambda payload: order_events.append(dict(payload)))
+    monkeypatch.setattr(lt, "record_trade_fill", lambda payload: persisted.append(dict(payload)))
+    monkeypatch.setattr(engine, "_record_runtime_fill_event", lambda _payload: None)
+    monkeypatch.setattr(engine, "_update_symbol_loss_cooldown_from_fill", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_arm_symbol_reentry_cooldown_from_fill", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_reconcile_pending_tca_from_fill", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_record_cycle_order_outcome", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_update_markout_feedback", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_update_execution_learning_feedback", lambda **_kwargs: None)
+
+    engine._reconcile_pending_order_runtime_artifacts(open_orders=[])
+
+    assert persisted[-1]["side"] == "sell_short"
+    assert any(
+        row.get("event") == "final_state"
+        and row.get("side") == "sell_short"
+        for row in order_events
+    )
+    assert engine._pending_orders == {}
+
+
 def test_submit_no_result_symbol_backoff_triggers_after_cluster(monkeypatch):
     engine = _engine_stub()
     monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: False)

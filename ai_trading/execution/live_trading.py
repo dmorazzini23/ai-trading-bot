@@ -3599,7 +3599,7 @@ class ExecutionEngine:
 
         symbol_token = str(symbol or "").strip().upper()
         side_token = self._normalized_order_side(side)
-        if not symbol_token or side_token not in {"buy", "sell"}:
+        if not symbol_token or side_token not in {"buy", "sell", "sell_short"}:
             return cooldown_effective
 
         context_slippage = dict(slippage_context) if isinstance(slippage_context, Mapping) else {}
@@ -3967,7 +3967,7 @@ class ExecutionEngine:
 
         symbol_token = str(symbol or "").strip().upper()
         side_token = self._normalized_order_side(side)
-        if not symbol_token or side_token not in {"buy", "sell"}:
+        if not symbol_token or side_token not in {"buy", "sell", "sell_short"}:
             return True, {"enabled": True, "reason": "symbol_or_side_missing"}
 
         cooldown_seconds = self._symbol_reentry_cooldown_seconds(
@@ -4031,7 +4031,7 @@ class ExecutionEngine:
 
         symbol_token = str(symbol or "").strip().upper()
         side_token = self._normalized_order_side(side)
-        if not symbol_token or side_token not in {"buy", "sell"}:
+        if not symbol_token or side_token not in {"buy", "sell", "sell_short"}:
             return
 
         cooldown_seconds = self._symbol_reentry_cooldown_seconds()
@@ -11021,8 +11021,8 @@ class ExecutionEngine:
         symbol_token = str(symbol or "").strip().upper()
         if not symbol_token:
             symbol_token = "ALL"
-        side_token = str(side or "").strip().lower()
-        if side_token not in {"buy", "sell", "cover", "short"}:
+        side_token = self._normalized_order_side(side)
+        if side_token not in {"buy", "sell", "sell_short"}:
             side_token = "unknown"
         profile_token = ""
         if isinstance(execution_profile_context, Mapping):
@@ -13717,7 +13717,7 @@ class ExecutionEngine:
                     return "taker"
                 if float(fill_px) <= float(bid_px) + tick_eps:
                     return "maker"
-            elif side_token in {"sell", "short"}:
+            elif side_token in {"sell", "short", "sell_short"}:
                 if float(fill_px) <= float(bid_px) + tick_eps:
                     return "taker"
                 if float(fill_px) >= float(ask_px) - tick_eps:
@@ -15952,7 +15952,13 @@ class ExecutionEngine:
             return
 
         side_token = str(side or "").strip().lower()
-        side_normalized = "sell_short" if side_token in {"short", "sell_short"} else "sell" if side_token == "sell" else "buy"
+        side_normalized = (
+            "sell_short"
+            if side_token in {"short", "sell_short", "sellshort", "sell-short", "sell short"}
+            else "sell"
+            if side_token == "sell"
+            else "buy"
+        )
         slippage_bps: float | None = None
         if expected_price is not None and expected_price > 0:
             try:
@@ -23083,7 +23089,7 @@ class ExecutionEngine:
         return "buy"
 
     @staticmethod
-    def _normalized_order_side(side: str | None) -> str | None:
+    def _normalized_order_side(side: Any | None) -> str | None:
         if side is None:
             return None
         try:
@@ -23096,7 +23102,9 @@ class ExecutionEngine:
             value = value.rsplit(".", 1)[-1]
         if value in {"buy", "sell"}:
             return value
-        if value in {"short", "sell_short", "sellshort", "exit"}:
+        if value in {"short", "sell_short", "sellshort", "sell-short", "sell short"}:
+            return "sell_short"
+        if value in {"exit"}:
             return "sell"
         if value in {"cover", "buy_to_cover", "buytocover", "long"}:
             return "buy"
@@ -23265,7 +23273,7 @@ class ExecutionEngine:
         except LIVE_TRADING_FALLBACK_EXC:
             normalized_side = None
         qty_int = int(qty_decimal.copy_abs()) if qty_decimal is not None else 0
-        if normalized_side == "sell":
+        if normalized_side in {"sell", "sell_short"}:
             return -qty_int
         return qty_int
 
@@ -23402,7 +23410,7 @@ class ExecutionEngine:
                     qty_abs = 0
             side_val = _extract_value(pos, "side")
             normalized_side = self._normalized_order_side(side_val)
-            if normalized_side == "sell":
+            if normalized_side in {"sell", "sell_short"}:
                 qty_abs = -qty_abs
             tracker[symbol_key] = qty_abs
         self._position_tracker_last_sync_mono = float(monotonic_time())
@@ -24054,7 +24062,7 @@ class ExecutionEngine:
                 continue
             side_raw = _extract_value(position, "side")
             normalized_side = self._normalized_order_side(side_raw)
-            if normalized_side != "sell":
+            if normalized_side not in {"sell", "sell_short"}:
                 continue
 
             qty_float = abs(
@@ -26998,7 +27006,7 @@ class ExecutionEngine:
                 if expected_price is not None and expected_price > 0.0:
                     side_token = self._normalized_order_side(row.get("side")) or "buy"
                     try:
-                        if side_token == "sell":
+                        if side_token in {"sell", "sell_short"}:
                             slippage_bps = (
                                 (float(expected_price) - float(fill_price))
                                 / float(expected_price)

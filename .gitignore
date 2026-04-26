@@ -107,8 +107,9 @@ patch_full_cleanup.patch
 /runtime/research_reports/
 /runtime/archive/
 /runtime/*.db
-/runtime/governance/rollback_audit.jsonl
+/runtime/governance/*.jsonl
 /runtime/meta_retrain_history.json
+/memory/*.md
 
 # Local OpenClaw workspace state
 .openclaw/

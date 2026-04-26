@@ -126,9 +126,35 @@ def prepare_netting_symbol_approval(
         side = _side_for_delta(delta_shares_value, int(current_shares), target_shares)
         return None
 
-    blocked_by_sell_clip = _clip_sell_to_available_position()
-    if blocked_by_sell_clip is not None:
-        return blocked_by_sell_clip
+    def _clip_buy_to_short_cover() -> None:
+        nonlocal delta_shares_value, target_shares, target_dollars, side
+        if int(current_shares) >= 0 or int(delta_shares_value) <= 0:
+            side = _side_for_delta(delta_shares_value, int(current_shares), target_shares)
+            return
+        max_cover_qty = abs(int(current_shares))
+        requested_qty = int(delta_shares_value)
+        if requested_qty <= max_cover_qty:
+            side = _side_for_delta(delta_shares_value, int(current_shares), target_shares)
+            return
+        delta_shares_value = int(max_cover_qty)
+        target_shares = int(current_shares + delta_shares_value)
+        target_dollars = float(target_shares * price)
+        side = _side_for_delta(delta_shares_value, int(current_shares), target_shares)
+        if "PRE_SUBMIT_BUY_QTY_CLIP_SHORT_COVER" not in gates_added:
+            gates_added.append("PRE_SUBMIT_BUY_QTY_CLIP_SHORT_COVER")
+        snapshot_updates["pre_submit_buy_qty_clip"] = {
+            "current_shares": int(current_shares),
+            "requested_qty": int(requested_qty),
+            "max_cover_qty": int(max_cover_qty),
+        }
+
+    def _clip_cross_zero_to_close_only() -> NettingSymbolApprovalResult | None:
+        _clip_buy_to_short_cover()
+        return _clip_sell_to_available_position()
+
+    blocked_by_close_clip = _clip_cross_zero_to_close_only()
+    if blocked_by_close_clip is not None:
+        return blocked_by_close_clip
 
     opening_trade = abs(current_shares + delta_shares_value) > abs(current_shares)
     if exec_engine is not None:
@@ -531,9 +557,9 @@ def prepare_netting_symbol_approval(
         delta_shares_value = int(approval_context.adjusted_delta_shares)
         target_shares = int(current_shares + delta_shares_value)
         target_dollars = float(target_shares * price)
-    blocked_by_sell_clip = _clip_sell_to_available_position()
-    if blocked_by_sell_clip is not None:
-        return blocked_by_sell_clip
+    blocked_by_close_clip = _clip_cross_zero_to_close_only()
+    if blocked_by_close_clip is not None:
+        return blocked_by_close_clip
     opening_trade = abs(current_shares + delta_shares_value) > abs(current_shares)
 
     if current_shares == 0 and alpha_decay_deweight_enabled:
@@ -585,9 +611,9 @@ def prepare_netting_symbol_approval(
                 delta_shares_value = scaled_qty
                 target_shares = int(current_shares + delta_shares_value)
                 target_dollars = float(target_shares * price)
-                blocked_by_sell_clip = _clip_sell_to_available_position()
-                if blocked_by_sell_clip is not None:
-                    return blocked_by_sell_clip
+                blocked_by_close_clip = _clip_cross_zero_to_close_only()
+                if blocked_by_close_clip is not None:
+                    return blocked_by_close_clip
                 opening_trade = abs(current_shares + delta_shares_value) > abs(current_shares)
                 gates_added.append("ALPHA_DECAY_DEWEIGHT")
                 snapshot_updates["alpha_decay"] = {
@@ -652,9 +678,9 @@ def prepare_netting_symbol_approval(
                 delta_shares_value = throttled_qty
                 target_shares = int(current_shares + delta_shares_value)
                 target_dollars = float(target_shares * price)
-                blocked_by_sell_clip = _clip_sell_to_available_position()
-                if blocked_by_sell_clip is not None:
-                    return blocked_by_sell_clip
+                blocked_by_close_clip = _clip_cross_zero_to_close_only()
+                if blocked_by_close_clip is not None:
+                    return blocked_by_close_clip
                 opening_trade = abs(current_shares + delta_shares_value) > abs(current_shares)
                 gates_added.append("CAPACITY_THROTTLE_SCALE")
                 snapshot_updates["capacity_throttle"] = {

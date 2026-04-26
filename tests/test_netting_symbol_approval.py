@@ -177,6 +177,27 @@ def test_prepare_netting_symbol_approval_closes_long_before_opening_short() -> N
     assert clip_calls[0]["requested_qty"] == 10
 
 
+def test_prepare_netting_symbol_approval_covers_short_before_opening_long() -> None:
+    kwargs = _base_kwargs()
+    kwargs["current_shares"] = -5
+    kwargs["delta_shares"] = 10
+    kwargs["exec_engine"] = SimpleNamespace()
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.blocked_reason is None
+    assert result.side == "buy"
+    assert result.delta_shares == 5
+    assert result.target_shares == 0
+    assert result.opening_trade is False
+    assert result.gates_added == ("PRE_SUBMIT_BUY_QTY_CLIP_SHORT_COVER",)
+    assert result.snapshot_updates["pre_submit_buy_qty_clip"] == {
+        "current_shares": -5,
+        "requested_qty": 10,
+        "max_cover_qty": 5,
+    }
+
+
 def test_prepare_netting_symbol_approval_clips_post_approval_long_to_short_adjustment() -> None:
     kwargs = _base_kwargs()
     kwargs["current_shares"] = 5
@@ -201,6 +222,29 @@ def test_prepare_netting_symbol_approval_clips_post_approval_long_to_short_adjus
     assert result.gates_added == (
         "APPROVAL_SCALE",
         "PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION",
+    )
+
+
+def test_prepare_netting_symbol_approval_clips_post_approval_short_to_long_adjustment() -> None:
+    kwargs = _base_kwargs()
+    kwargs["current_shares"] = -5
+    kwargs["delta_shares"] = 3
+    kwargs["exec_engine"] = SimpleNamespace()
+    kwargs["evaluate_execution_approval_func"] = lambda **_kwargs: SimpleNamespace(
+        approval=SimpleNamespace(allowed=True, reasons=["APPROVAL_SCALE"], expected_net_edge_bps=7.5),
+        adjusted_delta_shares=8,
+        adjusted_side="buy",
+    )
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.side == "buy"
+    assert result.delta_shares == 5
+    assert result.target_shares == 0
+    assert result.opening_trade is False
+    assert result.gates_added == (
+        "APPROVAL_SCALE",
+        "PRE_SUBMIT_BUY_QTY_CLIP_SHORT_COVER",
     )
 
 
