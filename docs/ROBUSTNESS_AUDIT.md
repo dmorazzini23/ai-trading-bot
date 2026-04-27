@@ -22,13 +22,17 @@ Current status as of `2026-04-27`:
 - `PASS`: health, database, broker connectivity, and market-closed behavior are currently stable.
 - `MONITOR`: the runtime is intentionally in explicit no-ML mode because no real promoted ML artifact exists yet.
 - `MONITOR`: RL remains `shadow` gated and is not ready for live decisioning.
-- `ATTENTION`: pre-open flat-start enforcement is implemented behind
-  `AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START`; keep it observe/off until
-  expected swing symbols and broker snapshots are validated in paper.
-- `ATTENTION`: `oms_invariants` and `oms_lifecycle_parity` now have explicit
-  health readiness gates, but production strictness still depends on
-  `AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS` and
-  `AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY`.
+- `PASS`: strict pre-open flat-start enforcement is enabled in the local
+  runtime config through `AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START=1`;
+  keep `AI_TRADING_EXECUTION_PREOPEN_EXPECTED_SWING_SYMBOLS` current before
+  allowing intentional swing exposure.
+- `PASS`: `oms_invariants` and `oms_lifecycle_parity` are required by local
+  health readiness through `AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS=1` and
+  `AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY=1`.
+- `PASS`: paper runtime now exercises the execution go/no-go gate and blocks
+  degraded-data execution instead of widening into low-quality quotes.
+- `ATTENTION`: live go/no-go is still blocked by observed performance evidence,
+  not readiness plumbing.
 
 ## Control Matrix
 
@@ -39,7 +43,7 @@ Current status as of `2026-04-27`:
 | Reconciliation drift between local and broker state | reconciliation retry, mismatch burst tracking, opening freeze | go/no-go observed metrics, health payload positions section | freeze new openings, guarded auto-repair | `tests/execution/test_execution_runtime_controls.py` | `PASS` |
 | Stale pending / orphaned orders | stale-order sweeps, startup stale-only cleanup, pending backlog caps | order health monitor, pending-order tests | cancel stale orders before new work | `tests/bot_engine/test_pending_orders_cleanup.py`, `tests/execution/test_execution_runtime_controls.py` | `PASS` |
 | Market-open with unsafe runtime artifacts | pre-open readiness gates for broker/data/artifact freshness | readiness context, health/control-plane checks | block new openings until fresh | `tests/execution/test_execution_runtime_controls.py::test_runtime_preopen_readiness_*` | `PASS` |
-| Non-flat account during closed session or before open | EOD flatten, startup reconciliation, optional `AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START` guard with `AI_TRADING_EXECUTION_PREOPEN_EXPECTED_SWING_SYMBOLS` allowlist | readiness context, broker sync counts, health attention flags, journal logs | block new openings / operator flatten / hold rollout until expected | `tests/execution/test_execution_runtime_controls.py`, live service logs, `/healthz` broker counts | `ATTENTION` |
+| Non-flat account during closed session or before open | EOD flatten, startup reconciliation, enforced `AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START` guard with `AI_TRADING_EXECUTION_PREOPEN_EXPECTED_SWING_SYMBOLS` allowlist | readiness context, broker sync counts, health attention flags, journal logs | block new openings / operator flatten / hold rollout until expected | `tests/execution/test_execution_runtime_controls.py`, live service logs, `/healthz` broker counts | `PASS` |
 | Symbol / gross / net exposure breach | risk engine caps, notional caps, sleeve caps, max trades/day | risk logs, runtime summaries, health/control-plane | block or scale targets, manage existing only | `config/runtime.py`, runtime risk checks | `PASS` |
 | Hard dependency outage (provider / broker) | dependency breakers, safe-mode, halt flag | `/healthz`, provider state, alerting | fail safe and manage existing only | `docs/OPERATIONS.md`, provider safe-mode logic | `PASS` |
 | Placeholder or missing ML artifact | explicit runtime loader verification, placeholder detection | `MODEL_RUNTIME_DISABLED`, loader tests | no-ML mode instead of fake model | `tests/test_model_loading.py` | `PASS` |
@@ -103,7 +107,7 @@ Reference coverage:
 
 ## Current Audit Findings
 
-### 1. Pre-open account state now has an explicit guard, but policy must be set
+### 1. Pre-open account state has an explicit strict guard
 
 The runtime can now require a flat start during the pre-open readiness window:
 
@@ -114,9 +118,9 @@ The runtime can now require a flat start during the pre-open readiness window:
 - The readiness context includes a `flat_start` section with counts, expected
   and unexpected positions, and the concrete block reason.
 
-Do not treat the guard as live-proven yet. Validate it in paper against real
-broker snapshots, especially if stale cached snapshots or intended swing
-holdings are part of the operating mode.
+The local runtime config now enables this strict guard. Do not add intentional
+swing exposure without also updating `AI_TRADING_EXECUTION_PREOPEN_EXPECTED_SWING_SYMBOLS`
+and validating that the broker snapshot reports the expected holdings.
 
 ### 2. Learning-system plumbing is now stronger than learning-system performance
 
@@ -131,6 +135,7 @@ What still blocks promotion is model performance, not deployment plumbing:
 - live go/no-go must pass
 - the consecutive-pass requirement must be met
 - effective trade count must reach the configured threshold
+- the current gate still rejects the runtime on live sample count and win rate
 
 ### 3. Operator visibility improved, and strict OMS gates are now configurable
 
@@ -138,7 +143,7 @@ The system now surfaces broker position/open-order counts and market-closed
 attention flags in the canonical health payload. That helps operators catch
 "non-flat before the open" early.
 
-The OMS controls are explicit:
+The OMS controls are explicit and enabled in the local runtime config:
 
 - `AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS=1`
 - `AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY=1`
