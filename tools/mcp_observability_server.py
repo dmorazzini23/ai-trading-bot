@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import ipaddress
 import json
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, cast
@@ -30,6 +32,8 @@ _run_module_json = cast(
 
 _DEFAULT_RUNTIME_ROOT = Path("/var/lib/ai-trading-bot/runtime")
 _DEFAULT_HEALTH_PORT = 9001
+_MIN_PORT = 1
+_MAX_PORT = 65535
 _ALLOWED_SYSTEMD_UNITS = frozenset(
     {
         "ai-trading",
@@ -68,10 +72,48 @@ def _runtime_root(args: dict[str, Any]) -> Path:
     return Path(raw).expanduser().resolve()
 
 
+def _bounded_port(value: Any) -> int:
+    port = _DEFAULT_HEALTH_PORT if value is None or str(value).strip() == "" else int(value)
+    if not _MIN_PORT <= port <= _MAX_PORT:
+        raise RuntimeError(f"health port out of range: {port}")
+    return port
+
+
+def _health_url(args: dict[str, Any]) -> str:
+    raw_url = str(args.get("url") or "").strip()
+    if not raw_url:
+        port = _bounded_port(args.get("port"))
+        return f"http://127.0.0.1:{port}/healthz"
+
+    parsed = urllib.parse.urlparse(raw_url)
+    if parsed.scheme != "http":
+        raise RuntimeError("health_probe url must use http")
+    if parsed.username or parsed.password:
+        raise RuntimeError("health_probe url must not include credentials")
+    if parsed.path != "/healthz" or parsed.params or parsed.query or parsed.fragment:
+        raise RuntimeError("health_probe url must target exactly /healthz")
+    try:
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise RuntimeError("health_probe url port out of range") from exc
+    if parsed_port is None:
+        raise RuntimeError("health_probe url must include a port")
+    _bounded_port(parsed_port)
+    host = parsed.hostname
+    if host is None:
+        raise RuntimeError("health_probe url must include a host")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise RuntimeError("health_probe url host must be a loopback IP literal") from exc
+    if not address.is_loopback:
+        raise RuntimeError("health_probe url host must be loopback")
+    return raw_url
+
+
 def tool_health_probe(args: dict[str, Any]) -> dict[str, Any]:
-    port = int(args.get("port") or _DEFAULT_HEALTH_PORT)
     timeout_s = float(args.get("timeout_s") or 2.0)
-    url = str(args.get("url") or f"http://127.0.0.1:{port}/healthz")
+    url = _health_url(args)
     request = urllib.request.Request(url=url, method="GET")
     try:
         with urllib.request.urlopen(request, timeout=timeout_s) as response:

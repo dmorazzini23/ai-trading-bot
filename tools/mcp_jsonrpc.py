@@ -83,6 +83,9 @@ def process_mcp_message(
     params = message.get("params")
     params_obj = params if isinstance(params, dict) else {}
 
+    if is_request and message.get("jsonrpc") != "2.0":
+        return _jsonrpc_error(request_id, -32600, "Invalid Request: jsonrpc must be '2.0'"), False
+
     if not method:
         if is_request:
             return _jsonrpc_error(request_id, -32600, "Invalid Request: method is required"), False
@@ -132,6 +135,9 @@ def process_mcp_message(
         return None, False
 
     if method == "tools/call":
+        if not is_request:
+            return None, False
+
         tool_name = str(params_obj.get("name") or "").strip()
         raw_args = params_obj.get("arguments")
         tool_args = raw_args if isinstance(raw_args, dict) else {}
@@ -141,9 +147,7 @@ def process_mcp_message(
                 "isError": True,
                 "content": [{"type": "text", "text": "tools/call requires params.name"}],
             }
-            if is_request:
-                return _jsonrpc_success(request_id, missing_name_result), False
-            return None, False
+            return _jsonrpc_success(request_id, missing_name_result), False
 
         handler = tools.get(tool_name)
         if handler is None:
@@ -151,9 +155,7 @@ def process_mcp_message(
                 "isError": True,
                 "content": [{"type": "text", "text": f"unknown tool: {tool_name}"}],
             }
-            if is_request:
-                return _jsonrpc_success(request_id, unknown_tool_result), False
-            return None, False
+            return _jsonrpc_success(request_id, unknown_tool_result), False
 
         try:
             tool_result = handler(tool_args)
@@ -177,9 +179,7 @@ def process_mcp_message(
                     }
                 ],
             }
-        if is_request:
-            return _jsonrpc_success(request_id, call_result), False
-        return None, False
+        return _jsonrpc_success(request_id, call_result), False
 
     if is_request:
         return _jsonrpc_error(request_id, -32601, f"Method not found: {method}"), False

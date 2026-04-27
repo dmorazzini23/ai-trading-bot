@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from tools import mcp_secrets_manager_server as secrets_srv
@@ -39,6 +40,38 @@ def test_migrate_local_env_requires_confirm() -> None:
     payload = secrets_srv.tool_migrate_local_env_to_aws({})
     assert payload["executed"] is False
     assert "confirm" in payload["reason"]
+
+
+def test_migrate_local_env_uses_current_python(monkeypatch, tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "AI_TRADING_AWS_SECRET_ID=ai-trading-bot/prod\nAI_TRADING_AWS_REGION=us-west-2\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_run_cmd(cmd: list[str], timeout_s: int = 120):
+        captured["cmd"] = cmd
+        captured["timeout_s"] = timeout_s
+        return {
+            "cmd": cmd,
+            "rc": 0,
+            "stdout": json.dumps({"created": True}),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(secrets_srv, "_run_cmd", _fake_run_cmd)
+
+    payload = secrets_srv.tool_migrate_local_env_to_aws(
+        {"confirm": True, "env_file": str(env_file), "dry_run": True}
+    )
+
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    assert cmd[0] == sys.executable
+    assert cmd[0] != "python3"
+    assert "migrate_secrets_to_aws_sm.py" in cmd[1]
+    assert payload["executed"] is True
 
 
 def test_aws_secret_inventory_parses_secret_string(monkeypatch, tmp_path: Path) -> None:

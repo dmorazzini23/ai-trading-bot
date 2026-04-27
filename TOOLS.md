@@ -13,6 +13,10 @@
 
 ## Commands
 
+- Quiet-check gate:
+  Run read-only status, health, report, logs, and working-tree checks without asking. Stay quiet when results match the expected healthy state and there is no actionable drift.
+- Approval gate:
+  Ask before restart/start/stop, deploy, live trading mode changes, secret changes, or commands that could alter orders, positions, configuration, service state, or persistent runtime data.
 - Health:
   `ai-trading-local-check health`
 - Trading service status:
@@ -55,6 +59,7 @@
 
 ## Narrow sudo for aiuser
 
+- Use these only after the approval gate when they change service state; status/show remain read-only.
 - `systemctl status ai-trading.service`
 - `systemctl restart ai-trading.service`
 - `systemctl start ai-trading.service`

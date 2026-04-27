@@ -76,6 +76,50 @@ def test_process_tools_call_success_contains_structured_content() -> None:
     assert result["structuredContent"] == {"echo": {"k": "v"}}
 
 
+def test_process_tools_call_notification_does_not_execute_handler() -> None:
+    state: dict[str, Any] = {"shutdown": False}
+    calls: list[dict[str, Any]] = []
+
+    def _handler(args: dict[str, Any]) -> dict[str, Any]:
+        calls.append(args)
+        return {"ok": True}
+
+    response, should_exit = mcp_jsonrpc.process_mcp_message(
+        message={
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {"name": "echo", "arguments": {"k": "v"}},
+        },
+        tools={"echo": _handler},
+        tool_specs=_sample_specs(),
+        input_schemas=None,
+        server_name="demo",
+        server_version="1.0.0",
+        state=state,
+    )
+    assert response is None
+    assert should_exit is False
+    assert calls == []
+
+
+def test_process_request_rejects_invalid_jsonrpc_version() -> None:
+    state: dict[str, Any] = {"shutdown": False}
+    response, should_exit = mcp_jsonrpc.process_mcp_message(
+        message={"jsonrpc": "1.0", "id": 31, "method": "tools/list"},
+        tools=_sample_tools(),
+        tool_specs=_sample_specs(),
+        input_schemas=None,
+        server_name="demo",
+        server_version="1.0.0",
+        state=state,
+    )
+    assert should_exit is False
+    assert response is not None
+    assert response["id"] == 31
+    assert response["error"]["code"] == -32600
+    assert "jsonrpc" in response["error"]["message"]
+
+
 def test_process_tools_call_unknown_tool_returns_is_error() -> None:
     state: dict[str, Any] = {"shutdown": False}
     response, _ = mcp_jsonrpc.process_mcp_message(

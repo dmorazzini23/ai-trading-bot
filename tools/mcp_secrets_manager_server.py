@@ -245,7 +245,7 @@ def tool_migrate_local_env_to_aws(args: dict[str, Any]) -> dict[str, Any]:
     profile = _aws_profile(args, env_map)
 
     cmd = [
-        "python3",
+        sys.executable,
         str(_REPO_ROOT / "scripts" / "migrate_secrets_to_aws_sm.py"),
         "--env-file",
         str(env_file),

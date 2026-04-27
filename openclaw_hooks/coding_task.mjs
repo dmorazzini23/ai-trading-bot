@@ -19,7 +19,7 @@ export default function codingTask(ctx) {
     branch ? `branch=${branch}` : "",
     acceptance ? `acceptance=${acceptance}` : "",
     "",
-    "Work in the repo at /home/aiuser/ai-trading-bot. Read and follow AGENTS.md before making repo changes or running repo commands. Prefer apply_patch for file edits, validate the result, and summarize what changed.",
+    "Work in the repo at /home/aiuser/ai-trading-bot. Read and follow AGENTS.md before making repo changes or running repo commands. Use apply_patch for all file edits, validate the result, and summarize what changed.",
     "If the task touches runtime, deployment, or service-control paths, also call out rollout risk, restart implications, and any missing tests or follow-up checks."
   ].filter(Boolean);
 

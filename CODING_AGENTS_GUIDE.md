@@ -21,7 +21,8 @@ Make precise, minimal edits with first-pass correctness. Do not change strategy 
 
 ## Patch Style
 - Provide unified diffs or discrete file patches.
-- Include a Validation section: `py_compile`, service restart, journal check.
+- Use `apply_patch` for all file edits.
+- Include a Validation section with repo-venv commands. Do not make service restarts routine; restart only when rollout validation explicitly requires it, and call out why.
 
 ## Example Commit Message
 
@@ -29,9 +30,11 @@ Thread runtime in regime detection; remove final ctx usage; warn-once for missin
 
 ## Example Validation
 
-python -m py_compile $(git ls-files ‘*.py’) || exit 1
-sudo systemctl restart ai-trading.service
-journalctl -u ai-trading.service -f | sed -n ‘1,200p’
+./venv/bin/python -m py_compile $(git ls-files '*.py')
+./venv/bin/pytest -q tests/path/to_targeted_test.py
+systemctl status ai-trading.service
+curl -sS http://127.0.0.1:9001/healthz
+journalctl -u ai-trading.service -n 200 --no-pager
 
 ## Known Pitfalls
 - “Loaded DataFrame is empty…” off-hours is normal.

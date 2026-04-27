@@ -216,10 +216,12 @@ def _resolve_openclaw_runtime_target(env_map: Mapping[str, str]) -> dict[str, st
     cfg_path = Path(raw_cfg_path).expanduser()
     cfg = _read_json_file(cfg_path)
     hooks = cfg.get("hooks") if isinstance(cfg.get("hooks"), dict) else {}
-    token = str(hooks.get("token") or "").strip()
+    token = explicit_token or str(hooks.get("token") or "").strip()
     hook_path = str(hooks.get("path") or "/hooks").strip() or "/hooks"
     if not token:
         return None
+    if explicit_url:
+        return {"url": explicit_url, "token": token}
     hook_path = "/" + hook_path.strip("/ ")
     gateway_url = (
         env_map.get("AI_TRADING_OPENCLAW_GATEWAY_URL")
@@ -1004,6 +1006,10 @@ def run_dispatch(
                 "require_after_hours_training": _bool_env(
                     env_map.get("AI_TRADING_SLACK_EOD_REQUIRE_AFTER_HOURS_TRAINING"),
                     default=True,
+                ),
+                "block_on_training_gate": _bool_env(
+                    env_map.get("AI_TRADING_SLACK_EOD_BLOCK_ON_TRAINING_GATE"),
+                    default=False,
                 ),
             }
             health_timeout_s = _float_env(

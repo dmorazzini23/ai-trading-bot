@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import importlib
+import os
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -24,6 +25,20 @@ _mcp_common_mod = importlib.import_module(
 run_tool_server = cast(Callable[..., int], getattr(_mcp_common_mod, "run_tool_server"))
 
 _DEFAULT_RUNTIME_ROOT = Path("/var/lib/ai-trading-bot/runtime")
+_MODULE_JSON_TIMEOUT_SECONDS = 60.0
+
+
+def _bool_arg(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _resolve_runtime_root(args: dict[str, Any]) -> Path:
@@ -81,12 +96,22 @@ def _extract_json_objects(payload: str | Iterable[str]) -> list[dict[str, Any]]:
 
 def _run_module_json(module: str, extra_args: list[str]) -> dict[str, Any]:
     cmd = [sys.executable, "-m", module, *extra_args]
-    proc = subprocess.run(
-        cmd,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    env = dict(os.environ)
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    try:
+        proc = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_MODULE_JSON_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"module timed out after {_MODULE_JSON_TIMEOUT_SECONDS:g}s: {module}"
+        ) from exc
     if proc.returncode != 0:
         raise RuntimeError(
             f"module failed rc={proc.returncode}: {module}; stderr={proc.stderr.strip()}"
@@ -144,10 +169,17 @@ def tool_trade_history_summary(args: dict[str, Any]) -> dict[str, Any]:
     if not path.exists():
         return {"path": str(path), "exists": False}
 
-    if path.suffix == ".parquet":
+    suffix = path.suffix.lower()
+    if suffix == ".parquet":
         frame = pd.read_parquet(path)
-    else:
+    elif suffix in {".pkl", ".pickle"}:
+        if not _bool_arg(args.get("allow_trusted_pickle"), default=False):
+            raise RuntimeError(
+                "pickle trade history requires explicit allow_trusted_pickle=true"
+            )
         frame = pd.read_pickle(path)
+    else:
+        raise RuntimeError(f"unsupported trade history format: {path.suffix}")
 
     summary: dict[str, Any] = {
         "path": str(path),

@@ -13,22 +13,72 @@ function pick(...values) {
   return "";
 }
 
+function isTruthySignal(value) {
+  if (value === true) return true;
+  if (typeof value !== "string") return false;
+  return ["1", "true", "yes", "y"].includes(value.trim().toLowerCase());
+}
+
+function hasExplicitSmokeLabel(value) {
+  if (value === null || value === undefined) return false;
+  const text = String(value).trim().toLowerCase();
+  if (!text) return false;
+  return [
+    "smoke",
+    "smoke_test",
+    "smoke-test",
+    "synthetic",
+    "synthetic_test",
+    "synthetic-test",
+    "synthetic_validation",
+    "synthetic-validation"
+  ].includes(text) || /\bsmoke[-_ ]test\b/.test(text);
+}
+
 function looksLikeSmokeTest(payload, detailsText) {
   const details = payload.details && typeof payload.details === "object" ? payload.details : {};
-  const tokens = [
+  const flagSignals = [
+    payload.synthetic,
+    payload.smoke_test,
+    payload.smokeTest,
+    payload.is_synthetic,
+    details.synthetic,
+    details.smoke_test,
+    details.smokeTest,
+    details.is_synthetic
+  ];
+  if (flagSignals.some(isTruthySignal)) return true;
+
+  const labelSignals = [
+    payload.event_type,
+    payload.type,
+    payload.category,
+    payload.source,
+    details.event_type,
+    details.type,
+    details.category,
+    details.source,
+    details.model_id,
+    details.model_name
+  ];
+  if (labelSignals.some(hasExplicitSmokeLabel)) return true;
+
+  const pathSignals = [
+    details.report_path,
+    details.reportPath,
+    payload.report_path,
+    payload.reportPath
+  ].map((value) => String(value || ""));
+  if (pathSignals.some((text) => text.startsWith("/tmp/") || text.includes("/tmp/"))) return true;
+
+  const explicitTextSignals = [
     payload.summary,
     payload.message,
-    details.event_type,
-    details.model_id,
-    details.model_name,
-    details.report_path,
     detailsText
   ].map((value) => String(value || "").toLowerCase());
-  return tokens.some((text) =>
-    text.includes("smoke") ||
-    text.includes("test") ||
-    text.includes("temporary smoke-test") ||
-    text.includes("/tmp/")
+  return explicitTextSignals.some((text) =>
+    /\btemporary smoke[-_ ]test\b/.test(text) ||
+    /\bsynthetic validation payload\b/.test(text)
   );
 }
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import signal as _signal
 import types
+from typing import Any
 
 from ai_trading import main
 
@@ -61,7 +62,7 @@ def test_shutdown_runtime_resources_uses_nonblocking_cleanup(monkeypatch):
 
 
 def test_shutdown_force_exit_timer_is_armed_once(monkeypatch):
-    calls = []
+    calls: list[tuple[Any, ...]] = []
 
     class FakeTimer:
         daemon = False

@@ -115,7 +115,7 @@ def test_render_runtime_env_excludes_selected_managed_keys(
                     "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD"
                 ),
                 "ALPACA_API_KEY=local-key",
-                "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD=",
+                "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD=local-prom-password",
             ]
         )
         + "\n",
@@ -137,8 +137,6 @@ def test_render_runtime_env_excludes_selected_managed_keys(
     rendered_lines = rendered.splitlines()
 
     assert "ALPACA_API_KEY=remote-key" in rendered
-    assert not any(
-        line.startswith("AI_TRADING_PROM_REMOTE_WRITE_PASSWORD=")
-        for line in rendered_lines
-    )
+    assert "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD=local-prom-password" in rendered_lines
+    assert "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD=remote-prom-password" not in rendered
     assert summary["manager_overrides_applied"] == 1

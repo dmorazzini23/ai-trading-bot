@@ -278,8 +278,6 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
         key = entry.key
         if key in DEPRECATED_KEYS:
             continue
-        if key in excluded_managed_keys:
-            continue
         value = entry.value
         if key in managed_keys and backend not in _BACKEND_NONE:
             managed_value = manager_values.get(key)

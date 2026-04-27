@@ -52,7 +52,70 @@ def test_run_dispatch_calls_active_connectors() -> None:
     assert calls["slack"]["webhook_url"] == "https://hooks.slack.test/abc"
     assert calls["slack_eod"]["webhook_url"] == "https://hooks.slack.test/abc"
     assert calls["slack_eod"]["require_after_hours_training"] is True
+    assert calls["slack_eod"]["block_on_training_gate"] is False
     assert "health_timeout_s" not in calls["incident_snapshot"]
+
+
+def test_resolve_openclaw_runtime_target_accepts_explicit_url_with_config_token(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "openclaw.json"
+    config_path.write_text(
+        dispatch.json.dumps({"hooks": {"token": "cfg-token", "path": "/custom-hooks"}}),
+        encoding="utf-8",
+    )
+
+    target = dispatch._resolve_openclaw_runtime_target(
+        {
+            "AI_TRADING_OPENCLAW_RUNTIME_WEBHOOK_URL": "http://runtime.test/override",
+            "AI_TRADING_OPENCLAW_CONFIG_PATH": str(config_path),
+        }
+    )
+
+    assert target == {
+        "url": "http://runtime.test/override",
+        "token": "cfg-token",
+    }
+
+
+def test_resolve_openclaw_runtime_target_accepts_explicit_token_with_config_path(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "openclaw.json"
+    config_path.write_text(
+        dispatch.json.dumps({"hooks": {"token": "cfg-token", "path": "custom-hooks"}}),
+        encoding="utf-8",
+    )
+
+    target = dispatch._resolve_openclaw_runtime_target(
+        {
+            "AI_TRADING_OPENCLAW_HOOK_TOKEN": "explicit-token",
+            "AI_TRADING_OPENCLAW_GATEWAY_URL": "http://gateway.test/",
+            "AI_TRADING_OPENCLAW_CONFIG_PATH": str(config_path),
+        }
+    )
+
+    assert target == {
+        "url": "http://gateway.test/custom-hooks/runtime",
+        "token": "explicit-token",
+    }
+
+
+def test_resolve_openclaw_runtime_target_accepts_explicit_token_without_config(
+    tmp_path: Path,
+) -> None:
+    target = dispatch._resolve_openclaw_runtime_target(
+        {
+            "AI_TRADING_OPENCLAW_HOOK_TOKEN": "explicit-token",
+            "AI_TRADING_OPENCLAW_GATEWAY_URL": "http://gateway.test",
+            "AI_TRADING_OPENCLAW_CONFIG_PATH": str(tmp_path / "missing.json"),
+        }
+    )
+
+    assert target == {
+        "url": "http://gateway.test/hooks/runtime",
+        "token": "explicit-token",
+    }
 
 
 def test_run_dispatch_skips_missing_credentials() -> None:
@@ -154,6 +217,19 @@ def test_run_dispatch_forwards_shared_health_timeout() -> None:
         calls["slack_eod"] = args
         return {"sent": False, "reason": "market_not_closed"}
 
+    def _openclaw(args: dict[str, Any]) -> dict[str, Any]:
+        calls["openclaw"] = args
+        return {"sent": False, "reason": "no_incident_triggered"}
+
+    def _incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
+        calls["incident_snapshot"] = args
+        return {
+            "should_alert": False,
+            "fingerprint": "fp-1",
+            "snapshot": {},
+            "triggers": [],
+        }
+
     payload = dispatch.run_dispatch(
         env={
             "AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc",
@@ -161,23 +237,40 @@ def test_run_dispatch_forwards_shared_health_timeout() -> None:
         },
         slack_notifier=_slack,
         slack_eod_notifier=_slack_eod,
-        openclaw_notifier=lambda args: (
-            calls.__setitem__("openclaw", args) or {"sent": False, "reason": "no_incident_triggered"}
-        ),
-        incident_snapshot_builder=lambda args: (
-            calls.__setitem__("incident_snapshot", args)
-            or {
-                "should_alert": False,
-                "fingerprint": "fp-1",
-                "snapshot": {},
-                "triggers": [],
-            }
-        ),
+        openclaw_notifier=_openclaw,
+        incident_snapshot_builder=_incident_snapshot,
     )
     assert payload["ok"] is True
     assert calls["slack"]["health_timeout_s"] == 5.5
     assert calls["slack_eod"]["health_timeout_s"] == 5.5
     assert calls["incident_snapshot"]["health_timeout_s"] == 5.5
+
+
+def test_run_dispatch_forwards_slack_eod_block_on_training_gate() -> None:
+    calls: dict[str, dict[str, Any]] = {}
+
+    def _slack_eod(args: dict[str, Any]) -> dict[str, Any]:
+        calls["slack_eod"] = args
+        return {"sent": False, "reason": "market_not_closed"}
+
+    payload = dispatch.run_dispatch(
+        env={
+            "AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc",
+            "AI_TRADING_SLACK_EOD_BLOCK_ON_TRAINING_GATE": "1",
+        },
+        slack_notifier=lambda args: {"sent": False, "reason": "no_incident_triggered"},
+        slack_eod_notifier=_slack_eod,
+        openclaw_notifier=lambda args: {"sent": False, "reason": "no_incident_triggered"},
+        incident_snapshot_builder=lambda args: {
+            "should_alert": False,
+            "fingerprint": "fp-1",
+            "snapshot": {},
+            "triggers": [],
+        },
+    )
+
+    assert payload["ok"] is True
+    assert calls["slack_eod"]["block_on_training_gate"] is True
 
 
 def test_run_dispatch_openclaw_alert_uses_snapshot_builder() -> None:

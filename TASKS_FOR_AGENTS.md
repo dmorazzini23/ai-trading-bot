@@ -4,6 +4,7 @@
 - Ensure all hot paths accept `runtime` and do not reference a global `ctx`.
 - Centralize ML model loading in `_load_primary_model(runtime)` and cache at `runtime.model`.
 - Normalize metrics imports under `ai_trading.monitoring.metrics`.
+- Before acting on backlog items, verify the current branch and working tree and avoid files already being edited by another worker.
 
 ## Next PR Bundle (already planned)
 - Strategy re‑tuning and exception hygiene across modules.
@@ -14,3 +15,4 @@
 ## Non-Goals (for this repo pass)
 - Destructive refactors or replacement of critical modules without explicit approval.
 - Changing strategy logic unless the PR states so.
+- Restarting services, deploying, or changing live connector/trading state without explicit approval.
