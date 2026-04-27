@@ -1,8 +1,0 @@
-file,line,marker,snippet
-scripts/backtest_framework.py,72,mock_class,    def test_position_sizing(self):
-scripts/critical_fixes_validation.py,32,mock_class,        from trade_execution import ExecutionEngine
-scripts/critical_fixes_validation.py,37,mock_class,"                self.id = ""test_order_123"""
-scripts/critical_fixes_validation.py,83,mock_class,        # Create signals with out-of-range confidence from production logs
-scripts/critical_fixes_validation.py,130,mock_class,        from trade_execution import ExecutionEngine
-scripts/validate_critical_fix.py,33,mock_class,from ai_trading.trade_execution import ExecutionEngine
-scripts/validate_critical_fix.py,42,mock_class,"        self.symbol = ""TEST"""
