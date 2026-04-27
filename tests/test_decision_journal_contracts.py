@@ -62,6 +62,24 @@ def test_pretrade_order_intent_to_contract_exposes_canonical_fields() -> None:
     assert payload["metadata"]["quote_quality_ok"] is True
 
 
+def test_pretrade_order_intent_to_contract_preserves_sell_short_side() -> None:
+    bar_ts = datetime.now(UTC)
+    intent = PretradeOrderIntent(
+        symbol="TSLA",
+        side="sell_short",
+        qty=4,
+        notional=1000.0,
+        limit_price=250.0,
+        bar_ts=bar_ts,
+        client_order_id="coid-tsla-short-1",
+    )
+
+    payload = intent.to_contract().to_dict()
+
+    assert payload["side"] == "sell_short"
+    assert payload["qty"] == 4.0
+
+
 def test_decision_record_includes_canonical_decision_journal() -> None:
     bar_ts = datetime.now(UTC)
     proposal = SleeveProposal(
@@ -97,7 +115,11 @@ def test_decision_record_includes_canonical_decision_journal() -> None:
             "strategy_id": "mean_revert_v2",
             "status": "accepted",
         },
-        metrics={"expected_net_edge_bps": 14.2},
+        metrics={
+            "expected_net_edge_bps": 14.2,
+            "model_id": "ml-main",
+            "model_version": "v2026.04.15",
+        },
         config_snapshot={
             "config_snapshot_hash": "cfg-hash-1",
             "effective_policy_hash": "policy-hash-1",
@@ -120,6 +142,8 @@ def test_decision_record_includes_canonical_decision_journal() -> None:
     assert journal["decision_trace_id"] == "trace-aapl-1"
     assert journal["config_snapshot_hash"] == "cfg-hash-1"
     assert journal["policy_hash"] == "policy-hash-1"
+    assert journal["model_id"] == "ml-main"
+    assert journal["model_version"] == "v2026.04.15"
     assert journal["dataset_hash"] == "ds-hash-1"
     assert journal["target_delta_shares"] == 8.0
     assert "OK_TRADE" in journal["reasons"]
@@ -236,6 +260,45 @@ def test_decision_journal_exposes_provider_feed_and_broker_result() -> None:
     assert "BROKER_REJECTED" in journal["reasons"]
     assert journal["broker_result"]["status"] == "rejected"
     assert journal["broker_result"]["error_reason"] == "BROKER_REJECTED"
+
+
+def test_decision_journal_preserves_sell_short_intent_with_negative_delta() -> None:
+    bar_ts = datetime.now(UTC)
+    proposal = SleeveProposal(
+        symbol="TSLA",
+        sleeve="intraday",
+        bar_ts=bar_ts,
+        target_dollars=-1000.0,
+        expected_edge_bps=12.0,
+        expected_cost_bps=3.0,
+        score=-0.6,
+        confidence=0.9,
+    )
+    record = build_decision_record(
+        symbol="TSLA",
+        bar_ts=bar_ts,
+        net_target=NettedTarget(
+            symbol="TSLA",
+            bar_ts=bar_ts,
+            target_dollars=-1000.0,
+            target_shares=-4.0,
+            proposals=[proposal],
+        ),
+        gates=["OK_TRADE"],
+        order={
+            "client_order_id": "coid-tsla-short-2",
+            "side": "sell_short",
+            "qty": 4,
+            "price": 250.0,
+            "status": "accepted",
+        },
+    )
+
+    journal = record.to_dict()["decision_journal"]
+
+    assert journal["order_intent"]["side"] == "sell_short"
+    assert journal["target_delta_shares"] == -4.0
+    assert journal["broker_result"]["broker_order"]["side"] == "sell_short"
 
 
 def test_decision_journal_uses_explicit_event_and_freshness_metrics() -> None:

@@ -107,6 +107,10 @@ def test_execute_netting_submission_returns_blocked_on_exception() -> None:
 
 def test_execute_netting_submission_returns_success_payload() -> None:
     kwargs = _base_kwargs()
+    tca_kwargs: dict[str, Any] = {}
+    kwargs["build_order_metrics_and_tca_func"] = lambda **call_kwargs: (
+        tca_kwargs.update(call_kwargs) or ({"pnl": 1.0}, {"tca": True})
+    )
     result = execute_netting_submission(**cast(Any, kwargs))
 
     assert result.status == "submitted"
@@ -117,11 +121,13 @@ def test_execute_netting_submission_returns_success_payload() -> None:
     assert result.order_payload["client_order_id"] == "cid-1"
     assert result.metrics == {"pnl": 1.0}
     assert result.tca_record == {"tca": True}
+    assert tca_kwargs["order_lineage_metadata"] == {"decision_trace_id": "trace-1"}
 
 
 def test_execute_netting_submission_does_not_count_rejected_order_as_submitted() -> None:
     kwargs = _base_kwargs()
     recorded_success: list[dict[str, Any]] = []
+    tca_calls: list[dict[str, Any]] = []
     kwargs["normalize_submitted_order_func"] = lambda order, **kwargs: SimpleNamespace(
         status_text="rejected",
         status_token="rejected",
@@ -129,6 +135,11 @@ def test_execute_netting_submission_does_not_count_rejected_order_as_submitted()
     kwargs["record_successful_submission_func"] = lambda **record_kwargs: recorded_success.append(
         dict(record_kwargs)
     )
+    def _build_order_metrics_and_tca(**call_kwargs: Any) -> tuple[dict[str, str], dict[str, str]]:
+        tca_calls.append(dict(call_kwargs))
+        return ({"tca_status": "rejected"}, {"status": "rejected"})
+
+    kwargs["build_order_metrics_and_tca_func"] = _build_order_metrics_and_tca
 
     result = execute_netting_submission(**cast(Any, kwargs))
 
@@ -136,4 +147,8 @@ def test_execute_netting_submission_does_not_count_rejected_order_as_submitted()
     assert result.gates_added == ("BROKER_ORDER_REJECTED",)
     assert result.attempted_increment == 1
     assert result.submitted_increment == 0
+    assert result.metrics == {"tca_status": "rejected"}
+    assert result.tca_record == {"status": "rejected"}
     assert recorded_success == []
+    assert tca_calls
+    assert tca_calls[0]["order_lineage_metadata"] == {"decision_trace_id": "trace-1"}

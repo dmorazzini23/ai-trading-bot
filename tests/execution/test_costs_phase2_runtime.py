@@ -97,6 +97,15 @@ def test_position_impact_and_size_adjustment_respect_minimums_and_scaling(tmp_pa
     assert tiny["cost_dollars"] == 2.0
     assert tiny["effective_bps"] == 200.0
 
+    signed = model.calculate_position_impact("SPY", position_value=-10_000.0, volume_ratio=1.0)
+    unsigned = model.calculate_position_impact("SPY", position_value=10_000.0, volume_ratio=1.0)
+    assert signed["cost_dollars"] == pytest.approx(unsigned["cost_dollars"])
+    assert signed["cost_dollars"] > 0.0
+
+    zero = model.calculate_position_impact("SPY", position_value=0.0, volume_ratio=1.0)
+    assert zero["cost_dollars"] == 0.0
+    assert zero["effective_bps"] == 0.0
+
     adjusted, cost_info = model.adjust_position_size(
         "SPY",
         target_size=1_000.0,
@@ -154,6 +163,21 @@ def test_short_availability_and_holding_cost_adjustments(tmp_path: Path) -> None
     assert -1_000.0 < scaled < 0.0
     assert holding_info["original_size"] == -1_000.0
     assert holding_info["scaling_factor"] == pytest.approx(5.0 / 21.0)
+
+    signed_holding = model.calculate_holding_cost(
+        "EASY",
+        position_value=-10_000.0,
+        days_held=2.0,
+        is_short=True,
+    )
+    unsigned_holding = model.calculate_holding_cost(
+        "EASY",
+        position_value=10_000.0,
+        days_held=2.0,
+        is_short=True,
+    )
+    assert signed_holding["total_holding_cost_dollars"] == pytest.approx(unsigned_holding["total_holding_cost_dollars"])
+    assert signed_holding["borrow_cost_dollars"] > 0.0
 
 
 def test_snapshot_statistics_and_global_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

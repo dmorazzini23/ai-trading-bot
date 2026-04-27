@@ -302,3 +302,123 @@ def test_live_engine_reconciles_terminal_broker_lookup_for_missing_partially_fil
     assert refreshed.status == "FILLED"
     open_intent_ids = {record.intent_id for record in store.get_open_intents()}
     assert intent.intent_id not in open_intent_ids
+
+
+def test_order_manager_reconcile_matches_tradier_tag_client_order_id(
+    tmp_path,
+) -> None:
+    """Tradier tag should satisfy client_order_id reconciliation fallback."""
+
+    store = IntentStore(path=str(tmp_path / "tradier_tag_client_order_id.db"))
+    engine = ExecutionEngine()
+    engine.order_manager.configure_intent_store(store)
+
+    intent, created = store.create_intent(
+        intent_id="intent-tradier-tag",
+        idempotency_key="tradier-tag-key",
+        symbol="AAPL",
+        side="buy",
+        quantity=3.0,
+        status="SUBMITTED",
+    )
+    assert created is True
+
+    summary = engine.order_manager.reconcile_open_intents(
+        broker_orders=[
+            {
+                "id": "tradier-order-1",
+                "tag": intent.intent_id,
+                "symbol": "AAPL",
+                "side": "buy",
+                "quantity": "3",
+                "status": "open",
+            }
+        ],
+    )
+
+    refreshed = store.get_intent(intent.intent_id)
+    assert refreshed is not None
+    assert refreshed.broker_order_id == "tradier-order-1"
+    assert summary["matched_open_orders"] == 1
+    assert summary["marked_submitted"] == 1
+
+
+def test_order_manager_reconcile_records_tradier_partial_cancel_aliases(
+    tmp_path,
+) -> None:
+    """Tradier exec_quantity/avg_fill_price should feed partial terminal fills."""
+
+    store = IntentStore(path=str(tmp_path / "tradier_partial_cancel_aliases.db"))
+    engine = ExecutionEngine()
+    engine.order_manager.configure_intent_store(store)
+
+    intent, created = store.create_intent(
+        intent_id="intent-tradier-partial-cancel",
+        idempotency_key="tradier-partial-cancel-key",
+        symbol="MSFT",
+        side="buy",
+        quantity=10.0,
+        status="SUBMITTED",
+    )
+    assert created is True
+    store.mark_submitted(intent.intent_id, "tradier-order-partial")
+
+    summary = engine.order_manager.reconcile_open_intents(
+        broker_orders=[],
+        get_order_by_id_fn=lambda _order_id: {
+            "id": "tradier-order-partial",
+            "tag": intent.intent_id,
+            "symbol": "MSFT",
+            "side": "buy",
+            "quantity": "10",
+            "status": "canceled",
+            "exec_quantity": "4",
+            "avg_fill_price": "249.5",
+        },
+    )
+
+    refreshed = store.get_intent(intent.intent_id)
+    fills = store.list_fills(intent.intent_id)
+    assert refreshed is not None
+    assert refreshed.status == "CANCELED"
+    assert len(fills) == 1
+    assert fills[0].fill_qty == pytest.approx(4.0)
+    assert fills[0].fill_price == pytest.approx(249.5)
+    assert summary["intents_checked"] == 1
+
+
+def test_order_manager_reconcile_treats_broker_error_as_rejected(
+    tmp_path,
+) -> None:
+    """Broker error status is terminal rejection evidence."""
+
+    store = IntentStore(path=str(tmp_path / "broker_error_terminal.db"))
+    engine = ExecutionEngine()
+    engine.order_manager.configure_intent_store(store)
+
+    intent, created = store.create_intent(
+        intent_id="intent-broker-error",
+        idempotency_key="broker-error-key",
+        symbol="MSFT",
+        side="buy",
+        quantity=2.0,
+        status="SUBMITTED",
+    )
+    assert created is True
+    store.mark_submitted(intent.intent_id, "broker-error-order")
+
+    engine.order_manager.reconcile_open_intents(
+        broker_orders=[],
+        get_order_by_id_fn=lambda _order_id: {
+            "id": "broker-error-order",
+            "client_order_id": intent.intent_id,
+            "symbol": "MSFT",
+            "side": "buy",
+            "quantity": "2",
+            "status": "error",
+        },
+    )
+
+    refreshed = store.get_intent(intent.intent_id)
+    assert refreshed is not None
+    assert refreshed.status == "REJECTED"

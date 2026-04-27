@@ -138,7 +138,7 @@ class PortfolioOptimizer:
             period_return = 0.0
             for symbol, position in positions.items():
                 if symbol in returns_data and i < len(returns_data[symbol]):
-                    weight = abs(position) * current_prices.get(symbol, 1.0) / total_value
+                    weight = position * current_prices.get(symbol, 1.0) / total_value
                     period_return += weight * returns_data[symbol][i]
             portfolio_returns.append(period_return)
         return portfolio_returns
@@ -275,7 +275,7 @@ class PortfolioOptimizer:
             total_value = sum((abs(pos) * current_prices.get(symbol, 1.0) for symbol, pos in current_positions.items()))
             if total_value == 0:
                 return (False, 'No positions to rebalance')
-            current_weights = {symbol: abs(pos) * current_prices.get(symbol, 1.0) / total_value for symbol, pos in current_positions.items()}
+            current_weights = {symbol: pos * current_prices.get(symbol, 1.0) / total_value for symbol, pos in current_positions.items()}
             max_drift = 0.0
             total_drift = 0.0
             for symbol in set(list(current_weights.keys()) + list(target_weights.keys())):

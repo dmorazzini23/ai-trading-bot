@@ -41,10 +41,21 @@ def test_tca_record_includes_canonical_price_fields() -> None:
             first_fill_ts=ts,
         ),
         fill=FillSummary(fill_vwap=100.5, total_qty=10, fees=0.0, status="filled"),
+        model_id="ml-main",
+        model_version="v1",
+        config_snapshot_hash="cfg-1",
+        rank_reason="EDGE_RANKED",
+        rank_reasons=["EDGE_RANKED", "CAPTURE_OK"],
     )
     assert record["decision_price"] == 100.0
     assert record["submit_price_reference"] == 100.2
     assert record["fill_price"] == 100.5
+    assert record["order_side"] == "buy"
+    assert record["model_id"] == "ml-main"
+    assert record["model_version"] == "v1"
+    assert record["config_snapshot_hash"] == "cfg-1"
+    assert record["rank_reason"] == "EDGE_RANKED"
+    assert record["rank_reasons"] == ["EDGE_RANKED", "CAPTURE_OK"]
 
 
 def test_resolve_pending_tca_from_fill_updates_pending_fields() -> None:
@@ -194,6 +205,45 @@ def test_reconcile_pending_tca_with_fill_supports_fallback_identifiers(tmp_path:
     assert len(rows) == 2
     assert rows[-1]["pending_event"] is False
     assert rows[-1]["fill_price"] == 451.0
+
+
+def test_reconcile_pending_tca_with_fill_symbol_qty_fallback_supports_sell_short(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tca_records.jsonl"
+    submit_ts = datetime(2026, 3, 13, 15, 0, tzinfo=UTC)
+    pending = {
+        "ts": submit_ts.isoformat(),
+        "symbol": "TSLA",
+        "side": "sell_short",
+        "order_side": "sell_short",
+        "decision_price": 250.0,
+        "qty": 3.0,
+        "pending_event": True,
+        "benchmark": {"mid_at_arrival": 250.0, "submit_ts": submit_ts.isoformat()},
+    }
+    path.write_text(json.dumps(pending) + "\n", encoding="utf-8")
+
+    reconciled, reason = reconcile_pending_tca_with_fill(
+        str(path),
+        client_order_id=None,
+        order_id=None,
+        symbol="TSLA",
+        side="short",
+        fill_price=249.0,
+        fill_qty=3.0,
+        status="filled",
+        fill_ts=datetime(2026, 3, 13, 15, 0, 2, tzinfo=UTC),
+        source="unit_test",
+        allow_symbol_qty_fallback=True,
+    )
+
+    assert reconciled is True
+    assert reason == "reconciled"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert rows[-1]["pending_event"] is False
+    assert rows[-1]["order_side"] == "sell_short"
+    assert rows[-1]["fill_price"] == 249.0
 
 
 def test_finalize_stale_pending_tca_appends_terminal_nonfill_row(tmp_path: Path) -> None:

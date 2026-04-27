@@ -263,8 +263,20 @@ def _normalize_order_side(side: OrderSide | str | None) -> OrderSide | None:
         return side
     if side is None:
         return None
+    normalized = str(side).strip().lower()
+    aliases = {
+        "long": "buy",
+        "cover": "buy",
+        "buy_to_cover": "buy",
+        "buy-to-cover": "buy",
+        "buy to cover": "buy",
+        "short": "sell_short",
+        "sellshort": "sell_short",
+        "sell-short": "sell_short",
+        "sell short": "sell_short",
+    }
     try:
-        return OrderSide(str(side).lower())
+        return OrderSide(aliases.get(normalized, normalized))
     except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
         logger.debug("ORDER_SIDE_NORMALIZE_FAILED", extra={"side": side}, exc_info=True)
         return None
@@ -732,6 +744,13 @@ class OrderManager:
         )
         if not token:
             token = str(status or "").strip().upper()
+        if "." in token:
+            token = token.split(".")[-1]
+        token = token.replace("-", "_").replace(" ", "_")
+        if token in {"ERROR", "ERRORED"}:
+            return "REJECTED"
+        if token in {"COMPLETE", "COMPLETED"}:
+            return "FILLED"
         return token
 
     def _resolve_external_intent_id(
@@ -1049,6 +1068,7 @@ class OrderManager:
             raw_client_order_id = self._extract_payload_value(
                 order_payload,
                 "client_order_id",
+                "tag",
             )
             if raw_client_order_id not in (None, ""):
                 open_by_client_order_id[str(raw_client_order_id)] = order_payload
@@ -1215,15 +1235,9 @@ class OrderManager:
                     recovered_status = ExecutionResult._normalize_status(
                         recovered_status_raw
                     )
-                    status_token = (
-                        str(
-                            getattr(recovered_status, "value", recovered_status)
-                        ).strip().upper()
-                        if recovered_status is not None
-                        else ""
+                    status_token = self._normalize_broker_status_token(
+                        recovered_status_raw
                     )
-                    if not status_token:
-                        status_token = str(recovered_status_raw or "").strip().upper()
                     terminal_status = resolve_terminal_intent_status(
                         status=status_token,
                         status_is_terminal=bool(
@@ -1240,10 +1254,13 @@ class OrderManager:
                             resolved_client_order_id = self._extract_payload_value(
                                 recovered_order,
                                 "client_order_id",
+                                "tag",
                             )
                             recovered_filled_qty = self._extract_payload_value(
                                 recovered_order,
                                 "filled_qty",
+                                "filled_quantity",
+                                "exec_quantity",
                             )
                             if (
                                 terminal_status == "FILLED"
@@ -1253,6 +1270,7 @@ class OrderManager:
                             recovered_fill_price = self._extract_payload_value(
                                 recovered_order,
                                 "filled_avg_price",
+                                "avg_fill_price",
                                 "fill_price",
                                 "average_fill_price",
                             )

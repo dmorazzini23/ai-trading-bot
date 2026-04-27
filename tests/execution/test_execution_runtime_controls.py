@@ -255,6 +255,125 @@ def test_pending_order_reconcile_terminalizes_stale_lookup_failure(monkeypatch, 
     assert engine._pending_orders == {}
 
 
+def test_pending_order_reconcile_updates_open_partially_filled_order(monkeypatch):
+    engine = _engine_stub()
+    old_ts = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    engine._pending_orders = {
+        "ord-open-partial": {
+            "status": "accepted",
+            "symbol": "AAPL",
+            "side": "buy",
+            "qty": 10,
+            "filled_qty": 0,
+            "order_id": "ord-open-partial",
+            "client_order_id": "cid-open-partial",
+            "updated_at": old_ts,
+            "expected_price": 185.0,
+            "event_seq": 1,
+        }
+    }
+    lookup_calls: list[str] = []
+    recorded: list[dict[str, Any]] = []
+    open_order = SimpleNamespace(
+        id="ord-open-partial",
+        client_order_id="cid-open-partial",
+        symbol="AAPL",
+        side="buy",
+        qty="10",
+        filled_qty="3",
+        filled_avg_price="184.75",
+        status="partially_filled",
+    )
+
+    def _lookup_should_not_run(order_id: str) -> None:
+        lookup_calls.append(order_id)
+        raise RuntimeError("open order payload should be used")
+
+    engine.trading_client = SimpleNamespace(get_order_by_id=_lookup_should_not_run)
+    engine._record_runtime_order_event = lambda payload: recorded.append(dict(payload))
+
+    engine._reconcile_pending_order_runtime_artifacts(open_orders=[open_order])
+
+    assert lookup_calls == []
+    assert any(
+        row.get("event") == "status_transition"
+        and row.get("prev_status") == "accepted"
+        and row.get("status") == "partially_filled"
+        and row.get("filled_qty") == 3.0
+        for row in recorded
+    )
+    pending = engine._pending_orders["ord-open-partial"]
+    assert pending["status"] == "partially_filled"
+    assert pending["filled_qty"] == 3.0
+
+
+def test_pending_order_reconcile_terminal_partial_cancel_records_fill_feedback(monkeypatch):
+    engine = _engine_stub()
+    old_ts = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
+    engine._pending_orders = {
+        "ord-cancel-partial": {
+            "status": "partially_filled",
+            "symbol": "MSFT",
+            "side": "buy",
+            "qty": 10,
+            "filled_qty": 4,
+            "order_id": "ord-cancel-partial",
+            "client_order_id": "cid-cancel-partial",
+            "updated_at": old_ts,
+            "expected_price": 250.0,
+            "expected_net_edge_bps": 8.0,
+        }
+    }
+    order_events: list[dict[str, Any]] = []
+    persisted: list[dict[str, Any]] = []
+    outcomes: list[dict[str, Any]] = []
+    markout_updates: list[dict[str, Any]] = []
+    learning_updates: list[dict[str, Any]] = []
+
+    engine.trading_client = SimpleNamespace(
+        get_order_by_id=lambda _order_id: {
+            "id": "ord-cancel-partial",
+            "client_order_id": "cid-cancel-partial",
+            "symbol": "MSFT",
+            "side": "buy",
+            "qty": "10",
+            "filled_qty": "4",
+            "filled_avg_price": "249.5",
+            "status": "canceled",
+            "updated_at": datetime(2026, 4, 26, tzinfo=UTC).isoformat(),
+        }
+    )
+    monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: True)
+    monkeypatch.setattr(engine, "_record_runtime_order_event", lambda payload: order_events.append(dict(payload)))
+    monkeypatch.setattr(lt, "record_trade_fill", lambda payload: persisted.append(dict(payload)))
+    monkeypatch.setattr(engine, "_record_runtime_fill_event", lambda _payload: None)
+    monkeypatch.setattr(engine, "_update_symbol_loss_cooldown_from_fill", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_arm_symbol_reentry_cooldown_from_fill", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_reconcile_pending_tca_from_fill", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_record_cycle_order_outcome", lambda **kwargs: outcomes.append(dict(kwargs)))
+    monkeypatch.setattr(engine, "_update_markout_feedback", lambda **kwargs: markout_updates.append(dict(kwargs)))
+    monkeypatch.setattr(
+        engine,
+        "_update_execution_learning_feedback",
+        lambda **kwargs: learning_updates.append(dict(kwargs)),
+    )
+
+    engine._reconcile_pending_order_runtime_artifacts(open_orders=[])
+
+    assert any(
+        row.get("event") == "final_state"
+        and row.get("status") == "canceled"
+        and row.get("filled_qty") == 4.0
+        for row in order_events
+    )
+    assert persisted and persisted[-1]["status"] == "partially_filled"
+    assert outcomes and outcomes[-1]["status"] == "partially_filled"
+    assert markout_updates and markout_updates[-1]["status"] == "partially_filled"
+    assert learning_updates and learning_updates[-1]["status"] == "partially_filled"
+    assert learning_updates[-1]["fill_success_ratio"] == pytest.approx(0.4)
+    assert engine._pending_orders == {}
+
+
 def test_pending_candidate_bootstrap_enriches_durable_intent_from_artifact(monkeypatch, tmp_path):
     engine = _engine_stub()
     order_events_path = tmp_path / "runtime" / "order_events.jsonl"
@@ -413,6 +532,42 @@ def test_pending_new_timeout_policy_ladder_replaces_then_cancels(monkeypatch):
     assert second_applied is True
     assert len(replaced) == 1
     assert canceled == ["ord-ladder-1"]
+
+
+def test_pending_new_timeout_policy_replaces_sell_short_lifecycle_side(monkeypatch):
+    engine = _engine_stub()
+    now_dt = datetime.now(UTC)
+    stale_order = SimpleNamespace(
+        id="ord-short-ladder-1",
+        symbol="MSFT",
+        side="sell_short",
+        qty="3",
+        status="pending_new",
+        type="limit",
+        limit_price="99.0",
+        client_order_id="cid-short-ladder-1",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
+    replaced: list[dict[str, Any]] = []
+    engine._cancel_order_alpaca = lambda *_args, **_kwargs: None
+
+    def _replace_limit_order_with_marketable(**kwargs: Any) -> dict[str, str]:
+        replaced.append(dict(kwargs))
+        return {"id": "ord-repl-short"}
+
+    engine._replace_limit_order_with_marketable = _replace_limit_order_with_marketable
+    engine._engine_cycle_index = 1
+
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "ladder")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC", "600")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_MAX_REPLACEMENTS", "1")
+
+    assert engine._apply_pending_new_timeout_policy() is True
+    assert replaced
+    assert replaced[0]["side"] == "sell_short"
 
 
 def test_pending_new_timeout_policy_hard_timeout_forces_cancel(monkeypatch):
@@ -675,6 +830,20 @@ def test_duplicate_intent_window(monkeypatch):
     assert engine._should_suppress_duplicate_intent("AAPL", "buy") is False
 
 
+def test_duplicate_intent_window_preserves_sell_short(monkeypatch):
+    engine = _engine_stub()
+    clock = {"value": 100.0}
+    monkeypatch.setenv("AI_TRADING_INTENT_BLOCK_WHEN_OPEN_ORDER", "0")
+    monkeypatch.setenv("AI_TRADING_DUPLICATE_INTENT_WINDOW_SEC", "60")
+    monkeypatch.setattr(lt, "monotonic_time", lambda: clock["value"])
+
+    engine._record_order_intent("MSFT", "sell_short")
+
+    clock["value"] = 130.0
+    assert engine._should_suppress_duplicate_intent("MSFT", "sell_short") is True
+    assert ("MSFT", "sell_short") in engine._recent_order_intents
+
+
 def test_duplicate_intent_suppressed_when_open_order_present(monkeypatch):
     engine = _engine_stub()
     monkeypatch.setenv("AI_TRADING_INTENT_BLOCK_WHEN_OPEN_ORDER", "1")
@@ -682,6 +851,15 @@ def test_duplicate_intent_suppressed_when_open_order_present(monkeypatch):
     engine._open_order_qty_index = {"AAPL": (2.0, 0.0)}
 
     assert engine._should_suppress_duplicate_intent("AAPL", "buy") is True
+
+
+def test_duplicate_intent_suppresses_sell_short_when_open_sell_order_present(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_INTENT_BLOCK_WHEN_OPEN_ORDER", "1")
+    monkeypatch.setenv("AI_TRADING_DUPLICATE_INTENT_WINDOW_SEC", "0")
+    engine._open_order_qty_index = {"MSFT": (0.0, 3.0)}
+
+    assert engine._should_suppress_duplicate_intent("MSFT", "sell_short") is True
 
 
 def test_symbol_reentry_cooldown_blocks_same_side_then_expires(monkeypatch):
@@ -1083,6 +1261,8 @@ def test_cycle_intent_reservation_dedupes_symbol_side():
     assert engine._reserve_cycle_intent("AAPL", "buy") is True
     assert engine._reserve_cycle_intent("AAPL", "buy") is False
     assert engine._reserve_cycle_intent("AAPL", "sell") is True
+    assert engine._reserve_cycle_intent("AAPL", "sell_short") is True
+    assert engine._reserve_cycle_intent("AAPL", "sell_short") is False
 
 
 def test_order_pacing_cap_warning_cooldown(monkeypatch):
@@ -5468,6 +5648,30 @@ def test_update_execution_learning_feedback_updates_bucket_stats(
     assert bucket["samples"] == 2
     assert bucket["fills"] == 1
     assert bucket["fill_rate"] == pytest.approx(0.5)
+
+
+def test_update_execution_learning_feedback_credits_partial_fill_ratio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_LEARNING_AUTO_WRITE", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_AUTOTUNE_AUTO_WRITE", "0")
+
+    engine._update_execution_learning_feedback(
+        symbol="AAPL",
+        side="sell_short",
+        status="partially_filled",
+        fill_source="live",
+        fill_success_ratio=0.01,
+        execution_profile_context={"profile": "balanced", "session_regime": "midday"},
+    )
+
+    state = engine._execution_learning_state
+    assert state["global"]["fills"] == pytest.approx(0.01)
+    assert state["global"]["fill_rate"] == pytest.approx(0.01)
+    bucket = state["buckets"]["midday:balanced:sell_short"]
+    assert bucket["fills"] == pytest.approx(0.01)
+    assert bucket["fill_rate"] == pytest.approx(0.01)
 
 
 def test_update_execution_learning_feedback_tracks_realization_and_symbol_bucket(

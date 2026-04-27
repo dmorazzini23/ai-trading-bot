@@ -324,11 +324,12 @@ class PortfolioPositionManager:
                 'warnings': [],
                 'recommendations': [],
             }
-            notional_value = proposed_size * entry_price
+            size_sign = -1 if proposed_size < 0 else 1
+            notional_value = abs(proposed_size * entry_price)
             position_pct = notional_value / account_equity if account_equity > 0 else 0
             if position_pct > self.dynamic_sizer.max_position_pct:
                 max_notional = account_equity * self.dynamic_sizer.max_position_pct
-                adjusted_size = int(max_notional / entry_price)
+                adjusted_size = size_sign * int(max_notional / entry_price)
                 assessment['adjusted_size'] = adjusted_size
                 assessment['warnings'].append(f'Position size adjusted from {proposed_size} to {adjusted_size}')
             else:
@@ -336,13 +337,13 @@ class PortfolioPositionManager:
             estimated_risk_addition = position_pct * 0.5
             new_total_risk = self.total_risk_exposure + estimated_risk_addition
             assessment['risk_impact'] = estimated_risk_addition
-            if new_total_risk > self.max_portfolio_risk:
+            if estimated_risk_addition > 0 and new_total_risk > self.max_portfolio_risk:
                 risk_reduction_needed = new_total_risk - self.max_portfolio_risk
                 size_reduction_pct = risk_reduction_needed / estimated_risk_addition
                 final_size = int(assessment['adjusted_size'] * (1 - size_reduction_pct))
-                assessment['adjusted_size'] = max(0, final_size)
+                assessment['adjusted_size'] = size_sign * max(0, abs(final_size))
                 assessment['warnings'].append(f'Portfolio risk limit requires size reduction to {final_size}')
-            assessment['approved'] = assessment['adjusted_size'] > 0 and len(assessment['warnings']) == 0
+            assessment['approved'] = abs(assessment['adjusted_size']) > 0 and len(assessment['warnings']) == 0
             if assessment['adjusted_size'] != proposed_size:
                 assessment['recommendations'].append('Consider splitting order across multiple sessions')
             return assessment
@@ -353,7 +354,7 @@ class PortfolioPositionManager:
     def update_position(self, symbol: str, size: int, entry_price: float) -> None:
         """Update portfolio position tracking."""
         try:
-            if size > 0:
+            if size != 0:
                 self.current_positions[symbol] = {'size': size, 'entry_price': entry_price, 'notional_value': size * entry_price, 'timestamp': datetime.now(UTC)}
             else:
                 self.current_positions.pop(symbol, None)
@@ -364,9 +365,9 @@ class PortfolioPositionManager:
     def get_portfolio_summary(self) -> dict[str, Any]:
         """Get current portfolio position summary."""
         try:
-            total_notional = sum((pos['notional_value'] for pos in self.current_positions.values()))
+            total_notional = sum((abs(pos['notional_value']) for pos in self.current_positions.values()))
             position_count = len(self.current_positions)
-            return {'position_count': position_count, 'total_notional_value': total_notional, 'total_risk_exposure': self.total_risk_exposure, 'positions': dict(self.current_positions), 'largest_position': max((pos['notional_value'] for pos in self.current_positions.values()), default=0)}
+            return {'position_count': position_count, 'total_notional_value': total_notional, 'total_risk_exposure': self.total_risk_exposure, 'positions': dict(self.current_positions), 'largest_position': max((abs(pos['notional_value']) for pos in self.current_positions.values()), default=0)}
         except COMMON_EXC as e:
             logger.error(f'Error generating portfolio summary: {e}')
             return {'error': str(e)}
@@ -374,7 +375,7 @@ class PortfolioPositionManager:
     def _recalculate_risk_exposure(self) -> None:
         """Recalculate total portfolio risk exposure."""
         try:
-            self.total_risk_exposure = sum((pos['notional_value'] * 0.02 for pos in self.current_positions.values()))
+            self.total_risk_exposure = sum((abs(pos['notional_value']) * 0.02 for pos in self.current_positions.values()))
         except COMMON_EXC as e:
             logger.error(f'Error recalculating risk exposure: {e}')
             self.total_risk_exposure = 0.0

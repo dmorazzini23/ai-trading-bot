@@ -210,6 +210,144 @@ def test_rank_netting_candidates_records_edge_realized_portfolio_replay_and_exit
     )
 
 
+def test_portfolio_log_growth_uses_order_delta_for_turnover_and_liquidity() -> None:
+    kwargs = _base_kwargs()
+    now = kwargs["now"]
+    kwargs.update(
+        {
+            "targets": {
+                "AAPL": _make_target(
+                    symbol="AAPL",
+                    now=now,
+                    target_dollars=-1_000.0,
+                    confidence=0.9,
+                    disagreement=1.0,
+                )
+            },
+            "latest_price": {"AAPL": 100.0},
+            "positions": {"AAPL": 10.0},
+            "latest_liquidity": {
+                "AAPL": type(
+                    "Liquidity",
+                    (),
+                    {
+                        "rolling_volume": 100.0,
+                        "spread_bps": 10.0,
+                        "volatility_proxy": 0.8,
+                    },
+                )()
+            },
+            "portfolio_log_growth_rank_enabled": True,
+            "portfolio_current_gross_for_rank": 10_000.0,
+            "portfolio_log_growth_max_participation": 0.1,
+        }
+    )
+
+    result = rank_netting_candidates(**kwargs)
+
+    signal = result.counterfactual_signal_by_symbol["AAPL"]
+    assert signal["portfolio_turnover_penalty"] == pytest.approx(0.2)
+    assert signal["portfolio_liquidity_impact_penalty"] == pytest.approx(2.0)
+
+
+def test_portfolio_log_growth_does_not_penalize_reducing_current_exposure() -> None:
+    kwargs = _base_kwargs()
+    now = kwargs["now"]
+    kwargs.update(
+        {
+            "targets": {
+                "AAPL": _make_target(
+                    symbol="AAPL",
+                    now=now,
+                    target_dollars=100.0,
+                    confidence=0.9,
+                    disagreement=1.0,
+                )
+            },
+            "latest_price": {"AAPL": 100.0},
+            "positions": {"AAPL": 10.0},
+            "portfolio_log_growth_rank_enabled": True,
+            "portfolio_current_gross_for_rank": 10_000.0,
+        }
+    )
+
+    result = rank_netting_candidates(**kwargs)
+
+    signal = result.counterfactual_signal_by_symbol["AAPL"]
+    assert signal["portfolio_exposure_penalty"] == 0.0
+    assert signal["portfolio_turnover_penalty"] == pytest.approx(0.09)
+
+
+def test_exit_policy_entry_pressure_skips_reducing_same_side_trade() -> None:
+    kwargs = _base_kwargs()
+    now = kwargs["now"]
+    calls: list[dict[str, Any]] = []
+
+    def pressure_context(_state: object, **payload: Any) -> dict[str, Any]:
+        calls.append(dict(payload))
+        return {"active": True, "pressure_score": 0.95, "reason": "entry_pressure"}
+
+    kwargs.update(
+        {
+            "targets": {
+                "AAPL": _make_target(
+                    symbol="AAPL",
+                    now=now,
+                    target_dollars=900.0,
+                    confidence=0.9,
+                    disagreement=1.0,
+                )
+            },
+            "latest_price": {"AAPL": 100.0},
+            "positions": {"AAPL": 10.0},
+            "exit_policy_entry_penalty_enabled": True,
+            "exit_policy_pressure_context_func": pressure_context,
+        }
+    )
+
+    result = rank_netting_candidates(**kwargs)
+
+    signal = result.counterfactual_signal_by_symbol["AAPL"]
+    assert calls == []
+    assert "EXIT_POLICY_ENTRY_PENALTY" not in kwargs["targets"]["AAPL"].reasons
+    assert signal["exit_policy_entry_context"]["reason"] == "not_expanding_exposure"
+
+
+def test_exit_policy_entry_pressure_uses_final_side_for_flip_trade() -> None:
+    kwargs = _base_kwargs()
+    now = kwargs["now"]
+    calls: list[dict[str, Any]] = []
+
+    def pressure_context(_state: object, **payload: Any) -> dict[str, Any]:
+        calls.append(dict(payload))
+        return {"active": True, "pressure_score": 0.95, "reason": "entry_pressure"}
+
+    kwargs.update(
+        {
+            "targets": {
+                "AAPL": _make_target(
+                    symbol="AAPL",
+                    now=now,
+                    target_dollars=-500.0,
+                    confidence=0.9,
+                    disagreement=1.0,
+                )
+            },
+            "latest_price": {"AAPL": 100.0},
+            "positions": {"AAPL": 10.0},
+            "exit_policy_entry_penalty_enabled": True,
+            "exit_policy_pressure_context_func": pressure_context,
+        }
+    )
+
+    result = rank_netting_candidates(**kwargs)
+
+    signal = result.counterfactual_signal_by_symbol["AAPL"]
+    assert calls[0]["side"] == "short"
+    assert "EXIT_POLICY_ENTRY_PENALTY" in kwargs["targets"]["AAPL"].reasons
+    assert signal["exit_policy_entry_pressure"] == pytest.approx(0.95)
+
+
 def test_rank_netting_candidates_clips_and_time_decays_negative_edge() -> None:
     kwargs = _base_kwargs()
     now = kwargs["now"]

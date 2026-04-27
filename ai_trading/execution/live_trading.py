@@ -2934,7 +2934,7 @@ class ExecutionEngine:
             replacement_allowed = (
                 policy in {"replace_widen", "ladder"}
                 and symbol
-                and side in {"buy", "sell"}
+                and side in {"buy", "sell", "sell_short"}
                 and quantity > 0
                 and not hard_timeout_reached
             )
@@ -6320,7 +6320,7 @@ class ExecutionEngine:
         """Reserve symbol/side for current cycle; False when already reserved."""
 
         key = (str(symbol or "").upper(), str(side or "").lower())
-        if not key[0] or key[1] not in {"buy", "sell"}:
+        if not key[0] or key[1] not in {"buy", "sell", "sell_short"}:
             return True
         intents = getattr(self, "_cycle_reserved_intents", None)
         if not isinstance(intents, set):
@@ -6345,10 +6345,10 @@ class ExecutionEngine:
         if suppress_when_open:
             symbol_key = str(symbol or "").upper()
             side_key = str(side or "").lower()
-            if symbol_key and side_key in {"buy", "sell"}:
+            if symbol_key and side_key in {"buy", "sell", "sell_short"}:
                 buy_open, sell_open = self.open_order_totals(symbol_key)
                 if (side_key == "buy" and buy_open > 0.0) or (
-                    side_key == "sell" and sell_open > 0.0
+                    side_key in {"sell", "sell_short"} and sell_open > 0.0
                 ):
                     logger.info(
                         "ORDER_INTENT_SUPPRESSED_OPEN_BROKER_ORDER",
@@ -6365,7 +6365,7 @@ class ExecutionEngine:
         if window_s <= 0:
             return False
         key = (str(symbol or "").upper(), str(side or "").lower())
-        if not key[0] or key[1] not in {"buy", "sell"}:
+        if not key[0] or key[1] not in {"buy", "sell", "sell_short"}:
             return False
         now_ts = monotonic_time()
         intents = getattr(self, "_recent_order_intents", None)
@@ -6393,7 +6393,7 @@ class ExecutionEngine:
         """Persist latest submit timestamp for duplicate-intent suppression."""
 
         key = (str(symbol or "").upper(), str(side or "").lower())
-        if not key[0] or key[1] not in {"buy", "sell"}:
+        if not key[0] or key[1] not in {"buy", "sell", "sell_short"}:
             return
         intents = getattr(self, "_recent_order_intents", None)
         if not isinstance(intents, dict):
@@ -11428,6 +11428,7 @@ class ExecutionEngine:
         realized_slippage_bps: float | None = None,
         passive_fill_probability: float | None = None,
         adverse_selection_risk_bps: float | None = None,
+        fill_success_ratio: float | None = None,
         market_regime: str | None = None,
         execution_profile_context: Mapping[str, Any] | None = None,
     ) -> None:
@@ -11480,6 +11481,14 @@ class ExecutionEngine:
             parsed_fill_probability = None
         if parsed_fill_probability is not None:
             parsed_fill_probability = max(0.0, min(float(parsed_fill_probability), 1.0))
+        parsed_fill_success_ratio = _safe_float(fill_success_ratio)
+        if (
+            parsed_fill_success_ratio is not None
+            and not math.isfinite(float(parsed_fill_success_ratio))
+        ):
+            parsed_fill_success_ratio = None
+        if parsed_fill_success_ratio is not None:
+            parsed_fill_success_ratio = max(0.0, min(float(parsed_fill_success_ratio), 1.0))
         parsed_adverse_risk = _safe_float(adverse_selection_risk_bps)
         if parsed_adverse_risk is not None and not math.isfinite(float(parsed_adverse_risk)):
             parsed_adverse_risk = None
@@ -11490,7 +11499,7 @@ class ExecutionEngine:
             payload_map = dict(payload) if isinstance(payload, Mapping) else {}
             return {
                 "samples": max(0, _safe_int(payload_map.get("samples"), 0)),
-                "fills": max(0, _safe_int(payload_map.get("fills"), 0)),
+                "fills": max(0.0, _safe_float(payload_map.get("fills")) or 0.0),
                 "fill_rate": max(
                     0.0,
                     min(1.0, _safe_float(payload_map.get("fill_rate")) or 0.0),
@@ -11540,11 +11549,11 @@ class ExecutionEngine:
                 ),
             }
 
-        def _update_entry(entry: dict[str, Any], *, did_fill: bool) -> dict[str, Any]:
+        def _update_entry(entry: dict[str, Any], *, fill_credit: float) -> dict[str, Any]:
             samples = int(entry.get("samples", 0)) + 1
-            fills = int(entry.get("fills", 0)) + (1 if did_fill else 0)
+            fills = float(entry.get("fills", 0.0) or 0.0) + float(fill_credit)
             entry["samples"] = int(samples)
-            entry["fills"] = int(max(0, min(fills, samples)))
+            entry["fills"] = float(max(0.0, min(float(fills), float(samples))))
             entry["fill_rate"] = (
                 float(entry["fills"]) / float(samples)
                 if samples > 0
@@ -11604,8 +11613,17 @@ class ExecutionEngine:
             return entry
 
         did_fill = status_token in {"filled", "partially_filled"}
+        fill_credit = 0.0
+        if status_token == "filled":
+            fill_credit = 1.0
+        elif status_token == "partially_filled":
+            fill_credit = (
+                float(parsed_fill_success_ratio)
+                if parsed_fill_success_ratio is not None
+                else 0.5
+            )
         global_entry = _normalize_entry(state.get("global")) if isinstance(state, Mapping) else _normalize_entry(None)
-        global_entry = _update_entry(global_entry, did_fill=bool(did_fill))
+        global_entry = _update_entry(global_entry, fill_credit=float(fill_credit))
         state["global"] = global_entry
 
         bucket_context = self._execution_learning_bucket_context(
@@ -11620,7 +11638,7 @@ class ExecutionEngine:
         bucket_entry = _normalize_entry(
             buckets.get(bucket_key) if isinstance(buckets, Mapping) else None
         )
-        buckets[bucket_key] = _update_entry(bucket_entry, did_fill=bool(did_fill))
+        buckets[bucket_key] = _update_entry(bucket_entry, fill_credit=float(fill_credit))
         state["buckets"] = buckets
         symbol_buckets_raw = state.get("symbol_buckets")
         symbol_buckets = (
@@ -11635,7 +11653,7 @@ class ExecutionEngine:
             )
             symbol_buckets[symbol_bucket_key] = _update_entry(
                 symbol_bucket_entry,
-                did_fill=bool(did_fill),
+                fill_credit=float(fill_credit),
             )
             state["symbol_buckets"] = symbol_buckets
 
@@ -19441,6 +19459,7 @@ class ExecutionEngine:
             raise ValueError(f"execute_order invalid qty={qty}")
 
         mapped_side = self._map_core_side(side)
+        lifecycle_side = normalized_side_input
         try:
             side_lower = str(mapped_side).lower()
         except LIVE_TRADING_FALLBACK_EXC:
@@ -19867,12 +19886,12 @@ class ExecutionEngine:
                 submit_started_at=submit_started_at,
             )
             return None
-        if not closing_position and self._should_suppress_duplicate_intent(symbol, mapped_side):
+        if not closing_position and self._should_suppress_duplicate_intent(symbol, lifecycle_side):
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
             self._skip_submit(
                 symbol=symbol,
-                side=mapped_side,
+                side=lifecycle_side,
                 reason="duplicate_intent",
                 order_type=order_type_normalized,
                 submit_started_at=submit_started_at,
@@ -21656,7 +21675,7 @@ class ExecutionEngine:
                 },
             )
 
-        if not closing_position and not self._reserve_cycle_intent(symbol, mapped_side):
+        if not closing_position and not self._reserve_cycle_intent(symbol, lifecycle_side):
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
             reserved_count = 0
@@ -21665,7 +21684,7 @@ class ExecutionEngine:
                 reserved_count = len(intents_snapshot)
             self._skip_submit(
                 symbol=symbol,
-                side=mapped_side,
+                side=lifecycle_side,
                 reason="cycle_duplicate_intent",
                 order_type=order_type_normalized,
                 context={
@@ -22509,7 +22528,7 @@ class ExecutionEngine:
                 pending_entry = store.setdefault(key, {})
                 pending_entry["status"] = order_status_lower or "submitted"
                 pending_entry["symbol"] = symbol
-                pending_entry["side"] = mapped_side
+                pending_entry["side"] = lifecycle_side
                 pending_entry["qty"] = requested_qty
                 if benchmark_price is not None and benchmark_price > 0:
                     pending_entry["expected_price"] = float(benchmark_price)
@@ -22676,7 +22695,7 @@ class ExecutionEngine:
             )
             self._cycle_new_orders_submitted = current_submits + 1
             self._cycle_submitted_orders = self._cycle_new_orders_submitted
-            self._record_order_intent(symbol, mapped_side)
+            self._record_order_intent(symbol, lifecycle_side)
 
         outcome_status = (
             _normalize_status(execution_result.status)
@@ -22844,7 +22863,7 @@ class ExecutionEngine:
                 runtime_source = str(runtime_fill_payload.get("source") or "live")
             self._persist_fill_derived_trade_record(
                 symbol=symbol,
-                side=mapped_side,
+                side=lifecycle_side,
                 filled_qty=float(filled_qty or 0.0),
                 fill_price=resolved_fill_price,
                 expected_price=benchmark_price,
@@ -22878,7 +22897,7 @@ class ExecutionEngine:
             outcome_reason = "ack_timeout"
         self._record_cycle_order_outcome(
             symbol=symbol,
-            side=mapped_side,
+            side=lifecycle_side,
             status=outcome_status,
             reason=outcome_reason,
             submit_started_at=submit_started_at,
@@ -22944,7 +22963,7 @@ class ExecutionEngine:
         )
         self._update_markout_feedback(
             symbol=symbol,
-            side=mapped_side,
+            side=lifecycle_side,
             status=outcome_status,
             realized_net_edge_bps=realized_net_edge_bps,
             realized_slippage_bps=realized_slippage_bps,
@@ -22952,7 +22971,7 @@ class ExecutionEngine:
         )
         self._update_execution_learning_feedback(
             symbol=symbol,
-            side=mapped_side,
+            side=lifecycle_side,
             status=outcome_status,
             fill_source=runtime_source,
             expected_net_edge_bps=expected_edge_hint,
@@ -22967,6 +22986,11 @@ class ExecutionEngine:
             )
             if isinstance(markout_context, Mapping)
             else None,
+            fill_success_ratio=(
+                max(0.0, min(1.0, float(filled_qty) / float(requested_qty)))
+                if requested_qty and float(requested_qty) > 0.0
+                else None
+            ),
             market_regime=(
                 str(metadata_raw.get("market_regime") or "")
                 if isinstance(metadata_raw, Mapping)
@@ -22978,7 +23002,7 @@ class ExecutionEngine:
             "status": outcome_status,
             "reason": None,
             "symbol": symbol,
-            "side": mapped_side,
+            "side": lifecycle_side,
             "order_id": str(order_id_display) if order_id_display is not None else None,
         }
 
@@ -31566,6 +31590,7 @@ class ExecutionEngine:
             return
 
         open_refs: set[str] = set()
+        open_orders_by_ref: dict[str, Any] = {}
         for order in open_orders:
             for token in (
                 _extract_value(order, "id", "order_id"),
@@ -31573,7 +31598,9 @@ class ExecutionEngine:
             ):
                 if token in (None, ""):
                     continue
-                open_refs.add(str(token))
+                token_text = str(token)
+                open_refs.add(token_text)
+                open_orders_by_ref[token_text] = order
 
         max_checks = _config_int("AI_TRADING_PENDING_TERMINAL_RECONCILE_MAX_PER_CYCLE", 25)
         if max_checks is None:
@@ -31651,108 +31678,110 @@ class ExecutionEngine:
                 if ref_client_id_raw not in (None, "")
                 else None
             )
-            if ref_order_id in open_refs or (ref_client_id and ref_client_id in open_refs):
-                continue
-
             checked += 1
             refreshed: Any | None = None
-            try:
-                if callable(get_by_id) and ref_order_id:
-                    refreshed = get_by_id(ref_order_id)
-                if refreshed is None and callable(get_by_client):
-                    client_ref = ref_client_id or (key if key != ref_order_id else None)
-                    if client_ref:
-                        refreshed = get_by_client(client_ref)
-            except LIVE_TRADING_FALLBACK_EXC as err:
-                if _is_missing_order_lookup_error(err):
-                    lookup_not_found += 1
-                    refreshed = {
-                        "id": ref_order_id,
-                        "client_order_id": ref_client_id,
-                        "symbol": _extract_value(entry, "symbol"),
-                        "side": _extract_value(entry, "side"),
-                        "qty": _extract_value(entry, "qty", "quantity"),
-                        "limit_price": _extract_value(entry, "limit_price", "expected_price", "price"),
-                        "status": "canceled",
-                        "filled_qty": _extract_value(entry, "filled_qty") or 0,
-                    }
-                    logger.info(
-                        "PENDING_ORDER_RECONCILE_LOOKUP_NOT_FOUND",
-                        extra={
-                            "pending_key": key,
-                            "order_id": ref_order_id,
+            if ref_order_id in open_refs:
+                refreshed = open_orders_by_ref.get(ref_order_id)
+            if refreshed is None and ref_client_id and ref_client_id in open_refs:
+                refreshed = open_orders_by_ref.get(ref_client_id)
+            if refreshed is None:
+                try:
+                    if callable(get_by_id) and ref_order_id:
+                        refreshed = get_by_id(ref_order_id)
+                    if refreshed is None and callable(get_by_client):
+                        client_ref = ref_client_id or (key if key != ref_order_id else None)
+                        if client_ref:
+                            refreshed = get_by_client(client_ref)
+                except LIVE_TRADING_FALLBACK_EXC as err:
+                    if _is_missing_order_lookup_error(err):
+                        lookup_not_found += 1
+                        refreshed = {
+                            "id": ref_order_id,
                             "client_order_id": ref_client_id,
-                        },
-                    )
-                else:
-                    pending_age_s = _pending_entry_age_seconds(entry)
-                    if (
-                        pending_age_s is not None
-                        and pending_age_s <= fresh_lookup_grace_s
-                    ):
-                        lookup_deferred_fresh += 1
-                        logger.debug(
-                            "PENDING_ORDER_RECONCILE_LOOKUP_DEFERRED_FRESH",
+                            "symbol": _extract_value(entry, "symbol"),
+                            "side": _extract_value(entry, "side"),
+                            "qty": _extract_value(entry, "qty", "quantity"),
+                            "limit_price": _extract_value(entry, "limit_price", "expected_price", "price"),
+                            "status": "canceled",
+                            "filled_qty": _extract_value(entry, "filled_qty") or 0,
+                        }
+                        logger.info(
+                            "PENDING_ORDER_RECONCILE_LOOKUP_NOT_FOUND",
                             extra={
                                 "pending_key": key,
                                 "order_id": ref_order_id,
                                 "client_order_id": ref_client_id,
-                                "pending_age_s": round(float(pending_age_s), 3),
-                                "fresh_lookup_grace_s": round(
-                                    float(fresh_lookup_grace_s),
-                                    3,
-                                ),
                             },
-                            exc_info=True,
                         )
                     else:
+                        pending_age_s = _pending_entry_age_seconds(entry)
                         if (
                             pending_age_s is not None
-                            and pending_age_s >= stale_lookup_terminalize_s
+                            and pending_age_s <= fresh_lookup_grace_s
                         ):
-                            lookup_stale_terminalized += 1
-                            refreshed = {
-                                "id": ref_order_id,
-                                "client_order_id": ref_client_id,
-                                "symbol": _extract_value(entry, "symbol"),
-                                "side": _extract_value(entry, "side"),
-                                "qty": _extract_value(entry, "qty", "quantity"),
-                                "limit_price": _extract_value(
-                                    entry,
-                                    "limit_price",
-                                    "expected_price",
-                                    "price",
-                                ),
-                                "status": "canceled",
-                                "filled_qty": _extract_value(entry, "filled_qty") or 0,
-                            }
-                            logger.info(
-                                "PENDING_ORDER_RECONCILE_STALE_LOOKUP_TERMINALIZED",
+                            lookup_deferred_fresh += 1
+                            logger.debug(
+                                "PENDING_ORDER_RECONCILE_LOOKUP_DEFERRED_FRESH",
                                 extra={
                                     "pending_key": key,
                                     "order_id": ref_order_id,
                                     "client_order_id": ref_client_id,
-                                    "previous_status": prev_status,
                                     "pending_age_s": round(float(pending_age_s), 3),
-                                    "stale_lookup_terminalize_s": round(
-                                        float(stale_lookup_terminalize_s),
+                                    "fresh_lookup_grace_s": round(
+                                        float(fresh_lookup_grace_s),
                                         3,
                                     ),
                                 },
-                            )
-                        else:
-                            lookup_failed += 1
-                            logger.debug(
-                                "PENDING_ORDER_RECONCILE_LOOKUP_FAILED",
-                                extra={
-                                    "pending_key": key,
-                                    "order_id": ref_order_id,
-                                    "client_order_id": ref_client_id,
-                                },
                                 exc_info=True,
                             )
-                if refreshed is None:
-                    continue
+                        else:
+                            if (
+                                pending_age_s is not None
+                                and pending_age_s >= stale_lookup_terminalize_s
+                            ):
+                                lookup_stale_terminalized += 1
+                                refreshed = {
+                                    "id": ref_order_id,
+                                    "client_order_id": ref_client_id,
+                                    "symbol": _extract_value(entry, "symbol"),
+                                    "side": _extract_value(entry, "side"),
+                                    "qty": _extract_value(entry, "qty", "quantity"),
+                                    "limit_price": _extract_value(
+                                        entry,
+                                        "limit_price",
+                                        "expected_price",
+                                        "price",
+                                    ),
+                                    "status": "canceled",
+                                    "filled_qty": _extract_value(entry, "filled_qty") or 0,
+                                }
+                                logger.info(
+                                    "PENDING_ORDER_RECONCILE_STALE_LOOKUP_TERMINALIZED",
+                                    extra={
+                                        "pending_key": key,
+                                        "order_id": ref_order_id,
+                                        "client_order_id": ref_client_id,
+                                        "previous_status": prev_status,
+                                        "pending_age_s": round(float(pending_age_s), 3),
+                                        "stale_lookup_terminalize_s": round(
+                                            float(stale_lookup_terminalize_s),
+                                            3,
+                                        ),
+                                    },
+                                )
+                            else:
+                                lookup_failed += 1
+                                logger.debug(
+                                    "PENDING_ORDER_RECONCILE_LOOKUP_FAILED",
+                                    extra={
+                                        "pending_key": key,
+                                        "order_id": ref_order_id,
+                                        "client_order_id": ref_client_id,
+                                    },
+                                    exc_info=True,
+                                )
+                    if refreshed is None:
+                        continue
             if refreshed is None:
                 continue
 
@@ -31888,8 +31917,14 @@ class ExecutionEngine:
                         "price",
                     )
                 )
+                fill_feedback_status = refreshed_status
                 if (
-                    refreshed_status in {"filled", "partially_filled"}
+                    fill_feedback_status not in {"filled", "partially_filled"}
+                    and fill_qty_value > 0.0
+                ):
+                    fill_feedback_status = "partially_filled"
+                if (
+                    fill_feedback_status in {"filled", "partially_filled"}
                     and fill_qty_value > 0.0
                     and fill_price_value is not None
                     and fill_price_value > 0
@@ -31942,7 +31977,7 @@ class ExecutionEngine:
                         expected_price=expected_price_value,
                         order_id=resolved_order_id,
                         client_order_id=resolved_client_order_id,
-                        order_status=refreshed_status,
+                        order_status=fill_feedback_status,
                         signal=signal,
                         timestamp=fill_timestamp,
                         runtime_payload=runtime_fill_payload,
@@ -31980,7 +32015,7 @@ class ExecutionEngine:
                     self._record_cycle_order_outcome(
                         symbol=symbol_token or None,
                         side=side_token,
-                        status=refreshed_status,
+                        status=fill_feedback_status,
                         submit_started_at=None,
                         ack_timed_out=False,
                         execution_drift_bps=reconciled_execution_drift_bps,
@@ -32001,7 +32036,7 @@ class ExecutionEngine:
                     self._update_markout_feedback(
                         symbol=symbol_token,
                         side=side_token,
-                        status=refreshed_status,
+                        status=fill_feedback_status,
                         realized_net_edge_bps=reconciled_realized_net_edge_bps,
                         realized_slippage_bps=reconciled_execution_drift_bps,
                         fill_source="broker_reconcile",
@@ -32009,13 +32044,25 @@ class ExecutionEngine:
                     self._update_execution_learning_feedback(
                         symbol=symbol_token,
                         side=side_token,
-                        status=refreshed_status,
+                        status=fill_feedback_status,
                         fill_source="broker_reconcile",
                         expected_net_edge_bps=expected_net_edge_hint,
                         realized_net_edge_bps=reconciled_realized_net_edge_bps,
                         realized_slippage_bps=reconciled_execution_drift_bps,
                         passive_fill_probability=None,
                         adverse_selection_risk_bps=None,
+                        fill_success_ratio=(
+                            max(
+                                0.0,
+                                min(
+                                    1.0,
+                                    float(fill_qty_value)
+                                    / float(refreshed_requested_qty or qty_fallback),
+                                ),
+                            )
+                            if float(refreshed_requested_qty or qty_fallback) > 0.0
+                            else None
+                        ),
                         market_regime=None,
                         execution_profile_context=None,
                     )
@@ -32043,6 +32090,7 @@ class ExecutionEngine:
             if side_token:
                 updated_entry["side"] = side_token
             updated_entry["qty"] = int(max(float(refreshed_requested_qty or qty_fallback), 0.0))
+            updated_entry["filled_qty"] = float(max(float(refreshed_filled_qty or 0.0), 0.0))
             updated_entry["event_seq"] = int(max(event_seq, 0))
             updated_entry["updated_at"] = now_iso
             if expected_price_value is not None and expected_price_value > 0:

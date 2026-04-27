@@ -66,15 +66,17 @@ def _idempotency_key(payload: Mapping[str, Any]) -> str:
 def _decision_action(payload: Mapping[str, Any]) -> str:
     explicit = str(payload.get("decision_action") or "").strip().upper()
     if explicit in {"SELL_SHORT", "SHORT"}:
-        return "SELL"
-    if explicit in {"BUY", "SELL", "HOLD", "REDUCE", "EXIT"}:
+        return "SELL_SHORT"
+    if explicit in {"BUY", "SELL", "SELL_SHORT", "HOLD", "REDUCE", "EXIT"}:
         return explicit
 
     order_payload = _as_mapping(payload.get("order"))
     side = str(order_payload.get("side") or "").strip().lower()
     if side == "buy":
         return "BUY"
-    if side in {"sell", "sell_short", "short"}:
+    if side in {"sell_short", "sellshort", "sell-short", "sell short", "short"}:
+        return "SELL_SHORT"
+    if side == "sell":
         return "SELL"
 
     gates_raw = payload.get("gates")
@@ -166,10 +168,27 @@ def _lineage_text(value: Any) -> str | None:
     return parsed or None
 
 
+def _lineage_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        candidates = [value]
+    elif isinstance(value, list | tuple):
+        candidates = list(value)
+    else:
+        candidates = []
+    return list(
+        dict.fromkeys(
+            str(candidate).strip()
+            for candidate in candidates
+            if str(candidate).strip()
+        )
+    )
+
+
 def _lineage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     metrics_payload = _as_mapping(payload.get("metrics"))
     snapshot_payload = _as_mapping(payload.get("config_snapshot"))
     order_payload = _as_mapping(payload.get("order"))
+    tca_payload = _as_mapping(payload.get("tca"))
 
     policy_hash = (
         _lineage_text(snapshot_payload.get("effective_policy_hash"))
@@ -183,11 +202,15 @@ def _lineage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
         _lineage_text(payload.get("model_id"))
         or _lineage_text(metrics_payload.get("model_id"))
         or _lineage_text(order_payload.get("model_id"))
+        or _lineage_text(snapshot_payload.get("model_id"))
+        or _lineage_text(tca_payload.get("model_id"))
     )
     model_version = (
         _lineage_text(payload.get("model_version"))
         or _lineage_text(metrics_payload.get("model_version"))
         or _lineage_text(order_payload.get("model_version"))
+        or _lineage_text(snapshot_payload.get("model_version"))
+        or _lineage_text(tca_payload.get("model_version"))
     )
     dataset_hash = (
         _lineage_text(payload.get("dataset_hash"))
@@ -254,10 +277,37 @@ def _lineage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
 def _context(payload: Mapping[str, Any]) -> dict[str, Any]:
     order_payload = _as_mapping(payload.get("order"))
     net_target_payload = _as_mapping(payload.get("net_target"))
+    tca_payload = _as_mapping(payload.get("tca"))
     gates_raw = payload.get("gates")
+    sleeves_raw = payload.get("sleeves")
+    sleeves = []
+    if isinstance(sleeves_raw, list | tuple):
+        for sleeve in sleeves_raw:
+            sleeve_payload = _as_mapping(sleeve)
+            sleeve_name = (
+                _lineage_text(sleeve_payload.get("sleeve"))
+                or _lineage_text(sleeve_payload.get("name"))
+                or _lineage_text(sleeve)
+            )
+            if sleeve_name:
+                sleeves.append(sleeve_name)
+    rank_reasons = _lineage_list(net_target_payload.get("reasons"))
+    rank_reasons.extend(_lineage_list(tca_payload.get("rank_reasons")))
+    rank_reason = (
+        _lineage_text(tca_payload.get("rank_reason"))
+        or (rank_reasons[0] if rank_reasons else None)
+    )
+    if rank_reason:
+        rank_reasons.insert(0, rank_reason)
+    rank_reasons = list(dict.fromkeys(rank_reasons))
     return {
         "bar_ts": payload.get("bar_ts"),
         "gates": list(gates_raw) if isinstance(gates_raw, list) else [],
+        "sleeve": sleeves[0] if sleeves else tca_payload.get("sleeve"),
+        "sleeves": sleeves or ([tca_payload["sleeve"]] if tca_payload.get("sleeve") else []),
+        "rank_reason": rank_reason,
+        "rank_reasons": rank_reasons,
+        "order_side": order_payload.get("side"),
         "order": {
             "id": order_payload.get("id"),
             "client_order_id": order_payload.get("client_order_id"),

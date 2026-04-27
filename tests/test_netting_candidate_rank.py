@@ -234,6 +234,33 @@ def test_rank_netting_candidates_computes_expected_capture_and_reasons() -> None
     assert result.counterfactual_signal_by_symbol["AAPL"]["opportunity_quality_score"] >= 0.0
 
 
+def test_rank_netting_candidates_uses_order_delta_for_expected_capture_costs() -> None:
+    kwargs = _base_kwargs()
+    kwargs["targets"] = {
+        "AAPL": _make_target(
+            symbol="AAPL",
+            now=kwargs["now"],
+            target_dollars=1100.0,
+            confidence=0.9,
+            disagreement=0.8,
+        )
+    }
+    kwargs["latest_price"] = {"AAPL": 100.0}
+    kwargs["latest_liquidity"] = {
+        "AAPL": LiquidityFeatures(
+            rolling_volume=100.0,
+            spread_bps=1.0,
+            volatility_proxy=0.8,
+        )
+    }
+    kwargs["positions"] = {"AAPL": 10.0}
+
+    result = rank_netting_candidates(**kwargs)
+
+    signal = result.counterfactual_signal_by_symbol["AAPL"]
+    assert signal["expected_capture_participation"] == 0.01
+
+
 def test_rank_netting_candidates_applies_opportunity_gate_demotions() -> None:
     kwargs = _base_kwargs()
     now = kwargs["now"]

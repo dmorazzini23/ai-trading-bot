@@ -92,6 +92,59 @@ def test_execution_report_rollup_tz_controls_output_day(tmp_path: Path, monkeypa
     assert (out_dir / "execution_report_20250101.json").exists()
 
 
+def test_execution_report_groups_preserve_lineage_dimensions(tmp_path: Path) -> None:
+    records = [
+        {
+            "symbol": "AAPL",
+            "sleeve": "day",
+            "regime_profile": "balanced",
+            "order_type": "limit",
+            "provider": "alpaca",
+            "status": "filled",
+            "is_bps": 4.0,
+            "spread_paid_bps": 1.0,
+            "model_id": "model-a",
+            "model_version": "v1",
+            "config_snapshot_hash": "cfg-a",
+            "order_side": "buy",
+            "rank_reason": "EDGE_RANKED",
+        },
+        {
+            "symbol": "AAPL",
+            "sleeve": "day",
+            "regime_profile": "balanced",
+            "order_type": "limit",
+            "provider": "alpaca",
+            "status": "filled",
+            "is_bps": 5.0,
+            "spread_paid_bps": 1.2,
+            "model_id": "model-b",
+            "model_version": "v2",
+            "config_snapshot_hash": "cfg-b",
+            "order_side": "sell_short",
+            "rank_reasons": ["SHORT_EDGE_RANKED"],
+        },
+    ]
+
+    report = execution_report.build_daily_execution_report(records)
+
+    assert len(report["groups"]) == 2
+    groups_by_model = {group["model_id"]: group for group in report["groups"]}
+    assert groups_by_model["model-a"]["config_snapshot_hash"] == "cfg-a"
+    assert groups_by_model["model-a"]["order_side"] == "buy"
+    assert groups_by_model["model-a"]["rank_reason"] == "EDGE_RANKED"
+    assert groups_by_model["model-b"]["model_version"] == "v2"
+    assert groups_by_model["model-b"]["order_side"] == "sell_short"
+    assert groups_by_model["model-b"]["rank_reason"] == "SHORT_EDGE_RANKED"
+
+    csv_path = tmp_path / "report.csv"
+    execution_report._write_csv(csv_path, report["groups"])  # noqa: SLF001 - report surface check
+    header = csv_path.read_text(encoding="utf-8").splitlines()[0]
+    assert "model_id" in header
+    assert "config_snapshot_hash" in header
+    assert "order_side" in header
+
+
 def test_execution_report_phase2_gate_passes_with_baselines(monkeypatch) -> None:
     now = datetime.now(UTC)
     monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_ENABLED", "1")

@@ -64,24 +64,15 @@ def test_lookup_helpers_prefer_specific_bucket() -> None:
     assert latency_cost == 0.5
 
 
-def test_build_netting_learning_state_collects_learned_buckets() -> None:
-    now = datetime(2026, 4, 19, 15, 0, tzinfo=UTC)
-    target = SimpleNamespace(target_dollars=1500.0)
-    tca_row = {
-        "symbol": "AAPL",
-        "status": "filled",
-        "session_regime": "opening",
-        "regime_profile": "trend",
-        "venue": "ALPACA",
-        "expected_net_edge_bps": 12.0,
-        "spread_paid_bps": 1.0,
-        "is_bps": 3.0,
-        "fill_latency_ms": 250.0,
-        "execution_drift_bps": 0.5,
-        "realized_net_edge_bps": 8.0,
-    }
-
-    state = build_netting_learning_state(
+def _build_state_for_single_tca_row(
+    *,
+    now: datetime,
+    target: SimpleNamespace,
+    tca_row: dict[str, object],
+    fill_model_enabled: bool,
+    cost_model_enabled: bool,
+):
+    return build_netting_learning_state(
         now=now,
         targets={"AAPL": target},
         positions={"AAPL": 5.0},
@@ -147,12 +138,12 @@ def test_build_netting_learning_state_collects_learned_buckets() -> None:
         counterfactual_promote_min_dr_mean_bps=0.0,
         realized_edge_rank_enabled=True,
         expected_capture_rank_enabled=True,
-        expected_capture_learned_fill_model_enabled=True,
+        expected_capture_learned_fill_model_enabled=fill_model_enabled,
         expected_capture_learned_fill_min_samples=1,
         expected_capture_learned_fill_prior_alpha=2.0,
         expected_capture_learned_fill_prior_beta=2.0,
         expected_capture_venue_default="ALPACA",
-        expected_capture_cost_model_enabled=True,
+        expected_capture_cost_model_enabled=cost_model_enabled,
         expected_capture_cost_model_min_samples=1,
         expected_capture_latency_bps_per_sec=0.02,
         expected_capture_floor_bps=5.0,
@@ -175,6 +166,32 @@ def test_build_netting_learning_state_collects_learned_buckets() -> None:
         portfolio_log_growth_rank_enabled=True,
     )
 
+
+def test_build_netting_learning_state_collects_learned_buckets() -> None:
+    now = datetime(2026, 4, 19, 15, 0, tzinfo=UTC)
+    target = SimpleNamespace(target_dollars=1500.0)
+    tca_row = {
+        "symbol": "AAPL",
+        "status": "filled",
+        "session_regime": "opening",
+        "regime_profile": "trend",
+        "venue": "ALPACA",
+        "expected_net_edge_bps": 12.0,
+        "spread_paid_bps": 1.0,
+        "is_bps": 3.0,
+        "fill_latency_ms": 250.0,
+        "execution_drift_bps": 0.5,
+        "realized_net_edge_bps": 8.0,
+    }
+
+    state = _build_state_for_single_tca_row(
+        now=now,
+        target=target,
+        tca_row=tca_row,
+        fill_model_enabled=True,
+        cost_model_enabled=True,
+    )
+
     assert state.bandit_active_session == "opening"
     assert state.bandit_active_regime == "trend"
     assert state.bandit_rewards_by_symbol["AAPL"] == [8.0]
@@ -188,3 +205,32 @@ def test_build_netting_learning_state_collects_learned_buckets() -> None:
     assert state.portfolio_rank_correlation["AAPL"]["AAPL"] == 1.0
     assert state.held_notional_weights["AAPL"] == 1.0
     assert state.expected_capture_floor_bps_effective <= 5.0
+
+
+def test_build_netting_learning_state_collects_costs_when_fill_model_disabled() -> None:
+    now = datetime(2026, 4, 19, 15, 0, tzinfo=UTC)
+    target = SimpleNamespace(target_dollars=1500.0)
+    tca_row = {
+        "symbol": "AAPL",
+        "status": "filled",
+        "session_regime": "opening",
+        "regime_profile": "trend",
+        "venue": "ALPACA",
+        "expected_net_edge_bps": 12.0,
+        "spread_paid_bps": 1.0,
+        "is_bps": 3.0,
+        "fill_latency_ms": 250.0,
+        "execution_drift_bps": 0.5,
+        "realized_net_edge_bps": 8.0,
+    }
+
+    state = _build_state_for_single_tca_row(
+        now=now,
+        target=target,
+        tca_row=tca_row,
+        fill_model_enabled=False,
+        cost_model_enabled=True,
+    )
+
+    assert state.learned_fill_trials_by_bucket == {}
+    assert state.learned_exec_cost_stats_by_bucket["AAPL"]["samples"] == 1.0

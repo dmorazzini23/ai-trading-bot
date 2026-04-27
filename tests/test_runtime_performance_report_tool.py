@@ -137,7 +137,10 @@ def test_build_report_summarizes_trade_and_gate_data(tmp_path: Path) -> None:
     assert trade["win_rate"] == 2 / 3
     assert gate["acceptance_rate"] == 0.25
     assert gate["top_gates"][0]["gate"] == "COST_GATE"
-    assert gate["top_rejection_reasons_by_count"] == gate["top_gates"]
+    assert gate["top_rejection_reasons_by_count"] == [
+        {"gate": "COST_GATE", "count": 11},
+        {"gate": "STOP_LOCK", "count": 3},
+    ]
     assert gate["top_rejection_concentration_gate"] == "COST_GATE"
     assert gate["top_rejection_concentration_ratio"] == pytest.approx(11 / 15)
 
@@ -230,6 +233,7 @@ def test_build_report_excludes_non_blocking_model_tags_from_rejection_concentrat
                 "total_rejected_records": 20,
                 "gate_totals": {
                     "EXPECTED_CAPTURE_MODEL_LEARNED": 15,
+                    "RANK_DOWNSIDE_OVERLAP_CAP": 12,
                     "PRE_EXECUTION_ORDER_CHECKS_FAILED": 5,
                     "OK_TRADE": 20,
                 },
@@ -238,6 +242,11 @@ def test_build_report_excludes_non_blocking_model_tags_from_rejection_concentrat
                         "count": 15,
                         "accepted_records": 0,
                         "blocked_records": 15,
+                    },
+                    "RANK_DOWNSIDE_OVERLAP_CAP": {
+                        "count": 12,
+                        "accepted_records": 0,
+                        "blocked_records": 12,
                     },
                     "PRE_EXECUTION_ORDER_CHECKS_FAILED": {
                         "count": 5,
@@ -256,6 +265,38 @@ def test_build_report_excludes_non_blocking_model_tags_from_rejection_concentrat
     )
 
     gate = report["gate_effectiveness"]
+    assert gate["top_rejection_concentration_gate"] == "PRE_EXECUTION_ORDER_CHECKS_FAILED"
+    assert gate["top_rejection_concentration_ratio"] == pytest.approx(5 / 20)
+
+
+def test_build_report_excludes_ok_trade_from_fallback_rejection_concentration(
+    tmp_path: Path,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text("[]", encoding="utf-8")
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 100,
+                "total_accepted_records": 80,
+                "total_rejected_records": 20,
+                "gate_totals": {
+                    "OK_TRADE": 80,
+                    "PRE_EXECUTION_ORDER_CHECKS_FAILED": 5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+
+    gate = report["gate_effectiveness"]
+    assert gate["top_gates"][0]["gate"] == "OK_TRADE"
     assert gate["top_rejection_concentration_gate"] == "PRE_EXECUTION_ORDER_CHECKS_FAILED"
     assert gate["top_rejection_concentration_ratio"] == pytest.approx(5 / 20)
 

@@ -162,6 +162,7 @@ def build_order_metrics_and_tca(
     compute_attribution_metrics_func: Callable[..., dict[str, Any]],
     safe_float: Callable[[Any], float | None],
     logger: Any,
+    order_lineage_metadata: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Build attribution metrics and TCA payload for a submitted order."""
     metrics: dict[str, Any] = {}
@@ -233,6 +234,25 @@ def build_order_metrics_and_tca(
     )
     from ai_trading.analytics.tca import build_tca_record
 
+    lineage = dict(order_lineage_metadata or {})
+    for key in ("model_id", "model_version", "config_snapshot_hash"):
+        if lineage.get(key) in (None, ""):
+            value = getattr(order, key, None)
+            if value not in (None, ""):
+                lineage[key] = value
+    rank_reasons = [
+        str(reason).strip()
+        for reason in list(getattr(net_target, "reasons", []) or [])
+        if str(reason).strip()
+    ]
+    lineage_rank_reasons = lineage.get("rank_reasons")
+    if isinstance(lineage_rank_reasons, (list, tuple)):
+        rank_reasons.extend(str(reason).strip() for reason in lineage_rank_reasons if str(reason).strip())
+    rank_reason = str(lineage.get("rank_reason") or "").strip()
+    if rank_reason:
+        rank_reasons.insert(0, rank_reason)
+    rank_reasons = list(dict.fromkeys(rank_reasons))
+    rank_reason = rank_reasons[0] if rank_reasons else None
     tca_record = build_tca_record(
         client_order_id=str(getattr(order, "client_order_id", None) or getattr(order, "id", None) or ""),
         symbol=symbol,
@@ -240,6 +260,11 @@ def build_order_metrics_and_tca(
         benchmark=benchmark,
         fill=fill_summary,
         sleeve=net_target.proposals[0].sleeve if net_target.proposals else None,
+        model_id=str(lineage.get("model_id") or "") or None,
+        model_version=str(lineage.get("model_version") or "") or None,
+        config_snapshot_hash=str(lineage.get("config_snapshot_hash") or "") or None,
+        rank_reason=rank_reason,
+        rank_reasons=rank_reasons,
         regime_profile=get_regime_signal_profile_func(),
         provider="alpaca",
         order_type="limit",
@@ -292,6 +317,11 @@ def build_order_metrics_and_tca(
     }
     tca_update_on_fill = bool(get_env("AI_TRADING_TCA_UPDATE_ON_FILL", True, cast=bool))
     tca_write_pending = bool(get_env("AI_TRADING_TCA_WRITE_PENDING_EVENTS", True, cast=bool))
+    terminal_nonfill = bool(
+        (not persistable_fill)
+        and order_state.status_token
+        in {"rejected", "canceled", "cancelled", "expired", "done_for_day"}
+    )
     should_write_tca = bool(
         (tca_update_on_fill and persistable_fill)
         or (tca_write_pending and not persistable_fill)
@@ -301,7 +331,12 @@ def build_order_metrics_and_tca(
         try:
             resolved_tca_path = str(resolved_tca_path_func())
             tca_payload = dict(tca_record)
-            if not persistable_fill:
+            if terminal_nonfill:
+                tca_payload["pending_event"] = False
+                tca_payload["pending_terminal_nonfill"] = True
+                tca_payload["pending_reason"] = order_state.status_token
+                tca_payload["order_status"] = order_state.status_text
+            elif not persistable_fill:
                 tca_payload["pending_event"] = True
                 tca_payload["pending_reason"] = order_state.status_token or "no_fill"
                 tca_payload["order_status"] = order_state.status_text

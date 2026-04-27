@@ -69,6 +69,96 @@ def _float_from(value: Any, *, default: float) -> float:
         return default
 
 
+def _normalize_broker_side(side: Any) -> str:
+    raw = str(side or "buy").strip().lower()
+    if raw in {"short", "sell_short", "sellshort", "sell-short", "sell short"}:
+        return "sell_short"
+    if raw in {"cover", "buy_to_cover", "buy-to-cover", "buy to cover"}:
+        return "buy_to_cover"
+    if raw in {"buy", "sell"}:
+        return raw
+    return raw or "buy"
+
+
+def _first_present(payload: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = payload.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _normalize_broker_status(status: Any, *, default: str = "accepted") -> str:
+    raw = str(status or "").strip().lower()
+    if "." in raw:
+        raw = raw.split(".")[-1]
+    normalized = raw.replace("-", "_").replace(" ", "_")
+    aliases = {
+        "cancelled": "canceled",
+        "complete": "filled",
+        "completed": "filled",
+        "error": "rejected",
+    }
+    return aliases.get(normalized, normalized) or default
+
+
+def _normalize_adapter_order_payload(
+    payload: Mapping[str, Any],
+    *,
+    requested_qty: Any = None,
+    client_order_id: Any = None,
+) -> dict[str, Any]:
+    normalized = dict(payload)
+    order_id = _first_present(normalized, "id", "order_id")
+    if order_id not in (None, ""):
+        normalized["id"] = str(order_id)
+    symbol = _first_present(normalized, "symbol")
+    if symbol not in (None, ""):
+        normalized["symbol"] = str(symbol).strip().upper()
+    side = _first_present(normalized, "side")
+    if side not in (None, ""):
+        normalized["side"] = _normalize_broker_side(side)
+    status = _first_present(normalized, "status", "order_status")
+    normalized["status"] = _normalize_broker_status(status)
+
+    qty = _first_present(normalized, "qty", "quantity", "requested_quantity")
+    if qty in (None, ""):
+        qty = requested_qty
+    if qty not in (None, ""):
+        normalized["qty"] = qty
+        normalized["quantity"] = qty
+
+    filled_qty = _first_present(
+        normalized,
+        "filled_qty",
+        "filled_quantity",
+        "exec_quantity",
+    )
+    if filled_qty in (None, ""):
+        filled_qty = "0"
+    normalized["filled_qty"] = filled_qty
+    normalized["filled_quantity"] = filled_qty
+
+    filled_avg_price = _first_present(
+        normalized,
+        "filled_avg_price",
+        "avg_fill_price",
+        "average_fill_price",
+    )
+    if filled_avg_price not in (None, ""):
+        normalized["filled_avg_price"] = filled_avg_price
+
+    resolved_client_order_id = (
+        _first_present(normalized, "client_order_id", "tag")
+        if client_order_id in (None, "")
+        else client_order_id
+    )
+    if resolved_client_order_id not in (None, ""):
+        normalized["client_order_id"] = resolved_client_order_id
+        normalized.setdefault("tag", resolved_client_order_id)
+    return normalized
+
+
 _MANAGED_GET_ENV_READY = False
 _MANAGED_GET_ENV: Any | None = None
 
@@ -167,12 +257,12 @@ class TradierBrokerAdapter:
         if order_payload is None:
             return []
         if isinstance(order_payload, Mapping):
-            return [dict(order_payload)]
+            return [_normalize_adapter_order_payload(order_payload)]
         if isinstance(order_payload, list):
             normalized: list[dict[str, Any]] = []
             for item in order_payload:
                 if isinstance(item, Mapping):
-                    normalized.append(dict(item))
+                    normalized.append(_normalize_adapter_order_payload(item))
             return normalized
         return []
 
@@ -183,12 +273,12 @@ class TradierBrokerAdapter:
         qty = order_data.get("quantity", order_data.get("qty"))
         if qty in (None, ""):
             raise ValueError("Tradier order requires quantity")
-        side_raw = str(order_data.get("side") or "buy").strip().lower()
+        side_raw = _normalize_broker_side(order_data.get("side"))
         side_map = {
             "buy": "buy",
             "sell": "sell",
-            "short": "sell_short",
-            "cover": "buy_to_cover",
+            "sell_short": "sell_short",
+            "buy_to_cover": "buy_to_cover",
         }
         side = side_map.get(side_raw, side_raw)
         order_type = str(order_data.get("type") or "market").strip().lower()
@@ -205,6 +295,9 @@ class TradierBrokerAdapter:
             "type": order_type,
             "duration": duration,
         }
+        client_order_id = order_data.get("client_order_id")
+        if client_order_id not in (None, ""):
+            request_data["tag"] = str(client_order_id)
         if order_type in {"limit", "stop_limit"}:
             limit_price = order_data.get("limit_price", order_data.get("price"))
             if limit_price in (None, ""):
@@ -224,23 +317,38 @@ class TradierBrokerAdapter:
                 order_id = str(order_id_val)
             status_val = order_payload.get("status")
             if status_val not in (None, ""):
-                status = str(status_val).strip().lower()
+                status = _normalize_broker_status(status_val, default="submitted")
         if order_id is None:
             fallback_id = payload.get("id")
             if fallback_id not in (None, ""):
                 order_id = str(fallback_id)
         if not order_id:
             raise RuntimeError("Tradier submit response missing order id")
-        client_order_id = order_data.get("client_order_id", order_id)
-        return {
+        response_payload: dict[str, Any] = {
             "id": order_id,
             "status": status,
             "symbol": symbol,
-            "side": side_raw,
+            "side": side,
             "qty": qty,
+            "quantity": qty,
+            "filled_qty": "0",
+            "filled_quantity": "0",
+            "filled_avg_price": None,
             "client_order_id": client_order_id,
             "raw": payload,
         }
+        if isinstance(order_payload, Mapping):
+            response_payload.update(
+                _normalize_adapter_order_payload(
+                    order_payload,
+                    requested_qty=qty,
+                    client_order_id=client_order_id,
+                )
+            )
+            response_payload["raw"] = payload
+        if response_payload.get("client_order_id") in (None, ""):
+            response_payload["client_order_id"] = client_order_id or order_id
+        return response_payload
 
 
 @dataclass
@@ -266,15 +374,22 @@ class PaperBrokerAdapter:
 
     def submit_order(self, order_data: Mapping[str, Any]) -> dict[str, Any]:
         qty = order_data.get("quantity", order_data.get("qty"))
+        side = _normalize_broker_side(order_data.get("side"))
         order_id = f"paper-{int(datetime.now(UTC).timestamp() * 1000)}"
         payload: dict[str, Any] = {
             "id": order_id,
             "status": "accepted",
             "symbol": order_data.get("symbol"),
-            "side": order_data.get("side"),
+            "side": side,
             "qty": qty,
+            "quantity": qty,
+            "filled_qty": "0",
+            "filled_quantity": "0",
+            "filled_avg_price": None,
             "limit_price": order_data.get("limit_price"),
             "client_order_id": order_data.get("client_order_id", order_id),
+            "type": order_data.get("type", order_data.get("order_type", "market")),
+            "time_in_force": order_data.get("time_in_force", "day"),
         }
         self._orders.append(payload)
         return payload

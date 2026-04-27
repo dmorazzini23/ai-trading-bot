@@ -80,7 +80,7 @@ class SlippageModel:
         """
         try:
             base_slippage = price * (self.base_slippage_bps / 10000)
-            notional_value = quantity * price
+            notional_value = abs(quantity) * price
             size_impact = self._calculate_size_impact(notional_value)
             urgency_impact = self._calculate_urgency_impact(order_type)
             volatility_impact = base_slippage * self.volatility_factor
@@ -156,24 +156,28 @@ class FillSimulator:
             Fill simulation result dictionary
         """
         try:
+            order_quantity = abs(int(quantity))
             result: dict[str, Any] = {'filled': False, 'fill_quantity': 0, 'fill_price': price, 'slippage': 0.0, 'fill_time': 0, 'partial_fills': [], 'rejection_reason': None}
+            if order_quantity <= 0:
+                result['rejection_reason'] = 'Invalid quantity'
+                return result
             if not self._should_fill(order_type, price):
                 result['rejection_reason'] = 'Price limit not met'
                 return result
-            slippage = self.slippage_model.calculate_slippage(symbol, side, quantity, price, order_type)
+            slippage = self.slippage_model.calculate_slippage(symbol, side, order_quantity, price, order_type)
             result['slippage'] = slippage
             result['fill_price'] = price + slippage
-            if self._should_partial_fill(quantity, order_type):
-                fills = self._simulate_partial_fills(quantity, result['fill_price'])
+            if self._should_partial_fill(order_quantity, order_type):
+                fills = self._simulate_partial_fills(order_quantity, result['fill_price'])
                 result['partial_fills'] = fills
                 result['fill_quantity'] = sum((fill['quantity'] for fill in fills))
                 result['filled'] = result['fill_quantity'] > 0
             else:
                 fill_time = self._calculate_fill_time(order_type)
                 result['filled'] = True
-                result['fill_quantity'] = quantity
+                result['fill_quantity'] = order_quantity
                 result['fill_time'] = fill_time
-                result['partial_fills'] = [{'quantity': quantity, 'price': result['fill_price'], 'time': fill_time}]
+                result['partial_fills'] = [{'quantity': order_quantity, 'price': result['fill_price'], 'time': fill_time}]
             logger.debug(f"Fill simulated: {symbol} {quantity}@{result['fill_price']:.2f}, slippage={slippage:.4f}")
             return result
         except (ValueError, TypeError, ZeroDivisionError) as e:

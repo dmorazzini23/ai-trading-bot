@@ -170,6 +170,40 @@ def test_execute_order_uses_capacity_suggested_qty(engine_factory, monkeypatch):
     assert result.requested_quantity == 3
 
 
+def test_execute_order_preserves_sell_short_lifecycle_side(engine_factory):
+    captured: dict[str, Any] = {}
+
+    def _submit_limit_stub(symbol, side, quantity, limit_price, **kwargs):
+        captured["side"] = side
+        captured["quantity"] = quantity
+        captured["limit_price"] = limit_price
+        return {
+            "id": "short-open-1",
+            "symbol": symbol,
+            "side": side,
+            "status": "accepted",
+            "qty": quantity,
+            "filled_qty": "0",
+        }
+
+    engine = engine_factory()
+    engine.submit_limit_order = _submit_limit_stub
+
+    result = engine.execute_order(
+        "MSFT",
+        "sell_short",
+        4,
+        order_type="limit",
+        limit_price=99.0,
+    )
+
+    assert result is not None
+    assert captured["side"] == "sell"
+    assert engine._pending_orders["short-open-1"]["side"] == "sell_short"
+    assert ("MSFT", "sell_short") in engine._recent_order_intents
+    assert engine._last_submit_outcome["side"] == "sell_short"
+
+
 def test_execute_order_limit_precheck_runs_once(engine_factory, monkeypatch):
     calls: list[tuple[Any, Any, Any, Any]] = []
 

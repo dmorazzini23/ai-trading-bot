@@ -26,6 +26,18 @@ def _safe_text(value: Any) -> str | None:
     return text or None
 
 
+def _normalize_order_side_text(value: Any) -> str | None:
+    text = _safe_text(value)
+    if text is None:
+        return None
+    normalized = text.lower()
+    if normalized in {"short", "sell_short", "sellshort", "sell-short", "sell short"}:
+        return "sell_short"
+    if normalized in {"buy", "sell"}:
+        return normalized
+    return text
+
+
 def _safe_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -270,7 +282,7 @@ class BrokerOrderSnapshot:
             broker_order_id=_safe_text(
                 payload.get("broker_order_id") or payload.get("order_id")
             ),
-            side=_safe_text(payload.get("side")),
+            side=_normalize_order_side_text(payload.get("side")),
             qty=_safe_float(payload.get("qty")),
             filled_qty=_safe_float(payload.get("filled_qty")),
             limit_price=_safe_float(payload.get("limit_price") or payload.get("price")),

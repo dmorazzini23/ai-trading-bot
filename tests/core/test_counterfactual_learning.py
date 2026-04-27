@@ -168,6 +168,41 @@ def test_lookup_execution_learning_bucket_entry_and_penalty() -> None:
     assert penalty["mean_fill_probability"] == 0.65
 
 
+def test_lookup_execution_learning_bucket_entry_matches_live_profile_keys() -> None:
+    state = {
+        "global": {},
+        "buckets": {
+            "opening:balanced:sell_short": {
+                "samples": 4,
+                "mean_slippage_bps": 14.0,
+                "fill_rate": 0.25,
+            }
+        },
+        "symbol_buckets": {
+            "AAPL:opening:trend:balanced:sell_short": {
+                "samples": 4,
+                "mean_slippage_bps": 18.0,
+                "fill_rate": 0.2,
+            }
+        },
+    }
+
+    entry, key = netting_candidate_rank._lookup_execution_learning_bucket_entry(
+        state=state,
+        symbol="AAPL",
+        session_token="opening",
+        regime_token="trend",
+        liquidity_role="maker",
+        side="sell_short",
+        min_samples=2,
+        safe_float=bot_engine._safe_float,
+    )
+
+    assert key == "AAPL:opening:trend:balanced:sell_short"
+    assert entry is not None
+    assert entry["fill_rate"] == 0.2
+
+
 def test_load_recent_rejection_concentration_by_symbol_counts_recent_rows(
     tmp_path,
     monkeypatch,
@@ -198,10 +233,57 @@ def test_load_recent_rejection_concentration_by_symbol_counts_recent_rows(
             "gates_blocking": ["PRE_EXECUTION_ORDER_CHECKS_FAILED"],
         },
         {
+            "bar_ts": "2026-04-17T13:50:00+00:00",
+            "symbol": "BA",
+            "decision_journal": {"accepted": True},
+            "gates": ["OK_TRADE"],
+        },
+        {
+            "bar_ts": "2026-04-17T13:55:00+00:00",
+            "symbol": "BA",
+            "accepted": False,
+            "gates": [
+                "EXPECTED_CAPTURE_OPTIMIZER",
+                "REJECTION_CONCENTRATION_DEWEIGHT",
+                "RANK_DOWNSIDE_OVERLAP_CAP",
+            ],
+        },
+        {
+            "symbol": "BA",
+            "accepted": False,
+            "gates_blocking": ["PRE_EXECUTION_ORDER_CHECKS_FAILED"],
+        },
+        {
             "bar_ts": "2026-04-16T01:00:00+00:00",
             "symbol": "BA",
             "accepted": False,
             "gates_blocking": ["PRE_EXECUTION_ORDER_CHECKS_FAILED"],
+        },
+        {
+            "decision_journal": {
+                "symbol": "MSFT",
+                "bar_ts": "2026-04-17T13:58:00+00:00",
+                "risk_decision": {
+                    "accepted": False,
+                    "gates": ["PRE_EXECUTION_ORDER_CHECKS_FAILED"],
+                },
+            },
+        },
+        {
+            "symbol": "NVDA",
+            "decision_journal": {
+                "bar_ts": "2026-04-17T13:59:00+00:00",
+                "risk_decision": {
+                    "accepted": True,
+                    "gates": ["OK_TRADE"],
+                },
+            },
+        },
+        {
+            "bar_ts": "2026-04-17T13:59:30+00:00",
+            "symbol": "SPY",
+            "accepted": False,
+            "gates_blocking": ["RISK_PORTFOLIO_HARD_BLOCK"],
         },
     ]
     decision_path.write_text(
@@ -220,7 +302,11 @@ def test_load_recent_rejection_concentration_by_symbol_counts_recent_rows(
     assert counts["BA"]["pre_execution"] == 1
     assert counts["BA"]["slippage"] == 1
     assert counts["BA"]["capacity"] == 1
-    assert counts["BA"]["portfolio"] == 1
+    assert counts["BA"]["portfolio"] == 0
+    assert counts["MSFT"]["total"] == 1
+    assert counts["MSFT"]["pre_execution"] == 1
+    assert counts["SPY"]["portfolio"] == 1
+    assert "NVDA" not in counts
 
 
 def test_compute_rejection_concentration_penalty_bps_respects_thresholds() -> None:

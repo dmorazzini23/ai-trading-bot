@@ -15,7 +15,9 @@ def _normalize_side(side: Any) -> str:
     value = str(side or "").strip().lower()
     if value in {"buy", "long", "entry"}:
         return "buy"
-    if value in {"sell", "short", "sell_short", "exit"}:
+    if value in {"short", "sell_short", "sellshort", "sell-short", "sell short"}:
+        return "sell_short"
+    if value in {"sell", "exit"}:
         return "sell"
     return "hold"
 
@@ -255,6 +257,8 @@ class DecisionJournalEntry:
     decision_trace_id: str | None = None
     config_snapshot_hash: str | None = None
     policy_hash: str | None = None
+    model_id: str | None = None
+    model_version: str | None = None
     dataset_hash: str | None = None
     feature_version: str | None = None
     model_artifact_hash: str | None = None
@@ -282,6 +286,8 @@ class DecisionJournalEntry:
             "reasons": list(self.reasons),
             "config_snapshot_hash": self.config_snapshot_hash,
             "policy_hash": self.policy_hash,
+            "model_id": self.model_id,
+            "model_version": self.model_version,
             "dataset_hash": self.dataset_hash,
             "feature_version": self.feature_version,
             "model_artifact_hash": self.model_artifact_hash,
@@ -395,7 +401,7 @@ def _derive_target_delta_shares(
 ) -> float | None:
     if order_intent is not None and order_intent.qty is not None:
         qty = float(order_intent.qty)
-        if order_intent.side == "sell":
+        if order_intent.side in {"sell", "sell_short"}:
             return -qty
         if order_intent.side == "buy":
             return qty
@@ -404,7 +410,7 @@ def _derive_target_delta_shares(
         qty = _safe_float(payload.get("qty") or payload.get("shares"))
         side = _normalize_side(payload.get("side"))
         if qty is not None:
-            if side == "sell":
+            if side in {"sell", "sell_short"}:
                 return -float(qty)
             if side == "buy":
                 return float(qty)
@@ -565,6 +571,10 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
     config_map = dict(config_snapshot) if isinstance(config_snapshot, Mapping) else {}
     metrics = getattr(record, "metrics", None)
     metrics_map = dict(metrics) if isinstance(metrics, Mapping) else {}
+    order = getattr(record, "order", None)
+    order_map = dict(order) if isinstance(order, Mapping) else {}
+    tca = getattr(record, "tca", None)
+    tca_map = dict(tca) if isinstance(tca, Mapping) else {}
     fills = getattr(record, "fills", None)
     fills_seq = list(fills) if isinstance(fills, Sequence) else []
     decision_trace_id = (
@@ -605,6 +615,18 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
         decision_trace_id=_safe_text(decision_trace_id),
         config_snapshot_hash=_safe_text(config_map.get("config_snapshot_hash")),
         policy_hash=_safe_text(config_map.get("effective_policy_hash")),
+        model_id=(
+            _safe_text(metrics_map.get("model_id"))
+            or _safe_text(order_map.get("model_id"))
+            or _safe_text(config_map.get("model_id"))
+            or _safe_text(tca_map.get("model_id"))
+        ),
+        model_version=(
+            _safe_text(metrics_map.get("model_version"))
+            or _safe_text(order_map.get("model_version"))
+            or _safe_text(config_map.get("model_version"))
+            or _safe_text(tca_map.get("model_version"))
+        ),
         dataset_hash=_safe_text(config_map.get("dataset_hash")),
         feature_version=_safe_text(config_map.get("feature_version")),
         model_artifact_hash=_safe_text(config_map.get("model_artifact_hash")),

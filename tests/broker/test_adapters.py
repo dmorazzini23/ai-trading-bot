@@ -84,8 +84,24 @@ def test_paper_adapter_supports_account_orders_and_submit() -> None:
 
     assert response["status"] == "accepted"
     assert response["symbol"] == "MSFT"
+    assert response["qty"] == 2
+    assert response["quantity"] == 2
+    assert response["filled_qty"] == "0"
+    assert response["filled_quantity"] == "0"
+    assert response["filled_avg_price"] is None
+    assert response["type"] == "market"
+    assert response["time_in_force"] == "day"
     assert len(adapter.list_orders("open")) == 1
     _assert_submit_contract(response)
+
+
+def test_paper_adapter_normalizes_short_side_alias() -> None:
+    adapter = PaperBrokerAdapter()
+
+    response = adapter.submit_order({"symbol": "MSFT", "side": "short", "quantity": 2})
+
+    assert response["side"] == "sell_short"
+    assert adapter.list_orders("open")[0]["side"] == "sell_short"
 
 
 def test_tradier_adapter_contract_parity() -> None:
@@ -133,6 +149,125 @@ def test_tradier_adapter_contract_parity() -> None:
     assert third_data["class"] == "equity"
     assert third_data["type"] == "limit"
     assert third_data["price"] == "100.5"
+    assert third_data["tag"] == "cid-1"
+
+
+def test_tradier_adapter_normalizes_list_order_aliases() -> None:
+    session = _FakeSession(
+        responses=[
+            _FakeResponse(
+                {
+                    "orders": {
+                        "order": {
+                            "id": 228175,
+                            "status": "partially_filled",
+                            "symbol": "aapl",
+                            "side": "short",
+                            "quantity": "10.00000000",
+                            "exec_quantity": "3.00000000",
+                            "avg_fill_price": "175.25",
+                            "tag": "cid-tradier-1",
+                        }
+                    }
+                }
+            ),
+        ],
+    )
+    adapter = TradierBrokerAdapter(
+        token="token-123",
+        account_id="acct-1",
+        base_url="https://sandbox.tradier.com/v1",
+        session=session,
+    )
+
+    orders = adapter.list_orders("open")
+
+    assert orders == [
+        {
+            "id": "228175",
+            "status": "partially_filled",
+            "symbol": "AAPL",
+            "side": "sell_short",
+            "quantity": "10.00000000",
+            "exec_quantity": "3.00000000",
+            "avg_fill_price": "175.25",
+            "tag": "cid-tradier-1",
+            "qty": "10.00000000",
+            "filled_qty": "3.00000000",
+            "filled_quantity": "3.00000000",
+            "filled_avg_price": "175.25",
+            "client_order_id": "cid-tradier-1",
+        }
+    ]
+
+
+def test_tradier_adapter_normalizes_submit_fill_aliases_and_terminal_error() -> None:
+    session = _FakeSession(
+        responses=[
+            _FakeResponse(
+                {
+                    "order": {
+                        "id": "ord-error-1",
+                        "status": "error",
+                        "exec_quantity": "2",
+                        "avg_fill_price": "101.25",
+                        "tag": "cid-error-1",
+                    }
+                }
+            ),
+        ],
+    )
+    adapter = TradierBrokerAdapter(
+        token="token-123",
+        account_id="acct-1",
+        base_url="https://sandbox.tradier.com/v1",
+        session=session,
+    )
+
+    submitted = adapter.submit_order(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 5,
+            "client_order_id": "cid-error-1",
+        },
+    )
+
+    assert submitted["id"] == "ord-error-1"
+    assert submitted["status"] == "rejected"
+    assert submitted["client_order_id"] == "cid-error-1"
+    assert submitted["qty"] == 5
+    assert submitted["quantity"] == 5
+    assert submitted["filled_qty"] == "2"
+    assert submitted["filled_quantity"] == "2"
+    assert submitted["filled_avg_price"] == "101.25"
+    assert session.calls[0]["data"]["tag"] == "cid-error-1"
+
+
+def test_tradier_adapter_normalizes_short_side_alias() -> None:
+    session = _FakeSession(
+        responses=[
+            _FakeResponse({"order": {"id": "ord-short-1", "status": "submitted"}}),
+        ],
+    )
+    adapter = TradierBrokerAdapter(
+        token="token-123",
+        account_id="acct-1",
+        base_url="https://sandbox.tradier.com/v1",
+        session=session,
+    )
+
+    submitted = adapter.submit_order(
+        {
+            "symbol": "TSLA",
+            "side": "short",
+            "quantity": 3,
+            "type": "market",
+        },
+    )
+
+    assert submitted["side"] == "sell_short"
+    assert session.calls[0]["data"]["side"] == "sell_short"
 
 
 def test_build_broker_adapter_factory(monkeypatch) -> None:

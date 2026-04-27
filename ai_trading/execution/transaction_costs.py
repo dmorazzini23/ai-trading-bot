@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 from ai_trading.core.constants import EXECUTION_PARAMETERS, RISK_PARAMETERS
 
 def estimate_cost(quantity: float, price: float, bps: float=1.0) -> float:
-    return quantity * price * (bps / 10000.0)
+    return abs(float(quantity)) * abs(float(price)) * max(float(bps), 0.0) / 10000.0
 
 def _finite_nonneg(name: str, v: float | None) -> float:
     if v is None:
@@ -163,13 +163,14 @@ class TransactionCostCalculator:
             Commission cost in dollars
         """
         try:
-            commission = trade_value * self.commission_rate
+            trade_value_abs = abs(float(trade_value))
+            commission = trade_value_abs * self.commission_rate
             commission = max(self.min_commission, min(self.max_commission, commission))
-            logger.debug(f'Commission for {symbol}: ${commission:.4f} (value=${trade_value:.2f}, rate={self.commission_rate:.4f})')
+            logger.debug(f'Commission for {symbol}: ${commission:.4f} (value=${trade_value_abs:.2f}, rate={self.commission_rate:.4f})')
             return commission
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:
             logger.error('COMMISSION_CALC_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
-            return max(self.min_commission, trade_value * 0.0001)
+            return max(self.min_commission, abs(float(trade_value)) * 0.0001)
 
     def calculate_market_impact(self, symbol: str, trade_size: float, market_data: dict[str, Any]) -> tuple[float, float]:
         """
@@ -224,14 +225,14 @@ class TransactionCostCalculator:
             if expected_delay <= 0 or expected_return == 0:
                 return 0.0
             delay_fraction = expected_delay / 390.0
-            opportunity_cost = delay_fraction * abs(expected_return) * trade_value
+            opportunity_cost = delay_fraction * abs(expected_return) * abs(float(trade_value))
             logger.debug(f'Opportunity cost for {symbol}: ${opportunity_cost:.4f} (delay={expected_delay}min, return={expected_return:.4f})')
             return opportunity_cost
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:
             logger.error('OPPORTUNITY_COST_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
             return 0.0
 
-    def calculate_borrowing_cost(self, symbol: str, trade_size: float, trade_value: float, holding_period_days: float=1.0) -> float:
+    def calculate_borrowing_cost(self, symbol: str, trade_size: float, trade_value: float, holding_period_days: float=1.0, current_position: float=0.0) -> float:
         """
         Calculate borrowing cost for short selling.
         
@@ -240,23 +241,29 @@ class TransactionCostCalculator:
             trade_size: Number of shares (negative for short)
             trade_value: Dollar value of trade
             holding_period_days: Expected holding period
+            current_position: Current signed shares before the trade
             
         Returns:
             Borrowing cost in dollars
         """
         try:
-            if trade_size >= 0:
+            trade_size_f = float(trade_size)
+            current_position_f = float(current_position)
+            short_qty = max(0.0, -(current_position_f + trade_size_f)) - max(0.0, -current_position_f)
+            if short_qty <= 0.0:
                 return 0.0
             annual_borrow_rate = 0.01
             daily_rate = annual_borrow_rate / 365.0
-            borrowing_cost = trade_value * daily_rate * holding_period_days
+            trade_value_abs = abs(float(trade_value))
+            price = trade_value_abs / abs(trade_size_f)
+            borrowing_cost = short_qty * price * daily_rate * float(holding_period_days)
             logger.debug(f'Borrowing cost for {symbol}: ${borrowing_cost:.4f} (rate={annual_borrow_rate:.1%}, days={holding_period_days})')
             return borrowing_cost
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:
             logger.error('BORROWING_COST_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
             return 0.0
 
-    def calculate_total_transaction_cost(self, symbol: str, trade_size: float, trade_type: TradeType, market_data: dict[str, Any], expected_delay: float=1.0, expected_return: float=0.0, holding_period_days: float=1.0) -> TransactionCostBreakdown:
+    def calculate_total_transaction_cost(self, symbol: str, trade_size: float, trade_type: TradeType, market_data: dict[str, Any], expected_delay: float=1.0, expected_return: float=0.0, holding_period_days: float=1.0, current_position: float=0.0) -> TransactionCostBreakdown:
         """
         Calculate comprehensive transaction cost breakdown.
         
@@ -268,6 +275,7 @@ class TransactionCostCalculator:
             expected_delay: Expected execution delay in minutes
             expected_return: Expected return rate
             holding_period_days: Expected holding period for short sales
+            current_position: Current signed shares before the trade
             
         Returns:
             Detailed transaction cost breakdown
@@ -281,7 +289,7 @@ class TransactionCostCalculator:
             temp_impact, perm_impact = self.calculate_market_impact(symbol, trade_size, market_data)
             market_impact = temp_impact + perm_impact
             opportunity_cost = self.calculate_opportunity_cost(symbol, expected_delay, expected_return, trade_value)
-            borrowing_cost = self.calculate_borrowing_cost(symbol, trade_size, trade_value, holding_period_days)
+            borrowing_cost = self.calculate_borrowing_cost(symbol, trade_size, trade_value, holding_period_days, current_position)
             if trade_type == TradeType.LIMIT_ORDER:
                 spread_cost *= 0.5
                 opportunity_cost *= 1.5

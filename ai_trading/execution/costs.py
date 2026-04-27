@@ -229,7 +229,16 @@ class SymbolCostModel:
         """
         costs = self.get_costs(symbol)
         total_cost_bps = float(costs.total_execution_cost_bps(volume_ratio))
-        position_value_f = float(position_value)
+        position_value_f = abs(float(position_value))
+        if position_value_f == 0.0:
+            return {
+                'cost_bps': total_cost_bps,
+                'cost_dollars': 0.0,
+                'effective_bps': 0.0,
+                'spread_bps': costs.half_spread_bps * 2,
+                'slippage_bps': costs.slippage_cost_bps(volume_ratio),
+                'commission_bps': costs.commission_bps,
+            }
         cost_dollars = position_value_f * (total_cost_bps / 10000)
         min_commission = float(costs.min_commission)
         if cost_dollars < min_commission:
@@ -360,7 +369,7 @@ class SymbolCostModel:
             Dict with holding cost breakdown
         """
         costs = self.get_costs(symbol)
-        position_value_f = float(position_value)
+        position_value_f = abs(float(position_value))
         overnight_cost_bps = float(costs.overnight_cost_bps(days_held))
         overnight_cost_dollars = position_value_f * (overnight_cost_bps / 10000)
         borrow_cost_bps = 0.0

@@ -142,6 +142,29 @@ def test_portfolio_position_manager_assesses_updates_and_summarizes_positions() 
     assert "AAPL" not in manager.get_portfolio_summary()["positions"]
 
 
+def test_portfolio_position_manager_preserves_short_gross_accounting() -> None:
+    manager = PortfolioPositionManager(max_portfolio_risk=1.0)
+
+    assessment = manager.assess_new_position(
+        "AAPL",
+        proposed_size=-10,
+        entry_price=100.0,
+        account_equity=100_000.0,
+    )
+    assert assessment["approved"] is True
+    assert assessment["adjusted_size"] == -10
+    assert assessment["risk_impact"] == pytest.approx(0.005)
+
+    manager.update_position("AAPL", size=-10, entry_price=100.0)
+    summary = manager.get_portfolio_summary()
+
+    assert summary["position_count"] == 1
+    assert summary["total_notional_value"] == pytest.approx(1_000.0)
+    assert summary["largest_position"] == pytest.approx(1_000.0)
+    assert summary["total_risk_exposure"] == pytest.approx(20.0)
+    assert summary["positions"]["AAPL"]["notional_value"] == pytest.approx(-1_000.0)
+
+
 def test_portfolio_position_manager_risk_reduction_and_error_paths() -> None:
     manager = PortfolioPositionManager(max_portfolio_risk=0.01)
     manager.total_risk_exposure = 0.009

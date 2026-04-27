@@ -149,7 +149,8 @@ class LiquidityValidator:
             ValidationResult for liquidity check
         """
         try:
-            details = {'symbol': symbol, 'quantity': quantity}
+            trade_quantity = abs(float(quantity))
+            details = {'symbol': symbol, 'quantity': quantity, 'trade_quantity': trade_quantity}
             avg_volume = market_data.get('avg_volume', 0)
             current_volume = market_data.get('current_volume', 0)
             bid_ask_spread = market_data.get('bid_ask_spread', 0.0)
@@ -159,11 +160,11 @@ class LiquidityValidator:
             details.update({'avg_volume': avg_volume, 'current_volume': current_volume, 'bid_ask_spread': bid_ask_spread, 'price': price})
             if avg_volume < self.min_liquidity:
                 return ValidationResult(category=ValidationCategory.LIQUIDITY, status=ValidationStatus.REJECTED, message=f'Insufficient liquidity: avg volume {avg_volume:,} < {self.min_liquidity:,}', details=details, score=0.0, recommendations=['Find more liquid alternative', 'Reduce position size'])
-            participation_rate = quantity / avg_volume if avg_volume > 0 else 1.0
+            participation_rate = trade_quantity / avg_volume if avg_volume > 0 else 1.0
             details['participation_rate'] = participation_rate
             if participation_rate > self.max_participation:
                 return ValidationResult(category=ValidationCategory.LIQUIDITY, status=ValidationStatus.WARNING, message=f'High participation rate: {participation_rate:.1%} > {self.max_participation:.1%}', details=details, score=0.5, recommendations=['Split order across multiple sessions', 'Use TWAP/VWAP execution algorithm', 'Reduce position size'])
-            estimated_slippage_bps = self._estimate_slippage(quantity, avg_volume, bid_ask_spread, price, bid_size, ask_size)
+            estimated_slippage_bps = self._estimate_slippage(trade_quantity, avg_volume, bid_ask_spread, price, bid_size, ask_size)
             details['estimated_slippage_bps'] = estimated_slippage_bps
             if estimated_slippage_bps > self.max_slippage_bps:
                 return ValidationResult(category=ValidationCategory.LIQUIDITY, status=ValidationStatus.WARNING, message=f'High estimated slippage: {estimated_slippage_bps:.1f} bps', details=details, score=0.6, recommendations=['Use limit orders', 'Split into smaller orders', 'Consider alternative execution venue'])
@@ -173,7 +174,7 @@ class LiquidityValidator:
             logger.error(f'Error validating liquidity for {symbol}: {e}')
             return ValidationResult(category=ValidationCategory.LIQUIDITY, status=ValidationStatus.REJECTED, message=f'Liquidity validation error: {e}', details={'error': str(e)}, score=0.0, recommendations=['Manual liquidity review required'])
 
-    def _estimate_slippage(self, quantity: int, avg_volume: float, spread: float, price: float, bid_size: int, ask_size: int) -> float:
+    def _estimate_slippage(self, quantity: float, avg_volume: float, spread: float, price: float, bid_size: int, ask_size: int) -> float:
         """Estimate slippage in basis points."""
         try:
             if price <= 0:
@@ -216,6 +217,14 @@ class RiskValidator:
         self.max_correlation_exposure = RISK_PARAMETERS['MAX_CORRELATION_EXPOSURE']
         logger.debug(f'RiskValidator initialized with risk_level={risk_level}')
 
+    @staticmethod
+    def _notional_value(position_info: Any) -> float:
+        if isinstance(position_info, dict):
+            raw_value = position_info.get('notional_value', 0.0)
+        else:
+            raw_value = getattr(position_info, 'notional_value', 0.0)
+        return float(raw_value or 0.0)
+
     def validate_position_risk(self, symbol: str, quantity: int, price: float, account_equity: float, current_positions: dict) -> ValidationResult:
         """
         Validate position-level risk constraints.
@@ -234,12 +243,19 @@ class RiskValidator:
             details = {'symbol': symbol, 'quantity': quantity, 'price': price, 'account_equity': account_equity}
             if account_equity <= 0:
                 return ValidationResult(category=ValidationCategory.RISK_LIMITS, status=ValidationStatus.REJECTED, message='Invalid account equity', details=details, score=0.0, recommendations=['Verify account data'])
-            position_value = quantity * price
+            order_value = float(quantity) * float(price)
+            current_symbol_value = self._notional_value(current_positions.get(symbol, {}))
+            projected_symbol_value = current_symbol_value + order_value
+            position_value = abs(projected_symbol_value)
             position_pct = position_value / account_equity
-            details.update({'position_value': position_value, 'position_percentage': position_pct})
+            details.update({'order_value': order_value, 'current_symbol_value': current_symbol_value, 'position_value': projected_symbol_value, 'position_percentage': position_pct})
             if position_pct > self.max_position_size:
                 return ValidationResult(category=ValidationCategory.POSITION_LIMITS, status=ValidationStatus.REJECTED, message=f'Position size {position_pct:.1%} exceeds limit {self.max_position_size:.1%}', details=details, score=0.0, recommendations=[f'Reduce quantity to max {int(account_equity * self.max_position_size / price)}'])
-            total_position_value = sum((pos.get('notional_value', 0) for pos in current_positions.values()))
+            total_position_value = sum(
+                abs(self._notional_value(pos))
+                for current_symbol, pos in current_positions.items()
+                if current_symbol != symbol
+            )
             new_total = total_position_value + position_value
             portfolio_utilization = new_total / account_equity
             details['portfolio_utilization'] = portfolio_utilization
@@ -285,12 +301,25 @@ class RiskValidator:
             correlations = portfolio_data.get('correlations', {})
             account_equity = portfolio_data.get('account_equity', 0)
             details = {'symbol': symbol, 'current_position_count': len(current_positions), 'account_equity': account_equity}
-            correlation_exposure = self._calculate_correlation_exposure(symbol, quantity * price, current_positions, correlations)
+            order_value = float(quantity) * float(price)
+            correlation_exposure = self._calculate_correlation_exposure(symbol, order_value, current_positions, correlations)
             details['correlation_exposure'] = correlation_exposure
             if correlation_exposure > self.max_correlation_exposure:
                 return ValidationResult(category=ValidationCategory.CORRELATION, status=ValidationStatus.WARNING, message=f'High correlation exposure: {correlation_exposure:.1%}', details=details, score=0.4, recommendations=['Consider reducing correlated positions', 'Diversify across uncorrelated assets'])
-            position_count = len(current_positions) + (1 if symbol not in current_positions else 0)
-            concentration_risk = self._assess_concentration_risk(current_positions, account_equity)
+            projected_symbol_value = self._notional_value(current_positions.get(symbol, {})) + order_value
+            projected_positions = {
+                current_symbol: position_info
+                for current_symbol, position_info in current_positions.items()
+                if current_symbol != symbol and abs(self._notional_value(position_info)) > 0
+            }
+            if abs(projected_symbol_value) > 0:
+                projected_positions[symbol] = {'notional_value': projected_symbol_value}
+            position_count = sum(
+                1
+                for position_info in projected_positions.values()
+                if abs(self._notional_value(position_info)) > 0
+            )
+            concentration_risk = self._assess_concentration_risk(projected_positions, account_equity)
             details.update({'position_count': position_count, 'concentration_risk': concentration_risk})
             portfolio_score = self._calculate_portfolio_risk_score(correlation_exposure, concentration_risk, position_count)
             return ValidationResult(category=ValidationCategory.RISK_LIMITS, status=ValidationStatus.APPROVED, message='Portfolio risk within acceptable limits', details=details, score=portfolio_score, recommendations=[] if portfolio_score > 0.7 else ['Monitor portfolio risk closely'])
@@ -312,8 +341,13 @@ class RiskValidator:
         try:
             if not current_positions or not correlations:
                 return 0.0
-            total_portfolio_value = sum((pos.get('notional_value', 0) for pos in current_positions.values()))
-            total_portfolio_value += position_value
+            projected_symbol_value = self._notional_value(current_positions.get(symbol, {})) + float(position_value)
+            total_portfolio_value = abs(projected_symbol_value)
+            total_portfolio_value += sum(
+                abs(self._notional_value(pos))
+                for other_symbol, pos in current_positions.items()
+                if other_symbol != symbol
+            )
             if total_portfolio_value <= 0:
                 return 0.0
             correlation_exposure = 0.0
@@ -322,7 +356,7 @@ class RiskValidator:
                     continue
                 correlation_key = f'{symbol}_{other_symbol}'
                 correlation = correlations.get(correlation_key, 0.0)
-                other_weight = position_info.get('notional_value', 0) / total_portfolio_value
+                other_weight = abs(self._notional_value(position_info)) / total_portfolio_value
                 correlation_contribution = abs(correlation) * other_weight
                 correlation_exposure += correlation_contribution
             return correlation_exposure
@@ -336,7 +370,7 @@ class RiskValidator:
                 return 0.0
             position_weights: list[float] = []
             for position_info in current_positions.values():
-                notional_value = float(position_info.get('notional_value', 0.0))
+                notional_value = abs(self._notional_value(position_info))
                 weight = notional_value / account_equity
                 position_weights.append(weight)
             if not position_weights:

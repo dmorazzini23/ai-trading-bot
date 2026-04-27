@@ -15,6 +15,11 @@ from ..core.enums import RiskLevel
 from .kelly import KellyCalculator
 from ai_trading.config import get_settings
 
+
+def _market_value(position: dict[str, Any]) -> float:
+    return float(position.get('market_value', 0.0) or 0.0)
+
+
 class RiskManager:
     """
     Comprehensive risk management system for institutional trading.
@@ -149,15 +154,15 @@ class RiskManager:
             if not positions:
                 assessment['overall_risk_level'] = 'Low'
                 return assessment
-            total_value = sum((pos.get('market_value', 0) for pos in positions))
-            max_position_pct = max((pos.get('market_value', 0) / total_value for pos in positions)) if total_value > 0 else 0
+            total_value = sum((abs(_market_value(pos)) for pos in positions))
+            max_position_pct = max((abs(_market_value(pos)) / total_value for pos in positions)) if total_value > 0 else 0
             assessment['metrics']['max_position_concentration'] = max_position_pct
             if max_position_pct > self.max_position_size:
                 assessment['alerts'].append(f'High concentration risk: {max_position_pct:.2%}')
             sector_exposure: dict[str, float] = {}
             for pos in positions:
                 sector = pos.get('sector', 'Unknown')
-                sector_exposure[sector] = sector_exposure.get(sector, 0) + pos.get('market_value', 0)
+                sector_exposure[sector] = sector_exposure.get(sector, 0) + abs(_market_value(pos))
             max_sector_pct = max((exposure / total_value for exposure in sector_exposure.values())) if total_value > 0 else 0
             assessment['metrics']['max_sector_concentration'] = max_sector_pct
             if max_sector_pct > RISK_PARAMETERS['MAX_SECTOR_CONCENTRATION']:
@@ -342,7 +347,7 @@ class PortfolioRiskAssessor:
                 'best_case_gain': 0.0,
                 'scenario_count': 0,
             }
-            total_value = sum((pos.get('market_value', 0) for pos in positions))
+            total_value = sum((abs(_market_value(pos)) for pos in positions))
             if total_value == 0:
                 return results
             for scenario_name, scenario_data in stress_scenarios.items():
@@ -361,16 +366,16 @@ class PortfolioRiskAssessor:
     def _apply_stress_scenario(self, positions: list[dict], scenario: dict) -> dict:
         """Apply a single stress scenario to the portfolio."""
         try:
-            total_before = sum((pos.get('market_value', 0) for pos in positions))
-            total_after = 0.0
+            total_before = sum((abs(_market_value(pos)) for pos in positions))
+            portfolio_change = 0.0
             for position in positions:
                 symbol = position.get('symbol', '')
-                current_value = position.get('market_value', 0)
+                current_value = _market_value(position)
                 shock = scenario.get(symbol, scenario.get('market_shock', 0))
-                new_value = current_value * (1 + shock)
-                total_after += new_value
-            change_pct = (total_after - total_before) / total_before if total_before > 0 else 0
-            return {'portfolio_value_before': total_before, 'portfolio_value_after': total_after, 'portfolio_change': total_after - total_before, 'portfolio_change_pct': change_pct}
+                portfolio_change += current_value * shock
+            total_after = total_before + portfolio_change
+            change_pct = portfolio_change / total_before if total_before > 0 else 0
+            return {'portfolio_value_before': total_before, 'portfolio_value_after': total_after, 'portfolio_change': portfolio_change, 'portfolio_change_pct': change_pct}
         except COMMON_EXC as e:
             logger.error(f'Error applying stress scenario: {e}')
             return {'error': str(e)}

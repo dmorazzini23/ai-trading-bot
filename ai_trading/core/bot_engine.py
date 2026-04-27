@@ -34912,6 +34912,52 @@ def _decision_log_runtime_path() -> Path:
     )
 
 
+_REJECTION_CONCENTRATION_NON_BLOCKING_GATES = frozenset(
+    {
+        "OK_TRADE",
+        "EXPECTED_CAPTURE_MODEL_LEARNED",
+        "EXPECTED_CAPTURE_OPTIMIZER",
+        "EXECUTION_LEARNING_DEWEIGHT",
+        "REJECTION_CONCENTRATION_DEWEIGHT",
+        "PORTFOLIO_LOG_GROWTH",
+        "COUNTERFACTUAL_DR",
+        "COUNTERFACTUAL_DR_SHADOW",
+        "EDGE_MODEL_V2",
+        "EDGE_MODEL_V2_REGIME_BLEND",
+        "REPLAY_QUALITY_UPLIFT",
+        "REPLAY_QUALITY_DEWEIGHT",
+        "RANK_DOWNSIDE_OVERLAP_CAP",
+    }
+)
+_REJECTION_CONCENTRATION_NON_BLOCKING_PREFIXES = ("BANDIT_",)
+
+
+def _is_rejection_concentration_non_blocking_gate(gate_name: str) -> bool:
+    token = str(gate_name or "").strip().upper()
+    if not token:
+        return False
+    if token in _REJECTION_CONCENTRATION_NON_BLOCKING_GATES:
+        return True
+    return any(
+        token.startswith(prefix)
+        for prefix in _REJECTION_CONCENTRATION_NON_BLOCKING_PREFIXES
+    )
+
+
+def _rejection_concentration_gate_tokens(raw: Any) -> set[str]:
+    if isinstance(raw, (str, bytes, bytearray)):
+        iterable: Sequence[Any] = [raw]
+    elif isinstance(raw, Sequence):
+        iterable = raw
+    else:
+        iterable = []
+    return {
+        str(item or "").strip().upper()
+        for item in iterable
+        if str(item or "").strip()
+    }
+
+
 def _load_recent_rejection_concentration_by_symbol(
     *,
     now: datetime,
@@ -34927,15 +34973,56 @@ def _load_recent_rejection_concentration_by_symbol(
     for row in rows:
         if not isinstance(row, Mapping):
             continue
-        accepted_value = row.get("accepted")
-        if bool(accepted_value):
+        decision_journal = row.get("decision_journal")
+        decision_journal_map = (
+            decision_journal if isinstance(decision_journal, Mapping) else {}
+        )
+        risk_decision = row.get("risk_decision")
+        risk_decision_map = risk_decision if isinstance(risk_decision, Mapping) else {}
+        journal_risk_decision = decision_journal_map.get("risk_decision")
+        journal_risk_decision_map = (
+            journal_risk_decision
+            if isinstance(journal_risk_decision, Mapping)
+            else {}
+        )
+        accepted_candidates = [row.get("accepted")]
+        gate_sources: list[Any] = [row.get("gates_blocking"), row.get("gates")]
+        for nested in (
+            decision_journal_map,
+            risk_decision_map,
+            journal_risk_decision_map,
+        ):
+            accepted_candidates.append(nested.get("accepted"))
+            gate_sources.extend([nested.get("gates_blocking"), nested.get("gates")])
+        gates: set[str] = set()
+        for raw_gates in gate_sources:
+            gates.update(_rejection_concentration_gate_tokens(raw_gates))
+        if any(_safe_bool(value) for value in accepted_candidates) or "OK_TRADE" in gates:
             continue
         ts = _parse_iso_timestamp(
-            row.get("bar_ts") or row.get("ts") or row.get("timestamp")
+            row.get("bar_ts")
+            or row.get("ts")
+            or row.get("timestamp")
+            or decision_journal_map.get("bar_ts")
+            or risk_decision_map.get("bar_ts")
+            or journal_risk_decision_map.get("bar_ts")
         )
-        if ts is not None and ts < cutoff:
+        if ts is None or ts < cutoff:
             continue
-        symbol = str(row.get("symbol", "") or "").strip().upper()
+        blocking_gates = {
+            gate
+            for gate in gates
+            if not _is_rejection_concentration_non_blocking_gate(gate)
+        }
+        if not blocking_gates:
+            continue
+        symbol = str(
+            row.get("symbol")
+            or decision_journal_map.get("symbol")
+            or risk_decision_map.get("symbol")
+            or journal_risk_decision_map.get("symbol")
+            or ""
+        ).strip().upper()
         if not symbol:
             continue
         counts = counts_by_symbol.setdefault(
@@ -34949,18 +35036,12 @@ def _load_recent_rejection_concentration_by_symbol(
             },
         )
         counts["total"] += 1
-        gates_raw = row.get("gates_blocking") or row.get("gates") or []
-        gates = {
-            str(item or "").strip()
-            for item in gates_raw
-            if str(item or "").strip()
-        }
-        if "PRE_EXECUTION_ORDER_CHECKS_FAILED" in gates:
+        if "PRE_EXECUTION_ORDER_CHECKS_FAILED" in blocking_gates:
             counts["pre_execution"] += 1
-        if "SLIPPAGE_CEILING_BLOCK" in gates:
+        if "SLIPPAGE_CEILING_BLOCK" in blocking_gates:
             counts["slippage"] += 1
         if any(
-            gate in gates
+            gate in blocking_gates
             for gate in (
                 "CAPACITY_THROTTLE_SCALE",
                 "CAPACITY_THROTTLE_BLOCK",
@@ -34969,8 +35050,9 @@ def _load_recent_rejection_concentration_by_symbol(
         ):
             counts["capacity"] += 1
         if any(
-            gate in gates
-            for gate in ("PORTFOLIO_LOG_GROWTH", "RANK_DOWNSIDE_OVERLAP_CAP")
+            gate == "RISK_PORTFOLIO_HARD_BLOCK"
+            or gate.startswith("PORTFOLIO_OPTIMIZER_")
+            for gate in blocking_gates
         ):
             counts["portfolio"] += 1
     return counts_by_symbol

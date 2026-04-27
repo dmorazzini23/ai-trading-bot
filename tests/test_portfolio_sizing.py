@@ -279,11 +279,17 @@ def test_risk_parity_weight_paths_and_sign_handling() -> None:
     )
     assert single == {"AAA": 1.0}
 
+    single_short = sizer.calculate_risk_parity_weights(
+        signals={"AAA": -1.0},
+        price_history=price_history,
+    )
+    assert single_short == {"AAA": -1.0}
+
     equal = sizer.calculate_risk_parity_weights(
-        signals={"AAA": 1.0, "BBB": 1.0},
+        signals={"AAA": 1.0, "BBB": -1.0},
         price_history={"AAA": pd.Series([1.0, 1.1]), "BBB": pd.Series([2.0, 2.1])},
     )
-    assert equal == {"AAA": 0.5, "BBB": 0.5}
+    assert equal == {"AAA": 0.5, "BBB": -0.5}
 
 
 def test_risk_parity_covariance_and_optimizer_fallbacks(
@@ -384,8 +390,17 @@ def test_cluster_constraints_error_fallback_and_scaling() -> None:
         {"AAA": 0.5, "BBB": 0.4, "CCC": 0.1},
         {1: ["AAA", "BBB"], 2: ["CCC"]},
     )
-    assert sum(constrained.values()) == pytest.approx(1.0)
-    assert constrained["CCC"] > 0.1
+    assert constrained["AAA"] + constrained["BBB"] == pytest.approx(0.5)
+    assert constrained["CCC"] == pytest.approx(0.1)
+
+    signed = sizer._apply_cluster_constraints(
+        {"LONG": 0.45, "SHORT": -0.45, "OTHER": 0.1},
+        {1: ["LONG", "SHORT"], 2: ["OTHER"]},
+    )
+    assert signed["LONG"] > 0
+    assert signed["SHORT"] < 0
+    assert abs(signed["LONG"]) + abs(signed["SHORT"]) == pytest.approx(0.5)
+    assert signed["OTHER"] == pytest.approx(0.1)
 
     bad = sizer._apply_cluster_constraints(cast(dict[str, float], {"AAA": "bad"}), {1: ["AAA"]})
     assert bad == {"AAA": "bad"}

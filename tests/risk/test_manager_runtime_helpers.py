@@ -137,6 +137,22 @@ def test_check_portfolio_risk_flags_concentration_and_drawdown(monkeypatch):
     assert manager.current_portfolio_risk == pytest.approx(assessment["risk_score"] / 100)
 
 
+def test_check_portfolio_risk_uses_gross_for_long_short_books(monkeypatch):
+    _enable_portfolio_features(monkeypatch)
+    manager = rm.RiskManager(RiskLevel.AGGRESSIVE)
+
+    assessment = manager.check_portfolio_risk(
+        [
+            {"symbol": "LONG", "market_value": 100.0, "sector": "Tech"},
+            {"symbol": "SHORT", "market_value": -100.0, "sector": "Tech"},
+        ],
+        {},
+    )
+
+    assert assessment["metrics"]["max_position_concentration"] == pytest.approx(0.5)
+    assert assessment["metrics"]["max_sector_concentration"] == pytest.approx(1.0)
+
+
 def test_check_portfolio_risk_error_path(monkeypatch):
     _enable_portfolio_features(monkeypatch)
     manager = rm.RiskManager()
@@ -248,6 +264,22 @@ def test_stress_test_portfolio_applies_market_and_symbol_shocks():
     assert results["scenarios"]["mixed"]["portfolio_change_pct"] == pytest.approx(0.0)
     assert results["worst_case_loss"] == pytest.approx(-0.10)
     assert results["best_case_gain"] == pytest.approx(0.0)
+
+
+def test_stress_test_portfolio_uses_signed_pnl_over_gross_exposure():
+    assessor = rm.PortfolioRiskAssessor()
+
+    results = assessor.stress_test_portfolio(
+        [
+            {"symbol": "LONG", "market_value": 100.0},
+            {"symbol": "SHORT", "market_value": -100.0},
+        ],
+        {"market_down": {"market_shock": -0.10}},
+    )
+
+    assert results["scenario_count"] == 1
+    assert results["scenarios"]["market_down"]["portfolio_value_before"] == pytest.approx(200.0)
+    assert results["scenarios"]["market_down"]["portfolio_change_pct"] == pytest.approx(0.0)
 
 
 def test_stress_test_zero_and_error_paths():

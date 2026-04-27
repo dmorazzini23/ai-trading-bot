@@ -41,6 +41,17 @@ class _DecisionEventRecord:
             "bar_ts": datetime.now(UTC).isoformat(),
             "decision_trace_id": "trace-aapl-1",
             "gates": ["OK_TRADE"],
+            "sleeves": [
+                {
+                    "sleeve": "intraday",
+                    "score": 0.51,
+                }
+            ],
+            "net_target": {
+                "target_dollars": 1000.0,
+                "target_shares": 5.0,
+                "reasons": ["EDGE_RANKED"],
+            },
             "order": {
                 "id": "intent-aapl-1",
                 "client_order_id": "coid-aapl-1",
@@ -157,10 +168,17 @@ def test_write_decision_record_emits_immutable_decision_events(
     lineage = decision_context.get("lineage", {})
     assert lineage["policy_hash"] == "policy-hash-1"
     assert lineage["config_snapshot_hash"] == "cfg-hash-1"
+    assert lineage["model_id"] == "ml-main"
+    assert lineage["model_version"] == "v2026.04.15"
     assert lineage["dataset_hash"] == "ds-hash-1"
     assert lineage["feature_version"] == "fv-2026.04"
     assert lineage["model_artifact_hash"] == "artifact-hash-1"
     assert lineage["decision_trace_id"] == "trace-aapl-1"
+    assert decision_context["order_side"] == "buy"
+    assert decision_context["sleeve"] == "intraday"
+    assert decision_context["sleeves"] == ["intraday"]
+    assert decision_context["rank_reason"] == "EDGE_RANKED"
+    assert decision_context["rank_reasons"] == ["EDGE_RANKED"]
     assert len(oms_rows) == 1
     assert str(oms_rows[0]["event_type"]) == "DECISION_EMITTED"
     oms_payload = json.loads(str(oms_rows[0]["payload_json"] or "{}"))
@@ -195,7 +213,7 @@ def test_write_decision_record_emits_decision_events_idempotently(
     assert len(oms_rows) == 1
 
 
-def test_decision_event_sell_short_is_sell_action() -> None:
+def test_decision_event_sell_short_is_distinct_action() -> None:
     inferred = decision_events._decision_action(
         {
             "symbol": "AAPL",
@@ -211,8 +229,8 @@ def test_decision_event_sell_short_is_sell_action() -> None:
         }
     )
 
-    assert inferred == "SELL"
-    assert explicit == "SELL"
+    assert inferred == "SELL_SHORT"
+    assert explicit == "SELL_SHORT"
 
 
 def test_tca_stale_block_reason_respects_latest_timestamp(

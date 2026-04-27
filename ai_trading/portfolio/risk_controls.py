@@ -84,7 +84,7 @@ class TurnoverBudget:
         """
         if portfolio_value <= 0:
             return False
-        trade_turnover = trade_value / portfolio_value
+        trade_turnover = abs(trade_value) / portfolio_value
         if self.used_turnover + trade_turnover <= self.total_budget:
             self.used_turnover += trade_turnover
             self.remaining_turnover = self.total_budget - self.used_turnover

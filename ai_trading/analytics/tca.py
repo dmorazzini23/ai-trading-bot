@@ -167,6 +167,11 @@ def build_tca_record(
     order_type: str | None = None,
     quote_proxy: bool = False,
     generated_ts: datetime | None = None,
+    model_id: str | None = None,
+    model_version: str | None = None,
+    config_snapshot_hash: str | None = None,
+    rank_reason: str | None = None,
+    rank_reasons: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     arrival = float(benchmark.arrival_price)
     fill_vwap = float(fill.fill_vwap) if fill.fill_vwap is not None else arrival
@@ -190,7 +195,13 @@ def build_tca_record(
         "client_order_id": client_order_id,
         "symbol": symbol,
         "side": side,
+        "order_side": side,
         "sleeve": sleeve,
+        "model_id": model_id,
+        "model_version": model_version,
+        "config_snapshot_hash": config_snapshot_hash,
+        "rank_reason": rank_reason,
+        "rank_reasons": list(rank_reasons or []),
         "regime_profile": regime_profile,
         "provider": provider,
         "order_type": order_type,
@@ -373,8 +384,10 @@ def reconcile_pending_tca_with_fill(
         return False, "invalid_fill_payload"
 
     symbol_token = str(symbol or "").strip().upper()
-    side_token = str(side or "").strip().lower()
-    if side_token not in {"buy", "sell"}:
+    side_token = str(side or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if side_token in {"short", "sellshort"}:
+        side_token = "sell_short"
+    if side_token not in {"buy", "sell", "sell_short"}:
         side_token = ""
     fallback_enabled = bool(allow_symbol_qty_fallback and symbol_token and side_token and fill_qty_value)
     if not identifiers and not fallback_enabled:
@@ -421,7 +434,10 @@ def reconcile_pending_tca_with_fill(
                 fallback_matched = False
                 if not id_matched and fallback_enabled:
                     row_symbol = str(row.get("symbol") or "").strip().upper()
-                    row_side = str(row.get("side") or "").strip().lower()
+                    row_side = str(row.get("order_side") or row.get("side") or "").strip().lower()
+                    row_side = row_side.replace("-", "_").replace(" ", "_")
+                    if row_side in {"short", "sellshort"}:
+                        row_side = "sell_short"
                     row_qty = _safe_float(row.get("qty"))
                     if (
                         row_symbol == symbol_token

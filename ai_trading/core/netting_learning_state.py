@@ -341,6 +341,10 @@ def build_netting_learning_state(
                             learned_fill_success_by_bucket.get(str(key), 0.0)
                         ) + float(max(0.0, min(1.0, fill_success_ratio)))
 
+            if expected_capture_rank_enabled and (
+                expected_capture_cost_model_enabled
+                or expected_capture_floor_adaptive_enabled
+            ):
                 spread_cost_bps = max(0.0, float(safe_float(row.get("spread_paid_bps")) or 0.0))
                 total_cost_bps = max(0.0, float(safe_float(row.get("is_bps")) or spread_cost_bps))
                 impact_cost_bps = max(0.0, float(total_cost_bps) - float(spread_cost_bps))
@@ -356,7 +360,12 @@ def build_netting_learning_state(
                 expected_edge_for_capture = safe_float(row.get("expected_net_edge_bps"))
                 if expected_edge_for_capture is None:
                     expected_edge_for_capture = safe_float(row.get("edge_bps"))
-                if expected_edge_for_capture is not None and fill_success_ratio is not None:
+                fill_success_ratio = extract_tca_fill_success_ratio_func(row)
+                if (
+                    expected_capture_floor_adaptive_enabled
+                    and expected_edge_for_capture is not None
+                    and fill_success_ratio is not None
+                ):
                     observed_capture = (
                         float(expected_edge_for_capture) * float(fill_success_ratio)
                     ) - (
@@ -366,32 +375,33 @@ def build_netting_learning_state(
                     )
                     if math.isfinite(float(observed_capture)):
                         expected_capture_observed_values.append(float(observed_capture))
-                for key in expected_capture_bucket_keys(
-                    symbol=symbol,
-                    session_token=session_token,
-                    regime_token=regime_token,
-                    liquidity_role=liquidity_role,
-                    venue_session=venue_session_token,
-                ):
-                    stats_item = learned_exec_cost_stats_by_bucket.setdefault(
-                        str(key),
-                        {
-                            "samples": 0.0,
-                            "spread_sum_bps": 0.0,
-                            "impact_sum_bps": 0.0,
-                            "latency_sum_bps": 0.0,
-                        },
-                    )
-                    stats_item["samples"] = float(stats_item.get("samples", 0.0) or 0.0) + 1.0
-                    stats_item["spread_sum_bps"] = float(
-                        stats_item.get("spread_sum_bps", 0.0) or 0.0
-                    ) + float(spread_cost_bps)
-                    stats_item["impact_sum_bps"] = float(
-                        stats_item.get("impact_sum_bps", 0.0) or 0.0
-                    ) + float(impact_cost_bps)
-                    stats_item["latency_sum_bps"] = float(
-                        stats_item.get("latency_sum_bps", 0.0) or 0.0
-                    ) + float(latency_drift_cost_bps)
+                if expected_capture_cost_model_enabled:
+                    for key in expected_capture_bucket_keys(
+                        symbol=symbol,
+                        session_token=session_token,
+                        regime_token=regime_token,
+                        liquidity_role=liquidity_role,
+                        venue_session=venue_session_token,
+                    ):
+                        stats_item = learned_exec_cost_stats_by_bucket.setdefault(
+                            str(key),
+                            {
+                                "samples": 0.0,
+                                "spread_sum_bps": 0.0,
+                                "impact_sum_bps": 0.0,
+                                "latency_sum_bps": 0.0,
+                            },
+                        )
+                        stats_item["samples"] = float(stats_item.get("samples", 0.0) or 0.0) + 1.0
+                        stats_item["spread_sum_bps"] = float(
+                            stats_item.get("spread_sum_bps", 0.0) or 0.0
+                        ) + float(spread_cost_bps)
+                        stats_item["impact_sum_bps"] = float(
+                            stats_item.get("impact_sum_bps", 0.0) or 0.0
+                        ) + float(impact_cost_bps)
+                        stats_item["latency_sum_bps"] = float(
+                            stats_item.get("latency_sum_bps", 0.0) or 0.0
+                        ) + float(latency_drift_cost_bps)
 
             if status in {"rejected", "canceled", "cancelled"}:
                 continue

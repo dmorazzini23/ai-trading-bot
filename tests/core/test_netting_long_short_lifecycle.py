@@ -26,7 +26,7 @@ from tests.test_netting_symbol_approval import _base_kwargs as _approval_base_kw
     ),
     [
         ("flat_to_long", 0, 4, "buy", 4, 4, True, "BUY", None),
-        ("flat_to_short", 0, -4, "sell_short", -4, -4, True, "SELL", None),
+        ("flat_to_short", 0, -4, "sell_short", -4, -4, True, "SELL_SHORT", None),
         ("long_to_flat", 5, -5, "sell", -5, 0, False, "SELL", None),
         (
             "long_to_short_closes_first",

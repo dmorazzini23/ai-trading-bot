@@ -59,6 +59,24 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+def _text_or_unknown(value: Any) -> str:
+    text = str(value or "").strip()
+    return text or "unknown"
+
+
+def _rank_reason_from_record(record: Mapping[str, Any]) -> str:
+    rank_reason = str(record.get("rank_reason") or "").strip()
+    if rank_reason:
+        return rank_reason
+    rank_reasons = record.get("rank_reasons")
+    if isinstance(rank_reasons, list | tuple):
+        for reason in rank_reasons:
+            text = str(reason or "").strip()
+            if text:
+                return text
+    return "unknown"
+
+
 def _optional_env_float(name: str) -> float | None:
     raw = str(get_env(name, "", cast=str) or "").strip()
     return _safe_float(raw)
@@ -382,14 +400,22 @@ def load_execution_records(path: str | Path) -> list[dict[str, Any]]:
 def build_daily_execution_report(
     records: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    grouped: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[
+        tuple[str, str, str, str, str, str, str, str, str, str],
+        list[dict[str, Any]],
+    ] = defaultdict(list)
     for record in records:
         key = (
-            str(record.get("symbol", "UNKNOWN")),
-            str(record.get("sleeve", "unknown")),
-            str(record.get("regime_profile", "unknown")),
-            str(record.get("order_type", "unknown")),
-            str(record.get("provider", "unknown")),
+            _text_or_unknown(record.get("symbol", "UNKNOWN")),
+            _text_or_unknown(record.get("sleeve")),
+            _text_or_unknown(record.get("regime_profile")),
+            _text_or_unknown(record.get("order_type")),
+            _text_or_unknown(record.get("provider")),
+            _text_or_unknown(record.get("model_id")),
+            _text_or_unknown(record.get("model_version")),
+            _text_or_unknown(record.get("config_snapshot_hash")),
+            _text_or_unknown(record.get("order_side") or record.get("side")),
+            _rank_reason_from_record(record),
         )
         grouped[key].append(record)
 
@@ -399,7 +425,18 @@ def build_daily_execution_report(
     partial_fill_count = 0
     blocked_count = 0
     for key, rows in sorted(grouped.items()):
-        symbol, sleeve, regime, order_type, provider = key
+        (
+            symbol,
+            sleeve,
+            regime,
+            order_type,
+            provider,
+            model_id,
+            model_version,
+            config_snapshot_hash,
+            order_side,
+            rank_reason,
+        ) = key
         is_values = [float(r["is_bps"]) for r in rows if r.get("is_bps") is not None]
         spread_values = [
             float(r["spread_paid_bps"]) for r in rows if r.get("spread_paid_bps") is not None
@@ -422,6 +459,11 @@ def build_daily_execution_report(
                 "regime_profile": regime,
                 "order_type": order_type,
                 "provider": provider,
+                "model_id": model_id,
+                "model_version": model_version,
+                "config_snapshot_hash": config_snapshot_hash,
+                "order_side": order_side,
+                "rank_reason": rank_reason,
                 "count": len(rows),
                 "is_bps_p50": _percentile(is_values, 50.0),
                 "is_bps_p90": _percentile(is_values, 90.0),
@@ -454,6 +496,11 @@ def _write_csv(path: Path, groups: list[dict[str, Any]]) -> None:
         "regime_profile",
         "order_type",
         "provider",
+        "model_id",
+        "model_version",
+        "config_snapshot_hash",
+        "order_side",
+        "rank_reason",
         "count",
         "is_bps_p50",
         "is_bps_p90",

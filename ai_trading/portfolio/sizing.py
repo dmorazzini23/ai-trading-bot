@@ -364,11 +364,10 @@ class RiskParitySizer:
         try:
             symbols = list(signals.keys())
             if len(symbols) < 2:
-                return {symbols[0]: 1.0} if symbols else {}
+                return self._signed_equal_weights(signals)
             cov_matrix = self._calculate_covariance_matrix(symbols, price_history)
             if cov_matrix is None:
-                n = len(symbols)
-                return dict.fromkeys(symbols, 1.0 / n)
+                return self._signed_equal_weights(signals)
             weights = self._optimize_risk_parity(cov_matrix, symbols)
             for symbol in symbols:
                 if signals[symbol] < 0:
@@ -376,8 +375,21 @@ class RiskParitySizer:
             return weights
         except COMMON_EXC as e:
             logger.error(f'Error calculating risk parity weights: {e}')
-            n = len(signals)
-            return dict.fromkeys(signals, 1.0 / n)
+            return self._signed_equal_weights(signals)
+
+    def _signed_equal_weights(self, signals: dict[str, float]) -> dict[str, float]:
+        """Return equal gross weights with direction from each signal."""
+        n = len(signals)
+        if n == 0:
+            return {}
+        weights = {}
+        for symbol, signal in signals.items():
+            try:
+                sign = -1.0 if float(signal) < 0 else 1.0
+            except (TypeError, ValueError):
+                sign = 1.0
+            weights[symbol] = sign / n
+        return weights
 
     def _calculate_covariance_matrix(self, symbols: list[str], price_history: dict[str, pd.Series]) -> np.ndarray | None:
         """Calculate covariance matrix from price history."""
@@ -534,14 +546,14 @@ class CorrelationClusterSizer:
         try:
             adjusted_weights = base_weights.copy()
             for _cluster_id, cluster_symbols in clusters.items():
-                cluster_weight = sum((base_weights.get(symbol, 0) for symbol in cluster_symbols))
+                cluster_weight = sum((abs(base_weights.get(symbol, 0)) for symbol in cluster_symbols))
                 if cluster_weight > self.max_cluster_weight:
                     scale_factor = self.max_cluster_weight / cluster_weight
                     for symbol in cluster_symbols:
                         if symbol in adjusted_weights:
                             adjusted_weights[symbol] *= scale_factor
-            total_weight = sum(adjusted_weights.values())
-            if total_weight > 0:
+            total_weight = sum((abs(weight) for weight in adjusted_weights.values()))
+            if total_weight > 1.0:
                 for symbol in adjusted_weights:
                     adjusted_weights[symbol] /= total_weight
             return adjusted_weights
@@ -624,10 +636,6 @@ class TurnoverPenaltySizer:
                 dampened_change = weight_change * dampen_factor
                 adjusted_weights[symbol] = current_weight + dampened_change
             adjusted_weights = {k: v for k, v in adjusted_weights.items() if abs(v) > 0.001}
-            total_weight = sum((abs(w) for w in adjusted_weights.values()))
-            if total_weight > 0:
-                for symbol in adjusted_weights:
-                    adjusted_weights[symbol] /= total_weight
             return adjusted_weights
         except COMMON_EXC as e:
             logger.error(f'Error reducing turnover: {e}')

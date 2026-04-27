@@ -22,7 +22,7 @@ OmsEventType = Literal[
     "RECONCILE_UPDATE",
 ]
 
-DecisionAction = Literal["BUY", "SELL", "HOLD", "REDUCE", "EXIT"]
+DecisionAction = Literal["BUY", "SELL", "SELL_SHORT", "HOLD", "REDUCE", "EXIT"]
 
 
 def utc_now_iso() -> str:
@@ -132,4 +132,3 @@ class DecisionEvent:
             decision_uuid=normalized_uuid,
             decision_ts=normalized_ts,
         )
-

@@ -16,6 +16,8 @@ def test_order_validation_helpers_and_stale_cleanup(monkeypatch):
     assert eng._ensure_valid_price(None) is None
     assert eng._ensure_valid_price(cast(Any, "101.25")) == 101.25
     assert eng._normalize_order_side("buy") is OrderSide.BUY
+    assert eng._normalize_order_side("short") is OrderSide.SELL_SHORT
+    assert eng._normalize_order_side("sell short") is OrderSide.SELL_SHORT
     assert eng._normalize_order_side("unknown") is None
     assert eng._as_bool("YES")
     assert not eng._as_bool("no")

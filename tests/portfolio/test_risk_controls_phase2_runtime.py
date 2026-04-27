@@ -27,6 +27,9 @@ def test_turnover_budget_tracks_remaining_and_rejects_over_budget() -> None:
     assert budget.add_trade(10_000.0, 100_000.0) is True
     assert budget.used_turnover == pytest.approx(0.1)
     assert budget.remaining_turnover == pytest.approx(0.4)
+    assert budget.add_trade(-10_000.0, 100_000.0) is True
+    assert budget.used_turnover == pytest.approx(0.2)
+    assert budget.remaining_turnover == pytest.approx(0.3)
     assert budget.add_trade(50_000.0, 100_000.0) is False
     assert budget.add_trade(1.0, 0.0) is False
 

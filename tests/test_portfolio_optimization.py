@@ -63,6 +63,16 @@ class TestPortfolioOptimizer:
         assert 0.0 <= efficiency <= 1.0
         assert efficiency > 0  # Should have some efficiency with valid data
 
+    def test_portfolio_returns_preserve_short_direction(self):
+        """Short positions should contribute inverse returns, not long returns."""
+        returns = self.optimizer._calculate_portfolio_returns(
+            {'LONG': 1.0, 'SHORT': -1.0},
+            {'LONG': [0.01, -0.02], 'SHORT': [0.01, -0.02]},
+            {'LONG': 100.0, 'SHORT': 100.0},
+        )
+
+        assert returns == pytest.approx([0.0, 0.0])
+
     def test_correlation_impact_calculation(self):
         """Test correlation impact calculation."""
         impact = self.optimizer.calculate_correlation_impact(
@@ -150,6 +160,17 @@ class TestPortfolioOptimizer:
         assert isinstance(should_rebalance, bool)
         assert isinstance(reasoning, str)
         assert len(reasoning) > 0
+
+    def test_rebalance_trigger_uses_signed_current_weights(self):
+        """A matching short target should not drift as if it were long."""
+        should_rebalance, reasoning = self.optimizer.should_trigger_rebalance(
+            {'LONG': 1.0, 'SHORT': -1.0},
+            {'LONG': 0.5, 'SHORT': -0.5},
+            {'LONG': 100.0, 'SHORT': 100.0},
+        )
+
+        assert should_rebalance is False
+        assert 'Drift within tolerance' in reasoning
 
 
 class TestTransactionCostCalculator:

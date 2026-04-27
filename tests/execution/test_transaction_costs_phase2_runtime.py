@@ -25,6 +25,8 @@ def _market_data() -> dict[str, object]:
 
 def test_validation_and_breakdown_normalization() -> None:
     assert estimate_cost(10, 50, bps=2.0) == pytest.approx(0.10)
+    assert estimate_cost(-10, 50, bps=2.0) == pytest.approx(0.10)
+    assert estimate_cost(10, -50, bps=2.0) == pytest.approx(0.10)
 
     breakdown = TransactionCostBreakdown(
         spread_cost=1.0,
@@ -120,6 +122,48 @@ def test_total_cost_market_limit_short_and_profitability() -> None:
     assert low_confidence.is_profitable is False
     assert zero_profit.is_profitable is False
     assert zero_profit.cost_ratio == float("inf")
+
+
+def test_signed_transaction_costs_and_true_short_borrow() -> None:
+    calculator = TransactionCostCalculator(
+        commission_rate=0.001,
+        min_commission=0.0,
+        max_commission=25.0,
+    )
+    data = _market_data()
+
+    assert calculator.calculate_commission("AAPL", -100, -10_000.0) == pytest.approx(10.0)
+    assert calculator.calculate_opportunity_cost("AAPL", 10.0, 0.02, -10_000.0) > 0.0
+    assert calculator.calculate_borrowing_cost("AAPL", -100, -10_000.0, 3.0) > 0.0
+
+    reducing_long = calculator.calculate_total_transaction_cost(
+        "AAPL",
+        trade_size=-50,
+        trade_type=TradeType.MARKET_ORDER,
+        market_data=data,
+        holding_period_days=3.0,
+        current_position=100,
+    )
+    crossing_to_short = calculator.calculate_total_transaction_cost(
+        "AAPL",
+        trade_size=-150,
+        trade_type=TradeType.MARKET_ORDER,
+        market_data=data,
+        holding_period_days=3.0,
+        current_position=100,
+    )
+    full_short = calculator.calculate_total_transaction_cost(
+        "AAPL",
+        trade_size=-150,
+        trade_type=TradeType.MARKET_ORDER,
+        market_data=data,
+        holding_period_days=3.0,
+        current_position=0,
+    )
+
+    assert reducing_long.borrowing_cost == 0.0
+    assert crossing_to_short.borrowing_cost > 0.0
+    assert crossing_to_short.borrowing_cost == pytest.approx(full_short.borrowing_cost / 3.0)
 
 
 def test_fallback_paths_and_factory_configuration() -> None:

@@ -93,13 +93,29 @@ def _execution_learning_bucket_keys(
     regime_value = str(regime_token or "").strip().lower() or "unknown"
     liquidity_value = str(liquidity_role or "").strip().lower() or "mixed"
     side_value = str(side or "").strip().lower() or "buy"
-    return (
-        f"{symbol_token}:{session_value}:{regime_value}:{liquidity_value}:{side_value}",
-        f"{symbol_token}:{session_value}:{regime_value}:{side_value}",
-        f"{symbol_token}:{session_value}:{side_value}",
-        f"{symbol_token}:{session_value}",
-        f"{symbol_token}",
+    role_values = [liquidity_value]
+    for profile_value in ("balanced", "passive", "urgent", "protective"):
+        if profile_value not in role_values:
+            role_values.append(profile_value)
+    keys: list[str] = []
+    for role_value in role_values:
+        keys.extend(
+            (
+                f"{symbol_token}:{session_value}:{regime_value}:{role_value}:{side_value}",
+                f"{symbol_token}:{session_value}:{role_value}:{side_value}",
+                f"{session_value}:{role_value}:{side_value}",
+            )
+        )
+    keys.extend(
+        (
+            f"{symbol_token}:{session_value}:{regime_value}:{side_value}",
+            f"{symbol_token}:{session_value}:{side_value}",
+            f"{symbol_token}:{session_value}",
+            f"{symbol_token}",
+            "global",
+        )
     )
+    return tuple(dict.fromkeys(keys))
 
 
 def _lookup_execution_learning_bucket_entry(
@@ -440,7 +456,34 @@ def rank_netting_candidates(  # noqa: PLR0913, C901
 
     for symbol, target in targets.items():
         raw_net_edge_total = float(net_edge_raw_by_symbol.get(symbol, 0.0) or 0.0)
-        candidate_side = "buy" if float(target.target_dollars) >= 0.0 else "sell_short"
+        px_for_qty = safe_float(latest_price.get(symbol))
+        current_shares = safe_float(positions.get(symbol))
+        current_notional = 0.0
+        if px_for_qty is not None and px_for_qty > 0.0 and current_shares is not None:
+            current_notional = float(current_shares) * float(px_for_qty)
+        candidate_trade_notional = float(target.target_dollars) - float(current_notional)
+        candidate_side = "buy" if float(candidate_trade_notional) >= 0.0 else "sell_short"
+        current_notional_abs = abs(float(current_notional))
+        target_notional_abs = abs(float(target.target_dollars))
+        trade_notional_abs = abs(float(candidate_trade_notional))
+        current_position_side = (
+            1
+            if float(current_notional) > 1e-9
+            else (-1 if float(current_notional) < -1e-9 else 0)
+        )
+        target_position_side = (
+            1
+            if float(target.target_dollars) > 1e-9
+            else (-1 if float(target.target_dollars) < -1e-9 else 0)
+        )
+        candidate_expands_exposure = (
+            target_position_side != 0
+            and (
+                current_position_side == 0
+                or current_position_side != target_position_side
+                or float(target_notional_abs) > float(current_notional_abs)
+            )
+        )
         edge_realism_rank_factor = float(
             edge_realism_rank_factor_by_symbol.get(symbol, 1.0)
         )
@@ -521,10 +564,9 @@ def rank_netting_candidates(  # noqa: PLR0913, C901
                 0.0,
                 safe_float(getattr(liq_features, "rolling_volume", 0.0)) or 0.0,
             )
-            px_for_qty = safe_float(latest_price.get(symbol))
             trade_qty = 0.0
             if px_for_qty is not None and px_for_qty > 0.0:
-                trade_qty = abs(float(target.target_dollars)) / float(px_for_qty)
+                trade_qty = abs(float(candidate_trade_notional)) / float(px_for_qty)
             participation = 0.0
             if rolling_volume > 0.0 and trade_qty > 0.0:
                 participation = min(
@@ -1289,21 +1331,19 @@ def rank_netting_candidates(  # noqa: PLR0913, C901
                         continue
                     corr_penalty += abs(float(corr_value)) * float(held_weight)
             exposure_penalty = 0.0
-            current_notional = abs(
-                float(positions.get(symbol, 0.0) or 0.0)
-                * float(latest_price.get(symbol, 0.0) or 0.0)
-            )
-            target_notional = abs(float(target.target_dollars))
             if portfolio_current_gross_for_rank > 0.0:
-                post_notional = max(current_notional, target_notional)
-                exposure_penalty = post_notional / float(
+                incremental_exposure = max(
+                    0.0,
+                    float(target_notional_abs) - float(current_notional_abs),
+                )
+                exposure_penalty = float(incremental_exposure) / float(
                     max(portfolio_current_gross_for_rank, 1.0)
                 )
             turnover_penalty = 0.0
             if portfolio_current_gross_for_rank > 0.0:
-                turnover_penalty = abs(
-                    float(target_notional) - float(current_notional)
-                ) / float(max(portfolio_current_gross_for_rank, 1.0))
+                turnover_penalty = float(trade_notional_abs) / float(
+                    max(portfolio_current_gross_for_rank, 1.0)
+                )
             liquidity_impact_penalty = 0.0
             liq_features = latest_liquidity.get(symbol)
             spread_bps_for_impact = max(
@@ -1316,7 +1356,7 @@ def rank_netting_candidates(  # noqa: PLR0913, C901
             )
             if rolling_volume_for_impact > 0.0:
                 trade_qty = abs(
-                    float(target.target_dollars)
+                    float(candidate_trade_notional)
                     / max(float(latest_price.get(symbol, 0.0) or 0.0), 1e-9)
                 )
                 participation = float(trade_qty) / float(
@@ -1486,16 +1526,23 @@ def rank_netting_candidates(  # noqa: PLR0913, C901
                         }
                     )
         if exit_policy_entry_penalty_enabled and exit_policy_entry_penalty_weight > 0.0:
-            target_side = "long" if float(target.target_dollars) >= 0.0 else "short"
-            exit_policy_entry_context = exit_policy_pressure_context_func(
-                exit_policy_state,
-                symbol=symbol,
-                regime=bandit_active_regime,
-                side=target_side,
-                now=now,
-                position_age_seconds=0.0,
-                expected_edge_bps=float(clipped_net_edge_total),
-            )
+            target_side = "long" if target_position_side >= 0 else "short"
+            if candidate_expands_exposure:
+                exit_policy_entry_context = exit_policy_pressure_context_func(
+                    exit_policy_state,
+                    symbol=symbol,
+                    regime=bandit_active_regime,
+                    side=target_side,
+                    now=now,
+                    position_age_seconds=0.0,
+                    expected_edge_bps=float(clipped_net_edge_total),
+                )
+            else:
+                exit_policy_entry_context = {
+                    "active": False,
+                    "reason": "not_expanding_exposure",
+                    "side": target_side,
+                }
             pressure_score = safe_float(exit_policy_entry_context.get("pressure_score"))
             if (
                 bool(exit_policy_entry_context.get("active", False))
@@ -1522,6 +1569,20 @@ def rank_netting_candidates(  # noqa: PLR0913, C901
                             exit_policy_entry_penalty_bps
                         ),
                         "exit_policy_entry_pressure": float(pressure_score),
+                        "exit_policy_entry_context": dict(
+                            exit_policy_entry_context
+                        ),
+                    }
+                )
+            else:
+                counterfactual_signal_by_symbol.setdefault(symbol, {}).update(
+                    {
+                        "exit_policy_entry_penalty_bps": 0.0,
+                        "exit_policy_entry_pressure": (
+                            float(pressure_score)
+                            if pressure_score is not None
+                            else None
+                        ),
                         "exit_policy_entry_context": dict(
                             exit_policy_entry_context
                         ),
