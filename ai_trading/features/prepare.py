@@ -212,7 +212,6 @@ def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame
     except (ValueError, TypeError) as e:
         logger.exception('Multi-timeframe features failed: %s', e)
     df.ffill(inplace=True)
-    df.bfill(inplace=True)
     required = ['vwap', 'rsi', 'atr', 'macd', 'macds', 'ichimoku_conv', 'ichimoku_base', 'stochrsi']
     if freq == 'daily':
         df['sma_50'] = np.nan

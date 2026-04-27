@@ -43,17 +43,17 @@ except (ImportError, ModuleNotFoundError):
     _requests_exceptions = None
 
 
-class _FallbackAPIError(Exception):
-    """Fallback APIError when Alpaca SDK is unavailable."""
+_ALPACA_PY_REQUIRED = (
+    "alpaca-py==0.42.1 is required; install with `pip install alpaca-py==0.42.1`"
+)
 
+APIError: type[BaseException] = RuntimeError
 
-APIError: type[BaseException] = _FallbackAPIError
-
-if should_import_alpaca_sdk():  # pragma: no cover - alpaca optional
+if should_import_alpaca_sdk():  # pragma: no cover - depends on runtime config
     try:
         from alpaca.common.exceptions import APIError as _RealAPIError
-    except (ImportError, AttributeError):
-        pass
+    except (ImportError, ModuleNotFoundError, AttributeError, OSError, RuntimeError) as exc:
+        raise RuntimeError(_ALPACA_PY_REQUIRED) from exc
     else:
         APIError = _RealAPIError
 

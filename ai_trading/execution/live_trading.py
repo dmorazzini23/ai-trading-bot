@@ -52,68 +52,21 @@ from ai_trading.utils.ids import stable_client_order_id
 from ai_trading.utils.process_manager import file_lock as process_file_lock
 from ai_trading.utils.time import monotonic_time
 
-try:  # pragma: no cover - optional dependency
+_ALPACA_PY_REQUIRED = (
+    "alpaca-py==0.42.1 is required; install with `pip install alpaca-py==0.42.1`"
+)
+
+try:
     from alpaca.common.exceptions import APIError as _ImportedAlpacaAPIError  # type: ignore[import]
-except (ImportError, AttributeError, OSError, RuntimeError):  # pragma: no cover - fallback when SDK missing
-    _AlpacaAPIError: type[BaseException] | None = None
+except (ImportError, ModuleNotFoundError, AttributeError, OSError, RuntimeError) as exc:
+    raise RuntimeError(_ALPACA_PY_REQUIRED) from exc
 else:
     _AlpacaAPIError = _ImportedAlpacaAPIError
 
 
-class _FallbackAPIError(Exception):
-    """Fallback APIError when alpaca-py is unavailable."""
-
-    def __init__(  # type: ignore[no-untyped-def]
-        self,
-        message: str,
-        *args,
-        http_error: Any | None = None,
-        code: Any | None = None,
-        status_code: int | None = None,
-        **_kwargs,
-    ) -> None:
-        super().__init__(message, *args)
-        self.http_error = http_error
-        parsed_code = code
-        parsed_message = message
-        try:
-            payload = json.loads(message)
-            parsed_message = payload.get("message", parsed_message)
-            parsed_code = payload.get("code", parsed_code)
-        except LIVE_TRADING_FALLBACK_EXC:
-            logger.debug("API_ERROR_JSON_PARSE_FAILED", exc_info=True)
-        self._code = parsed_code
-        self._message = parsed_message
-        derived_status = status_code
-        if http_error is not None:
-            try:
-                derived_status = getattr(getattr(http_error, "response", None), "status_code", derived_status)
-            except LIVE_TRADING_FALLBACK_EXC:
-                logger.debug("API_ERROR_STATUS_DERIVE_FAILED", exc_info=True)
-        self._status_code = derived_status
-
-    @property
-    def status_code(self) -> int | None:
-        return self._status_code
-
-    @property
-    def code(self) -> Any:
-        return self._code
-
-    @property
-    def message(self) -> str:
-        return self._message
-
-
 if TYPE_CHECKING:
-
-    class APIError(_FallbackAPIError):
+    class APIError(Exception):
         """Type-checker-visible APIError contract."""
-
-elif _AlpacaAPIError is None:
-
-    class APIError(_FallbackAPIError):
-        """Runtime fallback when alpaca-py is unavailable."""
 
 else:
 
@@ -2105,13 +2058,13 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
         _format_money(downsized_notional),
     )
     return CapacityCheck(True, max_qty, None)
-from ai_trading.core import bot_engine as _bot_engine
 
 AlpacaREST: type[Any] | None
 OrderSide: Any | None
 TimeInForce: Any | None
 LimitOrderRequest: type[Any] | None
 MarketOrderRequest: type[Any] | None
+_ALPACA_REQUEST_IMPORT_ERROR: BaseException | None = None
 try:  # pragma: no cover - optional dependency
     from alpaca.trading.client import TradingClient as _ImportedAlpacaREST  # type: ignore
     from alpaca.trading.enums import (
@@ -2122,12 +2075,13 @@ try:  # pragma: no cover - optional dependency
         LimitOrderRequest as _ImportedLimitOrderRequest,
         MarketOrderRequest as _ImportedMarketOrderRequest,
     )
-except (ValueError, TypeError, ModuleNotFoundError, ImportError):
+except (ValueError, TypeError, ModuleNotFoundError, ImportError) as exc:
     AlpacaREST = None
     OrderSide = None
     TimeInForce = None
     LimitOrderRequest = None
     MarketOrderRequest = None
+    _ALPACA_REQUEST_IMPORT_ERROR = exc
 else:
     AlpacaREST = _ImportedAlpacaREST
     OrderSide = _ImportedOrderSide
@@ -2137,20 +2091,17 @@ else:
 
 
 def _ensure_request_models():
-    """Ensure Alpaca request models are available, falling back to bot_engine stubs."""
+    """Ensure Alpaca request models are available."""
 
     global MarketOrderRequest, LimitOrderRequest, OrderSide, TimeInForce
 
-    _bot_engine._ensure_alpaca_classes()
-
-    if MarketOrderRequest is None:
-        MarketOrderRequest = _bot_engine.MarketOrderRequest
-    if LimitOrderRequest is None:
-        LimitOrderRequest = _bot_engine.LimitOrderRequest
-    if OrderSide is None:
-        OrderSide = _bot_engine.OrderSide
-    if TimeInForce is None:
-        TimeInForce = _bot_engine.TimeInForce
+    if (
+        MarketOrderRequest is None
+        or LimitOrderRequest is None
+        or OrderSide is None
+        or TimeInForce is None
+    ):
+        raise RuntimeError(_ALPACA_PY_REQUIRED) from _ALPACA_REQUEST_IMPORT_ERROR
 
     return MarketOrderRequest, LimitOrderRequest, OrderSide, TimeInForce
 
@@ -30846,26 +30797,10 @@ class ExecutionEngine:
                 order_data["take_profit"] = tp_payload
 
         resp: Any | None = None
-        if _runtime_env("PYTEST_RUNNING"):
-            client = getattr(self, "trading_client", None)
-            submit = getattr(client, "submit_order", None)
-            if callable(submit):
-                try:
-                    resp = submit(order_data)
-                except LIVE_TRADING_FALLBACK_EXC:
-                    resp = None
-        else:
-            if self.trading_client is None:
-                raise RuntimeError("Alpaca TradingClient is not initialized")
+        if self.trading_client is None:
+            raise RuntimeError("Alpaca TradingClient is not initialized")
 
-        # If bracket requested, call submit_order with keyword args to pass nested structures
-        alpaca_payload = dict(order_data)
-        qty_payload = alpaca_payload.get("quantity")
-        if qty_payload is not None:
-            alpaca_payload["qty"] = qty_payload
-            alpaca_payload.pop("quantity", None)
-        if isinstance(alpaca_payload.get("time_in_force"), str):
-            alpaca_payload["time_in_force"] = str(alpaca_payload["time_in_force"]).lower()
+        qty_payload = order_data.get("quantity")
         market_cls, limit_cls, side_enum, tif_enum = _ensure_request_models()
         if side_enum is None or tif_enum is None or market_cls is None or limit_cls is None:
             raise RuntimeError("Alpaca request models unavailable")
@@ -30885,7 +30820,55 @@ class ExecutionEngine:
         )
         try:
             if resp is None:
-                if _runtime_env("PYTEST_RUNNING"):
+                side = (
+                    side_enum.BUY
+                    if str(order_data["side"]).lower() == "buy"
+                    else side_enum.SELL
+                )
+                tif_member = tif_enum.DAY
+                tif_lookup = str(tif_token).strip().upper()
+                if tif_lookup:
+                    candidate = getattr(tif_enum, tif_lookup, None)
+                    if candidate is None:
+                        try:
+                            candidate = tif_enum[tif_lookup]  # type: ignore[index]
+                        except LIVE_TRADING_FALLBACK_EXC:
+                            candidate = None
+                    if candidate is not None:
+                        tif_member = candidate
+                common_kwargs = {
+                    "symbol": order_data["symbol"],
+                    "qty": order_data["quantity"],
+                    "side": side,
+                    "time_in_force": tif_member,
+                    "client_order_id": order_data.get("client_order_id"),
+                }
+                asset_class = order_data.get("asset_class")
+                if asset_class:
+                    common_kwargs["asset_class"] = asset_class
+                if order_data.get("extended_hours") is not None:
+                    common_kwargs["extended_hours"] = bool(order_data.get("extended_hours"))
+                for bracket_key in ("order_class", "take_profit", "stop_loss"):
+                    bracket_value = order_data.get(bracket_key)
+                    if bracket_value is not None:
+                        common_kwargs[bracket_key] = bracket_value
+                try:
+                    if order_type == "market":
+                        req = market_cls(**common_kwargs)
+                    else:
+                        req = limit_cls(limit_price=order_data["limit_price"], **common_kwargs)
+                except TypeError as exc:
+                    if asset_class and "asset_class" in common_kwargs:
+                        common_kwargs.pop("asset_class", None)
+                        logger.debug("EXEC_IGNORED_KWARG", extra={"kw": "asset_class", "detail": str(exc)})
+                        if order_type == "market":
+                            req = market_cls(**common_kwargs)
+                        else:
+                            req = limit_cls(limit_price=order_data["limit_price"], **common_kwargs)
+                    else:
+                        raise
+                resp = self.trading_client.submit_order(order_data=req)
+                if resp is None and _runtime_env("PYTEST_RUNNING"):
                     mock_id = f"alpaca-pending-{int(time.time() * 1000)}"
                     resp = {
                         "id": mock_id,
@@ -30896,69 +30879,6 @@ class ExecutionEngine:
                         "limit_price": order_data.get("limit_price"),
                         "client_order_id": mock_id,
                     }
-                elif order_data.get("order_class"):
-                    try:
-                        resp = self.trading_client.submit_order(**alpaca_payload)
-                    except TypeError as exc:
-                        # Some brokers reject nested bracket kwargs; retry without extras
-                        logger.warning(
-                            "BRACKET_UNSUPPORTED_FALLBACK_LIMIT",
-                            extra={
-                                "symbol": order_data.get("symbol"),
-                                "side": order_data.get("side"),
-                                "error": str(exc),
-                            },
-                        )
-                        cleaned = {
-                            k: v
-                            for k, v in alpaca_payload.items()
-                            if k not in {"order_class", "take_profit", "stop_loss"}
-                            and not str(k).startswith("_")
-                        }
-                        resp = self.trading_client.submit_order(**cleaned)
-                else:
-                    side = (
-                        side_enum.BUY
-                        if str(order_data["side"]).lower() == "buy"
-                        else side_enum.SELL
-                    )
-                    tif_member = tif_enum.DAY
-                    tif_lookup = str(tif_token).strip().upper()
-                    if tif_lookup:
-                        candidate = getattr(tif_enum, tif_lookup, None)
-                        if candidate is None:
-                            try:
-                                candidate = tif_enum[tif_lookup]  # type: ignore[index]
-                            except LIVE_TRADING_FALLBACK_EXC:
-                                candidate = None
-                        if candidate is not None:
-                            tif_member = candidate
-                    common_kwargs = {
-                        "symbol": order_data["symbol"],
-                        "qty": order_data["quantity"],
-                        "side": side,
-                        "time_in_force": tif_member,
-                        "client_order_id": order_data.get("client_order_id"),
-                    }
-                    asset_class = order_data.get("asset_class")
-                    if asset_class:
-                        common_kwargs["asset_class"] = asset_class
-                    try:
-                        if order_type == "market":
-                            req = market_cls(**common_kwargs)
-                        else:
-                            req = limit_cls(limit_price=order_data["limit_price"], **common_kwargs)
-                    except TypeError as exc:
-                        if asset_class and "asset_class" in common_kwargs:
-                            common_kwargs.pop("asset_class", None)
-                            logger.debug("EXEC_IGNORED_KWARG", extra={"kw": "asset_class", "detail": str(exc)})
-                            if order_type == "market":
-                                req = market_cls(**common_kwargs)
-                            else:
-                                req = limit_cls(limit_price=order_data["limit_price"], **common_kwargs)
-                        else:
-                            raise
-                    resp = self.trading_client.submit_order(order_data=req)
             if resp is None:
                 recovered = self._lookup_order_by_client_order_id(
                     client_order_id_text,

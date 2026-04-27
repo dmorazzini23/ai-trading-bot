@@ -154,3 +154,48 @@ def test_register_healthz_routes_returns_exception_payload() -> None:
     assert payload["status"] == "degraded"
     assert payload["error"] == "boom"
     assert logger.events == ["HEALTH_CHECK_FAILED"]
+
+
+def test_service_health_payload_env_error_forces_degraded() -> None:
+    payload = health_payload.build_service_health_payload(
+        force_ok_for_pytest=True,
+        env_error="missing ALPACA_API_KEY",
+        alpaca_context={
+            "sdk_ok": True,
+            "initialized": True,
+            "client_attached": True,
+            "has_key": True,
+            "has_secret": True,
+            "base_url": "https://paper-api.alpaca.markets",
+            "paper": True,
+            "shadow_mode": False,
+        },
+        enrich_alpaca_from_runtime_env=False,
+    )
+
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["error"] == "missing ALPACA_API_KEY"
+    assert payload["reason"]
+
+
+def test_canonical_healthz_payload_env_error_forces_degraded() -> None:
+    payload = health_payload.build_canonical_healthz_payload(
+        force_ok_for_pytest=True,
+        env_error="invalid HEALTHCHECK_PORT",
+        alpaca_context={
+            "sdk_ok": True,
+            "initialized": True,
+            "client_attached": True,
+            "has_key": True,
+            "has_secret": True,
+            "base_url": "https://paper-api.alpaca.markets",
+            "paper": True,
+            "shadow_mode": False,
+        },
+        enrich_alpaca_from_runtime_env=False,
+    )
+
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["error"] == "invalid HEALTHCHECK_PORT"

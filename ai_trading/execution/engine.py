@@ -23,14 +23,14 @@ from typing import Any, TYPE_CHECKING, cast
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
-try:  # pragma: no cover - Alpaca SDK optional in tests
+_ALPACA_PY_REQUIRED = (
+    "alpaca-py==0.42.1 is required; install with `pip install alpaca-py==0.42.1`"
+)
+
+try:
     from alpaca.common.exceptions import APIError as _ImportedAPIError
-except AI_TRADING_FALLBACK_EXCEPTIONS:  # ImportError
-
-    class _FallbackAPIError(Exception):
-        """Fallback when Alpaca SDK is unavailable."""
-
-    APIError: type[Exception] = _FallbackAPIError
+except (ImportError, ModuleNotFoundError, AttributeError, OSError, RuntimeError) as exc:
+    raise RuntimeError(_ALPACA_PY_REQUIRED) from exc
 else:
     APIError = _ImportedAPIError
 
@@ -2353,8 +2353,24 @@ class ExecutionEngine:
         """Helper to set :attr:`available_qty`."""
         self.available_qty = qty
 
-    def get_available_qty(self) -> float:
-        """Helper to get :attr:`available_qty`."""
+    def get_available_qty(self, symbol: str | None = None) -> float:
+        """Return sellable long quantity, scoped to ``symbol`` when provided."""
+        if symbol:
+            symbol_text = str(symbol).strip()
+            symbol_keys = (symbol_text, symbol_text.upper(), symbol_text.lower())
+            for source_name in ("_position_tracker", "_position_ledger"):
+                source = getattr(self, source_name, None)
+                if not isinstance(source, Mapping):
+                    continue
+                for symbol_key in symbol_keys:
+                    if symbol_key not in source:
+                        continue
+                    try:
+                        return max(float(source[symbol_key]), 0.0)
+                    except (TypeError, ValueError):
+                        return 0.0
+                if source:
+                    return 0.0
         return self.available_qty
 
     @property
@@ -3262,7 +3278,7 @@ class ExecutionEngine:
             if isinstance(side, str):
                 side = OrderSide(side)
 
-            available_qty_raw = self.get_available_qty()
+            available_qty_raw = self.get_available_qty(symbol)
             if callable(available_qty_raw):  # accommodate mocked attributes
                 available_qty_raw = available_qty_raw()
             try:

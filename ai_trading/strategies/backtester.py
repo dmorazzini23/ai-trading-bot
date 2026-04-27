@@ -528,8 +528,8 @@ class BacktestEngine:
 
     def _generate_orders_for_bar(self, symbol: str, close: float) -> list[Order]:
         history = self._close_history.setdefault(symbol, [])
-        history.append(close)
         if len(history) < 5:
+            history.append(close)
             return []
 
         short_mean = sum(history[-3:]) / 3.0
@@ -541,19 +541,32 @@ class BacktestEngine:
         elif short_mean < long_mean * 0.999:
             side = "sell"
         if side is None:
+            history.append(close)
             return []
 
         current_position = int(self.positions.get(symbol, 0))
         if side == "sell" and current_position <= 0:
+            history.append(close)
             return []
         if side == "buy" and self.cash < close:
+            history.append(close)
             return []
+        history.append(close)
         return [Order(symbol=symbol, qty=1, side=side, price=close)]
 
     def run(self, symbols: list[str]) -> BacktestResult:
         import pandas as pd  # heavy import; keep local
 
-        combined = sorted(set().union(*(df.index for df in self.data.values())))
+        trade_columns = ["symbol", "qty", "side", "price", "timestamp", "commission"]
+        equity_columns = ["timestamp", "cash", "positions", "total_equity"]
+        frames = [df for df in self.data.values() if df is not None and not getattr(df, "empty", True)]
+        combined = sorted(set().union(*(df.index for df in frames)))
+        if not combined:
+            trades_df = pd.DataFrame(columns=trade_columns)
+            eq_df = pd.DataFrame(columns=equity_columns).set_index("timestamp")
+            stats = self._stats(eq_df, trades_df)
+            self._close_event_store()
+            return BacktestResult(trades_df, eq_df, **stats)
         for ts in combined:
             orders: list[Order] = []
             for sym in symbols:
@@ -583,9 +596,10 @@ class BacktestEngine:
                     "commission": fill.commission,
                 }
                 for fill in self.trades
-            ]
+            ],
+            columns=trade_columns,
         )
-        eq_df = pd.DataFrame(self.equity_curve).set_index("timestamp")
+        eq_df = pd.DataFrame(self.equity_curve, columns=equity_columns).set_index("timestamp")
         stats = self._stats(eq_df, trades_df)
         self._close_event_store()
         return BacktestResult(trades_df, eq_df, **stats)

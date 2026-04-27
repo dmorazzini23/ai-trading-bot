@@ -946,7 +946,9 @@ class RiskEngine:
         side = str(getattr(signal, "side", "buy")).lower()
         prev = self.exposure.get(asset_class, 0.0)
         try:
-            signal_weight = float(getattr(signal, "weight", 0.0))
+            signal_weight = abs(float(getattr(signal, "weight", 0.0)))
+            if not math.isfinite(signal_weight):
+                signal_weight = 0.0
         except (ValueError, TypeError) as e:
             logger.warning(
                 "Invalid signal.weight value '%s' for %s in register_fill, defaulting to 0.0: %s",
@@ -955,24 +957,29 @@ class RiskEngine:
                 e,
             )
             signal_weight = 0.0
-        delta = signal_weight if side == "buy" else -signal_weight
-        new_exposure = prev + delta
-        if new_exposure < 0 and side == "sell":
+        if side in {"buy", "sell_short", "sellshort", "short", "sell-short", "sell short"}:
+            delta = signal_weight
+            new_exposure = prev + delta
+        else:
+            delta = -min(prev, signal_weight)
+            new_exposure = max(0.0, prev + delta)
+        if prev - signal_weight < 0 and side == "sell":
             logger.warning(
                 "EXPOSURE_NEGATIVE_PREVENTED",
                 extra={
                     "asset": asset_class,
                     "symbol": symbol,
                     "prev": prev,
-                    "delta": delta,
-                    "would_be": new_exposure,
+                    "delta": -signal_weight,
+                    "would_be": prev - signal_weight,
                 },
             )
-            new_exposure = 0.0
-            delta = -prev
         self.exposure[asset_class] = new_exposure
         s_prev = self.strategy_exposure.get(strategy, 0.0)
-        self.strategy_exposure[strategy] = s_prev + delta
+        if delta < 0:
+            self.strategy_exposure[strategy] = max(0.0, s_prev + delta)
+        else:
+            self.strategy_exposure[strategy] = s_prev + delta
         logger.info(
             "EXPOSURE_UPDATED",
             extra={

@@ -9,10 +9,10 @@ from typing import Any
 import numpy as np
 try:  # pragma: no cover - Alpaca optional
     from alpaca.common.exceptions import APIError as _ImportedAlpacaAPIError
-except AI_TRADING_FALLBACK_EXCEPTIONS:  # ImportError
-    class _FallbackAlpacaAPIError(Exception):
-        """Fallback when Alpaca SDK is absent."""
-    APIError: type[Exception] = _FallbackAlpacaAPIError
+except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # ImportError
+    raise RuntimeError(
+        "alpaca-py==0.42.1 is required; install with `pip install alpaca-py==0.42.1`"
+    ) from exc
 else:
     APIError = _ImportedAlpacaAPIError
 from ai_trading.config import get_settings

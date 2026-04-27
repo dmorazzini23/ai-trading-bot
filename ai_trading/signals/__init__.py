@@ -18,13 +18,14 @@ if TYPE_CHECKING:  # pragma: no cover - used for type hints
 
     pd = load_pandas()
 
-try:  # pragma: no cover - alpaca may be missing in tests
-    from alpaca.common.exceptions import APIError as _ImportedAPIError
-except AI_TRADING_FALLBACK_EXCEPTIONS:  # ImportError
-    class _FallbackAPIError(Exception):
-        """Fallback APIError when alpaca package is absent."""
+_ALPACA_PY_REQUIRED = (
+    "alpaca-py==0.42.1 is required; install with `pip install alpaca-py==0.42.1`"
+)
 
-    APIError: type[Exception] = _FallbackAPIError
+try:
+    from alpaca.common.exceptions import APIError as _ImportedAPIError
+except (ImportError, ModuleNotFoundError, AttributeError, OSError, RuntimeError) as exc:
+    raise RuntimeError(_ALPACA_PY_REQUIRED) from exc
 else:
     APIError = _ImportedAPIError
 

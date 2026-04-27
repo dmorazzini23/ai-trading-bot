@@ -1,4 +1,5 @@
 import pytest
+from datetime import UTC, datetime, timedelta
 
 pd = pytest.importorskip("pandas")
 
@@ -22,6 +23,7 @@ def _stub_daily_df():
 
 def test_cache_used_on_network_failure(monkeypatch):
     daily_cache._CACHE.clear()
+    daily_cache._CACHE_TS.clear()
     df = _stub_daily_df()
     calls = {"count": 0}
 
@@ -40,3 +42,52 @@ def test_cache_used_on_network_failure(monkeypatch):
 
     assert out is df
     assert calls["count"] == 2
+
+
+def test_cache_not_used_when_schema_invalid(monkeypatch):
+    daily_cache._CACHE.clear()
+    daily_cache._CACHE_TS.clear()
+    daily_cache._CACHE[("AAPL", None, None, None, None)] = pd.DataFrame({"close": [1.0]})
+    daily_cache._CACHE_TS[("AAPL", None, None, None, None)] = datetime.now(UTC)
+
+    monkeypatch.setattr(
+        daily_cache,
+        "_fetch_daily_df",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(DataFetchError("boom")),
+    )
+
+    with pytest.raises(DataFetchError):
+        daily_cache.get_daily_df("AAPL")
+
+
+def test_cache_not_used_when_stale(monkeypatch):
+    daily_cache._CACHE.clear()
+    daily_cache._CACHE_TS.clear()
+    key = ("AAPL", None, None, None, None)
+    daily_cache._CACHE[key] = _stub_daily_df()
+    daily_cache._CACHE_TS[key] = datetime.now(UTC) - timedelta(days=2)
+
+    monkeypatch.setattr(
+        daily_cache,
+        "_fetch_daily_df",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(DataFetchError("boom")),
+    )
+
+    with pytest.raises(DataFetchError):
+        daily_cache.get_daily_df("AAPL")
+
+
+def test_unexpected_cache_fetch_error_is_not_swallowed(monkeypatch):
+    daily_cache._CACHE.clear()
+    daily_cache._CACHE_TS.clear()
+    daily_cache._CACHE[("AAPL", None, None, None, None)] = _stub_daily_df()
+    daily_cache._CACHE_TS[("AAPL", None, None, None, None)] = datetime.now(UTC)
+
+    monkeypatch.setattr(
+        daily_cache,
+        "_fetch_daily_df",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("bug")),
+    )
+
+    with pytest.raises(AssertionError):
+        daily_cache.get_daily_df("AAPL")

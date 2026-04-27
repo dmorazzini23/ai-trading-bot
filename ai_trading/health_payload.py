@@ -1435,10 +1435,15 @@ def build_service_health_payload(
     )
 
     env_error_text = str(env_error or "").strip()
-    if env_error_text and not payload.get("reason"):
-        payload["reason"] = env_error_text
-
-    if force_ok_for_pytest:
+    if env_error_text:
+        if not payload.get("reason"):
+            payload["reason"] = env_error_text
+        existing_error = str(payload.get("error") or "").strip()
+        errors = [error for error in (existing_error, env_error_text) if error]
+        payload["error"] = "; ".join(dict.fromkeys(errors))
+        payload["ok"] = False
+        payload["status"] = "degraded"
+    elif force_ok_for_pytest:
         payload["ok"] = True
         payload.setdefault("status", payload.get("status") or "healthy")
     return payload
@@ -1549,11 +1554,18 @@ def build_canonical_healthz_payload(
         alpaca_context=alpaca_context,
         enrich_alpaca_from_runtime_env=enrich_alpaca_from_runtime_env,
     )
+    env_error_text = str(env_error or "").strip()
+    if env_error_text:
+        payload["ok"] = False
+        payload["status"] = "degraded"
+        payload["error"] = env_error_text
     error_text = str(error or "").strip()
     if error_text:
         payload["ok"] = False
         payload["status"] = "degraded"
-        payload["error"] = error_text
+        existing_error = str(payload.get("error") or "").strip()
+        errors = [error for error in (existing_error, error_text) if error]
+        payload["error"] = "; ".join(dict.fromkeys(errors))
     if extras:
         payload.update(dict(extras))
     return payload

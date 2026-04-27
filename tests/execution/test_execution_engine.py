@@ -90,6 +90,29 @@ def test_async_fill_triggers_risk_engine(monkeypatch):
     assert pytest.approx(sum(sig.weight for sig in risk.fills), rel=1e-6) == pytest.approx(0.5)
 
 
+def test_sell_gating_uses_symbol_specific_available_quantity(monkeypatch):
+    engine = ExecutionEngine()
+    engine.available_qty = 5
+    engine._position_tracker = {"AAPL": 5.0}
+    submitted: list[str] = []
+
+    def submit_and_track(self, order):
+        submitted.append(order.symbol)
+        self.orders[order.id] = order
+        self.active_orders[order.id] = order
+        return SimpleNamespace(id=order.id)
+
+    monkeypatch.setattr(OrderManager, "submit_order", submit_and_track, raising=False)
+    monkeypatch.setattr(ExecutionEngine, "_simulate_market_execution", lambda self, order: None, raising=False)
+
+    blocked = engine.execute_order("MSFT", OrderSide.SELL, 1)
+    allowed = engine.execute_order("AAPL", OrderSide.SELL, 1)
+
+    assert blocked is None
+    assert isinstance(allowed, ExecutionResult)
+    assert submitted == ["AAPL"]
+
+
 def test_order_add_fill_tracks_partial_then_full():
     order = Order("AAPL", OrderSide.BUY, 5)
 

@@ -11,6 +11,65 @@ from enum import Enum
 from zoneinfo import ZoneInfo
 logger = get_logger(__name__)
 
+def _observed_fixed_holiday(year: int, month: int, day: int) -> date:
+    holiday = date(year, month, day)
+    if holiday.weekday() == 5:
+        return holiday - timedelta(days=1)
+    if holiday.weekday() == 6:
+        return holiday + timedelta(days=1)
+    return holiday
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    current = date(year, month, 1)
+    offset = (weekday - current.weekday()) % 7
+    return current + timedelta(days=offset + 7 * (n - 1))
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    current = date(year, month + 1, 1) - timedelta(days=1)
+    offset = (current.weekday() - weekday) % 7
+    return current - timedelta(days=offset)
+
+def _good_friday(year: int) -> date:
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return date(year, month, day) - timedelta(days=2)
+
+def _us_market_holidays(year: int) -> set[date]:
+    return {
+        _observed_fixed_holiday(year, 1, 1),
+        _nth_weekday(year, 1, 0, 3),
+        _nth_weekday(year, 2, 0, 3),
+        _good_friday(year),
+        _last_weekday(year, 5, 0),
+        _observed_fixed_holiday(year, 6, 19),
+        _observed_fixed_holiday(year, 7, 4),
+        _nth_weekday(year, 9, 0, 1),
+        _nth_weekday(year, 11, 3, 4),
+        _observed_fixed_holiday(year, 12, 25),
+    }
+
+def _us_market_half_days(year: int) -> set[date]:
+    half_days = {_nth_weekday(year, 11, 3, 4) + timedelta(days=1)}
+    christmas_eve = date(year, 12, 24)
+    if christmas_eve.weekday() < 5:
+        half_days.add(christmas_eve)
+    july_third = date(year, 7, 3)
+    if july_third.weekday() < 5:
+        half_days.add(july_third)
+    return half_days
+
 class AssetClass(Enum):
     """Asset class for calendar determination."""
     EQUITY = 'equity'
@@ -78,11 +137,9 @@ class CalendarRegistry:
 
     def _setup_market_holidays(self) -> None:
         """Setup common US market holidays."""
-        holidays_2024 = [date(2024, 1, 1), date(2024, 1, 15), date(2024, 2, 19), date(2024, 3, 29), date(2024, 5, 27), date(2024, 6, 19), date(2024, 7, 4), date(2024, 9, 2), date(2024, 11, 28), date(2024, 12, 25)]
-        holidays_2025 = [date(2025, 1, 1), date(2025, 1, 20), date(2025, 2, 17), date(2025, 4, 18), date(2025, 5, 26), date(2025, 6, 19), date(2025, 7, 4), date(2025, 9, 1), date(2025, 11, 27), date(2025, 12, 25)]
-        self._holidays.update(holidays_2024 + holidays_2025)
-        half_days = [date(2024, 7, 3), date(2024, 11, 29), date(2024, 12, 24), date(2025, 7, 3), date(2025, 11, 28), date(2025, 12, 24)]
-        self._half_days.update(half_days)
+        for year in range(2024, 2031):
+            self._holidays.update(_us_market_holidays(year))
+            self._half_days.update(_us_market_half_days(year))
 
     def register_symbol(self, symbol: str, session: TradingSession) -> None:
         """

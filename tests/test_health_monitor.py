@@ -78,6 +78,66 @@ def test_health_monitor_register_unregister_and_run_all_checks():
     asyncio.run(run_monitor())
 
 
+def test_health_checker_operational_failures_return_critical_results():
+    async def run_checks():
+        results = []
+        for exc in (
+            RuntimeError("runtime down"),
+            OSError("disk unavailable"),
+            ConnectionError("api unavailable"),
+        ):
+
+            def broken_check(exc=exc):
+                raise exc
+
+            checker = hm.HealthChecker(
+                type(exc).__name__,
+                hm.ComponentType.API_SERVICE,
+                broken_check,
+            )
+            results.append(await checker.run_check())
+
+        assert [result.status for result in results] == [
+            hm.HealthStatus.CRITICAL,
+            hm.HealthStatus.CRITICAL,
+            hm.HealthStatus.CRITICAL,
+        ]
+        assert [result.details["error_type"] for result in results] == [
+            "RuntimeError",
+            "OSError",
+            "ConnectionError",
+        ]
+        assert all(result.tags == ["failures:1"] for result in results)
+
+    asyncio.run(run_checks())
+
+
+def test_run_all_checks_keeps_operational_failure_results():
+    async def run_monitor():
+        monitor = hm.HealthMonitor(check_interval=0.01)
+        monitor.checkers.clear()
+
+        def broken_check():
+            raise RuntimeError("dependency offline")
+
+        monitor.register_check(
+            "broken",
+            hm.ComponentType.EXTERNAL_API,
+            broken_check,
+            interval_seconds=0,
+        )
+
+        results = await monitor.run_all_checks()
+
+        assert len(results) == 1
+        assert results[0].component == "broken"
+        assert results[0].status is hm.HealthStatus.CRITICAL
+        assert results[0].details["error_type"] == "RuntimeError"
+        assert monitor.health_history == results
+
+    asyncio.run(run_monitor())
+
+
 def test_monitoring_loop_runs_one_iteration_and_stops(monkeypatch):
     monitor = hm.HealthMonitor(check_interval=0.01)
     calls: list[str] = []

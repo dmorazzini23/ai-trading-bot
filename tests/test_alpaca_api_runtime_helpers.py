@@ -146,14 +146,16 @@ def test_make_client_order_id_uses_minute_bucket_and_uuid_prefix(monkeypatch):
     assert api._make_client_order_id("trade") == "trade-2-abcdef12"
 
 
-def test_get_trading_client_cls_returns_unavailable_sentinel(monkeypatch):
+def test_get_trading_client_cls_fails_when_sdk_unavailable(monkeypatch):
     api = _alpaca_api_module()
-    monkeypatch.setattr(api, "_ensure_trading_client_cls", lambda: None)
 
-    cls = api.get_trading_client_cls()
+    def _missing():
+        raise RuntimeError("alpaca-py==0.42.1 is required")
 
-    with pytest.raises(RuntimeError, match="TradingClient not available"):
-        cls()
+    monkeypatch.setattr(api, "_ensure_trading_client_cls", _missing)
+
+    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
+        api.get_trading_client_cls()
 
 
 def test_get_trading_client_cls_returns_loaded_class(monkeypatch):
@@ -193,48 +195,24 @@ def test_trading_client_adapter_proxies_helpers_and_cancel_by_id():
     assert getattr(adapter, "__ai_trading_adapter__") == "trading_client"
 
 
-def test_trading_client_adapter_uses_cancel_orders_request_variants(monkeypatch):
-    monkeypatch.setattr(alpaca_api, "AI_TRADING_FALLBACK_EXCEPTIONS", (ImportError,))
-    captured: list[Any] = []
-
-    class Client:
-        def cancel_orders(self, request=None):
-            captured.append(request)
-            return {"ok": True, "payload": request.payload}
-
-    result = alpaca_api.TradingClientAdapter(Client()).cancel_order("ord-2")
-
-    assert result == {"ok": True, "payload": {"order_id": "ord-2"}}
-    assert captured[0].payload == {"order_id": "ord-2"}
-
-
-def test_trading_client_adapter_tries_keyword_cancel_order_signatures(monkeypatch):
-    monkeypatch.setattr(alpaca_api, "AI_TRADING_FALLBACK_EXCEPTIONS", (ImportError,))
-    calls: list[tuple[Any | None, Any | None]] = []
-
-    class Client:
-        def cancel_orders(self, request=None, cancel_orders_request=None):
-            calls.append((request, cancel_orders_request))
-            if request is not None:
-                raise TypeError("request keyword unsupported")
-            return {"payload": cancel_orders_request.payload}
-
-    result = alpaca_api.TradingClientAdapter(Client()).cancel_order("ord-3")
-
-    assert result == {"payload": {"order_id": "ord-3"}}
-    assert calls[0][0].payload == {"order_id": "ord-3"}
-    assert calls[1][0].payload == {"order_id": "ord-3"}
-    assert calls[2][1].payload == {"order_id": "ord-3"}
-
-
-def test_trading_client_adapter_reports_unadaptable_cancel_orders(monkeypatch):
+def test_trading_client_adapter_rejects_cancel_orders_all_as_single_order_cancel(monkeypatch):
     monkeypatch.setattr(alpaca_api, "AI_TRADING_FALLBACK_EXCEPTIONS", (ImportError,))
 
     class Client:
-        def cancel_orders(self, *_args, **_kwargs):
-            raise TypeError("unsupported")
+        def cancel_orders(self):
+            return {"ok": True}
 
-    with pytest.raises(RuntimeError, match="could not adapt"):
+    with pytest.raises(AttributeError, match="cancel_order_by_id"):
+        alpaca_api.TradingClientAdapter(Client()).cancel_order("ord-2")
+
+
+def test_trading_client_adapter_without_cancel_methods_requires_cancel_support(monkeypatch):
+    monkeypatch.setattr(alpaca_api, "AI_TRADING_FALLBACK_EXCEPTIONS", (ImportError,))
+
+    class Client:
+        pass
+
+    with pytest.raises(AttributeError, match="cancel_order not supported"):
         alpaca_api.TradingClientAdapter(Client()).cancel_order("ord-4")
 
 
@@ -257,10 +235,8 @@ def test_lazy_client_fallback_classes_raise_clear_errors(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    DataClient = alpaca_api.get_data_client_cls()
-    data_client = DataClient()
-    with pytest.raises(RuntimeError, match="StockHistoricalDataClient not available"):
-        data_client.get_stock_bars()
+    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
+        alpaca_api.get_data_client_cls()
 
-    APIError = alpaca_api.get_api_error_cls()
-    assert issubclass(APIError, Exception)
+    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
+        alpaca_api.get_api_error_cls()

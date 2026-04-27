@@ -158,6 +158,16 @@ def test_load_model_from_internal_dir(tmp_path, monkeypatch):
     assert hasattr(loaded, "predict")
 
 
+def test_train_and_save_model_synthetic_fallback_handles_missing_daily_data(tmp_path, monkeypatch):
+    monkeypatch.setattr("ai_trading.data.fetch.get_daily_df", lambda *_args, **_kwargs: None)
+
+    model = model_loader.train_and_save_model("SYN", tmp_path)
+
+    assert hasattr(model, "predict")
+    assert (tmp_path / "SYN.pkl").exists()
+    assert set(model.predict(np.zeros((4, 9))).tolist()) <= {0, 1}
+
+
 def test_live_model_loader_requires_verified_artifact(tmp_path, monkeypatch):
     monkeypatch.setenv("AI_TRADING_MODELS_DIR", str(tmp_path))
     monkeypatch.setenv("EXECUTION_MODE", "live")

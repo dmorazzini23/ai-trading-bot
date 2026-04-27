@@ -32659,7 +32659,7 @@ def pyramid_add_position(
         ctx,
         symbol,
         add_qty,
-        "buy" if side == "long" else "sell",
+        "buy" if side == "long" else "sell_short",
         price=px,
     )
     logger.info("PYRAMID_ADD", extra={"symbol": symbol, "qty": add_qty, "side": side})

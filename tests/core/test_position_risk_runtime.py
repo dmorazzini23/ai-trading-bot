@@ -75,6 +75,30 @@ def test_manage_position_risk_sanitizes_invalid_atr_and_vwap(monkeypatch):
     assert "pyramid" not in calls
 
 
+def test_pyramid_add_position_short_submits_sell_short(monkeypatch):
+    orders: list[tuple[str, int, str, float | None]] = []
+    ctx = SimpleNamespace(
+        position_map={"AAPL": SimpleNamespace(symbol="AAPL", qty="-10")},
+    )
+
+    monkeypatch.setattr(
+        bot_engine,
+        "fetch_minute_df_safe",
+        lambda _symbol: pd.DataFrame({"close": [101.0]}),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "submit_order",
+        lambda _ctx, symbol, qty, side, **kwargs: orders.append(
+            (symbol, qty, side, kwargs.get("price"))
+        ),
+    )
+
+    bot_engine.pyramid_add_position(ctx, "AAPL", 0.5, "short")
+
+    assert orders == [("AAPL", 5, "sell_short", 101.0)]
+
+
 def test_manage_position_risk_tolerates_missing_optional_utils_helpers(monkeypatch):
     calls: dict[str, object] = {}
 

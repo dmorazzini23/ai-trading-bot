@@ -270,11 +270,17 @@ def test_execute_order_sell_existing_long_uses_sell_capacity_side(engine_factory
 
 
 def test_submit_limit_order_returns_broker_payload(engine_factory, monkeypatch):
-    submissions: list[dict[str, object]] = []
+    submissions: list[object] = []
 
-    def _fake_submit(order_payload):
-        submissions.append(order_payload)
-        return {"id": "broker-ack", "status": "accepted", **order_payload}
+    def _fake_submit(*, order_data):
+        submissions.append(order_data)
+        return {
+            "id": "broker-ack",
+            "status": "accepted",
+            "symbol": getattr(order_data, "symbol", None),
+            "qty": getattr(order_data, "qty", None),
+            "side": getattr(order_data, "side", None),
+        }
 
     fake_client = SimpleNamespace(submit_order=_fake_submit)
     monkeypatch.setenv("PYTEST_RUNNING", "1")
@@ -287,7 +293,7 @@ def test_submit_limit_order_returns_broker_payload(engine_factory, monkeypatch):
     assert result["status"] == "accepted"
     assert engine.stats["successful_orders"] == 1
     assert engine.stats["failed_orders"] == 0
-    assert submissions and submissions[0]["symbol"] == "AAPL"
+    assert submissions and getattr(submissions[0], "symbol") == "AAPL"
 
 
 def test_submit_limit_order_nonretryable_logs_detail(engine_factory, caplog):
@@ -453,18 +459,16 @@ def test_execute_order_fallback_reject_market_retry_when_enabled(engine_factory,
     assert any(record.msg == "ORDER_DOWNGRADED_TO_MARKET" for record in caplog.records)
 
 
-def test_bracket_fallback_reuses_normalized_payload(engine_factory, monkeypatch):
+def test_bracket_submit_uses_order_request_with_protective_legs(engine_factory, monkeypatch):
     class _BracketClient:
         def __init__(self) -> None:
-            self.calls: list[dict[str, Any]] = []
+            self.calls: list[Any] = []
 
-        def submit_order(self, **kwargs):
-            self.calls.append(dict(kwargs))
-            if len(self.calls) == 1:
-                raise TypeError("nested bracket unsupported")
-            return {"id": "ok", "status": "accepted", **kwargs}
+        def submit_order(self, *, order_data):
+            self.calls.append(order_data)
+            return {"id": "ok", "status": "accepted"}
 
-    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.setattr(lt, "_runtime_env", lambda *_a, **_k: "")
     client = _BracketClient()
     engine = engine_factory(None, use_real_submit=True, trading_client=client)
 
@@ -479,11 +483,16 @@ def test_bracket_fallback_reuses_normalized_payload(engine_factory, monkeypatch)
     )
 
     assert result is not None
-    assert len(client.calls) == 2
-    assert "qty" in client.calls[-1]
-    assert client.calls[-1]["qty"] == 5
-    assert "quantity" not in client.calls[-1]
-    assert "order_class" not in client.calls[-1]
+    assert len(client.calls) == 1
+    request = client.calls[-1]
+    assert getattr(request, "qty") == 5
+    assert getattr(request, "order_class") == "bracket"
+    take_profit = getattr(request, "take_profit")
+    stop_loss = getattr(request, "stop_loss")
+    tp_limit = take_profit["limit_price"] if isinstance(take_profit, dict) else getattr(take_profit, "limit_price")
+    sl_stop = stop_loss["stop_price"] if isinstance(stop_loss, dict) else getattr(stop_loss, "stop_price")
+    assert tp_limit == 130.0
+    assert sl_stop == 120.0
 
 
 def test_ttl_replacement_price_uses_tick_quantization(engine_factory, monkeypatch):

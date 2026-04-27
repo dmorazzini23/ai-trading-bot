@@ -127,3 +127,29 @@ def test_backtester_default_json_artifact_is_written(tmp_path: Path) -> None:
     payload = json.loads(summary_json.read_text(encoding="utf-8"))
     assert payload["config"]["symbols_loaded"] == ["MSFT"]
     assert (tmp_path / "runs" / "backtest_run_manifest.json").exists()
+
+
+def test_backtest_engine_empty_input_returns_empty_result() -> None:
+    engine = backtester.BacktestEngine(
+        {"AAPL": pd.DataFrame(columns=["open", "high", "low", "close", "volume"])},
+        backtester.DefaultExecutionModel(),
+    )
+
+    result = engine.run(["AAPL"])
+
+    assert result.trades.empty
+    assert result.equity_curve.empty
+    assert result.net_pnl == 0.0
+
+
+def test_backtest_signal_uses_prior_bars_for_order_decision() -> None:
+    engine = backtester.BacktestEngine(
+        {"AAPL": pd.DataFrame()},
+        backtester.DefaultExecutionModel(),
+        initial_cash=1_000.0,
+    )
+
+    for close in [10.0, 10.0, 10.0, 10.0, 10.0]:
+        assert engine._generate_orders_for_bar("AAPL", close) == []
+    assert engine._generate_orders_for_bar("AAPL", 20.0) == []
+    assert engine._generate_orders_for_bar("AAPL", 20.0) != []

@@ -76,3 +76,11 @@ def test_build_subprocess_env_respects_keep_env_opt_out(tmp_path, monkeypatch):
 
     assert child_env.get("ALPACA_API_KEY") == "exported"
     assert child_env["PYTEST_RUNNING"] == "1"
+
+
+def test_main_propagates_pytest_infrastructure_failures(monkeypatch):
+    monkeypatch.setattr(run_pytest, "_ensure_repo_on_path", lambda: None)
+    monkeypatch.setattr(run_pytest.subprocess, "call", lambda *_args, **_kwargs: 5)
+    monkeypatch.setenv("NO_XDIST", "1")
+
+    assert run_pytest.main(["--files", "tests/does_not_exist.py"]) == 5

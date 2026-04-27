@@ -9,5 +9,5 @@ def test_initialize_missing_sdk(monkeypatch):
         raise ModuleNotFoundError("missing")
 
     monkeypatch.setattr(importlib, "import_module", fail)
-    with pytest.raises(RuntimeError, match="alpaca-py SDK is required"):
+    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
         alpaca_api.initialize()

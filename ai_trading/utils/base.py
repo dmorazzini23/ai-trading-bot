@@ -29,35 +29,10 @@ from ai_trading.utils.env import get_alpaca_data_v2_base
 from .locks import portfolio_lock
 from .safe_subprocess import SUBPROCESS_TIMEOUT_DEFAULT, safe_subprocess_run
 
-try:  # pragma: no cover - import guard mirrors runtime behaviour
-    from ai_trading.alpaca_api import (  # type: ignore
-        alpaca_get as _alpaca_get,
-        AlpacaOrderHTTPError,
-    )
-except ImportError:  # pragma: no cover - fallback when Alpaca API unavailable
-
-    class AlpacaOrderHTTPError(Exception):  # type: ignore[no-redef]
-        """Fallback Alpaca HTTP error when alpaca-py is unavailable."""
-
-        def __init__(
-            self,
-            status_code: int | None = None,
-            message: str = "",
-            *,
-            payload: dict[str, Any] | None = None,
-        ) -> None:
-            super().__init__(message or "Alpaca request failed")
-            self.status_code = status_code
-            self.payload = payload or {}
-
-    def _alpaca_get(
-        path: str,
-        *,
-        params: dict[str, Any] | None = None,
-        timeout: float | int | tuple[float | int, float | int] | None = None,
-    ) -> dict[str, Any]:  # type: ignore[no-redef]
-        _ = (path, params, timeout)
-        raise ImportError("alpaca API unavailable")
+from ai_trading.alpaca_api import (  # type: ignore
+    alpaca_get as _alpaca_get,
+    AlpacaOrderHTTPError,
+)
 
 alpaca_get = _alpaca_get
 

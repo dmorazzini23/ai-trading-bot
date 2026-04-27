@@ -99,7 +99,8 @@ def test_import_and_env_fallback_branches(monkeypatch: pytest.MonkeyPatch) -> No
     assert api._default_execution_feed() == "iex"
     assert api._lazy_http_session() is None
     assert api._managed_env("ALPACA_API_KEY", "fallback") == "fallback"
-    assert api._ensure_trading_client_cls() is None
+    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
+        api._ensure_trading_client_cls()
     assert api.TradingClient is None
     assert api.ALPACA_AVAILABLE is False
 
@@ -126,24 +127,12 @@ def test_initialize_uses_data_module_fallback(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_cancel_order_request_constructor_variants(monkeypatch: pytest.MonkeyPatch) -> None:
-    requests_mod = types.ModuleType("alpaca.trading.requests")
-
-    class CancelOrdersRequest:
-        def __init__(self, **kwargs: Any) -> None:
-            if "order_id" in kwargs:
-                raise TypeError("order_id unsupported")
-            self.payload = kwargs
-
-    requests_mod.CancelOrdersRequest = CancelOrdersRequest
-    monkeypatch.setitem(sys.modules, "alpaca.trading.requests", requests_mod)
-
     class Client:
-        def cancel_orders(self, request: Any) -> dict[str, Any]:
-            return {"payload": request.payload}
+        def cancel_orders(self) -> dict[str, Any]:
+            return {"cancelled": "all"}
 
-    assert api.TradingClientAdapter(Client()).cancel_order("ord-7") == {
-        "payload": {"order_ids": ["ord-7"]},
-    }
+    with pytest.raises(AttributeError, match="cancel_order_by_id"):
+        api.TradingClientAdapter(Client()).cancel_order("ord-7")
 
 
 def test_data_class_and_timeframe_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -158,13 +147,12 @@ def test_data_class_and_timeframe_helpers(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(api, "TimeFrame", object, raising=False)
     monkeypatch.setattr(api, "TimeFrameUnit", object, raising=False)
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    stock_req, tf_cls, unit_cls = api._data_classes()
-    assert stock_req is api.StockBarsRequest
-    assert tf_cls is api.TimeFrame
-    assert unit_cls is api.TimeFrameUnit
+    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
+        api._data_classes()
 
     monkeypatch.setattr(api, "ALPACA_AVAILABLE", False)
-    assert api.get_stock_bars_request_cls() is api.StockBarsRequest
+    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
+        api.get_stock_bars_request_cls()
     assert api.get_timeframe_unit_cls().__name__ == "TimeFrameUnit"
 
     naive = dt.datetime(2024, 1, 2, 3, 4, 5, 999)

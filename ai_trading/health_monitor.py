@@ -150,7 +150,7 @@ class HealthChecker:
             message = f"Health check timed out after {self.timeout_seconds}s"
             details = {"timeout": True}
             self.consecutive_failures += 1
-        except (ValueError, TypeError) as e:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as e:
             response_time = (time.time() - start_time) * 1000
             status = HealthStatus.CRITICAL
             message = f"Health check failed: {str(e)}"

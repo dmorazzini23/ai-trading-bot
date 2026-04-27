@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import builtins
 import sys
 import types
 from typing import Any, cast
+import pytest
 
 
 def _clear_module(monkeypatch, prefix: str) -> None:
@@ -13,8 +15,8 @@ def _clear_module(monkeypatch, prefix: str) -> None:
         monkeypatch.delitem(sys.modules, name, raising=False)
 
 
-def test_stock_bars_request_accepts_mutable_timeframe(monkeypatch, request):
-    """Ensure fallback ``StockBarsRequest`` works with mutable timeframe."""
+def test_missing_sdk_does_not_install_timeframe_fallbacks(monkeypatch, request):
+    """Missing alpaca-py must not install fallback request/timeframe classes."""
 
     original_alpaca = sys.modules.pop("ai_trading.alpaca_api", None)
     if original_alpaca is not None:
@@ -23,6 +25,15 @@ def test_stock_bars_request_accepts_mutable_timeframe(monkeypatch, request):
         request.addfinalizer(lambda: sys.modules.pop("ai_trading.alpaca_api", None))
 
     _clear_module(monkeypatch, "alpaca")
+    monkeypatch.delitem(sys.modules, "ai_trading.timeframe", raising=False)
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name.startswith("alpaca"):
+            raise ModuleNotFoundError(name)
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
 
     stub_utils_http = cast(Any, types.ModuleType("ai_trading.utils.http"))
     stub_utils_http.clamp_request_timeout = lambda timeout: timeout
@@ -88,16 +99,12 @@ def test_stock_bars_request_accepts_mutable_timeframe(monkeypatch, request):
     alpaca_api = importlib.import_module("ai_trading.alpaca_api")
 
     assert not alpaca_api.ALPACA_AVAILABLE
+    assert alpaca_api.TimeFrame is None
+    assert alpaca_api.TimeFrameUnit is None
+    assert alpaca_api.StockBarsRequest is None
 
-    timeframe = alpaca_api.TimeFrame()
-    request = alpaca_api.StockBarsRequest(
-        symbol_or_symbols="SPY",
-        timeframe=timeframe,
-    )
+    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
+        alpaca_api.get_stock_bars_request_cls()
 
-    # Mutating the timeframe should not raise FrozenInstanceError/AttributeError
-    request.timeframe.amount = 5
-    request.timeframe.unit = alpaca_api.TimeFrameUnit.Minute
-
-    assert request.timeframe.amount == 5
-    assert request.timeframe.unit == alpaca_api.TimeFrameUnit.Minute
+    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
+        alpaca_api.get_timeframe_cls()

@@ -264,71 +264,10 @@ def _validate_trading_api(api: Any) -> bool:
                     key="alpaca_cancel_order_patch_failed",
                 )
         elif callable(cancel_orders):
-            CancelOrdersRequest = None
-            try:
-                requests_mod = __import__(
-                    "alpaca.trading.requests", fromlist=["CancelOrdersRequest"]
-                )
-                CancelOrdersRequest = getattr(requests_mod, "CancelOrdersRequest", None)
-            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive fallback
-                log_once.error(
-                    "ALPACA_CANCEL_ORDERS_REQUEST_IMPORT_FAILED",
-                    key="alpaca_cancel_orders_request_import_failed",
-                    extra={"error": str(exc)},
-                )
-
-            if CancelOrdersRequest is None:
-                class _FallbackCancelOrdersRequest:
-                    def __init__(self, **kwargs):
-                        if not kwargs:
-                            raise TypeError("payload required")
-                        self.payload = kwargs
-
-                CancelOrdersRequest = _FallbackCancelOrdersRequest
-
-            def _cancel_order_via_batch(order_id: Any):
-
-                last_error: Exception | None = None
-                init_variants = (
-                    {"order_id": order_id},
-                    {"order_ids": [order_id]},
-                    {"client_order_id": order_id},
-                )
-
-                for init_kwargs in init_variants:
-                    try:
-                        request_obj = CancelOrdersRequest(**init_kwargs)
-                    except TypeError as exc:
-                        last_error = exc
-                        continue
-
-                    for caller in (
-                        lambda ro=request_obj: cancel_orders(ro),
-                        lambda ro=request_obj: cancel_orders(request=ro),
-                        lambda ro=request_obj: cancel_orders(
-                            cancel_orders_request=ro
-                        ),
-                    ):
-                        try:
-                            return caller()
-                        except TypeError as exc:
-                            last_error = exc
-                            continue
-
-                raise RuntimeError(
-                    "Alpaca client cancel_orders adapter could not adapt provided API"
-                ) from last_error
-
-            if _try_setattr(api, "cancel_order", _cancel_order_via_batch):
-                log_once.info(
-                    "API_CANCEL_ORDERS_MAPPED", key="alpaca_cancel_orders_mapped"
-                )
-                adapted_api = True
-            else:  # pragma: no cover - defensive fallback
-                log_once.error(
-                    "ALPACA_CANCEL_ORDER_PATCH_FAILED",
-                    key="alpaca_cancel_order_patch_failed",
-                )
+            log_once.warning(
+                "ALPACA_CANCEL_ORDER_BY_ID_UNAVAILABLE",
+                key="alpaca_cancel_order_by_id_unavailable",
+            )
         else:
             log_once.error(
                 "ALPACA_CANCEL_ORDER_MISSING", key="alpaca_cancel_order_missing"

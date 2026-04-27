@@ -118,6 +118,36 @@ def test_register_fill_partial_updates_exposure():
     assert pytest.approx(eng.exposure[base.asset_class], rel=1e-6) == pytest.approx(base.weight)
 
 
+def test_register_fill_sell_short_tracks_gross_exposure_without_headroom_gain():
+    eng = RiskEngine()
+    short = TradeSignal(
+        symbol="AAPL",
+        side="sell_short",
+        confidence=1.0,
+        strategy="s",
+        weight=0.25,
+        asset_class="equity",
+    )
+
+    eng.register_fill(short)
+
+    assert eng.exposure["equity"] == pytest.approx(0.25)
+    assert eng.strategy_exposure["s"] == pytest.approx(0.25)
+
+    closing_sell = TradeSignal(
+        symbol="AAPL",
+        side="sell",
+        confidence=1.0,
+        strategy="s",
+        weight=0.50,
+        asset_class="equity",
+    )
+    eng.register_fill(closing_sell)
+
+    assert eng.exposure["equity"] == 0.0
+    assert eng.strategy_exposure["s"] == 0.0
+
+
 def test_position_size_zero_raw_qty_defaults_to_min(caplog):
     eng = RiskEngine()
     sig = make_signal()

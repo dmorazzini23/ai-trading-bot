@@ -13,6 +13,7 @@ from ai_trading.config.management import get_env
 from datetime import UTC
 from pathlib import Path
 from dataclasses import asdict
+from typing import Any
 import json
 
 import joblib
@@ -46,6 +47,7 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import make_pipeline
     from sklearn.metrics import accuracy_score
+    from sklearn.dummy import DummyClassifier
 
     from ai_trading.data.fetch import get_daily_df
 
@@ -57,8 +59,10 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
         logger.warning("Data fetch failed for %s: %s", symbol, exc)
         df = None
     if df is None or df.empty or "close" not in df:
-        # Fallback synthetic monotonic series
-        df = pd.DataFrame({"close": np.linspace(1.0, 2.0, 240), "volume": np.linspace(1e5, 2e5, 240)})
+        # Fallback synthetic series with both up and down labels.
+        steps = np.arange(240, dtype=float)
+        close = 100.0 + 0.02 * steps + np.sin(steps / 3.0)
+        df = pd.DataFrame({"close": close, "volume": np.linspace(1e5, 2e5, 240)})
 
     df = df.copy()
     # Basic features
@@ -91,11 +95,21 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
     # Label: next-period up/down
     df["y"] = (df["close"].shift(-1) > df["close"]).astype(int)
     df = df.dropna()
+
+    def _classifier_for(target: np.ndarray) -> Any:
+        if len(np.unique(target)) < 2:
+            return DummyClassifier(strategy="most_frequent")
+        return LogisticRegression(max_iter=500)
+
     if len(df) < 60:
         # Not enough data; fit a trivial prior model
-        X = np.arange(len(df)).reshape(-1, 1)
-        y = df["y"].values
-        model = LogisticRegression(max_iter=200)
+        if df.empty:
+            X = np.array([[0.0], [1.0]])
+            y = np.array([0, 1])
+        else:
+            X = np.arange(len(df)).reshape(-1, 1)
+            y = df["y"].astype(int).values
+        model = _classifier_for(y)
         model.fit(X, y)
         try:
             models_dir.mkdir(parents=True, exist_ok=True)
@@ -114,7 +128,7 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
     for train_idx, test_idx in tscv.split(X):
         if len(test_idx) == 0 or len(train_idx) < 20:
             continue
-        pipe = make_pipeline(StandardScaler(with_mean=True), LogisticRegression(max_iter=500))
+        pipe = make_pipeline(StandardScaler(with_mean=True), _classifier_for(y[train_idx]))
         pipe.fit(X[train_idx], y[train_idx])
         yhat = pipe.predict(X[test_idx])
         try:
@@ -124,7 +138,9 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
 
     # Final fit on all but last 5 samples to reduce leakage
     cutoff = max(0, len(X) - 5)
-    final_pipe = make_pipeline(StandardScaler(with_mean=True), LogisticRegression(max_iter=500))
+    if cutoff <= 0:
+        cutoff = len(X)
+    final_pipe = make_pipeline(StandardScaler(with_mean=True), _classifier_for(y[:cutoff]))
     final_pipe.fit(X[:cutoff], y[:cutoff])
 
     # Persist model and metadata

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import copy
 from datetime import UTC, datetime
 from typing import Any, TYPE_CHECKING
 from pathlib import Path
@@ -74,6 +75,8 @@ class MLTrainer:
         self.best_params: dict[str, Any] = {}
         self.cv_results: dict[str, Any] = {}
         self.feature_importance: dict[str, Any] = {}
+        self.feature_pipeline: Any | None = None
+        self._feature_count: int = 0
         self._validate_dependencies()
 
     def _validate_dependencies(self) -> None:
@@ -123,30 +126,38 @@ class MLTrainer:
             Training results dictionary
         """
         try:
-            import pandas as pd
-
             logger.info(f"Starting {self.model_type} training with {len(X)} samples")
-            if feature_pipeline is not None:
-                X_processed = feature_pipeline.fit_transform(X, y)
-            else:
-                X_processed = X.copy()
             cv_splitter = PurgedGroupTimeSeriesSplit(
                 n_splits=self.cv_splits, embargo_pct=self.embargo_pct, purge_pct=self.purge_pct
             )
             if optimize_hyperparams and optuna_available:
-                self.best_params = self._optimize_hyperparams(X_processed, y, cv_splitter, optimization_trials, t1)
+                self.best_params = self._optimize_hyperparams(
+                    X,
+                    y,
+                    cv_splitter,
+                    optimization_trials,
+                    t1,
+                    feature_pipeline=feature_pipeline,
+                )
             else:
                 self.best_params = self._get_default_params()
             self.model = self._create_model(self.best_params)
-            self.cv_results = self._evaluate_cv(X_processed, y, cv_splitter, self.best_params, t1)
-            self._fit_final_model(X_processed, y)
+            self.cv_results = self._evaluate_cv(
+                X,
+                y,
+                cv_splitter,
+                self.best_params,
+                t1,
+                feature_pipeline=feature_pipeline,
+            )
+            self._fit_final_model(X, y, feature_pipeline=feature_pipeline)
             results = {
                 "model_type": self.model_type,
                 "best_params": self.best_params,
                 "cv_metrics": self.cv_results,
                 "feature_importance": self.feature_importance,
                 "train_samples": len(X),
-                "feature_count": X_processed.shape[1],
+                "feature_count": self._feature_count or X.shape[1],
                 "training_time": datetime.now(UTC).isoformat(),
             }
             logger.info(f"Training completed. CV score: {self.cv_results.get('mean_score', 'N/A')}")
@@ -162,11 +173,10 @@ class MLTrainer:
         cv_splitter: PurgedGroupTimeSeriesSplit,
         n_trials: int,
         t1: "pd.Series" | None = None,
+        feature_pipeline: Any | None = None,
     ) -> dict[str, Any]:
         """Optimize hyperparameters using Optuna."""
         try:
-
-            import pandas as pd
 
             def objective(trial):
                 params = self._suggest_params(trial)
@@ -174,6 +184,12 @@ class MLTrainer:
                 for train_idx, test_idx in cv_splitter.split(X, y, t1=t1):
                     X_train, X_test = (X.iloc[train_idx], X.iloc[test_idx])
                     y_train, y_test = (y.iloc[train_idx], y.iloc[test_idx])
+                    X_train, X_test = self._fit_transform_fold(
+                        X_train,
+                        y_train,
+                        X_test,
+                        feature_pipeline,
+                    )
                     model = self._create_model(params)
                     model.fit(X_train, y_train)
                     predictions = model.predict(X_test)
@@ -286,6 +302,61 @@ class MLTrainer:
         else:
             raise ValueError(f"Unknown model type: {self.model_type}")
 
+    def _clone_feature_pipeline(self, feature_pipeline: Any) -> Any:
+        """Clone a feature transformer for an isolated fold."""
+        try:
+            from sklearn.base import clone
+
+            return clone(feature_pipeline)
+        except (AttributeError, TypeError, ValueError):
+            return copy.deepcopy(feature_pipeline)
+
+    @staticmethod
+    def _feature_names_from_transformer(transformer: Any, count: int) -> list[str]:
+        get_names = getattr(transformer, "get_feature_names_out", None)
+        if callable(get_names):
+            try:
+                return [str(name) for name in get_names()]
+            except (TypeError, ValueError):
+                pass
+        return [f"feature_{i}" for i in range(count)]
+
+    def _as_feature_frame(self, values: Any, *, index: Any, transformer: Any | None = None) -> Any:
+        """Return transformed values as a DataFrame when possible."""
+        import pandas as pd
+
+        if isinstance(values, pd.DataFrame):
+            return values
+        if isinstance(values, pd.Series):
+            return values.to_frame()
+        columns = self._feature_names_from_transformer(transformer, values.shape[1])
+        return pd.DataFrame(values, index=index, columns=columns)
+
+    def _fit_transform_fold(
+        self,
+        X_train: "pd.DataFrame",
+        y_train: "pd.Series",
+        X_test: "pd.DataFrame",
+        feature_pipeline: Any | None,
+    ) -> tuple[Any, Any]:
+        """Fit a feature transformer on one training fold and transform train/test."""
+        if feature_pipeline is None:
+            return X_train, X_test
+        transformer = self._clone_feature_pipeline(feature_pipeline)
+        if hasattr(transformer, "fit_transform"):
+            X_train_processed = transformer.fit_transform(X_train, y_train)
+        else:
+            transformer.fit(X_train, y_train)
+            X_train_processed = transformer.transform(X_train)
+        transform = getattr(transformer, "transform", None)
+        if not callable(transform):
+            raise ValueError("feature_pipeline must implement transform for leakage-safe CV")
+        X_test_processed = transform(X_test)
+        return (
+            self._as_feature_frame(X_train_processed, index=X_train.index, transformer=transformer),
+            self._as_feature_frame(X_test_processed, index=X_test.index, transformer=transformer),
+        )
+
     def _calculate_score(self, y_true: "pd.Series", y_pred: np.ndarray) -> float:
         """
         Calculate model score (Sharpe-like metric for trading).
@@ -316,10 +387,10 @@ class MLTrainer:
         cv_splitter: PurgedGroupTimeSeriesSplit,
         params: dict[str, Any],
         t1: "pd.Series" | None = None,
+        feature_pipeline: Any | None = None,
     ) -> dict[str, Any]:
         """Evaluate model using cross-validation."""
         try:
-            import pandas as pd
             from sklearn.metrics import mean_squared_error
 
             scores = []
@@ -327,6 +398,12 @@ class MLTrainer:
             for fold, (train_idx, test_idx) in enumerate(cv_splitter.split(X, y, t1=t1)):
                 X_train, X_test = (X.iloc[train_idx], X.iloc[test_idx])
                 y_train, y_test = (y.iloc[train_idx], y.iloc[test_idx])
+                X_train, X_test = self._fit_transform_fold(
+                    X_train,
+                    y_train,
+                    X_test,
+                    feature_pipeline,
+                )
                 model = self._create_model(params)
                 model.fit(X_train, y_train)
                 predictions = model.predict(X_test)
@@ -356,16 +433,63 @@ class MLTrainer:
             logger.error(f"Error in CV evaluation: {e}")
             return {"mean_score": 0.0, "std_score": 0.0, "fold_scores": []}
 
-    def _fit_final_model(self, X: "pd.DataFrame", y: "pd.Series") -> None:
+    def _fit_final_model(
+        self,
+        X: "pd.DataFrame",
+        y: "pd.Series",
+        feature_pipeline: Any | None = None,
+    ) -> None:
         """Fit final model on full dataset."""
         try:
             if self.model is None:
                 raise RuntimeError("Model must be initialized before fitting")
-            self.model.fit(X, y)
-            if hasattr(self.model, "feature_importances_"):
-                self.feature_importance = dict(zip(X.columns, self.model.feature_importances_, strict=False))
-            elif hasattr(self.model, "coef_"):
-                self.feature_importance = dict(zip(X.columns, np.abs(self.model.coef_), strict=False))
+            feature_names = list(X.columns)
+            fitted_model = self.model
+            if feature_pipeline is not None:
+                transformer = feature_pipeline
+                self.feature_pipeline = transformer
+                transform = getattr(transformer, "transform", None)
+                if callable(transform):
+                    from sklearn.pipeline import Pipeline
+
+                    pipeline_model = self._create_model(self.best_params)
+                    fitted_pipeline = Pipeline(
+                        [
+                            ("features", transformer),
+                            ("model", pipeline_model),
+                        ]
+                    )
+                    fitted_pipeline.fit(X, y)
+                    self.model = fitted_pipeline
+                    X_processed = self._as_feature_frame(
+                        fitted_pipeline.named_steps["features"].transform(X),
+                        index=X.index,
+                        transformer=fitted_pipeline.named_steps["features"],
+                    )
+                    feature_names = list(X_processed.columns)
+                    fitted_model = fitted_pipeline.named_steps["model"]
+                else:
+                    if hasattr(transformer, "fit_transform"):
+                        X_processed = transformer.fit_transform(X, y)
+                    else:
+                        transformer.fit(X, y)
+                        X_processed = transformer.transform(X)
+                    X_processed = self._as_feature_frame(
+                        X_processed,
+                        index=X.index,
+                        transformer=transformer,
+                    )
+                    feature_names = list(X_processed.columns)
+                    self.model.fit(X_processed, y)
+                    fitted_model = self.model
+                self._feature_count = int(X_processed.shape[1])
+            else:
+                self.model.fit(X, y)
+                self._feature_count = int(X.shape[1])
+            if hasattr(fitted_model, "feature_importances_"):
+                self.feature_importance = dict(zip(feature_names, fitted_model.feature_importances_, strict=False))
+            elif hasattr(fitted_model, "coef_"):
+                self.feature_importance = dict(zip(feature_names, np.abs(fitted_model.coef_), strict=False))
             logger.debug("Final model fitted successfully")
         except (ValueError, TypeError) as e:
             logger.error(f"Error fitting final model: {e}")

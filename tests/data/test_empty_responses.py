@@ -1,5 +1,6 @@
 import pandas as pd
 from datetime import datetime, timedelta, UTC
+from types import SimpleNamespace
 from typing import Any
 
 import ai_trading.data.fetch as fetch
@@ -74,3 +75,24 @@ def test_alpaca_empty_responses_trigger_backup(monkeypatch):
     assert calls["count"] == 2
     assert calls["feeds"] == ["iex", "sip"]
     assert not df.empty
+
+
+def test_sip_empty_get_bars_returns_canonical_empty_frame(monkeypatch):
+    monkeypatch.setattr(
+        fetch,
+        "_current_settings",
+        lambda: SimpleNamespace(alpaca_adjustment="raw", backup_data_provider="yahoo"),
+    )
+    monkeypatch.setattr(fetch, "provider_priority", lambda *_args, **_kwargs: ["alpaca_sip"])
+    monkeypatch.setattr(fetch, "_has_alpaca_keys", lambda: True)
+    monkeypatch.setattr(fetch, "_fetch_bars", lambda *_args, **_kwargs: pd.DataFrame())
+    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
+    monkeypatch.setattr(fetch, "_is_sip_unauthorized", lambda: False)
+
+    start = datetime(2026, 1, 2, 15, 30, tzinfo=UTC)
+    end = start + timedelta(minutes=1)
+    df = fetch.get_bars("AAPL", "1Min", start, end, feed="sip")
+
+    assert df.empty
+    assert list(df.columns) == ["timestamp", "open", "high", "low", "close", "volume"]

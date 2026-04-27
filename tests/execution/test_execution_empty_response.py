@@ -11,7 +11,7 @@ class _DummyTradingClient:
         self._response = response
         self.submitted: list[object] = []
 
-    def submit_order(self, order_data):
+    def submit_order(self, *, order_data):
         self.submitted.append(order_data)
         return self._response
 
@@ -23,7 +23,7 @@ class _LookupTradingClient(_DummyTradingClient):
         self.duplicate_error = duplicate_error
         self.last_client_order_id = None
 
-    def submit_order(self, order_data):
+    def submit_order(self, *, order_data):
         self.submitted.append(order_data)
         self.last_client_order_id = getattr(order_data, "client_order_id", None)
         if self.duplicate_error is not None:

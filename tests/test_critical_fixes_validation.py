@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any, cast
 
 from tests.mocks.app_mocks import MockConfig
@@ -188,15 +189,37 @@ class TestCriticalFixes(unittest.TestCase):
             "Service should provision after-hours report directory",
         )
         self.assertIn(
-            "chown -R aiuser:aiuser /var/lib/ai-trading-bot/runtime/research_reports",
-            content,
-            "Service should normalize after-hours report ownership at startup",
-        )
-        self.assertIn(
             "NoNewPrivileges=true", content, "Should have security restrictions"
         )
         self.assertIn("ProtectSystem=strict", content, "Should protect system")
+        self.assertIn("StateDirectory=ai-trading-bot", content)
+        self.assertIn("CacheDirectory=ai-trading-bot", content)
+        self.assertIn("LogsDirectory=ai-trading-bot", content)
+        self.assertIn("ReadWritePaths=", content)
+        self.assertIn("/var/lib/ai-trading-bot", content)
+        self.assertIn("/var/cache/ai-trading-bot", content)
+        self.assertIn("/var/log/ai-trading-bot", content)
         self.assertIn("Restart=always", content, "Should restart on failure")
+
+    def test_systemd_environment_precedence(self):
+        """Packaged units should keep managed runtime settings authoritative."""
+        systemd_dir = Path(os.getcwd()) / "packaging" / "systemd"
+        main_content = (systemd_dir / "ai-trading.service").read_text(encoding="utf-8")
+        env_file_idx = main_content.index("EnvironmentFile=-/home/aiuser/ai-trading-bot/.env")
+        api_port_idx = main_content.index("Environment=API_PORT=9001")
+        health_port_idx = main_content.index("Environment=HEALTHCHECK_PORT=9001")
+        self.assertLess(env_file_idx, api_port_idx)
+        self.assertLess(env_file_idx, health_port_idx)
+
+        for service_name in (
+            "ai-trading-healthcheck.service",
+            "ai-trading-runtime-report.service",
+            "ai-trading-replay-governance.service",
+        ):
+            content = (systemd_dir / service_name).read_text(encoding="utf-8")
+            dotenv_idx = content.index("EnvironmentFile=-/home/aiuser/ai-trading-bot/.env")
+            runtime_idx = content.index("EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime")
+            self.assertLess(dotenv_idx, runtime_idx, f"{service_name} should load .env.runtime last")
 
     def test_error_handling_robustness(self):
         """Test 5: General Robustness - Error handling patterns."""

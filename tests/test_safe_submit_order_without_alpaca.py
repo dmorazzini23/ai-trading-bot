@@ -248,19 +248,6 @@ def test_live_trading_request_helper_fails_without_sdk(
 ) -> None:
     _block_alpaca_imports(monkeypatch)
 
-    import ai_trading.execution.live_trading as live_trading
-    from ai_trading.core import bot_engine
-
-    importlib.reload(live_trading)
-    _reset_alpaca_symbols(bot_engine, monkeypatch)
-
-    for name in [m for m in list(sys.modules) if m.startswith("ai_trading.alpaca")]:
-        monkeypatch.delitem(sys.modules, name, raising=False)
-
-    monkeypatch.setattr(live_trading, "MarketOrderRequest", None, raising=False)
-    monkeypatch.setattr(live_trading, "LimitOrderRequest", None, raising=False)
-    monkeypatch.setattr(live_trading, "OrderSide", None, raising=False)
-    monkeypatch.setattr(live_trading, "TimeInForce", None, raising=False)
-
-    with pytest.raises(ModuleNotFoundError):
-        live_trading._ensure_request_models()
+    monkeypatch.delitem(sys.modules, "ai_trading.execution.live_trading", raising=False)
+    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
+        import ai_trading.execution.live_trading  # noqa: F401

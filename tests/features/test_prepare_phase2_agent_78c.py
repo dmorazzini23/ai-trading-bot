@@ -294,3 +294,14 @@ def test_prepare_indicators_logs_multi_timeframe_failure(
     assert "Multi-timeframe features failed" in caplog.text
     assert result["ret_5m"].isna().all()
     assert result["lag_close_1"].isna().all()
+
+
+def test_prepare_indicators_does_not_backfill_lagged_features(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_ta(monkeypatch, _FullTA)
+
+    result = prepare_mod.prepare_indicators(_market_frame(), freq="minute")
+
+    assert pd.isna(result.loc[0, "lag_close_1"])
+    assert pd.isna(result.loc[0, "ret_5m"])

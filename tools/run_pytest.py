@@ -213,8 +213,6 @@ def main(argv: list[str] | None = None) -> int:
             cmd_wo.append(c)
         _emit_runner_echo(logger, echo_command(cmd_wo))
         rc = subprocess.call(cmd_wo, env=child_env)
-    if rc in {4, 5}:  # 5: no tests collected, 4: early exit via pytest.exit
-        return 0
     return rc
 
 

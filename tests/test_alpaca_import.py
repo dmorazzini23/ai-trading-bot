@@ -26,7 +26,12 @@ def test_ai_trading_import_without_alpaca(monkeypatch):
         import ai_trading
 
         assert ai_trading is not None
-        import ai_trading.core.bot_engine  # noqa: F401
+
+        import ai_trading.alpaca_api as alpaca_api
+
+        assert alpaca_api.ALPACA_AVAILABLE is False
+        assert alpaca_api.TimeFrame is None
+        assert alpaca_api.StockBarsRequest is None
 
         # Import diagnostics may load runtime modules, but must not install an
         # Alpaca stand-in over the missing SDK sentinel.

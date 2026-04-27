@@ -9193,18 +9193,7 @@ def _fetch_bars(
                 if fallback_df is None or getattr(fallback_df, "empty", True):
                     pandas_mod = load_pandas()
                     if pandas_mod is not None:
-                        fallback_df = pandas_mod.DataFrame(
-                            [
-                                {
-                                    "timestamp": _start,
-                                    "open": float("nan"),
-                                    "high": float("nan"),
-                                    "low": float("nan"),
-                                    "close": float("nan"),
-                                    "volume": 0,
-                                },
-                            ],
-                        )
+                        fallback_df = _empty_ohlcv_frame(pandas_mod)
                 if fallback_df is not None:
                     _restore_forced_sip()
                     return _finalize_frame(fallback_df)
@@ -14403,25 +14392,13 @@ def get_bars(
     ):
         pandas_mod = _ensure_pandas()
         if pandas_mod is not None:
-            fallback_frame = pandas_mod.DataFrame(
-                [
-                    {
-                        "timestamp": ensure_datetime(start),
-                        "open": float("nan"),
-                        "high": float("nan"),
-                        "low": float("nan"),
-                        "close": float("nan"),
-                        "volume": 0,
-                    },
-                ],
-            )
-            return fallback_frame
+            return _empty_ohlcv_frame(pandas_mod)
     if not return_meta and normalized_feed == "sip" and result is None and (
         _SIP_UNAUTHORIZED or _is_sip_unauthorized()
     ):
         pandas_mod = _ensure_pandas()
         if pandas_mod is not None:
-            return pandas_mod.DataFrame()
+            return _empty_ohlcv_frame(pandas_mod)
         empty_frame = _empty_ohlcv_frame()
         if empty_frame is not None:
             return empty_frame

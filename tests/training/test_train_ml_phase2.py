@@ -92,6 +92,9 @@ def test_train_applies_feature_pipeline_and_returns_training_summary() -> None:
         def fit_transform(self, frame: Any, target: Any) -> Any:
             assert len(frame) == len(target)
             self.fitted = True
+            return self.transform(frame)
+
+        def transform(self, frame: Any) -> Any:
             return frame.assign(c=frame["a"] + frame["b"])
 
     pipeline = _Pipeline()
@@ -102,6 +105,29 @@ def test_train_applies_feature_pipeline_and_returns_training_summary() -> None:
     assert result["feature_count"] == 3
     assert result["train_samples"] == 12
     assert result["cv_metrics"]["n_splits"] == 2
+
+
+def test_train_fits_feature_pipeline_inside_cv_folds() -> None:
+    trainer = MLTrainer(model_type="ridge", cv_splits=2)
+    X = pd.DataFrame({"a": np.arange(18, dtype=float), "b": np.arange(18, dtype=float)})
+    y = pd.Series(np.arange(18, dtype=float))
+
+    class _FoldAwarePipeline:
+        seen_fit_lengths: list[int] = []
+
+        def fit_transform(self, frame: Any, target: Any) -> Any:
+            self.seen_fit_lengths.append(len(frame))
+            assert len(frame) == len(target)
+            return self.transform(frame)
+
+        def transform(self, frame: Any) -> Any:
+            return frame.assign(c=frame["a"] - frame["b"])
+
+    pipeline = _FoldAwarePipeline()
+    trainer.train(X, y, optimize_hyperparams=False, feature_pipeline=pipeline)
+
+    assert len(pipeline.seen_fit_lengths) >= 3
+    assert all(length < len(X) for length in pipeline.seen_fit_lengths[:2])
 
 
 def test_save_model_rejects_paths_outside_allowed_dirs(tmp_path: Path) -> None:

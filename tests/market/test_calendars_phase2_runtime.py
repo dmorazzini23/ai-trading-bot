@@ -59,3 +59,10 @@ def test_next_trading_day_and_final_bar_helpers(monkeypatch) -> None:
     monkeypatch.setattr(calendars, "_global_calendar", registry)
     assert calendars.is_trading_day("AAPL", datetime(2025, 1, 7, 15, 0, tzinfo=UTC)) is True
     assert calendars.ensure_final_bar("AAPL", "5min") is True
+
+
+def test_generated_fallback_holidays_cover_2026_new_years_day() -> None:
+    registry = CalendarRegistry()
+
+    assert registry.is_trading_day("AAPL", date(2026, 1, 1)) is False
+    assert registry.get_session_bounds("AAPL", date(2026, 1, 1)) == (None, None)

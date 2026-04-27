@@ -83,6 +83,30 @@ def test_triple_barrier_labels_accepts_dataframe_input() -> None:
     assert {"t1", "ret", "bin"} <= set(out.columns)
 
 
+def test_triple_barrier_labels_preserves_event_index_when_events_skipped() -> None:
+    idx = pd.date_range("2026-01-01 09:30:00", periods=5, freq="min")
+    missing_event = idx[0] - pd.Timedelta(minutes=1)
+    prices = pd.Series([100.0, 101.0, 102.0, 103.0, 104.0], index=idx)
+    events = pd.DataFrame(index=[missing_event, idx[1], idx[2]])
+    t1 = pd.Series([idx[2], idx[3], idx[4]], index=events.index)
+
+    out = triple_barrier_labels(prices, events=events, pt_sl=(0.01, -0.01), t1=t1)
+
+    assert out.index.tolist() == [idx[1], idx[2]]
+
+
+def test_triple_barrier_labels_empty_result_has_canonical_columns() -> None:
+    idx = pd.date_range("2026-01-01", periods=3, freq="D")
+    prices = pd.Series([100.0, 100.5, 100.75], index=idx)
+    events = pd.DataFrame(index=[idx[0]])
+    t1 = pd.Series([idx[1]], index=events.index)
+
+    out = triple_barrier_labels(prices, events=events, pt_sl=(0.10, -0.10), t1=t1, min_ret=0.05)
+
+    assert out.empty
+    assert list(out.columns) == ["t1", "ret", "bin"]
+
+
 def test_get_daily_vol_returns_expected_indexed_series() -> None:
     idx = pd.date_range("2025-01-01", periods=140, freq="D")
     prices = pd.Series(np.linspace(100.0, 150.0, len(idx)), index=idx)

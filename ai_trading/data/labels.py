@@ -74,6 +74,15 @@ def triple_barrier_labels(
     Returns:
         DataFrame with labels: t1 (end time), ret (return), bin (label)
     """
+    def _empty_result():
+        return pd.DataFrame(
+            {
+                "t1": pd.Series(dtype="datetime64[ns]"),
+                "ret": pd.Series(dtype=float),
+                "bin": pd.Series(dtype=int),
+            }
+        )
+
     try:
         if isinstance(prices, pd.DataFrame):
             if 'close' in prices.columns:
@@ -98,11 +107,14 @@ def triple_barrier_labels(
         elif vertical_barrier_times is not None:
             t1 = vertical_barrier_times
         labels = []
+        label_index = []
         for event_time in events.index:
             if event_time not in prices.index:
                 continue
             start_price = prices.loc[event_time]
             end_time = t1.loc[event_time] if event_time in t1.index else event_time
+            if pd.isna(start_price) or pd.isna(end_time):
+                continue
             price_slice = prices.loc[event_time:end_time]
             if len(price_slice) <= 1:
                 continue
@@ -117,7 +129,7 @@ def triple_barrier_labels(
                 first_loss = loss_hit.idxmax() if loss_hit.any() else None
             else:
                 first_loss = None
-            if first_profit and first_loss:
+            if first_profit is not None and first_loss is not None:
                 if first_profit <= first_loss:
                     label_bin = 1
                     label_t1 = first_profit
@@ -126,11 +138,11 @@ def triple_barrier_labels(
                     label_bin = -1
                     label_t1 = first_loss
                     label_ret = returns.loc[first_loss]
-            elif first_profit:
+            elif first_profit is not None:
                 label_bin = 1
                 label_t1 = first_profit
                 label_ret = returns.loc[first_profit]
-            elif first_loss:
+            elif first_loss is not None:
                 label_bin = -1
                 label_t1 = first_loss
                 label_ret = returns.loc[first_loss]
@@ -140,12 +152,16 @@ def triple_barrier_labels(
                 label_ret = returns.iloc[-1]
             if abs(label_ret) >= min_ret:
                 labels.append({'t1': label_t1, 'ret': label_ret, 'bin': label_bin})
-        result_df = pd.DataFrame(labels, index=events.index[:len(labels)])
+                label_index.append(event_time)
+        if not labels:
+            result_df = _empty_result()
+        else:
+            result_df = pd.DataFrame(labels, index=pd.Index(label_index, name=events.index.name))
         logger.info(f"Generated triple barrier labels: {len(result_df)} events, {(result_df['bin'] == 1).sum()} profits, {(result_df['bin'] == -1).sum()} losses, {(result_df['bin'] == 0).sum()} timeouts")
         return result_df
     except (ValueError, TypeError) as e:
         logger.error(f'Error in triple barrier labeling: {e}')
-        return pd.DataFrame(columns=['t1', 'ret', 'bin'])
+        return _empty_result()
 
 def get_daily_vol(prices: "pd.Series", span0: int = 100) -> "pd.Series":
     pd = load_pandas()

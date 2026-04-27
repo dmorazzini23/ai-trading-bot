@@ -11,12 +11,18 @@ from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING, Type, cast
 from threading import RLock
 
+_ALPACA_PY_REQUIRED = (
+    "alpaca-py==0.42.1 is required; install with `pip install alpaca-py==0.42.1`"
+)
+
 _imported_trading_client: type[Any] | None
+_ALPACA_IMPORT_ERROR: BaseException | None = None
 try:
     from alpaca.trading.client import TradingClient as _TradingClientImported
-except AI_TRADING_FALLBACK_EXCEPTIONS:
+except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
     _imported_trading_client = None
     ALPACA_AVAILABLE = False
+    _ALPACA_IMPORT_ERROR = exc
 else:
     _imported_trading_client = _TradingClientImported
     ALPACA_AVAILABLE = True
@@ -40,7 +46,7 @@ _MarketOrderRequest: type[Any] | None
 _LimitOrderRequest: type[Any] | None
 _StopOrderRequest: type[Any] | None
 _StopLimitOrderRequest: type[Any] | None
-try:  # pragma: no cover - exercised via stub classes in tests
+try:  # pragma: no cover - exercised via SDK/stub classes in tests
     from alpaca.trading.requests import (
         LimitOrderRequest as _ImportedLimitOrderRequest,
         MarketOrderRequest as _ImportedMarketOrderRequest,
@@ -59,49 +65,10 @@ else:
     _StopLimitOrderRequest = _ImportedStopLimitOrderRequest
 
 
-_fallback_market_order_request_cls: type[Any] | None = None
-_fallback_limit_order_request_cls: type[Any] | None = None
-_fallback_stop_order_request_cls: type[Any] | None = None
-_fallback_stop_limit_order_request_cls: type[Any] | None = None
-
-
-if _MarketOrderRequest is None:  # pragma: no cover - fallback when SDK unavailable
-    @dataclass
-    class _FallbackOrderRequest:
-        symbol: Any
-        qty: Any
-        side: Any
-        time_in_force: Any
-        limit_price: Any | None = None
-        stop_price: Any | None = None
-        client_order_id: str | None = None
-
-
-    class _FallbackMarketOrderRequest(_FallbackOrderRequest):
-        pass
-
-
-    class _FallbackLimitOrderRequest(_FallbackOrderRequest):
-        pass
-
-
-    class _FallbackStopOrderRequest(_FallbackOrderRequest):
-        pass
-
-
-    class _FallbackStopLimitOrderRequest(_FallbackOrderRequest):
-        pass
-
-    _fallback_market_order_request_cls = _FallbackMarketOrderRequest
-    _fallback_limit_order_request_cls = _FallbackLimitOrderRequest
-    _fallback_stop_order_request_cls = _FallbackStopOrderRequest
-    _fallback_stop_limit_order_request_cls = _FallbackStopLimitOrderRequest
-
-
-MarketOrderRequest = _MarketOrderRequest or _fallback_market_order_request_cls
-LimitOrderRequest = _LimitOrderRequest or _fallback_limit_order_request_cls
-StopOrderRequest = _StopOrderRequest or _fallback_stop_order_request_cls
-StopLimitOrderRequest = _StopLimitOrderRequest or _fallback_stop_limit_order_request_cls
+MarketOrderRequest = _MarketOrderRequest
+LimitOrderRequest = _LimitOrderRequest
+StopOrderRequest = _StopOrderRequest
+StopLimitOrderRequest = _StopLimitOrderRequest
 
 # Only used for type hints; does NOT run at import time.
 if TYPE_CHECKING:
@@ -297,7 +264,7 @@ def initialize() -> None:
             except ModuleNotFoundError:
                 importlib.import_module("alpaca.data")
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - exercised in tests
-        raise RuntimeError("alpaca-py SDK is required") from exc
+        raise RuntimeError(_ALPACA_PY_REQUIRED) from exc
 
 
 def is_alpaca_service_available() -> bool:
@@ -311,76 +278,13 @@ def _set_alpaca_service_available(value: bool) -> None:
     _ALPACA_SERVICE_AVAILABLE = bool(value)
 
 
-if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
-    from dataclasses import dataclass
-    from enum import Enum
+TimeFrameUnit: type[Any] | None = None
+TimeFrame: type[Any] | None = None
+StockBarsRequest: type[Any] | None = None
 
-    class TimeFrameUnit(Enum):
-        Minute = "Min"
-        Hour = "Hour"
-        Day = "Day"
-        Week = "Week"
-        Month = "Month"
 
-    @dataclass
-    class TimeFrame:
-        amount: int = 1
-        unit: TimeFrameUnit = TimeFrameUnit.Day
-
-        def __str__(self) -> str:
-            return f"{self.amount}{self.unit.value}"
-
-    # Pre-defined shorthand attributes mirroring alpaca-py
-    TimeFrame.Minute = TimeFrame(1, TimeFrameUnit.Minute)  # type: ignore[attr-defined]
-    TimeFrame.Hour = TimeFrame(1, TimeFrameUnit.Hour)  # type: ignore[attr-defined]
-    TimeFrame.Day = TimeFrame()  # type: ignore[attr-defined]
-    _week_unit = getattr(TimeFrameUnit, "Week", None)
-    if _week_unit is not None:
-        TimeFrame.Week = TimeFrame(1, _week_unit)  # type: ignore[attr-defined]
-    _month_unit = getattr(TimeFrameUnit, "Month", None)
-    if _month_unit is not None:
-        TimeFrame.Month = TimeFrame(1, _month_unit)  # type: ignore[attr-defined]
-
-    @dataclass
-    class StockBarsRequest:
-        symbol_or_symbols: Any
-        timeframe: Any
-        start: Any | None = None
-        end: Any | None = None
-        limit: int | None = None
-        adjustment: str | None = None
-        feed: str | None = None
-        sort: str | None = None
-        asof: str | None = None
-        currency: str | None = None
-
-        def __init__(
-            self,
-            symbol_or_symbols: Any,
-            timeframe: Any,
-            *,
-            start: Any | None = None,
-            end: Any | None = None,
-            limit: int | None = None,
-            adjustment: str | None = None,
-            feed: str | None = None,
-            sort: str | None = None,
-            asof: str | None = None,
-            currency: str | None = None,
-            **extra: Any,
-        ) -> None:
-            self.symbol_or_symbols = symbol_or_symbols
-            self.timeframe = timeframe
-            self.start = start
-            self.end = end
-            self.limit = limit
-            self.adjustment = adjustment
-            self.feed = feed
-            self.sort = sort
-            self.asof = asof
-            self.currency = currency
-            for k, v in extra.items():
-                setattr(self, k, v)
+def _alpaca_sdk_required_error(detail: str) -> RuntimeError:
+    return RuntimeError(f"{_ALPACA_PY_REQUIRED} ({detail})")
 
 
 def _make_client_order_id(prefix: str = "ai") -> str:
@@ -395,10 +299,10 @@ def _ensure_trading_client_cls():
     global TradingClient, ALPACA_AVAILABLE
     try:
         from alpaca.trading.client import TradingClient as _TradingClient
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         TradingClient = None
         ALPACA_AVAILABLE = False
-        return None
+        raise _alpaca_sdk_required_error("TradingClient unavailable") from exc
     TradingClient = _TradingClient
     ALPACA_AVAILABLE = True
     return TradingClient
@@ -407,14 +311,7 @@ def _ensure_trading_client_cls():
 def get_trading_client_cls():
     """Return the Alpaca TradingClient class if available."""
 
-    client_cls = _ensure_trading_client_cls()
-    if client_cls is None:
-        class _UnavailableTradingClient:
-            def __init__(self, *_a, **_k):
-                raise RuntimeError("alpaca-py TradingClient not available")
-
-        return _UnavailableTradingClient
-    return client_cls
+    return _ensure_trading_client_cls()
 
 
 class TradingClientAdapter:
@@ -464,54 +361,12 @@ class TradingClientAdapter:
         if callable(cancel_by_id):
             return cancel_by_id(order_id)
 
-        cancel_orders = getattr(self._client, "cancel_orders", None)
-        if not callable(cancel_orders):  # pragma: no cover - defensive guard
-            raise AttributeError("cancel_order not supported by wrapped client")
-
-        CancelOrdersRequest: Any | None
-        try:  # pragma: no cover - exercised indirectly in integration tests
-            from alpaca.trading.requests import CancelOrdersRequest  # type: ignore
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
-            CancelOrdersRequest = None
-
-        if CancelOrdersRequest is None:
-
-            class _FallbackCancelOrdersRequest:
-                def __init__(self, **kwargs: Any):
-                    if not kwargs:
-                        raise TypeError("payload required")
-                    self.payload = kwargs
-
-            CancelOrdersRequest = _FallbackCancelOrdersRequest
-
-        last_error: Exception | None = None
-        init_variants = (
-            {"order_id": order_id},
-            {"order_ids": [order_id]},
-            {"client_order_id": order_id},
-        )
-
-        for init_kwargs in init_variants:
-            try:
-                request_obj = CancelOrdersRequest(**init_kwargs)
-            except TypeError as exc:
-                last_error = exc
-                continue
-
-            for caller in (
-                lambda ro=request_obj: cancel_orders(ro),
-                lambda ro=request_obj: cancel_orders(request=ro),
-                lambda ro=request_obj: cancel_orders(cancel_orders_request=ro),
-            ):
-                try:
-                    return caller()
-                except TypeError as exc:
-                    last_error = exc
-                    continue
-
-        raise RuntimeError(
-            "Alpaca client cancel_orders adapter could not adapt provided API"
-        ) from last_error
+        if callable(getattr(self._client, "cancel_orders", None)):
+            raise AttributeError(
+                "single-order cancellation requires Alpaca cancel_order_by_id; "
+                "cancel_orders cancels all open orders in alpaca-py"
+            )
+        raise AttributeError("cancel_order not supported by wrapped client")
 
 
 def get_data_client_cls():
@@ -520,28 +375,16 @@ def get_data_client_cls():
         from alpaca.data.historical.stock import StockHistoricalDataClient  # type: ignore
 
         return StockHistoricalDataClient
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        class _UnavailableDataClient:
-            def __init__(self, *_a, **_k):
-                self._reason = "alpaca-py StockHistoricalDataClient not available"
-
-            def get_stock_bars(self, *_a, **_k):
-                raise RuntimeError(self._reason)
-
-        return _UnavailableDataClient
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        raise _alpaca_sdk_required_error("StockHistoricalDataClient unavailable") from exc
 
 
 def get_api_error_cls():
     """Return the Alpaca APIError class via lazy import."""
     try:
         from alpaca.common.exceptions import APIError  # type: ignore
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        class _FallbackAPIError(Exception):
-            """Fallback APIError when alpaca-py is unavailable."""
-
-            pass
-
-        return _FallbackAPIError
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        raise _alpaca_sdk_required_error("APIError unavailable") from exc
     return APIError
 
 
@@ -551,16 +394,13 @@ def _data_classes():
         from alpaca.data import StockBarsRequest as _StockBarsRequest, TimeFrame as _TimeFrame, TimeFrameUnit as _TimeFrameUnit  # type: ignore
 
         return _StockBarsRequest, _TimeFrame, _TimeFrameUnit
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        _log.debug("ALPACA_DATA_CLASSES_IMPORT_FAILED", exc_info=True)
-        return StockBarsRequest, TimeFrame, TimeFrameUnit
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        raise _alpaca_sdk_required_error("data request classes unavailable") from exc
 
 
 def get_stock_bars_request_cls():
-    if ALPACA_AVAILABLE:
-        cls, _, _ = _data_classes()
-        return cls
-    return StockBarsRequest
+    cls, _, _ = _data_classes()
+    return cls
 
 
 def get_timeframe_cls():
@@ -569,15 +409,19 @@ def get_timeframe_cls():
     The wrapper guarantees that ``TimeFrame()`` defaults to ``1 Day`` and that
     ``amount`` and ``unit`` attributes are always present.
     """
-    from .timeframe import TimeFrame
-
+    try:
+        from .timeframe import TimeFrame
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        raise _alpaca_sdk_required_error("TimeFrame unavailable") from exc
     return TimeFrame
 
 
 def get_timeframe_unit_cls():
     """Return the package-level ``TimeFrameUnit`` enum."""
-    from .timeframe import TimeFrameUnit
-
+    try:
+        from .timeframe import TimeFrameUnit
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        raise _alpaca_sdk_required_error("TimeFrameUnit unavailable") from exc
     return TimeFrameUnit
 
 
