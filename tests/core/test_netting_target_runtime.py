@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from ai_trading.core.netting import NettedTarget
 from ai_trading.core.netting_candidate_rank import NettingCandidateRankingResult
 from ai_trading.core.netting_target_runtime import (
+    NettingExecutionRankRuntimeContext,
     apply_target_construction_controls,
     prepare_portfolio_optimizer_runtime,
     store_candidate_ranking_runtime_state,
@@ -181,6 +182,93 @@ def test_store_candidate_ranking_runtime_state_builds_context_from_values() -> N
         "gate_a",
         "gate_b",
     ]
+
+
+def test_netting_execution_rank_runtime_context_defaults_and_shape() -> None:
+    context = NettingExecutionRankRuntimeContext.from_values(
+        {
+            "bandit_enabled": True,
+            "bandit_method": "ucb",
+            "bandit_promote_min_samples": "bad",
+            "expected_capture_rank_weight": "not-a-float",
+            "execution_learning_rank_slippage_floor_bps": float("nan"),
+            "bandit_significance_context": {"nested": {"passed": True}},
+            "counterfactual_significance_context": {"passed": False},
+            "policy_runtime_payload": "malformed",
+            "policy_disabled_gate_roots": {"gate_b", "gate_a"},
+            "policy_disabled_sleeves": "not-a-sequence",
+            "toggles": {"rankers": {"bandit_enabled": True}},
+        }
+    )
+
+    runtime_context = context.to_runtime_context()
+    assert runtime_context["bandit_enabled"] is True
+    assert runtime_context["counterfactual_enabled"] is False
+    assert runtime_context["bandit_promote_min_samples"] == 0
+    assert runtime_context["expected_capture_rank_weight"] == 0.0
+    assert runtime_context["execution_learning_rank_slippage_floor_bps"] == 0.0
+    assert runtime_context["bandit_method"] == "ucb"
+    assert runtime_context["bandit_promotion_significance"] == {
+        "nested": {"passed": True}
+    }
+    assert runtime_context["counterfactual_promotion_significance"] == {
+        "passed": False
+    }
+    assert runtime_context["policy_runtime_toggles_updated_at"] is None
+    assert runtime_context["policy_runtime_toggles_source_updated_at"] is None
+    assert runtime_context["policy_disabled_gate_roots"] == ["gate_a", "gate_b"]
+    assert runtime_context["policy_disabled_sleeves"] == []
+    assert runtime_context["policy_runtime_toggles"] == {
+        "rankers": {"bandit_enabled": True}
+    }
+
+
+def test_store_candidate_ranking_runtime_state_preserves_context_dict_shape() -> None:
+    runtime = SimpleNamespace()
+    captured_contexts: list[dict[str, object]] = []
+    ranking_result = NettingCandidateRankingResult(
+        candidate_expected_net_edge={"AAPL": 1.0},
+        candidate_expected_capture={"AAPL": 0.5},
+        candidate_rank={"AAPL": 2.0},
+        counterfactual_signal_by_symbol={},
+        opportunity_quality_by_symbol={},
+        opportunity_allowed_symbols=set(),
+        opportunity_quality_gate={},
+    )
+
+    def _store_runtime_state(
+        runtime_arg: object,
+        **kwargs: object,
+    ) -> None:
+        assert runtime_arg is runtime
+        captured_contexts.append(kwargs["rank_context"])  # type: ignore[arg-type]
+        runtime.execution_candidate_rank_context = kwargs["rank_context"]
+
+    store_candidate_ranking_runtime_state(
+        runtime=runtime,
+        ranking_result=ranking_result,
+        edge_realism_rank_factor_by_symbol={},
+        context_values={
+            "bandit_enabled": True,
+            "bandit_global_samples": 12,
+            "bandit_global_mean_reward_bps": 1.75,
+            "policy_runtime_payload": {
+                "updated_at": "2026-04-27T12:00:00+00:00",
+                "source_updated_at": "2026-04-27T11:59:00+00:00",
+            },
+        },
+        store_execution_candidate_ranking_runtime_state_func=_store_runtime_state,
+    )
+
+    assert isinstance(runtime.execution_candidate_rank_context, dict)
+    assert captured_contexts == [runtime.execution_candidate_rank_context]
+    assert runtime.execution_candidate_rank_context["bandit_enabled"] is True
+    assert runtime.execution_candidate_rank_context["bandit_global_samples"] == 12
+    assert runtime.execution_candidate_rank_context["bandit_global_mean_reward_bps"] == 1.75
+    assert runtime.execution_candidate_rank_context["policy_runtime_toggles_updated_at"] == (
+        "2026-04-27T12:00:00+00:00"
+    )
+    assert runtime.execution_candidate_rank_context["policy_runtime_toggles"] == {}
 
 
 def test_prepare_portfolio_optimizer_runtime_normalizes_symbol_keys() -> None:

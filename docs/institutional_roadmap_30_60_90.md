@@ -42,6 +42,7 @@ Focus: execution-quality governance and replay-backed confidence.
 3. OMS lifecycle parity replay check in CI and pre-deploy.
 4. Walk-forward + leakage guard outputs tracked per release candidate.
 5. Model artifact verification policy enforced in deployment checklist.
+6. Phase 2 execution-edge baseline includes calibration sufficiency diagnostics and conservative routing threshold recommendations.
 
 ### Acceptance Criteria
 1. Daily execution report generated on schedule and archived.
@@ -49,6 +50,7 @@ Focus: execution-quality governance and replay-backed confidence.
 3. OMS lifecycle parity replay reports zero live/simulated stream mismatches.
 4. Leakage checks fail hard when any horizon contamination is introduced.
 5. Live promotions require verified model artifact manifests.
+6. Adaptive routing remains disabled unless Phase 2 diagnostics are sufficient and release sign-off explicitly enables `AI_TRADING_PHASE2_EXECUTION_EDGE_ROUTING_ENABLED`.
 
 ### Verification Commands
 ```bash
@@ -69,17 +71,23 @@ Focus: portfolio governance, adaptation safety, and incident readiness.
 2. SLO breach alerts tied to action runbooks with owner/on-call assignment.
 3. Disaster exercises for kill-switch, broker outage, and degraded data behavior.
 4. Promotion review for moving from paper-only canary to broader symbol set.
+5. Pre-open acceptance gate drilled with flat-start and strict OMS readiness settings.
+6. Live KPI breach persistence drilled through dry-run and rollback-enabled modes.
 
 ### Acceptance Criteria
 1. Quarantine and learning updates are bounded, logged, and reproducible.
 2. On-call can execute each runbook without ad-hoc decisions.
 3. Canary release can automatically rollback on threshold breach.
 4. Deployment sign-off includes replay/TCA/leakage/model-governance results.
+5. `/healthz` exposes required OMS readiness failures when strict OMS gates are enabled.
+6. Pre-open operator drill blocks required flat-start or OMS failures before market entry.
 
 ### Verification Commands
 ```bash
 pytest -q tests/test_quarantine_triggers_and_blocks.py tests/test_post_trade_learning_bounded_updates.py
 pytest -q tests/test_allocation_weight_updates.py tests/test_portfolio_limits_vol_targeting.py
+pytest -q tests/scripts/test_pre_open_acceptance_gate.py tests/main/test_runtime_governance_hooks.py
+python3 scripts/pre_open_acceptance_gate.py --json
 ```
 
 ## Weekly Operating Cadence

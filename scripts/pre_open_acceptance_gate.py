@@ -28,6 +28,11 @@ DEPRECATED_ENV_KEYS = {
     "AI_TRADING_EXEC_ALLOW_FALLBACK_WITHOUT_NBBO",
 }
 
+PREOPEN_REQUIRE_FLAT_START_ENV = "AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START"
+PREOPEN_EXPECTED_SWING_SYMBOLS_ENV = "AI_TRADING_EXECUTION_PREOPEN_EXPECTED_SWING_SYMBOLS"
+HEALTH_REQUIRE_OMS_INVARIANTS_ENV = "AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS"
+HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY_ENV = "AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY"
+
 _SECRET_KEY_HINT_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|WEBHOOK_URL$|API_KEY$)")
 _SECRETS_BACKEND_NONE = {"", "none", "off", "disabled"}
 
@@ -82,12 +87,36 @@ def _canonical_env_map(path: Path) -> dict[str, str]:
 
 
 def _parse_bool(value: str, *, default: bool = False) -> bool:
-    text = value.strip().lower()
+    text = value.strip().strip('"').strip("'").lower()
     if text in {"1", "true", "yes", "on"}:
         return True
     if text in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _env_value(repo_dir: Path, key: str) -> tuple[str | None, str | None]:
+    raw = os.environ.get(key)
+    if raw is not None:
+        return raw, "process"
+    runtime_map = _canonical_env_map(repo_dir / ".env.runtime")
+    if key in runtime_map:
+        return runtime_map[key], ".env.runtime"
+    env_map = _canonical_env_map(repo_dir / ".env")
+    if key in env_map:
+        return env_map[key], ".env"
+    return None, None
+
+
+def _env_bool_detail(repo_dir: Path, key: str, *, default: bool = False) -> dict[str, Any]:
+    raw, source = _env_value(repo_dir, key)
+    enabled = _parse_bool(str(raw), default=default) if raw is not None else default
+    return {
+        "enabled": enabled,
+        "raw": raw,
+        "source": source,
+        "default": default,
+    }
 
 
 def _parse_managed_secret_keys(raw: str) -> set[str]:
@@ -377,6 +406,223 @@ def _check_health(repo_dir: Path, *, port: int | None, timeout_seconds: int, ski
     )
 
 
+def _safe_nonnegative_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _health_payload_from_step(health_step: Step) -> dict[str, Any] | None:
+    payload = health_step.details.get("payload")
+    return dict(payload) if isinstance(payload, dict) else None
+
+
+def _runtime_flat_start_context(payload: dict[str, Any]) -> dict[str, Any]:
+    preopen_raw = payload.get("preopen_readiness")
+    if not isinstance(preopen_raw, dict):
+        service_state_raw = payload.get("service_state")
+        service_state = dict(service_state_raw) if isinstance(service_state_raw, dict) else {}
+        preopen_raw = service_state.get("preopen_readiness")
+    preopen = dict(preopen_raw) if isinstance(preopen_raw, dict) else {}
+    flat_start_raw = preopen.get("flat_start")
+    if not isinstance(flat_start_raw, dict):
+        flat_start_raw = payload.get("flat_start")
+    return dict(flat_start_raw) if isinstance(flat_start_raw, dict) else {}
+
+
+def _check_preopen_operator_drill(repo_dir: Path, *, health_step: Step) -> Step:
+    """Summarize pre-open flat-start and OMS strictness signals for operators."""
+
+    flat_start_required = _env_bool_detail(
+        repo_dir,
+        PREOPEN_REQUIRE_FLAT_START_ENV,
+        default=False,
+    )
+    oms_invariants_required = _env_bool_detail(
+        repo_dir,
+        HEALTH_REQUIRE_OMS_INVARIANTS_ENV,
+        default=False,
+    )
+    oms_lifecycle_required = _env_bool_detail(
+        repo_dir,
+        HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY_ENV,
+        default=False,
+    )
+    expected_swing_symbols, expected_swing_source = _env_value(
+        repo_dir,
+        PREOPEN_EXPECTED_SWING_SYMBOLS_ENV,
+    )
+    config = {
+        PREOPEN_REQUIRE_FLAT_START_ENV: flat_start_required,
+        HEALTH_REQUIRE_OMS_INVARIANTS_ENV: oms_invariants_required,
+        HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY_ENV: oms_lifecycle_required,
+        PREOPEN_EXPECTED_SWING_SYMBOLS_ENV: {
+            "raw": expected_swing_symbols,
+            "source": expected_swing_source,
+        },
+    }
+
+    payload = _health_payload_from_step(health_step)
+    if payload is None:
+        return Step(
+            name="preopen_operator_drill",
+            status="warn",
+            summary="health payload unavailable; cannot verify flat-start or OMS drill state",
+            details={
+                "config": config,
+                "health_step_status": health_step.status,
+                "health_step_summary": health_step.summary,
+            },
+        )
+
+    broker = payload.get("broker")
+    broker_payload = dict(broker) if isinstance(broker, dict) else {}
+    open_orders_count = _safe_nonnegative_int(broker_payload.get("open_orders_count"))
+    positions_count = _safe_nonnegative_int(broker_payload.get("positions_count"))
+    runtime_flat_start = _runtime_flat_start_context(payload)
+    runtime_open_orders_count = _safe_nonnegative_int(
+        runtime_flat_start.get("open_orders_count")
+    )
+    runtime_unexpected_positions_count = _safe_nonnegative_int(
+        runtime_flat_start.get("unexpected_positions_count")
+    )
+    runtime_flat_start_has_counts = (
+        runtime_open_orders_count is not None
+        or runtime_unexpected_positions_count is not None
+    )
+    trust_runtime_flat_start = bool(
+        runtime_flat_start
+        and runtime_flat_start.get("enabled", True)
+        and runtime_flat_start_has_counts
+    )
+    attention_flags_raw = payload.get("attention_flags")
+    attention_flags = (
+        [str(flag) for flag in attention_flags_raw]
+        if isinstance(attention_flags_raw, list)
+        else []
+    )
+    readiness_failures_raw = payload.get("readiness_failures")
+    readiness_failures = (
+        [str(failure) for failure in readiness_failures_raw]
+        if isinstance(readiness_failures_raw, list)
+        else []
+    )
+    readiness_gates_raw = payload.get("readiness_gates")
+    readiness_gates = dict(readiness_gates_raw) if isinstance(readiness_gates_raw, dict) else {}
+    oms_invariants_gate_raw = readiness_gates.get("oms_invariants")
+    oms_invariants_gate = (
+        dict(oms_invariants_gate_raw) if isinstance(oms_invariants_gate_raw, dict) else {}
+    )
+    oms_lifecycle_gate_raw = readiness_gates.get("oms_lifecycle_parity")
+    oms_lifecycle_gate = (
+        dict(oms_lifecycle_gate_raw) if isinstance(oms_lifecycle_gate_raw, dict) else {}
+    )
+    oms_invariants_required_effective = bool(
+        oms_invariants_required["enabled"] or oms_invariants_gate.get("required", False)
+    )
+    oms_lifecycle_required_effective = bool(
+        oms_lifecycle_required["enabled"] or oms_lifecycle_gate.get("required", False)
+    )
+
+    flat_start_blockers: list[str] = []
+    if trust_runtime_flat_start:
+        if runtime_open_orders_count is not None and runtime_open_orders_count > 0:
+            flat_start_blockers.append("preopen_open_orders")
+        if (
+            runtime_unexpected_positions_count is not None
+            and runtime_unexpected_positions_count > 0
+        ):
+            flat_start_blockers.append("preopen_non_flat_positions")
+    else:
+        if open_orders_count is not None and open_orders_count > 0:
+            flat_start_blockers.append("preopen_open_orders")
+        if positions_count is not None and positions_count > 0:
+            flat_start_blockers.append("preopen_non_flat_positions")
+        if (
+            "market_closed_open_orders" in attention_flags
+            and "preopen_open_orders" not in flat_start_blockers
+        ):
+            flat_start_blockers.append("preopen_open_orders")
+        if (
+            "market_closed_non_flat_positions" in attention_flags
+            and "preopen_non_flat_positions" not in flat_start_blockers
+        ):
+            flat_start_blockers.append("preopen_non_flat_positions")
+
+    oms_blockers = [
+        failure
+        for failure in readiness_failures
+        if failure in {"oms_invariants_failed", "oms_lifecycle_parity_failed"}
+    ]
+    observed_oms_warnings: list[str] = []
+    for gate_name in ("oms_invariants", "oms_lifecycle_parity"):
+        gate_raw = readiness_gates.get(gate_name)
+        gate = dict(gate_raw) if isinstance(gate_raw, dict) else {}
+        if gate.get("status") == "observed_failure":
+            observed_oms_warnings.append(f"{gate_name}_observed_failure")
+        if gate.get("status") == "required_failed":
+            failure = f"{gate_name}_failed"
+            if failure not in oms_blockers:
+                oms_blockers.append(failure)
+
+    blockers = [*flat_start_blockers, *oms_blockers]
+    warnings = list(observed_oms_warnings)
+    if flat_start_blockers and not bool(flat_start_required["enabled"]):
+        warnings.extend(flat_start_blockers)
+    status = "pass"
+    if oms_blockers or (flat_start_blockers and bool(flat_start_required["enabled"])):
+        status = "fail"
+    elif warnings:
+        status = "warn"
+
+    flat_state = "clean" if not flat_start_blockers else ",".join(flat_start_blockers)
+    oms_state = "clean" if not oms_blockers and not observed_oms_warnings else ",".join(
+        [*oms_blockers, *observed_oms_warnings]
+    )
+    summary = (
+        "pre-open drill "
+        f"flat_start_required={str(bool(flat_start_required['enabled'])).lower()} "
+        f"flat_state={flat_state} "
+        f"oms_require_invariants={str(oms_invariants_required_effective).lower()} "
+        f"oms_require_lifecycle={str(oms_lifecycle_required_effective).lower()} "
+        f"oms_state={oms_state}"
+    )
+
+    return Step(
+        name="preopen_operator_drill",
+        status=status,
+        summary=summary,
+        details={
+            "config": config,
+            "broker": {
+                "open_orders_count": open_orders_count,
+                "positions_count": positions_count,
+            },
+            "flat_start": {
+                "required": bool(flat_start_required["enabled"]),
+                "blockers": flat_start_blockers,
+                "open_orders_count": open_orders_count,
+                "positions_count": positions_count,
+                "runtime_context": runtime_flat_start,
+            },
+            "oms": {
+                "require_invariants": oms_invariants_required_effective,
+                "require_lifecycle_parity": oms_lifecycle_required_effective,
+                "readiness_failures": readiness_failures,
+                "readiness_gates": readiness_gates,
+                "blockers": oms_blockers,
+                "warnings": observed_oms_warnings,
+            },
+            "attention_flags": attention_flags,
+            "blockers": blockers,
+            "warnings": warnings,
+        },
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-dir", default=".", help="Repository root (default: current directory).")
@@ -422,13 +668,15 @@ def main() -> int:
         _check_env_sync(repo_dir, sync=not bool(args.no_sync_env)),
         _refresh_runtime_reports(repo_dir, refresh=not bool(args.no_refresh)),
         _evaluate_runtime_gonogo(),
-        _check_health(
-            repo_dir,
-            port=args.health_port,
-            timeout_seconds=int(args.health_timeout_sec),
-            skip=bool(args.skip_health),
-        ),
     ]
+    health_step = _check_health(
+        repo_dir,
+        port=args.health_port,
+        timeout_seconds=int(args.health_timeout_sec),
+        skip=bool(args.skip_health),
+    )
+    steps.append(health_step)
+    steps.append(_check_preopen_operator_drill(repo_dir, health_step=health_step))
     fail_count = sum(1 for step in steps if step.status == "fail")
     warn_count = sum(1 for step in steps if step.status == "warn")
     report: dict[str, Any] = {

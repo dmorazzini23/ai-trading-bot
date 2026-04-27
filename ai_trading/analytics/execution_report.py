@@ -152,6 +152,75 @@ def _resolve_phase2_baseline_value(
     return None, "none"
 
 
+def _rounded_rate(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(max(0.0, min(float(value), 1.0)), 4)
+
+
+def _rounded_bps(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(max(0.0, float(value)), 4)
+
+
+def _build_phase2_calibration_diagnostics(
+    *,
+    metrics: Mapping[str, Any],
+    min_samples: int,
+) -> dict[str, Any]:
+    target_limit_attempted = int(_safe_float(metrics.get("target_limit_attempted")) or 0.0)
+    target_limit_fill_rate = _safe_float(metrics.get("target_limit_fill_rate"))
+    slippage_median_abs_bps = _safe_float(metrics.get("slippage_median_abs_bps"))
+    reject_rate = _safe_float(metrics.get("reject_rate"))
+    missing: list[str] = []
+    if target_limit_attempted < int(min_samples):
+        missing.append("target_limit_samples")
+    if target_limit_fill_rate is None:
+        missing.append("target_limit_fill_rate")
+    if slippage_median_abs_bps is None:
+        missing.append("slippage_median_abs_bps")
+    if reject_rate is None:
+        missing.append("reject_rate")
+
+    recommended_fill_rate = (
+        max(0.05, min(float(target_limit_fill_rate), 0.95))
+        if target_limit_fill_rate is not None
+        else 0.56
+    )
+    recommended_slippage = (
+        max(0.1, min(float(slippage_median_abs_bps) * 1.25, 100.0))
+        if slippage_median_abs_bps is not None
+        else 5.0
+    )
+    recommended_reject_rate = (
+        max(0.005, min(float(reject_rate) * 2.0 + 0.005, 0.05))
+        if reject_rate is not None
+        else 0.05
+    )
+    sufficient = not missing
+    return {
+        "sufficient": bool(sufficient),
+        "min_samples": int(min_samples),
+        "missing": missing,
+        "recommended_routing_thresholds": {
+            "AI_TRADING_PHASE2_EXECUTION_EDGE_ROUTING_ENABLED": False,
+            "AI_TRADING_PHASE2_EXECUTION_EDGE_MIN_SAMPLES": int(min_samples),
+            "AI_TRADING_PHASE2_EXECUTION_EDGE_TARGET_FILL_RATE": _rounded_rate(
+                recommended_fill_rate
+            ),
+            "AI_TRADING_PHASE2_EXECUTION_EDGE_MAX_REJECT_RATE": _rounded_rate(
+                recommended_reject_rate
+            ),
+            "AI_TRADING_PHASE2_EXECUTION_EDGE_TARGET_SLIPPAGE_BPS": _rounded_bps(
+                recommended_slippage
+            ),
+            "AI_TRADING_PHASE2_EXECUTION_EDGE_MAX_OFFSET_ADD_BPS": 3.0,
+            "AI_TRADING_PHASE2_EXECUTION_EDGE_OFFSET_WEIGHT": 1.0 if sufficient else 0.5,
+        },
+    }
+
+
 def _parse_record_ts(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -198,6 +267,13 @@ def _build_phase2_execution_edge_summary(
     )
     max_stale_pending_increase = float(
         get_env("AI_TRADING_ROADMAP_PHASE2_MAX_STALE_PENDING_INCREASE", 0.0, cast=float)
+    )
+    routing_min_samples = max(
+        1,
+        min(
+            int(get_env("AI_TRADING_PHASE2_EXECUTION_EDGE_MIN_SAMPLES", 24, cast=int)),
+            5000,
+        ),
     )
     baseline_payload, baseline_path = _load_phase2_baseline_payload()
 
@@ -283,6 +359,15 @@ def _build_phase2_execution_edge_summary(
     current_reject_rate = float(rejected) / float(attempted) if attempted > 0 else None
     current_execution_drift_p90_bps = _percentile(drift_values, 90.0)
     current_stale_pending_count = float(stale_pending_count)
+    metrics = {
+        "slippage_median_abs_bps": current_slippage_median_bps,
+        "target_limit_fill_rate": current_fill_rate,
+        "reject_rate": current_reject_rate,
+        "execution_drift_p90_bps": current_execution_drift_p90_bps,
+        "stale_pending_count": current_stale_pending_count,
+        "target_limit_attempted": target_limit_attempted,
+        "target_limit_filled": target_limit_filled,
+    }
 
     slippage_improvement_pct: float | None = None
     if (
@@ -339,15 +424,7 @@ def _build_phase2_execution_edge_summary(
         "evaluated_at_utc": resolved_now_utc.isoformat(),
         "records_in_window": len(window_records),
         "attempted_orders": attempted,
-        "metrics": {
-            "slippage_median_abs_bps": current_slippage_median_bps,
-            "target_limit_fill_rate": current_fill_rate,
-            "reject_rate": current_reject_rate,
-            "execution_drift_p90_bps": current_execution_drift_p90_bps,
-            "stale_pending_count": current_stale_pending_count,
-            "target_limit_attempted": target_limit_attempted,
-            "target_limit_filled": target_limit_filled,
-        },
+        "metrics": metrics,
         "baselines": {
             "slippage_median_abs_bps": baseline_slippage_median_bps,
             "target_limit_fill_rate": baseline_fill_rate,
@@ -377,6 +454,10 @@ def _build_phase2_execution_edge_summary(
         },
         "gates": gates,
         "effective_gates": effective_gates,
+        "calibration": _build_phase2_calibration_diagnostics(
+            metrics=metrics,
+            min_samples=routing_min_samples,
+        ),
     }
 
 

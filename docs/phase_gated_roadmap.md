@@ -37,18 +37,23 @@ Optional promotion enforcement:
 
 ## Phase 2: Execution Edge Upgrade (TCA-Native Routing)
 
-Status: In progress.
+Status: Implemented as guarded opt-in automation; pending paper calibration and
+baseline refresh before live enablement.
 
 Primary objective:
 - Improve realized net edge by reducing slippage and adverse selection.
 
-Target gates (to be automated in code):
+Target gates:
 - 30-day realized slippage median improves by at least 10 percent versus baseline.
 - Fill-rate at target limit offset does not degrade more than 5 percent.
 - Execution drift and reject-rate remain within SLO control bands.
 - No increase in stale pending order incidents.
 
 Current automation surface:
+- Smart order routing can consume recent execution-learning context and apply a
+  small marketable-limit offset increase when fill rate is below target.
+- Routing action is disabled by default and guarded by minimum sample count,
+  reject-rate, slippage, max-offset, and side-aware buy/sell directionality.
 - Daily execution report now emits `roadmap.phase_2_execution_edge` with windowed
   metrics, thresholds, gate booleans, and `gate_passed`.
 - Institutional gate script can enforce this at merge/deploy time via:
@@ -66,6 +71,14 @@ Current automation surface:
   - `AI_TRADING_ROADMAP_PHASE2_BASELINE_FILL_RATE`
   - `AI_TRADING_ROADMAP_PHASE2_BASELINE_STALE_PENDING_COUNT`
   - `AI_TRADING_ROADMAP_PHASE2_BASELINE_PATH` (JSON artifact, default `runtime/phase2_execution_baseline.json`)
+- Routing action is controlled separately via:
+  - `AI_TRADING_PHASE2_EXECUTION_EDGE_ROUTING_ENABLED` (default off)
+  - `AI_TRADING_PHASE2_EXECUTION_EDGE_MIN_SAMPLES`
+  - `AI_TRADING_PHASE2_EXECUTION_EDGE_TARGET_FILL_RATE`
+  - `AI_TRADING_PHASE2_EXECUTION_EDGE_MAX_REJECT_RATE`
+  - `AI_TRADING_PHASE2_EXECUTION_EDGE_TARGET_SLIPPAGE_BPS`
+  - `AI_TRADING_PHASE2_EXECUTION_EDGE_MAX_OFFSET_ADD_BPS`
+  - `AI_TRADING_PHASE2_EXECUTION_EDGE_OFFSET_WEIGHT`
 
 Baseline artifact refresh:
 
@@ -78,20 +91,35 @@ python3 -m ai_trading.tools.update_phase2_execution_baseline \
 
 ## Phase 3: Live Auto-Demotion + Recovery
 
-Status: Planned.
+Status: Runtime scaffolding implemented; rollback remains conservative and must
+be paper-drilled before live enablement.
 
 Primary objective:
 - Minimize damage when live regime shifts break model assumptions.
 
-Target gates (to be automated in code):
+Target gates:
 - Automatic demotion triggers after persistent breaches of calibration or drift SLOs.
 - Rollback-to-prior model executes within one cycle without service restart.
 - Post-demotion drawdown slope reduces versus pre-demotion window.
 - Recovery promotion requires fresh phase gate pass, not stale historical pass.
 
-Initial runtime scaffolding now available:
-- `AI_TRADING_PROMOTION_LIVE_KPI_BREACH_CONSECUTIVE_REQUIRED` controls how many
-  consecutive live KPI control-band breaches are required before auto-rollback.
+Current automation surface:
+- Live KPI guard can evaluate control-band breaches on an interval from runtime.
+- Breach windows persist to `live_kpi_breach_state.json` under the governance
+  base path, or the override path below.
+- Consecutive breach requirements are enforced per strategy/model/KPI signature.
+- Auto-rollback is dry-run disabled unless explicitly enabled; dry-run audit
+  still records failed KPI names, values, current model, breach count, and
+  required breach count.
+- If rollback is enabled but no previous champion exists, the current production
+  model is demoted to `challenger` so stale promotion state is not left marked
+  as production.
+- Controls:
+  - `AI_TRADING_PROMOTION_LIVE_KPI_GUARD_ENABLED`
+  - `AI_TRADING_PROMOTION_LIVE_KPI_GUARD_INTERVAL_SEC`
+  - `AI_TRADING_PROMOTION_LIVE_KPI_BREACH_STATE_PATH`
+  - `AI_TRADING_PROMOTION_LIVE_KPI_BREACH_CONSECUTIVE_REQUIRED`
+  - `AI_TRADING_PROMOTION_AUTO_ROLLBACK_ON_CONTROL_BAND` (default off)
 - `evaluate_live_kpis_and_maybe_rollback(..., allow_rollback=False)` enables
   breach evaluation without immediate rollback, so callers can enforce
   persistence windows before demotion.

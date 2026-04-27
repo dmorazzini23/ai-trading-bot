@@ -65,6 +65,134 @@ class PortfolioOptimizerRuntime:
     market_data: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class NettingExecutionRankRuntimeContext:
+    bool_values: dict[str, bool]
+    int_values: dict[str, int]
+    float_values: dict[str, float]
+    bandit_method: str
+    bandit_active_session: str
+    bandit_active_regime: str
+    promotion_significance_method: str
+    bandit_promotion_significance: Any
+    counterfactual_promotion_significance: Any
+    replay_quality_context: Any
+    opportunity_quality_gate: Any
+    policy_rollback_disabled_slices: list[Any]
+    policy_disabled_gate_roots: list[Any]
+    policy_disabled_sleeves: list[Any]
+    policy_runtime_toggles_updated_at: Any
+    policy_runtime_toggles_source_updated_at: Any
+    policy_runtime_toggles: Any
+
+    @classmethod
+    def from_values(
+        cls,
+        context_values: Mapping[str, Any],
+    ) -> "NettingExecutionRankRuntimeContext":
+        bool_values = {
+            key: bool(context_values.get(key))
+            for key in _BOOL_CONTEXT_KEYS
+        }
+        int_values: dict[str, int] = {}
+        for key in _INT_CONTEXT_KEYS:
+            try:
+                int_values[key] = int(context_values.get(key, 0))
+            except (TypeError, ValueError):
+                int_values[key] = 0
+
+        float_values: dict[str, float] = {}
+        for key in _FLOAT_CONTEXT_KEYS:
+            try:
+                parsed = float(context_values.get(key, 0.0))
+            except (TypeError, ValueError):
+                parsed = 0.0
+            if not math.isfinite(parsed):
+                parsed = 0.0
+            float_values[key] = float(parsed)
+
+        policy_runtime_payload = context_values.get("policy_runtime_payload", {})
+        if isinstance(policy_runtime_payload, Mapping):
+            toggles_updated_at = _copy_value(policy_runtime_payload.get("updated_at"))
+            toggles_source_updated_at = _copy_value(
+                policy_runtime_payload.get("source_updated_at")
+            )
+        else:
+            toggles_updated_at = None
+            toggles_source_updated_at = None
+
+        return cls(
+            bool_values=bool_values,
+            int_values=int_values,
+            float_values=float_values,
+            bandit_method=str(context_values.get("bandit_method", "") or ""),
+            bandit_active_session=str(
+                context_values.get("bandit_active_session", "") or ""
+            ),
+            bandit_active_regime=str(
+                context_values.get("bandit_active_regime", "") or ""
+            ),
+            promotion_significance_method=str(
+                context_values.get("promotion_significance_method", "") or ""
+            ),
+            bandit_promotion_significance=_copy_value(
+                context_values.get("bandit_significance_context", {})
+            ),
+            counterfactual_promotion_significance=_copy_value(
+                context_values.get("counterfactual_significance_context", {})
+            ),
+            replay_quality_context=_copy_value(
+                context_values.get("replay_quality_context", {})
+            ),
+            opportunity_quality_gate=_copy_value(
+                context_values.get("opportunity_quality_gate", {})
+            ),
+            policy_rollback_disabled_slices=_sorted_values(
+                context_values.get("policy_rollback_disabled_slices", [])
+            ),
+            policy_disabled_gate_roots=_sorted_values(
+                context_values.get("policy_disabled_gate_roots", [])
+            ),
+            policy_disabled_sleeves=_sorted_values(
+                context_values.get("policy_disabled_sleeves", [])
+            ),
+            policy_runtime_toggles_updated_at=toggles_updated_at,
+            policy_runtime_toggles_source_updated_at=toggles_source_updated_at,
+            policy_runtime_toggles=_copy_value(context_values.get("toggles", {})),
+        )
+
+    def to_runtime_context(self) -> dict[str, Any]:
+        context: dict[str, Any] = {}
+        context.update(self.bool_values)
+        context.update(self.int_values)
+        context.update(self.float_values)
+        context["bandit_method"] = self.bandit_method
+        context["bandit_active_session"] = self.bandit_active_session
+        context["bandit_active_regime"] = self.bandit_active_regime
+        context["promotion_significance_method"] = self.promotion_significance_method
+        context["bandit_promotion_significance"] = _copy_value(
+            self.bandit_promotion_significance
+        )
+        context["counterfactual_promotion_significance"] = _copy_value(
+            self.counterfactual_promotion_significance
+        )
+        context["replay_quality_context"] = _copy_value(self.replay_quality_context)
+        context["opportunity_quality_gate"] = _copy_value(self.opportunity_quality_gate)
+        context["policy_rollback_disabled_slices"] = list(
+            self.policy_rollback_disabled_slices
+        )
+        context["policy_disabled_gate_roots"] = list(self.policy_disabled_gate_roots)
+        context["policy_disabled_sleeves"] = list(self.policy_disabled_sleeves)
+        context["policy_runtime_toggles_updated_at"] = _copy_value(
+            self.policy_runtime_toggles_updated_at
+        )
+        context["policy_runtime_toggles_source_updated_at"] = _copy_value(
+            self.policy_runtime_toggles_source_updated_at
+        )
+        context["policy_runtime_toggles"] = _copy_value(self.policy_runtime_toggles)
+        return context
+
+
 def _sorted_values(raw: Any) -> list[Any]:
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
         if isinstance(raw, set):
@@ -184,67 +312,9 @@ _FLOAT_CONTEXT_KEYS = {
 
 
 def _build_execution_rank_context(context_values: Mapping[str, Any]) -> dict[str, Any]:
-    context: dict[str, Any] = {}
-    for key in _BOOL_CONTEXT_KEYS:
-        context[key] = bool(context_values.get(key))
-    for key in _INT_CONTEXT_KEYS:
-        try:
-            context[key] = int(context_values.get(key, 0))
-        except (TypeError, ValueError):
-            context[key] = 0
-    for key in _FLOAT_CONTEXT_KEYS:
-        try:
-            parsed = float(context_values.get(key, 0.0))
-        except (TypeError, ValueError):
-            parsed = 0.0
-        if not math.isfinite(parsed):
-            parsed = 0.0
-        context[key] = float(parsed)
-
-    context["bandit_method"] = str(context_values.get("bandit_method", "") or "")
-    context["bandit_active_session"] = str(
-        context_values.get("bandit_active_session", "") or ""
-    )
-    context["bandit_active_regime"] = str(
-        context_values.get("bandit_active_regime", "") or ""
-    )
-    context["promotion_significance_method"] = str(
-        context_values.get("promotion_significance_method", "") or ""
-    )
-    context["bandit_promotion_significance"] = _copy_value(
-        context_values.get("bandit_significance_context", {})
-    )
-    context["counterfactual_promotion_significance"] = _copy_value(
-        context_values.get("counterfactual_significance_context", {})
-    )
-    context["replay_quality_context"] = _copy_value(
-        context_values.get("replay_quality_context", {})
-    )
-    context["opportunity_quality_gate"] = _copy_value(
-        context_values.get("opportunity_quality_gate", {})
-    )
-    context["policy_rollback_disabled_slices"] = _sorted_values(
-        context_values.get("policy_rollback_disabled_slices", [])
-    )
-    context["policy_disabled_gate_roots"] = _sorted_values(
-        context_values.get("policy_disabled_gate_roots", [])
-    )
-    context["policy_disabled_sleeves"] = _sorted_values(
-        context_values.get("policy_disabled_sleeves", [])
-    )
-    policy_runtime_payload = context_values.get("policy_runtime_payload", {})
-    if isinstance(policy_runtime_payload, Mapping):
-        context["policy_runtime_toggles_updated_at"] = _copy_value(
-            policy_runtime_payload.get("updated_at")
-        )
-        context["policy_runtime_toggles_source_updated_at"] = _copy_value(
-            policy_runtime_payload.get("source_updated_at")
-        )
-    else:
-        context["policy_runtime_toggles_updated_at"] = None
-        context["policy_runtime_toggles_source_updated_at"] = None
-    context["policy_runtime_toggles"] = _copy_value(context_values.get("toggles", {}))
-    return context
+    return NettingExecutionRankRuntimeContext.from_values(
+        context_values
+    ).to_runtime_context()
 
 
 def store_candidate_ranking_runtime_state(
@@ -476,6 +546,7 @@ def apply_target_construction_controls(
 
 
 __all__ = [
+    "NettingExecutionRankRuntimeContext",
     "PortfolioOptimizerRuntime",
     "apply_target_construction_controls",
     "prepare_portfolio_optimizer_runtime",

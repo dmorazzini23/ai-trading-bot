@@ -258,6 +258,40 @@ def test_execution_report_phase2_gate_fails_on_reject_and_stale_pending(monkeypa
     assert phase2["effective_gates"]["stale_pending_incidents"] is False
 
 
+def test_execution_report_phase2_calibration_hints_stay_disabled(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    monkeypatch.setenv("AI_TRADING_PHASE2_EXECUTION_EDGE_MIN_SAMPLES", "2")
+    records = [
+        {
+            "ts": (now - timedelta(hours=1)).isoformat(),
+            "symbol": "AAPL",
+            "status": "filled",
+            "order_type": "limit",
+            "midpoint_offset_bps": 4.0,
+            "is_bps": 4.0,
+        },
+        {
+            "ts": (now - timedelta(hours=1)).isoformat(),
+            "symbol": "AAPL",
+            "status": "canceled",
+            "order_type": "limit",
+            "midpoint_offset_bps": 4.0,
+        },
+    ]
+
+    report = execution_report.build_daily_execution_report(records)
+
+    calibration = report["roadmap"]["phase_2_execution_edge"]["calibration"]
+    assert calibration["sufficient"] is True
+    assert calibration["missing"] == []
+    threshold_hints = calibration["recommended_routing_thresholds"]
+    assert threshold_hints["AI_TRADING_PHASE2_EXECUTION_EDGE_ROUTING_ENABLED"] is False
+    assert threshold_hints["AI_TRADING_PHASE2_EXECUTION_EDGE_MIN_SAMPLES"] == 2
+    assert threshold_hints["AI_TRADING_PHASE2_EXECUTION_EDGE_TARGET_FILL_RATE"] == 0.5
+    assert threshold_hints["AI_TRADING_PHASE2_EXECUTION_EDGE_TARGET_SLIPPAGE_BPS"] == 5.0
+    assert threshold_hints["AI_TRADING_PHASE2_EXECUTION_EDGE_OFFSET_WEIGHT"] == 1.0
+
+
 def test_execution_report_phase2_loads_baselines_from_file(tmp_path: Path, monkeypatch) -> None:
     baseline_path = tmp_path / "phase2_execution_baseline.json"
     baseline_path.write_text(

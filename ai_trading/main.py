@@ -1405,7 +1405,12 @@ def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None
         breached = bool(result.get("breached"))
         if breached:
             with _PROMOTION_KPI_STREAK_LOCK:
-                streak = int(_PROMOTION_KPI_BREACH_STREAKS.get(strategy, 0)) + 1
+                local_streak = int(_PROMOTION_KPI_BREACH_STREAKS.get(strategy, 0)) + 1
+                try:
+                    streak = int(result.get("consecutive_breach_count", local_streak) or 0)
+                except (TypeError, ValueError):
+                    streak = local_streak
+                streak = max(local_streak, streak)
                 _PROMOTION_KPI_BREACH_STREAKS[strategy] = streak
         else:
             with _PROMOTION_KPI_STREAK_LOCK:

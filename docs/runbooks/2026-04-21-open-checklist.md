@@ -36,6 +36,25 @@ Expected:
 - `positions: 0`
 - `open_orders: 0`
 
+The operator acceptance gate now surfaces the same flat-start and OMS
+strictness signals in one place:
+
+```bash
+./venv/bin/python scripts/pre_open_acceptance_gate.py --json
+```
+
+Review the `preopen_operator_drill` step before removing the halt flag:
+
+- `AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START`
+- `AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS`
+- `AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY`
+- broker `open_orders_count` and `positions_count`
+- OMS `readiness_gates` and `readiness_failures`
+
+If flat-start is required, any open order or unexpected non-flat broker state
+must be treated as a blocker. If OMS strictness is required, any
+`required_failed` OMS gate must be repaired before opening new exposure.
+
 3. Confirm runtime health is green:
 
 ```bash
@@ -59,6 +78,13 @@ Expected live values:
 - `TRADING__ALLOW_SHORTS=0`
 - `AI_TRADING_EOD_FLATTEN_ENABLED=1`
 - `AI_TRADING_EOD_FLATTEN_LEAD_SECONDS=300`
+- For strict flat-start paper canaries:
+  - `AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START=1`
+  - `AI_TRADING_EXECUTION_PREOPEN_EXPECTED_SWING_SYMBOLS=` unless intentional
+    swing holdings are approved
+- For strict OMS readiness:
+  - `AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS=1`
+  - `AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY=1`
 
 ## Unhalt
 

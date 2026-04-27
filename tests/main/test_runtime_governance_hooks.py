@@ -193,6 +193,187 @@ def test_live_kpi_guard_requires_consecutive_breaches_before_rollback(monkeypatc
     assert "ALERT_PROMOTION_CONTROL_BAND_ROLLBACK_TRIGGERED" in emitted
 
 
+def test_live_kpi_guard_honors_persisted_breach_count_for_dry_run(
+    monkeypatch,
+    caplog,
+) -> None:
+    main._LAST_PROMOTION_KPI_GUARD_TS = 0.0
+    main._PROMOTION_KPI_BREACH_STREAKS = {}
+    monkeypatch.setenv("AI_TRADING_PROMOTION_LIVE_KPI_GUARD_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_LIVE_KPI_GUARD_INTERVAL_SEC", "0")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_RUNTIME_STRATEGIES", "ml_edge")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_LIVE_KPI_BREACH_CONSECUTIVE_REQUIRED", "2")
+
+    class _FakeSLOMonitor:
+        def get_slo_status(self, metric_name: str | None = None):
+            if metric_name == "order_reject_rate_pct":
+                return {"current_value": 6.0, "sample_count": 9}
+            if metric_name == "execution_drift_bps":
+                return {"current_value": 42.0, "sample_count": 9}
+            return {}
+
+    import ai_trading.monitoring.slo as slo_mod
+
+    monkeypatch.setattr(slo_mod, "get_slo_monitor", lambda: _FakeSLOMonitor())
+    monkeypatch.setitem(
+        main.sys.modules,
+        "ai_trading.core.bot_engine",
+        types.SimpleNamespace(_current_drawdown=lambda: 0.12),
+    )
+
+    eval_calls: list[dict[str, object]] = []
+
+    class _FakePromotionManager:
+        registry = types.SimpleNamespace(model_index={})
+
+        def evaluate_live_kpis_and_maybe_rollback(
+            self,
+            *,
+            strategy: str,
+            live_kpis: dict[str, float],
+            force: bool = True,
+            allow_rollback: bool = True,
+        ) -> dict[str, object]:
+            eval_calls.append(
+                {
+                    "strategy": strategy,
+                    "force": force,
+                    "allow_rollback": allow_rollback,
+                    "live_kpis": dict(live_kpis),
+                }
+            )
+            status = "dry_run_disabled" if allow_rollback else "pending"
+            return {
+                "strategy": strategy,
+                "breached": True,
+                "breaches": {"max_drawdown": 0.12},
+                "consecutive_breach_count": 2,
+                "required_consecutive_breaches": 2,
+                "status": status,
+                "triggered": False,
+            }
+
+    import ai_trading.governance.promotion as promotion_mod
+
+    monkeypatch.setattr(
+        promotion_mod,
+        "get_promotion_manager",
+        lambda: _FakePromotionManager(),
+    )
+
+    emitted: list[str] = []
+    monkeypatch.setattr(
+        main,
+        "emit_runtime_alert",
+        lambda event, **_kwargs: emitted.append(str(event)),
+    )
+
+    with caplog.at_level("WARNING", logger=main.logger.name):
+        main._maybe_evaluate_live_kpi_control_band_rollbacks(cycle_index=3)
+
+    assert [call["allow_rollback"] for call in eval_calls] == [False, True]
+    assert not emitted
+    assert not any(
+        record.message == "LIVE_KPI_CONTROL_BAND_BREACH_PENDING"
+        for record in caplog.records
+    )
+    breach_records = [
+        record
+        for record in caplog.records
+        if record.message == "LIVE_KPI_CONTROL_BAND_BREACH"
+    ]
+    assert len(breach_records) == 1
+    assert getattr(breach_records[0], "status") == "dry_run_disabled"
+    assert getattr(breach_records[0], "consecutive_breach_count") == 2
+    assert main._PROMOTION_KPI_BREACH_STREAKS.get("ml_edge") == 2
+
+
+def test_live_kpi_guard_honors_persisted_breach_count_for_trigger(
+    monkeypatch,
+) -> None:
+    main._LAST_PROMOTION_KPI_GUARD_TS = 0.0
+    main._PROMOTION_KPI_BREACH_STREAKS = {}
+    monkeypatch.setenv("AI_TRADING_PROMOTION_LIVE_KPI_GUARD_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_LIVE_KPI_GUARD_INTERVAL_SEC", "0")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_RUNTIME_STRATEGIES", "ml_edge")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_LIVE_KPI_BREACH_CONSECUTIVE_REQUIRED", "2")
+
+    class _FakeSLOMonitor:
+        def get_slo_status(self, metric_name: str | None = None):
+            if metric_name == "order_reject_rate_pct":
+                return {"current_value": 6.0, "sample_count": 9}
+            if metric_name == "execution_drift_bps":
+                return {"current_value": 42.0, "sample_count": 9}
+            return {}
+
+    import ai_trading.monitoring.slo as slo_mod
+
+    monkeypatch.setattr(slo_mod, "get_slo_monitor", lambda: _FakeSLOMonitor())
+    monkeypatch.setitem(
+        main.sys.modules,
+        "ai_trading.core.bot_engine",
+        types.SimpleNamespace(_current_drawdown=lambda: 0.12),
+    )
+
+    eval_calls: list[dict[str, object]] = []
+
+    class _FakePromotionManager:
+        registry = types.SimpleNamespace(model_index={})
+
+        def evaluate_live_kpis_and_maybe_rollback(
+            self,
+            *,
+            strategy: str,
+            live_kpis: dict[str, float],
+            force: bool = True,
+            allow_rollback: bool = True,
+        ) -> dict[str, object]:
+            eval_calls.append(
+                {
+                    "strategy": strategy,
+                    "force": force,
+                    "allow_rollback": allow_rollback,
+                    "live_kpis": dict(live_kpis),
+                }
+            )
+            return {
+                "strategy": strategy,
+                "breached": True,
+                "breaches": {"max_drawdown": 0.12},
+                "consecutive_breach_count": 2,
+                "required_consecutive_breaches": 2,
+                "status": "rolled_back" if allow_rollback else "pending",
+                "triggered": bool(allow_rollback),
+            }
+
+    import ai_trading.governance.promotion as promotion_mod
+
+    monkeypatch.setattr(
+        promotion_mod,
+        "get_promotion_manager",
+        lambda: _FakePromotionManager(),
+    )
+
+    emitted: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        main,
+        "emit_runtime_alert",
+        lambda event, **kwargs: emitted.append((str(event), dict(kwargs))),
+    )
+
+    main._maybe_evaluate_live_kpi_control_band_rollbacks(cycle_index=4)
+
+    assert [call["allow_rollback"] for call in eval_calls] == [False, True]
+    assert len(emitted) == 1
+    event, payload = emitted[0]
+    assert event == "ALERT_PROMOTION_CONTROL_BAND_ROLLBACK_TRIGGERED"
+    details = payload["details"]
+    assert isinstance(details, dict)
+    assert details["status"] == "rolled_back"
+    assert details["consecutive_breach_count"] == 2
+    assert main._PROMOTION_KPI_BREACH_STREAKS == {}
+
+
 def test_bad_session_replay_auto_builds_from_tca_source(
     monkeypatch,
     tmp_path: Path,

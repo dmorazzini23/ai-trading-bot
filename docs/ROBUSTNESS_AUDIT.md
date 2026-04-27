@@ -1,6 +1,6 @@
 # Robustness Audit
 
-Last reviewed: `2026-04-18`
+Last reviewed: `2026-04-27`
 
 This document turns "make the system robust" into a concrete operating standard:
 
@@ -14,7 +14,7 @@ bounded, visible, and recoverable.
 
 ## Current Summary
 
-Current status as of `2026-04-18`:
+Current status as of `2026-04-27`:
 
 - `PASS`: backtester and offline replay are both implemented and validated.
 - `PASS`: runtime ML now fails closed instead of silently using placeholder artifacts.
@@ -22,8 +22,13 @@ Current status as of `2026-04-18`:
 - `PASS`: health, database, broker connectivity, and market-closed behavior are currently stable.
 - `MONITOR`: the runtime is intentionally in explicit no-ML mode because no real promoted ML artifact exists yet.
 - `MONITOR`: RL remains `shadow` gated and is not ready for live decisioning.
-- `ATTENTION`: the paper account is still carrying `7` broker positions into the weekend and must be confirmed flat at Monday's open.
-- `ATTENTION`: `oms_invariants` and `oms_lifecycle_parity` are available in health surfaces but currently disabled by default, so they are not acting as hard readiness gates yet.
+- `ATTENTION`: pre-open flat-start enforcement is implemented behind
+  `AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START`; keep it observe/off until
+  expected swing symbols and broker snapshots are validated in paper.
+- `ATTENTION`: `oms_invariants` and `oms_lifecycle_parity` now have explicit
+  health readiness gates, but production strictness still depends on
+  `AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS` and
+  `AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY`.
 
 ## Control Matrix
 
@@ -34,7 +39,7 @@ Current status as of `2026-04-18`:
 | Reconciliation drift between local and broker state | reconciliation retry, mismatch burst tracking, opening freeze | go/no-go observed metrics, health payload positions section | freeze new openings, guarded auto-repair | `tests/execution/test_execution_runtime_controls.py` | `PASS` |
 | Stale pending / orphaned orders | stale-order sweeps, startup stale-only cleanup, pending backlog caps | order health monitor, pending-order tests | cancel stale orders before new work | `tests/bot_engine/test_pending_orders_cleanup.py`, `tests/execution/test_execution_runtime_controls.py` | `PASS` |
 | Market-open with unsafe runtime artifacts | pre-open readiness gates for broker/data/artifact freshness | readiness context, health/control-plane checks | block new openings until fresh | `tests/execution/test_execution_runtime_controls.py::test_runtime_preopen_readiness_*` | `PASS` |
-| Non-flat account during closed session or before open | EOD flatten, startup reconciliation, paper rollout guardrails | broker sync counts, health attention flags, journal logs | operator flatten / hold rollout until flat | live service logs, `/healthz` broker counts | `ATTENTION` |
+| Non-flat account during closed session or before open | EOD flatten, startup reconciliation, optional `AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START` guard with `AI_TRADING_EXECUTION_PREOPEN_EXPECTED_SWING_SYMBOLS` allowlist | readiness context, broker sync counts, health attention flags, journal logs | block new openings / operator flatten / hold rollout until expected | `tests/execution/test_execution_runtime_controls.py`, live service logs, `/healthz` broker counts | `ATTENTION` |
 | Symbol / gross / net exposure breach | risk engine caps, notional caps, sleeve caps, max trades/day | risk logs, runtime summaries, health/control-plane | block or scale targets, manage existing only | `config/runtime.py`, runtime risk checks | `PASS` |
 | Hard dependency outage (provider / broker) | dependency breakers, safe-mode, halt flag | `/healthz`, provider state, alerting | fail safe and manage existing only | `docs/OPERATIONS.md`, provider safe-mode logic | `PASS` |
 | Placeholder or missing ML artifact | explicit runtime loader verification, placeholder detection | `MODEL_RUNTIME_DISABLED`, loader tests | no-ML mode instead of fake model | `tests/test_model_loading.py` | `PASS` |
@@ -98,17 +103,20 @@ Reference coverage:
 
 ## Current Audit Findings
 
-### 1. Pre-open account state is still the highest immediate operational risk
+### 1. Pre-open account state now has an explicit guard, but policy must be set
 
-The service is healthy, but the latest broker sync logs still show:
+The runtime can now require a flat start during the pre-open readiness window:
 
-- `open_orders=0`
-- `positions=7`
+- `AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START=1` blocks opening trades when
+  broker state shows open orders or unexpected nonzero positions.
+- `AI_TRADING_EXECUTION_PREOPEN_EXPECTED_SWING_SYMBOLS` allows intentional swing
+  holdings to pass while still blocking unexpected exposure.
+- The readiness context includes a `flat_start` section with counts, expected
+  and unexpected positions, and the concrete block reason.
 
-That is acceptable for a closed session only if those are intentional swing holdings.
-For the current paper rollout, the rollout assumption was effectively no-overnight /
-flat start, so Monday's first operator check is to confirm those positions actually
-flatten.
+Do not treat the guard as live-proven yet. Validate it in paper against real
+broker snapshots, especially if stale cached snapshots or intended swing
+holdings are part of the operating mode.
 
 ### 2. Learning-system plumbing is now stronger than learning-system performance
 
@@ -124,19 +132,21 @@ What still blocks promotion is model performance, not deployment plumbing:
 - the consecutive-pass requirement must be met
 - effective trade count must reach the configured threshold
 
-### 3. Operator visibility improved, but readiness policy is still a choice
+### 3. Operator visibility improved, and strict OMS gates are now configurable
 
 The system now surfaces broker position/open-order counts and market-closed
 attention flags in the canonical health payload. That helps operators catch
 "non-flat before the open" early.
 
-What is still a policy decision:
+The OMS controls are explicit:
 
-- whether `AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS=1` should be enabled
-- whether `AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY=1` should be enabled
+- `AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS=1`
+- `AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY=1`
 
-Leaving them disabled is operationally simpler, but it is less strict than a
-maximally defensive rollout.
+When required, failures are reported through `readiness_gates`,
+`readiness_failures`, status degradation, and attention flags. When observe-only,
+failures remain visible without failing readiness. Choose the mode deliberately
+for paper and live rollout.
 
 ## Operating Cadence
 
