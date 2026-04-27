@@ -116,7 +116,11 @@ def test_record_challenger_evaluation_adds_significance(tmp_path: Path) -> None:
     assert float(payload["significance"]["uplift_bps"]) > 0.0
 
 
-def test_live_kpi_control_band_triggers_rollback(tmp_path: Path) -> None:
+def test_live_kpi_control_band_triggers_rollback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PROMOTION_AUTO_ROLLBACK_ON_CONTROL_BAND", "1")
     registry = ModelRegistry(tmp_path / "registry")
     promotion = ModelPromotion(model_registry=registry, base_path=str(tmp_path / "governance"))
     strategy = "momentum"
@@ -160,6 +164,105 @@ def test_live_kpi_control_band_pending_when_rollback_not_allowed(tmp_path: Path)
     production = registry.get_production_model(strategy)
     assert production is not None
     assert production[0] == challenger
+
+
+def test_live_kpi_control_band_persists_consecutive_breaches_before_rollback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PROMOTION_AUTO_ROLLBACK_ON_CONTROL_BAND", "1")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_LIVE_KPI_BREACH_CONSECUTIVE_REQUIRED", "2")
+    registry = ModelRegistry(tmp_path / "registry")
+    governance_path = tmp_path / "governance"
+    promotion = ModelPromotion(model_registry=registry, base_path=str(governance_path))
+    strategy = "persistent_momentum"
+
+    champion = _register_test_model(registry, strategy=strategy, marker="champion")
+    challenger = _register_test_model(registry, strategy=strategy, marker="challenger")
+    registry.update_governance_status(champion, "production")
+    assert promotion.promote_to_production(challenger, force=True) is True
+
+    first = promotion.evaluate_live_kpis_and_maybe_rollback(
+        strategy=strategy,
+        live_kpis={"max_drawdown": 0.20, "reject_rate": 0.07},
+    )
+    assert first["status"] == "pending"
+    assert first["consecutive_breach_count"] == 1
+    assert first["required_consecutive_breaches"] == 2
+    assert registry.get_production_model(strategy)[0] == challenger
+
+    restarted = ModelPromotion(model_registry=registry, base_path=str(governance_path))
+    second = restarted.evaluate_live_kpis_and_maybe_rollback(
+        strategy=strategy,
+        live_kpis={"max_drawdown": 0.20, "reject_rate": 0.07},
+    )
+
+    assert second["status"] == "rolled_back"
+    assert second["triggered"] is True
+    assert second["consecutive_breach_count"] == 2
+    assert second["failed_kpis"] == ["max_drawdown", "reject_rate"]
+    production = registry.get_production_model(strategy)
+    assert production is not None
+    assert production[0] == champion
+    audit_rows = restarted.list_recent_rollback_audit(limit=10)
+    assert audit_rows[-1]["status"] == "rolled_back"
+    assert audit_rows[-1]["consecutive_breach_count"] == 2
+    assert audit_rows[-1]["failed_kpis"] == ["max_drawdown", "reject_rate"]
+
+
+def test_live_kpi_control_band_defaults_to_dry_run_without_enablement(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("AI_TRADING_PROMOTION_AUTO_ROLLBACK_ON_CONTROL_BAND", raising=False)
+    registry = ModelRegistry(tmp_path / "registry")
+    promotion = ModelPromotion(model_registry=registry, base_path=str(tmp_path / "governance"))
+    strategy = "dry_run_momentum"
+
+    champion = _register_test_model(registry, strategy=strategy, marker="champion")
+    challenger = _register_test_model(registry, strategy=strategy, marker="challenger")
+    registry.update_governance_status(champion, "production")
+    assert promotion.promote_to_production(challenger, force=True) is True
+
+    result = promotion.evaluate_live_kpis_and_maybe_rollback(
+        strategy=strategy,
+        live_kpis={"max_drawdown": 0.20},
+    )
+
+    assert result["status"] == "dry_run_disabled"
+    assert result["triggered"] is False
+    production = registry.get_production_model(strategy)
+    assert production is not None
+    assert production[0] == challenger
+    audit_rows = promotion.list_recent_rollback_audit(limit=5)
+    assert audit_rows[-1]["status"] == "dry_run_disabled"
+    assert audit_rows[-1]["failed_kpis"] == ["max_drawdown"]
+
+
+def test_live_kpi_control_band_demotes_when_rollback_target_missing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PROMOTION_AUTO_ROLLBACK_ON_CONTROL_BAND", "1")
+    registry = ModelRegistry(tmp_path / "registry")
+    promotion = ModelPromotion(model_registry=registry, base_path=str(tmp_path / "governance"))
+    strategy = "no_champion"
+
+    model_id = _register_test_model(registry, strategy=strategy, marker="only")
+    registry.update_governance_status(model_id, "production")
+
+    result = promotion.evaluate_live_kpis_and_maybe_rollback(
+        strategy=strategy,
+        live_kpis={"max_drawdown": 0.20, "execution_drift_bps": 40.0},
+    )
+
+    assert result["status"] == "demoted_no_rollback_target"
+    assert result["triggered"] is True
+    assert registry.get_production_model(strategy) is None
+    governance = registry.model_index[model_id]["governance"]
+    assert governance["status"] == "challenger"
+    assert governance["live_kpi_breach_count"] == 1
+    assert governance["live_kpi_failed_kpis"] == ["execution_drift_bps", "max_drawdown"]
 
 
 def test_update_shadow_metrics_autoderives_validation_ratios(tmp_path: Path) -> None:

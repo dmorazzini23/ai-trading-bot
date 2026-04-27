@@ -579,6 +579,62 @@ def test_runtime_health_payload_oms_invariants_requirement_marks_degraded(monkey
     assert payload["ok"] is False
     assert payload["status"] == "degraded"
     assert payload.get("reason") == "oms_invariants_failed"
+    assert "oms_invariants_failed" in payload["readiness_failures"]
+    assert "oms_invariants_failed" in payload["attention_flags"]
+    assert payload["readiness_gates"]["oms_invariants"]["status"] == "required_failed"
+    assert payload["readiness_gates"]["oms_invariants"]["required"] is True
+    assert "repair" in payload["readiness_gates"]["oms_invariants"]["action"]
+
+
+def test_runtime_health_payload_oms_observe_only_failures_do_not_fail_readiness(
+    monkeypatch,
+):
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS", "0")
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY", "0")
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_invariants_snapshot",
+        lambda: {
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "reason": "missing_terminal_event",
+            "total_violations": 3,
+        },
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_lifecycle_parity_snapshot",
+        lambda: {
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "reason": "missing_submit_ack",
+            "total_violations": 2,
+        },
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_replay_live_parity_gate_snapshot",
+        lambda **_kwargs: {"enabled": False, "available": False, "ok": True},
+    )
+
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+
+    assert payload["ok"] is True
+    assert payload["status"] == "healthy"
+    assert payload["readiness_failures"] == []
+    assert "oms_invariants_failed" in payload["attention_flags"]
+    assert "oms_lifecycle_parity_failed" in payload["attention_flags"]
+    assert payload["readiness_gates"]["oms_invariants"]["status"] == "observed_failure"
+    assert payload["readiness_gates"]["oms_invariants"]["required"] is False
+    assert payload["readiness_gates"]["oms_invariants"]["detail"] == "missing_terminal_event"
+    assert payload["readiness_gates"]["oms_lifecycle_parity"]["status"] == "observed_failure"
+    assert payload["readiness_gates"]["oms_lifecycle_parity"]["required"] is False
 
 
 def test_runtime_health_payload_includes_oms_lifecycle_parity_snapshot(monkeypatch):
@@ -621,6 +677,13 @@ def test_runtime_health_payload_oms_lifecycle_parity_requirement_marks_degraded(
     assert payload["ok"] is False
     assert payload["status"] == "degraded"
     assert payload.get("reason") == "oms_lifecycle_parity_failed"
+    assert "oms_lifecycle_parity_failed" in payload["readiness_failures"]
+    assert "oms_lifecycle_parity_failed" in payload["attention_flags"]
+    assert (
+        payload["readiness_gates"]["oms_lifecycle_parity"]["status"]
+        == "required_failed"
+    )
+    assert payload["readiness_gates"]["oms_lifecycle_parity"]["required"] is True
 
 
 def test_runtime_health_payload_requires_oms_invariants_by_default_outside_pytest(

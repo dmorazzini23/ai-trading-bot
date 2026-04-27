@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 import math
-from typing import Any, cast
+from typing import Any, Mapping, cast
+from ai_trading.config.management import get_env
 from ai_trading.execution.costs import get_symbol_costs
 logger = get_logger(__name__)
 
@@ -87,6 +88,224 @@ class SmartOrderRouter:
             return float(default)
         return number
 
+    @staticmethod
+    def _config_bool(name: str, default: bool) -> bool:
+        value = get_env(name, default, cast=bool)
+        return bool(value)
+
+    @staticmethod
+    def _config_float(name: str, default: float) -> float:
+        try:
+            value = float(get_env(name, default, cast=float))
+        except (TypeError, ValueError):
+            return float(default)
+        if not math.isfinite(value):
+            return float(default)
+        return value
+
+    @staticmethod
+    def _config_int(name: str, default: int) -> int:
+        try:
+            value = int(get_env(name, default, cast=int))
+        except (TypeError, ValueError):
+            return int(default)
+        return int(value)
+
+    @classmethod
+    def _context_float(
+        cls,
+        context: Mapping[str, Any],
+        *keys: str,
+    ) -> float | None:
+        for key in keys:
+            raw = context.get(key)
+            if raw in (None, ""):
+                continue
+            value = cls._coerce_numeric(raw, math.nan)
+            if math.isfinite(value):
+                return float(value)
+        return None
+
+    @staticmethod
+    def _normalize_rate(value: float | None) -> float | None:
+        if value is None or not math.isfinite(float(value)):
+            return None
+        normalized = float(value)
+        if normalized > 1.0:
+            normalized /= 100.0
+        return max(0.0, min(normalized, 1.0))
+
+    def _adaptive_limit_offset(
+        self,
+        *,
+        market_data: MarketData,
+        side: str,
+        base_offset: float,
+        execution_context: Mapping[str, Any] | None,
+    ) -> tuple[float, dict[str, Any]]:
+        """Return a guarded Phase 2 adaptive marketable-limit offset."""
+
+        context: dict[str, Any] = {
+            "enabled": False,
+            "applied": False,
+            "reason": "disabled",
+            "base_offset": float(base_offset),
+            "resolved_offset": float(base_offset),
+        }
+        enabled = self._config_bool(
+            "AI_TRADING_PHASE2_EXECUTION_EDGE_ROUTING_ENABLED",
+            False,
+        )
+        context["enabled"] = bool(enabled)
+        if not enabled:
+            return float(base_offset), context
+        if not isinstance(execution_context, Mapping):
+            context["reason"] = "missing_execution_context"
+            return float(base_offset), context
+
+        min_samples = max(
+            1,
+            min(
+                self._config_int(
+                    "AI_TRADING_PHASE2_EXECUTION_EDGE_MIN_SAMPLES",
+                    24,
+                ),
+                5000,
+            ),
+        )
+        samples = int(
+            max(
+                self._context_float(
+                    execution_context,
+                    "samples",
+                    "slippage_samples",
+                    "attempts",
+                    "attempted",
+                )
+                or 0.0,
+                0.0,
+            )
+        )
+        fill_rate = self._normalize_rate(
+            self._context_float(execution_context, "fill_rate", "target_limit_fill_rate")
+        )
+        reject_rate = self._normalize_rate(
+            self._context_float(execution_context, "reject_rate", "reject_rate_pct")
+        )
+        mean_slippage_bps = self._context_float(
+            execution_context,
+            "mean_slippage_bps",
+            "slippage_median_abs_bps",
+            "median_slippage_bps",
+        )
+        target_fill_rate = max(
+            0.05,
+            min(
+                self._config_float(
+                    "AI_TRADING_PHASE2_EXECUTION_EDGE_TARGET_FILL_RATE",
+                    0.56,
+                ),
+                0.95,
+            ),
+        )
+        max_reject_rate = max(
+            0.0,
+            min(
+                self._config_float(
+                    "AI_TRADING_PHASE2_EXECUTION_EDGE_MAX_REJECT_RATE",
+                    0.05,
+                ),
+                1.0,
+            ),
+        )
+        target_slippage_bps = max(
+            0.1,
+            min(
+                self._config_float(
+                    "AI_TRADING_PHASE2_EXECUTION_EDGE_TARGET_SLIPPAGE_BPS",
+                    5.0,
+                ),
+                100.0,
+            ),
+        )
+        max_add_bps = max(
+            0.0,
+            min(
+                self._config_float(
+                    "AI_TRADING_PHASE2_EXECUTION_EDGE_MAX_OFFSET_ADD_BPS",
+                    3.0,
+                ),
+                25.0,
+            ),
+        )
+        weight = max(
+            0.0,
+            min(
+                self._config_float(
+                    "AI_TRADING_PHASE2_EXECUTION_EDGE_OFFSET_WEIGHT",
+                    1.0,
+                ),
+                1.0,
+            ),
+        )
+        side_token = str(side or "").strip().lower()
+        context.update(
+            {
+                "samples": samples,
+                "min_samples": int(min_samples),
+                "fill_rate": float(fill_rate) if fill_rate is not None else None,
+                "target_fill_rate": float(target_fill_rate),
+                "reject_rate": float(reject_rate) if reject_rate is not None else None,
+                "max_reject_rate": float(max_reject_rate),
+                "mean_slippage_bps": (
+                    float(mean_slippage_bps) if mean_slippage_bps is not None else None
+                ),
+                "target_slippage_bps": float(target_slippage_bps),
+                "max_offset_add_bps": float(max_add_bps),
+                "offset_weight": float(weight),
+                "side": side_token,
+            }
+        )
+        if samples < min_samples:
+            context["reason"] = "insufficient_samples"
+            return float(base_offset), context
+        if fill_rate is None:
+            context["reason"] = "missing_fill_rate"
+            return float(base_offset), context
+        if fill_rate >= target_fill_rate:
+            context["reason"] = "fill_rate_on_target"
+            return float(base_offset), context
+        if reject_rate is not None and reject_rate > max_reject_rate:
+            context["reason"] = "reject_rate_guard"
+            return float(base_offset), context
+        if mean_slippage_bps is not None and mean_slippage_bps > target_slippage_bps:
+            context["reason"] = "slippage_guard"
+            return float(base_offset), context
+        if max_add_bps <= 0.0 or market_data.mid <= 0.0:
+            context["reason"] = "offset_cap_zero"
+            return float(base_offset), context
+
+        fill_gap = max(float(target_fill_rate) - float(fill_rate), 0.0)
+        add_bps = min(float(max_add_bps), (fill_gap / 0.25) * float(max_add_bps))
+        add_bps *= float(weight)
+        if add_bps <= 0.0:
+            context["reason"] = "no_fill_gap"
+            return float(base_offset), context
+
+        add_price = float(market_data.mid) * (float(add_bps) / 10000.0)
+        resolved_offset = max(0.0, float(base_offset) + float(add_price))
+        context.update(
+            {
+                "applied": True,
+                "reason": "low_fill_rate_guarded_offset",
+                "fill_gap": float(fill_gap),
+                "adaptive_offset_add_bps": float(add_bps),
+                "adaptive_offset_add": float(add_price),
+                "resolved_offset": float(resolved_offset),
+            }
+        )
+        return float(resolved_offset), context
+
     def get_order_params(self, symbol: str) -> OrderParameters:
         """
         Get order parameters for symbol.
@@ -116,7 +335,13 @@ class SmartOrderRouter:
             else:
                 self.logger.warning(f'Unknown parameter: {key}')
 
-    def calculate_limit_price(self, market_data: MarketData, side: str, urgency: OrderUrgency=OrderUrgency.MEDIUM) -> tuple[float, OrderType]:
+    def calculate_limit_price(
+        self,
+        market_data: MarketData,
+        side: str,
+        urgency: OrderUrgency=OrderUrgency.MEDIUM,
+        execution_context: Mapping[str, Any] | None=None,
+    ) -> tuple[float, OrderType]:
         """
         Calculate optimal limit price and order type.
 
@@ -137,8 +362,15 @@ class SmartOrderRouter:
             k *= params.high_volume_multiplier
             self.logger.info(f'High volume detected for {market_data.symbol} ({market_data.volume_ratio:.1f}x), adjusting spread')
         half_spread = market_data.half_spread
-        limit_offset = k * half_spread
-        if side.lower() == 'buy':
+        base_offset = k * half_spread
+        limit_offset, _adaptive_context = self._adaptive_limit_offset(
+            market_data=market_data,
+            side=side,
+            base_offset=base_offset,
+            execution_context=execution_context,
+        )
+        side_token = str(side or "").strip().lower()
+        if side_token in {'buy', 'cover', 'buy_to_cover'}:
             limit_price = market_data.bid + limit_offset
             limit_price = min(limit_price, market_data.mid)
         else:
@@ -146,6 +378,30 @@ class SmartOrderRouter:
             limit_price = max(limit_price, market_data.mid)
         recommended_type = self._recommend_order_type(market_data, params, urgency)
         return (limit_price, recommended_type)
+
+    def _limit_offset_context(
+        self,
+        market_data: MarketData,
+        side: str,
+        urgency: OrderUrgency,
+        execution_context: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Return adaptive context for the current limit-offset inputs."""
+
+        params = self.get_order_params(market_data.symbol)
+        k = params.spread_multiplier
+        urgency_multipliers = {OrderUrgency.LOW: 0.5, OrderUrgency.MEDIUM: 1.0, OrderUrgency.HIGH: 1.5, OrderUrgency.URGENT: 2.0}
+        k *= urgency_multipliers.get(urgency, 1.0)
+        if market_data.volume_ratio > params.high_volume_threshold:
+            k *= params.high_volume_multiplier
+        base_offset = k * market_data.half_spread
+        _resolved_offset, adaptive_context = self._adaptive_limit_offset(
+            market_data=market_data,
+            side=side,
+            base_offset=base_offset,
+            execution_context=execution_context,
+        )
+        return adaptive_context
 
     def _recommend_order_type(self, market_data: MarketData, params: OrderParameters, urgency: OrderUrgency) -> OrderType:
         """Recommend order type based on market conditions."""
@@ -156,7 +412,16 @@ class SmartOrderRouter:
             return OrderType.IOC
         return OrderType.MARKETABLE_LIMIT
 
-    def create_order_request(self, symbol: str, side: str, quantity: float, market_data: MarketData, urgency: OrderUrgency=OrderUrgency.MEDIUM, custom_params: dict | None=None) -> dict:
+    def create_order_request(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        market_data: MarketData,
+        urgency: OrderUrgency=OrderUrgency.MEDIUM,
+        custom_params: dict | None=None,
+        execution_context: Mapping[str, Any] | None=None,
+    ) -> dict:
         """
         Create optimized order request.
 
@@ -177,7 +442,18 @@ class SmartOrderRouter:
             self.logger.warning("Invalid quantity %r for %s; defaulting to 0", quantity, symbol)
             qty = 0.0
 
-        limit_price, order_type = self.calculate_limit_price(market_data, side, urgency)
+        limit_price, order_type = self.calculate_limit_price(
+            market_data,
+            side,
+            urgency,
+            execution_context=execution_context,
+        )
+        adaptive_context = self._limit_offset_context(
+            market_data,
+            side,
+            urgency,
+            execution_context,
+        )
         order_request = {
             'symbol': symbol,
             'side': side.lower(),
@@ -187,6 +463,8 @@ class SmartOrderRouter:
             'urgency': urgency.value,
             'created_at': datetime.now(UTC).isoformat(),
         }
+        if bool(adaptive_context.get("enabled")):
+            order_request["execution_edge_routing"] = adaptive_context
         params = self.get_order_params(symbol)
         if order_type == OrderType.IOC:
             order_request.update({'time_in_force': 'IOC', 'allow_partial_fill': True, 'min_fill_ratio': params.min_fill_ratio})

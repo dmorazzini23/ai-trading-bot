@@ -479,6 +479,172 @@ class ModelPromotion:
             limit=max(1, int(limit)),
         )
 
+    def _live_kpi_breach_state_path(self) -> Path:
+        try:
+            raw = str(
+                get_env(
+                    "AI_TRADING_PROMOTION_LIVE_KPI_BREACH_STATE_PATH",
+                    "",
+                    cast=str,
+                )
+                or ""
+            ).strip()
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            raw = ""
+        if not raw:
+            return self.base_path / "live_kpi_breach_state.json"
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            path = self.base_path / path
+        return path
+
+    def _load_live_kpi_breach_state(self) -> dict[str, Any]:
+        path = self._live_kpi_breach_state_path()
+        if not path.exists():
+            return {"version": 1, "strategies": {}}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            self.logger.warning(
+                "LIVE_KPI_BREACH_STATE_LOAD_FAILED",
+                extra={"path": str(path)},
+            )
+            return {"version": 1, "strategies": {}}
+        if not isinstance(payload, dict):
+            return {"version": 1, "strategies": {}}
+        strategies = payload.get("strategies")
+        if not isinstance(strategies, dict):
+            payload["strategies"] = {}
+        payload["version"] = 1
+        return payload
+
+    def _write_live_kpi_breach_state(self, payload: dict[str, Any]) -> None:
+        path = self._live_kpi_breach_state_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+            tmp_path.write_text(
+                json.dumps(payload, sort_keys=True, indent=2, default=self._json_default),
+                encoding="utf-8",
+            )
+            tmp_path.replace(path)
+        except OSError as exc:
+            self.logger.warning(
+                "LIVE_KPI_BREACH_STATE_WRITE_FAILED",
+                extra={"path": str(path), "error": str(exc)},
+            )
+
+    def _required_live_kpi_breach_count(self) -> int:
+        try:
+            value = int(
+                get_env(
+                    "AI_TRADING_PROMOTION_LIVE_KPI_BREACH_CONSECUTIVE_REQUIRED",
+                    1,
+                    cast=int,
+                )
+            )
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            value = 1
+        return max(1, min(value, 30))
+
+    def _update_live_kpi_breach_window(
+        self,
+        *,
+        strategy: str,
+        model_id: str | None,
+        breaches: dict[str, Any],
+        allow_rollback: bool,
+    ) -> dict[str, Any]:
+        state = self._load_live_kpi_breach_state()
+        strategies = state.setdefault("strategies", {})
+        if not isinstance(strategies, dict):
+            strategies = {}
+            state["strategies"] = strategies
+        strategy_key = str(strategy)
+        prior = strategies.get(strategy_key)
+        if not isinstance(prior, dict):
+            prior = {}
+        failed_kpis = sorted(str(key) for key in breaches)
+        signature_payload = {
+            "model_id": str(model_id or ""),
+            "failed_kpis": failed_kpis,
+        }
+        signature = hashlib.sha256(
+            json.dumps(signature_payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        prior_model_id = str(prior.get("model_id") or "")
+        prior_signature = str(prior.get("last_breach_signature") or "")
+        if prior_model_id != str(model_id or ""):
+            prior_count = 0
+        else:
+            try:
+                prior_count = int(prior.get("consecutive_breach_count", 0) or 0)
+            except (TypeError, ValueError):
+                prior_count = 0
+        duplicate_rollback_eval = (
+            bool(allow_rollback)
+            and prior_signature == signature
+            and str(prior.get("last_status") or "") == "pending"
+            and not bool(prior.get("last_allow_rollback", True))
+            and prior_count > 0
+        )
+        breach_count = prior_count if duplicate_rollback_eval else prior_count + 1
+        required = self._required_live_kpi_breach_count()
+        now = datetime.now(UTC).isoformat()
+        window = {
+            "model_id": str(model_id or ""),
+            "consecutive_breach_count": int(max(0, breach_count)),
+            "required_consecutive_breaches": int(required),
+            "failed_kpis": failed_kpis,
+            "breaches": dict(breaches),
+            "first_breach_ts": prior.get("first_breach_ts") if prior_count > 0 else now,
+            "last_breach_ts": now,
+            "last_breach_signature": signature,
+            "last_status": "pending",
+            "last_allow_rollback": bool(allow_rollback),
+        }
+        strategies[strategy_key] = window
+        state["updated_at"] = now
+        self._write_live_kpi_breach_state(state)
+        return dict(window)
+
+    def _clear_live_kpi_breach_window(
+        self,
+        *,
+        strategy: str,
+        model_id: str | None,
+    ) -> None:
+        state = self._load_live_kpi_breach_state()
+        strategies = state.get("strategies")
+        if not isinstance(strategies, dict):
+            return
+        prior = strategies.get(str(strategy))
+        if not isinstance(prior, dict):
+            return
+        if str(prior.get("model_id") or "") != str(model_id or ""):
+            return
+        strategies.pop(str(strategy), None)
+        state["updated_at"] = datetime.now(UTC).isoformat()
+        self._write_live_kpi_breach_state(state)
+
+    def _mark_live_kpi_window_status(
+        self,
+        *,
+        strategy: str,
+        status: str,
+    ) -> None:
+        state = self._load_live_kpi_breach_state()
+        strategies = state.get("strategies")
+        if not isinstance(strategies, dict):
+            return
+        window = strategies.get(str(strategy))
+        if not isinstance(window, dict):
+            return
+        window["last_status"] = str(status)
+        window["updated_at"] = datetime.now(UTC).isoformat()
+        state["updated_at"] = window["updated_at"]
+        self._write_live_kpi_breach_state(state)
+
     def _record_rollback_audit(
         self,
         *,
@@ -1641,7 +1807,7 @@ class ModelPromotion:
         force: bool = True,
         allow_rollback: bool = True,
     ) -> dict[str, Any]:
-        """Rollback production when live KPI control bands are breached."""
+        """Rollback production when live KPI control bands are persistently breached."""
 
         breaches: dict[str, Any] = {}
         drawdown = float(live_kpis.get("max_drawdown", 0.0) or 0.0)
@@ -1664,38 +1830,80 @@ class ModelPromotion:
         if live_calibration_brier > float(self.criteria.control_band_live_calibration_brier):
             breaches["live_calibration_brier"] = live_calibration_brier
 
+        current = self.registry.get_production_model(strategy)
+        current_model_id = current[0] if current is not None else None
         result: dict[str, Any] = {
             "strategy": strategy,
+            "model_id": current_model_id,
             "breached": bool(breaches),
             "breaches": breaches,
+            "failed_kpis": sorted(str(key) for key in breaches),
             "triggered": False,
         }
         if not breaches:
+            self._clear_live_kpi_breach_window(
+                strategy=strategy,
+                model_id=current_model_id,
+            )
             return result
+        breach_window = self._update_live_kpi_breach_window(
+            strategy=strategy,
+            model_id=current_model_id,
+            breaches=breaches,
+            allow_rollback=allow_rollback,
+        )
+        breach_count = int(breach_window.get("consecutive_breach_count", 0) or 0)
+        required_breaches = int(breach_window.get("required_consecutive_breaches", 1) or 1)
+        failed_kpis = list(breach_window.get("failed_kpis", result["failed_kpis"]))
+        audit_extra = {
+            "breaches": dict(breaches),
+            "failed_kpis": failed_kpis,
+            "consecutive_breach_count": breach_count,
+            "required_consecutive_breaches": required_breaches,
+            "current_model_id": current_model_id,
+        }
+        result["consecutive_breach_count"] = breach_count
+        result["required_consecutive_breaches"] = required_breaches
         if not allow_rollback:
             result["status"] = "pending"
             self._record_rollback_audit(
                 strategy=strategy,
                 status="pending",
                 reason="live_kpi_control_band_breach",
-                extra={"breaches": dict(breaches)},
+                from_model_id=current_model_id,
+                extra=audit_extra,
+            )
+            return result
+        if breach_count < required_breaches:
+            result["status"] = "pending"
+            self._record_rollback_audit(
+                strategy=strategy,
+                status="pending",
+                reason="live_kpi_control_band_breach",
+                from_model_id=current_model_id,
+                extra=audit_extra,
             )
             return result
 
-        rollback_enabled = True
+        rollback_enabled = False
         try:
             rollback_enabled = bool(
-                get_env("AI_TRADING_PROMOTION_AUTO_ROLLBACK_ON_CONTROL_BAND", True, cast=bool)
+                get_env("AI_TRADING_PROMOTION_AUTO_ROLLBACK_ON_CONTROL_BAND", False, cast=bool)
             )
         except AI_TRADING_FALLBACK_EXCEPTIONS:
-            rollback_enabled = True
+            rollback_enabled = False
         if not rollback_enabled:
-            result["status"] = "disabled"
+            result["status"] = "dry_run_disabled"
+            self._mark_live_kpi_window_status(
+                strategy=strategy,
+                status="dry_run_disabled",
+            )
             self._record_rollback_audit(
                 strategy=strategy,
-                status="disabled",
+                status="dry_run_disabled",
                 reason="live_kpi_control_band_breach",
-                extra={"breaches": dict(breaches)},
+                from_model_id=current_model_id,
+                extra=audit_extra,
             )
             return result
 
@@ -1706,6 +1914,44 @@ class ModelPromotion:
         )
         result["triggered"] = bool(rolled_back)
         result["status"] = "rolled_back" if rolled_back else "rollback_failed"
+        if rolled_back:
+            self._mark_live_kpi_window_status(strategy=strategy, status="rolled_back")
+            self._record_rollback_audit(
+                strategy=strategy,
+                status="rolled_back",
+                reason="live_kpi_control_band_breach",
+                from_model_id=current_model_id,
+                extra=audit_extra,
+            )
+            return result
+
+        if current_model_id:
+            demoted_at = datetime.now(UTC).isoformat()
+            self.registry.update_governance_status(
+                current_model_id,
+                "challenger",
+                {
+                    "demoted_at": demoted_at,
+                    "demotion_reason": "live_kpi_control_band_breach",
+                    "live_kpi_breach_count": breach_count,
+                    "live_kpi_failed_kpis": failed_kpis,
+                },
+            )
+            result["triggered"] = True
+            result["status"] = "demoted_no_rollback_target"
+            self._mark_live_kpi_window_status(
+                strategy=strategy,
+                status="demoted_no_rollback_target",
+            )
+            self._record_rollback_audit(
+                strategy=strategy,
+                status="demoted_no_rollback_target",
+                reason="live_kpi_control_band_breach",
+                from_model_id=current_model_id,
+                extra=audit_extra,
+            )
+        else:
+            self._mark_live_kpi_window_status(strategy=strategy, status="rollback_failed")
         return result
 
     def _save_shadow_metrics(self, model_id: str, metrics: PromotionMetrics) -> None:

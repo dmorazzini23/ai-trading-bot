@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from ai_trading.core import bot_engine
 from ai_trading.core.execution_runtime_metadata import (
+    ExecutionCandidateRankingRuntimeState,
     load_execution_prerank_runtime_state,
     store_execution_candidate_ranking_runtime_state,
 )
@@ -92,3 +93,38 @@ def test_store_execution_candidate_ranking_runtime_state_copies_inputs() -> None
         "AAPL": {"score": 1.0}
     }
     assert runtime.execution_candidate_rank_context == {"nested": {"enabled": True}}
+
+
+def test_execution_candidate_ranking_runtime_state_defaults_and_shape() -> None:
+    state = ExecutionCandidateRankingRuntimeState.from_payloads(
+        opportunity_quality_by_symbol={" aapl ": "0.91", "BAD": object()},
+        opportunity_allowed_symbols=[" msft ", "", "aapl", "AAPL"],
+        opportunity_quality_gate=None,
+        candidate_rank={"msft": 2.5, "nan": float("nan")},
+        candidate_expected_net_edge=None,
+        candidate_expected_capture={" aapl ": "8.0"},
+        edge_realism_rank_factor_by_symbol=None,
+        counterfactual_signal_by_symbol={" aapl ": {"score": 1.0}, " ": {"ignored": True}},
+        rank_context=None,
+    )
+
+    assert state.opportunity_quality_by_symbol == {"AAPL": 0.91}
+    assert state.opportunity_allowed_symbols == ["AAPL", "MSFT"]
+    assert state.opportunity_quality_gate == {}
+    assert state.candidate_rank == {"MSFT": 2.5}
+    assert state.candidate_expected_net_edge_bps == {}
+    assert state.candidate_expected_capture_bps == {"AAPL": 8.0}
+    assert state.candidate_rank_realism_factor == {}
+    assert state.candidate_rank_learning_signals == {"AAPL": {"score": 1.0}}
+    assert state.candidate_rank_context == {}
+    assert state.to_runtime_attributes() == {
+        "execution_opportunity_quality_by_symbol": {"AAPL": 0.91},
+        "execution_opportunity_quality_allowed_symbols": ["AAPL", "MSFT"],
+        "execution_opportunity_quality_gate": {},
+        "execution_candidate_rank": {"MSFT": 2.5},
+        "execution_candidate_rank_expected_edge_bps": {},
+        "execution_candidate_rank_expected_capture_bps": {"AAPL": 8.0},
+        "execution_candidate_rank_realism_factor": {},
+        "execution_candidate_rank_learning_signals": {"AAPL": {"score": 1.0}},
+        "execution_candidate_rank_context": {},
+    }

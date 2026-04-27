@@ -93,6 +93,8 @@ def _build_runtime_attention_flags(
     require_oms_lifecycle_parity: bool = False,
     require_replay_live_parity_gate: bool = False,
     include_optional_contract_failures: bool = False,
+    observe_oms_invariants: bool = False,
+    observe_oms_lifecycle_parity: bool = False,
 ) -> list[str]:
     flags: list[str] = []
     provider_reason_normalized = _normalized_token(provider_state.get("reason"))
@@ -152,6 +154,7 @@ def _build_runtime_attention_flags(
         and (
             include_optional_contract_failures
             or require_oms_invariants
+            or observe_oms_invariants
         )
         and oms_invariants.get("enabled", False)
         and not bool(oms_invariants.get("ok"))
@@ -162,6 +165,7 @@ def _build_runtime_attention_flags(
         and (
             include_optional_contract_failures
             or require_oms_lifecycle_parity
+            or observe_oms_lifecycle_parity
         )
         and oms_lifecycle_parity.get("enabled", False)
         and not bool(oms_lifecycle_parity.get("ok"))
@@ -169,6 +173,43 @@ def _build_runtime_attention_flags(
         flags.append("oms_lifecycle_parity_failed")
 
     return _dedupe_flags(flags)
+
+
+def _build_contract_gate_status(
+    snapshot: Mapping[str, Any],
+    *,
+    required: bool,
+    failure_reason: str,
+    attention_flag: str,
+    action: str,
+) -> dict[str, Any]:
+    enabled = bool(snapshot.get("enabled", False))
+    ok = bool(snapshot.get("ok", True)) if enabled else True
+    failure_observed = enabled and not ok
+    status = "disabled"
+    if enabled and failure_observed and required:
+        status = "required_failed"
+    elif enabled and failure_observed:
+        status = "observed_failure"
+    elif enabled:
+        status = "passed"
+
+    gate: dict[str, Any] = {
+        "enabled": enabled,
+        "required": bool(required),
+        "ok": ok,
+        "status": status,
+        "failure_observed": failure_observed,
+    }
+    if failure_observed:
+        gate["reason"] = failure_reason
+        gate["attention_flag"] = attention_flag
+        gate["action"] = action
+        if snapshot.get("reason"):
+            gate["detail"] = snapshot.get("reason")
+        if snapshot.get("total_violations") is not None:
+            gate["total_violations"] = snapshot.get("total_violations")
+    return gate
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -1012,20 +1053,22 @@ def build_runtime_health_payload(
         "AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS",
         _default_fail_closed_outside_tests(),
     )
-    if require_oms_invariants and oms_invariants.get("enabled", False) and not bool(
-        oms_invariants.get("ok")
-    ):
+    oms_invariants_failure = bool(
+        oms_invariants.get("enabled", False)
+        and not bool(oms_invariants.get("ok"))
+    )
+    if require_oms_invariants and oms_invariants_failure:
         overall_ok = False
         degraded = True
     require_oms_lifecycle_parity = _env_bool(
         "AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY",
         _default_fail_closed_outside_tests(),
     )
-    if (
-        require_oms_lifecycle_parity
-        and oms_lifecycle_parity.get("enabled", False)
+    oms_lifecycle_parity_failure = bool(
+        oms_lifecycle_parity.get("enabled", False)
         and not bool(oms_lifecycle_parity.get("ok"))
-    ):
+    )
+    if require_oms_lifecycle_parity and oms_lifecycle_parity_failure:
         overall_ok = False
         degraded = True
     require_replay_live_parity_gate = _env_bool(
@@ -1043,6 +1086,41 @@ def build_runtime_health_payload(
         overall_ok = False
     if not overall_ok:
         degraded = True
+    readiness_failures: list[str] = []
+    if require_database_ready and database_configured and not database_ok:
+        readiness_failures.append("database_unhealthy")
+    if require_oms_invariants and oms_invariants_failure:
+        readiness_failures.append("oms_invariants_failed")
+    if require_oms_lifecycle_parity and oms_lifecycle_parity_failure:
+        readiness_failures.append("oms_lifecycle_parity_failed")
+    if (
+        require_replay_live_parity_gate
+        and replay_live_parity_gate.get("enabled", False)
+        and not bool(replay_live_parity_gate.get("ok"))
+    ):
+        readiness_failures.append("replay_live_parity_gate_failed")
+    readiness_gates = {
+        "oms_invariants": _build_contract_gate_status(
+            oms_invariants,
+            required=require_oms_invariants,
+            failure_reason="oms_invariants_failed",
+            attention_flag="oms_invariants_failed",
+            action=(
+                "Inspect OMS reconciliation invariant violations and repair "
+                "intent, order, or broker-state drift before new openings."
+            ),
+        ),
+        "oms_lifecycle_parity": _build_contract_gate_status(
+            oms_lifecycle_parity,
+            required=require_oms_lifecycle_parity,
+            failure_reason="oms_lifecycle_parity_failed",
+            attention_flag="oms_lifecycle_parity_failed",
+            action=(
+                "Inspect OMS lifecycle parity violations and reconcile missing "
+                "or mismatched lifecycle events before new openings."
+            ),
+        ),
+    }
 
     attention_flags = _build_runtime_attention_flags(
         provider_state=provider_state,
@@ -1056,6 +1134,8 @@ def build_runtime_health_payload(
         require_oms_invariants=require_oms_invariants,
         require_oms_lifecycle_parity=require_oms_lifecycle_parity,
         require_replay_live_parity_gate=require_replay_live_parity_gate,
+        observe_oms_invariants=oms_invariants_failure,
+        observe_oms_lifecycle_parity=oms_lifecycle_parity_failure,
     )
 
     if offhours_market_closed_ready:
@@ -1094,12 +1174,16 @@ def build_runtime_health_payload(
         "oms_invariants": oms_invariants,
         "oms_lifecycle_parity": oms_lifecycle_parity,
         "replay_live_parity_gate": replay_live_parity_gate,
+        "readiness_gates": readiness_gates,
+        "readiness_failures": readiness_failures,
         "attention_flags": attention_flags,
     }
     if offhours_market_closed_ready:
         payload["reason"] = "market_closed"
     elif warmup_market_closed_ready:
         payload["reason"] = "market_closed"
+    elif readiness_failures:
+        payload["reason"] = readiness_failures[0]
     elif service_reason:
         payload.setdefault("reason", service_reason)
     degrade_reason = provider_payload.get("reason")

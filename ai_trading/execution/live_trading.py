@@ -13390,6 +13390,7 @@ class ExecutionEngine:
                 quantity=float(max(int(quantity), 0)),
                 market_data=market_data,
                 urgency=urgency,
+                execution_context=learning_adjustment,
             )
         except LIVE_TRADING_FALLBACK_EXC:
             logger.debug(
@@ -13424,6 +13425,7 @@ class ExecutionEngine:
                 ).strip().lower()
                 or None,
                 "execution_learning_adjustment": learning_adjustment,
+                "execution_edge_routing": request.get("execution_edge_routing"),
                 "router_aggressiveness_add": float(router_aggressiveness_add),
                 "ioc_guard": ioc_guard_context,
             }
@@ -25964,6 +25966,104 @@ class ExecutionEngine:
             "unwritable_labels": unwritable_labels,
         }
 
+    def _runtime_preopen_flat_start_context(self) -> dict[str, Any]:
+        """Summarize flat-start policy state before opening submissions."""
+
+        require_flat = _resolve_bool_env("AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START")
+        if require_flat is None:
+            require_flat = False
+        if not bool(require_flat):
+            return {"enabled": False, "reason": "disabled"}
+
+        expected_raw: Any = ""
+        if _config_get_env is not None:
+            try:
+                expected_raw = _config_get_env(
+                    "AI_TRADING_EXECUTION_PREOPEN_EXPECTED_SWING_SYMBOLS",
+                    "",
+                    resolve_aliases=False,
+                )
+            except LIVE_TRADING_FALLBACK_EXC:
+                expected_raw = ""
+        if expected_raw in (None, ""):
+            expected_raw = _runtime_env(
+                "AI_TRADING_EXECUTION_PREOPEN_EXPECTED_SWING_SYMBOLS",
+                "",
+            )
+        expected_symbols = {
+            token.strip().upper()
+            for token in str(expected_raw or "").replace(";", ",").split(",")
+            if token.strip()
+        }
+        allow_all_expected = "*" in expected_symbols
+        if allow_all_expected:
+            expected_symbols.discard("*")
+
+        open_orders: list[Any] = []
+        positions: list[Any] = []
+        snapshot = getattr(self, "_broker_sync", None)
+        if snapshot is not None:
+            try:
+                open_orders = list(getattr(snapshot, "open_orders", ()) or ())
+                positions = list(getattr(snapshot, "positions", ()) or ())
+            except LIVE_TRADING_FALLBACK_EXC:
+                open_orders = []
+                positions = []
+
+        if not open_orders:
+            try:
+                open_orders = list(self._list_open_orders_snapshot())
+            except LIVE_TRADING_FALLBACK_EXC:
+                logger.debug("PREOPEN_FLAT_START_OPEN_ORDERS_FETCH_FAILED", exc_info=True)
+                open_orders = []
+
+        if not positions:
+            client = self._capacity_broker(getattr(self, "trading_client", None))
+            list_positions = getattr(client, "list_positions", None)
+            if callable(list_positions):
+                try:
+                    positions = list(list_positions() or [])
+                except LIVE_TRADING_FALLBACK_EXC:
+                    logger.debug("PREOPEN_FLAT_START_POSITIONS_FETCH_FAILED", exc_info=True)
+                    positions = []
+
+        nonzero_positions: list[dict[str, Any]] = []
+        expected_positions: list[dict[str, Any]] = []
+        for position in positions:
+            symbol = str(_extract_value(position, "symbol") or "").strip().upper()
+            qty = _safe_float(
+                _extract_value(position, "qty", "quantity", "position", "current_qty")
+            )
+            if qty is None or not math.isfinite(float(qty)) or abs(float(qty)) <= 0.0:
+                continue
+            position_payload = {"symbol": symbol or None, "qty": float(qty)}
+            if allow_all_expected or (symbol and symbol in expected_symbols):
+                expected_positions.append(position_payload)
+            else:
+                nonzero_positions.append(position_payload)
+
+        open_orders_count = len(open_orders)
+        unexpected_positions_count = len(nonzero_positions)
+        reason = "ok"
+        if open_orders_count > 0:
+            reason = "preopen_open_orders"
+        elif unexpected_positions_count > 0:
+            reason = "preopen_non_flat_positions"
+
+        return {
+            "enabled": True,
+            "reason": reason,
+            "require_flat_start": True,
+            "open_orders_count": int(open_orders_count),
+            "unexpected_positions_count": int(unexpected_positions_count),
+            "expected_positions_count": int(len(expected_positions)),
+            "expected_swing_symbols": sorted(expected_symbols),
+            "allow_all_expected_swing_symbols": bool(allow_all_expected),
+            "unexpected_positions": nonzero_positions,
+            "expected_positions": expected_positions,
+            "flat": open_orders_count == 0 and unexpected_positions_count == 0,
+        }
+
     def _execution_vs_alpha_alert_cooldown_seconds(self) -> float:
         """Return minimum seconds between repeated execution-vs-alpha alerts."""
 
@@ -26184,6 +26284,11 @@ class ExecutionEngine:
         artifact_fresh = len(stale_labels) == 0
         artifact_write_readiness = self._runtime_preopen_artifact_write_readiness_context()
         artifact_writable = bool(artifact_write_readiness.get("all_writable"))
+        flat_start = self._runtime_preopen_flat_start_context()
+        flat_start_ok = (
+            not bool(flat_start.get("enabled"))
+            or bool(flat_start.get("flat"))
+        )
         require_learning_artifacts = _resolve_bool_env(
             "AI_TRADING_EXECUTION_PREOPEN_REQUIRE_LEARNING_ARTIFACTS"
         )
@@ -26233,6 +26338,9 @@ class ExecutionEngine:
             failed_checks.append("artifact_freshness")
         if not artifact_writable:
             failed_checks.append("artifact_path_writable")
+        if not flat_start_ok:
+            flat_reason = str(flat_start.get("reason") or "preopen_flat_start").strip()
+            failed_checks.append(flat_reason)
         if not learning_artifacts_ready:
             failed_checks.append("learning_artifacts_missing")
         allowed = not failed_checks
@@ -26269,6 +26377,7 @@ class ExecutionEngine:
             "artifact_fresh": bool(artifact_fresh),
             "artifact_freshness": artifact_freshness,
             "artifact_write_readiness": artifact_write_readiness,
+            "flat_start": flat_start,
             "require_learning_artifacts": bool(require_learning_artifacts),
             "learning_artifacts_ready": bool(learning_artifacts_ready),
             "learning_artifact_states": learning_artifact_states,

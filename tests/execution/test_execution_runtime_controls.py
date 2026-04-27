@@ -5370,6 +5370,66 @@ def test_resolve_smart_order_route_applies_ioc_recommendation(
     assert context["resolved_time_in_force"] == "ioc"
 
 
+def test_resolve_smart_order_route_passes_execution_learning_to_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_LEARNING_MIN_SAMPLES", "5")
+    captured: dict[str, Any] = {}
+    engine._execution_learning_state = {
+        "version": 1,
+        "updated_at": "2026-04-27T00:00:00+00:00",
+        "global": {
+            "samples": 20,
+            "fills": 8,
+            "fill_rate": 0.4,
+            "slippage_samples": 20,
+            "mean_slippage_bps": 2.0,
+            "edge_samples": 20,
+            "mean_net_edge_bps": 1.0,
+        },
+        "buckets": {},
+        "symbol_buckets": {},
+    }
+
+    class _Router:
+        @staticmethod
+        def create_order_request(**kwargs: Any) -> dict[str, Any]:
+            captured.update(kwargs)
+            return {
+                "type": "marketable_limit",
+                "time_in_force": "DAY",
+                "limit_price": 100.95,
+                "execution_edge_routing": {
+                    "enabled": True,
+                    "applied": True,
+                    "reason": "low_fill_rate_guarded_offset",
+                },
+            }
+
+    monkeypatch.setattr(lt, "get_smart_router", lambda: _Router())
+
+    context = engine._resolve_smart_order_route(
+        symbol="AAPL",
+        side="buy",
+        quantity=5,
+        order_type="limit",
+        limit_price=100.9,
+        bid=100.8,
+        ask=101.0,
+        quote_age_ms=300.0,
+        degrade_active=False,
+        markout_context={"toxic": False},
+        manual_limit_requested=False,
+    )
+
+    execution_context = captured["execution_context"]
+    assert execution_context["active"] is True
+    assert execution_context["fill_rate"] == pytest.approx(0.4)
+    assert context["execution_edge_routing"]["applied"] is True
+    assert context["resolved_limit_price"] == pytest.approx(100.95)
+
+
 def test_apply_execution_policy_router_prefers_passive_when_conditions_support(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7560,6 +7620,197 @@ def test_runtime_preopen_readiness_requires_learning_artifacts(
     assert "counterfactual_learning" in context["learning_missing_labels"]
     assert "policy_ablation" in context["learning_missing_labels"]
     assert "policy_runtime_toggles" in context["learning_missing_labels"]
+
+
+def test_runtime_preopen_readiness_blocks_unexpected_non_flat_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    engine._broker_sync = SimpleNamespace(
+        open_orders=(),
+        positions=(SimpleNamespace(symbol="AAPL", qty="7"),),
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_READINESS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_READINESS_ENFORCE_IN_TESTS", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_REQUIRE_LEARNING_ARTIFACTS", "0")
+    monkeypatch.setattr(
+        engine,
+        "_runtime_preopen_artifact_write_readiness_context",
+        lambda: {"artifacts": [], "all_writable": True, "unwritable_labels": []},
+    )
+    monkeypatch.setattr(
+        runtime_state,
+        "observe_data_provider_state",
+        lambda: {"status": "healthy", "using_backup": False, "data_status": "ready"},
+    )
+    monkeypatch.setattr(
+        runtime_state,
+        "observe_broker_status",
+        lambda: {"status": "connected", "connected": True},
+    )
+
+    class _OpenWindowDateTime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:
+            base = datetime(2026, 3, 30, 9, 20, tzinfo=ZoneInfo("America/New_York"))
+            if tz is None:
+                return base.astimezone(UTC).replace(tzinfo=None)
+            return base.astimezone(tz)
+
+    monkeypatch.setattr(lt, "datetime", _OpenWindowDateTime)
+    allowed, context = engine._runtime_preopen_readiness_allows_openings(
+        report={"execution_vs_alpha": {"execution_capture_ratio": 0.2, "slippage_drag_bps": 5.0}},
+        thresholds={"min_execution_capture_ratio": 0.08, "max_slippage_drag_bps": 18.0},
+    )
+
+    assert allowed is False
+    assert context["reason"] == "preopen_readiness_failed"
+    assert "preopen_non_flat_positions" in context["failed_checks"]
+    assert context["flat_start"]["reason"] == "preopen_non_flat_positions"
+    assert context["flat_start"]["unexpected_positions_count"] == 1
+
+
+def test_runtime_preopen_readiness_blocks_open_orders_when_flat_start_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    engine._broker_sync = SimpleNamespace(
+        open_orders=(SimpleNamespace(symbol="MSFT", side="buy", qty="3"),),
+        positions=(),
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_READINESS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_READINESS_ENFORCE_IN_TESTS", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_REQUIRE_LEARNING_ARTIFACTS", "0")
+    monkeypatch.setattr(
+        engine,
+        "_runtime_preopen_artifact_write_readiness_context",
+        lambda: {"artifacts": [], "all_writable": True, "unwritable_labels": []},
+    )
+    monkeypatch.setattr(
+        runtime_state,
+        "observe_data_provider_state",
+        lambda: {"status": "healthy", "using_backup": False, "data_status": "ready"},
+    )
+    monkeypatch.setattr(
+        runtime_state,
+        "observe_broker_status",
+        lambda: {"status": "connected", "connected": True},
+    )
+
+    class _OpenWindowDateTime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:
+            base = datetime(2026, 3, 30, 9, 20, tzinfo=ZoneInfo("America/New_York"))
+            if tz is None:
+                return base.astimezone(UTC).replace(tzinfo=None)
+            return base.astimezone(tz)
+
+    monkeypatch.setattr(lt, "datetime", _OpenWindowDateTime)
+    allowed, context = engine._runtime_preopen_readiness_allows_openings(
+        report={"execution_vs_alpha": {"execution_capture_ratio": 0.2, "slippage_drag_bps": 5.0}},
+        thresholds={"min_execution_capture_ratio": 0.08, "max_slippage_drag_bps": 18.0},
+    )
+
+    assert allowed is False
+    assert "preopen_open_orders" in context["failed_checks"]
+    assert context["flat_start"]["reason"] == "preopen_open_orders"
+    assert context["flat_start"]["open_orders_count"] == 1
+
+
+def test_runtime_preopen_readiness_allows_configured_expected_swing_holding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    engine._broker_sync = SimpleNamespace(
+        open_orders=(),
+        positions=(SimpleNamespace(symbol="AAPL", qty="7"),),
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_READINESS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_READINESS_ENFORCE_IN_TESTS", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_EXPECTED_SWING_SYMBOLS", "AAPL")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_REQUIRE_LEARNING_ARTIFACTS", "0")
+    monkeypatch.setattr(
+        engine,
+        "_runtime_preopen_artifact_write_readiness_context",
+        lambda: {"artifacts": [], "all_writable": True, "unwritable_labels": []},
+    )
+    monkeypatch.setattr(
+        runtime_state,
+        "observe_data_provider_state",
+        lambda: {"status": "healthy", "using_backup": False, "data_status": "ready"},
+    )
+    monkeypatch.setattr(
+        runtime_state,
+        "observe_broker_status",
+        lambda: {"status": "connected", "connected": True},
+    )
+
+    class _OpenWindowDateTime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:
+            base = datetime(2026, 3, 30, 9, 20, tzinfo=ZoneInfo("America/New_York"))
+            if tz is None:
+                return base.astimezone(UTC).replace(tzinfo=None)
+            return base.astimezone(tz)
+
+    monkeypatch.setattr(lt, "datetime", _OpenWindowDateTime)
+    allowed, context = engine._runtime_preopen_readiness_allows_openings(
+        report={"execution_vs_alpha": {"execution_capture_ratio": 0.2, "slippage_drag_bps": 5.0}},
+        thresholds={"min_execution_capture_ratio": 0.08, "max_slippage_drag_bps": 18.0},
+    )
+
+    assert allowed is True
+    assert context["flat_start"]["reason"] == "ok"
+    assert context["flat_start"]["expected_positions_count"] == 1
+    assert context["flat_start"]["unexpected_positions_count"] == 0
+
+
+def test_runtime_preopen_readiness_keeps_non_flat_monitor_only_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    engine._broker_sync = SimpleNamespace(
+        open_orders=(),
+        positions=(SimpleNamespace(symbol="AAPL", qty="7"),),
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_READINESS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_READINESS_ENFORCE_IN_TESTS", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_REQUIRE_LEARNING_ARTIFACTS", "0")
+    monkeypatch.setattr(
+        engine,
+        "_runtime_preopen_artifact_write_readiness_context",
+        lambda: {"artifacts": [], "all_writable": True, "unwritable_labels": []},
+    )
+    monkeypatch.setattr(
+        runtime_state,
+        "observe_data_provider_state",
+        lambda: {"status": "healthy", "using_backup": False, "data_status": "ready"},
+    )
+    monkeypatch.setattr(
+        runtime_state,
+        "observe_broker_status",
+        lambda: {"status": "connected", "connected": True},
+    )
+
+    class _OpenWindowDateTime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:
+            base = datetime(2026, 3, 30, 9, 20, tzinfo=ZoneInfo("America/New_York"))
+            if tz is None:
+                return base.astimezone(UTC).replace(tzinfo=None)
+            return base.astimezone(tz)
+
+    monkeypatch.setattr(lt, "datetime", _OpenWindowDateTime)
+    allowed, context = engine._runtime_preopen_readiness_allows_openings(
+        report={"execution_vs_alpha": {"execution_capture_ratio": 0.2, "slippage_drag_bps": 5.0}},
+        thresholds={"min_execution_capture_ratio": 0.08, "max_slippage_drag_bps": 18.0},
+    )
+
+    assert allowed is True
+    assert context["flat_start"] == {"enabled": False, "reason": "disabled"}
 
 
 def test_duplicate_client_order_id_suppression(monkeypatch: pytest.MonkeyPatch) -> None:

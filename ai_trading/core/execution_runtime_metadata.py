@@ -76,6 +76,18 @@ def _copy_plain_mapping(raw: Any) -> dict[str, Any]:
     return copied
 
 
+def _normalize_symbol_list(raw: Iterable[Any] | None) -> list[str]:
+    if raw is None:
+        return []
+    return sorted(
+        {
+            str(symbol).strip().upper()
+            for symbol in raw
+            if str(symbol).strip()
+        }
+    )
+
+
 @dataclass(slots=True)
 class ExecutionPreRankRuntimeState:
     weights: dict[str, Any]
@@ -83,6 +95,84 @@ class ExecutionPreRankRuntimeState:
     opportunity_quality: dict[str, Any]
     prerank_cycle: int
     last_selected_cycles: dict[str, int]
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionCandidateRankingRuntimeState:
+    opportunity_quality_by_symbol: dict[str, float]
+    opportunity_allowed_symbols: list[str]
+    opportunity_quality_gate: dict[str, Any]
+    candidate_rank: dict[str, float]
+    candidate_expected_net_edge_bps: dict[str, float]
+    candidate_expected_capture_bps: dict[str, float]
+    candidate_rank_realism_factor: dict[str, float]
+    candidate_rank_learning_signals: dict[str, Any]
+    candidate_rank_context: dict[str, Any]
+
+    @classmethod
+    def from_payloads(
+        cls,
+        *,
+        opportunity_quality_by_symbol: Mapping[str, Any] | None = None,
+        opportunity_allowed_symbols: Iterable[Any] | None = None,
+        opportunity_quality_gate: Mapping[str, Any] | None = None,
+        candidate_rank: Mapping[str, Any] | None = None,
+        candidate_expected_net_edge: Mapping[str, Any] | None = None,
+        candidate_expected_capture: Mapping[str, Any] | None = None,
+        edge_realism_rank_factor_by_symbol: Mapping[str, Any] | None = None,
+        counterfactual_signal_by_symbol: Mapping[str, Any] | None = None,
+        rank_context: Mapping[str, Any] | None = None,
+    ) -> ExecutionCandidateRankingRuntimeState:
+        """Normalize candidate-ranking runtime metadata at one typed boundary."""
+
+        return cls(
+            opportunity_quality_by_symbol=_normalize_symbol_float_mapping(
+                opportunity_quality_by_symbol
+            ),
+            opportunity_allowed_symbols=_normalize_symbol_list(opportunity_allowed_symbols),
+            opportunity_quality_gate=_copy_plain_mapping(opportunity_quality_gate),
+            candidate_rank=_normalize_symbol_float_mapping(candidate_rank),
+            candidate_expected_net_edge_bps=_normalize_symbol_float_mapping(
+                candidate_expected_net_edge
+            ),
+            candidate_expected_capture_bps=_normalize_symbol_float_mapping(
+                candidate_expected_capture
+            ),
+            candidate_rank_realism_factor=_normalize_symbol_float_mapping(
+                edge_realism_rank_factor_by_symbol
+            ),
+            candidate_rank_learning_signals=_normalize_symbol_mapping(
+                counterfactual_signal_by_symbol
+            ),
+            candidate_rank_context=_copy_plain_mapping(rank_context),
+        )
+
+    def to_runtime_attributes(self) -> dict[str, Any]:
+        """Return the legacy runtime attribute payload shape."""
+
+        return {
+            "execution_opportunity_quality_by_symbol": dict(
+                self.opportunity_quality_by_symbol
+            ),
+            "execution_opportunity_quality_allowed_symbols": list(
+                self.opportunity_allowed_symbols
+            ),
+            "execution_opportunity_quality_gate": dict(self.opportunity_quality_gate),
+            "execution_candidate_rank": dict(self.candidate_rank),
+            "execution_candidate_rank_expected_edge_bps": dict(
+                self.candidate_expected_net_edge_bps
+            ),
+            "execution_candidate_rank_expected_capture_bps": dict(
+                self.candidate_expected_capture_bps
+            ),
+            "execution_candidate_rank_realism_factor": dict(
+                self.candidate_rank_realism_factor
+            ),
+            "execution_candidate_rank_learning_signals": dict(
+                self.candidate_rank_learning_signals
+            ),
+            "execution_candidate_rank_context": dict(self.candidate_rank_context),
+        }
 
 
 def resolve_order_type_capabilities(runtime: Any) -> Mapping[str, bool] | None:
@@ -249,60 +339,23 @@ def store_execution_candidate_ranking_runtime_state(
 ) -> None:
     """Persist copied execution-ranking metadata onto runtime."""
 
-    setattr(
-        runtime,
-        "execution_opportunity_quality_by_symbol",
-        _normalize_symbol_float_mapping(opportunity_quality_by_symbol),
+    ranking_state = ExecutionCandidateRankingRuntimeState.from_payloads(
+        opportunity_quality_by_symbol=opportunity_quality_by_symbol,
+        opportunity_allowed_symbols=opportunity_allowed_symbols,
+        opportunity_quality_gate=opportunity_quality_gate,
+        candidate_rank=candidate_rank,
+        candidate_expected_net_edge=candidate_expected_net_edge,
+        candidate_expected_capture=candidate_expected_capture,
+        edge_realism_rank_factor_by_symbol=edge_realism_rank_factor_by_symbol,
+        counterfactual_signal_by_symbol=counterfactual_signal_by_symbol,
+        rank_context=rank_context,
     )
-    setattr(
-        runtime,
-        "execution_opportunity_quality_allowed_symbols",
-        sorted(
-            {
-                str(symbol).strip().upper()
-                for symbol in opportunity_allowed_symbols
-                if str(symbol).strip()
-            }
-        ),
-    )
-    setattr(
-        runtime,
-        "execution_opportunity_quality_gate",
-        _copy_plain_mapping(opportunity_quality_gate),
-    )
-    setattr(
-        runtime,
-        "execution_candidate_rank",
-        _normalize_symbol_float_mapping(candidate_rank),
-    )
-    setattr(
-        runtime,
-        "execution_candidate_rank_expected_edge_bps",
-        _normalize_symbol_float_mapping(candidate_expected_net_edge),
-    )
-    setattr(
-        runtime,
-        "execution_candidate_rank_expected_capture_bps",
-        _normalize_symbol_float_mapping(candidate_expected_capture),
-    )
-    setattr(
-        runtime,
-        "execution_candidate_rank_realism_factor",
-        _normalize_symbol_float_mapping(edge_realism_rank_factor_by_symbol),
-    )
-    setattr(
-        runtime,
-        "execution_candidate_rank_learning_signals",
-        _normalize_symbol_mapping(counterfactual_signal_by_symbol),
-    )
-    setattr(
-        runtime,
-        "execution_candidate_rank_context",
-        _copy_plain_mapping(rank_context),
-    )
+    for attribute, value in ranking_state.to_runtime_attributes().items():
+        setattr(runtime, attribute, value)
 
 
 __all__ = [
+    "ExecutionCandidateRankingRuntimeState",
     "ExecutionPreRankRuntimeState",
     "load_execution_prerank_runtime_state",
     "resolve_order_type_capabilities",
