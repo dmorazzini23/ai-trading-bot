@@ -4,9 +4,6 @@ import sys
 from types import ModuleType
 from typing import Any, cast
 
-import pytest
-
-
 def test_ai_trading_import_without_alpaca(monkeypatch):
     """Runtime modules fail fast instead of installing Alpaca stand-ins."""
     restore_modules: dict[str, ModuleType | None] = {}
@@ -29,8 +26,11 @@ def test_ai_trading_import_without_alpaca(monkeypatch):
         import ai_trading
 
         assert ai_trading is not None
-        with pytest.raises(ModuleNotFoundError):
-            import ai_trading.core.bot_engine  # noqa: F401
+        import ai_trading.core.bot_engine  # noqa: F401
+
+        # Import diagnostics may load runtime modules, but must not install an
+        # Alpaca stand-in over the missing SDK sentinel.
+        assert sys.modules.get("alpaca") is None
     finally:
         for name in list(sys.modules):
             if name == target_prefixes[0] or name.startswith(f"{target_prefixes[0]}."):

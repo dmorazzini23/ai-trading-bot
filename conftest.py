@@ -142,6 +142,20 @@ def _timeframe_unit_is_valid(unit_cls: object | None) -> bool:
     return all(hasattr(unit_cls, name) for name in required)
 
 
+def _coerce_timeframe_unit(unit_cls: object, unit: Any) -> Any:
+    """Return an Alpaca TimeFrameUnit member when tests pass string-like units."""
+
+    if isinstance(unit, str):
+        return getattr(unit_cls, unit, unit)
+    name = getattr(unit, "name", None)
+    if isinstance(name, str):
+        return getattr(unit_cls, name, unit)
+    value = getattr(unit, "value", None)
+    if isinstance(value, str):
+        return getattr(unit_cls, value, unit)
+    return unit
+
+
 def _extract_request_timeframe_cls(request_cls: object) -> type | None:
     """Best-effort extraction of StockBarsRequest timeframe annotation class."""
 
@@ -227,6 +241,7 @@ def _ensure_alpaca_timeframe_defaults() -> None:
 
     class _CompatTimeFrame(tf_cls):  # type: ignore[valid-type,misc]
         def __init__(self, amount: int = 1, unit: Any = day_unit) -> None:
+            unit = _coerce_timeframe_unit(tf_unit_cls, unit)
             try:
                 super().__init__(amount, unit)
             except Exception:
@@ -652,6 +667,7 @@ def _reset_loaded_singletons() -> None:
 
                         class _CompatTimeFrame(tf_cls):  # type: ignore[valid-type,misc]
                             def __init__(self, amount: int = 1, unit: Any = day_unit) -> None:
+                                unit = _coerce_timeframe_unit(tf_unit_cls, unit)
                                 try:
                                     super().__init__(amount, unit)
                                 except Exception:

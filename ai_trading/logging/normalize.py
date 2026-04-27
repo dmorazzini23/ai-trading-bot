@@ -6,7 +6,7 @@ from typing import Any
 def _as_lower_str(value: Any) -> str:
     try:
         return str(value).strip().lower()
-    except (KeyError, ValueError, TypeError):
+    except (AttributeError, KeyError, ValueError, TypeError):
         return ''
 
 def canon_timeframe(value: Any) -> str:
@@ -14,6 +14,16 @@ def canon_timeframe(value: Any) -> str:
 
     Accepts strings, enums, or odd callables (from stubs). Defaults to "1Day".
     """
+    amount = getattr(value, "amount", None)
+    unit = getattr(value, "unit", None)
+    if amount is not None and unit is not None:
+        unit_value = getattr(unit, "value", unit)
+        unit_name = getattr(unit, "name", unit_value)
+        unit_s = _as_lower_str(unit_name)
+        if "min" in unit_s:
+            return "1Min"
+        if "day" in unit_s:
+            return "1Day"
     s = _as_lower_str(value)
     if s in {'1min', '1m', 'minute', '1 minute'}:
         return '1Min'

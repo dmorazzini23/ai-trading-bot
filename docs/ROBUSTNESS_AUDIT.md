@@ -31,6 +31,9 @@ Current status as of `2026-04-27`:
   `AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY=1`.
 - `PASS`: paper runtime now exercises the execution go/no-go gate and blocks
   degraded-data execution instead of widening into low-quality quotes.
+- `PASS`: the 2026-04-27 repository-wide bug audit findings have been
+  remediated across runtime trading paths, ops tooling, MCP tools, and test
+  isolation.
 - `ATTENTION`: live go/no-go is still blocked by observed performance evidence,
   not readiness plumbing.
 
@@ -106,6 +109,44 @@ Reference coverage:
 - `tests/health/test_health_endpoint.py`
 
 ## Current Audit Findings
+
+### 0. Repository-wide robustness sweep remediated on 2026-04-27
+
+A manifest-based audit covered all tracked files and produced a remediation
+batch for high-confidence bugs, test-suite hazards, and suspicious runtime
+risks. The fixes are now in place:
+
+- production startup/shutdown paths no longer `await` synchronous alert methods
+- VWAP/TWAP/implementation-shortfall child orders no longer emit invalid limit
+  orders without prices
+- daily-loss safety checks trigger only on actual negative PnL
+- slippage recorder output and TCA rollup ingestion now share a compatible
+  schema, with legacy slippage rows still accepted
+- `sell_short` intent is preserved through strategy signals, allocation, and
+  pairs-stat-arb short legs
+- simple runtime signal execution uses Alpaca request objects instead of legacy
+  positional broker calls
+- health/config scripts use canonical `ALPACA_TRADING_BASE_URL` and packaged
+  health-port defaults
+- operational guards now fail correctly on dynamic execution or newly-added
+  import guards
+- MCP SQL analytics paths are runtime-root bounded, pickle reads are explicitly
+  trusted only, and systemd controls are unit-allowlisted
+- Slack health snapshots degrade gracefully when `/healthz` is unavailable or
+  malformed
+- broad test-suite hazards were isolated, including model artifact writes,
+  import-smoke false positives, import-time assertions, pytest-reserved mock
+  attributes, and order-dependent env/module mutations
+- Flask API startup now stays on configured `API_PORT` and fails fast on bind
+  conflicts
+- IEX fallback reads live SIP entitlement state instead of frozen imported
+  globals
+- shadow-mode runtime no longer installs an import-time `sys.modules`
+  placeholder for `ai_trading.alpaca_api`
+
+Validation for this remediation includes targeted regression tests, full mypy,
+strict typecheck, ruff, full py_compile, CI guard scripts, and a broad pytest
+run.
 
 ### 1. Pre-open account state has an explicit strict guard
 

@@ -121,7 +121,7 @@ class BuildFeatures:
                 features = self._add_volume_features(features, X['volume'])
             if self.include_regime:
                 features = self._add_regime_features(features, prices)
-            features = features.replace([np.inf, -np.inf], np.nan)
+            features = features.replace([np.inf, -np.inf], np.nan).fillna(0.0)
             logger.debug(f'Generated {features.shape[1]} features from {X.shape[1]} inputs')
             return features
         except (KeyError, ValueError, TypeError, pd.errors.EmptyDataError) as e:

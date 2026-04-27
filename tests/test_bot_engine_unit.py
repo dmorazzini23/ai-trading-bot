@@ -23,8 +23,16 @@ class DummyAPI:
     def __init__(self):
         self.calls = []
 
-    def submit_order(self, symbol, qty, side):
+    def submit_order(self, *args, **kwargs):
+        if "order_data" in kwargs:
+            order_data = kwargs["order_data"]
+            side = getattr(order_data, "side")
+            side_value = getattr(side, "value", side)
+            self.calls.append((order_data.symbol, float(order_data.qty), str(side_value)))
+            return types.SimpleNamespace(status="accepted")
+        symbol, qty, side = args
         self.calls.append((symbol, qty, side))
+        return types.SimpleNamespace(status="accepted")
 
 
 def dummy_loader():
@@ -69,7 +77,7 @@ def test_execute_trades_sends_orders(monkeypatch):
     sig = pd.Series([1, 0, -1], index=["A", "B", "C"])
     orders = execute_trades(ctx, sig)
     assert orders == [("A", "buy"), ("C", "sell")]
-    assert api.calls == [("A", 1, "buy"), ("C", 1, "sell")]
+    assert api.calls == [("A", 1.0, "buy"), ("C", 1.0, "sell")]
 
 
 # --- run_trading_cycle ------------------------------------------------------
@@ -120,4 +128,3 @@ def test_run_trading_cycle_empty_df_returns_no_orders():
     ctx = types.SimpleNamespace(api=None)
     df = pd.DataFrame({"price": []})
     assert run_trading_cycle(ctx, df) == []
-
