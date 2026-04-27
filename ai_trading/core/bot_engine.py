@@ -36777,6 +36777,64 @@ def _tca_feedback_penalty_map(
     return penalties
 
 
+def _strict_edge_manual_penalty_payload(env_name: str) -> dict[str, Any]:
+    raw = str(get_env(env_name, "", cast=str) or "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except BOT_ENGINE_FALLBACK_EXC as exc:
+        logger.warning(
+            "STRICT_EDGE_MANUAL_PENALTY_CONFIG_INVALID",
+            extra={"env": env_name, "error": str(exc)},
+        )
+        return {}
+    if not isinstance(payload, Mapping):
+        logger.warning(
+            "STRICT_EDGE_MANUAL_PENALTY_CONFIG_INVALID",
+            extra={"env": env_name, "error": "payload_not_mapping"},
+        )
+        return {}
+    return dict(payload)
+
+
+def _strict_edge_manual_penalty_value(raw_value: Any) -> float:
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(value):
+        return 0.0
+    return max(0.0, min(value, 500.0))
+
+
+def _strict_edge_manual_penalty_bps(
+    *,
+    symbol: str,
+    side: str,
+    bar_ts: datetime,
+    hour_penalties: Mapping[str, Any],
+    symbol_side_hour_penalties: Mapping[str, Any],
+) -> tuple[float, float]:
+    hour_key = f"{bar_ts.astimezone(_EASTERN_TZ).hour:02d}"
+    manual_hour_penalty = _strict_edge_manual_penalty_value(
+        hour_penalties.get(hour_key, hour_penalties.get(str(int(hour_key)), 0.0))
+    )
+    symbol_key = str(symbol or "").strip().upper()
+    side_key = str(side or "").strip().lower()
+    if side_key == "long":
+        side_key = "buy"
+    manual_symbol_penalty = 0.0
+    raw_symbol = symbol_side_hour_penalties.get(symbol_key)
+    if isinstance(raw_symbol, Mapping):
+        raw_side = raw_symbol.get(side_key)
+        if isinstance(raw_side, Mapping):
+            manual_symbol_penalty = _strict_edge_manual_penalty_value(
+                raw_side.get(hour_key, raw_side.get(str(int(hour_key)), 0.0))
+            )
+    return manual_hour_penalty, manual_symbol_penalty
+
+
 def _refresh_tca_feedback_components(
     state: BotState,
     *,
@@ -39651,8 +39709,16 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         edge_min_expected_bps = 2.0
     edge_cost_min_ratio = max(0.0, min(edge_cost_min_ratio, 10.0))
     edge_min_expected_bps = max(0.0, min(edge_min_expected_bps, 500.0))
+    manual_hour_penalties: dict[str, Any] = {}
+    manual_symbol_side_hour_penalties: dict[str, Any] = {}
     if strict_edge_gate_enabled:
         _refresh_tca_feedback_components(state)
+        manual_hour_penalties = _strict_edge_manual_penalty_payload(
+            "AI_TRADING_EDGE_COST_MANUAL_PENALTY_BPS_BY_NY_HOUR"
+        )
+        manual_symbol_side_hour_penalties = _strict_edge_manual_penalty_payload(
+            "AI_TRADING_EDGE_COST_MANUAL_PENALTY_BPS_BY_SYMBOL_SIDE_NY_HOUR"
+        )
     proposals_total = 0
     proposals_blocked = 0
     orders_attempted = 0
@@ -39831,6 +39897,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 edge_floor_buffer_bps = 0.0
                 symbol_cost_penalty_bps = 0.0
                 hour_cost_penalty_bps = 0.0
+                manual_hour_penalty_bps = 0.0
+                manual_symbol_penalty_bps = 0.0
                 if isinstance(tca_feedback, Mapping):
                     try:
                         edge_floor_adjust = float(tca_feedback.get("edge_floor_adjust_bps", 0.0) or 0.0)
@@ -39857,9 +39925,22 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                             hour_cost_penalty_bps = float(raw_hour_penalties.get(hour_key, 0.0) or 0.0)
                         except (TypeError, ValueError):
                             hour_cost_penalty_bps = 0.0
+                proposal_side = "sell_short" if float(proposal.target_dollars) < 0.0 else "buy"
+                manual_hour_penalty_bps, manual_symbol_penalty_bps = _strict_edge_manual_penalty_bps(
+                    symbol=symbol,
+                    side=proposal_side,
+                    bar_ts=bar_ts,
+                    hour_penalties=manual_hour_penalties,
+                    symbol_side_hour_penalties=manual_symbol_side_hour_penalties,
+                )
                 edge_bps = max(float(proposal.expected_edge_bps), 0.0)
                 base_cost_bps = max(float(proposal.expected_cost_bps), 1e-6)
-                total_cost_penalty_bps = max(0.0, symbol_cost_penalty_bps) + max(0.0, hour_cost_penalty_bps)
+                total_cost_penalty_bps = (
+                    max(0.0, symbol_cost_penalty_bps)
+                    + max(0.0, hour_cost_penalty_bps)
+                    + max(0.0, manual_hour_penalty_bps)
+                    + max(0.0, manual_symbol_penalty_bps)
+                )
                 effective_cost_bps = max(base_cost_bps + total_cost_penalty_bps, 1e-6)
                 edge_ratio = edge_bps / effective_cost_bps
                 strict_net_edge_bps = compute_expected_net_edge_bps(
@@ -39867,7 +39948,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     float(effective_cost_bps),
                     fee_bps=float(effective_policy.objective.fee_bps),
                     borrow_bps=float(effective_policy.objective.borrow_bps),
-                    side="sell_short" if float(proposal.target_dollars) < 0.0 else "buy",
+                    side=proposal_side,
                 )
                 effective_edge_floor = max(
                     edge_min_expected_bps + max(edge_floor_adjust, 0.0) + max(edge_floor_buffer_bps, 0.0),
@@ -39890,6 +39971,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 proposal.debug["strict_edge_effective_cost_bps"] = effective_cost_bps
                 proposal.debug["strict_edge_symbol_penalty_bps"] = max(0.0, symbol_cost_penalty_bps)
                 proposal.debug["strict_edge_hour_penalty_bps"] = max(0.0, hour_cost_penalty_bps)
+                proposal.debug["strict_edge_manual_hour_penalty_bps"] = max(0.0, manual_hour_penalty_bps)
+                proposal.debug["strict_edge_manual_symbol_penalty_bps"] = max(0.0, manual_symbol_penalty_bps)
                 proposal.debug["strict_expected_net_edge_bps"] = strict_net_edge_bps
                 proposal.debug["edge_to_cost_ratio"] = edge_ratio
                 proposal.debug["edge_cost_min_ratio"] = effective_edge_ratio

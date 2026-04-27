@@ -58,12 +58,12 @@ def _ensure_executors() -> None:
     prediction_executor = ThreadPoolExecutor(max_workers=pred_workers)
 
 
-def cleanup_executors() -> None:
+def cleanup_executors(*, wait: bool = True) -> None:
     """Cleanup ThreadPoolExecutor resources to prevent resource leaks."""
     global executor, prediction_executor
     try:
         if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=True)
+            executor.shutdown(wait=wait, cancel_futures=True)
             logger.debug("Main executor shutdown successfully")
             executor = None
     except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # defensive: never raise in cleanup
@@ -71,7 +71,7 @@ def cleanup_executors() -> None:
 
     try:
         if prediction_executor is not None:
-            prediction_executor.shutdown(wait=True, cancel_futures=True)
+            prediction_executor.shutdown(wait=wait, cancel_futures=True)
             logger.debug("Prediction executor shutdown successfully")
             prediction_executor = None
     except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # defensive: never raise in cleanup
@@ -79,4 +79,3 @@ def cleanup_executors() -> None:
 
 
 atexit.register(cleanup_executors)
-

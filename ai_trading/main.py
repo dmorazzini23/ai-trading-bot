@@ -52,6 +52,8 @@ MAIN_FALLBACK_EXC: tuple[type[Exception], ...] = (
 
 _MANAGED_GET_ENV_READY = False
 _MANAGED_GET_ENV: Callable[..., Any] | None = None
+_SHUTDOWN_FORCE_EXIT_TIMER: threading.Timer | None = None
+_SHUTDOWN_FORCE_EXIT_LOCK = threading.Lock()
 
 
 def _managed_env(name: str, default: Any = None) -> Any:
@@ -2295,6 +2297,71 @@ def _as_float(val, default: float = 0.0) -> float:
         return float(default)
 
 
+def _shutdown_force_exit_seconds() -> float:
+    try:
+        seconds = float(
+            _managed_env("AI_TRADING_SHUTDOWN_FORCE_EXIT_SECONDS", 45.0) or 45.0
+        )
+    except (TypeError, ValueError):
+        seconds = 45.0
+    return max(5.0, min(seconds, 240.0))
+
+
+def _shutdown_runtime_resources(*, wait: bool) -> None:
+    try:
+        from ai_trading.core import executors as core_executors
+
+        core_executors.cleanup_executors(wait=wait)
+    except MAIN_FALLBACK_EXC:
+        logger.debug("CORE_EXECUTOR_SHUTDOWN_FAILED", exc_info=True)
+    try:
+        from ai_trading.utils import workers
+
+        workers.shutdown_all(wait=wait)
+    except MAIN_FALLBACK_EXC:
+        logger.debug("BACKGROUND_WORKER_SHUTDOWN_FAILED", exc_info=True)
+    try:
+        shutdown_queue_listener = getattr(_logging, "shutdown_queue_listener", None)
+        if callable(shutdown_queue_listener):
+            shutdown_queue_listener(timeout=1.0)
+    except MAIN_FALLBACK_EXC:
+        logger.debug("LOGGING_QUEUE_SHUTDOWN_FAILED", exc_info=True)
+
+
+def _force_exit_after_shutdown(signame: str) -> None:
+    try:
+        logger.critical(
+            "SERVICE_SHUTDOWN_FORCE_EXIT",
+            extra={"signal": signame, "reason": "shutdown_grace_expired"},
+        )
+        _shutdown_runtime_resources(wait=False)
+        _logging.flush_log_throttle_summaries()
+    except MAIN_FALLBACK_EXC:
+        pass
+    try:
+        logging.shutdown()
+    finally:
+        os._exit(0)
+
+
+def _arm_shutdown_force_exit(signame: str) -> None:
+    global _SHUTDOWN_FORCE_EXIT_TIMER
+    if _is_test_mode():
+        return
+    with _SHUTDOWN_FORCE_EXIT_LOCK:
+        if _SHUTDOWN_FORCE_EXIT_TIMER is not None:
+            return
+        seconds = _shutdown_force_exit_seconds()
+        timer = threading.Timer(seconds, _force_exit_after_shutdown, args=(signame,))
+        timer.daemon = True
+        _SHUTDOWN_FORCE_EXIT_TIMER = timer
+        timer.start()
+        logger.info(
+            "SERVICE_SHUTDOWN_FORCE_EXIT_ARMED",
+            extra={"signal": signame, "seconds": seconds},
+        )
+
+
 def _install_signal_handlers() -> None:
     """Install signal handlers that log and request cooperative shutdown."""
 
@@ -2305,6 +2372,7 @@ def _install_signal_handlers() -> None:
             signame = str(signum)
         logger.info("SERVICE_SIGNAL", extra={"signal": signame})
         request_stop(f"signal:{signame}")
+        _arm_shutdown_force_exit(signame)
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -4199,6 +4267,20 @@ def main(argv: list[str] | None = None) -> None:
         request_stop("keyboard-interrupt")
         logger.info("KeyboardInterrupt received — shutting down gracefully")
         return
+    finally:
+        if should_stop():
+            try:
+                logger.info("SERVICE_SHUTDOWN_CLEANUP_START")
+                _shutdown_runtime_resources(wait=False)
+                _logging.flush_log_throttle_summaries()
+                logger.info("SERVICE_SHUTDOWN_CLEANUP_DONE")
+            except MAIN_FALLBACK_EXC:
+                logger.debug("SERVICE_SHUTDOWN_CLEANUP_FAILED", exc_info=True)
+            if not _is_test_mode():
+                try:
+                    logging.shutdown()
+                finally:
+                    os._exit(0)
     # If a finite number of iterations was requested, exit promptly so tests
     # and batch runs do not hang. Production runs use infinite iterations.
     if iterations > 0:

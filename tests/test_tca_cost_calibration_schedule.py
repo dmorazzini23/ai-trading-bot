@@ -70,6 +70,32 @@ def test_tca_feedback_penalty_map_filters_and_caps() -> None:
     assert "TSLA" not in penalties
 
 
+def test_strict_edge_manual_penalty_bps_combines_hour_and_symbol_side() -> None:
+    hour_penalty, symbol_penalty = bot_engine._strict_edge_manual_penalty_bps(
+        symbol="AAPL",
+        side="buy",
+        bar_ts=datetime(2026, 4, 24, 17, 5, tzinfo=UTC),
+        hour_penalties={"13": 20.0, "14": 20.0},
+        symbol_side_hour_penalties={"AAPL": {"buy": {"12": 30.0, "13": 30.0}}},
+    )
+
+    assert hour_penalty == 20.0
+    assert symbol_penalty == 30.0
+
+
+def test_strict_edge_manual_penalty_bps_respects_side() -> None:
+    hour_penalty, symbol_penalty = bot_engine._strict_edge_manual_penalty_bps(
+        symbol="AAPL",
+        side="sell_short",
+        bar_ts=datetime(2026, 4, 24, 17, 5, tzinfo=UTC),
+        hour_penalties={"13": 20.0},
+        symbol_side_hour_penalties={"AAPL": {"buy": {"13": 30.0}}},
+    )
+
+    assert hour_penalty == 20.0
+    assert symbol_penalty == 0.0
+
+
 def test_refresh_tca_feedback_components_loads_payload(monkeypatch, tmp_path) -> None:
     feedback_path = tmp_path / "tca_feedback.json"
     feedback_path.write_text(
