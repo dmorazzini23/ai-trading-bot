@@ -29,6 +29,22 @@ _run_module_json = cast(
 )
 
 _DEFAULT_RUNTIME_ROOT = Path("/var/lib/ai-trading-bot/runtime")
+_DEFAULT_HEALTH_PORT = 9001
+_ALLOWED_SYSTEMD_UNITS = frozenset(
+    {
+        "ai-trading",
+        "ai-trading.service",
+        "ai-trading-api",
+        "ai-trading-api.service",
+    }
+)
+
+
+def _systemd_unit(args: dict[str, Any]) -> str:
+    unit = str(args.get("unit") or "ai-trading").strip()
+    if unit not in _ALLOWED_SYSTEMD_UNITS:
+        raise RuntimeError(f"systemd unit is not allowlisted: {unit or '<empty>'}")
+    return unit
 
 
 def _run_cmd(cmd: list[str], timeout_s: int = 30) -> dict[str, Any]:
@@ -53,7 +69,7 @@ def _runtime_root(args: dict[str, Any]) -> Path:
 
 
 def tool_health_probe(args: dict[str, Any]) -> dict[str, Any]:
-    port = int(args.get("port") or 8081)
+    port = int(args.get("port") or _DEFAULT_HEALTH_PORT)
     timeout_s = float(args.get("timeout_s") or 2.0)
     url = str(args.get("url") or f"http://127.0.0.1:{port}/healthz")
     request = urllib.request.Request(url=url, method="GET")
@@ -73,7 +89,7 @@ def tool_health_probe(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_service_status(args: dict[str, Any]) -> dict[str, Any]:
-    unit = str(args.get("unit") or "ai-trading")
+    unit = _systemd_unit(args)
     show = _run_cmd(
         ["systemctl", "show", unit, "-p", "ActiveState,SubState,MainPID,ExecMainStatus"]
     )
@@ -89,7 +105,7 @@ def tool_service_status(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_journal_tail(args: dict[str, Any]) -> dict[str, Any]:
-    unit = str(args.get("unit") or "ai-trading")
+    unit = _systemd_unit(args)
     lines = int(args.get("lines") or 200)
     since = str(args.get("since") or "30 min ago")
     cmd = ["journalctl", "-u", unit, "--since", since, "-n", str(lines), "-o", "cat"]

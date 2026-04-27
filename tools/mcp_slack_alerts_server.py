@@ -35,6 +35,7 @@ _run_module_json = cast(
 _DEFAULT_RUNTIME_ROOT = Path("/var/lib/ai-trading-bot/runtime")
 _DEFAULT_INCIDENT_STATE = _DEFAULT_RUNTIME_ROOT / "slack_incident_state.json"
 _DEFAULT_EOD_STATE = _DEFAULT_RUNTIME_ROOT / "slack_eod_state.json"
+_DEFAULT_HEALTH_PORT = 9001
 _STARTUP_WARMUP_HEALTH_REASONS = frozenset(
     {
         "startup",
@@ -124,15 +125,60 @@ def _runtime_report_payload() -> dict[str, Any]:
     )
 
 
+def _health_unavailable_payload(*, port: int, url: str, error: str) -> dict[str, Any]:
+    reason = "health_payload_unavailable"
+    return {
+        "ok": False,
+        "status": "degraded",
+        "reason": reason,
+        "timestamp": utc_now_iso(),
+        "health_port": int(port),
+        "health_url": url,
+        "health_error": str(error)[:500],
+        "data_provider": {
+            "status": "unknown",
+            "active": "unknown",
+            "reason": reason,
+            "using_backup": False,
+        },
+        "broker": {"status": "unknown"},
+        "model_liveness": {},
+    }
+
+
 def _health_payload(port: int, timeout_s: float) -> dict[str, Any]:
     url = f"http://127.0.0.1:{port}/healthz"
     request = urllib.request.Request(url=url, method="GET")
-    with urllib.request.urlopen(request, timeout=timeout_s) as response:
-        body = response.read().decode("utf-8")
-        payload = json.loads(body)
-        if not isinstance(payload, dict):
-            raise RuntimeError("health payload was not a JSON object")
-        return payload
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            body = response.read().decode("utf-8")
+            payload = json.loads(body)
+            if not isinstance(payload, dict):
+                raise RuntimeError("health payload was not a JSON object")
+            return payload
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            return payload
+        return _health_unavailable_payload(
+            port=port,
+            url=url,
+            error=f"HTTP {exc.code}: {body[:300]}",
+        )
+    except Exception as exc:
+        return _health_unavailable_payload(port=port, url=url, error=str(exc))
+
+
+def _safe_health_payload(port: int, timeout_s: float) -> dict[str, Any]:
+    try:
+        return _health_payload(port=port, timeout_s=timeout_s)
+    except Exception as exc:
+        url = f"http://127.0.0.1:{port}/healthz"
+        return _health_unavailable_payload(port=port, url=url, error=str(exc))
 
 
 def _incident_state_path(args: dict[str, Any]) -> Path:
@@ -463,9 +509,12 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     execution = report.get("execution_vs_alpha") or {}
     gate_effectiveness = report.get("gate_effectiveness") or {}
 
-    port = int(args.get("health_port") or os.getenv("HEALTHCHECK_PORT", "8081"))
+    port = int(
+        args.get("health_port")
+        or os.getenv("HEALTHCHECK_PORT", str(_DEFAULT_HEALTH_PORT))
+    )
     timeout_s = float(args.get("health_timeout_s") or 2.0)
-    health = _health_payload(port=port, timeout_s=timeout_s)
+    health = _safe_health_payload(port=port, timeout_s=timeout_s)
     data_provider = health.get("data_provider") or {}
     broker = health.get("broker") or {}
     execution_window = _collect_execution_window_snapshot(args)
@@ -694,9 +743,12 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     trade_history = report.get("trade_history")
     trade_history_obj = trade_history if isinstance(trade_history, dict) else {}
 
-    port = int(args.get("health_port") or os.getenv("HEALTHCHECK_PORT", "8081"))
+    port = int(
+        args.get("health_port")
+        or os.getenv("HEALTHCHECK_PORT", str(_DEFAULT_HEALTH_PORT))
+    )
     timeout_s = float(args.get("health_timeout_s") or 2.0)
-    health = _health_payload(port=port, timeout_s=timeout_s)
+    health = _safe_health_payload(port=port, timeout_s=timeout_s)
     data_provider = health.get("data_provider")
     data_provider_obj = data_provider if isinstance(data_provider, dict) else {}
     broker = health.get("broker")

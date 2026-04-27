@@ -24,6 +24,8 @@ _DYNAMIC_CACHE: dict[str, type] = {}
 
 
 def __getattr__(name: str):
+    if name.startswith("__") or name.startswith("pytest"):
+        raise AttributeError(name)
     if name in _DYNAMIC_CACHE:
         return _DYNAMIC_CACHE[name]
     base = Warning if name.endswith("Warning") else Exception

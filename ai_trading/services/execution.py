@@ -32,6 +32,17 @@ def _legacy_live_execution_allowed() -> bool:
     )
 
 
+def _market_order_request(symbol: str, qty: int, side: str) -> Any:
+    from ai_trading.alpaca_api import MarketOrderRequest
+
+    return MarketOrderRequest(
+        symbol=str(symbol),
+        qty=str(qty),
+        side=str(side),
+        time_in_force="day",
+    )
+
+
 class ExecutionService:
     """Canonical execution service facade for operator/runtime callers."""
 
@@ -124,7 +135,7 @@ class ExecutionService:
             api = getattr(ctx, "api", None)
             if api is not None and hasattr(api, "submit_order"):
                 try:
-                    order = api.submit_order(symbol, 1, side)
+                    order = api.submit_order(order_data=_market_order_request(str(symbol), 1, side))
                     status_token = _order_status_token(order)
                     if status_token in _NON_ACCEPTED_ORDER_STATUSES:
                         logger.error(

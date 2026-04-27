@@ -19,11 +19,14 @@ from ai_trading.data.bars import safe_get_stock_bars, StockBarsRequest, TimeFram
 from ai_trading.utils.time import monotonic_time
 from ai_trading.data.fetch import normalize_ohlcv_columns
 
-from alpaca.common.exceptions import APIError as _ImportedAPIError
-from alpaca.trading.client import TradingClient as _ImportedTradingClient
+from ai_trading.alpaca_api import (
+    get_api_error_cls,
+    get_data_client_cls,
+    get_trading_client_cls,
+)
 
-APIError = _ImportedAPIError
-TradingClient = _ImportedTradingClient
+APIError = get_api_error_cls()
+TradingClient = get_trading_client_cls()
 from ai_trading.config.management import (
     SEED,
     TradingConfig,
@@ -147,9 +150,7 @@ def _calculate_position_size(
     return max(qty, 0)
 
 
-from alpaca.data.historical.stock import StockHistoricalDataClient as _ImportedStockHistoricalDataClient
-
-StockHistoricalDataClient = _ImportedStockHistoricalDataClient
+StockHistoricalDataClient = get_data_client_cls()
 
 
 def _safe_call(fn, *a, **k):

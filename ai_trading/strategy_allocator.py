@@ -297,7 +297,8 @@ class StrategyAllocator:
                 side_is_enum = isinstance(side_value, OrderSide)
                 side_is_enum = bool(getattr(s, "_side_is_enum", side_is_enum))
                 if side_is_enum:
-                    s.side = "buy" if side_value is OrderSide.BUY else "sell"
+                    enum_value = side_value.value if isinstance(side_value, OrderSide) else str(side_value)
+                    s.side = str(enum_value).strip().lower()
                 else:
                     try:
                         side_norm = str(side_value).strip().lower()
@@ -306,8 +307,10 @@ class StrategyAllocator:
                     # Map aliases
                     if side_norm in ("long", "buy", "enter_long"):
                         s.side = "buy"
-                    elif side_norm in ("short", "sell", "sell_short", "enter_short"):
+                    elif side_norm in ("sell", "exit"):
                         s.side = "sell"
+                    elif side_norm in ("short", "sell_short", "sellshort", "sell-short", "sell short", "enter_short", "entry_short"):
+                        s.side = "sell_short"
                     else:
                         logger.warning("Invalid signal side: %s", getattr(s, "side", side_norm))
                         continue
@@ -445,7 +448,7 @@ class StrategyAllocator:
             last_dir = self.last_direction.get(s.symbol)
             last_conf = prev_conf.get(s.symbol, 0.0)
             if last_dir and last_dir != s.side:
-                if s.side == "sell" and self.hold_protect.get(s.symbol, 0) > 0:
+                if s.side in {"sell", "sell_short"} and self.hold_protect.get(s.symbol, 0) > 0:
                     remaining = self.hold_protect.get(s.symbol, 0)
                     logger.info(
                         "HOLD_PROTECT_ACTIVE",
@@ -491,7 +494,7 @@ class StrategyAllocator:
 
         max_total = getattr(self.config, "exposure_cap_aggressive", 0.88)
         buys = [s for s in signals if s.side == "buy"]
-        sells = [s for s in signals if s.side == "sell"]
+        sells = [s for s in signals if s.side in {"sell", "sell_short"}]
 
         if buys:
             total_conf = sum(s.confidence for s in buys)

@@ -95,7 +95,7 @@ class PairsStatArbStrategy(BaseStrategy):
             return [
                 StrategySignal(
                     symbol=left,
-                    side="sell",
+                    side="sell_short",
                     strength=strength,
                     confidence=confidence,
                     strategy_id=self.strategy_id,
@@ -143,7 +143,7 @@ class PairsStatArbStrategy(BaseStrategy):
             ),
             StrategySignal(
                 symbol=right,
-                side="sell",
+                side="sell_short",
                 strength=strength,
                 confidence=confidence,
                 strategy_id=self.strategy_id,

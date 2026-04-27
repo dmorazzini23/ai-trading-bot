@@ -24,4 +24,6 @@ def retry_if_exception_type(*args):
     return None
 
 def __getattr__(name):
+    if name.startswith("__") or name.startswith("pytest"):
+        raise AttributeError(name)
     return lambda *args, **kwargs: lambda f: f

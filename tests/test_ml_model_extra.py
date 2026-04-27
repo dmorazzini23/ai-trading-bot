@@ -28,6 +28,14 @@ def make_df():
     return pd.DataFrame({"a": [1.0, 2.0]})
 
 
+@pytest.fixture
+def isolated_ml_model_dir(tmp_path, monkeypatch):
+    model_root = tmp_path / "pkg" / "models"
+    model_root.mkdir(parents=True)
+    monkeypatch.setattr(ml_model, "__file__", str(tmp_path / "pkg" / "ml_model.py"))
+    return model_root
+
+
 def test_validate_errors():
     model = MLModel(DummyPipe())
     with pytest.raises(TypeError):
@@ -38,23 +46,20 @@ def test_validate_errors():
         model.predict(df)
 
 
-def test_fit_and_predict():
+def test_fit_and_predict(isolated_ml_model_dir):
     model = MLModel(DummyPipe())
     df = make_df()
     mse = model.fit(df, np.array([0, 1]))
     assert mse >= 0
     preds = model.predict(df)
     assert len(preds) == len(df)
-    model_dir = Path(ml_model.__file__).resolve().parent / "models"
     if ml_model.joblib is None:
         pytest.skip("joblib not available")
-    save_path = model.save(str(model_dir / "m.pkl"))
+    save_path = model.save(str(isolated_ml_model_dir / "m.pkl"))
     assert Path(save_path).exists()
     assert default_manifest_path(save_path).exists()
     loaded = MLModel.load(save_path)
     assert isinstance(loaded.pipeline, DummyPipe)
-    Path(save_path).unlink()
-    default_manifest_path(save_path).unlink()
 
 
 def test_train_model_invalid_algorithm():
@@ -85,21 +90,17 @@ def test_predict_model_invalid_input():
     assert result == []
 
 
-def test_load_model_missing_file():
-    model_dir = Path(ml_model.__file__).resolve().parent / "models"
+def test_load_model_missing_file(isolated_ml_model_dir):
     with pytest.raises(FileNotFoundError):
-        ml_model.load_model(str(model_dir / "nonexistent.pkl"))
+        ml_model.load_model(str(isolated_ml_model_dir / "nonexistent.pkl"))
 
 
-def test_save_and_load_model():
+def test_save_and_load_model(isolated_ml_model_dir):
     if ml_model.joblib is None:
         pytest.skip("joblib not available")
     dummy_model = {"foo": "bar"}
-    model_dir = Path(ml_model.__file__).resolve().parent / "models"
-    model_path = model_dir / "test_model.pkl"
+    model_path = isolated_ml_model_dir / "test_model.pkl"
     ml_model.save_model(dummy_model, str(model_path))
     assert default_manifest_path(model_path).exists()
     loaded = ml_model.load_model(str(model_path))
     assert loaded == dummy_model
-    model_path.unlink()
-    default_manifest_path(model_path).unlink()

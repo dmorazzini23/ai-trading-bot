@@ -2803,11 +2803,11 @@ def run_bot(*_a, **_k) -> int:
 
 
 def run_flask_app(
-    port: int = 5000,
+    port: int = 9001,
     ready_signal: threading.Event | None = None,
     **run_kwargs,
 ) -> None:
-    """Launch Flask API, retrying on sequential ports when necessary."""
+    """Launch Flask API on the configured port or raise if unavailable."""
 
     from ai_trading import app
 
@@ -2914,9 +2914,7 @@ def run_flask_app(
                     return False
         return True
 
-    max_attempts = run_kwargs.pop("max_attempts", 5)
-    attempt_port = port
-    attempts = 0
+    run_kwargs.pop("max_attempts", None)
 
     def _signal_ready_when_serving(
         serving_port: int,
@@ -2946,42 +2944,32 @@ def run_flask_app(
         probe_thread.start()
         return stop_probe, probe_thread
 
-    while attempts < max_attempts:
-        attempts += 1
-        pid = get_pid_on_port(attempt_port)
-        available = _port_available(attempt_port)
+    pid = get_pid_on_port(port)
+    available = _port_available(port)
 
-        if not available:
-            logger.warning(
-                "API_PORT_UNAVAILABLE", extra={"port": attempt_port, "reason": "socket_bound"}
-            )
-            attempt_port += 1
-            continue
+    if not available:
+        logger.warning("API_PORT_UNAVAILABLE", extra={"port": port, "reason": "socket_bound"})
+        raise PortInUseError(port, pid)
 
-        if pid:
-            logger.error("API_PORT_OCCUPIED", extra={"port": attempt_port, "pid": pid})
-            raise PortInUseError(attempt_port, pid)
+    if pid:
+        logger.error("API_PORT_OCCUPIED", extra={"port": port, "pid": pid})
+        raise PortInUseError(port, pid)
 
-        probe_probe = _signal_ready_when_serving(attempt_port)
-        try:
-            logger.info("Starting Flask app on 0.0.0.0:%s", attempt_port)
-            application.run(host="0.0.0.0", port=attempt_port, debug=debug, **run_kwargs)
-            return
-        except OSError as exc:
-            if exc.errno == errno.EADDRINUSE:
-                logger.warning(
-                    "API_PORT_BOUND_DURING_START", extra={"port": attempt_port}
-                )
-                attempt_port += 1
-                continue
-            raise
-        finally:
-            if probe_probe is not None:
-                probe_stop, probe_thread = probe_probe
-                probe_stop.set()
-                probe_thread.join(timeout=1.0)
-
-    raise PortInUseError(attempt_port)
+    probe_probe = _signal_ready_when_serving(port)
+    try:
+        logger.info("Starting Flask app on 0.0.0.0:%s", port)
+        application.run(host="0.0.0.0", port=port, debug=debug, **run_kwargs)
+        return
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            logger.warning("API_PORT_BOUND_DURING_START", extra={"port": port})
+            raise PortInUseError(port, get_pid_on_port(port)) from exc
+        raise
+    finally:
+        if probe_probe is not None:
+            probe_stop, probe_thread = probe_probe
+            probe_stop.set()
+            probe_thread.join(timeout=1.0)
 
 
 def _probe_local_api_health(port: int) -> bool:

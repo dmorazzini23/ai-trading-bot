@@ -5,6 +5,7 @@ Integrates all production-ready components into a unified trading system
 with comprehensive risk management, monitoring, and execution capabilities.
 """
 from datetime import UTC, datetime
+import inspect
 from typing import Any
 from ai_trading.core.enums import OrderSide, OrderType, RiskLevel
 from ai_trading.exc import COMMON_EXC
@@ -52,6 +53,22 @@ class ProductionTradingSystem:
         self.session_pnl = 0.0
         logger.info(f'ProductionTradingSystem initialized with equity=${account_equity:,.2f}, risk_level={risk_level}')
 
+    async def _maybe_await_alert(self, result: Any) -> Any:
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    async def _send_system_alert(self, *args: Any) -> Any:
+        return await self._maybe_await_alert(self.alert_manager.send_system_alert(*args))
+
+    async def _send_trading_alert(self, *args: Any) -> Any:
+        return await self._maybe_await_alert(self.alert_manager.send_trading_alert(*args))
+
+    @staticmethod
+    def _requires_limit_price(order_type: OrderType) -> bool:
+        value = order_type.value if isinstance(order_type, OrderType) else str(order_type)
+        return str(value).strip().lower() in {OrderType.LIMIT.value, OrderType.STOP_LIMIT.value}
+
     async def start_system(self) -> dict[str, Any]:
         """Start the production trading system."""
         try:
@@ -61,14 +78,14 @@ class ProductionTradingSystem:
             self.is_active = True
             health_status = await self.perform_health_check()
             if not health_status['healthy']:
-                await self.alert_manager.send_system_alert('Trading System', 'Startup Health Check Failed', f"Issues: {', '.join(health_status['issues'])}", AlertSeverity.CRITICAL)
+                await self._send_system_alert('Trading System', 'Startup Health Check Failed', f"Issues: {', '.join(health_status['issues'])}", AlertSeverity.CRITICAL)
                 return {'status': 'failed', 'reason': 'Health check failed'}
-            await self.alert_manager.send_system_alert('Trading System', 'System Started', f'Production trading system started successfully with ${self.account_equity:,.2f} equity', AlertSeverity.INFO)
+            await self._send_system_alert('Trading System', 'System Started', f'Production trading system started successfully with ${self.account_equity:,.2f} equity', AlertSeverity.INFO)
             logger.info('Production trading system started successfully')
             return {'status': 'success', 'session_start_time': self.session_start_time, 'account_equity': self.account_equity, 'risk_level': self.risk_level.value, 'health_status': health_status}
         except COMMON_EXC as e:
             logger.error(f'Error starting production trading system: {e}')
-            await self.alert_manager.send_system_alert('Trading System', 'Startup Failed', f'System startup error: {e}', AlertSeverity.EMERGENCY)
+            await self._send_system_alert('Trading System', 'Startup Failed', f'System startup error: {e}', AlertSeverity.EMERGENCY)
             return {'status': 'error', 'message': str(e)}
 
     async def stop_system(self, reason: str='Manual shutdown') -> dict[str, Any]:
@@ -78,7 +95,7 @@ class ProductionTradingSystem:
             self.is_active = False
             session_summary = await self.get_session_summary()
             self.alert_manager.stop_processing()
-            await self.alert_manager.send_system_alert('Trading System', 'System Stopped', f'Production trading system stopped: {reason}', AlertSeverity.INFO)
+            await self._send_system_alert('Trading System', 'System Stopped', f'Production trading system stopped: {reason}', AlertSeverity.INFO)
             logger.info('Production trading system stopped successfully')
             return {'status': 'success', 'session_summary': session_summary, 'shutdown_reason': reason, 'shutdown_time': datetime.now(UTC)}
         except COMMON_EXC as e:
@@ -122,6 +139,8 @@ class ProductionTradingSystem:
                 final_rec = opportunity_analysis.get('final_recommendation', {})
                 if final_rec.get('action') == 'NO_TRADE':
                     return {'status': 'rejected', 'reason': 'Analysis recommends no trade', 'analysis': opportunity_analysis}
+            if self._requires_limit_price(order_type) and price is None:
+                return {'status': 'rejected', 'reason': 'Limit price required for limit order'}
             raw_execution_result = await self.execution_coordinator.submit_order(
                 symbol,
                 side,
@@ -148,7 +167,7 @@ class ProductionTradingSystem:
             return execution_result
         except COMMON_EXC as e:
             logger.error(f'Error executing trade for {symbol}: {e}')
-            await self.alert_manager.send_trading_alert('Trade Execution Error', symbol, {'error': str(e), 'side': side.value, 'quantity': quantity}, AlertSeverity.CRITICAL)
+            await self._send_trading_alert('Trade Execution Error', symbol, {'error': str(e), 'side': side.value, 'quantity': quantity}, AlertSeverity.CRITICAL)
             return {'status': 'error', 'message': str(e)}
 
     async def perform_health_check(self) -> dict[str, Any]:
@@ -314,7 +333,7 @@ class ProductionTradingSystem:
         try:
             logger.critical(f'EMERGENCY SHUTDOWN INITIATED: {reason}')
             self.halt_manager.emergency_stop_all(reason)
-            await self.alert_manager.send_system_alert('Trading System', 'EMERGENCY SHUTDOWN', f'Emergency shutdown activated: {reason}', AlertSeverity.EMERGENCY)
+            await self._send_system_alert('Trading System', 'EMERGENCY SHUTDOWN', f'Emergency shutdown activated: {reason}', AlertSeverity.EMERGENCY)
             await self.stop_system(f'Emergency: {reason}')
         except COMMON_EXC as e:
             logger.error(f'Error during emergency shutdown: {e}')

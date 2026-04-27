@@ -142,25 +142,24 @@ def test_run_flask_app_signals_ready_only_after_probe(monkeypatch):
 
 
 def test_run_flask_app_port_in_use(monkeypatch):
-    """OSError EADDRINUSE triggers retry on next port."""
+    """OSError EADDRINUSE fails instead of moving off the configured port."""
     called = []
 
     class App:
         def run(self, host, port, debug=False, **kwargs):
             called.append(port)
-            if len(called) == 1:
-                raise OSError(errno.EADDRINUSE, "address in use")
-            raise SystemExit
+            raise OSError(errno.EADDRINUSE, "address in use")
 
     monkeypatch.setattr(app, "create_app", lambda: App())
     monkeypatch.setattr(main, "get_pid_on_port", lambda p: None)
-    with pytest.raises(SystemExit):
+    with pytest.raises(main.PortInUseError) as excinfo:
         main.run_flask_app(1234)
-    assert called == [1234, 1235]
+    assert excinfo.value.port == 1234
+    assert called == [1234]
 
 
 def test_run_flask_app_skips_ipv6_port(monkeypatch):
-    """IPv6-bound port is skipped in favor of a free one."""
+    """IPv6-bound configured ports fail instead of walking upward."""
     s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
     s.bind(("::", 0))
     s.listen(1)
@@ -173,10 +172,11 @@ def test_run_flask_app_skips_ipv6_port(monkeypatch):
             raise SystemExit
 
     monkeypatch.setattr(app, "create_app", lambda: App())
-    with pytest.raises(SystemExit):
+    with pytest.raises(main.PortInUseError) as excinfo:
         main.run_flask_app(port)
     s.close()
-    assert called == [port + 1]
+    assert excinfo.value.port == port
+    assert called == []
 
 
 def test_run_bot_calls_cycle(monkeypatch):

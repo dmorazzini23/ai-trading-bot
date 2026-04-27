@@ -44,9 +44,10 @@ echo "=== Runtime go/no-go ==="
   --args '{}' | jq .
 
 echo "=== Health probe ==="
+HEALTH_PROBE_PORT="${HEALTHCHECK_PORT:-${API_PORT:-9001}}"
 "${PYTHON_BIN}" tools/mcp_ops_server.py \
   --call health_probe \
-  --args '{"port":8081}' | jq .
+  --args "{\"port\":${HEALTH_PROBE_PORT}}" | jq .
 
 echo "=== Service status ==="
 "${PYTHON_BIN}" tools/mcp_ops_server.py \

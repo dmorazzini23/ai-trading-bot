@@ -1,14 +1,8 @@
 from __future__ import annotations
 
 import importlib
-import os
-from pathlib import Path
 
 import pytest
-
-# Ensure a deterministic models directory for most tests
-DEFAULT_MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
-os.environ.setdefault("AI_TRADING_MODELS_DIR", str(DEFAULT_MODELS_DIR))
 
 np = pytest.importorskip("numpy")
 pytest.importorskip("sklearn")
@@ -20,21 +14,18 @@ from sklearn.dummy import DummyClassifier
 import joblib
 
 
-def setup_function(function):
+@pytest.fixture(autouse=True)
+def isolated_model_loader_state(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_TRADING_MODELS_DIR", str(tmp_path / "models"))
+    import ai_trading.paths as paths
+
+    importlib.reload(paths)
+    importlib.reload(model_loader)
     model_loader.ML_MODELS.clear()
     bot_engine._ML_MODEL_CACHE.clear()
-    models_dir = Path(os.environ["AI_TRADING_MODELS_DIR"])
-    for p in models_dir.rglob("*.pkl"):
-        try:
-            p.unlink()
-        except OSError:
-            pass
-    for d in sorted(models_dir.rglob("*"), reverse=True):
-        if d.is_dir():
-            try:
-                d.rmdir()
-            except OSError:
-                pass
+    yield
+    model_loader.ML_MODELS.clear()
+    bot_engine._ML_MODEL_CACHE.clear()
 
 
 def test_load_missing_raises(tmp_path, monkeypatch):

@@ -602,6 +602,61 @@ def test_collect_runtime_snapshot_ignores_ok_trade_report_concentration(
     assert snapshot["top_rejection_concentration_ratio"] is None
 
 
+def test_collect_runtime_snapshot_degrades_when_health_payload_fails(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        slack_srv,
+        "_runtime_report_payload",
+        lambda: {
+            "go_no_go": {"gate_passed": True, "failed_checks": []},
+            "execution_vs_alpha": {"execution_capture_ratio": 0.25},
+            "gate_effectiveness": {},
+        },
+    )
+    monkeypatch.setattr(
+        slack_srv,
+        "_health_payload",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("connection refused")),
+    )
+    monkeypatch.setattr(
+        slack_srv,
+        "_collect_execution_window_snapshot",
+        lambda _args: {
+            "execution_fill_ratio": None,
+            "execution_fill_ratio_samples": 0,
+            "execution_fill_ratio_filled": 0,
+            "execution_window_minutes": 30,
+            "execution_skipped_count": 0,
+            "precheck_failure_count": 0,
+            "precheck_failure_ratio": None,
+            "precheck_failure_top_details": [],
+            "precheck_failure_top_actionable_details": [],
+            "order_events_path": str(tmp_path / "order_events.jsonl"),
+            "exec_quality_events_path": str(tmp_path / "execution_quality_events.jsonl"),
+        },
+    )
+    monkeypatch.setattr(
+        slack_srv,
+        "_collect_gate_window_snapshot",
+        lambda _args: {
+            "gate_rejected_records": 0,
+            "gate_window_rows": 0,
+            "gate_window_minutes": 60,
+            "gate_window_events_path": str(tmp_path / "gate_effectiveness.jsonl"),
+            "top_rejection_concentration_blocking_gate_found": False,
+        },
+    )
+
+    snapshot = slack_srv._collect_runtime_snapshot({})
+
+    assert snapshot["health_ok"] is False
+    assert snapshot["health_status"] == "degraded"
+    assert snapshot["health_reason"] == "health_payload_unavailable"
+    assert snapshot["provider_status"] == "unknown"
+    assert snapshot["broker_status"] == "unknown"
+
+
 def test_incident_message_includes_top_precheck_blockers() -> None:
     snapshot = {
         "go_no_go_gate_passed": True,
@@ -1106,7 +1161,7 @@ def test_collect_eod_summary_uses_runtime_file_fallback(monkeypatch) -> None:
         }
 
     def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
-        assert port == 8081
+        assert port == 9001
         assert timeout_s == 2.0
         return {
             "status": "healthy",
@@ -1159,7 +1214,7 @@ def test_collect_eod_summary_prefers_daily_trade_stats_for_daily_kpis(monkeypatc
         }
 
     def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
-        assert port == 8081
+        assert port == 9001
         assert timeout_s == 2.0
         return {
             "status": "healthy",
@@ -1179,3 +1234,32 @@ def test_collect_eod_summary_prefers_daily_trade_stats_for_daily_kpis(monkeypatc
     assert snapshot["profit_factor"] == 0.8
     assert snapshot["win_rate"] == 0.4
     assert snapshot["closed_trades"] == 11
+
+
+def test_collect_eod_summary_degrades_when_health_payload_fails(monkeypatch) -> None:
+    monkeypatch.setattr(
+        slack_srv,
+        "_runtime_report_payload",
+        lambda: {
+            "go_no_go": {"gate_passed": True, "failed_checks": []},
+            "execution_vs_alpha": {
+                "execution_capture_ratio": 0.2,
+                "daily": [{"date": "2026-03-27"}],
+            },
+            "trade_history": {"daily_trade_stats": [{"date": "2026-03-27"}]},
+        },
+    )
+    monkeypatch.setattr(
+        slack_srv,
+        "_health_payload",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("connection refused")),
+    )
+
+    snapshot = slack_srv._collect_eod_summary_snapshot({})
+
+    assert snapshot["report_date"] == "2026-03-27"
+    assert snapshot["health_status"] == "degraded"
+    assert snapshot["health_reason"] == "health_payload_unavailable"
+    assert snapshot["provider_status"] == "unknown"
+    assert snapshot["broker_status"] == "unknown"
+    assert isinstance(snapshot["learning"], dict)

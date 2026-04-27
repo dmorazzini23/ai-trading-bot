@@ -22,7 +22,8 @@ def fetch_symbol(symbol: str, period: str = "2y", interval: str = "1d") -> Path:
     df = t.history(period=period, interval=interval)
     if df is None or df.empty or ("Close" not in df.columns and "close" not in df.columns):
         raise SystemExit(f"No data for {sym}")
-    out = df[["Close"]].rename(columns={"Close": "close"})
+    close_col = "Close" if "Close" in df.columns else "close"
+    out = df[[close_col]].rename(columns={close_col: "close"})
     out.index.name = "date"
     data_dir = Path("data")
     data_dir.mkdir(parents=True, exist_ok=True)

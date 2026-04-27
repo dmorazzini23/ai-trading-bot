@@ -18,6 +18,11 @@ def test_signal_canonical_side_and_score():
     assert sig2.score == -0.4
     sig3 = StrategySignal("AAPL", "hold", strength=0.9, confidence=0.9)
     assert sig3.score == 0.0
+    sig4 = StrategySignal("AAPL", "sell_short", strength=0.5, confidence=0.7)
+    assert sig4.side == "sell_short"
+    assert sig4.score == -0.5
+    assert sig4.is_sell
+    assert sig4.is_sell_short
 
 
 def test_signal_requires_explicit_strength_confidence():

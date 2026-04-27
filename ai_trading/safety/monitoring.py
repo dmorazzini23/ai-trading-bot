@@ -150,7 +150,9 @@ class SafetyMonitor:
     def check_safety_thresholds(self) -> list[dict[str, Any]]:
         """Check all safety thresholds and return any violations."""
         violations: list[dict[str, Any]] = []
-        if abs(self.metrics['daily_pnl']) > self.thresholds['max_daily_loss'] * self.metrics['total_portfolio_value']:
+        daily_pnl = float(self.metrics['daily_pnl'] or 0.0)
+        daily_loss_limit = self.thresholds['max_daily_loss'] * self.metrics['total_portfolio_value']
+        if daily_pnl < 0 and abs(daily_pnl) > daily_loss_limit:
             violations.append({'type': 'daily_loss_limit', 'severity': AlertSeverity.CRITICAL, 'message': f"Daily loss limit exceeded: {self.metrics['daily_pnl']:.2f}", 'action': 'emergency_stop'})
         if self.metrics['current_drawdown'] > self.thresholds['max_drawdown']:
             violations.append({'type': 'max_drawdown', 'severity': AlertSeverity.CRITICAL, 'message': f"Maximum drawdown exceeded: {self.metrics['current_drawdown']:.2%}", 'action': 'pause_trading'})

@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 PATHS = [
     "ai_trading/logging.py",
@@ -24,8 +25,16 @@ PATHS = [
     "ai_trading/risk/manager.py",
 ]
 
-p = subprocess.run([sys.executable, "tools/audit_exceptions.py", "--paths", *PATHS], check=False, capture_output=True, text=True)
-assert p.returncode == 0, p.stderr
-data = json.loads(p.stdout.splitlines()[0])
-offenders = {f: hits for f, hits in data.get("by_file", {}).items() if hits}
-assert offenders == {}, f"broad except present in: {list(offenders)}"
+def test_no_broad_except_in_stage2_paths():
+    repo_root = Path(__file__).resolve().parents[2]
+    p = subprocess.run(
+        [sys.executable, "tools/audit_exceptions.py", "--paths", *PATHS],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+    )
+    assert p.returncode == 0, p.stderr
+    data = json.loads(p.stdout.splitlines()[0])
+    offenders = {f: hits for f, hits in data.get("by_file", {}).items() if hits}
+    assert offenders == {}, f"broad except present in: {list(offenders)}"

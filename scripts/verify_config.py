@@ -14,7 +14,7 @@ def check_env_file():
     try:
         with open(env_path) as f:
             content = f.read()
-        required_vars = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL']
+        required_vars = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_TRADING_BASE_URL']
         missing_vars = []
         sample_vars = []
         loaded = reload_env(str(env_path), override=True)
@@ -42,7 +42,7 @@ def check_api_keys():
             return (False, '❌ python-dotenv not installed. Run: python3 -m pip install python-dotenv')
         api_key = get_env('ALPACA_API_KEY')
         secret_key = get_env('ALPACA_SECRET_KEY')
-        base_url = get_env('ALPACA_BASE_URL')
+        base_url = get_env('ALPACA_TRADING_BASE_URL')
         issues = []
         if not api_key:
             issues.append('ALPACA_API_KEY not set')
@@ -57,9 +57,9 @@ def check_api_keys():
         elif len(secret_key) < 30:
             issues.append('ALPACA_SECRET_KEY appears too short')
         if not base_url:
-            issues.append('ALPACA_BASE_URL not set')
+            issues.append('ALPACA_TRADING_BASE_URL not set')
         elif not base_url.startswith('https://'):
-            issues.append('ALPACA_BASE_URL should start with https://')
+            issues.append('ALPACA_TRADING_BASE_URL should start with https://')
         if issues:
             return (False, '❌ API key issues found:\n   ' + '\n   '.join(issues))
         is_paper = 'paper' in base_url.lower()

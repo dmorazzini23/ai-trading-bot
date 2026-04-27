@@ -20,9 +20,29 @@ run_tool_server = cast(Callable[..., int], getattr(_mcp_common_mod, "run_tool_se
 _DEFAULT_RUNTIME_ROOT = Path("/var/lib/ai-trading-bot/runtime")
 
 
+def _bool_arg(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _runtime_root(args: dict[str, Any]) -> Path:
     raw = str(args.get("runtime_root") or _DEFAULT_RUNTIME_ROOT)
     return Path(raw).expanduser().resolve()
+
+
+def _assert_inside_runtime_root(path: Path, root: Path) -> Path:
+    resolved = path.expanduser().resolve()
+    if resolved != root and not resolved.is_relative_to(root):
+        raise RuntimeError("trade history path must stay within runtime root")
+    return resolved
 
 
 def _trade_history_path(args: dict[str, Any]) -> Path:
@@ -30,17 +50,21 @@ def _trade_history_path(args: dict[str, Any]) -> Path:
     raw = str(args.get("trade_history_path") or "trade_history.parquet").strip()
     path = Path(raw).expanduser()
     if not path.is_absolute():
-        path = (root / path).resolve()
-    return path
+        path = root / path
+    return _assert_inside_runtime_root(path, root)
 
 
-def _load_trade_history(path: Path) -> pd.DataFrame:
+def _load_trade_history(path: Path, *, trusted_pickle: bool = False) -> pd.DataFrame:
     if not path.exists():
         raise RuntimeError(f"trade history not found: {path}")
     suffix = path.suffix.lower()
     if suffix == ".parquet":
         frame = pd.read_parquet(path)
     elif suffix in {".pkl", ".pickle"}:
+        if not trusted_pickle:
+            raise RuntimeError(
+                "pickle trade history requires explicit allow_trusted_pickle=true"
+            )
         frame = pd.read_pickle(path)
     else:
         raise RuntimeError(f"unsupported trade history format: {path.suffix}")
@@ -134,7 +158,8 @@ def _query_sql(frame: pd.DataFrame, query: str, limit: int) -> dict[str, Any]:
 
 def tool_warehouse_status(args: dict[str, Any]) -> dict[str, Any]:
     path = _trade_history_path(args)
-    frame = _prepare_frame(_load_trade_history(path))
+    trusted_pickle = _bool_arg(args.get("allow_trusted_pickle"), default=False)
+    frame = _prepare_frame(_load_trade_history(path, trusted_pickle=trusted_pickle))
     return {
         "trade_history_path": str(path),
         "table": "trade_history",
@@ -148,7 +173,8 @@ def tool_query_trade_history_sql(args: dict[str, Any]) -> dict[str, Any]:
     path = _trade_history_path(args)
     query = str(args.get("query") or "").strip()
     limit = int(args.get("limit") or 250)
-    frame = _prepare_frame(_load_trade_history(path))
+    trusted_pickle = _bool_arg(args.get("allow_trusted_pickle"), default=False)
+    frame = _prepare_frame(_load_trade_history(path, trusted_pickle=trusted_pickle))
     result = _query_sql(frame, query=query, limit=limit)
     return {
         "trade_history_path": str(path),

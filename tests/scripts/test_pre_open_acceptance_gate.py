@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
 
@@ -22,17 +23,43 @@ def _load_gate_module() -> ModuleType:
     return module
 
 
-def _health_step(module: ModuleType, payload: dict[str, object]):
+def _health_step(module: ModuleType, payload: Mapping[str, object]):
     return module.Step(
         name="healthz",
         status="pass",
         summary="health endpoint is healthy",
-        details={"payload": payload},
+        details={"payload": dict(payload)},
     )
 
 
 def _pass_step(module: ModuleType, name: str):
     return module.Step(name=name, status="pass", summary=f"{name} ok", details={})
+
+
+def test_health_port_prefers_healthcheck_env(tmp_path: Path, monkeypatch) -> None:
+    module = _load_gate_module()
+    monkeypatch.setenv("HEALTHCHECK_PORT", "18081")
+    monkeypatch.setenv("API_PORT", "9001")
+    (tmp_path / ".env.runtime").write_text("HEALTHCHECK_PORT=9001\n", encoding="utf-8")
+
+    assert module._health_port_from_env(tmp_path) == 18081
+
+
+def test_health_port_uses_packaged_api_port_default(tmp_path: Path, monkeypatch) -> None:
+    module = _load_gate_module()
+    monkeypatch.delenv("HEALTHCHECK_PORT", raising=False)
+    monkeypatch.delenv("API_PORT", raising=False)
+
+    assert module._health_port_from_env(tmp_path) == 9001
+
+
+def test_health_port_falls_back_to_runtime_api_port(tmp_path: Path, monkeypatch) -> None:
+    module = _load_gate_module()
+    monkeypatch.delenv("HEALTHCHECK_PORT", raising=False)
+    monkeypatch.delenv("API_PORT", raising=False)
+    (tmp_path / ".env.runtime").write_text("API_PORT=19001\n", encoding="utf-8")
+
+    assert module._health_port_from_env(tmp_path) == 19001
 
 
 def test_preopen_operator_drill_fails_when_flat_required_and_broker_not_flat(

@@ -1,9 +1,5 @@
-import os
-import sys
 import types
 from typing import Any, cast
-
-os.environ.setdefault("PYDANTIC_V1_MODE", "1")
 
 import numpy as np
 import pytest
@@ -11,100 +7,6 @@ pd = pytest.importorskip("pandas")
 
 from ai_trading.alpaca_api import AlpacaAuthenticationError
 from ai_trading.core import bot_engine
-
-
-def _install_alpaca_stub() -> types.ModuleType:
-    alpaca_stub = cast(Any, types.ModuleType("alpaca"))
-
-    trading_mod = cast(Any, types.ModuleType("alpaca.trading"))
-    alpaca_stub.trading = trading_mod
-
-    data_mod = cast(Any, types.ModuleType("alpaca.data"))
-    historical_mod = cast(Any, types.ModuleType("alpaca.data.historical"))
-    stock_mod = cast(Any, types.ModuleType("alpaca.data.historical.stock"))
-
-    class TimeFrameUnit:
-        Minute = "Minute"
-        Day = "Day"
-
-    class TimeFrame:
-        Minute = "1Min"
-        Day = "1Day"
-
-    class StockBarsRequest:
-        def __init__(self, *args, **kwargs) -> None:  # noqa: D401, ARG002
-            self.args = args
-            self.kwargs = kwargs
-
-    data_mod.StockBarsRequest = StockBarsRequest
-    data_mod.TimeFrame = TimeFrame
-    data_mod.TimeFrameUnit = TimeFrameUnit
-
-    class StockHistoricalDataClient:  # pragma: no cover - stub
-        def __init__(self, *args, **kwargs) -> None:  # noqa: D401, ARG002
-            raise ImportError("alpaca stub in use")
-
-    stock_mod.StockHistoricalDataClient = StockHistoricalDataClient
-    historical_mod.stock = stock_mod
-    data_mod.historical = historical_mod
-    alpaca_stub.data = data_mod
-
-    common_mod = cast(Any, types.ModuleType("alpaca.common"))
-    exceptions_mod = cast(Any, types.ModuleType("alpaca.common.exceptions"))
-
-    class APIError(Exception):
-        """Stub Alpaca APIError."""
-
-        pass
-
-    exceptions_mod.APIError = APIError
-    common_mod.exceptions = exceptions_mod
-    alpaca_stub.common = common_mod
-
-    sys.modules.update(
-        {
-            "alpaca": alpaca_stub,
-            "alpaca.trading": trading_mod,
-            "alpaca.data": data_mod,
-            "alpaca.data.historical": historical_mod,
-            "alpaca.data.historical.stock": stock_mod,
-            "alpaca.common": common_mod,
-            "alpaca.common.exceptions": exceptions_mod,
-        }
-    )
-
-    return cast(types.ModuleType, alpaca_stub)
-
-_install_alpaca_stub()
-
-
-# AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with direct import from shim module
-
-os.environ.setdefault("ALPACA_API_KEY", "x")
-os.environ.setdefault("ALPACA_SECRET_KEY", "x")
-os.environ.setdefault("ALPACA_TRADING_BASE_URL", "https://example.com")
-os.environ.setdefault("WEBHOOK_SECRET", "x")
-
-import alpaca.trading as _alpaca_trading
-_alpaca_trading = cast(Any, _alpaca_trading)
-
-_MISSING = [
-    "StockLatestQuoteRequest",
-    "Quote",
-    "OrderSide",
-    "OrderStatus",
-    "TimeInForce",
-    "Order",
-    "MarketOrderRequest",
-]
-
-for _name in _MISSING:
-    if not hasattr(_alpaca_trading, _name):
-        setattr(
-            _alpaca_trading,
-            _name,
-            type(_name, (), {"__init__": lambda self, *a, **k: None}),
-        )  # pragma: no cover - stubs
 
 from ai_trading.core.bot_engine import BotEngine, prepare_indicators
 

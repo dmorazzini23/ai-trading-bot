@@ -4,10 +4,31 @@ Advanced execution algorithms for institutional trading.
 Provides VWAP, TWAP, Implementation Shortfall, and other
 sophisticated execution algorithms.
 """
+import math
 import time
+from typing import Any
+
 from ai_trading.logging import logger
+from ai_trading.math.money import Money
 from ..core.enums import OrderSide, OrderType
 from .engine import Order, OrderManager
+
+
+def _positive_price(value: Any) -> Money | None:
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    return Money(price) if math.isfinite(price) and price > 0 else None
+
+
+def _limit_price_from_kwargs(kwargs: dict[str, Any]) -> Money | None:
+    for key in ("limit_price", "price", "benchmark_price", "target_price"):
+        price = _positive_price(kwargs.get(key))
+        if price is not None:
+            return price
+    return None
+
 
 class VWAPExecutor:
     """
@@ -38,6 +59,10 @@ class VWAPExecutor:
             List of child order IDs
         """
         try:
+            limit_price = _limit_price_from_kwargs(kwargs)
+            if limit_price is None:
+                logger.error("VWAP limit execution requires a positive price")
+                return []
             slice_interval_minutes = max(5, duration_minutes // 8)
             num_slices = max(1, duration_minutes // slice_interval_minutes)
             slice_quantity = max(self.min_slice_size, total_quantity // num_slices)
@@ -47,7 +72,7 @@ class VWAPExecutor:
                 if remaining_quantity <= 0:
                     break
                 current_slice = min(slice_quantity, remaining_quantity)
-                child_order = Order(symbol=symbol, side=side, quantity=current_slice, order_type=OrderType.LIMIT, parent_order_id=kwargs.get('parent_order_id'), strategy_id=kwargs.get('strategy_id'), execution_algorithm='vwap')
+                child_order = Order(symbol=symbol, side=side, quantity=current_slice, order_type=OrderType.LIMIT, price=limit_price, parent_order_id=kwargs.get('parent_order_id'), strategy_id=kwargs.get('strategy_id'), execution_algorithm='vwap')
                 if self.order_manager.submit_order(child_order):
                     child_orders.append(child_order.id)
                     remaining_quantity -= current_slice
@@ -87,6 +112,10 @@ class TWAPExecutor:
             List of child order IDs
         """
         try:
+            limit_price = _limit_price_from_kwargs(kwargs)
+            if limit_price is None:
+                logger.error("TWAP limit execution requires a positive price")
+                return []
             slice_interval = max(1, duration_minutes // 8)
             num_slices = duration_minutes // slice_interval
             slice_quantity = max(self.min_slice_size, total_quantity // num_slices)
@@ -96,7 +125,7 @@ class TWAPExecutor:
                 if remaining_quantity <= 0:
                     break
                 current_slice = min(slice_quantity, remaining_quantity)
-                child_order = Order(symbol=symbol, side=side, quantity=current_slice, order_type=OrderType.LIMIT, parent_order_id=kwargs.get('parent_order_id'), strategy_id=kwargs.get('strategy_id'), execution_algorithm='twap')
+                child_order = Order(symbol=symbol, side=side, quantity=current_slice, order_type=OrderType.LIMIT, price=limit_price, parent_order_id=kwargs.get('parent_order_id'), strategy_id=kwargs.get('strategy_id'), execution_algorithm='twap')
                 if self.order_manager.submit_order(child_order):
                     child_orders.append(child_order.id)
                     remaining_quantity -= current_slice
@@ -143,7 +172,11 @@ class ImplementationShortfall:
             child_orders = []
             for i, (slice_quantity, slice_urgency) in enumerate(execution_schedule):
                 order_type = OrderType.MARKET if slice_urgency > 0.8 else OrderType.LIMIT
-                child_order = Order(symbol=symbol, side=side, quantity=slice_quantity, order_type=order_type, parent_order_id=kwargs.get('parent_order_id'), strategy_id=kwargs.get('strategy_id'), execution_algorithm='implementation_shortfall')
+                child_price = _positive_price(benchmark_price) if order_type == OrderType.LIMIT else None
+                if order_type == OrderType.LIMIT and child_price is None:
+                    logger.error("Implementation Shortfall limit execution requires a positive benchmark price")
+                    return []
+                child_order = Order(symbol=symbol, side=side, quantity=slice_quantity, order_type=order_type, price=child_price, parent_order_id=kwargs.get('parent_order_id'), strategy_id=kwargs.get('strategy_id'), execution_algorithm='implementation_shortfall')
                 if self.order_manager.submit_order(child_order):
                     child_orders.append(child_order.id)
                     logger.debug(f'IS slice {i + 1}: {slice_quantity} shares, urgency={slice_urgency:.2f}, type={order_type}')

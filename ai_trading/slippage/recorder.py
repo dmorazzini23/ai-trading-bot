@@ -19,10 +19,28 @@ def _ensure_file(path: Path) -> None:
     if not path.exists():
         with path.open("w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["timestamp", "symbol", "expected", "actual", "slippage_cents"])
+            writer.writerow(
+                [
+                    "timestamp",
+                    "symbol",
+                    "side",
+                    "quantity",
+                    "expected_price",
+                    "actual_price",
+                    "slippage_bps",
+                ]
+            )
 
 
-def log_slippage(symbol: str, expected: float, actual: float, log_path: Path | str = SLIPPAGE_LOG_PATH) -> None:
+def log_slippage(
+    symbol: str,
+    expected: float,
+    actual: float,
+    log_path: Path | str = SLIPPAGE_LOG_PATH,
+    *,
+    side: str = "unknown",
+    quantity: float = 1.0,
+) -> None:
     """Append a slippage record to CSV, creating directories and file on first use."""
     path = Path(log_path)
     try:
@@ -30,11 +48,16 @@ def log_slippage(symbol: str, expected: float, actual: float, log_path: Path | s
     except OSError as e:  # pragma: no cover - filesystem errors
         logger.warning("SLIPPAGE_LOG_INIT_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
         return
-    slippage_cents = (actual - expected) * 100.0
+    try:
+        expected_price = float(expected)
+        actual_price = float(actual)
+        slippage_bps = ((actual_price - expected_price) / expected_price) * 10000.0
+    except (TypeError, ValueError, ZeroDivisionError) as e:
+        logger.warning("SLIPPAGE_LOG_VALUE_INVALID", extra={"cause": e.__class__.__name__, "detail": str(e)})
+        return
     ts = datetime.now(ZoneInfo("UTC")).isoformat()
     try:
         with path.open("a", newline="") as f:
-            csv.writer(f).writerow([ts, symbol, expected, actual, slippage_cents])
+            csv.writer(f).writerow([ts, symbol, side, quantity, expected_price, actual_price, slippage_bps])
     except OSError as e:  # pragma: no cover - filesystem errors
         logger.warning("SLIPPAGE_LOG_WRITE_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
-

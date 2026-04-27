@@ -5,6 +5,7 @@ import os
 import threading
 import types
 from datetime import UTC, datetime
+from typing import Any
 
 import pandas as pd
 
@@ -30,6 +31,12 @@ from ai_trading.services.signal import (
     evaluate_signal_and_confirm,
     generate_directional_signals,
 )
+
+
+def _request_snapshot(order_data: Any) -> tuple[str, float, str]:
+    side = getattr(order_data, "side")
+    side_value = getattr(side, "value", side)
+    return (str(order_data.symbol), float(order_data.qty), str(side_value))
 
 
 class _DummyLogger:
@@ -80,10 +87,10 @@ def test_evaluate_signal_and_confirm_enforces_threshold() -> None:
 
 
 def test_execute_signal_orders_submits_expected_orders() -> None:
-    calls: list[tuple[str, int, str]] = []
+    calls: list[Any] = []
     ctx = types.SimpleNamespace(
         api=types.SimpleNamespace(
-            submit_order=lambda symbol, qty, side: calls.append((symbol, qty, side))
+            submit_order=lambda *, order_data: calls.append(order_data)
         )
     )
     signals = pd.Series([1, 0, -1], index=["A", "B", "C"])
@@ -91,15 +98,15 @@ def test_execute_signal_orders_submits_expected_orders() -> None:
     orders = execute_signal_orders(ctx, signals, logger=_DummyLogger())
 
     assert orders == [("A", "buy"), ("C", "sell")]
-    assert calls == [("A", 1, "buy"), ("C", 1, "sell")]
+    assert [_request_snapshot(call) for call in calls] == [("A", 1.0, "buy"), ("C", 1.0, "sell")]
 
 
 def test_execute_signal_orders_returns_only_successfully_submitted_orders() -> None:
-    calls: list[tuple[str, int, str]] = []
+    calls: list[Any] = []
 
-    def _submit_order(symbol: str, qty: int, side: str) -> None:
-        calls.append((symbol, qty, side))
-        if symbol == "A":
+    def _submit_order(*, order_data: object) -> None:
+        calls.append(order_data)
+        if getattr(order_data, "symbol") == "A":
             raise ValueError("broker rejected")
 
     ctx = types.SimpleNamespace(api=types.SimpleNamespace(submit_order=_submit_order))
@@ -108,14 +115,14 @@ def test_execute_signal_orders_returns_only_successfully_submitted_orders() -> N
     orders = execute_signal_orders(ctx, signals, logger=_DummyLogger())
 
     assert orders == [("C", "sell")]
-    assert calls == [("A", 1, "buy"), ("C", 1, "sell")]
+    assert [_request_snapshot(call) for call in calls] == [("A", 1.0, "buy"), ("C", 1.0, "sell")]
 
 
 def test_execute_signal_orders_excludes_terminal_rejected_response() -> None:
     ctx = types.SimpleNamespace(
         api=types.SimpleNamespace(
-            submit_order=lambda symbol, _qty, _side: types.SimpleNamespace(
-                status="rejected" if symbol == "A" else "accepted"
+            submit_order=lambda *, order_data: types.SimpleNamespace(
+                status="rejected" if order_data.symbol == "A" else "accepted"
             )
         )
     )
@@ -124,6 +131,23 @@ def test_execute_signal_orders_excludes_terminal_rejected_response() -> None:
     orders = execute_signal_orders(ctx, signals, logger=_DummyLogger())
 
     assert orders == [("C", "sell")]
+
+
+def test_execute_signal_orders_uses_alpaca_request_keyword() -> None:
+    calls: list[dict[str, Any]] = []
+
+    def _submit_order(*args: object, **kwargs: object) -> types.SimpleNamespace:
+        calls.append({"args": args, "kwargs": kwargs})
+        return types.SimpleNamespace(status="accepted")
+
+    ctx = types.SimpleNamespace(api=types.SimpleNamespace(submit_order=_submit_order))
+
+    orders = execute_signal_orders(ctx, pd.Series([1], index=["AAPL"]), logger=_DummyLogger())
+
+    assert orders == [("AAPL", "buy")]
+    assert calls[0]["args"] == ()
+    order_data = calls[0]["kwargs"]["order_data"]
+    assert _request_snapshot(order_data) == ("AAPL", 1.0, "buy")
 
 
 def test_ensure_portfolio_weights_requires_canonical_weights(monkeypatch) -> None:

@@ -45,6 +45,8 @@ from . import (
 
 pd = load_pandas()
 logger = get_logger(__name__)
+_IMPORTED_ALLOW_SIP = _ALLOW_SIP
+_IMPORTED_SIP_UNAUTHORIZED = _SIP_UNAUTHORIZED
 
 
 def _resolve_fetch_callable(name: str, fallback: Any) -> Any:
@@ -72,6 +74,36 @@ def _resolve_fetch_value(name: str, fallback: Any) -> Any:
         return getattr(fetch_mod, name, fallback)
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         return fallback
+
+
+def _resolve_live_fetch_value(name: str, imported_value: Any) -> Any:
+    """Return mutable parent-package state without freezing imported globals."""
+
+    local_value = globals().get(name, imported_value)
+    if local_value != imported_value:
+        return local_value
+    return _resolve_fetch_value(name, imported_value)
+
+
+def _sip_unauthorized() -> bool:
+    """Return the current SIP authorization lockout state."""
+
+    local_value = globals().get("_SIP_UNAUTHORIZED", _IMPORTED_SIP_UNAUTHORIZED)
+    if local_value != _IMPORTED_SIP_UNAUTHORIZED:
+        return bool(local_value)
+    checker = _resolve_fetch_callable("_is_sip_unauthorized", None)
+    if callable(checker):
+        try:
+            return bool(checker())
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            pass
+    return bool(_resolve_live_fetch_value("_SIP_UNAUTHORIZED", _IMPORTED_SIP_UNAUTHORIZED))
+
+
+def _sip_allowed() -> bool:
+    """Return whether SIP fallback is currently allowed."""
+
+    return bool(_resolve_live_fetch_value("_ALLOW_SIP", _IMPORTED_ALLOW_SIP)) and not _sip_unauthorized()
 
 
 def _to_df(payload: dict[str, Any]):
@@ -140,7 +172,7 @@ def fetch_bars(
     # If previous attempts yielded an empty IEX response we skip straight to SIP
     # (when allowed).
     feed = "iex"
-    if _IEX_EMPTY_COUNTS.get(key, 0) >= _IEX_EMPTY_THRESHOLD and _ALLOW_SIP and not _SIP_UNAUTHORIZED:
+    if _IEX_EMPTY_COUNTS.get(key, 0) >= _IEX_EMPTY_THRESHOLD and _sip_allowed():
         consecutive = consecutive_failure_count(symbol, tf)
         logger.info(
             "DATA_SOURCE_FALLBACK_ATTEMPT",
@@ -198,7 +230,7 @@ def fetch_bars(
             inc_empty_payload(symbol, tf)
             mark_skipped(symbol, tf)
             record_failure_event(symbol, timeframe=tf)
-            if _ALLOW_SIP and not _SIP_UNAUTHORIZED:
+            if _sip_allowed():
                 logger.info(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
                     extra={
@@ -224,7 +256,7 @@ def fetch_bars(
                 feed = "sip"
                 promote_high_resolution(symbol, provider="finnhub")
                 continue
-            if _SIP_UNAUTHORIZED:
+            if _sip_unauthorized():
                 inc_unauthorized_sip("alpaca")
             record_failure_event(symbol, timeframe=tf)
             return _to_df({})

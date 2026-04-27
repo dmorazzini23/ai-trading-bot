@@ -341,6 +341,7 @@ def _health_port_from_env(repo_dir: Path) -> int:
         except ValueError:
             pass
     runtime_env_path = repo_dir / ".env.runtime"
+    runtime_api_port: int | None = None
     for line in _canonical_env_lines(runtime_env_path):
         key, value = line.split("=", 1)
         if key.strip() == "HEALTHCHECK_PORT":
@@ -348,7 +349,20 @@ def _health_port_from_env(repo_dir: Path) -> int:
                 return int(value.strip())
             except ValueError:
                 break
-    return 8081
+        if key.strip() == "API_PORT":
+            try:
+                runtime_api_port = int(value.strip())
+            except ValueError:
+                runtime_api_port = None
+    raw_api_port = os.environ.get("API_PORT")
+    if raw_api_port and raw_api_port.strip():
+        try:
+            return int(raw_api_port.strip())
+        except ValueError:
+            pass
+    if runtime_api_port is not None:
+        return runtime_api_port
+    return 9001
 
 
 def _check_health(repo_dir: Path, *, port: int | None, timeout_seconds: int, skip: bool) -> Step:

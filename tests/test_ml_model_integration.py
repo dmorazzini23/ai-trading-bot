@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import types
-from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -22,21 +21,26 @@ def _make_pipeline() -> types.SimpleNamespace:
     return types.SimpleNamespace(fit=_fit_noop, predict=_predict_zero, version="1")
 
 
-def test_save_and_load_roundtrip():
+@pytest.fixture
+def isolated_ml_model_dir(tmp_path, monkeypatch):
+    model_root = tmp_path / "pkg" / "models"
+    model_root.mkdir(parents=True)
+    monkeypatch.setattr(ml_model, "__file__", str(tmp_path / "pkg" / "ml_model.py"))
+    return model_root
+
+
+def test_save_and_load_roundtrip(isolated_ml_model_dir):
     if ml_model.joblib is None:
         pytest.skip("joblib not available")
-    model_dir = Path(ml_model.__file__).resolve().parent / "models"
     pipe = _make_pipeline()
     model = ml_model.MLModel(pipe)
     df = pd.DataFrame({"a": [1.0]})
     model.fit(df, [1.0])
-    path = model_dir / "roundtrip.pkl"
+    path = isolated_ml_model_dir / "roundtrip.pkl"
     saved = model.save(str(path))
     assert default_manifest_path(saved).exists()
     loaded = ml_model.MLModel.load(saved)
     assert isinstance(loaded.pipeline, types.SimpleNamespace)
-    Path(saved).unlink()
-    default_manifest_path(saved).unlink()
 
 
 def test_save_outside_model_dir_raises(tmp_path):

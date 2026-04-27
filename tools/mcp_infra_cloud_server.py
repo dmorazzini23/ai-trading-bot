@@ -29,6 +29,21 @@ utc_now_iso = cast(Callable[[], str], getattr(_mcp_common_mod, "utc_now_iso"))
 
 _DEFAULT_RUNTIME_ROOT = Path("/var/lib/ai-trading-bot/runtime")
 _DEFAULT_AUDIT_PATH = _DEFAULT_RUNTIME_ROOT / "infra_actions_audit.jsonl"
+_ALLOWED_SYSTEMD_UNITS = frozenset(
+    {
+        "ai-trading",
+        "ai-trading.service",
+        "ai-trading-api",
+        "ai-trading-api.service",
+    }
+)
+
+
+def _systemd_unit(args: dict[str, Any]) -> str:
+    unit = str(args.get("unit") or "ai-trading").strip()
+    if unit not in _ALLOWED_SYSTEMD_UNITS:
+        raise RuntimeError(f"systemd unit is not allowlisted: {unit or '<empty>'}")
+    return unit
 
 
 def _bool_arg(value: Any, default: bool = False) -> bool:
@@ -140,7 +155,7 @@ def tool_host_summary(_: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_service_status(args: dict[str, Any]) -> dict[str, Any]:
-    unit = str(args.get("unit") or "ai-trading")
+    unit = _systemd_unit(args)
     result = _run_cmd(
         ["systemctl", "show", unit, "-p", "ActiveState,SubState,MainPID,ExecMainStatus"],
         timeout_s=20,
@@ -157,7 +172,7 @@ def tool_service_status(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_journal_errors(args: dict[str, Any]) -> dict[str, Any]:
-    unit = str(args.get("unit") or "ai-trading")
+    unit = _systemd_unit(args)
     since = str(args.get("since") or "45 min ago")
     limit = max(1, int(args.get("limit") or 120))
     result = _run_cmd(["journalctl", "-u", unit, "--since", since, "-o", "cat"], timeout_s=30)
@@ -172,7 +187,7 @@ def tool_journal_errors(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_controlled_restart(args: dict[str, Any]) -> dict[str, Any]:
-    unit = str(args.get("unit") or "ai-trading")
+    unit = _systemd_unit(args)
     reason = str(args.get("reason") or "").strip()
     actor = str(args.get("actor") or "mcp_infra_cloud_server").strip()
     confirm = _bool_arg(args.get("confirm"), default=False)

@@ -10,6 +10,8 @@ This module provides comprehensive health monitoring capabilities:
 
 AI-AGENT-REF: Enhanced health monitoring with production-grade capabilities
 """
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -222,7 +224,7 @@ class HealthMonitor:
     def _check_environment_variables(self) -> HealthCheckResult:
         """Check critical environment variables."""
         try:
-            required_vars = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL']
+            required_vars = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_TRADING_BASE_URL']
             missing_vars = []
             details = {}
             for var in required_vars:

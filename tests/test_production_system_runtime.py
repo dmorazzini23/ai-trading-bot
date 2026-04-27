@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any, cast
 
 from ai_trading import production_system as ps
 from ai_trading.core.enums import OrderSide, OrderType, RiskLevel
+
+
+def _system_alerts(system: ps.ProductionTradingSystem) -> list[tuple[object, ...]]:
+    return cast(list[tuple[object, ...]], cast(Any, system.alert_manager).system_alerts)
 
 
 class _FakeAlertManager:
@@ -27,6 +32,16 @@ class _FakeAlertManager:
 
     def get_alert_stats(self):
         return {"processing_active": self.processing, "queue_size": 0}
+
+
+class _FakeSyncAlertManager(_FakeAlertManager):
+    def send_system_alert(self, *args):
+        self.system_alerts.append(args)
+        return "system-alert"
+
+    def send_trading_alert(self, *args):
+        self.trading_alerts.append(args)
+        return "trading-alert"
 
 
 class _FakeHaltManager:
@@ -79,8 +94,10 @@ class _FakeExecutionCoordinator:
             "fill_price": 101.5,
         }
         self.equity_updates: list[float] = []
+        self.submitted: list[tuple[object, ...]] = []
 
     async def submit_order(self, *_args):
+        self.submitted.append(_args)
         return self.next_result
 
     def get_execution_summary(self):
@@ -154,7 +171,25 @@ def test_start_and_stop_system_success(monkeypatch):
     assert stopped["status"] == "success"
     assert stopped["shutdown_reason"] == "done"
     assert not system.is_active
-    assert system.alert_manager.system_alerts[-1][1] == "System Stopped"
+    assert _system_alerts(system)[-1][1] == "System Stopped"
+
+
+def test_start_system_accepts_sync_alert_manager(monkeypatch):
+    monkeypatch.setattr(ps, "AlertManager", _FakeSyncAlertManager)
+    monkeypatch.setattr(ps, "TradingHaltManager", _FakeHaltManager)
+    monkeypatch.setattr(ps, "RiskManager", _FakeRiskManager)
+    monkeypatch.setattr(ps, "DynamicPositionSizer", lambda _risk_level: object())
+    monkeypatch.setattr(ps, "PerformanceDashboard", _FakeDashboard)
+    monkeypatch.setattr(ps, "ProductionExecutionCoordinator", _FakeExecutionCoordinator)
+    monkeypatch.setattr(ps, "LiquidityManager", _FakeLiquidityManager)
+    monkeypatch.setattr(ps, "MultiTimeframeAnalyzer", _FakeMtfAnalyzer)
+    monkeypatch.setattr(ps, "RegimeDetector", _FakeRegimeDetector)
+    system = ps.ProductionTradingSystem(100_000.0, RiskLevel.MODERATE)
+
+    result = asyncio.run(system.start_system())
+
+    assert result["status"] == "success"
+    assert _system_alerts(system)[-1][1] == "System Started"
 
 
 def test_start_system_fails_when_health_check_reports_issue(monkeypatch):
@@ -163,7 +198,7 @@ def test_start_system_fails_when_health_check_reports_issue(monkeypatch):
     result = asyncio.run(system.start_system())
 
     assert result == {"status": "failed", "reason": "Health check failed"}
-    assert system.alert_manager.system_alerts[-1][1] == "Startup Health Check Failed"
+    assert _system_alerts(system)[-1][1] == "Startup Health Check Failed"
 
 
 def test_analyze_trading_opportunity_halted_and_full_path(monkeypatch):
@@ -218,6 +253,15 @@ def test_execute_trade_rejects_no_trade_and_records_success(monkeypatch):
     assert result["total_execution_time_seconds"] >= 0
     assert len(system.session_trades) == 1
     assert system.performance_dashboard.positions == [("AAPL", 7, 101.5, 101.5)]
+
+
+def test_execute_trade_rejects_limit_without_price(monkeypatch):
+    system = _build_system(monkeypatch)
+
+    result = asyncio.run(system.execute_trade("AAPL", OrderSide.BUY, 5, order_type=OrderType.LIMIT))
+
+    assert result == {"status": "rejected", "reason": "Limit price required for limit order"}
+    assert system.execution_coordinator.submitted == []
 
 
 def test_execute_trade_normalizes_object_execution_result(monkeypatch):
@@ -297,5 +341,5 @@ def test_update_equity_emergency_shutdown_and_health(monkeypatch):
     asyncio.run(system.emergency_shutdown("risk"))
 
     assert system.halt_manager.emergency_reasons == ["risk"]
-    assert system.alert_manager.system_alerts[-2][1] == "EMERGENCY SHUTDOWN"
+    assert _system_alerts(system)[-2][1] == "EMERGENCY SHUTDOWN"
     assert not system.is_healthy()

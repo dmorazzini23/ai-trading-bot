@@ -8,6 +8,7 @@ import pytest
 
 from ai_trading.data.fetch import iex_fallback
 from ai_trading.data.fetch import _IEX_EMPTY_COUNTS
+from ai_trading.data import fetch as data_fetch
 
 
 class _Resp:
@@ -100,3 +101,45 @@ def test_skip_iex_after_threshold(monkeypatch, caplog):
     assert not df.empty
     assert _IEX_EMPTY_COUNTS.get(("AAPL", "1Min"), 0) == 1
     assert any(r.message == "DATA_SOURCE_FALLBACK_ATTEMPT" for r in caplog.records)
+
+
+def test_sip_entitlement_state_is_read_from_parent_module(monkeypatch):
+    _IEX_EMPTY_COUNTS.clear()
+    start, end = _dt_range()
+    sess = _Session([
+        _Resp({"bars": []}),
+        _Resp({"bars": [{"t": "2024-01-01T00:00:00Z"}]}),
+    ])
+    monkeypatch.setattr(data_fetch, "_ALLOW_SIP", True)
+    monkeypatch.setattr(data_fetch, "_SIP_UNAUTHORIZED", False)
+    monkeypatch.setattr(iex_fallback, "_ALLOW_SIP", iex_fallback._IMPORTED_ALLOW_SIP)
+    monkeypatch.setattr(
+        iex_fallback,
+        "_SIP_UNAUTHORIZED",
+        iex_fallback._IMPORTED_SIP_UNAUTHORIZED,
+    )
+
+    df = iex_fallback.fetch_bars("AAPL", start, end, "1Min", session=sess)
+
+    assert [c["feed"] for c in sess.calls] == ["iex", "sip"]
+    assert not df.empty
+
+
+def test_sip_unauthorized_state_is_read_from_parent_module(monkeypatch):
+    _IEX_EMPTY_COUNTS.clear()
+    start, end = _dt_range()
+    sess = _Session([_Resp({"bars": []})])
+    monkeypatch.setattr(data_fetch, "_ALLOW_SIP", True)
+    monkeypatch.setattr(data_fetch, "_SIP_UNAUTHORIZED", True)
+    monkeypatch.setattr(data_fetch, "_SIP_UNAUTHORIZED_UNTIL", None, raising=False)
+    monkeypatch.setattr(iex_fallback, "_ALLOW_SIP", iex_fallback._IMPORTED_ALLOW_SIP)
+    monkeypatch.setattr(
+        iex_fallback,
+        "_SIP_UNAUTHORIZED",
+        iex_fallback._IMPORTED_SIP_UNAUTHORIZED,
+    )
+
+    df = iex_fallback.fetch_bars("AAPL", start, end, "1Min", session=sess)
+
+    assert [c["feed"] for c in sess.calls] == ["iex"]
+    assert getattr(df, "empty", True)

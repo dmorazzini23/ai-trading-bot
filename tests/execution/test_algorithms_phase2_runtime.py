@@ -32,11 +32,13 @@ def test_vwap_executor_slices_to_minimum_size_and_preserves_metadata(monkeypatch
         duration_minutes=40,
         parent_order_id="parent-1",
         strategy_id="strategy-1",
+        limit_price=101.25,
     )
 
     assert len(order_ids) == 3
     assert [order.quantity for order in manager.orders] == [100, 100, 50]
     assert {order.order_type for order in manager.orders} == {OrderType.LIMIT}
+    assert {float(order.price) for order in manager.orders} == {101.25}
     assert {order.execution_algorithm for order in manager.orders} == {"vwap"}
     assert {order.parent_order_id for order in manager.orders} == {"parent-1"}
     assert sleeps == [300, 300, 300]
@@ -47,8 +49,17 @@ def test_vwap_executor_returns_empty_when_submit_fails(monkeypatch) -> None:
     manager = _OrderManager(accept=False)
     executor = algorithms.VWAPExecutor(manager)  # type: ignore[arg-type]
 
-    assert executor.execute_vwap_order("MSFT", OrderSide.SELL, 100, duration_minutes=5) == []
+    assert executor.execute_vwap_order("MSFT", OrderSide.SELL, 100, duration_minutes=5, price=50.0) == []
     assert len(manager.orders) == 1
+
+
+def test_vwap_and_twap_require_limit_price(monkeypatch) -> None:
+    monkeypatch.setattr(algorithms.time, "sleep", lambda _seconds: None)
+    manager = _OrderManager()
+
+    assert algorithms.VWAPExecutor(manager).execute_vwap_order("AAPL", OrderSide.BUY, 100) == []  # type: ignore[arg-type]
+    assert algorithms.TWAPExecutor(manager).execute_twap_order("AAPL", OrderSide.BUY, 100) == []  # type: ignore[arg-type]
+    assert manager.orders == []
 
 
 def test_twap_executor_evenly_slices_and_handles_submit_errors(monkeypatch) -> None:
@@ -57,15 +68,16 @@ def test_twap_executor_evenly_slices_and_handles_submit_errors(monkeypatch) -> N
     manager = _OrderManager()
     executor = algorithms.TWAPExecutor(manager)  # type: ignore[arg-type]
 
-    order_ids = executor.execute_twap_order("AAPL", OrderSide.BUY, 250, duration_minutes=8)
+    order_ids = executor.execute_twap_order("AAPL", OrderSide.BUY, 250, duration_minutes=8, limit_price=101.25)
 
     assert len(order_ids) == 3
     assert [order.quantity for order in manager.orders] == [100, 100, 50]
+    assert {float(order.price) for order in manager.orders} == {101.25}
     assert {order.execution_algorithm for order in manager.orders} == {"twap"}
     assert sleeps == [60, 60, 60]
 
     failing = algorithms.TWAPExecutor(_OrderManager(raise_on_submit=True))  # type: ignore[arg-type]
-    assert failing.execute_twap_order("AAPL", OrderSide.BUY, 250, duration_minutes=8) == []
+    assert failing.execute_twap_order("AAPL", OrderSide.BUY, 250, duration_minutes=8, price=101.25) == []
 
 
 def test_implementation_shortfall_schedule_waits_and_order_types(monkeypatch) -> None:

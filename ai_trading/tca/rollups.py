@@ -98,13 +98,26 @@ def load_slippage_records(
     with target.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle)
         for row in reader:
-            if not row or len(row) < 7:
+            if not row:
+                continue
+            if str(row[0]).strip().lower() == "timestamp":
                 continue
             ts = _parse_ts(row[0])
             if cutoff is not None and (ts is None or ts < cutoff):
                 continue
             try:
-                is_bps = abs(float(row[6]))
+                if len(row) >= 7:
+                    side = str(row[2]).strip().lower()
+                    is_bps = abs(float(row[6]))
+                elif len(row) >= 5:
+                    side = "unknown"
+                    expected = float(row[2])
+                    actual = float(row[3])
+                    if expected <= 0:
+                        continue
+                    is_bps = abs((actual - expected) / expected * 10000.0)
+                else:
+                    continue
             except (TypeError, ValueError):
                 continue
             if not math.isfinite(is_bps) or is_bps <= 0:
@@ -113,7 +126,7 @@ def load_slippage_records(
                 {
                     "ts": ts.isoformat() if ts is not None else None,
                     "symbol": str(row[1]).strip().upper(),
-                    "side": str(row[2]).strip().lower(),
+                    "side": side,
                     "status": "filled",
                     "is_bps": float(is_bps),
                 }

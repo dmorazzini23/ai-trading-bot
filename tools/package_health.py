@@ -9,7 +9,7 @@ def _probe_psutil() -> bool:
     try:
         import psutil
         return True
-    except (KeyError, ValueError, TypeError):
+    except (ImportError, KeyError, ValueError, TypeError):
         return False
 
 def _probe_alpaca() -> bool:
@@ -17,7 +17,7 @@ def _probe_alpaca() -> bool:
         import alpaca
         getattr(alpaca, '__version__', 'unknown')
         return True
-    except (KeyError, ValueError, TypeError):
+    except (ImportError, KeyError, ValueError, TypeError):
         return False
 
 def _probe_strategy_allocator() -> bool:
@@ -25,7 +25,7 @@ def _probe_strategy_allocator() -> bool:
         from ai_trading.strategies.performance_allocator import PerformanceBasedAllocator
         assert PerformanceBasedAllocator is not None
         return True
-    except (KeyError, ValueError, TypeError):
+    except (ImportError, KeyError, ValueError, TypeError):
         return False
 
 def _probe_async_testing() -> bool:
@@ -47,7 +47,7 @@ def _probe_model_and_universe():
     os.getenv('AI_TRADING_MODEL_MODULE')
     try:
         import joblib
-    except (KeyError, ValueError, TypeError):
+    except (ImportError, KeyError, ValueError, TypeError):
         pass
 
 def _probe_model_config():
@@ -62,7 +62,7 @@ def _probe_model_config():
         return False
     try:
         import joblib
-    except (KeyError, ValueError, TypeError):
+    except (ImportError, KeyError, ValueError, TypeError):
         return False
     return True
 if __name__ == '__main__':

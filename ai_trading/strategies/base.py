@@ -70,8 +70,10 @@ class StrategySignal:
         value = str(side or "").strip().lower()
         if value in {"buy", "long", "entry"}:
             return "buy"
-        if value in {"sell", "short", "exit"}:
+        if value in {"sell", "exit"}:
             return "sell"
+        if value in {"sell_short", "short", "sellshort", "sell-short", "sell short", "enter_short", "entry_short"}:
+            return "sell_short"
         if value in {"hold", "neutral", "none", "flat", ""}:
             return "hold"
         logger.warning("SIGNAL_SIDE_INVALID", extra={"side": value})
@@ -97,7 +99,7 @@ class StrategySignal:
         """Return signed strength based on side."""
         if self.side == "buy":
             return self.strength
-        if self.side == "sell":
+        if self.side in {"sell", "sell_short"}:
             return -self.strength
         return 0.0
 
@@ -109,7 +111,12 @@ class StrategySignal:
     @property
     def is_sell(self) -> bool:
         """Check if signal is a sell signal."""
-        return self.side == "sell"
+        return self.side in {"sell", "sell_short"}
+
+    @property
+    def is_sell_short(self) -> bool:
+        """Check if signal opens or adds short exposure."""
+        return self.side == "sell_short"
 
     def to_dict(self) -> dict:
         """Convert signal to dictionary representation."""

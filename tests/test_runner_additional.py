@@ -1,7 +1,10 @@
 from ai_trading.core import bot_engine  # replace old bot import
 from typing import Any, cast
 
-from tests.test_bot import _DummyTradingClient
+
+class _DummyTradingClient:
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
 
 
 def test_runner_starts():

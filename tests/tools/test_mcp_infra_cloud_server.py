@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tools import mcp_infra_cloud_server as infra_srv
 
 
@@ -34,6 +36,11 @@ def test_controlled_restart_writes_audit(monkeypatch, tmp_path: Path) -> None:
     parsed = json.loads(rows[0])
     assert parsed["unit"] == "ai-trading"
     assert parsed["reason"] == "test_restart"
+
+
+def test_controlled_restart_rejects_non_allowlisted_unit() -> None:
+    with pytest.raises(RuntimeError, match="allowlisted"):
+        infra_srv.tool_controlled_restart({"unit": "ssh.service", "confirm": False})
 
 
 def test_metadata_probe_digitalocean(monkeypatch) -> None:

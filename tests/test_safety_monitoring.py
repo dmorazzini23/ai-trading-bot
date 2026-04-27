@@ -104,6 +104,15 @@ def test_check_safety_thresholds_reports_all_violation_types():
     assert monitor.get_system_health()["violations"] == violations
 
 
+def test_positive_daily_pnl_does_not_trigger_daily_loss_limit():
+    monitor = monitoring.SafetyMonitor()
+    monitor.metrics.update(daily_pnl=7_500.0, total_portfolio_value=100_000.0)
+
+    violations = monitor.check_safety_thresholds()
+
+    assert "daily_loss_limit" not in {violation["type"] for violation in violations}
+
+
 def test_send_alert_handles_callback_failures():
     monitor = monitoring.SafetyMonitor()
     received: list[dict[str, object]] = []

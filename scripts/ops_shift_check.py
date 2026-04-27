@@ -23,6 +23,11 @@ from tools import mcp_ops_server as ops_srv
 from tools import mcp_slack_alerts_server as slack_srv
 
 
+def _resolve_health_port() -> int:
+    raw = os.getenv("HEALTHCHECK_PORT") or os.getenv("API_PORT") or "9001"
+    return int(raw)
+
+
 def _now_utc() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -58,7 +63,7 @@ def _safe_call(name: str, fn: Any, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_shift_summary(phase: str) -> dict[str, Any]:
-    health_port = int(os.getenv("HEALTHCHECK_PORT", "8081"))
+    health_port = _resolve_health_port()
     checks: list[dict[str, Any]] = [
         _safe_call("health_probe", ops_srv.tool_health_probe, {"port": health_port}),
         _safe_call("service_status", obs_srv.tool_service_status, {"unit": "ai-trading"}),

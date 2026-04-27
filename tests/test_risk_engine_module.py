@@ -1,37 +1,11 @@
 import logging
-import os
-import sys
+import importlib
 import types
 from typing import Any, cast
 
 import pytest
 
 np = pytest.importorskip("numpy")
-os.environ.setdefault("PYTEST_RUNNING", "1")
-os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.15")
-os.environ.setdefault("WEBHOOK_SECRET", "test-secret")
-for m in ["strategies", "strategies.momentum", "strategies.mean_reversion"]:
-    sys.modules.pop(m, None)
-sys.modules.pop("risk_engine", None)
-import ai_trading.config.management as config_management
-import ai_trading.config.settings as config_settings
-
-config_pkg_obj = sys.modules.get("ai_trading.config")
-if config_pkg_obj is None:
-    config_pkg_obj = types.ModuleType("ai_trading.config")
-    sys.modules["ai_trading.config"] = config_pkg_obj
-config_pkg = cast(Any, config_pkg_obj)
-
-config_pkg.get_settings = config_settings.get_settings
-config_pkg.Settings = config_settings.Settings
-config_pkg.management = config_management
-config_pkg.TradingConfig = config_management.TradingConfig
-
-if not hasattr(config_management, "from_env_relaxed"):
-    def _from_env_relaxed() -> config_management.TradingConfig:  # pragma: no cover - legacy shim
-        return config_management.TradingConfig.from_env()
-
-    cast(Any, config_management).from_env_relaxed = _from_env_relaxed
 from ai_trading.risk.engine import RiskEngine, TradeSignal  # AI-AGENT-REF: normalized import
 
 
@@ -64,7 +38,7 @@ def test_risk_engine_instantiates_with_default_config(monkeypatch):
         calls.append(None)
         return stub_config
 
-    risk_engine_module = sys.modules[RiskEngine.__module__]
+    risk_engine_module = importlib.import_module(RiskEngine.__module__)
     monkeypatch.setattr(risk_engine_module, "get_trading_config", fake_get_trading_config)
     monkeypatch.setenv("WEBHOOK_SECRET", "test-secret")
 

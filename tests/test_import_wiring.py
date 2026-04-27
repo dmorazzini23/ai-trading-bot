@@ -44,6 +44,27 @@ def test_package_health_skips_async_when_anyio_missing(monkeypatch) -> None:
         return orig_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", "model.pkl")
     monkeypatch.delitem(sys.modules, "tools.package_health", raising=False)
     ph = importlib.import_module("tools.package_health")
     assert ph._probe_async_testing() is True
+
+
+def test_package_health_optional_import_probes_return_false_when_missing(monkeypatch) -> None:
+    import builtins
+    import importlib
+
+    orig_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name in {"psutil", "alpaca", "joblib"}:
+            raise ModuleNotFoundError(name)
+        return orig_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.delitem(sys.modules, "tools.package_health", raising=False)
+    ph = importlib.import_module("tools.package_health")
+
+    assert ph._probe_psutil() is False
+    assert ph._probe_alpaca() is False
+    assert ph._probe_model_config() is False

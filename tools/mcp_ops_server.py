@@ -20,6 +20,22 @@ _mcp_common_mod = importlib.import_module(
 run_tool_server = cast(Callable[..., int], getattr(_mcp_common_mod, "run_tool_server"))
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_DEFAULT_HEALTH_PORT = 9001
+_ALLOWED_SYSTEMD_UNITS = frozenset(
+    {
+        "ai-trading",
+        "ai-trading.service",
+        "ai-trading-api",
+        "ai-trading-api.service",
+    }
+)
+
+
+def _systemd_unit(args: dict[str, Any]) -> str:
+    unit = str(args.get("unit") or "ai-trading").strip()
+    if unit not in _ALLOWED_SYSTEMD_UNITS:
+        raise RuntimeError(f"systemd unit is not allowlisted: {unit or '<empty>'}")
+    return unit
 
 
 def _run_cmd(cmd: list[str], timeout_s: int = 120) -> dict[str, Any]:
@@ -54,7 +70,7 @@ def tool_refresh_runtime_reports(_: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_service_status(args: dict[str, Any]) -> dict[str, Any]:
-    unit = str(args.get("unit") or "ai-trading")
+    unit = _systemd_unit(args)
     result = _run_cmd(["systemctl", "status", unit, "--no-pager", "-l"], timeout_s=30)
     if result["rc"] != 0:
         raise RuntimeError(result["stderr"].strip() or "systemctl status failed")
@@ -64,7 +80,7 @@ def tool_service_status(args: dict[str, Any]) -> dict[str, Any]:
 
 def tool_service_restart(args: dict[str, Any]) -> dict[str, Any]:
     """Restart service only when explicitly confirmed."""
-    unit = str(args.get("unit") or "ai-trading")
+    unit = _systemd_unit(args)
     confirm = bool(args.get("confirm", False))
     if not confirm:
         return {
@@ -79,7 +95,7 @@ def tool_service_restart(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_health_probe(args: dict[str, Any]) -> dict[str, Any]:
-    port = int(args.get("port") or 8081)
+    port = int(args.get("port") or _DEFAULT_HEALTH_PORT)
     timeout_s = float(args.get("timeout_s") or 2.0)
     url = str(args.get("url") or f"http://127.0.0.1:{port}/healthz")
     request = urllib.request.Request(url=url, method="GET")
@@ -99,7 +115,7 @@ def tool_health_probe(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_recent_errors(args: dict[str, Any]) -> dict[str, Any]:
-    unit = str(args.get("unit") or "ai-trading")
+    unit = _systemd_unit(args)
     since = str(args.get("since") or "30 min ago")
     limit = int(args.get("limit") or 80)
     pattern = str(args.get("pattern") or "ERROR|Traceback|CRITICAL")

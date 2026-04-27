@@ -1,5 +1,7 @@
 from ai_trading.strategies.base import BaseStrategy, StrategySignal
 
+__test__ = False
+
 
 class TestStrategy(BaseStrategy):
     """Simple strategy used for unit tests."""
