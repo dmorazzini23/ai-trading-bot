@@ -48,6 +48,7 @@ def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame
     if idx.empty:
         raise ValueError('Invalid date values in dataframe')
     df = df.sort_index()
+    idx = safe_to_datetime(df.index, context='retrain index')
     df['vwap'] = ta.vwap(df['high'], df['low'], df['close'], df['volume']).astype(float)
     df.dropna(subset=['vwap'], inplace=True)
     df['rsi'] = ta.rsi(df['close'], length=14).astype('float64')

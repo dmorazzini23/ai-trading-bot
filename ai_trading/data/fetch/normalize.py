@@ -253,7 +253,7 @@ def normalize_ohlcv_df(
         try:
             frame.index = pd.to_datetime(frame.index, utc=True, errors="coerce")
         except (TypeError, ValueError, AttributeError):
-            return _empty_frame()
+            return _empty_frame(include_timestamp=include_timestamp)
 
     if frame.index.tz is None:
         frame.index = frame.index.tz_localize("UTC")
@@ -262,7 +262,7 @@ def normalize_ohlcv_df(
 
     valid_index = ~frame.index.isna()
     if not valid_index.any():
-        return _empty_frame()
+        return _empty_frame(include_timestamp=include_timestamp)
     if not valid_index.all():
         frame = frame.loc[valid_index]
 
@@ -271,7 +271,7 @@ def normalize_ohlcv_df(
         frame = frame.dropna(subset=subset, how="any")
 
     if frame.empty:
-        return _empty_frame()
+        return _empty_frame(include_timestamp=include_timestamp)
 
     frame = frame[~frame.index.duplicated(keep="last")]
     frame = frame.sort_index()

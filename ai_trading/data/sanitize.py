@@ -206,7 +206,7 @@ class DataSanitizer:
         price_patterns = ['open', 'high', 'low', 'close', 'price', 'adj_close', 'vwap']
         price_cols = []
         for col in bars.columns:
-            col_lower = col.lower()
+            col_lower = str(col).lower()
             if any((pattern in col_lower for pattern in price_patterns)):
                 price_cols.append(col)
         return price_cols
@@ -216,7 +216,7 @@ class DataSanitizer:
         volume_patterns = ['volume', 'vol', 'shares']
         volume_cols = []
         for col in bars.columns:
-            col_lower = col.lower()
+            col_lower = str(col).lower()
             if any((pattern in col_lower for pattern in volume_patterns)):
                 volume_cols.append(col)
         return volume_cols

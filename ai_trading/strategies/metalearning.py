@@ -252,7 +252,7 @@ class MetaLearning(BaseStrategy):
             gb_accuracy = accuracy_score(y_test, gb_pred)
             rf_proba = self.rf_model.predict_proba(X_test_scaled)
             gb_proba = self.gb_model.predict_proba(X_test_scaled)
-            ensemble_proba = self.parameters['ensemble_weight_rf'] * rf_proba + self.parameters['ensemble_weight_gb'] * gb_proba
+            ensemble_proba = np.clip(self.parameters['ensemble_weight_rf'] * rf_proba + self.parameters['ensemble_weight_gb'] * gb_proba, 0.0, 1.0)
             ensemble_pred = np.argmax(ensemble_proba, axis=1)
             self.prediction_accuracy = accuracy_score(y_test, ensemble_pred)
             self.feature_columns = X.columns.tolist()
@@ -303,7 +303,7 @@ class MetaLearning(BaseStrategy):
             n_classes = min(len(rf_proba), len(gb_proba))
             rf_proba = rf_proba[:n_classes]
             gb_proba = gb_proba[:n_classes]
-            ensemble_proba = self.parameters['ensemble_weight_rf'] * rf_proba + self.parameters['ensemble_weight_gb'] * gb_proba
+            ensemble_proba = np.clip(self.parameters['ensemble_weight_rf'] * rf_proba + self.parameters['ensemble_weight_gb'] * gb_proba, 0.0, 1.0)
             if not NUMPY_AVAILABLE:
                 predicted_class = 0 if ensemble_proba[0] > 0.5 else 1
                 confidence = max(ensemble_proba)

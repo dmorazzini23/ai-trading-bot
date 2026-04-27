@@ -7,6 +7,7 @@ time series validation and comprehensive performance reporting.
 import json
 import os
 from datetime import UTC, datetime, timedelta
+from numbers import Real
 from typing import Any, TYPE_CHECKING, cast
 import numpy as np
 from ai_trading.config.management import get_env
@@ -35,6 +36,20 @@ from ..data.splits import walkforward_splits
 from .execution_sim import simulate_executed_trades
 from ..features.pipeline import create_feature_pipeline
 
+_VALID_MODES = {"rolling", "anchored", "expanding"}
+
+
+def _validate_positive_span(name: str, value: int | timedelta) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, timedelta)):
+        raise TypeError(f"{name} must be a positive integer day count or timedelta")
+    if isinstance(value, int):
+        if value <= 0:
+            raise ValueError(f"{name} must be positive")
+        return
+    if value <= timedelta(0):
+        raise ValueError(f"{name} must be positive")
+
+
 def _get_ml_trainer():
     from ..training.train_ml import MLTrainer
     return MLTrainer
@@ -58,22 +73,33 @@ class WalkForwardEvaluator:
             embargo_pct: Percentage embargo between train/test
             output_dir: Output directory (overridable via ARTIFACTS_DIR env var)
         """
-        self.mode = mode
-        self.train_span = train_span
-        self.test_span = test_span
-        self.embargo_pct = embargo_pct
+        if not isinstance(mode, str):
+            raise TypeError("mode must be a string")
+        normalized_mode = mode.lower().strip()
+        if normalized_mode not in _VALID_MODES:
+            raise ValueError(f"mode must be one of {sorted(_VALID_MODES)}")
+        _validate_positive_span("train_span", train_span)
+        _validate_positive_span("test_span", test_span)
+        if isinstance(embargo_pct, bool) or not isinstance(embargo_pct, Real):
+            raise TypeError("embargo_pct must be a real number")
+        if not 0.0 <= float(embargo_pct) < 1.0:
+            raise ValueError("embargo_pct must be in the range [0.0, 1.0)")
+        self.mode: str = normalized_mode
+        self.train_span: int | timedelta = train_span
+        self.test_span: int | timedelta = test_span
+        self.embargo_pct: float = float(embargo_pct)
         if output_dir is None:
             base = str(get_env('ARTIFACTS_DIR', 'artifacts') or 'artifacts')
-            self.output_dir = os.path.join(base, 'walkforward')
+            self.output_dir: str = os.path.join(base, 'walkforward')
         else:
             self.output_dir = output_dir
         import pandas as pd
 
         self.fold_results: list[dict[str, Any]] = []
         self.aggregate_results: dict[str, Any] = {}
-        self.equity_curve = pd.Series(dtype=float)
-        self.drawdown_series = pd.Series(dtype=float)
-        self.trade_simulation_params = {
+        self.equity_curve: pd.Series = pd.Series(dtype=float)
+        self.drawdown_series: pd.Series = pd.Series(dtype=float)
+        self.trade_simulation_params: dict[str, float | bool] = {
             "signal_threshold": max(
                 0.0,
                 float(get_env("AI_TRADING_WALK_FORWARD_SIGNAL_THRESHOLD", 0.0, cast=float)),
@@ -193,7 +219,7 @@ class WalkForwardEvaluator:
             )
             fold_result = {'fold': fold_idx, 'train_start': train_start.isoformat(), 'train_end': train_end.isoformat(), 'test_start': test_start.isoformat(), 'test_end': test_end.isoformat(), 'train_samples': len(X_train), 'test_samples': len(X_test), 'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else list(predictions), 'actual': y_test.values.tolist(), 'metrics': fold_metrics, 'trade_metrics': trade_metrics, 'model_params': trainer.best_params}
             return fold_result
-        except (ValueError, TypeError) as e:
+        except (KeyError, ValueError, TypeError) as e:
             logger.error(f'Error in fold {fold_idx}: {e}')
             return {'fold': fold_idx, 'error': str(e)}
 
@@ -202,7 +228,10 @@ class WalkForwardEvaluator:
         try:
             mse = np.mean((y_true - y_pred) ** 2)
             mae = np.mean(np.abs(y_true - y_pred))
-            correlation = np.corrcoef(y_true, y_pred)[0, 1] if len(y_pred) > 1 else 0.0
+            if len(y_pred) > 1 and np.std(y_true) > 0 and np.std(y_pred) > 0:
+                correlation = np.corrcoef(y_true, y_pred)[0, 1]
+            else:
+                correlation = 0.0
             directional_accuracy = np.mean(np.sign(y_pred) == np.sign(y_true))
             information_ratio: float
             if np.std(y_pred) > 0:
@@ -254,7 +283,10 @@ class WalkForwardEvaluator:
             actual = np.array(actual_all)
             mse = np.mean((actual - predictions) ** 2)
             mae = np.mean(np.abs(actual - predictions))
-            correlation = np.corrcoef(actual, predictions)[0, 1] if len(predictions) > 1 else 0.0
+            if len(predictions) > 1 and np.std(actual) > 0 and np.std(predictions) > 0:
+                correlation = np.corrcoef(actual, predictions)[0, 1]
+            else:
+                correlation = 0.0
             directional_accuracy = np.mean(np.sign(predictions) == np.sign(actual))
             if np.std(predictions) > 0:
                 prediction_sharpe = np.mean(predictions) / np.std(predictions) * np.sqrt(252)

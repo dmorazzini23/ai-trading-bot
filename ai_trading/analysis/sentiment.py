@@ -329,12 +329,22 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             )
         resp.raise_for_status()
         payload = resp.json()
+        if not isinstance(payload, dict):
+            raise TypeError("sentiment API payload must be a JSON object")
         articles = payload.get('articles', [])
+        if not isinstance(articles, list):
+            raise TypeError("sentiment API articles must be a list")
         scores = []
         if articles:
             for art in articles:
-                text = (art.get('title') or '') + '. ' + (art.get('description') or '')
-                if text.strip():
+                if not isinstance(art, dict):
+                    raise TypeError("sentiment API article must be a JSON object")
+                title = art.get('title') or ''
+                description = art.get('description') or ''
+                if not isinstance(title, str) or not isinstance(description, str):
+                    raise TypeError("sentiment API article text fields must be strings")
+                if title.strip() or description.strip():
+                    text = title + '. ' + description
                     res = analyze_text(text)
                     if res.get('available'):
                         scores.append(float(res['pos'] - res['neg']))
@@ -360,7 +370,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
         with sentiment_lock:
             _sentiment_cache[ticker] = (now_ts, final_score)
         return final_score
-    except (ValueError, TypeError) as e:
+    except (RequestException, ValueError, TypeError) as e:
         logger.warning(f'Sentiment API request failed for {ticker}: {e}')
         _record_sentiment_failure('api_error', str(e))
         with sentiment_lock:
@@ -369,18 +379,13 @@ def fetch_sentiment(ctx, ticker: str) -> float:
                 _, last_score = cached
                 logger.debug(f'Using cached sentiment fallback {last_score} for {ticker}')
                 return last_score
-            fallback_score = _get_cached_or_neutral_sentiment(
-                ticker,
-                reason="api_error_without_cache",
-            )
-            _sentiment_cache[ticker] = (now_ts, fallback_score)
-            return fallback_score
-    except (ValueError, TypeError) as e:
-        logger.error(f'Unexpected error fetching sentiment for {ticker}: {e}')
-        _record_sentiment_failure('unexpected_error', str(e))
+        fallback_score = _get_cached_or_neutral_sentiment(
+            ticker,
+            reason="api_error_without_cache",
+        )
         with sentiment_lock:
-            _sentiment_cache[ticker] = (now_ts, 0.0)
-        return 0.0
+            _sentiment_cache[ticker] = (now_ts, fallback_score)
+        return fallback_score
 
 def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
     """

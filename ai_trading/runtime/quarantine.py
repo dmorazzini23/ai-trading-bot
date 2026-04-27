@@ -119,7 +119,8 @@ class QuarantineManager:
                     start_ts = start_ts.replace(tzinfo=UTC)
                 if end_ts.tzinfo is None:
                     end_ts = end_ts.replace(tzinfo=UTC)
-                entries[str(name)] = QuarantineEntry(
+                entry_name = str(name).upper() if key == "symbols" else str(name)
+                entries[entry_name] = QuarantineEntry(
                     start_ts=start_ts,
                     end_ts=end_ts,
                     trigger_reason=str(raw.get("trigger_reason", "")),

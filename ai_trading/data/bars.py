@@ -658,7 +658,7 @@ def _get_entitled_feeds(client: Any) -> set[str]:
         _ENTITLE_CACHE[key] = _EntitlementCacheEntry(set(fresh_feeds), fresh_generation)
 
     entry = _ENTITLE_CACHE[key]
-    return set(entry.feeds)
+    return _cache_entry_feeds(entry)
 
 def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     """
@@ -1113,6 +1113,10 @@ def fetch_minute_fallback(client, symbol, now_utc: datetime) -> DataFrame:
     return _normalize_bars_frame(df)
 
 def _parse_bars(payload: Any, symbol: str, tz: str) -> DataFrame:
+    if payload is None:
+        return empty_bars_dataframe()
+    if isinstance(payload, pd.DataFrame):
+        return _normalize_bars_frame(payload)
     if not payload:
         return empty_bars_dataframe()
     if isinstance(payload, dict):
@@ -1124,8 +1128,6 @@ def _parse_bars(payload: Any, symbol: str, tz: str) -> DataFrame:
         except (ValueError, TypeError):
             return empty_bars_dataframe()
         return _normalize_bars_frame(frame)
-    if isinstance(payload, pd.DataFrame):
-        return _normalize_bars_frame(payload)
     return empty_bars_dataframe()
 
 
