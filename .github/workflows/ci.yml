@@ -25,7 +25,7 @@ env:
 jobs:
   research-backtest-gate:
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: 1
       PYTHONUNBUFFERED: 1
@@ -46,7 +46,7 @@ jobs:
       - name: Install deps
         run: |
           python3 -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -c constraints.txt -r requirements-dev.txt
       - name: Research backtest gate
         run: |
           pytest -q \
@@ -60,7 +60,7 @@ jobs:
 
   offline-replay-gate:
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: 1
       PYTHONUNBUFFERED: 1
@@ -81,7 +81,7 @@ jobs:
       - name: Install deps
         run: |
           python3 -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -c constraints.txt -r requirements-dev.txt
       - name: Offline replay gate
         run: |
           pytest -q \
@@ -96,7 +96,7 @@ jobs:
 
   ci:
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: 1
       PYTHONUNBUFFERED: 1
@@ -120,7 +120,7 @@ jobs:
       - name: Install deps
         run: |
           python3 -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -c constraints.txt -r requirements-dev.txt
       - name: Alembic migration gate
         env:
           OMS_CI_DB_PATH: ${{ github.workspace }}/.ci/oms_migration_gate.db
@@ -219,7 +219,7 @@ jobs:
 
   determinism-seed-matrix:
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -246,7 +246,7 @@ jobs:
       - name: Install deps
         run: |
           python3 -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -c constraints.txt -r requirements-dev.txt
       - name: Deterministic replay checks
         run: |
           pytest -q \
@@ -258,8 +258,7 @@ jobs:
 
   nightly-full-deps:
     if: github.event_name == 'schedule'
-    continue-on-error: true
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: 1
       PYTHONUNBUFFERED: 1
@@ -281,7 +280,7 @@ jobs:
       - name: Install full test deps bundle
         run: |
           python3 -m pip install --upgrade pip
-          pip install -r requirements-dev.txt -r requirements-test.txt
+          pip install -c constraints.txt -r requirements-dev.txt -r requirements-test.txt
       - name: Nightly full-deps tests with coverage
         run: |
           pytest -q --maxfail=1 \

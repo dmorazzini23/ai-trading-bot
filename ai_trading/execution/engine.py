@@ -27,10 +27,18 @@ _ALPACA_PY_REQUIRED = (
     "alpaca-py==0.42.1 is required; install with `pip install alpaca-py==0.42.1`"
 )
 
+class _FallbackAPIError(Exception):
+    """Placeholder used when Alpaca imports are intentionally unavailable."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        del kwargs
+        super().__init__(*args)
+
+
 try:
     from alpaca.common.exceptions import APIError as _ImportedAPIError
-except (ImportError, ModuleNotFoundError, AttributeError, OSError, RuntimeError) as exc:
-    raise RuntimeError(_ALPACA_PY_REQUIRED) from exc
+except (ImportError, ModuleNotFoundError, AttributeError, OSError, RuntimeError):
+    APIError: type[Exception] = _FallbackAPIError
 else:
     APIError = _ImportedAPIError
 

@@ -1697,6 +1697,71 @@ def test_prioritize_losing_short_reduction_targets_largest_losses(monkeypatch):
     assert submitted[1][0] == "AAA"
 
 
+def test_submit_cover_order_uses_market_order_request(monkeypatch):
+    engine = _engine_stub()
+
+    class MarketReq:
+        def __init__(self, **kwargs):
+            self.kwargs = dict(kwargs)
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    class LimitReq:
+        pass
+
+    class Client:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        def submit_order(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            return SimpleNamespace(id="cover-1")
+
+    client = Client()
+    engine.trading_client = client
+    monkeypatch.setattr(engine, "_position_quantity", lambda _symbol: -7)
+    monkeypatch.setattr(lt, "MarketOrderRequest", MarketReq)
+    monkeypatch.setattr(lt, "LimitOrderRequest", LimitReq)
+    monkeypatch.setattr(lt, "OrderSide", SimpleNamespace(BUY="buy"))
+    monkeypatch.setattr(lt, "TimeInForce", SimpleNamespace(DAY="day"))
+
+    assert engine._submit_cover_order("AAPL", 3) is True
+
+    assert len(client.calls) == 1
+    assert set(client.calls[0]) == {"order_data"}
+    req = client.calls[0]["order_data"]
+    assert req.symbol == "AAPL"
+    assert req.qty == 3
+    assert req.side == "buy"
+    assert req.time_in_force == "day"
+    assert not hasattr(req, "reduce_only")
+
+
+def test_cover_then_long_blocks_when_cover_submit_fails(monkeypatch):
+    engine = _engine_stub()
+    order = SimpleNamespace(id="sell-1", side="sell", status="open")
+    monkeypatch.setattr(engine, "_list_open_orders_for_symbol", lambda _symbol: [order])
+    monkeypatch.setattr(engine, "_order_flip_mode", lambda: "cover_then_long")
+    monkeypatch.setattr(engine, "_cancel_opposite_orders", lambda *_args, **_kwargs: ["sell-1"])
+    monkeypatch.setattr(engine, "_submit_cover_order", lambda *_args, **_kwargs: False)
+
+    allowed, payload = engine._enforce_opposite_side_policy(
+        "AAPL",
+        "buy",
+        4,
+        closing_position=False,
+        client_order_id="cid-1",
+    )
+
+    assert allowed is False
+    assert payload == {
+        "status": "skipped",
+        "reason": "cover_order_failed",
+        "policy": "cover_then_long",
+        "symbol": "AAPL",
+    }
+
+
 def test_prioritize_short_reduction_enabled_by_default(monkeypatch):
     engine = _engine_stub()
     monkeypatch.delenv("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_SHORTS_ENABLED", raising=False)

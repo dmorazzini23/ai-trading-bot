@@ -22,6 +22,14 @@ if ALPACA_AVAILABLE:  # pragma: no cover - depends on alpaca-py
 else:  # pragma: no cover - exercised when SDK missing
     from ai_trading.alpaca_api import TimeFrame as _BaseTimeFrame, TimeFrameUnit  # type: ignore
 
+if _BaseTimeFrame is None:
+    class _BaseTimeFrame:  # type: ignore[no-redef]
+        """Minimal base used when Alpaca imports are intentionally blocked."""
+
+        def __init__(self, amount: int = 1, unit: Any = None) -> None:
+            self.amount = amount
+            self.unit = unit
+
 
 def _safe_setattr(obj: object, name: str, value: object) -> None:
     """Best-effort setattr that tolerates read-only descriptors."""
@@ -61,7 +69,7 @@ def _resolve_timeframe_unit_cls() -> Any:
 class TimeFrame(_BaseTimeFrame):  # type: ignore[misc]
     """Timeframe with safe defaults and attribute accessors."""
 
-    def __init__(self, amount: int = 1, unit=TimeFrameUnit.Day):  # type: ignore[assignment]
+    def __init__(self, amount: int = 1, unit=None):  # type: ignore[assignment]
         unit_cls = _resolve_timeframe_unit_cls()
         if unit is None:
             unit = getattr(unit_cls, "Day", "Day")

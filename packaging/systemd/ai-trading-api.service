@@ -8,9 +8,9 @@ User=aiuser
 Group=aiuser
 WorkingDirectory=/home/aiuser/ai-trading-bot
 Environment=PATH=/home/aiuser/ai-trading-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
 Environment=API_PORT=9002
 Environment=HEALTHCHECK_PORT=9002
-EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
 ExecStart=/home/aiuser/ai-trading-bot/venv/bin/gunicorn --workers 2 --threads 4 --bind 127.0.0.1:9002 'ai_trading.app:create_app()'
 StandardOutput=journal
 StandardError=journal

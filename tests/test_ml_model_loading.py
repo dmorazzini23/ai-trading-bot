@@ -9,7 +9,7 @@ pytest.importorskip("sklearn")
 
 import ai_trading.core.bot_engine as bot_engine
 import ai_trading.model_loader as model_loader
-from ai_trading.models.artifacts import write_artifact_manifest
+from ai_trading.models.artifacts import default_manifest_path, verify_artifact, write_artifact_manifest
 from sklearn.dummy import DummyClassifier
 import joblib
 
@@ -163,9 +163,48 @@ def test_train_and_save_model_synthetic_fallback_handles_missing_daily_data(tmp_
 
     model = model_loader.train_and_save_model("SYN", tmp_path)
 
+    model_path = tmp_path / "SYN.pkl"
     assert hasattr(model, "predict")
-    assert (tmp_path / "SYN.pkl").exists()
+    assert model_path.exists()
+    assert default_manifest_path(model_path).exists()
+    assert verify_artifact(model_path=model_path) == (True, "OK")
     assert set(model.predict(np.zeros((4, 9))).tolist()) <= {0, 1}
+
+
+def test_training_frame_trend_uses_past_only_for_future_tail_mutation():
+    pd = pytest.importorskip("pandas")
+    rows = 90
+    close = 100.0 + np.arange(rows, dtype=float) * 0.1 + np.sin(np.arange(rows) / 4.0)
+    base = pd.DataFrame(
+        {"close": close, "volume": np.linspace(100_000.0, 120_000.0, rows)},
+        index=pd.date_range("2025-01-01", periods=rows, freq="D", tz="UTC"),
+    )
+    mutated = base.copy()
+    mutation_start = base.index[70]
+    mutated.loc[mutation_start:, "close"] = mutated.loc[mutation_start:, "close"] + 10_000.0
+
+    base_features = model_loader._build_training_frame(base)
+    mutated_features = model_loader._build_training_frame(mutated)
+
+    past_index = base_features.index[base_features.index < mutation_start]
+    pd.testing.assert_series_equal(
+        base_features.loc[past_index, "trend"],
+        mutated_features.loc[past_index, "trend"],
+    )
+
+
+def test_training_frame_drops_final_missing_future_close_before_labeling():
+    pd = pytest.importorskip("pandas")
+    rows = 40
+    frame = pd.DataFrame(
+        {"close": np.arange(100.0, 100.0 + rows), "volume": np.linspace(100.0, 200.0, rows)},
+        index=pd.date_range("2025-01-01", periods=rows, freq="D", tz="UTC"),
+    )
+
+    features = model_loader._build_training_frame(frame)
+
+    assert frame.index[-1] not in features.index
+    assert set(features["y"].astype(int).unique()) == {1}
 
 
 def test_live_model_loader_requires_verified_artifact(tmp_path, monkeypatch):

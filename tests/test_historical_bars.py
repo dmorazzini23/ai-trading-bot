@@ -110,6 +110,23 @@ def test_filter_historical_bars_window_can_return_empty_frame(tmp_path: Path) ->
     assert filtered.empty
 
 
+def test_filter_historical_bars_window_rejects_range_index_with_date_filters(tmp_path: Path) -> None:
+    csv_path = tmp_path / "range.csv"
+    pd.DataFrame(
+        {
+            "seq": [0, 1, 2],
+            "open": [100.0, 101.0, 102.0],
+            "high": [100.5, 101.5, 102.5],
+            "low": [99.5, 100.5, 101.5],
+            "close": [100.2, 101.2, 102.2],
+        }
+    ).to_csv(csv_path, index=False)
+
+    frame, _report = load_historical_bars(csv_path, timestamp_col="event_time")
+    with pytest.raises(ValueError, match="date filters require timestamped historical bars"):
+        filter_historical_bars_window(frame, start="2025-01-01")
+
+
 def test_load_historical_bars_rejects_missing_required_columns(tmp_path: Path) -> None:
     csv_path = tmp_path / "missing.csv"
     pd.DataFrame(

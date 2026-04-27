@@ -51,6 +51,7 @@ from ai_trading.alpaca_api import get_api_error_cls
 from ai_trading.config import get_trading_config
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.time import is_generator_stop, monotonic_time
+from .._alpaca_guard import should_import_alpaca_sdk
 
 if TYPE_CHECKING:  # pragma: no cover - import hints for type checkers
     import pandas as pd
@@ -103,7 +104,14 @@ from ai_trading.settings import get_backup_data_provider
 from ai_trading.telemetry import runtime_state
 from ai_trading.timeframe import TimeFrame
 
-APIError = get_api_error_cls()
+class _APIErrorUnavailable(RuntimeError):
+    """Placeholder used when Alpaca imports are intentionally unavailable."""
+
+
+try:
+    APIError = get_api_error_cls() if should_import_alpaca_sdk() else _APIErrorUnavailable
+except FETCH_FALLBACK_EXCEPTIONS:
+    APIError = _APIErrorUnavailable
 # --- SAFETY: Provide a module-level default for `_state` ------------------------------------
 # Some nested helper functions in this module (e.g., `_record_minute_fallback`) were designed
 # to close over a local `_state` dict defined inside `get_minute_df(...)`. In certain runtime
@@ -306,7 +314,6 @@ from ai_trading.utils.env import (
 )
 from ai_trading.utils.http import clamp_request_timeout
 
-from .._alpaca_guard import should_import_alpaca_sdk
 from . import fallback_order
 from .fallback_concurrency import fallback_slot
 from .metrics import inc_provider_fallback, register_provider_disable
@@ -1591,7 +1598,7 @@ def _to_feed_str(feed: object) -> str:
     return _normalize_feed_value(feed)
 
 
-class DataFetchError(Exception):
+class DataFetchError(RuntimeError):
     """Error raised when market data retrieval fails."""  # AI-AGENT-REF: stable public symbol
 
     fetch_reason: str | None

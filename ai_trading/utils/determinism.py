@@ -9,7 +9,6 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import hashlib
 import json
 from ai_trading.logging import get_logger
-import os
 import random
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,7 +47,13 @@ def set_random_seeds(seed: int = 42) -> None:
         lgb.reset_parameter({"seed": seed})  # type: ignore[attr-defined]
     except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - best effort
         pass
-    os.putenv("PYTHONHASHSEED", str(seed))
+    logger.info(
+        "PYTHONHASHSEED must be set before interpreter startup to affect hash randomization",
+        extra={
+            "seed": seed,
+            "event": "PYTHONHASHSEED_STARTUP_REQUIRED",
+        },
+    )
     logger.info(f"Set random seeds to {seed} for reproducible results")
 
 

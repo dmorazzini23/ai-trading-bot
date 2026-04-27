@@ -81,6 +81,18 @@ def test_build_features_supports_price_column_without_volume_or_hilo() -> None:
     assert "microstructure_dev" not in transformed
 
 
+def test_build_features_regime_without_volatility_computes_returns_for_fit() -> None:
+    frame = _market_frame()
+    builder = pipe_mod.BuildFeatures(include_volatility=False, include_regime=True, regime_span=10)
+
+    builder.fit(frame)
+    transformed = builder.transform(frame)
+
+    assert "regime_vol_low" in builder.feature_params_
+    assert "vol_regime" in transformed
+    assert "vol_20d" not in transformed
+
+
 def test_build_features_error_paths_raise_for_unfit_or_bad_fit() -> None:
     builder = pipe_mod.BuildFeatures()
 

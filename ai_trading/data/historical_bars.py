@@ -135,6 +135,8 @@ def filter_historical_bars_window(
     start: str | None = None,
     end: str | None = None,
 ) -> pd.DataFrame:
+    if (start is not None or end is not None) and not isinstance(frame.index, pd.DatetimeIndex):
+        raise ValueError("date filters require timestamped historical bars; CSV did not provide a datetime index")
     start_ts = pd.to_datetime(str(start), errors="coerce", utc=True) if start is not None else pd.NaT
     end_ts = pd.to_datetime(str(end), errors="coerce", utc=True) if end is not None else pd.NaT
     filtered = frame

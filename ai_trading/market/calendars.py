@@ -122,6 +122,7 @@ class CalendarRegistry:
         self._asset_calendars: dict[AssetClass, TradingSession] = {}
         self._holidays: set[date] = set()
         self._half_days: set[date] = set()
+        self._holiday_years: set[int] = set()
         self._setup_default_calendars()
         self._setup_market_holidays()
 
@@ -138,8 +139,14 @@ class CalendarRegistry:
     def _setup_market_holidays(self) -> None:
         """Setup common US market holidays."""
         for year in range(2024, 2031):
-            self._holidays.update(_us_market_holidays(year))
-            self._half_days.update(_us_market_half_days(year))
+            self._ensure_market_holidays(year)
+
+    def _ensure_market_holidays(self, year: int) -> None:
+        if year in self._holiday_years:
+            return
+        self._holidays.update(_us_market_holidays(year))
+        self._half_days.update(_us_market_half_days(year))
+        self._holiday_years.add(year)
 
     def register_symbol(self, symbol: str, session: TradingSession) -> None:
         """
@@ -205,10 +212,13 @@ class CalendarRegistry:
         Returns:
             True if trading day, False otherwise
         """
+        session = self.get_session(symbol)
+        if session.name in {'CRYPTO_24_7', 'FOREX_EXTENDED'}:
+            return session.is_trading_day(dt)
         check_date = dt.date() if isinstance(dt, datetime) else dt
+        self._ensure_market_holidays(check_date.year)
         if check_date in self._holidays:
             return False
-        session = self.get_session(symbol)
         return session.is_trading_day(dt)
 
     def is_market_open(self, symbol: str, dt: datetime) -> bool:
@@ -228,6 +238,7 @@ class CalendarRegistry:
         is_in_session = session.is_in_session(dt)
         session_dt = session._to_session_time(dt)
         check_date = session_dt.date()
+        self._ensure_market_holidays(check_date.year)
         if check_date in self._half_days:
             market_time = session_dt.time()
             if market_time > time(13, 0):
@@ -248,6 +259,7 @@ class CalendarRegistry:
         if not self.is_trading_day(symbol, trading_date):
             return (None, None)
         session = self.get_session(symbol)
+        self._ensure_market_holidays(trading_date.year)
         session_tz = ZoneInfo(session.timezone_name)
         session_start = datetime.combine(trading_date, session.start_time, tzinfo=session_tz)
         session_end = datetime.combine(trading_date, session.end_time, tzinfo=session_tz)

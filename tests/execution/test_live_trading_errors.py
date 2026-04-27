@@ -23,7 +23,7 @@ def test_extract_api_error_metadata_handles_sparse_exception():
 def test_fallback_api_error_parses_json_payload_and_http_status():
     http_error = SimpleNamespace(response=SimpleNamespace(status_code=418))
 
-    err = live_trading._FallbackAPIError(
+    err = live_trading.APIError(
         '{"message": "teapot", "code": "short_and_stout"}',
         http_error=http_error,
     )
@@ -39,7 +39,7 @@ def test_fallback_api_error_keeps_plain_message_when_metadata_is_unreadable():
         def response(self):
             raise RuntimeError("response unavailable")
 
-    err = live_trading._FallbackAPIError(
+    err = live_trading.APIError(
         "plain broker failure",
         http_error=BrokenHTTPError(),
         code="plain",
@@ -52,17 +52,17 @@ def test_fallback_api_error_keeps_plain_message_when_metadata_is_unreadable():
 
 
 def test_lookup_and_duplicate_error_classifiers_use_metadata():
-    missing = live_trading._FallbackAPIError(
+    missing = live_trading.APIError(
         "order disappeared",
         code="40410000",
         status_code=500,
     )
-    duplicate = live_trading._FallbackAPIError(
+    duplicate = live_trading.APIError(
         "client_order_id must be unique",
         code="other",
         status_code=422,
     )
-    wrong_status = live_trading._FallbackAPIError(
+    wrong_status = live_trading.APIError(
         "client_order_id must be unique",
         status_code=400,
     )
@@ -81,7 +81,7 @@ def test_retry_after_parser_accepts_seconds_dates_and_header_objects():
                 return "3.5"
             return None
 
-    header_error = live_trading._FallbackAPIError(
+    header_error = live_trading.APIError(
         "rate limited",
         http_error=SimpleNamespace(response=SimpleNamespace(headers=HeaderBag())),
     )
@@ -97,7 +97,7 @@ def test_retry_after_header_get_failure_degrades_to_none():
         def get(self, _key):
             raise RuntimeError("header lookup failed")
 
-    err = live_trading._FallbackAPIError(
+    err = live_trading.APIError(
         "rate limited",
         http_error=SimpleNamespace(response=SimpleNamespace(headers=BrokenHeaders())),
     )

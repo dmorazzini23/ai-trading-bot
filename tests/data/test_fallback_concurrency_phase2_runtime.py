@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import UserList, deque
 from dataclasses import dataclass, field
 from types import MappingProxyType, SimpleNamespace
@@ -183,7 +184,7 @@ def test_closure_rebinding_replaces_nested_lock_for_worker() -> None:
     asyncio.run(scenario())
 
 
-def test_non_pytest_scheduler_records_success_failure_and_host_permits(monkeypatch) -> None:
+def test_non_pytest_scheduler_records_success_failure_and_host_permits(monkeypatch, caplog) -> None:
     async def scenario() -> None:
         concurrency.reset_tracking_state()
         concurrency.reset_peak_simultaneous_workers()
@@ -209,16 +210,45 @@ def test_non_pytest_scheduler_records_success_failure_and_host_permits(monkeypat
             finally:
                 active -= 1
 
-        results, succeeded, failed = await concurrency.run_with_concurrency(
-            ["OK1", "FAIL", "OK2"], worker, max_concurrency=5
-        )
+        with caplog.at_level(logging.WARNING):
+            results, succeeded, failed = await concurrency.run_with_concurrency(
+                ["OK1", "FAIL", "OK2"], worker, max_concurrency=5
+            )
 
         assert results == {"OK1": "ok1", "FAIL": None, "OK2": "ok2"}
         assert succeeded == {"OK1", "OK2"}
         assert failed == {"FAIL"}
+        assert any(
+            record.message == "FALLBACK_WORKER_FAILED"
+            and getattr(record, "symbol", None) == "FAIL"
+            and getattr(record, "error_type", None) == "RuntimeError"
+            for record in caplog.records
+        )
         assert peak == 1
         assert concurrency._HOST_PERMITS_HELD == 0
         assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == 1
+
+    asyncio.run(scenario())
+
+
+def test_run_with_concurrency_preserves_cancellation(monkeypatch) -> None:
+    async def scenario() -> None:
+        concurrency.reset_tracking_state()
+        monkeypatch.setattr(concurrency, "_running_under_pytest_worker", lambda: False)
+        monkeypatch.setattr(concurrency, "_get_effective_host_limit", lambda: None)
+        monkeypatch.setattr(concurrency, "_get_host_limit_semaphore", lambda: None)
+
+        async def worker(_symbol: str) -> str:
+            raise asyncio.CancelledError()
+
+        try:
+            await concurrency.run_with_concurrency(["STOP"], worker, max_concurrency=1)
+        except asyncio.CancelledError:
+            pass
+        else:  # pragma: no cover - defensive assertion
+            raise AssertionError("worker cancellation must propagate")
+
+        assert "STOP" not in concurrency.FAILED_SYMBOLS
 
     asyncio.run(scenario())
 

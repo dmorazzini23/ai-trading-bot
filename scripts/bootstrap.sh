@@ -30,7 +30,7 @@ if [[ ! -x "${VENV_PYTHON}" ]]; then
 fi
 
 "${VENV_PYTHON}" -m pip install --upgrade pip
-"${VENV_PYTHON}" -m pip install -r "$ROOT_DIR/requirements-dev.txt" -r "$ROOT_DIR/requirements-test.txt"
+"${VENV_PYTHON}" -m pip install -c "$ROOT_DIR/constraints.txt" -r "$ROOT_DIR/requirements-dev.txt" -r "$ROOT_DIR/requirements-test.txt"
 "${VENV_PYTHON}" -m pip install -e "$ROOT_DIR" --no-deps
 PYTHON_BIN="${VENV_PYTHON}" bash "$ROOT_DIR/ci/scripts/verify_alpaca_sdk.sh"
 

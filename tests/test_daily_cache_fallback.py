@@ -31,7 +31,7 @@ def test_cache_used_on_network_failure(monkeypatch):
         calls["count"] += 1
         if calls["count"] == 1:
             return df
-        raise DataFetchError("boom")
+        raise daily_cache.DataFetchError("boom")
 
     monkeypatch.setattr(daily_cache, "_fetch_daily_df", fake_fetch)
 

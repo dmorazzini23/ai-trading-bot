@@ -43,13 +43,26 @@ class MockTradingClient:
         self.call_count = 0
         self.submitted_orders: list[dict] = []
 
-    def submit_order(self, order):
+    def submit_order(self, order=None, *, order_data=None):
         self.call_count += 1
         if self.fail_count > 0:
             self.fail_count -= 1
             raise ConnectionError("mock submit failure")
+        if order_data is not None:
+            order = order_data
         self.submitted_orders.append(order)
-        return {"id": str(self.call_count), **order}
+        if isinstance(order, dict):
+            payload = dict(order)
+        else:
+            payload = {
+                "symbol": getattr(order, "symbol", None),
+                "qty": getattr(order, "qty", getattr(order, "quantity", None)),
+                "side": getattr(order, "side", None),
+                "time_in_force": getattr(order, "time_in_force", None),
+                "client_order_id": getattr(order, "client_order_id", None),
+                "limit_price": getattr(order, "limit_price", None),
+            }
+        return {"id": str(self.call_count), **payload}
 
     def get_account(self):  # pragma: no cover - basic mock
         return {"status": "ACTIVE", "buying_power": "100000"}

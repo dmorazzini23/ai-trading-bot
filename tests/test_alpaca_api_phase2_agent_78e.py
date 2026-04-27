@@ -898,8 +898,17 @@ def test_submit_order_sdk_branch_http_fallback_and_validation(monkeypatch: pytes
 
     monkeypatch.setattr(builtins, "__import__", block_trading_client)
     monkeypatch.delitem(sys.modules, "alpaca.trading.client", raising=False)
-    monkeypatch.setattr(api, "_http_submit", lambda _cfg, **kwargs: {"id": "http", "client_order_id": kwargs["idempotency_key"]})
-    assert api.submit_order("IBM", "buy", qty=1)["id"] == "http"
+    called_http = False
+
+    def _http_submit(_cfg, **_kwargs):
+        nonlocal called_http
+        called_http = True
+        return {"id": "http"}
+
+    monkeypatch.setattr(api, "_http_submit", _http_submit)
+    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
+        api.submit_order("IBM", "buy", qty=1)
+    assert called_http is False
 
 
 def test_alpaca_get_payload_shapes_and_metrics_failures(monkeypatch: pytest.MonkeyPatch) -> None:

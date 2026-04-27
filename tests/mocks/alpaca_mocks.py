@@ -23,7 +23,9 @@ class MockTradingClient:
     def __init__(self, *args, **kwargs):
         self.orders = []
 
-    def submit_order(self, **order):
+    def submit_order(self, order_data=None, **order):
+        if order_data is not None:
+            order = {"order_data": order_data, **order}
         self.orders.append(order)
         return {"status": "accepted", "id": f"mock-{len(self.orders)}"}
 

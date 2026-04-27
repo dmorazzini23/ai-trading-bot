@@ -179,6 +179,45 @@ def test_health_endpoint_structure_is_stable():
     assert payload == data
 
 
+def test_health_routes_use_shared_registration_helper(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+    original_register = app_module.register_canonical_health_routes
+
+    def tracked_register(*args, **kwargs):
+        calls.append(tuple(kwargs["routes"]))
+        return original_register(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "register_canonical_health_routes", tracked_register)
+
+    app_module.create_app()
+
+    assert ("/health",) in calls
+    assert ("/healthz",) in calls
+
+
+def test_healthz_endpoint_stringifies_non_serializable_nested_payload(monkeypatch):
+    bad_value = object()
+
+    monkeypatch.setattr(
+        app_module,
+        "build_canonical_healthz_payload",
+        lambda **_kwargs: {
+            "ok": True,
+            "status": "healthy",
+            "nested": {"bad": bad_value},
+        },
+    )
+
+    app = app_module.create_app(force_ok_for_pytest=False)
+    resp = app.test_client().get("/healthz")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["nested"]["bad"] == str(bad_value)
+    assert "meta" not in data
+
+
 def test_standalone_health_app_only_registers_health_routes():
     app = app_module.create_app(health_only=True)
     routes = getattr(app, "_routes", None)

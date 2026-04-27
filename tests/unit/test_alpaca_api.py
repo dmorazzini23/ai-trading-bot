@@ -51,6 +51,31 @@ def test_submit_order_uses_client_and_returns(dummy_alpaca_client, monkeypatch):
 
 
 @pytest.mark.unit
+def test_trading_client_adapter_maps_modern_alpaca_py_methods():
+    class ModernClient:
+        def __init__(self):
+            self.cancelled: list[str] = []
+
+        def cancel_order_by_id(self, order_id):
+            self.cancelled.append(order_id)
+            return True
+
+        def get_order_by_id(self, order_id):
+            return {"id": order_id}
+
+        def get_all_positions(self):
+            return [{"symbol": "AAPL"}]
+
+    client = ModernClient()
+    adapter = alpaca_api.TradingClientAdapter(client)
+
+    assert adapter.cancel_order("order-1") is True
+    assert client.cancelled == ["order-1"]
+    assert adapter.get_order("order-2") == {"id": "order-2"}
+    assert adapter.list_positions() == [{"symbol": "AAPL"}]
+
+
+@pytest.mark.unit
 def test_initialize_raises_when_sdk_missing(monkeypatch):
     """initialize should raise if the Alpaca SDK is absent."""
 

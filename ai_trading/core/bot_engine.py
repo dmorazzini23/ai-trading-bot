@@ -25,42 +25,13 @@ from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 from functools import cached_property, lru_cache
 
 from json import JSONDecodeError
-# Safe 'requests' import with stub + RequestException binding
-_REQUESTS_STUB = False
-try:  # pragma: no cover
-    import requests  # type: ignore
-    _RequestExceptionBase: type[Exception] = requests.exceptions.RequestException  # type: ignore[attr-defined]
-except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import handling
-    _REQUESTS_STUB = True
-    class _RequestExceptionFallback(Exception):
-        pass
 
-    _RequestExceptionBase = _RequestExceptionFallback
+import requests  # type: ignore[import-untyped]
+from requests.exceptions import RequestException  # type: ignore[import-untyped]
 
-    # Minimal stub so runtime calls fail gracefully into COMMON_EXC
-    class _RequestsStub:
-        class exceptions:
-            RequestException = _RequestExceptionBase
+from ai_trading.net.http import HTTPSession, get_http_session
 
-        def get(self, *a, **k):
-            raise _RequestExceptionBase("requests not installed")
-
-    requests = _RequestsStub()  # type: ignore
-RequestException = _RequestExceptionBase
-
-# Reusable HTTP session
-_HTTP_SESSION_STUB = False
-try:  # pragma: no cover
-    from ai_trading.net.http import HTTPSession, get_http_session
-
-    _HTTP_SESSION: HTTPSession = get_http_session()
-except (ImportError, AttributeError, RuntimeError):  # pragma: no cover - fallback when requests missing
-    _HTTP_SESSION_STUB = True
-    class _HTTPStub:
-        def get(self, *a, **k):  # type: ignore[no-untyped-def]
-            raise RequestException("HTTPSession unavailable")
-
-    _HTTP_SESSION = _HTTPStub()  # type: ignore
+_HTTP_SESSION: HTTPSession = get_http_session()
 
 from threading import Lock
 import warnings
@@ -7613,11 +7584,7 @@ def is_holiday(ts: pd.Timestamp) -> bool:
 # AI-AGENT-REF: portalocker is a hard dependency in pyproject.toml
 import portalocker
 
-# Bind HTTPError if available; fall back to generic Exception
-try:  # pragma: no cover
-    from requests.exceptions import HTTPError  # type: ignore
-except ImportError:  # pragma: no cover  # AI-AGENT-REF: optional requests
-    HTTPError = Exception
+from requests.exceptions import HTTPError  # type: ignore[import-untyped]
 
 # AI-AGENT-REF: optional schedule dependency
 schedule: Any
@@ -20386,9 +20353,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> An
         if not (getattr(CFG, "testing", False) or pytest_running):
             raise
 
-    skip_market_check = (
-        getattr(CFG, "testing", False) or pytest_running or bypass_market_check
-    )
+    skip_market_check = pytest_running or bypass_market_check
 
     def _req_to_args(r):
         side = getattr(r, "side", "")
@@ -33656,16 +33621,6 @@ def _enforce_dependency_preflight(runtime) -> None:
         "pybreaker is required for paper/live trading",
         execution_mode=execution_mode,
     )
-    require_dependency(
-        not _REQUESTS_STUB,
-        "requests is required for paper/live trading",
-        execution_mode=execution_mode,
-    )
-    require_dependency(
-        not _HTTP_SESSION_STUB,
-        "HTTP session unavailable for paper/live trading",
-        execution_mode=execution_mode,
-    )
     exec_engine = getattr(runtime, "execution_engine", None) or getattr(runtime, "exec_engine", None)
     require_dependency(
         exec_engine is not None,
@@ -33675,8 +33630,6 @@ def _enforce_dependency_preflight(runtime) -> None:
     require_no_stubs(
         {
             "runtime": runtime,
-            "_REQUESTS_STUB": _REQUESTS_STUB,
-            "_HTTP_SESSION_STUB": _HTTP_SESSION_STUB,
             "_HTTP_SESSION": _HTTP_SESSION,
             "execution_engine": exec_engine,
         },

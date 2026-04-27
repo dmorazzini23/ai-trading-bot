@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 
 import pandas as pd
 
@@ -93,7 +94,7 @@ def test_tax_recommendations_and_error_fallbacks(monkeypatch) -> None:
     tax = rebalancer.TaxAwareRebalancer()
     assert tax._generate_rebalance_recommendations([]) == ["Rebalancing plan appears tax-efficient"]
 
-    bad_trade = {"trade_value": "bad", "tax_impact": {"tax_liability": 1.0}}
+    bad_trade: dict[str, Any] = {"trade_value": "bad", "tax_impact": {"tax_liability": 1.0}}
     assert tax._generate_rebalance_recommendations([bad_trade]) == [
         "Manual review recommended due to analysis error"
     ]
@@ -126,14 +127,20 @@ def test_enhanced_rebalance_branches_and_loop_error(monkeypatch) -> None:
     monkeypatch.setattr(rebalancer, "init_rebalancer", lambda: None)
     monkeypatch.setattr(rebalancer, "_check_portfolio_first_rebalancing", lambda *_args: (True, "drift"))
     calls: list[str] = []
-    monkeypatch.setattr(rebalancer, "portfolio_first_rebalance", lambda _ctx: calls.append("portfolio_first"))
+    def record_portfolio_first(_ctx: object) -> None:
+        calls.append("portfolio_first")
+
+    monkeypatch.setattr(rebalancer, "portfolio_first_rebalance", record_portfolio_first)
 
     rebalancer.enhanced_maybe_rebalance(SimpleNamespace(portfolio_weights={"AAPL": 0.5}))
     assert calls == ["portfolio_first"]
 
     settings.ENABLE_PORTFOLIO_FEATURES = False
     rebalancer._last_rebalance = datetime.now(UTC) - timedelta(minutes=2)
-    monkeypatch.setattr(rebalancer, "rebalance_portfolio", lambda _ctx: calls.append("basic"))
+    def record_basic(_ctx: object) -> None:
+        calls.append("basic")
+
+    monkeypatch.setattr(rebalancer, "rebalance_portfolio", record_basic)
     rebalancer.enhanced_maybe_rebalance(SimpleNamespace(portfolio_weights={"AAPL": 0.5}))
     assert calls[-1] == "basic"
 
@@ -150,10 +157,10 @@ def test_enhanced_rebalance_branches_and_loop_error(monkeypatch) -> None:
     sleep_calls: list[int] = []
     monkeypatch.setattr(rebalancer.threading, "Thread", fake_thread)
     monkeypatch.setattr(rebalancer, "maybe_rebalance", lambda _ctx: (_ for _ in ()).throw(ValueError("boom")))
-    monkeypatch.setattr(
-        rebalancer.time,
-        "sleep",
-        lambda seconds: sleep_calls.append(seconds) or (_ for _ in ()).throw(StopIteration()),
-    )
+    def stop_after_sleep(seconds: int) -> None:
+        sleep_calls.append(seconds)
+        raise StopIteration
+
+    monkeypatch.setattr(rebalancer.time, "sleep", stop_after_sleep)
     rebalancer.start_rebalancer("ctx")
     assert sleep_calls == [1]

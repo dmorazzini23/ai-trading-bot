@@ -348,7 +348,14 @@ class TradingClientAdapter:
 
     def __dir__(self) -> list[str]:  # pragma: no cover - convenience only
         merged = set(dir(self._client))
-        merged.update(["cancel_order", "_ai_trading_wrapped_client"])
+        merged.update(
+            [
+                "cancel_order",
+                "get_order",
+                "list_positions",
+                "_ai_trading_wrapped_client",
+            ]
+        )
         return sorted(merged)
 
     def __repr__(self) -> str:  # pragma: no cover - diagnostic aid
@@ -367,6 +374,30 @@ class TradingClientAdapter:
                 "cancel_orders cancels all open orders in alpaca-py"
             )
         raise AttributeError("cancel_order not supported by wrapped client")
+
+    def get_order(self, order_id: Any) -> Any:
+        """Return an order by delegating to the wrapped SDK client."""
+
+        get_by_id = getattr(self._client, "get_order_by_id", None)
+        if callable(get_by_id):
+            return get_by_id(order_id)
+
+        legacy_get = getattr(self._client, "get_order", None)
+        if callable(legacy_get):
+            return legacy_get(order_id)
+        raise AttributeError("get_order not supported by wrapped client")
+
+    def list_positions(self) -> Any:
+        """Return all positions by delegating to the wrapped SDK client."""
+
+        get_all_positions = getattr(self._client, "get_all_positions", None)
+        if callable(get_all_positions):
+            return get_all_positions()
+
+        legacy_list = getattr(self._client, "list_positions", None)
+        if callable(legacy_list):
+            return legacy_list()
+        raise AttributeError("list_positions not supported by wrapped client")
 
 
 def get_data_client_cls():
@@ -409,20 +440,24 @@ def get_timeframe_cls():
     The wrapper guarantees that ``TimeFrame()`` defaults to ``1 Day`` and that
     ``amount`` and ``unit`` attributes are always present.
     """
+    if TimeFrame is None and not ALPACA_AVAILABLE:
+        raise _alpaca_sdk_required_error("TimeFrame unavailable")
     try:
-        from .timeframe import TimeFrame
+        from .timeframe import TimeFrame as _TimeFrame
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         raise _alpaca_sdk_required_error("TimeFrame unavailable") from exc
-    return TimeFrame
+    return _TimeFrame
 
 
 def get_timeframe_unit_cls():
     """Return the package-level ``TimeFrameUnit`` enum."""
+    if TimeFrameUnit is None and not ALPACA_AVAILABLE:
+        raise _alpaca_sdk_required_error("TimeFrameUnit unavailable")
     try:
-        from .timeframe import TimeFrameUnit
+        from .timeframe import TimeFrameUnit as _TimeFrameUnit
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         raise _alpaca_sdk_required_error("TimeFrameUnit unavailable") from exc
-    return TimeFrameUnit
+    return _TimeFrameUnit
 
 
 def _normalize_timeframe_for_tradeapi(tf_raw):
@@ -1459,9 +1494,8 @@ def submit_order(
         return cast(dict[str, Any], _ensure_client_order_id(order))
 
     try:
-        from alpaca.trading.client import TradingClient as _REST
-
-        rest = _REST(
+        trading_client_cls = _ensure_trading_client_cls()
+        rest = trading_client_cls(
             api_key=cfg.key_id,
             secret_key=cfg.secret_key,
             url_override=cfg.base_url,
@@ -1483,26 +1517,8 @@ def submit_order(
                 )
             ),
         )
-    except ModuleNotFoundError:
-        pass
-
-    return cast(
-        dict[str, Any],
-        _ensure_client_order_id(
-            _http_submit(
-                cfg,
-                symbol=symbol,
-                qty=q_int,
-                side=side,
-                type=type,
-                time_in_force=time_in_force,
-                limit_price=limit_price,
-                stop_price=stop_price,
-                idempotency_key=idempotency_key,
-                timeout=timeout_value,
-            )
-        ),
-    )
+    except RuntimeError:
+        raise
 
 
 def alpaca_get(

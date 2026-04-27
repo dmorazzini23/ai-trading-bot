@@ -100,7 +100,7 @@ def test_parquet_patch_and_migration_helpers(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setattr(mp, "_PATCHED_PARQUET", False)
     monkeypatch.setattr(mp, "_pytest_active", lambda: True)
     original = pd.read_parquet
-    pd.read_pickle = lambda _path: pd.DataFrame([{"symbol": "PICKLE"}])  # type: ignore[method-assign]
+    monkeypatch.setattr(pd, "read_pickle", lambda _path: pd.DataFrame([{"symbol": "PICKLE"}]))
     monkeypatch.setattr(pd, "read_parquet", lambda *_args, **_kwargs: (_ for _ in ()).throw(ImportError("missing")))
 
     mp._patch_parquet_fallback(pd)  # noqa: SLF001

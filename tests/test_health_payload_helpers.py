@@ -117,6 +117,19 @@ def test_build_health_json_response_handles_mapping_and_response_objects() -> No
     assert response.status_code == 503
 
 
+def test_build_health_json_response_sanitizes_unserializable_payload() -> None:
+    bad_value = object()
+    payload = {"ok": False, "nested": {"bad": bad_value}}
+
+    response_payload = health_payload.build_health_json_response(
+        payload,
+        200,
+        jsonify_fn=lambda body: dict(body),
+    )
+
+    assert response_payload == {"ok": False, "nested": {"bad": str(bad_value)}}
+
+
 def test_register_healthz_routes_returns_exception_payload() -> None:
     calls: dict[str, Any] = {}
 
@@ -154,6 +167,38 @@ def test_register_healthz_routes_returns_exception_payload() -> None:
     assert payload["status"] == "degraded"
     assert payload["error"] == "boom"
     assert logger.events == ["HEALTH_CHECK_FAILED"]
+
+
+def test_register_health_routes_sanitizes_payload_before_response() -> None:
+    calls: dict[str, Any] = {}
+    bad_value = object()
+
+    class _App:
+        def route(self, route: str, *, methods: list[str]):
+            calls["route"] = route
+            calls["methods"] = methods
+
+            def _decorator(func):
+                calls["handler_name"] = func.__name__
+                calls["handler"] = func
+                return func
+
+            return _decorator
+
+    health_payload.register_health_routes(
+        _App(),
+        payload_builder=lambda: {"ok": True, "nested": {"bad": bad_value}},
+        response_builder=lambda payload, status: (payload, status),
+        routes=("/health",),
+    )
+
+    payload, status = calls["handler"]()
+
+    assert calls["route"] == "/health"
+    assert calls["methods"] == ["GET"]
+    assert calls["handler_name"] == "health"
+    assert status == 200
+    assert payload["nested"]["bad"] == str(bad_value)
 
 
 def test_service_health_payload_env_error_forces_degraded() -> None:

@@ -68,16 +68,89 @@ if TYPE_CHECKING:
     class APIError(Exception):
         """Type-checker-visible APIError contract."""
 
+        message: str
+        code: Any | None
+        status_code: int | None
+        http_error: Any | None
+
+        def __init__(
+            self,
+            message: str,
+            *args: Any,
+            http_error: Any | None = None,
+            code: Any | None = None,
+            status_code: int | None = None,
+            status: int | None = None,
+            **kwargs: Any,
+        ) -> None: ...
+
 else:
 
     class APIError(_AlpacaAPIError):  # type: ignore[misc]
         """Compat layer ensuring alpaca APIError accepts ``http_error`` kwarg."""
 
-        def __init__(self, message: str, *args, http_error: Any | None = None, **kwargs) -> None:
+        def __init__(
+            self,
+            message: str,
+            *args: Any,
+            http_error: Any | None = None,
+            code: Any | None = None,
+            status_code: int | None = None,
+            status: int | None = None,
+            **kwargs: Any,
+        ) -> None:
+            parsed_message = message
+            parsed_code = code
             try:
-                super().__init__(message, *args, http_error=http_error, **kwargs)
+                parsed = json.loads(message)
+            except (TypeError, json.JSONDecodeError):
+                parsed = None
+            if isinstance(parsed, Mapping):
+                parsed_message = str(parsed.get("message") or message)
+                if parsed_code is None:
+                    parsed_code = parsed.get("code")
+            resolved_status = status_code if status_code is not None else status
+            if resolved_status is None:
+                response = getattr(http_error, "response", None)
+                candidate_status = getattr(response, "status_code", None)
+                if isinstance(candidate_status, int):
+                    resolved_status = candidate_status
+            try:
+                super().__init__(parsed_message, *args, http_error=http_error, **kwargs)
             except TypeError:
-                super().__init__(message, *args, **kwargs)
+                super().__init__(parsed_message, *args, **kwargs)
+            self._ai_trading_message = parsed_message
+            self._ai_trading_code = parsed_code
+            self._ai_trading_status_code = resolved_status
+            self._ai_trading_http_error = http_error
+
+        @property
+        def message(self) -> str:
+            return str(getattr(self, "_ai_trading_message", ""))
+
+        @property
+        def code(self) -> Any | None:
+            return getattr(self, "_ai_trading_code", None)
+
+        @property
+        def status_code(self) -> int | None:
+            status_value = getattr(self, "_ai_trading_status_code", None)
+            if status_value is not None:
+                return int(status_value)
+            status_value = getattr(self, "_status_code", None)
+            if status_value is not None:
+                return int(status_value)
+            response = getattr(getattr(self, "http_error", None), "response", None)
+            response_status = getattr(response, "status_code", None)
+            return int(response_status) if response_status is not None else None
+
+        @property
+        def http_error(self) -> Any | None:
+            return getattr(self, "_ai_trading_http_error", None)
+
+        @http_error.setter
+        def http_error(self, value: Any | None) -> None:
+            self._ai_trading_http_error = value
 
 
 class NonRetryableBrokerError(Exception):
@@ -153,7 +226,7 @@ def get_cached_credential_truth() -> tuple[bool, bool, float]:
     )
 
 
-from ai_trading.alpaca_api import AlpacaOrderHTTPError
+from ai_trading.alpaca_api import AlpacaOrderHTTPError, TradingClientAdapter
 from ai_trading.analytics.tca import finalize_stale_pending_tca, reconcile_pending_tca_with_fill
 from ai_trading.config import AlpacaConfig, ExecutionSettingsSnapshot, get_alpaca_config, get_execution_settings
 from ai_trading.data.provider_monitor import (
@@ -17021,7 +17094,7 @@ class ExecutionEngine:
                     "shadow_mode": self.shadow_mode,
                 },
             )
-            self.trading_client = raw_client
+            self.trading_client = TradingClientAdapter(raw_client)
             if self._validate_connection():
                 self.is_initialized = True
                 self._last_initialize_success_mono = float(monotonic_time())
@@ -23210,10 +23283,16 @@ class ExecutionEngine:
             except LIVE_TRADING_FALLBACK_EXC:
                 position_obj = None
         if position_obj is None:
+            get_all_positions = getattr(client, "get_all_positions", None)
             list_positions = getattr(client, "list_positions", None)
-            if callable(list_positions):
+            if callable(get_all_positions) or callable(list_positions):
                 try:
-                    for pos in list_positions():
+                    positions = (
+                        get_all_positions()
+                        if callable(get_all_positions)
+                        else list_positions()
+                    )
+                    for pos in positions:
                         if str(_extract_value(pos, "symbol") or "").upper() == symbol.upper():
                             position_obj = pos
                             break
@@ -23591,15 +23670,15 @@ class ExecutionEngine:
         if cover_qty <= 0:
             return False
         try:
-            client.submit_order(
+            market_cls, _limit_cls, side_enum, tif_enum = _ensure_request_models()
+            req = market_cls(
                 symbol=symbol,
                 qty=cover_qty,
-                side="buy",
-                type="market",
-                time_in_force="day",
+                side=side_enum.BUY,
+                time_in_force=tif_enum.DAY,
                 client_order_id=_stable_order_id(symbol, "cover"),
-                reduce_only=True,
             )
+            client.submit_order(order_data=req)
         except LIVE_TRADING_FALLBACK_EXC as exc:
             logger.warning(
                 "COVER_ORDER_SUBMIT_FAILED",
@@ -23661,7 +23740,14 @@ class ExecutionEngine:
         canceled_ids = self._cancel_opposite_orders(opposite_orders, symbol, normalized_side)
         conflict_extra["canceled_order_ids"] = tuple(canceled_ids)
         if policy == "cover_then_long" and normalized_side == "buy":
-            self._submit_cover_order(symbol, quantity)
+            if not self._submit_cover_order(symbol, quantity):
+                logger.warning("ORDER_FLIP_COVER_FAILED", extra=conflict_extra)
+                return False, {
+                    "status": "skipped",
+                    "reason": "cover_order_failed",
+                    "policy": policy,
+                    "symbol": symbol,
+                }
         return True, None
 
     @staticmethod
@@ -31179,7 +31265,11 @@ class ExecutionEngine:
             return True
         else:
             try:
-                self.trading_client.cancel_order(order_id)
+                cancel_by_id = getattr(self.trading_client, "cancel_order_by_id", None)
+                if callable(cancel_by_id):
+                    cancel_by_id(order_id)
+                else:
+                    self.trading_client.cancel_order(order_id)
             except (APIError, TimeoutError, ConnectionError) as e:
                 logger.error(
                     "ORDER_API_FAILED",
@@ -31195,7 +31285,11 @@ class ExecutionEngine:
         if _runtime_env("PYTEST_RUNNING"):
             return {"id": order_id, "status": "filled", "filled_qty": "100"}
         else:
-            order = self.trading_client.get_order(order_id)
+            get_by_id = getattr(self.trading_client, "get_order_by_id", None)
+            if callable(get_by_id):
+                order = get_by_id(order_id)
+            else:
+                order = self.trading_client.get_order(order_id)
             return {
                 "id": order.id,
                 "status": order.status,
@@ -31224,7 +31318,11 @@ class ExecutionEngine:
         if _runtime_env("PYTEST_RUNNING"):
             return []
         else:
-            positions = self.trading_client.list_positions()
+            get_all_positions = getattr(self.trading_client, "get_all_positions", None)
+            if callable(get_all_positions):
+                positions = get_all_positions()
+            else:
+                positions = self.trading_client.list_positions()
             return [
                 {
                     "symbol": pos.symbol,

@@ -12,19 +12,65 @@ from ai_trading.paths import MODELS_DIR
 from ai_trading.config.management import get_env
 from datetime import UTC
 from pathlib import Path
-from dataclasses import asdict
 from typing import Any
 import json
 
 import joblib
 from ai_trading.utils.lazy_imports import load_pandas
-from ai_trading.models.artifacts import load_verified_joblib_artifact
+from ai_trading.models.artifacts import load_verified_joblib_artifact, write_artifact_manifest
 
 logger = get_logger(__name__)
 ML_MODELS: dict[str, object | None] = {}
 
 # Built-in models bundled with the package live alongside this module.
 INTERNAL_MODELS_DIR = Path(__file__).resolve().parent / "models"
+
+
+def _rolling_slope(values: Any) -> float:
+    import numpy as np
+
+    clean = np.asarray(values, dtype=float)
+    if clean.size < 2:
+        return 0.0
+    x = np.arange(clean.size, dtype=float)
+    try:
+        return float(np.polyfit(x, clean, 1)[0])
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        return 0.0
+
+
+def _build_training_frame(df: Any) -> Any:
+    """Build past-only model features and labels from OHLCV history."""
+    import numpy as np
+
+    df = df.copy()
+    df["ret1"] = df["close"].pct_change()
+    df["mom5"] = df["close"].pct_change(5)
+    df["mom10"] = df["close"].pct_change(10)
+    df["vol20"] = df["ret1"].rolling(20).std()
+    with np.errstate(invalid="ignore"):
+        try:
+            df["skew20"] = df["ret1"].rolling(20).skew()
+            df["kurt20"] = df["ret1"].rolling(20).kurt()
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            df["skew20"] = 0.0
+            df["kurt20"] = 0.0
+    if "volume" in df:
+        df["liq20"] = df["volume"].rolling(20).mean()
+        df["volchg5"] = df["volume"].pct_change(5)
+    else:
+        df["liq20"] = 0.0
+        df["volchg5"] = 0.0
+    try:
+        trend_source = df["ret1"].fillna(0.0).cumsum()
+        df["trend"] = trend_source.rolling(20, min_periods=2).apply(_rolling_slope, raw=True).fillna(0.0)
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        df["trend"] = 0.0
+
+    future_close = df["close"].shift(-1)
+    df = df.loc[future_close.notna()].copy()
+    df["y"] = (future_close.loc[df.index] > df["close"]).astype(int)
+    return df.dropna()
 
 
 def train_and_save_model(symbol: str, models_dir: Path) -> object:
@@ -64,37 +110,7 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
         close = 100.0 + 0.02 * steps + np.sin(steps / 3.0)
         df = pd.DataFrame({"close": close, "volume": np.linspace(1e5, 2e5, 240)})
 
-    df = df.copy()
-    # Basic features
-    df["ret1"] = df["close"].pct_change()
-    df["mom5"] = df["close"].pct_change(5)
-    df["mom10"] = df["close"].pct_change(10)
-    df["vol20"] = df["ret1"].rolling(20).std()
-    with np.errstate(invalid="ignore"):
-        try:
-            df["skew20"] = df["ret1"].rolling(20).skew()
-            df["kurt20"] = df["ret1"].rolling(20).kurt()
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
-            df["skew20"] = 0.0
-            df["kurt20"] = 0.0
-    if "volume" in df:
-        df["liq20"] = df["volume"].rolling(20).mean()
-        df["volchg5"] = df["volume"].pct_change(5)
-    else:
-        df["liq20"] = 0.0
-        df["volchg5"] = 0.0
-    # Trend strength via polyfit on cumulative return
-    try:
-        x = np.arange(len(df))
-        y = df["ret1"].fillna(0).cumsum().to_numpy()
-        slope = np.polyfit(x, y, 1)[0]
-        df["trend"] = slope
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        df["trend"] = 0.0
-
-    # Label: next-period up/down
-    df["y"] = (df["close"].shift(-1) > df["close"]).astype(int)
-    df = df.dropna()
+    df = _build_training_frame(df)
 
     def _classifier_for(target: np.ndarray) -> Any:
         if len(np.unique(target)) < 2:
@@ -113,7 +129,13 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
         model.fit(X, y)
         try:
             models_dir.mkdir(parents=True, exist_ok=True)
-            joblib.dump(model, models_dir / f"{symbol}.pkl")
+            model_path = models_dir / f"{symbol}.pkl"
+            joblib.dump(model, model_path)
+            write_artifact_manifest(
+                model_path=model_path,
+                model_version=f"{symbol}-1.0",
+                metadata={"symbol": symbol, "model": type(model).__name__, "n_samples": int(len(df))},
+            )
         except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             logger.warning("Failed saving model for %s: %s", symbol, exc)
         return model
@@ -146,7 +168,8 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
     # Persist model and metadata
     try:
         models_dir.mkdir(parents=True, exist_ok=True)
-        joblib.dump(final_pipe, models_dir / f"{symbol}.pkl")
+        model_path = models_dir / f"{symbol}.pkl"
+        joblib.dump(final_pipe, model_path)
         meta = {
             "version": "1.0",
             "model": "logreg",
@@ -155,6 +178,12 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
             "n_samples": int(len(df)),
             "trained_at": datetime.now(UTC).isoformat(),
         }
+        write_artifact_manifest(
+            model_path=model_path,
+            model_version=f"{symbol}-1.0",
+            training_data_range={"start": start.isoformat(), "end": end.isoformat()},
+            metadata=meta,
+        )
         with (models_dir / f"{symbol}.meta.json").open("w") as f:
             json.dump(meta, f)
     except (OSError, ValueError, TypeError) as exc:

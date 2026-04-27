@@ -18,11 +18,23 @@ from ai_trading.settings import get_alpaca_secret_key_plain
 
 _log = get_logger(__name__)
 _once_logger = EmitOnceLogger(_log.logger)
+
+
+def _alpaca_api_error_types() -> tuple[type[Exception], ...]:
+    try:
+        api_error_cls = get_api_error_cls()
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        return ()
+    if isinstance(api_error_cls, type) and issubclass(api_error_cls, Exception):
+        return (api_error_cls,)
+    return ()
+
+
 POSITION_SIZING_FALLBACK_EXCEPTIONS: tuple[type[Exception], ...] = (
     *AI_TRADING_FALLBACK_EXCEPTIONS,
     HTTPError,
     RequestException,
-    get_api_error_cls(),
+    *_alpaca_api_error_types(),
 )
 
 @dataclass

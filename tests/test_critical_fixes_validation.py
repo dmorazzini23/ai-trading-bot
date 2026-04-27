@@ -211,6 +211,15 @@ class TestCriticalFixes(unittest.TestCase):
         self.assertLess(env_file_idx, api_port_idx)
         self.assertLess(env_file_idx, health_port_idx)
 
+        debug_content = (systemd_dir / "ai-trading-api.service").read_text(encoding="utf-8")
+        debug_env_file_idx = debug_content.index(
+            "EnvironmentFile=-/home/aiuser/ai-trading-bot/.env",
+        )
+        debug_api_port_idx = debug_content.index("Environment=API_PORT=9002")
+        debug_health_port_idx = debug_content.index("Environment=HEALTHCHECK_PORT=9002")
+        self.assertLess(debug_env_file_idx, debug_api_port_idx)
+        self.assertLess(debug_env_file_idx, debug_health_port_idx)
+
         for service_name in (
             "ai-trading-healthcheck.service",
             "ai-trading-runtime-report.service",
@@ -220,6 +229,19 @@ class TestCriticalFixes(unittest.TestCase):
             dotenv_idx = content.index("EnvironmentFile=-/home/aiuser/ai-trading-bot/.env")
             runtime_idx = content.index("EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime")
             self.assertLess(dotenv_idx, runtime_idx, f"{service_name} should load .env.runtime last")
+
+    def test_runtime_backup_sync_waits_for_network_online(self):
+        """Runtime backup sync should both order after and want network-online."""
+        service_file = (
+            Path(os.getcwd())
+            / "packaging"
+            / "systemd"
+            / "ai-trading-runtime-backup-sync.service"
+        )
+        content = service_file.read_text(encoding="utf-8")
+
+        self.assertIn("After=network-online.target", content)
+        self.assertIn("Wants=network-online.target", content)
 
     def test_error_handling_robustness(self):
         """Test 5: General Robustness - Error handling patterns."""

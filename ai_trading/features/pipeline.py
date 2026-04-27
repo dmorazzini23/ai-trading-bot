@@ -74,8 +74,8 @@ class BuildFeatures:
             if 'close' in X.columns or 'price' in X.columns:
                 price_col = 'close' if 'close' in X.columns else 'price'
                 prices = X[price_col]
+                returns = prices.pct_change().dropna()
                 if self.include_volatility:
-                    returns = prices.pct_change().dropna()
                     self.feature_params_['vol_mean'] = returns.std()
                     self.feature_params_['vol_threshold'] = returns.std() * 2
                 if self.include_regime:

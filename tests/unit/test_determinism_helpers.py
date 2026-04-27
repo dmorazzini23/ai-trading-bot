@@ -75,6 +75,13 @@ def test_generate_spec_hash_changes_with_training_parameters() -> None:
     assert determinism.hash_labels(None) == "no_labels"
 
 
+def test_set_random_seeds_does_not_mutate_pythonhashseed_runtime() -> None:
+    source = Path(determinism.__file__).read_text(encoding="utf-8")
+
+    assert "os.putenv" not in source
+    assert "PYTHONHASHSEED_STARTUP_REQUIRED" in source
+
+
 def test_model_spec_persists_locking_and_compatibility(tmp_path: Path) -> None:
     spec_path = tmp_path / "meta.json"
     spec = determinism.ModelSpecification(str(spec_path))

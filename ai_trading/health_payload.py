@@ -1587,6 +1587,54 @@ def build_health_exception_payload(
     }
 
 
+def _json_safe_value(value: Any, seen: set[int]) -> Any:
+    """Return ``value`` with nested objects coerced to JSON-safe values."""
+
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, Mapping):
+        value_id = id(value)
+        if value_id in seen:
+            return "<recursive>"
+        seen.add(value_id)
+        try:
+            return {str(key): _json_safe_value(nested, seen) for key, nested in value.items()}
+        finally:
+            seen.discard(value_id)
+    if isinstance(value, list | tuple):
+        value_id = id(value)
+        if value_id in seen:
+            return ["<recursive>"]
+        seen.add(value_id)
+        try:
+            return [_json_safe_value(item, seen) for item in value]
+        finally:
+            seen.discard(value_id)
+    if isinstance(value, set | frozenset):
+        value_id = id(value)
+        if value_id in seen:
+            return ["<recursive>"]
+        seen.add(value_id)
+        try:
+            return [_json_safe_value(item, seen) for item in sorted(value, key=str)]
+        finally:
+            seen.discard(value_id)
+    try:
+        json.dumps(value)
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        return str(value)
+    return value
+
+
+def sanitize_health_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a JSON-compatible copy of a health payload."""
+
+    return {
+        str(key): _json_safe_value(value, set())
+        for key, value in dict(payload).items()
+    }
+
+
 def build_health_json_response(
     payload: Mapping[str, Any],
     status: int,
@@ -1595,20 +1643,77 @@ def build_health_json_response(
 ) -> Any:
     """Build a robust Flask-compatible JSON response for health handlers."""
 
-    response = jsonify_fn(dict(payload))
+    safe_payload = sanitize_health_payload(payload)
+    try:
+        response = jsonify_fn(dict(safe_payload))
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        return dict(safe_payload) if status == 200 else (dict(safe_payload), status)
     if response is None or isinstance(response, Mapping):
-        return dict(payload) if status == 200 else (dict(payload), status)
+        return dict(safe_payload) if status == 200 else (dict(safe_payload), status)
     if not (
         callable(getattr(response, "get_data", None))
         or callable(getattr(response, "get_json", None))
         or hasattr(response, "status_code")
     ):
-        return dict(payload) if status == 200 else (dict(payload), status)
+        return dict(safe_payload) if status == 200 else (dict(safe_payload), status)
     try:
         response.status_code = status
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         pass
     return response
+
+
+def register_health_routes(
+    app: Any,
+    *,
+    payload_builder: Callable[[], Mapping[str, Any]],
+    response_builder: Callable[[dict[str, Any], int], Any],
+    service_name: str = "ai-trading",
+    routes: tuple[str, ...] = ("/healthz",),
+    methods: tuple[str, ...] = ("GET",),
+    logger: Any | None = None,
+    error_event: str = "HEALTH_CHECK_FAILED",
+) -> None:
+    """Register canonical health routes on ``app`` using shared runtime logic."""
+
+    def _health_handler() -> Any:
+        status = 200
+        try:
+            payload = dict(payload_builder())
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+            if logger is not None:
+                try:
+                    logger.exception(error_event, exc_info=exc)
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
+                    pass
+            payload = build_health_exception_payload(exc, service_name=service_name)
+            status = 500
+        safe_payload = sanitize_health_payload(payload)
+        try:
+            return response_builder(safe_payload, status)
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+            if logger is not None:
+                try:
+                    logger.exception(error_event, exc_info=exc)
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
+                    pass
+            fallback_payload = sanitize_health_payload(
+                build_health_exception_payload(exc, service_name=service_name),
+            )
+            try:
+                return response_builder(fallback_payload, 500)
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
+                return fallback_payload, 500
+
+    if len(routes) == 1:
+        route_name = routes[0].strip("/").replace("-", "_") or "health"
+        _health_handler.__name__ = route_name
+    else:
+        _health_handler.__name__ = "health_routes"
+
+    for route in routes:
+        decorator = app.route(route, methods=list(methods))
+        decorator(_health_handler)
 
 
 def register_healthz_routes(
@@ -1622,24 +1727,18 @@ def register_healthz_routes(
     logger: Any | None = None,
     error_event: str = "HEALTH_CHECK_FAILED",
 ) -> None:
-    """Register canonical health routes on ``app`` using shared runtime logic."""
+    """Register canonical ``/healthz`` routes on ``app``."""
 
-    def _healthz_handler() -> Any:
-        try:
-            payload = dict(payload_builder())
-            return response_builder(payload, 200)
-        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-            if logger is not None:
-                try:
-                    logger.exception(error_event, exc_info=exc)
-                except AI_TRADING_FALLBACK_EXCEPTIONS:
-                    pass
-            fallback_payload = build_health_exception_payload(exc, service_name=service_name)
-            return response_builder(fallback_payload, 500)
-
-    for route in routes:
-        decorator = app.route(route, methods=list(methods))
-        decorator(_healthz_handler)
+    register_health_routes(
+        app,
+        payload_builder=payload_builder,
+        response_builder=response_builder,
+        service_name=service_name,
+        routes=routes,
+        methods=methods,
+        logger=logger,
+        error_event=error_event,
+    )
 
 
 __all__ = [
@@ -1651,5 +1750,7 @@ __all__ = [
     "build_canonical_healthz_payload",
     "build_health_exception_payload",
     "build_health_json_response",
+    "sanitize_health_payload",
+    "register_health_routes",
     "register_healthz_routes",
 ]

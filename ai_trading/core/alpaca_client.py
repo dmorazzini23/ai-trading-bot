@@ -6,7 +6,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from typing import Any
 import sys
 from importlib import import_module
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 from ai_trading.logging import get_logger, logger_once
 import ai_trading.alpaca_api as _alpaca_api
@@ -264,10 +264,38 @@ def _validate_trading_api(api: Any) -> bool:
                     key="alpaca_cancel_order_patch_failed",
                 )
         elif callable(cancel_orders):
-            log_once.warning(
-                "ALPACA_CANCEL_ORDER_BY_ID_UNAVAILABLE",
-                key="alpaca_cancel_order_by_id_unavailable",
-            )
+            def _cancel_order_via_batch(order_id: Any):
+                request: Any | None = None
+                try:
+                    requests_mod = __import__(
+                        "alpaca.trading.requests",
+                        fromlist=["CancelOrdersRequest"],
+                    )
+                    request_cls = getattr(requests_mod, "CancelOrdersRequest")
+                    request = request_cls(order_ids=[order_id])
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
+                    logger.debug("CANCEL_ORDER_REQUEST_BUILD_FAILED", exc_info=True)
+                if request is not None:
+                    return cancel_orders(request=request)
+                request = SimpleNamespace(
+                    order_ids=[order_id],
+                    payload={"order_ids": [order_id]},
+                )
+                try:
+                    return cancel_orders(request=request)
+                except TypeError:
+                    return cancel_orders(order_ids=[order_id])
+
+            if _try_setattr(api, "cancel_order", _cancel_order_via_batch):
+                log_once.info(
+                    "API_CANCEL_ORDERS_MAPPED", key="alpaca_cancel_orders_mapped"
+                )
+                adapted_api = True
+            else:  # pragma: no cover - defensive fallback
+                log_once.error(
+                    "ALPACA_CANCEL_ORDER_PATCH_FAILED",
+                    key="alpaca_cancel_order_patch_failed",
+                )
         else:
             log_once.error(
                 "ALPACA_CANCEL_ORDER_MISSING", key="alpaca_cancel_order_missing"

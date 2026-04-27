@@ -66,3 +66,11 @@ def test_generated_fallback_holidays_cover_2026_new_years_day() -> None:
 
     assert registry.is_trading_day("AAPL", date(2026, 1, 1)) is False
     assert registry.get_session_bounds("AAPL", date(2026, 1, 1)) == (None, None)
+
+
+def test_crypto_remains_open_on_us_holidays_and_equity_holidays_are_lazy() -> None:
+    registry = CalendarRegistry()
+
+    assert registry.is_market_open("BTCUSD", datetime(2025, 1, 1, 15, 0, tzinfo=UTC)) is True
+    assert registry.is_trading_day("AAPL", date(2031, 1, 1)) is False
+    assert 2031 in registry._holiday_years  # noqa: SLF001

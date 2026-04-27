@@ -14,7 +14,8 @@ from ai_trading.logging import get_logger
 from ai_trading.health_payload import (
     build_api_health_payload,
     build_canonical_healthz_payload,
-    register_healthz_routes,
+    register_health_routes as register_canonical_health_routes,
+    sanitize_health_payload,
 )
 from ai_trading.services import ControlPlaneService, GovernanceService
 from ai_trading.utils.optional_dep import missing
@@ -633,10 +634,20 @@ def create_app(
 
     route_registry = _ensure_route_registry(app)
 
-    def _json_response(data: dict, *, status: int = 200, fallback: dict | None = None) -> Any:
+    def _json_response(
+        data: dict,
+        *,
+        status: int = 200,
+        fallback: dict | None = None,
+        include_fallback_meta: bool = True,
+    ) -> Any:
         """Return a JSON ``Response`` with a resilient fallback."""
-        primary_payload = _normalize_health_payload(data)
-        fallback_payload = _normalize_health_payload(fallback) if fallback else None
+        primary_payload = sanitize_health_payload(_normalize_health_payload(data))
+        fallback_payload = (
+            sanitize_health_payload(_normalize_health_payload(fallback))
+            if fallback
+            else None
+        )
 
         merged_payload = primary_payload
         if fallback_payload is not None:
@@ -660,6 +671,8 @@ def create_app(
             reasons: list[str] | tuple[str, ...] | None = None,
         ) -> dict:
             """Ensure payload carries structured fallback metadata."""
+            if not include_fallback_meta and not used and not reasons:
+                return payload
             meta = payload.get("meta")
             if not isinstance(meta, dict):
                 meta = {}
@@ -680,8 +693,8 @@ def create_app(
             payload["meta"] = meta
             return payload
 
-        sanitized_payload = _stamp_fallback_meta(
-            dict(merged_payload), used=False, reasons=[],
+        sanitized_payload = sanitize_health_payload(
+            _stamp_fallback_meta(dict(merged_payload), used=False, reasons=[]),
         )
 
         fallback_used = False
@@ -712,7 +725,7 @@ def create_app(
                     pass
                 return response
 
-        final_payload = _normalize_health_payload(dict(sanitized_payload))
+        final_payload = sanitize_health_payload(_normalize_health_payload(dict(sanitized_payload)))
 
         if serialization_failed:
             final_payload["ok"] = False
@@ -748,9 +761,13 @@ def create_app(
                 else:
                     final_payload["error_details"] = {"messages": merged}
 
-        sanitized_payload = _normalize_health_payload(dict(final_payload))
-        sanitized_payload = _stamp_fallback_meta(
-            sanitized_payload, used=fallback_used, reasons=fallback_reasons,
+        sanitized_payload = sanitize_health_payload(
+            _normalize_health_payload(dict(final_payload)),
+        )
+        sanitized_payload = sanitize_health_payload(
+            _stamp_fallback_meta(
+                sanitized_payload, used=fallback_used, reasons=fallback_reasons,
+            ),
         )
 
         try:
@@ -766,25 +783,36 @@ def create_app(
                 if reason
             ]
             alpaca_section = _normalise_alpaca_section(sanitized_payload.get("alpaca"))
-            sanitized_payload = _stamp_fallback_meta(
-                _normalize_health_payload(
-                    {
-                        "ok": False,
-                        "alpaca": alpaca_section,
-                        "error": extra_reason,
-                    },
+            sanitized_payload = sanitize_health_payload(
+                _stamp_fallback_meta(
+                    _normalize_health_payload(
+                        {
+                            "ok": False,
+                            "alpaca": alpaca_section,
+                            "error": extra_reason,
+                        },
+                    ),
+                    used=True,
+                    reasons=fallback_reasons,
                 ),
-                used=True,
-                reasons=fallback_reasons,
             )
-            body = json.dumps(sanitized_payload, default=str)
+            try:
+                body = json.dumps(sanitized_payload, default=str)
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
+                body = (
+                    '{"ok": false, "service": "ai-trading", '
+                    '"timestamp": "", "alpaca": {}, '
+                    '"error": "health_payload_unserializable"}'
+                )
 
         response_factory = getattr(app, "response_class", None)
         if callable(response_factory):
-            sanitized_payload = _stamp_fallback_meta(
-                _normalize_health_payload(dict(sanitized_payload)),
-                used=fallback_used,
-                reasons=fallback_reasons,
+            sanitized_payload = sanitize_health_payload(
+                _stamp_fallback_meta(
+                    _normalize_health_payload(dict(sanitized_payload)),
+                    used=fallback_used,
+                    reasons=fallback_reasons,
+                ),
             )
             return response_factory(body, status=status, mimetype="application/json")
 
@@ -793,10 +821,12 @@ def create_app(
         # directly so callers don't need to understand Flask's ``(body, status)``
         # tuple convention. Callers running under a real Flask stack will already
         # receive a wrapped ``Response`` above, preserving status semantics.
-        sanitized_payload = _stamp_fallback_meta(
-            _normalize_health_payload(dict(sanitized_payload)),
-            used=fallback_used,
-            reasons=fallback_reasons,
+        sanitized_payload = sanitize_health_payload(
+            _stamp_fallback_meta(
+                _normalize_health_payload(dict(sanitized_payload)),
+                used=fallback_used,
+                reasons=fallback_reasons,
+            ),
         )
         return sanitized_payload
 
@@ -838,23 +868,32 @@ def create_app(
 
     def _register_health_routes(*, include_health: bool) -> None:
         if include_health:
-            @app.route("/health")
-            def health():
-                """Lightweight liveness probe with Alpaca diagnostics."""
+            def _build_health_payload() -> dict[str, Any]:
                 pytest_mode = _pytest_active()
-                payload = build_api_health_payload(
+                return build_api_health_payload(
                     service_name=service_name,
                     force_ok_for_pytest=pytest_mode,
                     env_error=app.config.get("_ENV_ERR"),
                 )
 
+            def _health_response(payload: dict[str, Any], status: int) -> Any:
                 fallback_payload = {
                     "ok": bool(payload.get("ok")),
-                    "alpaca": dict(payload["alpaca"]),
+                    "alpaca": dict(payload.get("alpaca", {})),
                 }
                 if payload.get("error"):
                     fallback_payload["error"] = payload.get("error")
-                return _json_response(payload, fallback=fallback_payload)
+                return _json_response(payload, status=status, fallback=fallback_payload)
+
+            register_canonical_health_routes(
+                app,
+                payload_builder=_build_health_payload,
+                response_builder=_health_response,
+                service_name=service_name,
+                routes=("/health",),
+                logger=_log,
+                error_event="HEALTH_HANDLER_FAILED",
+            )
 
         def _build_healthz_payload() -> dict[str, Any]:
             pytest_mode = _pytest_active()
@@ -884,9 +923,13 @@ def create_app(
             return payload
 
         def _healthz_response(payload: dict[str, Any], status: int) -> Any:
-            return _safe_response(payload, status=status)
+            return _json_response(
+                payload,
+                status=status,
+                include_fallback_meta=False,
+            )
 
-        register_healthz_routes(
+        register_canonical_health_routes(
             app,
             payload_builder=_build_healthz_payload,
             response_builder=_healthz_response,

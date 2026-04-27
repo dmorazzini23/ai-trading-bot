@@ -391,6 +391,24 @@ def test_refresh_position_lookup_and_update_exposure_error_paths() -> None:
     engine.update_exposure(SimpleNamespace(api=SimpleNamespace(list_positions=lambda: (_ for _ in ()).throw(AttributeError("missing")))))
 
 
+def test_refresh_positions_counts_short_exposure_as_gross() -> None:
+    engine = _bare_engine()
+
+    class API:
+        def get_all_positions(self):
+            return [
+                SimpleNamespace(asset_class="equity", qty="-5", avg_entry_price="100", symbol="AAPL"),
+                SimpleNamespace(asset_class="equity", qty="3", avg_entry_price="50", symbol="MSFT"),
+            ]
+
+        def get_account(self):
+            return SimpleNamespace(equity="1000")
+
+    engine.refresh_positions(API())
+
+    assert engine.exposure == {"equity": pytest.approx(0.65)}
+
+
 def test_can_trade_rejects_limits_and_allows_force_override(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _bare_engine()
     assert engine.can_trade(object()) is False

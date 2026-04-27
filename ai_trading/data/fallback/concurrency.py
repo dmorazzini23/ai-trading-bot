@@ -79,6 +79,21 @@ def _log_debug_concurrency(event: str, **payload: object) -> None:
     logger.debug("DEBUG_CONCURRENCY", extra={"event": event, **payload})
 
 
+def _log_worker_exception(symbol: str, exc: Exception) -> None:
+    """Log an ordinary worker failure while preserving per-symbol fail-soft behavior."""
+
+    logger.warning(
+        "FALLBACK_WORKER_FAILED",
+        extra={
+            "event": "worker_failed",
+            "symbol": symbol,
+            "error_type": type(exc).__name__,
+            "detail": str(exc),
+        },
+        exc_info=True,
+    )
+
+
 def _running_under_pytest_worker() -> bool:
     """Return ``True`` when executing inside a pytest (xdist) worker."""
 
@@ -924,7 +939,7 @@ async def run_with_concurrency(
                 for task in test_done:
                     try:
                         test_outcomes[task] = task.result()
-                    except BaseException as exc:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                         test_outcomes[task] = exc
             for task, sym in task_map.items():
                 if task in test_pending:
@@ -942,7 +957,10 @@ async def run_with_concurrency(
                         )
                     continue
                 outcome = test_outcomes.get(task)
-                if isinstance(outcome, BaseException):
+                if isinstance(outcome, asyncio.CancelledError):
+                    raise outcome
+                if isinstance(outcome, AI_TRADING_FALLBACK_EXCEPTIONS):
+                    _log_worker_exception(sym, outcome)
                     test_failed.add(sym)
                     test_results.setdefault(sym, None)
                     if debug_mode:
@@ -1019,7 +1037,7 @@ async def run_with_concurrency(
                     await self._semaphore.acquire()
                 except asyncio.CancelledError:
                     raise
-                except BaseException:
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
                     # If host semaphore acquisition fails, proceed without holding a permit.
                     logger.debug("HOST_SEMAPHORE_ACQUIRE_FAILED", exc_info=True)
                     return
@@ -1065,7 +1083,9 @@ async def run_with_concurrency(
         def _record_result(task: asyncio.Task[None]) -> None:
             try:
                 result = task.result()
-            except BaseException as exc:
+            except asyncio.CancelledError as exc:
+                outcomes[task] = exc
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 outcomes[task] = exc
             else:
                 outcomes[task] = result  # ``None`` for ``run_with_concurrency``
@@ -1099,7 +1119,7 @@ async def run_with_concurrency(
                 def _drain(task: asyncio.Task[None]) -> None:
                     try:
                         task.exception()
-                    except BaseException:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
                         logger.debug("TASK_EXCEPTION_DRAIN_FAILED", exc_info=True)
                         return
 
@@ -1158,9 +1178,9 @@ async def run_with_concurrency(
                             extra={"event": "worker_exit", "symbol": symbol},
                         )
                 except asyncio.CancelledError:
-                    FAILED_SYMBOLS.add(symbol)
                     raise
-                except BaseException:
+                except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+                    _log_worker_exception(symbol, exc)
                     FAILED_SYMBOLS.add(symbol)
                 else:
                     SUCCESSFUL_SYMBOLS.add(symbol)
@@ -1173,7 +1193,6 @@ async def run_with_concurrency(
                     extra={"event": "done", "symbol": symbol},
                 )
         except asyncio.CancelledError:
-            FAILED_SYMBOLS.add(symbol)
             raise
 
     tasks: list[asyncio.Task[None]] = []
@@ -1217,13 +1236,13 @@ async def run_with_concurrency(
                 symbol = task_to_symbol.get(task)
                 if symbol is None:
                     continue
+                FAILED_SYMBOLS.add(symbol)
                 try:
                     result = await worker(symbol)
                 except asyncio.CancelledError:
-                    FAILED_SYMBOLS.add(symbol)
                     raise
-                except BaseException:
-                    FAILED_SYMBOLS.add(symbol)
+                except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+                    _log_worker_exception(symbol, exc)
                 else:
                     SUCCESSFUL_SYMBOLS.add(symbol)
                     results[symbol] = result
@@ -1231,7 +1250,7 @@ async def run_with_concurrency(
         for task in done:
             try:
                 gather_outcomes.append(task.result())
-            except BaseException as exc:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 gather_outcomes.append(exc)
         outcomes = gather_outcomes
 
@@ -1239,7 +1258,9 @@ async def run_with_concurrency(
         symbol = task_to_symbol.get(task)
         if symbol is None:
             continue
-        if isinstance(task_outcome, BaseException):
+        if isinstance(task_outcome, asyncio.CancelledError):
+            raise task_outcome
+        if isinstance(task_outcome, AI_TRADING_FALLBACK_EXCEPTIONS):
             results.setdefault(symbol, None)
             FAILED_SYMBOLS.add(symbol)
 

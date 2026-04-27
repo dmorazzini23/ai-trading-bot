@@ -25,8 +25,18 @@ from ai_trading.alpaca_api import (
     get_trading_client_cls,
 )
 
-APIError = get_api_error_cls()
-TradingClient = get_trading_client_cls()
+class _UnavailableAPIError(Exception):
+    """Placeholder used when Alpaca imports are intentionally unavailable."""
+
+
+try:
+    APIError = get_api_error_cls()
+except (ImportError, RuntimeError, OSError, AttributeError):
+    APIError = _UnavailableAPIError
+try:
+    TradingClient = get_trading_client_cls()
+except (ImportError, RuntimeError, OSError, AttributeError):
+    TradingClient = None
 from ai_trading.config.management import (
     SEED,
     TradingConfig,
@@ -150,7 +160,10 @@ def _calculate_position_size(
     return max(qty, 0)
 
 
-StockHistoricalDataClient = get_data_client_cls()
+try:
+    StockHistoricalDataClient = get_data_client_cls()
+except (ImportError, RuntimeError, OSError, AttributeError):
+    StockHistoricalDataClient = None
 
 
 def _safe_call(fn, *a, **k):
@@ -849,7 +862,8 @@ class RiskEngine:
     def refresh_positions(self, api) -> None:
         """Synchronize exposure with live positions."""
         try:
-            positions = api.list_positions()
+            get_all_positions = getattr(api, "get_all_positions", None)
+            positions = get_all_positions() if callable(get_all_positions) else api.list_positions()
             logger.debug("Raw Alpaca positions: %s", positions)
             acct = api.get_account()
             equity = float(getattr(acct, "equity", 0) or 0)
@@ -858,7 +872,7 @@ class RiskEngine:
                 asset = getattr(p, "asset_class", "equity")
                 qty = float(getattr(p, "qty", 0) or 0)
                 price = float(getattr(p, "avg_entry_price", 0) or 0)
-                weight = qty * price / equity if equity > 0 else 0.0
+                weight = abs(qty * price) / equity if equity > 0 else 0.0
                 exposure[asset] = exposure.get(asset, 0.0) + weight
             self.exposure = exposure
         except (AttributeError, APIError) as exc:
@@ -1093,14 +1107,20 @@ class RiskEngine:
             scale = 1.0
             if volatility and volatility > 0:
                 scale *= max(0.5, min(1.0, 0.02 / volatility))
-            if returns:
+            if returns is not None:
                 import numpy as np
-                from ai_trading.capital_scaling import cvar_scaling
+                import importlib
 
                 arr = np.asarray(list(returns), dtype=float)
                 arr = arr[np.isfinite(arr)]
                 if arr.size > 0:
-                    cvar_metric = cvar_scaling(arr, alpha=0.05)
+                    ai_trading_pkg = importlib.import_module("ai_trading")
+                    capital_scaling = getattr(
+                        ai_trading_pkg,
+                        "capital_scaling",
+                        importlib.import_module("ai_trading.capital_scaling"),
+                    )
+                    cvar_metric = capital_scaling.cvar_scaling(arr, alpha=0.05)
                     if cvar_metric > 1.0:
                         scale *= 1.0 / (1.0 + cvar_metric)
             signal.weight = max(0.0, float(signal.weight) * scale)

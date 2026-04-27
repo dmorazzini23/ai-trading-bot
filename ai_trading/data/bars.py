@@ -47,7 +47,11 @@ _ALPACA_PY_REQUIRED = (
     "alpaca-py==0.42.1 is required; install with `pip install alpaca-py==0.42.1`"
 )
 
-APIError: type[BaseException] = RuntimeError
+class _APIErrorUnavailable(RuntimeError):
+    """Placeholder used when alpaca-py APIError is intentionally unavailable."""
+
+
+APIError: type[BaseException] = _APIErrorUnavailable
 
 if should_import_alpaca_sdk():  # pragma: no cover - depends on runtime config
     try:
