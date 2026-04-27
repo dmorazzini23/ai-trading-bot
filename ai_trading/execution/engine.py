@@ -945,6 +945,9 @@ class OrderManager:
             token = str(candidate or "").strip()
             if token:
                 self._intent_by_order_id.pop(token, None)
+        for token, mapped_intent_id in list(self._intent_by_order_id.items()):
+            if mapped_intent_id == resolved_intent_id:
+                self._intent_by_order_id.pop(token, None)
         self._intent_reported_fill_qty.pop(resolved_intent_id, None)
         return resolved_intent_id
 

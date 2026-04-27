@@ -362,10 +362,13 @@ def hurst_exponent(ts):
     if n > 10000:
         step = max(1, n // 10000)
         arr = arr[::step]
-    lags = range(2, 20)
-    tau = [np.std(arr[lag:] - arr[:-lag]) for lag in lags]
-    poly = np.polyfit(np.log(lags), np.log(tau), 1)
-    return 2.0 * poly[0]
+    lags = np.arange(2, 20, dtype=float)
+    tau = [np.std(arr[int(lag):] - arr[:-int(lag)]) for lag in lags]
+    x = np.log(lags)
+    y = np.log(tau)
+    design = np.vstack([x, np.ones(len(x))]).T
+    slope = np.linalg.lstsq(design, y, rcond=-1.0)[0][0]
+    return 2.0 * slope
 
 __all__ = [
     "IndicatorManager",

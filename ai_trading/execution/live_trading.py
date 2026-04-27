@@ -32452,7 +32452,11 @@ def _extract_cash_balance(account: Any) -> float | None:
     if account is None:
         return None
     for attr in ("cash", "cash_balance", "buying_power", "available_cash"):
-        value = getattr(account, attr, None)
+        value = (
+            account.get(attr)
+            if isinstance(account, Mapping)
+            else getattr(account, attr, None)
+        )
         if value in (None, ""):
             continue
         try:
@@ -32468,16 +32472,20 @@ def _positions_to_quantity_map(positions: Iterable[Any]) -> dict[str, float]:
     quantities: dict[str, float] = {}
     for entry in positions or ():
         symbol = getattr(entry, "symbol", None) or getattr(entry, "asset_symbol", None)
+        if not symbol and isinstance(entry, Mapping):
+            symbol = entry.get("symbol") or entry.get("asset_symbol")
         if not symbol:
             continue
         qty_value = None
         for attr in ("qty", "quantity", "qty_available", "position"):
-            qty_candidate = getattr(entry, attr, None)
+            qty_candidate = (
+                entry.get(attr)
+                if isinstance(entry, Mapping)
+                else getattr(entry, attr, None)
+            )
             if qty_candidate not in (None, ""):
                 qty_value = qty_candidate
                 break
-        if qty_value is None and isinstance(entry, Mapping):  # type: ignore[arg-type]
-            qty_value = entry.get("qty") or entry.get("quantity")
         if qty_value is None:
             continue
         try:

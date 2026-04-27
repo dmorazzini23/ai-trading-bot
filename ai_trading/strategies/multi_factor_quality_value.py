@@ -75,9 +75,13 @@ class MultiFactorQualityValueStrategy(BaseStrategy):
                     continue
                 ret = (last_px / first_px) - 1.0
                 daily_ret = recent.pct_change().dropna()
-                vol = float(np.std(np.asarray(daily_ret.values, dtype=float)))
-                rolling_max = np.maximum.accumulate(np.asarray(recent.values, dtype=float))
-                drawdowns = (np.asarray(recent.values, dtype=float) / np.maximum(rolling_max, 1e-9)) - 1.0
+                daily_ret_values = np.asarray(daily_ret.values, dtype=float)
+                price_values = np.asarray(recent.values, dtype=float)
+                if not np.all(np.isfinite(daily_ret_values)) or not np.all(np.isfinite(price_values)):
+                    continue
+                vol = float(np.std(daily_ret_values))
+                rolling_max = np.maximum.accumulate(price_values)
+                drawdowns = (price_values / np.maximum(rolling_max, 1e-9)) - 1.0
                 max_dd = abs(float(np.min(drawdowns)))
             except (AttributeError, KeyError, IndexError, TypeError, ValueError):
                 continue
