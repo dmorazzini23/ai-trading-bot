@@ -1515,8 +1515,6 @@ def log_performance_metrics(
         "regime": regime,
     }
     if filename is None:
-        from pathlib import Path
-
         from ai_trading.paths import LOG_DIR
 
         filename = str((LOG_DIR / "performance.csv").resolve())

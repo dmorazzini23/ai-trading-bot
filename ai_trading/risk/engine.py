@@ -1508,7 +1508,7 @@ def calculate_position_size(*args, **kwargs) -> int:
         if not isinstance(price, int | float) or price <= 0:
             logger.warning(f"Invalid price: {price}")
             return 0
-        dummy = TradeSignal(symbol="DUMMY", side="buy", confidence=1.0, strategy="default")
+        dummy = TradeSignal(symbol="DUMMY", side="buy", confidence=1.0, strategy="default", weight=1.0, asset_class="equity")
         return engine.position_size(dummy, cash, price)
     if len(args) >= 3:
         signal, cash, price = args[:3]

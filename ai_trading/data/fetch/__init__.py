@@ -3065,8 +3065,8 @@ def _mark_fallback(
         log_extra["fallback_feed"] = feed_hint
     last_attempt = fetch_state.get("last_fetch_attempt")
     if isinstance(last_attempt, Mapping):
-        for key, value in last_attempt.items():
-            meta_key = str(key)
+        for attempt_key, value in last_attempt.items():
+            meta_key = str(attempt_key)
             log_extra.setdefault(meta_key, value)
     _FALLBACK_METADATA[key] = metadata
     fallback_name: str | None = None

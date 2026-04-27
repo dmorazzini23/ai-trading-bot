@@ -76,6 +76,39 @@ def test_alert_manager_caps_history_and_isolates_handler_errors() -> None:
     assert handled == ["one", "two", "three"]
 
 
+def test_alert_manager_handles_creation_and_state_update_errors(monkeypatch) -> None:
+    manager = alerts.AlertManager()
+    original_alert = alerts.Alert
+    calls = 0
+
+    def flaky_alert(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TypeError("bad alert")
+        return original_alert(*args, **kwargs)
+
+    monkeypatch.setattr(alerts, "Alert", flaky_alert)
+
+    fallback = manager.create_alert(alerts.AlertType.SYSTEM, alerts.AlertSeverity.INFO, "broken")
+
+    assert fallback.alert_type == alerts.AlertType.SYSTEM
+    assert fallback.severity == alerts.AlertSeverity.CRITICAL
+    assert "Alert creation failed" in fallback.message
+
+    class BrokenLock:
+        def __enter__(self):
+            raise TypeError("lock broken")
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    manager._lock = BrokenLock()
+
+    assert manager.acknowledge_alert("missing") is False
+    assert manager.resolve_alert("missing") is False
+
+
 def test_alert_cleanup_removes_old_alerts_in_single_iteration(monkeypatch) -> None:
     manager = alerts.AlertManager()
     manager.alert_retention_hours = 1
@@ -93,6 +126,51 @@ def test_alert_cleanup_removes_old_alerts_in_single_iteration(monkeypatch) -> No
     manager._cleanup_old_alerts()
 
     assert manager.alerts == [fresh]
+
+
+def test_alert_cleanup_start_stop_and_error_path(monkeypatch) -> None:
+    manager = alerts.AlertManager()
+    starts: list[bool] = []
+    joins: list[float | None] = []
+    sleeps: list[int] = []
+
+    class FakeThread:
+        def __init__(self, *, target, daemon: bool) -> None:
+            self.target = target
+            self.daemon = daemon
+
+        def start(self) -> None:
+            starts.append(self.daemon)
+
+        def join(self, timeout: float | None = None) -> None:
+            joins.append(timeout)
+
+    class BrokenLock:
+        def __enter__(self):
+            raise TypeError("cleanup lock broken")
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    def stop_after_error_sleep(seconds: int) -> None:
+        sleeps.append(seconds)
+        manager._cleanup_running = False
+
+    monkeypatch.setattr(alerts.threading, "Thread", FakeThread)
+    manager.start_cleanup()
+    manager.start_cleanup()
+    manager.stop_cleanup()
+
+    assert starts == [True]
+    assert joins == [5]
+
+    manager._lock = BrokenLock()
+    manager._cleanup_running = True
+    monkeypatch.setattr(alerts, "psleep", stop_after_error_sleep)
+
+    manager._cleanup_old_alerts()
+
+    assert sleeps == [300]
 
 
 def test_risk_alert_engine_emits_threshold_breaches_and_honors_cooldown() -> None:
@@ -125,6 +203,22 @@ def test_risk_alert_engine_emits_threshold_breaches_and_honors_cooldown() -> Non
     assert first_count == 7
     assert len(manager.alerts) == first_count
     assert {alert.alert_type for alert in manager.alerts} == {alerts.AlertType.RISK_LIMIT}
+
+
+def test_risk_alert_engine_logs_bad_metric_payloads_and_create_failures() -> None:
+    manager = alerts.AlertManager()
+    engine = alerts.RiskAlertEngine(manager)
+
+    engine.check_portfolio_risk({"max_drawdown": "bad"})
+    engine.check_position_risk("SPY", {"position_percentage": "bad"})
+    engine.check_execution_risk({"fill_rate": "bad"})
+
+    class FailingManager:
+        def create_alert(self, *_args, **_kwargs) -> None:
+            raise ValueError("alert backend down")
+
+    failing_engine = alerts.RiskAlertEngine(FailingManager())
+    failing_engine._create_risk_alert("key", alerts.AlertSeverity.WARNING, "message")
 
 
 def test_emit_runtime_alert_sets_state_and_thresholds(monkeypatch) -> None:
