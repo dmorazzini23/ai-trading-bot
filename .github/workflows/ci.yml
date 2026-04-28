@@ -233,6 +233,7 @@ jobs:
       ALPACA_API_KEY: "test"
       ALPACA_SECRET_KEY: "test"
       ALPACA_ENV: "paper"
+      PYTHONHASHSEED: "${{ matrix.seed }}"
       SEED: "${{ matrix.seed }}"
       AI_TRADING_SEED: "${{ matrix.seed }}"
     steps:

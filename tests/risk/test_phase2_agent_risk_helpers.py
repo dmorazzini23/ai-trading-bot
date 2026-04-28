@@ -58,7 +58,7 @@ def test_minimum_quantity_uses_config_then_fallback_and_logs_once(
     ("raw_qty", "expected"),
     [
         (float("nan"), 2),
-        (0.0, 2),
+        (0.0, 0),
         (-5.0, 0),
         (7.9, 7),
     ],
@@ -127,6 +127,17 @@ def test_market_hours_validator_static_paths(monkeypatch: pytest.MonkeyPatch) ->
     assert closed_result.status is ptv.ValidationStatus.REJECTED
 
 
+def test_market_hours_static_fallback_compares_in_eastern_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ptv, "load_pandas_market_calendars", lambda: None)
+    validator = ptv.MarketHoursValidator()
+
+    after_hours_result = validator.validate_market_hours(
+        datetime(2026, 4, 21, 20, 30, tzinfo=ptv.UTC)
+    )
+
+    assert after_hours_result.status is ptv.ValidationStatus.WARNING
+
+
 def test_liquidity_validator_error_and_low_liquidity_paths() -> None:
     validator = ptv.LiquidityValidator()
 
@@ -163,6 +174,13 @@ def test_portfolio_risk_warns_on_high_correlation(monkeypatch: pytest.MonkeyPatc
     assert result.status is ptv.ValidationStatus.WARNING
     assert result.category is ptv.ValidationCategory.CORRELATION
     assert result.details["correlation_exposure"] == pytest.approx(0.45)
+
+
+def test_risk_validator_reads_broker_market_value_when_notional_missing() -> None:
+    validator = ptv.RiskValidator()
+
+    assert validator._notional_value({"market_value": "-2500.5"}) == pytest.approx(-2500.5)
+    assert validator._notional_value(SimpleNamespace(market_value="1250.25")) == pytest.approx(1250.25)
 
 
 def test_pretrade_validator_overall_result_status_matrix() -> None:

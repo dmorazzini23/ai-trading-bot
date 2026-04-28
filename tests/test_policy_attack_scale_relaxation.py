@@ -10,6 +10,7 @@ from ai_trading.policy.compiler import (
     SafetyTier,
     approve_execution_candidate,
     compile_effective_policy,
+    resolve_operational_safety_tier,
 )
 
 
@@ -133,6 +134,53 @@ def test_attack_scale_reason_not_emitted_when_hard_block_rejects_candidate() -> 
     assert "SAFETY_TIER_ATTACK_SCALE" not in approval.reasons
     assert "SAFETY_TIER_ATTACK_SCALE_RELAXED" not in approval.reasons
     assert "SAFETY_TIER_ATTACK_SCALE_DEGRADED" not in approval.reasons
+
+
+def test_attack_scale_rechecks_hard_caps_after_size_increase() -> None:
+    policy = compile_effective_policy(
+        SimpleNamespace(trading_mode="balanced"),
+        env={
+            "AI_TRADING_POLICY_STRICT_CONFIG_GOVERNANCE": "0",
+            "AI_TRADING_POLICY_ATTACK_SIZE_MULTIPLIER": "1.40",
+            "AI_TRADING_POLICY_SYMBOL_HARD_DOLLARS": "1200",
+        },
+    )
+
+    approval = approve_execution_candidate(policy, _base_candidate(reject_rate_pct=5.0))
+
+    assert approval.allowed is False
+    assert approval.adjusted_delta_shares == 0
+    assert "RISK_SYMBOL_HARD_BLOCK" in approval.reasons
+    assert "SAFETY_TIER_ATTACK_SCALE" not in approval.reasons
+
+
+def test_attack_tier_requires_calibration_telemetry() -> None:
+    policy = compile_effective_policy(
+        SimpleNamespace(trading_mode="balanced"),
+        env={
+            "AI_TRADING_POLICY_STRICT_CONFIG_GOVERNANCE": "0",
+            "AI_TRADING_POLICY_ATTACK_MIN_NET_EDGE_BPS": "8",
+        },
+    )
+
+    tier, reasons = resolve_operational_safety_tier(
+        policy,
+        {"expected_net_edge_bps": 25.0, "pending_orders_count": 0},
+    )
+
+    assert tier is SafetyTier.NORMAL
+    assert "ATTACK_CALIBRATION_OK" not in reasons
+
+
+def test_policy_hash_is_stable_across_compile_times() -> None:
+    env = {"AI_TRADING_POLICY_STRICT_CONFIG_GOVERNANCE": "0"}
+
+    first = compile_effective_policy(SimpleNamespace(trading_mode="balanced"), env=env)
+    second = compile_effective_policy(SimpleNamespace(trading_mode="balanced"), env=env)
+
+    assert first.policy_hash == second.policy_hash
+    assert first.compiled_at != ""
+    assert second.compiled_at != ""
 
 
 def test_compile_policy_accepts_ablation_and_toggle_env_keys_under_strict_governance() -> None:

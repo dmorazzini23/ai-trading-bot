@@ -55,6 +55,12 @@ except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover
     Engine = Any  # type: ignore[assignment,misc]
     sessionmaker = None  # type: ignore[assignment,misc]
     IntegrityError = Exception  # type: ignore[assignment,misc]
+    SQLAlchemyError = Exception  # type: ignore[assignment,misc]
+
+_EVENT_STORE_FALLBACK_EXC: tuple[type[Exception], ...] = (
+    SQLAlchemyError,
+    *AI_TRADING_FALLBACK_EXCEPTIONS,
+)
 
 if _SQLALCHEMY_AVAILABLE:
     _EVENT_METADATA = MetaData()
@@ -962,10 +968,7 @@ class EventStore:
                 payload["current_revision"] = str(row[0])
             payload["available"] = True
             payload["managed"] = True
-        except SQLAlchemyError:
-            payload["reason"] = "migration_status_unavailable"
-            return payload
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
+        except _EVENT_STORE_FALLBACK_EXC:
             payload["reason"] = "migration_status_unavailable"
             return payload
 
@@ -993,12 +996,14 @@ class EventStore:
             migration = self.migration_status(expected_revision=expected_revision)
             payload["migration"] = migration
             at_head = migration.get("at_head")
-            if at_head is None:
-                payload["ok"] = True
+            if not migration.get("available") or migration.get("managed") is False:
+                payload["ok"] = False
+            elif at_head is None:
+                payload["ok"] = not bool(str(expected_revision or "").strip())
             else:
                 payload["ok"] = bool(at_head)
             return payload
-        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        except _EVENT_STORE_FALLBACK_EXC as exc:
             payload["error"] = str(exc)
             return payload
 

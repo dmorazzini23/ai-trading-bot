@@ -622,6 +622,7 @@ def _build_symbol_dataset(
     end_dt: datetime,
     *,
     cost_floor_bps: float,
+    horizon_days: int = 1,
 ):
     import pandas as pd
 
@@ -643,15 +644,15 @@ def _build_symbol_dataset(
     close_arr = frame["close"].astype(float).to_numpy()
     frame["rsi"] = _safe_rsi(close_arr)
     frame = _augment_training_features(frame)
-    future_ret_bps = (
-        frame["close"].astype(float).shift(-1) / frame["close"].astype(float) - 1.0
-    ) * 10_000.0
+    label_horizon = max(1, int(horizon_days))
+    future_close = frame["close"].astype(float).shift(-label_horizon)
+    future_ret_bps = (future_close / frame["close"].astype(float) - 1.0) * 10_000.0
     frame["realized_edge_bps"] = future_ret_bps - float(cost_floor_bps)
     frame["label"] = (frame["realized_edge_bps"] > 0).astype(int)
     frame["regime"] = _infer_regime(close_arr)
     timestamps = pd.to_datetime(frame.index, utc=True, errors="coerce")
     frame["timestamp"] = timestamps
-    frame["label_ts"] = pd.Series(timestamps, index=frame.index).shift(-1)
+    frame["label_ts"] = pd.Series(timestamps, index=frame.index).shift(-label_horizon)
     frame["symbol"] = symbol
     frame = frame.dropna(
         subset=list(FEATURE_COLUMNS)
@@ -670,6 +671,7 @@ def _build_training_dataset(
     import pandas as pd
 
     start_dt = now_utc - timedelta(days=int(max(180, lookback_days)))
+    horizon_days = int(get_env("AI_TRADING_AFTER_HOURS_HORIZON_DAYS", 1, cast=int))
     rows: list[pd.DataFrame] = []
     for symbol in symbols:
         frame = _build_symbol_dataset(
@@ -677,6 +679,7 @@ def _build_training_dataset(
             start_dt,
             now_utc,
             cost_floor_bps=cost_floor_bps,
+            horizon_days=horizon_days,
         )
         if frame is not None and not frame.empty:
             rows.append(frame)
@@ -5720,7 +5723,17 @@ def _maybe_promote_to_runtime_model_path(
     )
     try:
         runtime_model_path.parent.mkdir(parents=True, exist_ok=True)
-        runtime_model_path.write_bytes(model_path.read_bytes())
+        tmp_model_path = runtime_model_path.with_name(
+            f".{runtime_model_path.name}.{os.getpid()}.tmp"
+        )
+        try:
+            shutil.copy2(model_path, tmp_model_path)
+            os.replace(tmp_model_path, runtime_model_path)
+        finally:
+            try:
+                tmp_model_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         manifest_path = write_artifact_manifest(
             model_path=str(runtime_model_path),
             model_version=f"edge_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}",

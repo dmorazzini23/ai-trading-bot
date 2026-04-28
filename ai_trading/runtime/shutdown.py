@@ -42,13 +42,17 @@ def request_stop(reason: str | None = None) -> None:
         Optional human readable hint describing why the shutdown was requested.
     """
 
-    if stop_event.is_set():
+    already_set = stop_event.is_set()
+    stop_event.set()
+    if already_set:
         return
     payload: dict[str, object] = {}
     if reason:
         payload["reason"] = reason
-    _LOGGER.info("Shutdown signal received", extra=payload)
-    stop_event.set()
+    try:
+        _LOGGER.info("Shutdown signal received", extra=payload)
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        pass
 
 
 def _handle_signal(signum: int, frame: Optional[FrameType]) -> None:  # pragma: no cover - exercised via integration
@@ -109,4 +113,3 @@ def install_runtime_timer(max_runtime_seconds: float) -> threading.Timer:
 
 
 __all__ = ["stop_event", "should_stop", "request_stop", "register_signal_handlers", "install_runtime_timer"]
-

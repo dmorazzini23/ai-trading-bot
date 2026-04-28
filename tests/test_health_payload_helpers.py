@@ -119,7 +119,14 @@ def test_build_health_json_response_handles_mapping_and_response_objects() -> No
 
 def test_build_health_json_response_sanitizes_unserializable_payload() -> None:
     bad_value = object()
-    payload = {"ok": False, "nested": {"bad": bad_value}}
+    payload = {
+        "ok": False,
+        "nested": {
+            "bad": bad_value,
+            "nan": float("nan"),
+            "inf": float("inf"),
+        },
+    }
 
     response_payload = health_payload.build_health_json_response(
         payload,
@@ -127,7 +134,14 @@ def test_build_health_json_response_sanitizes_unserializable_payload() -> None:
         jsonify_fn=lambda body: dict(body),
     )
 
-    assert response_payload == {"ok": False, "nested": {"bad": str(bad_value)}}
+    assert response_payload == {
+        "ok": False,
+        "nested": {
+            "bad": str(bad_value),
+            "nan": None,
+            "inf": None,
+        },
+    }
 
 
 def test_register_healthz_routes_returns_exception_payload() -> None:

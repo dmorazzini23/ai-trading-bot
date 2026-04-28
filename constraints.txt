@@ -65,6 +65,8 @@ fsspec==2025.7.0
     # via
     #   huggingface-hub
     #   torch
+greenlet==3.3.0
+    # via sqlalchemy
 hf-xet==1.1.9
     # via huggingface-hub
 hmmlearn==0.3.2
@@ -192,6 +194,12 @@ protobuf==6.32.0
     # via yfinance
 psutil==5.9.8
     # via -r requirements.txt
+psycopg==3.3.3
+    # via
+    #   -r requirements.txt
+    #   psycopg-binary
+psycopg-binary==3.3.3
+    # via -r requirements.txt
 pyarrow==17.0.0
     # via -r requirements.txt
 pybreaker==1.4.0
@@ -253,6 +261,8 @@ six==1.17.0
     # via python-dateutil
 soupsieve==2.7
     # via beautifulsoup4
+sqlalchemy==2.0.49
+    # via -r requirements.txt
 sseclient-py==1.8.0
     # via alpaca-py
 statsmodels==0.14.5
@@ -286,6 +296,8 @@ typing-extensions==4.15.0
     #   huggingface-hub
     #   pydantic
     #   pydantic-core
+    #   psycopg
+    #   sqlalchemy
     #   torch
     #   typing-inspection
 typing-inspection==0.4.1

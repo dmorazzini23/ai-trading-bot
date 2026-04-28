@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import math
 from typing import Any
 
+from ai_trading.broker.adapters import list_alpaca_orders
 from ai_trading.core.interfaces import Order, OrderStatus, Position, OrderType
 from ai_trading.order.types import OrderSide
 from ai_trading.utils.time import safe_utcnow
@@ -85,18 +86,6 @@ def _coerce_order_status(value: Any) -> OrderStatus:
     return OrderStatus.PENDING
 
 
-def _orders_request(status: str) -> Any:
-    try:
-        from alpaca.trading.enums import QueryOrderStatus
-        from alpaca.trading.requests import GetOrdersRequest
-    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-        raise RuntimeError("alpaca-py trading order request classes unavailable") from exc
-
-    status_name = str(status or "open").strip().upper()
-    status_value = getattr(QueryOrderStatus, status_name, QueryOrderStatus.OPEN)
-    return GetOrdersRequest(status=status_value)
-
-
 def _fetch_broker_positions(client: Any) -> list[Any]:
     get_all_positions = getattr(client, "get_all_positions", None)
     if callable(get_all_positions):
@@ -108,18 +97,15 @@ def _fetch_broker_positions(client: Any) -> list[Any]:
 
 
 def _fetch_broker_orders(client: Any) -> list[Any]:
-    get_orders = getattr(client, "get_orders", None)
     list_orders = getattr(client, "list_orders", None)
-    if callable(get_orders):
+    get_orders = getattr(client, "get_orders", None)
+    if callable(get_orders) or callable(list_orders):
         try:
-            return list(get_orders(filter=_orders_request("open")) or [])
-        except TypeError:
-            return list(get_orders(status="open") or [])
+            return list_alpaca_orders(client, status="open")
         except AI_TRADING_FALLBACK_EXCEPTIONS:
             if not callable(list_orders):
                 raise
-    if callable(list_orders):
-        return list(list_orders(status="open") or [])
+            return []
     return []
 
 

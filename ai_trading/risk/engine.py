@@ -147,10 +147,10 @@ def _calculate_position_size(
 
     if raw_qty == 0:
         logger.warning(
-            "Zero raw_qty for %s; falling back to minimum position size",
+            "Zero raw_qty for %s; returning 0",
             symbol,
         )
-        return max(min_qty, 0)
+        return 0
 
     qty = max(int(raw_qty), min_qty)
     return max(qty, 0)
@@ -1309,6 +1309,8 @@ class RiskEngine:
                 return 0
         try:
             qty = _calculate_position_size(self, raw_qty, price, signal)
+            if qty <= 0:
+                return 0
             if getattr(signal, "strategy", "") == "default":
                 qty = max(qty, 10)
             qty = _cap_final_position_size(

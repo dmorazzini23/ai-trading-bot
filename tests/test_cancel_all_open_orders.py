@@ -205,6 +205,7 @@ def test_send_exit_order_uses_cancel_order_shim(monkeypatch):
 
         def cancel_order_by_id(self, order_id):
             self.cancelled.append(order_id)
+            self.orders[order_id].status = "canceled"
 
     api = DummyAPI()
     alpaca_client._validate_trading_api(api)
@@ -240,6 +241,60 @@ def test_send_exit_order_uses_cancel_order_shim(monkeypatch):
 
     assert api.cancelled == ["limit-001"]
     assert market_calls == ["AAPL"]
+
+
+def test_send_exit_order_replaces_only_unfilled_qty_after_partial_fill(monkeypatch):
+    class DummyAPI(_NativeAPIBase):
+        def __init__(self):
+            self.orders = {}
+
+        def get_orders(self, *args, **kwargs):
+            return []
+
+        def get_position(self, symbol):
+            return SimpleNamespace(qty=10)
+
+        def get_order_by_id(self, order_id):
+            return self.orders[order_id]
+
+        def cancel_order_by_id(self, order_id):
+            self.orders[order_id].status = "canceled"
+            self.orders[order_id].filled_qty = "2"
+
+    api = DummyAPI()
+    alpaca_client._validate_trading_api(api)
+    runtime = _Runtime(api=api)
+
+    submissions: list[dict[str, Any]] = []
+
+    def fake_safe_submit_order(_api, req):
+        submissions.append(
+            {
+                "symbol": getattr(req, "symbol", None),
+                "qty": getattr(req, "qty", None),
+                "side": getattr(req, "side", None),
+                "limit_price": getattr(req, "limit_price", None),
+            }
+        )
+        order = SimpleNamespace(id=f"order-{len(submissions)}")
+        if len(submissions) == 1:
+            api.orders[order.id] = SimpleNamespace(
+                id=order.id,
+                status="partially_filled",
+                filled_qty="0",
+            )
+        return order
+
+    monkeypatch.setattr(bot_engine, "safe_submit_order", fake_safe_submit_order)
+    monkeypatch.setattr(execution_flow.pytime, "sleep", lambda _secs: None)
+
+    execution_flow.send_exit_order(runtime, "AAPL", 5, 150.0, "manual_exit")
+
+    assert len(submissions) == 2
+    assert submissions[0]["qty"] == 5
+    assert submissions[0]["limit_price"] == 150.0
+    assert submissions[1]["qty"] == 3
+    assert submissions[1]["limit_price"] is None
 
 
 def test_send_exit_order_uses_raw_positions_snapshot_when_get_position_fails(monkeypatch):

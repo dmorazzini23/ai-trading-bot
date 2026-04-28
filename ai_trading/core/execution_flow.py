@@ -352,6 +352,24 @@ def _signed_position_qty(pos: Any) -> int:
     return qty
 
 
+def _broker_order_status(order: Any) -> str:
+    status = getattr(order, "status", "")
+    status = getattr(status, "value", status)
+    return str(status or "").strip().lower()
+
+
+def _broker_filled_qty(order: Any) -> int:
+    for attr in ("filled_qty", "filled_quantity", "filled"):
+        value = getattr(order, attr, None)
+        if value in (None, ""):
+            continue
+        try:
+            return max(int(float(value)), 0)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
 def _list_positions_compat(api: Any) -> list[Any]:
     get_all_positions = getattr(api, "get_all_positions", None)
     if callable(get_all_positions):
@@ -431,13 +449,24 @@ def send_exit_order(
     pytime.sleep(5)
     try:
         o2 = ctx.api.get_order_by_id(limit_order.id)
-        if getattr(o2, "status", "") in {"new", "accepted", "partially_filled"}:
+        if _broker_order_status(o2) in {"new", "accepted", "partially_filled"}:
             ctx.api.cancel_order_by_id(limit_order.id)
+            refreshed = ctx.api.get_order_by_id(limit_order.id)
+            status = _broker_order_status(refreshed)
+            if status not in {"canceled", "cancelled", "filled", "expired", "rejected"}:
+                logger.warning(
+                    "EXIT_LIMIT_CANCEL_NOT_FINAL",
+                    extra={"symbol": symbol, "order_id": getattr(limit_order, "id", "")},
+                )
+                return
+            remaining_qty = max(int(exit_qty) - _broker_filled_qty(refreshed), 0)
+            if remaining_qty <= 0:
+                return
             _bot_engine.safe_submit_order(
                 ctx.api,
                 MarketOrderRequest(
                     symbol=symbol,
-                    qty=exit_qty,
+                    qty=remaining_qty,
                     side=exit_side,
                     time_in_force=TimeInForce.DAY,
                 ),

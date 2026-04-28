@@ -231,3 +231,51 @@ def test_heuristic_fallback_marked_placeholder(monkeypatch, tmp_path):
 
     assert getattr(model, "is_placeholder_model", False) is True
     assert tuple(getattr(model, "classes_", ())) == (0, 1)
+
+
+def test_registry_model_runtime_failure_does_not_fall_back(monkeypatch, tmp_path):
+    fallback_path = tmp_path / "SPY.pkl"
+    fallback_path.write_bytes(b"fallback")
+    registry = types.ModuleType("ai_trading.model_registry")
+    registry.get_active_model_meta = lambda _symbol: {  # type: ignore[attr-defined]
+        "path": str(tmp_path / "registry-model.pkl"),
+        "manifest_path": str(tmp_path / "registry-model.pkl.manifest.json"),
+    }
+    monkeypatch.setitem(sys.modules, "ai_trading.model_registry", registry)
+
+    import ai_trading.model_loader as model_loader
+
+    model_loader.ML_MODELS.clear()
+    monkeypatch.setattr(model_loader, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr(model_loader, "INTERNAL_MODELS_DIR", tmp_path / "internal")
+    monkeypatch.setattr(
+        model_loader,
+        "load_verified_joblib_artifact",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("CHECKSUM_MISMATCH")),
+    )
+
+    with pytest.raises(RuntimeError, match="registry model"):
+        model_loader.load_model("SPY")
+
+
+def test_train_and_save_model_rejects_real_bars_without_labels(monkeypatch, tmp_path):
+    pytest.importorskip("sklearn")
+    pd = pytest.importorskip("pandas")
+    import ai_trading.data.fetch as data_fetch
+    import ai_trading.model_loader as model_loader
+
+    monkeypatch.setattr(
+        data_fetch,
+        "get_daily_df",
+        lambda *_args, **_kwargs: pd.DataFrame(
+            {
+                "close": [100.0 + idx for idx in range(21)],
+                "volume": [1_000.0 + idx for idx in range(21)],
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="No labeled training rows"):
+        model_loader.train_and_save_model("TINY", tmp_path)
+
+    assert not (tmp_path / "TINY.pkl").exists()

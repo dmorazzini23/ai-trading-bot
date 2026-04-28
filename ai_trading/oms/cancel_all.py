@@ -34,9 +34,24 @@ def _list_open_orders(api: Any) -> list[Any]:
 
 
 def _cancel_order(api: Any, order: Any) -> None:
-    order_id = getattr(order, "id", None) or getattr(order, "client_order_id", None)
+    order_id = getattr(order, "id", None)
+    client_order_id = getattr(order, "client_order_id", None)
+    if not order_id and isinstance(order, dict):
+        order_id = order.get("id")
+        client_order_id = order.get("client_order_id")
+    if not order_id and client_order_id:
+        for lookup_name in ("get_order_by_client_id", "get_order_by_client_order_id"):
+            lookup = getattr(api, lookup_name, None)
+            if not callable(lookup):
+                continue
+            resolved = lookup(str(client_order_id))
+            order_id = getattr(resolved, "id", None)
+            if not order_id and isinstance(resolved, dict):
+                order_id = resolved.get("id")
+            if order_id:
+                break
     if not order_id:
-        raise RuntimeError("Order missing id/client_order_id")
+        raise RuntimeError("Order missing broker id")
     cancel_order = getattr(api, "cancel_order", None)
     if callable(cancel_order):
         cancel_order(order_id)

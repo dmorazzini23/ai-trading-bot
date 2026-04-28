@@ -5,6 +5,7 @@ import types
 from typing import Any
 
 from ai_trading import main
+from ai_trading.runtime import shutdown
 
 
 def test_install_signal_handlers_logs_service_signal(monkeypatch):
@@ -29,6 +30,20 @@ def test_install_signal_handlers_logs_service_signal(monkeypatch):
     handler(_signal.SIGINT, None)
 
     assert any(call[0] == "SERVICE_SIGNAL" for call in calls)
+
+
+def test_request_stop_sets_event_even_when_logging_fails(monkeypatch):
+    shutdown.stop_event.clear()
+
+    def fail_info(*_args, **_kwargs):
+        raise RuntimeError("logging unavailable")
+
+    monkeypatch.setattr(shutdown, "_LOGGER", types.SimpleNamespace(info=fail_info))
+
+    shutdown.request_stop("test")
+
+    assert shutdown.stop_event.is_set()
+    shutdown.stop_event.clear()
 
 
 def test_shutdown_runtime_resources_uses_nonblocking_cleanup(monkeypatch):

@@ -42,11 +42,11 @@ class FeatureBuilder:
             returns = close.pct_change().fillna(0)
             features = {
                 "returns": returns,
-                "ma10": close.rolling(10).mean().bfill(),
-                "ma30": close.rolling(30).mean().bfill(),
-                "vol": returns.rolling(10).std().fillna(0),
-                "sma_50": close.rolling(50).mean().bfill(),
-                "sma_200": close.rolling(200).mean().bfill(),
+                "ma10": close.rolling(10, min_periods=1).mean(),
+                "ma30": close.rolling(30, min_periods=1).mean(),
+                "vol": returns.rolling(10, min_periods=2).std().fillna(0),
+                "sma_50": close.rolling(50, min_periods=1).mean(),
+                "sma_200": close.rolling(200, min_periods=1).mean(),
                 "price_change": (close.diff() > 0).astype(int),
                 "rsi": self._calculate_rsi(close),
             }
@@ -62,7 +62,7 @@ class FeatureBuilder:
                     features["rsi"],
                 ]
             )
-            return arr
+            return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
         return np.asarray(df, dtype=float)
 
     def _calculate_rsi(self, close, period: int = 14):
@@ -75,10 +75,10 @@ class FeatureBuilder:
             return pd.Series([50.0] * len(close))
 
         delta = close.diff()
-        gain = delta.where(delta > 0, 0).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        gain = delta.where(delta > 0, 0).rolling(window=period, min_periods=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period, min_periods=period).mean()
         rs = gain / loss
-        return 100 - 100 / (1 + rs)
+        return (100 - 100 / (1 + rs)).replace([np.inf, -np.inf], np.nan).fillna(50.0)
 
 
 SGD_PARAMS = {

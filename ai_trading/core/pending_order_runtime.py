@@ -79,7 +79,7 @@ def maybe_apply_pending_stale_sweep(
     )
     stale_candidates: list[tuple[float, Any]] = []
     for order in pending_orders:
-        status = be._normalize_broker_order_status(getattr(order, "status", None))
+        status = _extract_pending_order_status(order)
         age_s = be._pending_order_broker_age_seconds(order, now_dt)
         if age_s is None:
             continue
@@ -131,6 +131,26 @@ def _extract_pending_order_symbol(order: Any) -> str | None:
         return None
     symbol = str(symbol_raw).strip().upper()
     return symbol or None
+
+
+def _extract_pending_order_status(order: Any) -> str:
+    be = _bot_engine()
+    status_raw = order.get("status") if isinstance(order, Mapping) else getattr(order, "status", None)
+    return str(be._normalize_broker_order_status(status_raw))
+
+
+def _extract_pending_order_id(order: Any) -> str:
+    if isinstance(order, Mapping):
+        for key in ("id", "order_id", "client_order_id"):
+            value = order.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return "?"
+    for attr in ("id", "order_id", "client_order_id"):
+        value = getattr(order, attr, None)
+        if value not in (None, ""):
+            return str(value)
+    return "?"
 
 
 def _collect_pending_blocked_symbols(orders: Iterable[Any]) -> set[str]:
@@ -686,9 +706,9 @@ def handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     symbol_oldest_age_s: dict[str, float] = {}
     symbol_statuses: dict[str, set[str]] = {}
     for order in confirmed_pending:
-        status = be._normalize_broker_order_status(getattr(order, "status", None))
+        status = _extract_pending_order_status(order)
         symbol = _extract_pending_order_symbol(order)
-        pending_ids.append(str(getattr(order, "id", "?")))
+        pending_ids.append(_extract_pending_order_id(order))
         if status:
             pending_statuses.add(status)
             if symbol:

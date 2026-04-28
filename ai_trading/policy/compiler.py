@@ -259,6 +259,7 @@ class EffectivePolicy:
     def hash_payload(self) -> dict[str, Any]:
         payload = self.to_dict()
         payload.pop("policy_hash", None)
+        payload.pop("compiled_at", None)
         return payload
 
 
@@ -949,6 +950,24 @@ def approve_execution_candidate(policy: EffectivePolicy, candidate: ExecutionCan
         qty = _scale_qty(qty, attack_scale)
         if qty != qty_before_attack_scale:
             attack_scale_applied = True
+        if abs(candidate.current_shares + qty) > abs(candidate.current_shares + qty_before_attack_scale):
+            additional_notional = (
+                abs(candidate.current_shares + qty)
+                - abs(candidate.current_shares + qty_before_attack_scale)
+            ) * float(candidate.price)
+            proposed_notional = abs(float(candidate.current_shares + qty) * float(candidate.price))
+            if proposed_notional > policy.risk_budgets.symbol_hard_dollars:
+                reasons.append("RISK_SYMBOL_HARD_BLOCK")
+            if (
+                candidate.portfolio_post_gross_dollars + additional_notional
+                > policy.risk_budgets.portfolio_hard_gross_dollars
+            ):
+                reasons.append("RISK_PORTFOLIO_HARD_BLOCK")
+            if (
+                candidate.sleeve_post_notional_dollars + additional_notional
+                > policy.risk_budgets.sleeve_hard_dollars
+            ):
+                reasons.append("RISK_SLEEVE_HARD_BLOCK")
 
     if qty == 0 and "ZERO_QTY" not in reasons:
         reasons.append("ZERO_QTY")
@@ -975,8 +994,11 @@ def resolve_operational_safety_tier(
     reasons: list[str] = []
     pending_oldest_age = _as_float(telemetry.get("pending_oldest_age_sec"), 0.0, min_value=0.0)
     pacing_hit_rate = _as_float(telemetry.get("order_pacing_cap_hit_rate_pct"), 0.0, min_value=0.0)
-    ece = _as_float(telemetry.get("live_calibration_ece"), 0.0, min_value=0.0)
-    brier = _as_float(telemetry.get("live_calibration_brier"), 0.0, min_value=0.0)
+    ece_raw = telemetry.get("live_calibration_ece")
+    brier_raw = telemetry.get("live_calibration_brier")
+    ece = _as_float(ece_raw, 0.0, min_value=0.0)
+    brier = _as_float(brier_raw, 0.0, min_value=0.0)
+    calibration_present = ece_raw not in (None, "") and brier_raw not in (None, "")
     pending_count = _as_int(telemetry.get("pending_orders_count"), 0, min_value=0)
     net_edge = _as_float(telemetry.get("expected_net_edge_bps"), 0.0)
 
@@ -996,7 +1018,7 @@ def resolve_operational_safety_tier(
     attack_reasons: list[str] = []
     if net_edge >= policy.safety.attack_min_net_edge_bps:
         attack_reasons.append("ATTACK_NET_EDGE_OK")
-    if ece < policy.safety.safe_ece and brier < policy.safety.safe_brier:
+    if calibration_present and ece < policy.safety.safe_ece and brier < policy.safety.safe_brier:
         attack_reasons.append("ATTACK_CALIBRATION_OK")
     if (not policy.safety.attack_require_zero_pending) or pending_count == 0:
         attack_reasons.append("ATTACK_PENDING_OK")

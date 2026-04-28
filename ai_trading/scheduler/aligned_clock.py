@@ -201,21 +201,23 @@ class AlignedClock:
         tz = tz or tzinfo
         current_time = self.get_exchange_time(tz)
         next_close = self.next_bar_close(symbol, timeframe, tz)
-        time_to_close = (next_close - current_time).total_seconds()
+        interval_minutes = self._parse_timeframe_minutes(timeframe)
+        previous_close = next_close - timedelta(minutes=interval_minutes)
+        seconds_since_close = (current_time - previous_close).total_seconds()
         skew_ms = self.check_skew(tz=tz)
         buffer_seconds = (self.max_skew_ms + 100) / 1000
-        is_final = time_to_close > buffer_seconds
+        is_final = seconds_since_close > buffer_seconds
         validation = BarValidation(
             symbol=symbol,
             timeframe=timeframe,
             is_final=is_final,
             current_time=current_time,
-            bar_close_time=next_close,
+            bar_close_time=previous_close,
             skew_ms=skew_ms,
         )
         if not is_final:
             validation.reason = (
-                f"Too close to bar close: {time_to_close:.1f}s remaining (need >{buffer_seconds:.1f}s buffer)"
+                f"Too close to bar close: {seconds_since_close:.1f}s elapsed (need >{buffer_seconds:.1f}s buffer)"
             )
             self.logger.warning(f"Bar not final for {symbol} {timeframe}: {validation.reason}")
         return validation

@@ -43,6 +43,8 @@ def test_custom_symbol_registration_and_asset_class_sessions() -> None:
     assert registry.is_market_open("test", datetime(2025, 1, 2, 10, 30, tzinfo=UTC)) is True
     assert registry.is_market_open("test", datetime(2025, 1, 2, 11, 30, tzinfo=UTC)) is False
     assert registry.get_session("BTCUSD").name == "CRYPTO_24_7"
+    assert registry.get_session("BTC/USDT").name == "CRYPTO_24_7"
+    assert registry.get_session("ETHBTC").name == "CRYPTO_24_7"
     assert registry.get_session("EURUSD").name == "FOREX_EXTENDED"
     assert registry.get_session("GBPUSD").name == "FOREX_EXTENDED"
     assert registry.get_session("USDJPY").name == "FOREX_EXTENDED"
@@ -79,6 +81,13 @@ def test_crypto_remains_open_on_us_holidays_and_equity_holidays_are_lazy() -> No
     assert registry.is_market_open("BTCUSD", datetime(2025, 1, 1, 15, 0, tzinfo=UTC)) is True
     assert registry.is_trading_day("AAPL", date(2031, 1, 1)) is False
     assert 2031 in registry._holiday_years  # noqa: SLF001
+
+
+def test_saturday_new_year_observed_on_prior_year_friday() -> None:
+    registry = CalendarRegistry()
+
+    assert registry.is_trading_day("AAPL", date(2032, 12, 31)) is False
+    assert registry.is_market_open("ETHBTC", datetime(2032, 12, 31, 15, 0, tzinfo=UTC)) is True
 
 
 def test_overnight_futures_and_forex_respect_sunday_open_and_friday_close() -> None:

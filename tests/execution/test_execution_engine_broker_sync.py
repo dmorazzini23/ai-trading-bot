@@ -127,6 +127,60 @@ def test_live_engine_fetches_broker_state() -> None:
     assert getattr(engine, "_position_tracker", {}).get("AMD") == 2
 
 
+def test_live_engine_fetches_native_alpaca_orders_with_filter_request() -> None:
+    """Broker sync should use alpaca-py's get_orders(filter=...) contract."""
+
+    class _NativeAlpacaClient:
+        def __init__(self) -> None:
+            self.filter = None
+
+        def get_orders(self, *, filter):
+            self.filter = filter
+            return [SimpleNamespace(symbol="AMD", side="buy", qty=3)]
+
+        def get_all_positions(self):
+            return [SimpleNamespace(symbol="AMD", qty=2)]
+
+    client = _NativeAlpacaClient()
+    engine = LiveTradingExecutionEngine(ctx=None)
+    engine.trading_client = client
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot.open_orders
+    assert client.filter is not None
+    assert getattr(client.filter, "status", None).value == "open"
+    assert engine.open_order_totals("AMD") == (3, 0)
+
+
+def test_pending_policy_snapshot_uses_native_alpaca_order_filter() -> None:
+    """Pending-order maintenance must use the native order request filter."""
+
+    class _NativeAlpacaClient:
+        def __init__(self) -> None:
+            self.filter = None
+
+        def get_account(self):
+            return SimpleNamespace(status="ACTIVE")
+
+        def get_orders(self, *, filter):
+            self.filter = filter
+            return [SimpleNamespace(id="ord-1", symbol="AMD", status="open")]
+
+        def get_all_positions(self):
+            return []
+
+    client = _NativeAlpacaClient()
+    engine = LiveTradingExecutionEngine(ctx=None)
+    engine.trading_client = client
+
+    orders = engine._list_open_orders_snapshot()
+
+    assert len(orders) == 1
+    assert client.filter is not None
+    assert getattr(client.filter, "status", None).value == "open"
+
+
 def test_live_engine_preserves_fractional_open_order_quantities() -> None:
     """Live engine broker sync should not truncate fractional quantities."""
 

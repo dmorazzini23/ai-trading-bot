@@ -32,10 +32,15 @@ class _DummyClient:
 class _NativeGetOrdersClient:
     def __init__(self) -> None:
         self.filter = None
+        self.list_orders_called = False
 
     def get_orders(self, *, filter):
         self.filter = filter
         return [{"id": "native-1", "status": "open"}]
+
+    def list_orders(self, **_kwargs):
+        self.list_orders_called = True
+        raise AssertionError("native alpaca-py order listing must use get_orders(filter=...)")
 
 
 class _FakeResponse:
@@ -120,6 +125,7 @@ def test_alpaca_adapter_uses_native_get_orders_filter() -> None:
     orders = adapter.list_orders("open")
 
     assert orders == [{"id": "native-1", "status": "open"}]
+    assert client.list_orders_called is False
     assert client.filter is not None
     assert getattr(client.filter, "status", None).value == "open"
 

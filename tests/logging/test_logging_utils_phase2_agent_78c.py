@@ -59,6 +59,10 @@ def test_sanitize_adapter_formatter_and_emit_once(monkeypatch: pytest.MonkeyPatc
             "api_key": "abc123",
             "has_secret": True,
             "nested_secret": "hidden",
+            "DATABASE_URL": "postgresql://user:pass@example/db",
+            "authorization": "Bearer abc123",
+            "connection_string": "postgresql://user:pass@example/db",
+            "dsn": "postgresql://user:pass@example/db",
             "plain": 7,
         }
     )
@@ -67,6 +71,10 @@ def test_sanitize_adapter_formatter_and_emit_once(monkeypatch: pytest.MonkeyPatc
         "api_key": logmod._ENV_MASK,
         "has_secret": True,
         "nested_secret": logmod._ENV_MASK,
+        "DATABASE_URL": logmod._ENV_MASK,
+        "authorization": logmod._ENV_MASK,
+        "connection_string": logmod._ENV_MASK,
+        "dsn": logmod._ENV_MASK,
         "plain": 7,
     }
 

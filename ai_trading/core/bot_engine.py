@@ -16497,6 +16497,18 @@ class SignalManager:
 
             # Record that ML produced a decision payload even when filtered to no-trade.
             note_ml_signal()
+            if pred != 1:
+                logger.info(
+                    "ML_SIGNAL_NO_POSITIVE_EDGE",
+                    extra={
+                        "symbol": symbol,
+                        "prediction": prediction_for_log,
+                        "probability": proba,
+                        "threshold_source": threshold_source,
+                        "shadow_enabled": bool(shadow_payload),
+                    },
+                )
+                return None
             if effective_threshold > 0.0 and proba < effective_threshold:
                 logger.info(
                     "ML_SIGNAL_BELOW_CONFIDENCE",
@@ -16514,7 +16526,6 @@ class SignalManager:
                     },
                 )
                 return None
-            s = 1 if pred == 1 else -1
             logger.info(
                 "ML_SIGNAL",
                 extra={
@@ -16526,7 +16537,7 @@ class SignalManager:
                     "skew_breached": bool(skew_payload and skew_payload.get("breached")),
                 },
             )
-            return s, proba, "ml"
+            return 1, proba, "ml"
         except (
             FileNotFoundError,
             PermissionError,
@@ -33203,7 +33214,8 @@ def _select_startup_stale_orders(open_orders: Iterable[Any]) -> list[Any]:
     now_dt = datetime.now(UTC)
     selected: list[Any] = []
     for order in open_orders:
-        status = _normalize_broker_order_status(getattr(order, "status", None))
+        status_raw = order.get("status") if isinstance(order, MappingABC) else getattr(order, "status", None)
+        status = _normalize_broker_order_status(status_raw)
         if status and status not in _PENDING_ORDER_STUCK_STATUSES:
             continue
         age_s = _pending_order_broker_age_seconds(order, now_dt)
@@ -33334,7 +33346,7 @@ def _pending_order_broker_age_seconds(order: Any, now_dt: datetime) -> float | N
     """Return broker-reported order age in seconds when timestamps are available."""
 
     for attr in ("updated_at", "submitted_at", "created_at"):
-        raw_value = getattr(order, attr, None)
+        raw_value = order.get(attr) if isinstance(order, MappingABC) else getattr(order, attr, None)
         if raw_value in (None, ""):
             continue
         try:

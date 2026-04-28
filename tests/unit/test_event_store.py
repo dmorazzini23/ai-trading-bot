@@ -161,6 +161,7 @@ def test_event_store_migration_status_handles_missing_alembic_table(tmp_path: Pa
     store = EventStore(url=f"sqlite:///{tmp_path / 'migration_status.db'}")
 
     payload = store.migration_status(expected_revision="20260414_0001")
+    health = store.is_healthy(expected_revision="20260414_0001")
 
     assert payload["expected_revision"] == "20260414_0001"
     assert payload["available"] is False
@@ -168,6 +169,9 @@ def test_event_store_migration_status_handles_missing_alembic_table(tmp_path: Pa
     assert payload["current_revision"] is None
     assert payload["at_head"] is None
     assert payload["reason"] == "not_alembic_managed"
+    assert health["connected"] is True
+    assert health["ok"] is False
+    assert health["migration"]["reason"] == "not_alembic_managed"
 
 
 def test_event_store_health_reads_rollback_connections(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -229,3 +233,21 @@ def test_event_store_health_reads_rollback_connections(monkeypatch: pytest.Monke
     assert health["ok"] is True
     assert dummy_conn.rollback_count == 3
     assert all(result.closed for result in dummy_conn.results)
+
+
+def test_event_store_health_fails_closed_on_sqlalchemy_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = EventStore(url="sqlite://")
+
+    class _BrokenEngine:
+        def connect(self):
+            raise event_store_module.SQLAlchemyError("database offline")
+
+    monkeypatch.setattr(store, "_engine", _BrokenEngine())
+
+    health = store.is_healthy(expected_revision="rev-1")
+
+    assert health["ok"] is False
+    assert health["connected"] is False
+    assert health["error"] == "database offline"

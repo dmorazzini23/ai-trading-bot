@@ -43,6 +43,9 @@ def test_pipeline_basic(monkeypatch):
         def fit(self, X, y=None):
             return self
 
+        def transform(self, X):
+            return X
+
         def predict(self, X):
             return np.zeros(len(X))
 
@@ -82,5 +85,11 @@ def test_pipeline_basic(monkeypatch):
     df = pd.DataFrame({"close": np.arange(10, dtype=float)})
     arr = pipeline.FeatureBuilder().transform(df)
     assert arr.shape[0] == 10
+    assert np.isfinite(arr).all()
+    assert arr[0, 1] == pytest.approx(0.0)
+
+    long_df = pd.DataFrame({"close": np.arange(240, dtype=float)})
+    long_arr = pipeline.FeatureBuilder().transform(long_df)
+    assert np.isfinite(long_arr).all()
     pipeline.model_pipeline.fit(df, np.arange(len(df)))
     force_coverage(pipeline)

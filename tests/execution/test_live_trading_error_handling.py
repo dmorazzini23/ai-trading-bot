@@ -199,7 +199,10 @@ def test_execute_order_preserves_sell_short_lifecycle_side(engine_factory):
     assert result is not None
     assert captured["side"] == "sell"
     assert engine._pending_orders["short-open-1"]["side"] == "sell_short"
-    assert ("MSFT", "sell_short") in engine._recent_order_intents
+    assert any(
+        intent_key[:2] == ("MSFT", "sell_short")
+        for intent_key in engine._recent_order_intents
+    )
     assert engine._last_submit_outcome["side"] == "sell_short"
 
 
@@ -532,6 +535,10 @@ def test_ttl_replacement_price_uses_tick_quantization(engine_factory, monkeypatc
     captured: dict[str, Any] = {}
     engine.order_ttl_seconds = 20
     engine._cancel_order_alpaca = lambda _order_id: True
+    engine._get_order_status_alpaca = lambda _order_id: {
+        "status": "canceled",
+        "filled_qty": "0",
+    }
 
     def _capture_submit(payload: dict[str, Any]) -> dict[str, Any]:
         captured["payload"] = dict(payload)
@@ -560,11 +567,52 @@ def test_ttl_replacement_price_uses_tick_quantization(engine_factory, monkeypatc
     assert captured["payload"]["limit_price"] == pytest.approx(100.2)
 
 
+def test_ttl_replacement_reduces_qty_after_partial_fill(engine_factory):
+    engine = engine_factory()
+    captured: dict[str, Any] = {}
+    engine.order_ttl_seconds = 20
+    engine._cancel_order_alpaca = lambda _order_id: True
+    engine._get_order_status_alpaca = lambda _order_id: {
+        "status": "canceled",
+        "filled_qty": "3",
+    }
+
+    def _capture_submit(payload: dict[str, Any]) -> dict[str, Any]:
+        captured["payload"] = dict(payload)
+        return {
+            "id": "replace-partial",
+            "status": "accepted",
+            "qty": payload.get("quantity", 0),
+            "symbol": payload.get("symbol"),
+            "side": payload.get("side"),
+            "client_order_id": payload.get("client_order_id"),
+        }
+
+    engine._submit_order_to_alpaca = _capture_submit
+
+    replacement = engine._replace_limit_order_with_marketable(
+        symbol="AAPL",
+        side="sell",
+        qty=5,
+        existing_order_id="old-order",
+        client_order_id="cid-old",
+        order_data_snapshot={"symbol": "AAPL", "side": "sell", "quantity": 5, "type": "limit"},
+        limit_price=100.0,
+    )
+
+    assert replacement is not None
+    assert captured["payload"]["quantity"] == 2
+
+
 def test_ttl_replacement_uses_tighter_default_slippage(engine_factory):
     engine = engine_factory()
     captured: dict[str, Any] = {}
     engine.order_ttl_seconds = 8
     engine._cancel_order_alpaca = lambda _order_id: True
+    engine._get_order_status_alpaca = lambda _order_id: {
+        "status": "canceled",
+        "filled_qty": "0",
+    }
 
     def _capture_submit(payload: dict[str, Any]) -> dict[str, Any]:
         captured["payload"] = dict(payload)
@@ -591,6 +639,31 @@ def test_ttl_replacement_uses_tighter_default_slippage(engine_factory):
 
     assert replacement is not None
     assert captured["payload"]["limit_price"] == pytest.approx(100.04)
+
+
+def test_ambiguous_submit_timeout_suppresses_failover(engine_factory):
+    class TimeoutTradingClient:
+        def submit_order(self, *, order_data):
+            raise TimeoutError("submit timed out after broker handoff")
+
+    engine = engine_factory(use_real_submit=True, trading_client=TimeoutTradingClient())
+    failover_calls: list[dict[str, Any]] = []
+    engine._recover_order_after_submit_no_result = lambda **_kwargs: (None, "not_found")
+    engine._attempt_failover_submit = lambda order_data, **_kwargs: failover_calls.append(dict(order_data))
+
+    with pytest.raises(TimeoutError):
+        engine._submit_order_to_alpaca(
+            {
+                "symbol": "AAPL",
+                "side": "buy",
+                "quantity": 1,
+                "type": "market",
+                "time_in_force": "day",
+                "client_order_id": "cid-timeout",
+            }
+        )
+
+    assert failover_calls == []
 
 
 def test_execute_order_records_skip_outcome_for_duplicate_intent(engine_factory, caplog):

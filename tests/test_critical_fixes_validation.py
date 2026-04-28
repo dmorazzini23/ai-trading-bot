@@ -206,8 +206,12 @@ class TestCriticalFixes(unittest.TestCase):
         systemd_dir = Path(os.getcwd()) / "packaging" / "systemd"
         main_content = (systemd_dir / "ai-trading.service").read_text(encoding="utf-8")
         env_file_idx = main_content.index("EnvironmentFile=-/home/aiuser/ai-trading-bot/.env")
+        paper_url_idx = main_content.index(
+            "Environment=ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets"
+        )
         api_port_idx = main_content.index("Environment=API_PORT=9001")
         health_port_idx = main_content.index("Environment=HEALTHCHECK_PORT=9001")
+        self.assertLess(paper_url_idx, env_file_idx)
         self.assertLess(env_file_idx, api_port_idx)
         self.assertLess(env_file_idx, health_port_idx)
 

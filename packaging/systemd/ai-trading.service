@@ -8,6 +8,7 @@ User=aiuser
 Group=aiuser
 WorkingDirectory=/home/aiuser/ai-trading-bot
 Environment=PATH=/home/aiuser/ai-trading-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
 EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
 Environment=AI_TRADING_MODEL_MODULE=ai_trading.model_loader
 Environment=AI_TRADING_MODEL_PATH=/var/lib/ai-trading-bot/models/trained_model.pkl
@@ -20,7 +21,6 @@ Environment=API_PORT=9001
 # Match HEALTHCHECK_PORT to API_PORT so the shared Flask process serves /healthz on :9001
 Environment=HEALTHCHECK_PORT=9001
 Environment=TRADE_LOG_PATH=/home/aiuser/ai-trading-bot/logs/trades.jsonl
-Environment=ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
 StateDirectory=ai-trading-bot
 CacheDirectory=ai-trading-bot
 LogsDirectory=ai-trading-bot

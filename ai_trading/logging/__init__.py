@@ -206,7 +206,19 @@ def _sanitize_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
     return {k if k not in _RESERVED_LOGRECORD_KEYS else f"x_{k}": v for k, v in extra.items()}
 
 
-_SENSITIVE_EXTRA_KEYS = ("api_key", "secret")
+_SENSITIVE_EXTRA_KEYS = (
+    "api_key",
+    "secret",
+    "token",
+    "password",
+    "authorization",
+    "bearer",
+    "private_key",
+    "database_url",
+    "connection_string",
+    "dsn",
+    "url",
+)
 
 _SUMMARY_SANITIZE_PATTERN = re.compile(r"[^A-Z0-9]+")
 

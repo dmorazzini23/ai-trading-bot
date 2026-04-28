@@ -208,6 +208,25 @@ def test_signal_ml_can_disable_regime_thresholds(monkeypatch):
     assert label == "ml"
 
 
+def test_signal_ml_treats_negative_edge_class_as_no_trade(caplog):
+    class DummyModel:
+        feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+
+        def predict(self, _X):
+            return [0]
+
+        def predict_proba(self, _X):
+            return [[0.9, 0.1]]
+
+    manager = SignalManager()
+    caplog.set_level("INFO")
+
+    result = manager.signal_ml(_minimal_df(), model=DummyModel(), symbol="AAPL")
+
+    assert result is None
+    assert "ML_SIGNAL_NO_POSITIVE_EDGE" in caplog.text
+
+
 def test_signal_ml_shadow_logs_predictions(monkeypatch, tmp_path):
     class ChampionModel:
         feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]

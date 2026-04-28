@@ -23,6 +23,24 @@ _FOREX_CURRENCIES = {
     "USD",
 }
 _FUTURES_SYMBOL_RE = re.compile(r"^/?[A-Z]{1,3}[FGHJKMNQUVXZ]\d{1,2}$")
+_CRYPTO_BASES = {
+    "AAVE",
+    "ADA",
+    "AVAX",
+    "BCH",
+    "BTC",
+    "DOGE",
+    "DOT",
+    "ETH",
+    "LINK",
+    "LTC",
+    "MATIC",
+    "SHIB",
+    "SOL",
+    "UNI",
+    "XRP",
+}
+_CRYPTO_QUOTES = {"BTC", "ETH", "EUR", "USD", "USDC", "USDT"}
 
 def _observed_fixed_holiday(year: int, month: int, day: int) -> date:
     holiday = date(year, month, day)
@@ -60,7 +78,7 @@ def _good_friday(year: int) -> date:
     return date(year, month, day) - timedelta(days=2)
 
 def _us_market_holidays(year: int) -> set[date]:
-    return {
+    holidays = {
         _observed_fixed_holiday(year, 1, 1),
         _nth_weekday(year, 1, 0, 3),
         _nth_weekday(year, 2, 0, 3),
@@ -72,6 +90,10 @@ def _us_market_holidays(year: int) -> set[date]:
         _nth_weekday(year, 11, 3, 4),
         _observed_fixed_holiday(year, 12, 25),
     }
+    next_new_year = _observed_fixed_holiday(year + 1, 1, 1)
+    if next_new_year.year == year:
+        holidays.add(next_new_year)
+    return holidays
 
 def _us_market_half_days(year: int) -> set[date]:
     half_days = {_nth_weekday(year, 11, 3, 4) + timedelta(days=1)}
@@ -82,6 +104,15 @@ def _us_market_half_days(year: int) -> set[date]:
     if july_third.weekday() < 5:
         half_days.add(july_third)
     return half_days
+
+def _looks_like_crypto_symbol(symbol: str) -> bool:
+    compact = re.sub(r"[^A-Z0-9]", "", symbol.upper())
+    for quote in sorted(_CRYPTO_QUOTES, key=len, reverse=True):
+        if compact.endswith(quote):
+            base = compact[: -len(quote)]
+            if base in _CRYPTO_BASES:
+                return True
+    return False
 
 class AssetClass(Enum):
     """Asset class for calendar determination."""
@@ -219,9 +250,8 @@ class CalendarRegistry:
             return AssetClass.FOREX
         if _FUTURES_SYMBOL_RE.fullmatch(symbol):
             return AssetClass.FUTURES
-        if any((crypto in symbol for crypto in ['BTC', 'ETH', 'USD', 'USDT'])):
-            if 'USD' in symbol and len(symbol) <= 6:
-                return AssetClass.CRYPTO
+        if _looks_like_crypto_symbol(symbol):
+            return AssetClass.CRYPTO
         etf_symbols = {'SPY', 'QQQ', 'IWM', 'EFA', 'VTI', 'GLD', 'SLV', 'TLT', 'AGG', 'LQD', 'HYG', 'XLF', 'XLK', 'XLE', 'XLI', 'XLV'}
         if symbol in etf_symbols:
             return AssetClass.ETF

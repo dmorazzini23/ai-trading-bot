@@ -176,7 +176,7 @@ def _merged_env_snapshot(env: Mapping[str, str] | None = None) -> dict[str, str]
             if value is not None
         }
     for key, value in _runtime_env_overrides_snapshot().items():
-        if snapshot.get(key) in (None, ""):
+        if value not in (None, ""):
             snapshot[key] = value
     return snapshot
 

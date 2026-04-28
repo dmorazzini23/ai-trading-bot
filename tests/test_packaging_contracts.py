@@ -54,7 +54,22 @@ def test_runtime_workflows_use_ubuntu_2404_constraints_and_block_scheduled_gates
 
     audit_text = (workflow_dir / "dependency-audit.yml").read_text(encoding="utf-8")
     assert "continue-on-error:" not in audit_text
-    assert "pip-audit -r requirements.txt -c constraints.txt" in audit_text
+    assert "python -m pip install -c constraints.txt -r requirements.txt" in audit_text
+    assert "pip-audit --local --format json --output pip-audit-report.json" in audit_text
+    assert "if-no-files-found: ignore" not in audit_text
+
+    seed_matrix = re.search(r"determinism-seed-matrix:.*?(?=\n  [a-zA-Z0-9_-]+:|\Z)", ci_text, re.S)
+    assert seed_matrix is not None
+    assert 'PYTHONHASHSEED: "${{ matrix.seed }}"' in seed_matrix.group(0)
+
+
+def test_runtime_constraints_cover_database_runtime_dependencies() -> None:
+    constraints = _requirement_names(ROOT / "constraints.txt")
+    constraints_dev = _requirement_names(ROOT / "constraints-dev.txt")
+
+    for expected in {"sqlalchemy", "psycopg", "psycopg-binary", "greenlet"}:
+        assert expected in constraints
+        assert expected in constraints_dev
 
 
 def test_bot_engine_does_not_install_requests_or_session_shims() -> None:

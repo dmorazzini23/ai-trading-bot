@@ -36,7 +36,7 @@ from ai_trading.market.symbol_specs import get_tick_size
 from ai_trading.math.money import Money
 from ai_trading.config.settings import get_settings
 from ai_trading.config import EXECUTION_MODE, SAFE_MODE_ALLOW_PAPER, get_trading_config
-from ai_trading.broker.adapters import build_broker_adapter
+from ai_trading.broker.adapters import build_broker_adapter, list_alpaca_orders
 from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.execution.guards import (
     can_execute,
@@ -1877,7 +1877,7 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
     open_orders: list[Any] = []
     if broker is not None and hasattr(broker, "list_orders"):
         try:
-            orders = broker.list_orders(status="open")  # type: ignore[call-arg]
+            orders = list_alpaca_orders(broker, status="open")
             if orders is None:
                 open_orders = []
             else:
@@ -2741,26 +2741,10 @@ class ExecutionEngine:
         client = self._capacity_broker(getattr(self, "trading_client", None))
         if client is None:
             return []
-        list_orders = getattr(client, "list_orders", None)
-        if callable(list_orders):
-            try:
-                orders = list_orders(status="open")  # type: ignore[call-arg]
-            except TypeError:
-                orders = list_orders()  # type: ignore[call-arg]
-            except LIVE_TRADING_FALLBACK_EXC:
-                logger.debug("PENDING_POLICY_LIST_ORDERS_FAILED", exc_info=True)
-                return []
-            return list(orders or [])
-        get_orders = getattr(client, "get_orders", None)
-        if callable(get_orders):
-            try:
-                orders = get_orders(status="open")  # type: ignore[call-arg]
-            except TypeError:
-                orders = get_orders()  # type: ignore[call-arg]
-            except LIVE_TRADING_FALLBACK_EXC:
-                logger.debug("PENDING_POLICY_GET_ORDERS_FAILED", exc_info=True)
-                return []
-            return list(orders or [])
+        try:
+            return list_alpaca_orders(client, status="open")
+        except LIVE_TRADING_FALLBACK_EXC:
+            logger.debug("PENDING_POLICY_LIST_ORDERS_FAILED", exc_info=True)
         return []
 
     def _pending_new_policy_config(self) -> dict[str, Any]:
@@ -23308,15 +23292,8 @@ class ExecutionEngine:
         client = getattr(self, "trading_client", None)
         if client is None:
             return []
-        list_orders = getattr(client, "list_orders", None)
-        if not callable(list_orders):
-            list_orders = getattr(client, "get_orders", None)
-        if not callable(list_orders):
-            return []
         try:
-            orders = list_orders(status="open", symbols=[symbol])  # type: ignore[call-arg]
-        except TypeError:
-            orders = list_orders(status="open")  # type: ignore[call-arg]
+            orders = list_alpaca_orders(client, status="open", symbols=[symbol])
         except LIVE_TRADING_FALLBACK_EXC as exc:
             logger.debug(
                 "OPPOSITE_GUARD_LIST_FAILED",
@@ -31264,6 +31241,39 @@ class ExecutionEngine:
                         },
                     )
                     return cast(dict[str, Any], recovered)
+            ambiguous_submit = isinstance(e, (TimeoutError, ConnectionError))
+            if isinstance(e, APIError):
+                try:
+                    error_status = int(getattr(e, "status_code", 0) or 0)
+                except (TypeError, ValueError):
+                    error_status = 0
+                detail_text = str(getattr(e, "message", "") or e).strip().lower()
+                ambiguous_submit = error_status in {500, 502, 503, 504} or any(
+                    token in detail_text
+                    for token in (
+                        "timeout",
+                        "connection reset",
+                        "internal server error",
+                        "gateway",
+                        "service unavailable",
+                    )
+                )
+            if ambiguous_submit and client_order_id_text:
+                recovered, recovery_mode = self._recover_order_after_submit_no_result(
+                    client_order_id=client_order_id_text,
+                    symbol=str(order_data.get("symbol") or ""),
+                )
+                if recovered is not None:
+                    logger.warning(
+                        "ALPACA_ORDER_SUBMIT_AMBIGUOUS_RECOVERED",
+                        extra={
+                            "symbol": order_data.get("symbol"),
+                            "side": order_data.get("side"),
+                            "client_order_id": client_order_id_text,
+                            "recovery_mode": recovery_mode,
+                        },
+                    )
+                    return cast(dict[str, Any], recovered)
             logger.error(
                 "ALPACA_ORDER_SUBMIT_ERROR status_code=%s code=%s message=%s",
                 getattr(e, "status_code", None),
@@ -31334,6 +31344,17 @@ class ExecutionEngine:
                     "time_in_force": tif_token,
                 },
             )
+            if ambiguous_submit:
+                logger.error(
+                    "BROKER_FAILOVER_SUPPRESSED_AMBIGUOUS_SUBMIT",
+                    extra={
+                        "symbol": order_data.get("symbol"),
+                        "side": order_data.get("side"),
+                        "client_order_id": client_order_id_text or None,
+                        "cause": e.__class__.__name__,
+                    },
+                )
+                raise
             failover_response = self._attempt_failover_submit(order_data, primary_error=e)
             if failover_response is not None:
                 return failover_response
@@ -31412,6 +31433,60 @@ class ExecutionEngine:
                         "error": str(exc),
                     },
                 )
+                return None
+            status_info: Any | None = None
+            deadline = monotonic_time() + 5.0
+            terminal_statuses = {"canceled", "cancelled", "filled", "expired", "rejected"}
+            while monotonic_time() <= deadline:
+                try:
+                    status_info = self._get_order_status_alpaca(str(existing_order_id))
+                except LIVE_TRADING_FALLBACK_EXC as exc:
+                    logger.warning(
+                        "ORDER_TTL_CANCEL_STATUS_FAILED",
+                        extra={
+                            "symbol": symbol,
+                            "side": side,
+                            "order_id": existing_order_id,
+                            "error": str(exc),
+                        },
+                    )
+                    return None
+                status_text = str(_extract_value(status_info, "status") or "").strip().lower()
+                if status_text in terminal_statuses:
+                    break
+                time.sleep(0.25)
+            else:
+                status_text = ""
+            if status_text not in terminal_statuses:
+                logger.warning(
+                    "ORDER_TTL_CANCEL_NOT_FINAL",
+                    extra={
+                        "symbol": symbol,
+                        "side": side,
+                        "order_id": existing_order_id,
+                        "status": status_text or None,
+                    },
+                )
+                return None
+            filled_qty = _safe_int(_extract_value(status_info, "filled_qty", "filled_quantity"), 0)
+            remaining_qty = max(int(qty) - int(filled_qty), 0)
+            if remaining_qty <= 0:
+                logger.info(
+                    "ORDER_TTL_REPLACE_SKIPPED_ALREADY_FILLED",
+                    extra={
+                        "symbol": symbol,
+                        "side": side,
+                        "order_id": existing_order_id,
+                        "filled_qty": int(filled_qty),
+                        "requested_qty": int(qty),
+                    },
+                )
+                return None
+            if "quantity" in replacement_payload:
+                replacement_payload["quantity"] = remaining_qty
+            if "qty" in replacement_payload:
+                replacement_payload["qty"] = remaining_qty
+            qty = remaining_qty
         try:
             replacement = self._submit_order_to_alpaca(replacement_payload)
         except LIVE_TRADING_FALLBACK_EXC as exc:
@@ -32491,14 +32566,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         positions_list: list[Any] = []
 
         try:
-            open_orders_resp: Any | None = None
-            get_orders = getattr(client, "get_orders", None)
-            if callable(get_orders):
-                open_orders_resp = get_orders(status="open")  # type: ignore[call-arg]
-            else:
-                list_orders = getattr(client, "list_orders", None)
-                if callable(list_orders):
-                    open_orders_resp = list_orders(status="open")  # type: ignore[call-arg]
+            open_orders_resp: Any | None = list_alpaca_orders(client, status="open")
             if open_orders_resp is not None:
                 open_orders_list = list(open_orders_resp)
         except LIVE_TRADING_FALLBACK_EXC:

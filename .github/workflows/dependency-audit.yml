@@ -40,11 +40,12 @@ jobs:
           pip install pip-audit
       - name: Audit dependencies
         run: |
-          pip-audit -r requirements.txt -c constraints.txt --format json --output pip-audit-report.json
+          python -m pip install -c constraints.txt -r requirements.txt
+          pip-audit --local --format json --output pip-audit-report.json
       - name: Upload audit report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pip-audit-report
           path: pip-audit-report.json
-          if-no-files-found: ignore
+          if-no-files-found: error

@@ -47,6 +47,26 @@ def test_json_formatter_extra_fields_and_mask_keys():
     assert data["symbol"] == "***"
 
 
+def test_json_formatter_redacts_nested_extra_payloads():
+    fmt = logger.JSONFormatter("%Y-%m-%dT%H:%M:%SZ")
+    rec = _make_record(
+        payload={
+            "authorization": "Bearer live-token",
+            "nested": [{"dsn": "postgresql://user:pass@example/db"}],
+            "plain": "ok",
+        }
+    )
+
+    out = fmt.format(rec)
+    data = json.loads(out)
+
+    assert data["payload"]["authorization"] == "***REDACTED***"
+    assert data["payload"]["nested"][0]["dsn"] == "***REDACTED***"
+    assert data["payload"]["plain"] == "ok"
+    assert "live-token" not in out
+    assert "user:pass" not in out
+
+
 def test_json_formatter_exc_info():
     fmt = logger.JSONFormatter("%Y-%m-%dT%H:%M:%SZ")
     rec = _make_record()

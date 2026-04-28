@@ -62,3 +62,31 @@ def test_cancel_all_open_orders_does_not_fallback_to_unfiltered_list() -> None:
     assert result.cancelled == 0
     assert result.failed == 1
     assert runtime.api.cancelled == []
+
+
+def test_cancel_all_open_orders_resolves_client_order_id_before_native_cancel() -> None:
+    class Api:
+        def __init__(self) -> None:
+            self.cancelled: list[str] = []
+            self.lookups: list[str] = []
+
+        def list_orders(self, status: str = "open"):
+            assert status == "open"
+            return [SimpleNamespace(id=None, client_order_id="client-1")]
+
+        def get_order_by_client_id(self, client_order_id: str):
+            self.lookups.append(client_order_id)
+            return SimpleNamespace(id="broker-1")
+
+        def cancel_order_by_id(self, order_id: str) -> None:
+            self.cancelled.append(order_id)
+
+    api = Api()
+    runtime = SimpleNamespace(api=api)
+
+    result = cancel_all_open_orders(runtime)
+
+    assert result.cancelled == 1
+    assert result.failed == 0
+    assert api.lookups == ["client-1"]
+    assert api.cancelled == ["broker-1"]

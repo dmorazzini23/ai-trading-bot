@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 
 OrderClass: Any
 OrderSide: Any
@@ -98,18 +99,7 @@ class AlpacaBrokerAdapter:
         return getter()
 
     def list_orders(self, status: str = "open") -> list[Any]:
-        lister = getattr(self.client, "list_orders", None)
-        if callable(lister):
-            orders = lister(status=status)
-        else:
-            getter = getattr(self.client, "get_orders", None)
-            if not callable(getter):
-                return []
-            if GetOrdersRequest is None or QueryOrderStatus is None:
-                raise RuntimeError("alpaca-py order query models are unavailable")
-            status_text = str(status or "open").strip().lower()
-            status_value = getattr(QueryOrderStatus, status_text.upper(), status_text)
-            orders = getter(filter=GetOrdersRequest(status=status_value))
+        orders = list_alpaca_orders(self.client, status=status)
         if orders is None:
             return []
         return list(orders)
@@ -120,6 +110,70 @@ class AlpacaBrokerAdapter:
             raise RuntimeError("Broker client does not expose submit_order")
         request = _build_alpaca_order_request(order_data)
         return submit(order_data=request)
+
+
+def _alpaca_order_status(status: str) -> Any:
+    if GetOrdersRequest is None or QueryOrderStatus is None:
+        raise RuntimeError("alpaca-py order query models are unavailable")
+    status_text = str(status or "open").strip().lower()
+    return getattr(QueryOrderStatus, status_text.upper(), status_text)
+
+
+def _callable_accepts_keyword(func: Any, keyword: str) -> bool:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return False
+    for parameter in signature.parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            return True
+        if parameter.name == keyword and parameter.kind in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }:
+            return True
+    return False
+
+
+def list_alpaca_orders(
+    client: Any,
+    *,
+    status: str = "open",
+    symbols: Sequence[str] | None = None,
+) -> list[Any]:
+    """List orders using the native alpaca-py request model when available."""
+
+    getter = getattr(client, "get_orders", None)
+    if callable(getter):
+        request_kwargs: dict[str, Any] = {"status": _alpaca_order_status(status)}
+        if symbols:
+            request_kwargs["symbols"] = [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
+        request = GetOrdersRequest(**request_kwargs)
+        try:
+            orders = getter(filter=request)
+        except TypeError:
+            if not _callable_accepts_keyword(getter, "status"):
+                raise
+            legacy_kwargs: dict[str, Any] = {"status": status}
+            if symbols and _callable_accepts_keyword(getter, "symbols"):
+                legacy_kwargs["symbols"] = list(symbols)
+            orders = getter(**legacy_kwargs)
+        return list(orders or [])
+
+    lister = getattr(client, "list_orders", None)
+    if not callable(lister):
+        return []
+    list_kwargs: dict[str, Any] = {"status": status}
+    if symbols and _callable_accepts_keyword(lister, "symbols"):
+        list_kwargs["symbols"] = list(symbols)
+    try:
+        orders = lister(**list_kwargs)
+    except TypeError:
+        if list_kwargs.keys() == {"status"} and not _callable_accepts_keyword(lister, "status"):
+            orders = lister()
+        else:
+            raise
+    return list(orders or [])
 
 
 def _alpaca_enum_value(enum_cls: Any, value: Any, *, default: Any) -> Any:

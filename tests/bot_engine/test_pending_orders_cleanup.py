@@ -247,6 +247,48 @@ def test_handle_pending_orders_applies_stale_sweep_before_full_cleanup(monkeypat
     assert any(record.message == "PENDING_STALE_SWEEP_APPLIED" for record in caplog.records)
 
 
+def test_handle_pending_orders_reads_mapping_order_status_for_stale_sweep(monkeypatch, caplog):
+    runtime = types.SimpleNamespace(state={})
+    cancel_all_mock = MagicMock()
+    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_all_mock)
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=300),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_MAX_CANCELS", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_COOLDOWN_SEC", "0")
+
+    now_dt = datetime(2026, 3, 1, 15, 0, 0, tzinfo=UTC)
+    monkeypatch.setattr(be.time, "time", lambda: now_dt.timestamp())
+    subset_calls: list[list[dict[str, Any]]] = []
+
+    def _cancel_subset(_runtime, orders, **_kwargs):
+        subset_calls.append(list(orders))
+        return be.CancelAllResult(
+            total_open=1,
+            cancelled=1,
+            failed=0,
+            reason_code="PENDING_STALE_SWEEP",
+            errors=[],
+        )
+
+    monkeypatch.setattr(be, "_cancel_open_orders_subset", _cancel_subset)
+    stale_order = {
+        "status": "pending_new",
+        "id": "dict-order",
+        "created_at": now_dt - timedelta(seconds=120),
+    }
+
+    caplog.set_level(logging.INFO)
+    assert be._handle_pending_orders([stale_order], runtime) is True
+    cancel_all_mock.assert_not_called()
+    assert subset_calls == [[stale_order]]
+    assert any(record.message == "PENDING_STALE_SWEEP_APPLIED" for record in caplog.records)
+
+
 def test_handle_pending_orders_symbol_scope_applies_policy(monkeypatch, caplog):
     runtime = types.SimpleNamespace(
         state={},

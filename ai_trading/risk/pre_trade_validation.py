@@ -111,8 +111,10 @@ class MarketHoursValidator:
                         if open_utc <= now_utc <= close_utc:
                             return ValidationResult(category=ValidationCategory.MARKET_HOURS, status=ValidationStatus.APPROVED, message='Trading within regular market hours', details={'current_time': check_time.time(), 'market_status': 'open'}, score=1.0, recommendations=[])
                         # Fall through to extended-hours evaluation below
-            # Conservative fallback using static windows
-            current_time = check_time.time()
+            # Conservative fallback using static ET windows when calendar data is unavailable.
+            if check_time.tzinfo is None:
+                check_time = check_time.replace(tzinfo=UTC)
+            current_time = check_time.astimezone(ZoneInfo("America/New_York")).time()
             market_open = self.market_hours['MARKET_OPEN']
             market_close = self.market_hours['MARKET_CLOSE']
             if market_open <= current_time <= market_close:
@@ -220,9 +222,13 @@ class RiskValidator:
     @staticmethod
     def _notional_value(position_info: Any) -> float:
         if isinstance(position_info, dict):
-            raw_value = position_info.get('notional_value', 0.0)
+            raw_value = position_info.get('notional_value')
+            if raw_value in (None, ""):
+                raw_value = position_info.get('market_value', 0.0)
         else:
-            raw_value = getattr(position_info, 'notional_value', 0.0)
+            raw_value = getattr(position_info, 'notional_value', None)
+            if raw_value in (None, ""):
+                raw_value = getattr(position_info, 'market_value', 0.0)
         return float(raw_value or 0.0)
 
     @staticmethod

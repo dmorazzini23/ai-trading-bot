@@ -150,6 +150,29 @@ def test_build_symbol_dataset_label_ts_uses_next_valid_bar(
     assert row["label_ts"] != expected_previous_ts + pd.Timedelta(days=1)
 
 
+def test_build_symbol_dataset_uses_configured_label_horizon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bars = _synthetic_daily("AAPL")
+    monkeypatch.setattr(
+        after_hours,
+        "_fetch_daily_bars",
+        lambda symbol, _start, _end: bars,
+    )
+
+    dataset = after_hours._build_symbol_dataset(
+        "AAPL",
+        datetime(2024, 1, 1, tzinfo=UTC),
+        datetime(2026, 1, 1, tzinfo=UTC),
+        cost_floor_bps=0.0,
+        horizon_days=3,
+    )
+
+    first_ts = dataset.iloc[0]["timestamp"]
+    expected_label_ts = bars.index[bars.index.get_loc(first_ts) + 3]
+    assert dataset.iloc[0]["label_ts"] == expected_label_ts
+
+
 def test_candidate_selection_score_penalizes_poor_calibration() -> None:
     strong = after_hours.CandidateMetrics(
         name="model_a",

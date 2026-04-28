@@ -8,7 +8,11 @@ import re
 from typing import Any, cast
 
 _RE_KEYS = re.compile(
-    "(key|secret|token|password|connection[_-]?string|database[_-]?url|dsn)",
+    (
+        r"(api[_-]?key|secret|token|password|pwd|passwd|connection[_-]?string|"
+        r"database[_-]?url|dsn|authorization|bearer|credential|private[_-]?key|"
+        r"access[_-]?key|session[_-]?id|oauth|(^|[_-])key($|[_-]))"
+    ),
     re.IGNORECASE,
 )
 _MASK = "***REDACTED***"
@@ -16,8 +20,14 @@ _ENV_MASK = "***"
 
 _SENSITIVE_ENV = {
     "ALPACA_API_KEY",
+    "ALPACA_API_KEY_ID",
+    "ALPACA_API_SECRET_KEY",
+    "ALPACA_KEY_ID",
     "ALPACA_SECRET_KEY",
     "ALPACA_OAUTH",
+    "ALPACA_OAUTH_TOKEN",
+    "APCA_API_KEY_ID",
+    "APCA_API_SECRET_KEY",
     "WEBHOOK_SECRET",
     "NEWS_API_KEY",
     "FINNHUB_API_KEY",
@@ -93,7 +103,7 @@ def redact_env(env: Mapping[str, Any], *, drop: bool = False) -> Mapping[str, An
     normalized = normalize_aliases(env)
     dup: MutableMapping[str, Any] = dict(normalized)
     for key in list(dup):
-        if key in _SENSITIVE_ENV and dup[key]:
+        if (key in _SENSITIVE_ENV or _RE_KEYS.search(key)) and dup[key]:
             if drop:
                 dup.pop(key)
             else:

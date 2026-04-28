@@ -67,6 +67,30 @@ def test_reconciliation_updates_state():
     assert ctx.orders[0].status is OrderStatus.FILLED
 
 
+def test_reconciliation_uses_native_alpaca_order_filter():
+    """Native Alpaca clients should receive GetOrdersRequest via filter."""
+
+    class NativeBroker(DummyBroker):
+        def __init__(self):
+            super().__init__()
+            self.filter = None
+
+        def get_orders(self, *, filter):
+            self.filter = filter
+            return []
+
+        def list_orders(self, **_kwargs):
+            raise AssertionError("native order reconciliation should use get_orders(filter=...)")
+
+    broker = NativeBroker()
+    ctx = SimpleNamespace(api=broker, positions={"AAPL": 10}, orders=[])
+
+    reconcile_positions_and_orders(ctx)
+
+    assert broker.filter is not None
+    assert getattr(broker.filter, "status", None).value == "open"
+
+
 def test_reconcile_with_fractional_string_quantities():
     """String decimal quantities from broker payloads should not crash reconciliation."""
 

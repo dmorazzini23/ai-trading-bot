@@ -66,14 +66,23 @@ def test_calendar_loading_and_timeframe_branches(monkeypatch: pytest.MonkeyPatch
 def test_final_bar_market_open_wait_and_global_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     clock = ac.AlignedClock(max_skew_ms=100.0)
     clock.calendar = _Calendar()
-    current = datetime(2026, 4, 27, 15, 59, 59, 950000, tzinfo=UTC)
-    monkeypatch.setattr(clock, "get_exchange_time", lambda tz=None: current)
-    monkeypatch.setattr(clock, "next_bar_close", lambda symbol, timeframe="1m", tz=None: current + timedelta(milliseconds=50))
+    clock_now = SimpleNamespace(value=datetime(2026, 4, 27, 16, 0, 0, 50000, tzinfo=UTC))
+    monkeypatch.setattr(clock, "get_exchange_time", lambda tz=None: clock_now.value)
+    monkeypatch.setattr(
+        clock,
+        "next_bar_close",
+        lambda symbol, timeframe="1m", tz=None: datetime(2026, 4, 27, 16, 1, tzinfo=UTC),
+    )
     monkeypatch.setattr(clock, "check_skew", lambda reference_time=None, tz=None: 0.0)
 
     validation = clock.ensure_final_bar("AAPL", "1m", tzinfo=UTC)
     assert validation.is_final is False
     assert validation.reason and "Too close" in validation.reason
+    assert validation.bar_close_time == datetime(2026, 4, 27, 16, 0, tzinfo=UTC)
+
+    clock_now.value = datetime(2026, 4, 27, 16, 0, 0, 250000, tzinfo=UTC)
+    validation = clock.ensure_final_bar("AAPL", "1m", tzinfo=UTC)
+    assert validation.is_final is True
 
     clock.calendar = None
     assert clock.is_market_open("AAPL", datetime(2026, 4, 27, 10, 0, tzinfo=UTC)) is True
@@ -85,8 +94,8 @@ def test_final_bar_market_open_wait_and_global_helpers(monkeypatch: pytest.Monke
 
     attempts = iter(
         [
-            ac.BarValidation("AAPL", "1m", False, current, current, 0.0),
-            ac.BarValidation("AAPL", "1m", True, current, current, 0.0),
+            ac.BarValidation("AAPL", "1m", False, clock_now.value, clock_now.value, 0.0),
+            ac.BarValidation("AAPL", "1m", True, clock_now.value, clock_now.value, 0.0),
         ]
     )
     monkeypatch.setattr(clock, "ensure_final_bar", lambda *args, **kwargs: next(attempts))
@@ -97,7 +106,7 @@ def test_final_bar_market_open_wait_and_global_helpers(monkeypatch: pytest.Monke
     monkeypatch.setattr(
         clock,
         "ensure_final_bar",
-        lambda *args, **kwargs: ac.BarValidation("AAPL", "1m", True, current, current, 0.0),
+        lambda *args, **kwargs: ac.BarValidation("AAPL", "1m", True, clock_now.value, clock_now.value, 0.0),
     )
     monkeypatch.setattr(ac, "_global_clock", clock)
     assert ac.get_aligned_clock() is clock

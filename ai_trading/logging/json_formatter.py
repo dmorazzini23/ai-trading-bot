@@ -4,11 +4,13 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import json
 import logging
 import traceback
+from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from ai_trading.exc import COMMON_EXC
+from ai_trading.logging.redact import redact
 
 try:  # pragma: no cover - defensive import guard
     import unittest.mock as _mock_mod
@@ -38,6 +40,15 @@ def _mask_secret(value: str) -> str:
         return f'***{s[-4:]}'
     except COMMON_EXC:
         return '***'
+
+
+def _redact_nested_value(value: Any) -> Any:
+    """Redact secret-like keys inside structured extra payloads."""
+    if isinstance(value, Mapping):
+        return redact(value)
+    if isinstance(value, list):
+        return redact({"value": value})["value"]
+    return value
 
 
 _UTC = ZoneInfo("UTC")
@@ -108,7 +119,8 @@ class JSONFormatter(logging.Formatter):
                 return False
             sensitive_tokens = (
                 'api_key', 'secret_key', 'apca_api_key_id', 'apca_api_secret_key',
-                'token', 'password', 'bearer', 'private', 'access_key'
+                'token', 'password', 'bearer', 'private', 'access_key',
+                'authorization', 'database_url', 'connection_string', 'dsn', 'url',
             )
             return any(tok in lk for tok in sensitive_tokens)
 
@@ -119,6 +131,8 @@ class JSONFormatter(logging.Formatter):
                 v = '***'
             elif _should_mask_secret(k, v):
                 v = _mask_secret(v)  # type: ignore[arg-type]
+            else:
+                v = _redact_nested_value(v)
             payload[k] = v
 
         for k, v in self._extra_fields.items():

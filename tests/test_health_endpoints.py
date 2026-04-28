@@ -541,6 +541,30 @@ def test_runtime_health_payload_db_requirement_marks_degraded(monkeypatch):
     assert payload.get("reason") == "database_unhealthy"
 
 
+def test_runtime_health_payload_db_requirement_rejects_unconfigured_db(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_DB_READY", "1")
+    monkeypatch.setattr(
+        health_payload_module,
+        "_database_readiness_snapshot",
+        lambda: {
+            "enabled": True,
+            "configured": False,
+            "ok": False,
+            "reason": "database_not_configured",
+        },
+    )
+
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload.get("reason") == "database_unhealthy"
+
+
 def test_runtime_health_payload_includes_oms_invariants_snapshot(monkeypatch):
     monkeypatch.setattr(
         health_payload_module,

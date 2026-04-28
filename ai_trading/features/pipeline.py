@@ -80,8 +80,15 @@ class BuildFeatures:
                     self.feature_params_['vol_threshold'] = returns.std() * 2
                 if self.include_regime:
                     rolling_vol = returns.rolling(self.regime_span).std()
-                    self.feature_params_['regime_vol_low'] = rolling_vol.quantile(0.33)
-                    self.feature_params_['regime_vol_high'] = rolling_vol.quantile(0.67)
+                    vol_low = rolling_vol.quantile(0.33)
+                    vol_high = rolling_vol.quantile(0.67)
+                    fallback_vol = returns.std()
+                    if not np.isfinite(vol_low):
+                        vol_low = fallback_vol if np.isfinite(fallback_vol) else 0.0
+                    if not np.isfinite(vol_high):
+                        vol_high = fallback_vol if np.isfinite(fallback_vol) else 0.0
+                    self.feature_params_['regime_vol_low'] = float(vol_low)
+                    self.feature_params_['regime_vol_high'] = float(vol_high)
             self.is_fitted_ = True
             logger.debug('BuildFeatures fitted successfully')
             return self
@@ -211,6 +218,11 @@ class BuildFeatures:
             rolling_vol = returns.rolling(self.regime_span).std()
             vol_low = self.feature_params_.get('regime_vol_low', rolling_vol.quantile(0.33))
             vol_high = self.feature_params_.get('regime_vol_high', rolling_vol.quantile(0.67))
+            fallback_vol = returns.std()
+            if not np.isfinite(vol_low):
+                vol_low = fallback_vol if np.isfinite(fallback_vol) else 0.0
+            if not np.isfinite(vol_high):
+                vol_high = fallback_vol if np.isfinite(fallback_vol) else 0.0
             features['vol_regime'] = np.where(rolling_vol <= vol_low, 0, np.where(rolling_vol >= vol_high, 2, 1))
             ema_short = prices.ewm(span=12).mean()
             ema_long = prices.ewm(span=26).mean()

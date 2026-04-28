@@ -124,6 +124,8 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
         synthetic_data_used = True
 
     df = _build_training_frame(df)
+    if df.empty:
+        raise RuntimeError(f"No labeled training rows available for {symbol}")
 
     def _classifier_for(target: np.ndarray) -> Any:
         if len(np.unique(target)) < 2:
@@ -132,12 +134,8 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
 
     if len(df) < 60:
         # Not enough data; fit a trivial prior model
-        if df.empty:
-            X = np.array([[0.0], [1.0]])
-            y = np.array([0, 1])
-        else:
-            X = np.arange(len(df)).reshape(-1, 1)
-            y = df["y"].astype(int).values
+        X = np.arange(len(df)).reshape(-1, 1)
+        y = df["y"].astype(int).values
         model = _classifier_for(y)
         model.fit(X, y)
         if synthetic_data_used:
@@ -231,13 +229,22 @@ def load_model(symbol: str) -> object:
         if meta and meta.get("path"):
             try:
                 manifest_path = meta.get("manifest_path")
-                return load_verified_joblib_artifact(
+                model = load_verified_joblib_artifact(
                     Path(meta["path"]),
                     manifest_path=manifest_path if manifest_path else None,
                 )
+                ML_MODELS[symbol] = model
+                return model
+            except RuntimeError as exc:
+                msg = f"Failed to load registry model for '{symbol}' at '{meta.get('path')}': {exc}"
+                logger.error(
+                    "MODEL_REGISTRY_LOAD_ERROR",
+                    extra={"symbol": symbol, "path": str(meta.get("path")), "error": str(exc)},
+                )
+                raise RuntimeError(msg) from exc
             except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 logger.warning("MODEL_REGISTRY_LOAD_FAILED for %s: %s", symbol, exc)
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
+    except (AttributeError, ImportError, LookupError, OSError, TypeError, ValueError):
         pass
 
     dirs = (MODELS_DIR, INTERNAL_MODELS_DIR)

@@ -2,6 +2,7 @@ from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import json
+import math
 import time as pytime
 from datetime import UTC, datetime
 from pathlib import Path
@@ -340,6 +341,7 @@ def _database_readiness_snapshot() -> dict[str, Any]:
     enabled = _env_bool("AI_TRADING_HEALTH_DB_READINESS_ENABLED", True)
     if not enabled:
         return {"enabled": False}
+    required = _env_bool("AI_TRADING_HEALTH_REQUIRE_DB_READY", False)
 
     try:
         from ai_trading.config.management import get_env
@@ -372,7 +374,7 @@ def _database_readiness_snapshot() -> dict[str, Any]:
         return {
             "enabled": True,
             "configured": False,
-            "ok": True,
+            "ok": not required,
             "reason": "database_not_configured",
         }
 
@@ -394,7 +396,7 @@ def _database_readiness_snapshot() -> dict[str, Any]:
         payload["configured"] = True
         payload["expected_revision"] = expected_revision
         return payload
-    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+    except _HEALTH_FALLBACK_EXC as exc:
         return {
             "enabled": True,
             "configured": True,
@@ -407,7 +409,7 @@ def _database_readiness_snapshot() -> dict[str, Any]:
         if store is not None:
             try:
                 store.close()
-            except AI_TRADING_FALLBACK_EXCEPTIONS:
+            except _HEALTH_FALLBACK_EXC:
                 pass
 
 
@@ -1044,9 +1046,8 @@ def build_runtime_health_payload(
     if force_ok_for_pytest:
         overall_ok = True
     require_database_ready = _env_bool("AI_TRADING_HEALTH_REQUIRE_DB_READY", False)
-    database_configured = bool(database_readiness.get("configured"))
     database_ok = bool(database_readiness.get("ok"))
-    if require_database_ready and database_configured and not database_ok:
+    if require_database_ready and not database_ok:
         overall_ok = False
         degraded = True
     require_oms_invariants = _env_bool(
@@ -1087,7 +1088,7 @@ def build_runtime_health_payload(
     if not overall_ok:
         degraded = True
     readiness_failures: list[str] = []
-    if require_database_ready and database_configured and not database_ok:
+    if require_database_ready and not database_ok:
         readiness_failures.append("database_unhealthy")
     if require_oms_invariants and oms_invariants_failure:
         readiness_failures.append("oms_invariants_failed")
@@ -1201,7 +1202,7 @@ def build_runtime_health_payload(
         payload["reason"] = "broker_status_unknown"
     if service_degraded and not payload.get("reason"):
         payload["reason"] = "service_degraded"
-    if require_database_ready and database_configured and not database_ok and not payload.get("reason"):
+    if require_database_ready and not database_ok and not payload.get("reason"):
         payload["reason"] = "database_unhealthy"
     if (
         require_oms_invariants
@@ -1590,8 +1591,10 @@ def build_health_exception_payload(
 def _json_safe_value(value: Any, seen: set[int]) -> Any:
     """Return ``value`` with nested objects coerced to JSON-safe values."""
 
-    if value is None or isinstance(value, str | int | float | bool):
+    if value is None or isinstance(value, str | int | bool):
         return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
     if isinstance(value, Mapping):
         value_id = id(value)
         if value_id in seen:

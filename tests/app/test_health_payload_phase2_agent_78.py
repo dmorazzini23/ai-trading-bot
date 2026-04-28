@@ -19,7 +19,11 @@ def test_database_readiness_disabled_short_circuits(monkeypatch) -> None:
 
 
 def test_database_readiness_reports_unconfigured(monkeypatch) -> None:
-    monkeypatch.setattr(health_payload, "_env_bool", lambda name, default: True)
+    monkeypatch.setattr(
+        health_payload,
+        "_env_bool",
+        lambda name, default: name == "AI_TRADING_HEALTH_DB_READINESS_ENABLED",
+    )
     monkeypatch.setattr(
         health_payload,
         "get_env",
@@ -34,6 +38,20 @@ def test_database_readiness_reports_unconfigured(monkeypatch) -> None:
         "ok": True,
         "reason": "database_not_configured",
     }
+
+
+def test_database_readiness_fails_unconfigured_when_required(monkeypatch) -> None:
+    monkeypatch.setattr(health_payload, "_env_bool", lambda name, default: True)
+    monkeypatch.setattr(
+        health_payload,
+        "get_env",
+        lambda name, default="", **_kwargs: "" if name != "AI_TRADING_OMS_EXPECTED_ALEMBIC_REVISION" else default,
+    )
+
+    payload = health_payload._database_readiness_snapshot()
+
+    assert payload["configured"] is False
+    assert payload["ok"] is False
 
 
 def test_read_json_mapping_artifact_ignores_missing_invalid_and_non_mapping(tmp_path, monkeypatch) -> None:

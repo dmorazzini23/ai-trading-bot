@@ -26,7 +26,7 @@ ensure_dotenv_loaded()
 import ai_trading.logging as _logging
 from ai_trading.paths import LOG_DIR, ensure_runtime_paths
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
-from ai_trading.runtime.shutdown import register_signal_handlers, request_stop, should_stop
+from ai_trading.runtime.shutdown import register_signal_handlers, request_stop, should_stop, stop_event
 from ai_trading.data.fetch import DataFetchError, EmptyBarsError
 from ai_trading.execution.live_trading import APIError, NonRetryableBrokerError
 from ai_trading.execution import timing as execution_timing
@@ -2370,9 +2370,13 @@ def _install_signal_handlers() -> None:
             signame = signal.Signals(signum).name
         except MAIN_FALLBACK_EXC:
             signame = str(signum)
-        logger.info("SERVICE_SIGNAL", extra={"signal": signame})
-        request_stop(f"signal:{signame}")
+        stop_event.set()
         _arm_shutdown_force_exit(signame)
+        try:
+            logger.info("SERVICE_SIGNAL", extra={"signal": signame})
+        except MAIN_FALLBACK_EXC:
+            pass
+        request_stop(f"signal:{signame}")
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
