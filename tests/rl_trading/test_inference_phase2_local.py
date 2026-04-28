@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -8,6 +9,7 @@ import pytest
 from ai_trading.rl_trading import inference as inf
 from ai_trading.rl_trading.env import ActionSpaceConfig, RewardConfig
 from ai_trading.rl_trading.inference import InferenceConfig, UnifiedRLInference
+from ai_trading.rl_trading.state_builder import MarketStateBuilder, StateBuilderConfig
 
 
 class _Model:
@@ -51,6 +53,19 @@ def _make_inference(monkeypatch: pytest.MonkeyPatch, *, action_type: str = "disc
     return UnifiedRLInference(cfg)
 
 
+def _ohlcv_matrix(rows: int = 80) -> np.ndarray:
+    close = np.linspace(100.0, 102.0, rows, dtype=np.float32)
+    return np.column_stack(
+        [
+            close - 0.1,
+            close + 0.2,
+            close - 0.3,
+            close,
+            np.linspace(1_000.0, 2_000.0, rows, dtype=np.float32),
+        ]
+    ).astype(np.float32)
+
+
 def test_preprocess_and_discrete_postprocess_with_action_masks(monkeypatch: pytest.MonkeyPatch) -> None:
     inference = _make_inference(monkeypatch, actions=[2])
 
@@ -92,6 +107,81 @@ def test_predict_batch_stats_reset_and_factory(monkeypatch: pytest.MonkeyPatch) 
 
     created = inf.create_unified_inference("created.zip", action_type="discrete", observation_window=2)
     assert created.config.model_path == "created.zip"
+
+
+def test_inference_loads_state_builder_metadata_and_transforms_raw_observation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    model_path = tmp_path / "model.zip"
+    builder = MarketStateBuilder(StateBuilderConfig(use_ohlcv_features=True, normalize=True))
+    builder.fit_transform(_ohlcv_matrix())
+    metadata = builder.to_metadata()
+
+    _Agent.model = _Model([1], SimpleNamespace(n=3, observation_space=None))
+    _Agent.model.observation_space = SimpleNamespace(shape=(5, 6))
+    _Agent.loaded = []
+    monkeypatch.setattr(inf, "RLAgent", _Agent)
+    cfg = InferenceConfig(
+        model_path=str(model_path),
+        action_config=ActionSpaceConfig(action_type="discrete", discrete_actions=3),
+        observation_window=5,
+        state_builder_metadata=metadata,
+    )
+    inference = UnifiedRLInference(cfg)
+
+    signal = inference.predict(_ohlcv_matrix(5), symbol="AAPL")
+
+    assert signal is not None and signal.side == "buy"
+    predicted_obs = _Agent.model.calls[0][0]
+    assert predicted_obs.shape == (5, 6)
+    assert np.isfinite(predicted_obs).all()
+
+
+def test_inference_loads_state_builder_metadata_from_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    model_path = tmp_path / "model.zip"
+    builder = MarketStateBuilder(StateBuilderConfig(use_ohlcv_features=True, normalize=True))
+    builder.fit_transform(_ohlcv_matrix())
+    sidecar_path = tmp_path / "model.zip.state_builder.json"
+    sidecar_path.write_text(
+        json.dumps({"state_builder": builder.to_metadata()}),
+        encoding="utf-8",
+    )
+
+    _Agent.model = _Model([0], SimpleNamespace(n=3))
+    _Agent.loaded = []
+    monkeypatch.setattr(inf, "RLAgent", _Agent)
+    cfg = InferenceConfig(
+        model_path=str(model_path),
+        action_config=ActionSpaceConfig(action_type="discrete", discrete_actions=3),
+        observation_window=5,
+    )
+
+    inference = UnifiedRLInference(cfg)
+
+    assert inference.state_builder is not None
+    assert inference.preprocess_observation(_ohlcv_matrix(5)).shape == (5, 6)
+
+
+def test_inference_state_builder_mismatch_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    builder = MarketStateBuilder(StateBuilderConfig(use_ohlcv_features=True, normalize=True))
+    builder.fit_transform(_ohlcv_matrix())
+
+    _Agent.model = _Model([1], SimpleNamespace(n=3))
+    _Agent.loaded = []
+    monkeypatch.setattr(inf, "RLAgent", _Agent)
+    cfg = InferenceConfig(
+        model_path="model.zip",
+        action_config=ActionSpaceConfig(action_type="discrete", discrete_actions=3),
+        observation_window=5,
+        state_builder_metadata=builder.to_metadata(),
+    )
+    inference = UnifiedRLInference(cfg)
+
+    assert inference.predict(np.ones((5, 4), dtype=np.float32), symbol="AAPL") is None
 
 
 def test_continuous_actions_and_prediction_failure(monkeypatch: pytest.MonkeyPatch) -> None:

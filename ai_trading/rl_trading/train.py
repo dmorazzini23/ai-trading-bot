@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import UTC, datetime
@@ -176,6 +177,22 @@ _ARTIFACT_ENV_PARAM_KEYS: tuple[str, ...] = (
     "dataset_fingerprint",
     "feature_spec_hash",
 )
+
+_STATE_BUILDER_ZIP_MEMBER = "rl_state_builder.json"
+
+
+def _state_builder_payload(state_builder: Any | None) -> dict[str, Any]:
+    """Return fitted state-builder metadata for model artifacts."""
+
+    if state_builder is None:
+        return {"enabled": False}
+    if hasattr(state_builder, "to_metadata"):
+        return cast(dict[str, Any], state_builder.to_metadata())
+    if hasattr(state_builder, "describe"):
+        payload = dict(state_builder.describe())
+        payload.setdefault("enabled", True)
+        return payload
+    return {"enabled": True}
 
 
 def _resolve_algo_config(algorithm: str) -> RLAlgoConfig:
@@ -633,11 +650,7 @@ class RLTrainer:
         if not feature_spec_hash:
             feature_payload = {
                 "columns": int(data.shape[1]),
-                "state_builder": (
-                    self.state_builder.describe()
-                    if self.state_builder is not None and hasattr(self.state_builder, "describe")
-                    else {"schema": "raw"}
-                ),
+                "state_builder": _state_builder_payload(self.state_builder),
             }
             feature_spec_hash = hashlib.sha256(
                 json.dumps(feature_payload, sort_keys=True).encode("utf-8")
@@ -751,11 +764,7 @@ class RLTrainer:
                 env_params=self._artifact_env_overrides,
             )
             self._artifact_context = artifact_context
-            state_builder_summary = (
-                self.state_builder.describe()
-                if self.state_builder is not None and hasattr(self.state_builder, "describe")
-                else {"enabled": False}
-            )
+            state_builder_summary = _state_builder_payload(self.state_builder)
             env_summary: dict[str, Any] = {}
             for key, value in env_params_local.items():
                 if key == "price_series":
@@ -1022,8 +1031,21 @@ class RLTrainer:
                                 )
                             except (TypeError, ValueError):
                                 pass
+                            try:
+                                episode_metrics['max_drawdown'] = max(
+                                    float(episode_metrics['max_drawdown']),
+                                    float(stats.get('max_drawdown', 0.0) or 0.0),
+                                )
+                            except (TypeError, ValueError):
+                                pass
                     done = terminated or truncated
-                for key in episode_metrics:
+                for key in (
+                    'turnover',
+                    'drawdown',
+                    'variance',
+                    'constraint_violations',
+                    'constraint_terminations',
+                ):
                     episode_metrics[key] = episode_metrics[key] / steps if steps > 0 else 0
                 detailed_results.append({'total_reward': episode_reward, **episode_metrics})
             final_metrics = {
@@ -1051,6 +1073,26 @@ class RLTrainer:
             os.makedirs(save_path, exist_ok=True)
             model_path = os.path.join(save_path, f'model_{self.algorithm.lower()}.zip')
             self.model.save(model_path)
+            state_builder_metadata = dict(
+                self.training_results.get("state_builder")
+                if isinstance(self.training_results.get("state_builder"), Mapping)
+                else {"enabled": False}
+            )
+            state_builder_artifact = {"state_builder": state_builder_metadata}
+            state_builder_sidecar_path = f"{model_path}.state_builder.json"
+            with open(state_builder_sidecar_path, 'w') as f:
+                json.dump(state_builder_artifact, f, indent=2, default=str)
+            try:
+                with zipfile.ZipFile(model_path, mode="a") as model_zip:
+                    model_zip.writestr(
+                        _STATE_BUILDER_ZIP_MEMBER,
+                        json.dumps(state_builder_artifact, sort_keys=True, default=str),
+                    )
+            except (OSError, zipfile.BadZipFile) as exc:
+                logger.warning(
+                    "RL_STATE_BUILDER_ZIP_METADATA_WRITE_FAILED",
+                    extra={"model_path": model_path, "error": str(exc)},
+                )
             results_path = os.path.join(save_path, 'training_results.json')
             with open(results_path, 'w') as f:
                 json.dump(self.training_results, f, indent=2, default=str)
@@ -1058,7 +1100,15 @@ class RLTrainer:
             if self.eval_callback and hasattr(self.eval_callback, 'eval_results'):
                 eval_path = os.path.join(save_path, 'evaluation_results.json')
                 self.eval_callback.save_results(eval_path)
-            metadata = {'algorithm': self.algorithm, 'training_timestamp': datetime.now(UTC).isoformat(), 'total_timesteps': self.total_timesteps, 'seed': self.seed, 'model_file': os.path.basename(model_path)}
+            metadata = {
+                'algorithm': self.algorithm,
+                'training_timestamp': datetime.now(UTC).isoformat(),
+                'total_timesteps': self.total_timesteps,
+                'seed': self.seed,
+                'model_file': os.path.basename(model_path),
+                'state_builder': state_builder_metadata,
+                'state_builder_metadata_file': os.path.basename(state_builder_sidecar_path),
+            }
             meta_path = os.path.join(save_path, 'meta.json')
             with open(meta_path, 'w') as f:
                 json.dump(metadata, f, indent=2)

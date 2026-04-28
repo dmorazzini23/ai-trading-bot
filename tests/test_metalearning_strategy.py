@@ -284,6 +284,42 @@ def test_no_metalearn_invalid_prices_error():
         assert 'METALEARN_INVALID_PRICES' not in result.get('reasoning', '')
 
 
+def test_predict_price_movement_maps_binary_proba_by_model_classes(monkeypatch):
+    """Binary predict_proba columns must follow model.classes_, not position."""
+    from ai_trading.strategies import metalearning as metalearning_strategy
+    from ai_trading.strategies.metalearning import MetaLearning
+
+    class _IdentityScaler:
+        def transform(self, values):
+            return values
+
+    class _BinaryModel:
+        classes_ = np.asarray([2, 0], dtype=int)
+
+        def predict_proba(self, values):
+            return np.tile(np.asarray([[0.9, 0.1]], dtype=float), (len(values), 1))
+
+    monkeypatch.setattr(metalearning_strategy, "ML_AVAILABLE", True)
+    strategy = MetaLearning()
+    strategy.is_trained = True
+    strategy.scaler = _IdentityScaler()
+    strategy.rf_model = _BinaryModel()
+    strategy.gb_model = _BinaryModel()
+    strategy.feature_columns = ["returns"]
+    strategy.parameters["ensemble_weight_rf"] = 0.5
+    strategy.parameters["ensemble_weight_gb"] = 0.5
+    data = create_mock_price_data(days=3)
+    features = pd.DataFrame({"returns": [0.01]}, index=[data.index[-1]])
+    monkeypatch.setattr(strategy, "extract_features", lambda _data: features)
+
+    prediction = strategy.predict_price_movement(data)
+
+    assert prediction is not None
+    assert prediction["direction"] == "buy"
+    assert prediction["probability_distribution"]["buy"] == pytest.approx(0.9)
+    assert prediction["probability_distribution"]["sell"] == pytest.approx(0.1)
+
+
 if __name__ == '__main__':
     # Run a basic test to ensure the strategy works
 

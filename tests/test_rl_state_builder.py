@@ -49,3 +49,16 @@ def test_state_builder_transform_uses_fitted_stats():
     desc = builder.describe()
     assert desc["fitted"] is True
     assert desc["feature_count"] == train_states.shape[1]
+
+
+def test_state_builder_metadata_round_trip_and_input_mismatch_fails_closed():
+    builder = MarketStateBuilder(StateBuilderConfig(use_ohlcv_features=True, normalize=True))
+    expected = builder.fit_transform(_ohlcv_matrix(100))
+
+    restored = MarketStateBuilder.from_metadata(builder.to_metadata())
+    actual = restored.transform(_ohlcv_matrix(100))
+
+    assert actual.shape == expected.shape
+    assert np.isfinite(actual).all()
+    with pytest.raises(ValueError, match="input feature mismatch"):
+        restored.transform(_ohlcv_matrix(100)[:, :4])

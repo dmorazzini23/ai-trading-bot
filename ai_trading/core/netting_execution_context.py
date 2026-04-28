@@ -11,6 +11,22 @@ from typing import Any, Callable, Mapping
 from ai_trading.config.management import get_env
 from ai_trading.policy.compiler import SafetyTier
 
+_NON_DISABLEABLE_GATE_NAMES = frozenset(
+    {
+        "AUTH_BROKER_HALT_FORBIDDEN_COOLDOWN",
+        "BURN_IN_CONFIG_HASH_MISMATCH",
+        "BURN_IN_POLICY_HASH_MISMATCH",
+        "CAPACITY_THROTTLE_BLOCK",
+        "DERISK_PRIMARY_FEED_BLOCK",
+        "KILL_SWITCH_BLOCK",
+        "LIQ_PARTICIPATION_BLOCK",
+        "PAPER_BURN_IN_BLOCK",
+        "PRE_SUBMIT_INSUFFICIENT_POSITION_AVAILABLE",
+        "RECON_MISMATCH_HALT",
+    }
+)
+_NON_DISABLEABLE_GATE_ROOTS = frozenset({"LIQUIDITY_PARTICIPATION"})
+
 
 @dataclass(slots=True)
 class NettingExecutionContext:
@@ -368,16 +384,6 @@ def _build_gate_auto_disable_state(
     gate_auto_disable_min_contribution_bps = float(
         get_env("AI_TRADING_GATE_AUTO_DISABLE_MIN_CONTRIBUTION_BPS", 0.0, cast=float)
     )
-    critical_gates = {
-        "KILL_SWITCH_BLOCK",
-        "AUTH_BROKER_HALT_FORBIDDEN_COOLDOWN",
-        "DERISK_PRIMARY_FEED_BLOCK",
-        "PAPER_BURN_IN_BLOCK",
-        "BURN_IN_POLICY_HASH_MISMATCH",
-        "BURN_IN_CONFIG_HASH_MISMATCH",
-        "RECON_MISMATCH_HALT",
-        "PRE_SUBMIT_INSUFFICIENT_POSITION_AVAILABLE",
-    }
     if gate_auto_disable_enabled:
         try:
             gate_rows = read_jsonl_records_func(
@@ -408,7 +414,11 @@ def _build_gate_auto_disable_state(
                     stats["edge_sum"] = float(stats["edge_sum"]) + float(edge_sum)
             for gate_name, stats in gate_agg.items():
                 blocked_count = int(max(stats.get("blocked", 0.0), 0.0))
-                if blocked_count < gate_auto_disable_min_blocked or gate_name in critical_gates:
+                if (
+                    blocked_count < gate_auto_disable_min_blocked
+                    or gate_name in _NON_DISABLEABLE_GATE_NAMES
+                    or gate_name in _NON_DISABLEABLE_GATE_ROOTS
+                ):
                     continue
                 marginal_contribution_bps = float(
                     -float(stats.get("edge_sum", 0.0)) / float(max(blocked_count, 1))
@@ -479,6 +489,12 @@ def _build_gate_auto_disable_state(
 
     if policy_disabled_gate_roots:
         for gate_root in sorted(policy_disabled_gate_roots):
+            gate_root_name = str(gate_root).strip().upper()
+            if (
+                gate_root_name in _NON_DISABLEABLE_GATE_NAMES
+                or gate_root_name in _NON_DISABLEABLE_GATE_ROOTS
+            ):
+                continue
             ineffective_gate_blocklist.add(str(gate_root))
             ineffective_gate_diagnostics.setdefault(
                 str(gate_root),

@@ -306,6 +306,29 @@ def _attempt_parquet_migration(path: Path, frame: "pd.DataFrame") -> None:
     )
 
 
+def _attempt_pickle_sidecar_migration(
+    path: Path,
+    sidecar_path: Path,
+    frame: "pd.DataFrame",
+) -> None:
+    if not _is_parquet_path(path):
+        return
+    key = f"{path}:sidecar"
+    if key in _PARQUET_PICKLE_MIGRATION_LOGGED:
+        return
+    _PARQUET_PICKLE_MIGRATION_LOGGED.add(key)
+    if _write_parquet(path, frame, allow_pickle_sidecar=False):
+        logger.info(
+            "TRADE_HISTORY_PICKLE_SIDECAR_MIGRATED",
+            extra={"path": str(path), "pickle_path": str(sidecar_path)},
+        )
+        return
+    logger.warning(
+        "TRADE_HISTORY_PICKLE_SIDECAR_MIGRATION_DEFERRED",
+        extra={"path": str(path), "pickle_path": str(sidecar_path)},
+    )
+
+
 def _read_parquet(path: Path) -> "pd.DataFrame" | None:
     global _PANDAS_MISSING_LOGGED
     try:
@@ -316,6 +339,12 @@ def _read_parquet(path: Path) -> "pd.DataFrame" | None:
             _PANDAS_MISSING_LOGGED = True
         return None
     if not path.exists():
+        sidecar = _pickle_sidecar_path(path)
+        if _is_parquet_path(path) and sidecar.exists():
+            migrated = _read_pickle_for_explicit_migration(sidecar, pd)
+            if migrated is not None:
+                _attempt_pickle_sidecar_migration(path, sidecar, migrated)
+                return migrated
         return None
     try:
         return pd.read_parquet(path)

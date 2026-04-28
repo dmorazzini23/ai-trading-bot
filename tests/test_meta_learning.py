@@ -9,6 +9,7 @@ np.random.seed(0)
 
 from ai_trading import meta_learning
 from ai_trading.meta_learning import MetaLearning
+from ai_trading.meta_learning import core as meta_learning_core
 from ai_trading.meta import checkpoint
 from ai_trading.models.artifacts import write_artifact_manifest
 
@@ -172,6 +173,80 @@ def test_optimize_signals_no_cfg():
 
 def test_retrain_meta_missing(tmp_path):
     assert not meta_learning.retrain_meta_learner(str(tmp_path / "no.csv"))
+
+
+def test_retrain_meta_normalizes_side_aliases_for_outcomes(monkeypatch, tmp_path):
+    sklearn_linear = pytest.importorskip("sklearn.linear_model")
+    trade_log = tmp_path / "trades.csv"
+    trade_log.write_text(
+        "\n".join(
+            [
+                "entry_price,exit_price,signal_tags,side",
+                "100,110,a,BUY",
+                "100,110,b,long",
+                "100,90,a+b,Sell",
+                "100,90,c,short",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, list[int]] = {}
+
+    class _DummyModel:
+        def fit(self, _x, y, sample_weight=None):
+            captured["y"] = [int(value) for value in y]
+
+        def predict(self, x):
+            return [1] * len(x)
+
+    monkeypatch.setattr(meta_learning_core, "save_model_checkpoint", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(sklearn_linear, "Ridge", lambda *_args, **_kwargs: _DummyModel())
+
+    ok = meta_learning.retrain_meta_learner(
+        str(trade_log),
+        str(tmp_path / "model.joblib"),
+        str(tmp_path / "history.json"),
+        min_samples=1,
+    )
+
+    assert ok
+    assert captured["y"] == [1, 1, 1, 1]
+
+
+def test_retrain_meta_rejects_unknown_side(monkeypatch, tmp_path, caplog):
+    sklearn_linear = pytest.importorskip("sklearn.linear_model")
+    trade_log = tmp_path / "trades.csv"
+    trade_log.write_text(
+        "\n".join(
+            [
+                "entry_price,exit_price,signal_tags,side",
+                "100,110,a,BUY",
+                "100,90,b,sideways",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class _DummyModel:
+        def fit(self, _x, _y, sample_weight=None):
+            raise AssertionError("invalid sides must stop before model fitting")
+
+        def predict(self, x):
+            return [1] * len(x)
+
+    monkeypatch.setattr(meta_learning_core, "save_model_checkpoint", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(sklearn_linear, "Ridge", lambda *_args, **_kwargs: _DummyModel())
+    caplog.set_level("ERROR", logger=meta_learning_core.logger.name)
+
+    ok = meta_learning.retrain_meta_learner(
+        str(trade_log),
+        str(tmp_path / "model.joblib"),
+        str(tmp_path / "history.json"),
+        min_samples=1,
+    )
+
+    assert not ok
+    assert any(rec.message == "META_LEARNING_INVALID_SIDE_VALUES" for rec in caplog.records)
 
 
 def test_update_weights_history_error(tmp_path):

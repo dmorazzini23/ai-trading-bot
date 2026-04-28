@@ -4,13 +4,17 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.logging import get_logger
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+import json
 import numpy as np
+import zipfile
 from ai_trading.strategies.base import StrategySignal
 from . import RLAgent
 from .env import ActionSpaceConfig, RewardConfig
+from .state_builder import MarketStateBuilder
 TradeSignal = StrategySignal
 logger = get_logger(__name__)
+_STATE_BUILDER_ZIP_MEMBER = "rl_state_builder.json"
 
 @dataclass
 class InferenceConfig:
@@ -21,6 +25,7 @@ class InferenceConfig:
     deterministic: bool = True
     observation_window: int = 10
     confidence_threshold: float = 0.1
+    state_builder_metadata: dict[str, Any] | None = None
 
 class UnifiedRLInference:
     """
@@ -41,11 +46,87 @@ class UnifiedRLInference:
         self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self.agent = RLAgent(config.model_path)
         self.agent.load()
+        self.state_builder = self._load_state_builder()
         self._validate_action_space()
         self._obs_buffer: list[np.ndarray] = []
+        self._raw_obs_buffer: list[np.ndarray] = []
         self._last_prediction: TradeSignal | None = None
         self._prediction_confidence = 0.0
         self._inference_stats: dict[str, Any] = {'total_predictions': 0, 'hold_predictions': 0, 'buy_predictions': 0, 'sell_predictions': 0, 'avg_confidence': 0.0}
+
+    @staticmethod
+    def _extract_state_builder_metadata(payload: Any) -> dict[str, Any] | None:
+        if not isinstance(payload, Mapping):
+            return None
+        candidate = payload.get("state_builder")
+        if isinstance(candidate, Mapping):
+            return dict(candidate)
+        nested = payload.get("training_results")
+        if isinstance(nested, Mapping):
+            candidate = nested.get("state_builder")
+            if isinstance(candidate, Mapping):
+                return dict(candidate)
+        if "schema" in payload and "mean" in payload and "std" in payload:
+            return dict(payload)
+        return None
+
+    @staticmethod
+    def _read_json(path: Path) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    @staticmethod
+    def _read_zipped_state_builder(path: Path) -> dict[str, Any] | None:
+        try:
+            with zipfile.ZipFile(path) as model_zip:
+                with model_zip.open(_STATE_BUILDER_ZIP_MEMBER) as member:
+                    payload = json.loads(member.read().decode("utf-8"))
+        except (OSError, KeyError, ValueError, UnicodeDecodeError, zipfile.BadZipFile):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _load_state_builder_metadata(self) -> dict[str, Any] | None:
+        if self.config.state_builder_metadata is not None:
+            return dict(self.config.state_builder_metadata)
+
+        model_path = Path(self.config.model_path)
+        payload = self._read_zipped_state_builder(model_path)
+        metadata = self._extract_state_builder_metadata(payload)
+        if metadata is not None:
+            return metadata
+
+        candidates = [
+            Path(f"{model_path}.state_builder.json"),
+            Path(f"{model_path}.meta.json"),
+            model_path.with_suffix(f"{model_path.suffix}.state_builder.json")
+            if model_path.suffix
+            else Path(f"{model_path}.state_builder.json"),
+            model_path.parent / "meta.json",
+            model_path.parent / "training_results.json",
+        ]
+        seen: set[Path] = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if not candidate.is_file():
+                continue
+            metadata = self._extract_state_builder_metadata(self._read_json(candidate))
+            if metadata is not None:
+                return metadata
+        return None
+
+    def _load_state_builder(self) -> MarketStateBuilder | None:
+        metadata = self._load_state_builder_metadata()
+        if metadata is None or not bool(metadata.get("enabled", True)):
+            return None
+        try:
+            return MarketStateBuilder.from_metadata(metadata)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid RL state builder metadata: {exc}") from exc
 
     def _validate_action_space(self) -> None:
         """Validate that model action space matches configuration."""
@@ -77,18 +158,35 @@ class UnifiedRLInference:
         """
         obs = np.array(observation, dtype=np.float32)
         if len(obs.shape) == 1:
-            self._obs_buffer.append(obs)
-            if len(self._obs_buffer) > self.config.observation_window:
-                self._obs_buffer.pop(0)
-            while len(self._obs_buffer) < self.config.observation_window:
-                self._obs_buffer.insert(0, self._obs_buffer[0] if self._obs_buffer else np.zeros_like(obs))
-            obs = np.array(self._obs_buffer)
+            buffer = self._raw_obs_buffer if self.state_builder is not None else self._obs_buffer
+            buffer.append(obs)
+            if len(buffer) > self.config.observation_window:
+                buffer.pop(0)
+            while len(buffer) < self.config.observation_window:
+                buffer.insert(0, buffer[0] if buffer else np.zeros_like(obs))
+            obs = np.array(buffer)
         if obs.shape[0] > self.config.observation_window:
             obs = obs[-self.config.observation_window:]
         elif obs.shape[0] < self.config.observation_window:
             padding = np.tile(obs[0:1], (self.config.observation_window - obs.shape[0], 1))
             obs = np.vstack([padding, obs])
-        return obs
+        if self.state_builder is not None:
+            obs = self.state_builder.transform(obs)
+        return obs.astype(np.float32, copy=False)
+
+    def _validate_observation_shape(self, observation: np.ndarray) -> None:
+        model = self.agent.model
+        observation_space = getattr(model, "observation_space", None)
+        expected_shape = getattr(observation_space, "shape", None)
+        if expected_shape is None:
+            return
+        expected = tuple(int(value) for value in expected_shape)
+        observed = tuple(int(value) for value in observation.shape)
+        if expected != observed:
+            raise ValueError(
+                "RL observation shape mismatch: "
+                f"model expects {expected}, inference produced {observed}"
+            )
 
     def postprocess_action(
         self,
@@ -173,6 +271,7 @@ class UnifiedRLInference:
             return None
         try:
             processed_obs = self.preprocess_observation(observation)
+            self._validate_observation_shape(processed_obs)
             raw_action, _ = self.agent.model.predict(processed_obs, deterministic=self.config.deterministic)
             action_details = self.postprocess_action(
                 raw_action,

@@ -14,6 +14,14 @@ from ai_trading.risk.liquidity_regime import (
     classify_liquidity_regime,
 )
 
+_NON_DISABLEABLE_GATE_NAMES = frozenset(
+    {
+        "LIQ_PARTICIPATION_BLOCK",
+        "CAPACITY_THROTTLE_BLOCK",
+    }
+)
+_NON_DISABLEABLE_GATE_ROOTS = frozenset({"LIQUIDITY_PARTICIPATION"})
+
 
 @dataclass(slots=True)
 class NettingSymbolProcessor:
@@ -164,9 +172,12 @@ def _gate_blocks(processor: NettingSymbolProcessor, candidate_gate: str) -> bool
     gate_name = str(candidate_gate or "").strip().upper()
     if not gate_name:
         return True
+    gate_root = str(processor.gate_root_cause_func(gate_name) or "").strip().upper()
+    if gate_name in _NON_DISABLEABLE_GATE_NAMES or gate_root in _NON_DISABLEABLE_GATE_ROOTS:
+        return True
     if gate_name in processor.ineffective_gate_blocklist:
         return False
-    return processor.gate_root_cause_func(gate_name) not in processor.ineffective_gate_blocklist
+    return gate_root not in processor.ineffective_gate_blocklist
 
 
 def process_netting_symbol(
@@ -424,19 +435,22 @@ def process_netting_symbol(
         return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
 
     if bool(get_env("AI_TRADING_PARTICIPATION_CAP_ENABLED", True, cast=bool)):
+        participation_block_mode = str(
+            get_env("AI_TRADING_PARTICIPATION_BLOCK_MODE", "block")
+        ).strip().lower()
         allowed_participation, adjusted_qty, liq_reason = processor.enforce_participation_cap_func(
             order_qty=float(delta_shares),
             rolling_volume=liq_features.rolling_volume,
             max_participation_pct=float(
                 get_env("AI_TRADING_MAX_PARTICIPATION_PCT", 0.015, cast=float)
             ),
-            mode=str(get_env("AI_TRADING_PARTICIPATION_BLOCK_MODE", "block")),
+            mode=participation_block_mode,
             scale_min=float(get_env("AI_TRADING_PARTICIPATION_SCALE_MIN", 0.25, cast=float)),
         )
         participation_block_bypassed = False
         if not allowed_participation:
             participation_gate = liq_reason or "LIQ_PARTICIPATION_BLOCK"
-            if _gate_blocks(processor, str(participation_gate)):
+            if participation_block_mode == "block" or _gate_blocks(processor, str(participation_gate)):
                 gates.append(str(participation_gate))
                 processor.record_decision_func(
                     symbol=symbol,

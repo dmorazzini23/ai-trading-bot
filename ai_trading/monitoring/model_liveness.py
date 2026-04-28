@@ -15,6 +15,7 @@ from typing import Any
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 logger = get_logger(__name__)
 
@@ -27,6 +28,8 @@ _METRIC_ML_SIGNAL = "ml_signal"
 _METRIC_RL_SIGNAL = "rl_signal"
 _METRIC_AFTER_HOURS = "after_hours_training"
 _CRITICAL_CANARY_METRICS = {_METRIC_ML_SIGNAL, _METRIC_RL_SIGNAL}
+_CANARY_ROLLBACK_FLAG_DEFAULT = "runtime/canary_rollback.flag"
+_KILL_SWITCH_DEFAULT = "runtime/kill_switch"
 
 
 @dataclass(frozen=True)
@@ -116,6 +119,20 @@ def _parse_rollback_command(raw: str) -> list[str]:
     if command:
         return command
     raise ValueError("rollback command is empty")
+
+
+def _resolve_liveness_runtime_path(
+    env_key: str,
+    default_relative: str,
+    *,
+    for_write: bool,
+) -> Path:
+    configured = str(get_env(env_key, default_relative) or default_relative)
+    return resolve_runtime_artifact_path(
+        configured,
+        default_relative=default_relative,
+        for_write=for_write,
+    )
 
 
 def _event_for_metric(metric: str) -> str:
@@ -356,16 +373,13 @@ class _ModelLivenessMonitor:
             "metrics": [b.metric for b in critical_breaches],
             "events": [b.event for b in critical_breaches],
         }
-        flag_path = Path(
-            str(
-                get_env(
-                    "AI_TRADING_CANARY_ROLLBACK_FLAG_PATH",
-                    "runtime/canary_rollback.flag",
-                )
-                or "runtime/canary_rollback.flag"
-            )
-        )
+        flag_path: Path | str = _CANARY_ROLLBACK_FLAG_DEFAULT
         try:
+            flag_path = _resolve_liveness_runtime_path(
+                "AI_TRADING_CANARY_ROLLBACK_FLAG_PATH",
+                _CANARY_ROLLBACK_FLAG_DEFAULT,
+                for_write=True,
+            )
             _atomic_write_text(
                 flag_path,
                 json.dumps(payload, sort_keys=True) + "\n",
@@ -378,10 +392,13 @@ class _ModelLivenessMonitor:
             )
 
         if _env_bool("AI_TRADING_CANARY_ROLLBACK_SET_KILL_SWITCH", True):
-            kill_switch_path = Path(
-                str(get_env("AI_TRADING_KILL_SWITCH_PATH", "runtime/kill_switch") or "runtime/kill_switch")
-            )
+            kill_switch_path: Path | str = _KILL_SWITCH_DEFAULT
             try:
+                kill_switch_path = _resolve_liveness_runtime_path(
+                    "AI_TRADING_KILL_SWITCH_PATH",
+                    _KILL_SWITCH_DEFAULT,
+                    for_write=True,
+                )
                 _atomic_write_text(
                     kill_switch_path,
                     f"canary_auto_rollback {now_utc.isoformat()}\n",

@@ -475,10 +475,14 @@ def test_rl_trainer_save_persists_registry_governance(monkeypatch, tmp_path: Pat
     assert (tmp_path / "training_results.json").exists()
     assert (tmp_path / "evaluation_results.json").exists()
     assert (tmp_path / "meta.json").exists()
+    assert (tmp_path / "model_ppo.zip.state_builder.json").exists()
 
     saved_payload = json.loads((tmp_path / "training_results.json").read_text(encoding="utf-8"))
+    saved_meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
     assert saved_payload["model_id"] == "rl-registry-001"
     assert saved_payload["governance_status"] == "production"
+    assert saved_meta["state_builder"]["schema"] == "v1"
+    assert saved_meta["state_builder_metadata_file"] == "model_ppo.zip.state_builder.json"
     assert trainer.training_results["model_id"] == "rl-registry-001"
     assert trainer.training_results["governance_status"] == "production"
 

@@ -173,12 +173,13 @@ def test_process_symbol_event_blackout_failure_is_cached_false_and_continues() -
     assert records[0]["config_snapshot"]["event_risk_near"] is False
 
 
-def test_process_symbol_participation_block_bypass_scales_quantity_and_records_snapshot(
+def test_process_symbol_participation_block_is_not_bypassed_when_auto_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AI_TRADING_PARTICIPATION_CAP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PARTICIPATION_BLOCK_MODE", "block")
     processor, records = _make_processor(
-        ineffective_gate_blocklist={"LIQ_PARTICIPATION_BLOCK"},
+        ineffective_gate_blocklist={"LIQ_PARTICIPATION_BLOCK", "LIQUIDITY_PARTICIPATION"},
         enforce_participation_cap_func=lambda **_kwargs: (
             False,
             2.0,
@@ -193,13 +194,11 @@ def test_process_symbol_participation_block_bypass_scales_quantity_and_records_s
         orders_submitted=0,
     )
 
-    assert result.submitted_increment == 1
-    assert "LIQ_PARTICIPATION_BLOCK_BYPASSED" in records[0]["gates"]
-    assert records[0]["net_target"].target_shares == 2
-    assert records[0]["config_snapshot"]["gate_auto_disable"] == {
-        "gate": "LIQ_PARTICIPATION_BLOCK",
-        "reason": "non_positive_marginal_contribution",
-    }
+    assert result.attempted_increment == 0
+    assert result.submitted_increment == 0
+    assert records[0]["gates"] == ["LIQ_PARTICIPATION_BLOCK"]
+    assert records[0]["net_target"].target_shares == 10
+    assert "gate_auto_disable" not in records[0]["config_snapshot"]
 
 
 def test_process_symbol_quarantine_zero_targets_flattens_without_blocking() -> None:

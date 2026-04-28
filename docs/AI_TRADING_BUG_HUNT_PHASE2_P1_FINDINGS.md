@@ -63,6 +63,40 @@ Remaining High findings after this wave:
 - Meta-learning persistence sidecar is write-only in `ai_trading/meta_learning/persistence.py`
 - Canary rollback and kill-switch paths use CWD defaults in `ai_trading/monitoring/model_liveness.py`
 
+## Repair Wave 2 - 2026-04-28
+
+Status: completed during market hours with targeted validation only.
+
+Fixed in this wave:
+
+- High: 7 of 7 remaining
+- Additional validation blocker: targeted mypy error in `ai_trading/execution/production_engine.py`
+
+Resolved findings:
+
+- High: liquidity participation gates can fail open in `ai_trading/core/netting_symbol_cycle.py` and `ai_trading/core/netting_execution_context.py`
+- High: RL training/inference feature mismatch in `ai_trading/rl_trading/train.py`, `ai_trading/rl_trading/inference.py`, and `ai_trading/rl_trading/state_builder.py`
+- High: RL governance underreporting episode net return/max drawdown in `ai_trading/rl_trading/train.py`
+- High: meta-learning signal polarity with missing classes in `ai_trading/strategies/metalearning.py`
+- High: meta-learner label reversal for non-normalized sides in `ai_trading/meta_learning/core.py`
+- High: meta-learning pickle sidecar write-only behavior in `ai_trading/meta_learning/persistence.py`
+- High: canary rollback and kill-switch paths resolving under process cwd in `ai_trading/monitoring/model_liveness.py`
+- Validation blocker: `ai_trading/execution/production_engine.py:344` mypy incompatible assignment
+
+Repair validation:
+
+- `./venv/bin/pytest -q ...wave 2 targeted tests...` passed: 132 passed
+- `./venv/bin/python -m py_compile ...wave 2 changed Python files...` passed
+- `./venv/bin/ruff check ...wave 2 changed Python files...` passed
+- `./venv/bin/mypy ...wave 2 changed runtime modules...` passed: no issues found in 10 source files
+- `git diff --check` passed
+
+Full repo validation was not run because the repair wave occurred during market hours.
+
+Remaining High findings after this wave: none.
+
+Remaining Medium findings after this wave: 27.
+
 ## Ownership Coverage
 
 | Area | P1 files inspected | Critical | High | Medium | Total |

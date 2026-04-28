@@ -327,7 +327,7 @@ class ProductionExecutionCoordinator:
         try:
             symbol = order.symbol
             quantity = order.quantity if order.side == OrderSide.BUY else -order.quantity
-            fill_price = order.average_fill_price
+            fill_price = float(order.average_fill_price)
             if symbol in self.current_positions:
                 current_pos = self.current_positions[symbol]
                 new_quantity = current_pos['quantity'] + quantity

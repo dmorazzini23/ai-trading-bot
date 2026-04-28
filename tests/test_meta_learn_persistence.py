@@ -127,7 +127,7 @@ def test_load_trade_history_blocks_pickle_when_migration_not_explicit(
     assert any(rec.message == "TRADE_HISTORY_PICKLE_READ_BLOCKED" for rec in caplog.records)
 
 
-def test_record_trade_fill_writes_pickle_sidecar_but_runtime_read_stays_parquet_only(
+def test_record_trade_fill_writes_and_reads_trusted_pickle_sidecar(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -138,7 +138,9 @@ def test_record_trade_fill_writes_pickle_sidecar_but_runtime_read_stays_parquet_
 
     monkeypatch.setattr(persistence, "_CANONICAL_PATH", canonical_path)
     monkeypatch.setattr(persistence, "_WRITE_FALLBACK_LOGGED", set(), raising=False)
+    monkeypatch.setattr(persistence, "_PARQUET_PICKLE_MIGRATION_LOGGED", set(), raising=False)
     monkeypatch.setattr(persistence, "_pytest_active", lambda: False)
+    monkeypatch.setenv("AI_TRADING_ALLOW_TRUSTED_PICKLE_TRADE_HISTORY_MIGRATION", "1")
 
     monkeypatch.setattr(
         pd.DataFrame,
@@ -163,8 +165,10 @@ def test_record_trade_fill_writes_pickle_sidecar_but_runtime_read_stays_parquet_
     assert pickle_sidecar.exists()
     assert not canonical_path.exists()
     frame, source = persistence.load_trade_history(sync_from_broker=False)
-    assert source is None
-    assert frame is None
+    assert source == "canonical"
+    assert frame is not None
+    assert frame["symbol"].iloc[0] == "MSFT"
+    assert int(frame["qty"].iloc[0]) == 2
 
 
 def test_trade_history_engine_missing_log_emits_once(

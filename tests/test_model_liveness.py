@@ -129,6 +129,48 @@ def test_canary_auto_rollback_writes_flag_and_respects_cooldown(monkeypatch, tmp
     assert second["status"] == "cooldown"
 
 
+def test_canary_auto_rollback_resolves_default_files_under_runtime_root(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _set_default_liveness_env(monkeypatch)
+    data_dir = tmp_path / "data-root"
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_dir))
+    monkeypatch.delenv("AI_TRADING_CANARY_ROLLBACK_FLAG_PATH", raising=False)
+    monkeypatch.delenv("AI_TRADING_KILL_SWITCH_PATH", raising=False)
+    monkeypatch.setenv("AI_TRADING_CANARY_SYMBOLS", "AAPL")
+    monkeypatch.setenv("AI_TRADING_CANARY_ROLLBACK_SET_KILL_SWITCH", "1")
+    monkeypatch.setenv("AI_TRADING_CANARY_ROLLBACK_COMMAND", "")
+    model_liveness._reset_model_liveness_state_for_tests()
+
+    result = model_liveness.maybe_trigger_canary_auto_rollback(
+        [
+            {
+                "metric": "ml_signal",
+                "event": "ML_SIGNAL",
+                "age_seconds": 120.0,
+                "threshold_seconds": 60.0,
+                "severity": "critical",
+                "reason": "stale",
+            }
+        ],
+        now=datetime.now(UTC),
+    )
+
+    expected_flag = (data_dir / "runtime/canary_rollback.flag").resolve()
+    expected_kill_switch = (data_dir / "runtime/kill_switch").resolve()
+    assert result is not None
+    assert result["flag_path"] == str(expected_flag)
+    assert result["kill_switch_path"] == str(expected_kill_switch)
+    assert expected_flag.exists()
+    assert expected_kill_switch.exists()
+    assert not (cwd / "runtime/canary_rollback.flag").exists()
+    assert not (cwd / "runtime/kill_switch").exists()
+
+
 def test_canary_auto_rollback_runs_command_without_shell(monkeypatch, tmp_path) -> None:
     _set_default_liveness_env(monkeypatch)
     rollback_flag = tmp_path / "canary_rollback.flag"

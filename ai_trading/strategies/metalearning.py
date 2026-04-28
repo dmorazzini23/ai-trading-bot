@@ -13,6 +13,7 @@ import numpy as np
 from ai_trading.logging import logger
 NUMPY_AVAILABLE = True
 PANDAS_AVAILABLE = True
+_CLASS_DIRECTION = {0: 'sell', 1: 'hold', 2: 'buy'}
 from importlib.util import find_spec
 from ai_trading.utils.lazy_imports import (
     load_sklearn_ensemble,
@@ -268,7 +269,9 @@ class MetaLearning(BaseStrategy):
             gb_accuracy = accuracy_score(y_test, gb_pred)
             rf_proba = self.rf_model.predict_proba(X_test_scaled)
             gb_proba = self.gb_model.predict_proba(X_test_scaled)
-            ensemble_proba = np.clip(self.parameters['ensemble_weight_rf'] * rf_proba + self.parameters['ensemble_weight_gb'] * gb_proba, 0.0, 1.0)
+            rf_aligned = self._align_probabilities_by_class(self.rf_model, rf_proba)
+            gb_aligned = self._align_probabilities_by_class(self.gb_model, gb_proba)
+            ensemble_proba = np.clip(self.parameters['ensemble_weight_rf'] * rf_aligned + self.parameters['ensemble_weight_gb'] * gb_aligned, 0.0, 1.0)
             ensemble_pred = np.argmax(ensemble_proba, axis=1)
             self.prediction_accuracy = accuracy_score(y_test, ensemble_pred)
             self.feature_columns = X.columns.tolist()
@@ -311,14 +314,17 @@ class MetaLearning(BaseStrategy):
                 return self._fallback_prediction(data)
             features_scaled = self.scaler.transform(latest_features)
             try:
-                rf_proba = self.rf_model.predict_proba(features_scaled)[0]
-                gb_proba = self.gb_model.predict_proba(features_scaled)[0]
+                rf_proba = self._align_probabilities_by_class(
+                    self.rf_model,
+                    self.rf_model.predict_proba(features_scaled),
+                )[0]
+                gb_proba = self._align_probabilities_by_class(
+                    self.gb_model,
+                    self.gb_model.predict_proba(features_scaled),
+                )[0]
             except COMMON_EXC as e:
                 logger.warning(f'Model prediction failed: {e}, using fallback')
                 return self._fallback_prediction(data)
-            n_classes = min(len(rf_proba), len(gb_proba))
-            rf_proba = rf_proba[:n_classes]
-            gb_proba = gb_proba[:n_classes]
             ensemble_proba = np.clip(self.parameters['ensemble_weight_rf'] * rf_proba + self.parameters['ensemble_weight_gb'] * gb_proba, 0.0, 1.0)
             if not NUMPY_AVAILABLE:
                 predicted_class = 0 if ensemble_proba[0] > 0.5 else 1
@@ -326,16 +332,15 @@ class MetaLearning(BaseStrategy):
             else:
                 predicted_class = int(np.argmax(ensemble_proba))
                 confidence = np.max(ensemble_proba)
-            if n_classes == 2:
-                direction_map = {0: 'sell', 1: 'buy'}
-                prob_dist = {'sell': float(ensemble_proba[0]), 'hold': 0.0, 'buy': float(ensemble_proba[1])}
-            elif n_classes >= 3:
-                direction_map = {0: 'sell', 1: 'hold', 2: 'buy'}
-                prob_dist = {'sell': float(ensemble_proba[0]), 'hold': float(ensemble_proba[1]), 'buy': float(ensemble_proba[2]) if len(ensemble_proba) > 2 else 0.0}
-            else:
-                logger.warning(f'Unexpected number of classes: {n_classes}, using fallback')
+            if len(ensemble_proba) < 3:
+                logger.warning(f'Unexpected number of classes: {len(ensemble_proba)}, using fallback')
                 return self._fallback_prediction(data)
-            predicted_direction = direction_map.get(predicted_class, 'hold')
+            prob_dist = {
+                'sell': float(ensemble_proba[0]),
+                'hold': float(ensemble_proba[1]),
+                'buy': float(ensemble_proba[2]),
+            }
+            predicted_direction = _CLASS_DIRECTION.get(predicted_class, 'hold')
             current_price = data['close'].iloc[-1]
             if PANDAS_AVAILABLE:
                 volatility = data['close'].pct_change().rolling(20).std().iloc[-1]
@@ -350,6 +355,31 @@ class MetaLearning(BaseStrategy):
         except COMMON_EXC as e:
             logger.error(f'Error in predict_price_movement: {e}')
             return None
+
+    def _align_probabilities_by_class(self, model: Any, probabilities: Any) -> Any:
+        """Return predict_proba output aligned to sell/hold/buy class labels."""
+        proba = np.asarray(probabilities, dtype=float)
+        if proba.ndim == 1:
+            proba = proba.reshape(1, -1)
+        aligned = np.zeros((proba.shape[0], len(_CLASS_DIRECTION)), dtype=float)
+        classes = getattr(model, 'classes_', None)
+        if classes is not None and len(classes) == proba.shape[1]:
+            for col_idx, label in enumerate(classes):
+                try:
+                    class_idx = int(label)
+                except (TypeError, ValueError):
+                    continue
+                if class_idx in _CLASS_DIRECTION:
+                    aligned[:, class_idx] = proba[:, col_idx]
+            return aligned
+        if proba.shape[1] == len(_CLASS_DIRECTION):
+            return proba
+        if proba.shape[1] == 2:
+            aligned[:, 0] = proba[:, 0]
+            aligned[:, 2] = proba[:, 1]
+            return aligned
+        aligned[:, : min(proba.shape[1], aligned.shape[1])] = proba[:, : aligned.shape[1]]
+        return aligned
 
     def extract_features(self, data) -> Any | None:
         """

@@ -122,6 +122,47 @@ def test_build_netting_execution_context_collects_global_controls(monkeypatch) -
     assert context.uncertainty_capital_state == {"version": 1}
 
 
+def test_build_netting_execution_context_keeps_participation_gates_critical(monkeypatch) -> None:
+    monkeypatch.setenv("AI_TRADING_DERISK_ON_SLO_BREACH_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_NON_POSITIVE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_LOOKBACK_CYCLES", "10")
+    monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_MIN_BLOCKED", "10")
+    monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_MIN_CONTRIBUTION_BPS", "0")
+    kwargs = _base_kwargs()
+    kwargs["policy_disabled_gate_roots"] = {
+        "LIQUIDITY_PARTICIPATION",
+        "LIQ_PARTICIPATION_BLOCK",
+        "CAPACITY_THROTTLE_BLOCK",
+        "POLICY_GATE",
+    }
+    kwargs["read_jsonl_records_func"] = lambda path, max_records: [
+        {
+            "gate_attribution": {
+                "LIQ_PARTICIPATION_BLOCK": {
+                    "blocked_records": 100,
+                    "edge_proxy_bps_sum": 50.0,
+                },
+                "CAPACITY_THROTTLE_BLOCK": {
+                    "blocked_records": 100,
+                    "edge_proxy_bps_sum": 50.0,
+                },
+                "NON_CRITICAL_GATE": {
+                    "blocked_records": 100,
+                    "edge_proxy_bps_sum": 50.0,
+                },
+            }
+        }
+    ]
+
+    context = build_netting_execution_context(**cast(Any, kwargs))
+
+    assert "NON_CRITICAL_GATE" in context.ineffective_gate_blocklist
+    assert "POLICY_GATE" in context.ineffective_gate_blocklist
+    assert "LIQ_PARTICIPATION_BLOCK" not in context.ineffective_gate_blocklist
+    assert "LIQUIDITY_PARTICIPATION" not in context.ineffective_gate_blocklist
+    assert "CAPACITY_THROTTLE_BLOCK" not in context.ineffective_gate_blocklist
+
+
 def test_build_netting_execution_context_blocks_on_slo_breach(monkeypatch) -> None:
     monkeypatch.setenv("AI_TRADING_DERISK_ON_SLO_BREACH_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_DERISK_SLO_MIN_SAMPLES", "1")

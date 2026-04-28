@@ -115,6 +115,8 @@ logger = get_logger(__name__)
 
 _STRICT_DECIMAL_PATTERN = re.compile(r"^\d+(?:\.\d+)?$")
 _SIGNED_DECIMAL_PATTERN = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
+_LONG_SIDE_ALIASES = {"buy", "long"}
+_SHORT_SIDE_ALIASES = {"sell", "short", "sell_short"}
 
 
 def _meta_strict_schema_enabled() -> bool:
@@ -140,6 +142,17 @@ def _emit_meta_retrain_alert(
         emit_runtime_alert(event, severity=severity, details=details)
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("META_RETRAIN_ALERT_EMIT_FAILED", exc_info=True)
+
+
+def _normalize_outcome_side(value: Any) -> str | None:
+    """Normalize trade sides used for outcome labels."""
+
+    raw = str(getattr(value, "value", value)).strip().lower()
+    if raw in _LONG_SIDE_ALIASES:
+        return "buy"
+    if raw in _SHORT_SIDE_ALIASES:
+        return "sell"
+    return None
 
 
 class _FallbackRidgeModel:
@@ -1171,6 +1184,33 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='runtime/meta
             },
         )
         return False
+    normalized_side = df['side'].map(_normalize_outcome_side)
+    invalid_side_mask = normalized_side.isna()
+    if invalid_side_mask.any():
+        invalid_sides = sorted(
+            {
+                str(value).strip()
+                for value in df.loc[invalid_side_mask, 'side']
+                if str(value).strip()
+            }
+        )
+        logger.error(
+            "META_LEARNING_INVALID_SIDE_VALUES",
+            extra={
+                "trade_log_path": trade_log_path,
+                "invalid_sides": invalid_sides,
+            },
+        )
+        _emit_meta_retrain_alert(
+            "ALERT_META_RETRAIN_SIDE_INVALID",
+            severity="warning",
+            details={
+                "trade_log_path": trade_log_path,
+                "invalid_sides": invalid_sides,
+            },
+        )
+        return False
+    df['side'] = normalized_side
     direction = np.where(df['side'] == 'buy', 1, -1)
     df['pnl'] = np.where(pd.notna(df['exit_price']), (df['exit_price'] - df['entry_price']) * direction, 0.0)
     df['outcome'] = (df['pnl'] > 0).astype(int)

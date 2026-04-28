@@ -87,3 +87,40 @@ def test_final_evaluation_handles_missing_and_bad_env(monkeypatch: pytest.Monkey
     monkeypatch.setattr(train_mod, "evaluate_policy", lambda *_args, **_kwargs: (1.0, 0.5))
 
     assert trainer._final_evaluation() == {}
+
+
+def test_final_evaluation_keeps_episode_level_governance_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer = train_mod.RLTrainer()
+    trainer.model = SimpleNamespace(predict=lambda *_args, **_kwargs: (0, None))
+
+    class EvalEnv:
+        def __init__(self) -> None:
+            self.steps = 0
+
+        def reset(self):
+            self.steps = 0
+            return "obs"
+
+        def step(self, _action):
+            self.steps += 1
+            info = {
+                "turnover_penalty": 0.2,
+                "drawdown_penalty": 0.1,
+                "variance_penalty": 0.04,
+                "drawdown": 0.08 if self.steps == 1 else 0.20,
+            }
+            if self.steps >= 2:
+                info["episode_stats"] = {"total_return": 0.12, "max_drawdown": 0.20}
+                return "obs", 1.0, True, False, info
+            return "obs", 1.0, False, False, info
+
+    trainer.eval_env = EvalEnv()
+    monkeypatch.setattr(train_mod, "evaluate_policy", lambda *_args, **_kwargs: (1.0, 0.5))
+
+    metrics = trainer._final_evaluation()
+
+    assert metrics["avg_turnover_penalty"] == pytest.approx(0.2)
+    assert metrics["avg_episode_net_return"] == pytest.approx(0.12)
+    assert metrics["avg_episode_max_drawdown"] == pytest.approx(0.20)
