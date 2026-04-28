@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import Mock
 
+import joblib
 import pytest
 
 from ai_trading.model_registry import ModelRegistry
+from ai_trading.models.artifacts import write_artifact_manifest
 
 
 class TestModelRegistry:
@@ -114,20 +116,37 @@ class TestModelRegistry:
             registry = ModelRegistry(temp_dir)
             external_artifact = Path(temp_dir) / "runtime" / "ml_latest.joblib"
             external_artifact.parent.mkdir(parents=True, exist_ok=True)
-            external_artifact.write_bytes(b"joblib-artifact")
+            joblib.dump({"weights": [1, 2, 3]}, external_artifact)
+            manifest_path = write_artifact_manifest(
+                model_path=external_artifact,
+                model_version="external-v1",
+            )
 
             model_id = registry.register_model(
-                model={"artifact_path": str(external_artifact), "artifact_kind": "joblib"},
+                model={
+                    "artifact_path": str(external_artifact),
+                    "manifest_path": str(manifest_path),
+                    "artifact_kind": "joblib",
+                },
                 strategy="ml_edge",
                 model_type="joblib",
-                metadata={"model_path": str(external_artifact), "version": 7},
+                metadata={
+                    "model_path": str(external_artifact),
+                    "manifest_path": str(manifest_path),
+                    "version": 7,
+                },
             )
 
             loaded_model, loaded_metadata = registry.load_model(model_id)
-            assert loaded_model is None
+            assert loaded_model == {"weights": [1, 2, 3]}
             assert loaded_metadata["artifact_format"] == "external_path"
             assert loaded_metadata["artifact_path"] == str(external_artifact)
+            assert loaded_metadata["manifest_path"] == str(manifest_path)
             assert loaded_metadata["version"] == 7
+
+            external_artifact.write_bytes(b"tampered")
+            with pytest.raises(RuntimeError, match="CHECKSUM_MISMATCH"):
+                registry.load_model(model_id)
 
     def test_metadata_class_path_conversion(self):
         with tempfile.TemporaryDirectory() as temp_dir:

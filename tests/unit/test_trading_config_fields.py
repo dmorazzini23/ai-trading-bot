@@ -36,13 +36,16 @@ def test_env_overrides_and_defaults(monkeypatch):
 
 def test_update_and_to_dict():
     cfg = TradingConfig()
-    cfg.update(kelly_fraction_max=0.5, min_sample_size=20)
-    assert cfg.kelly_fraction_max == 0.5
-    assert cfg.min_sample_size == 20
-    snap = cfg.to_dict()
+    updated = cfg.update(kelly_fraction_max=0.5, min_sample_size=20)
+    assert updated is not cfg
+    assert cfg.kelly_fraction_max == 0.25
+    assert cfg.min_sample_size == 10
+    assert updated.kelly_fraction_max == 0.5
+    assert updated.min_sample_size == 20
+    snap = updated.to_dict()
     assert snap["kelly_fraction_max"] == 0.5
     assert snap["min_sample_size"] == 20
-    assert snap["seed"] == cfg.seed
+    assert snap["seed"] == updated.seed
     assert "signal_confirmation_bars" in snap
     assert "delta_threshold" in snap
     assert "min_confidence" in snap

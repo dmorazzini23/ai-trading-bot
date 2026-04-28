@@ -115,6 +115,29 @@ def test_order_payload_normalization_handles_dicts_and_objects() -> None:
     assert client_id == "client-2"
 
 
+def test_generated_client_order_id_includes_intent_fingerprint() -> None:
+    first = lt._stable_order_id("AAPL", "buy", quantity=1, order_type="market")
+    retry = lt._stable_order_id("AAPL", "buy", quantity=1, order_type="market")
+    distinct = lt._stable_order_id("AAPL", "buy", quantity=2, order_type="market")
+
+    assert first == retry
+    assert first != distinct
+
+
+def test_duplicate_intent_suppression_keys_by_intent_fingerprint(monkeypatch) -> None:
+    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine._recent_order_intents = {}
+    monkeypatch.setattr(engine, "_duplicate_intent_window_seconds", lambda: 60.0)
+    monkeypatch.setattr(engine, "open_order_totals", lambda _symbol: (0.0, 0.0))
+
+    first = lt._intent_fingerprint("AAPL", "buy", 1, "market", "", "")
+    second = lt._intent_fingerprint("AAPL", "buy", 2, "market", "", "")
+    engine._record_order_intent("AAPL", "buy", first)
+
+    assert engine._should_suppress_duplicate_intent("AAPL", "buy", first) is True
+    assert engine._should_suppress_duplicate_intent("AAPL", "buy", second) is False
+
+
 def test_error_metadata_extracts_detail_code_status_and_retry_after() -> None:
     future_retry = datetime.now(UTC) + timedelta(seconds=60)
     err = _ErrorWithMetadata(

@@ -2618,14 +2618,7 @@ class TradingConfig:
         return copy.deepcopy(dict(mode_effective))
 
     def update(self, **updates: Any) -> "TradingConfig":
-        """Merge ``updates`` into the configuration and return ``self``.
-
-        The configuration container is conceptually immutable to callers, but
-        internally it keeps a mutable mapping for efficiency.  The update
-        helper mirrors the historical behaviour expected by existing call
-        sites: validate requested fields, merge the supplied values, refresh
-        derived properties, and return the instance so calls may be chained.
-        """
+        """Merge ``updates`` into a new configuration instance."""
 
         if not updates:
             return self
@@ -2635,6 +2628,7 @@ class TradingConfig:
             names = ", ".join(sorted(unknown))
             raise AttributeError(f"TradingConfig has no fields: {names}")
 
+        values = self.to_dict()
         for key, value in updates.items():
             spec = SPEC_BY_FIELD.get(key)
             if spec is not None:
@@ -2643,12 +2637,12 @@ class TradingConfig:
                 value = _normalize_base_url(value)
             elif key == "app_env":
                 value = _normalize_env_label(value, default="test")
-            self._values[key] = value
+            values[key] = value
 
         if {"alpaca_base_url", "app_env"} & updates.keys():
-            self._values["paper"] = _infer_paper_mode(self._values)
+            values["paper"] = _infer_paper_mode(values)
 
-        return self
+        return TradingConfig(_mode_effective=self._mode_effective, **values)
 
     def snapshot_sanitized(self) -> dict[str, Any]:
         mode_snapshot = self.mode_effective_snapshot()

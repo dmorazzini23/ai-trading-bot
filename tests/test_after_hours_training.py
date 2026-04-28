@@ -124,6 +124,32 @@ def test_build_symbol_dataset_adds_derived_feature_columns(
         assert np.isfinite(dataset[column].to_numpy()).all()
 
 
+def test_build_symbol_dataset_label_ts_uses_next_valid_bar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bars = _synthetic_daily("AAPL")
+    removed_ts = bars.index[250]
+    irregular = bars.drop(index=removed_ts)
+    expected_previous_ts = bars.index[249]
+    expected_next_ts = bars.index[251]
+    monkeypatch.setattr(
+        after_hours,
+        "_fetch_daily_bars",
+        lambda symbol, _start, _end: irregular,
+    )
+
+    dataset = after_hours._build_symbol_dataset(
+        "AAPL",
+        datetime(2024, 1, 1, tzinfo=UTC),
+        datetime(2026, 1, 1, tzinfo=UTC),
+        cost_floor_bps=8.0,
+    )
+
+    row = dataset.loc[dataset["timestamp"] == expected_previous_ts].iloc[0]
+    assert row["label_ts"] == expected_next_ts
+    assert row["label_ts"] != expected_previous_ts + pd.Timedelta(days=1)
+
+
 def test_candidate_selection_score_penalizes_poor_calibration() -> None:
     strong = after_hours.CandidateMetrics(
         name="model_a",

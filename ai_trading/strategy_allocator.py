@@ -128,6 +128,20 @@ class StrategyAllocator:
                 return None
         return None
 
+    @staticmethod
+    def _explicit_audited_fallback_override(metadata: dict[str, Any]) -> bool:
+        for key in (
+            "fallback_price_audited_override",
+            "price_reliable_audited_override",
+            "audited_fallback_override",
+        ):
+            value = metadata.get(key)
+            if value is True:
+                return True
+            if isinstance(value, str) and value.strip().lower() in {"1", "true", "yes", "on"}:
+                return True
+        return False
+
     def _normalize_signal_reliability(self, signal: Any) -> None:
         metadata_raw = getattr(signal, "metadata", None)
         metadata = metadata_raw if isinstance(metadata_raw, dict) else None
@@ -158,12 +172,16 @@ class StrategyAllocator:
         allow_fallback = fallback_gap_relaxed or (
             fallback_label is not None and not fallback_label.startswith("alpaca")
         )
+        audited_override = self._explicit_audited_fallback_override(metadata)
+        finite_gap_evidence = gap_ratio is not None and gap_ratio >= 0.0
 
         if not reliable and allow_fallback:
-            if gap_ratio is None or gap_ratio <= fallback_limit:
+            if audited_override or (finite_gap_evidence and gap_ratio <= fallback_limit):
                 metadata["price_reliable"] = True
                 metadata.pop("price_reliable_reason", None)
                 metadata.setdefault("price_reliable_override", True)
+                if audited_override:
+                    metadata["price_reliable_override_reason"] = "audited_fallback_override"
                 if gap_ratio is not None:
                     metadata["gap_ratio"] = gap_ratio
                 logger.info(

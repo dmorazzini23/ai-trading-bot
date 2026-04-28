@@ -52,6 +52,23 @@ def test_session_add_query_delete_roundtrip(tmp_path: Path) -> None:
     db.disconnect()
 
 
+def test_nested_sessions_preserve_same_thread_active_tracking(tmp_path: Path) -> None:
+    db = db_connection.DatabaseManager(f"sqlite:///{tmp_path / 'nested.db'}")
+    assert db.connect() is True
+    try:
+        with db.get_session() as outer:
+            assert db.get_connection_info()["active_connections"] == 1
+            with db.get_session() as inner:
+                assert outer.is_active is True
+                assert inner.is_active is True
+                assert db.get_connection_info()["active_connections"] == 2
+            assert outer.is_active is True
+            assert db.get_connection_info()["active_connections"] == 1
+        assert db.get_connection_info()["active_connections"] == 0
+    finally:
+        db.disconnect()
+
+
 def test_initialize_database_global_session_lifecycle(tmp_path: Path) -> None:
     """Global initialize/get_session/shutdown lifecycle should be usable."""
     db_url = f"sqlite:///{tmp_path / 'global.db'}"

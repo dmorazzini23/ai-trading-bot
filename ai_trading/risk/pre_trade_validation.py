@@ -9,7 +9,7 @@ import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 from ai_trading.logging import logger
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas_market_calendars
@@ -198,7 +198,7 @@ class LiquidityValidator:
             volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0.5
             volume_score = min(1.0, volume_ratio)
             overall_score = participation_score * 0.4 + slippage_score * 0.4 + volume_score * 0.2
-            return max(0.0, min(1.0, overall_score))
+            return float(max(0.0, min(1.0, overall_score)))
         except (ValueError, TypeError, ZeroDivisionError):
             return 0.5
 
@@ -225,7 +225,17 @@ class RiskValidator:
             raw_value = getattr(position_info, 'notional_value', 0.0)
         return float(raw_value or 0.0)
 
-    def validate_position_risk(self, symbol: str, quantity: int, price: float, account_equity: float, current_positions: dict) -> ValidationResult:
+    @staticmethod
+    def _signed_order_value(quantity: int | float, price: float, side: str | None=None) -> float:
+        normalized_side = str(side or '').strip().lower()
+        quantity_abs = abs(float(quantity))
+        if normalized_side in {'sell_short', 'sellshort', 'short', 'sell-short', 'sell short', 'sell'}:
+            return -quantity_abs * float(price)
+        if normalized_side in {'buy', 'buy_to_cover', 'cover'}:
+            return quantity_abs * float(price)
+        return float(quantity) * float(price)
+
+    def validate_position_risk(self, symbol: str, quantity: int, price: float, account_equity: float, current_positions: dict, side: str | None=None) -> ValidationResult:
         """
         Validate position-level risk constraints.
 
@@ -240,10 +250,10 @@ class RiskValidator:
             ValidationResult for position risk check
         """
         try:
-            details = {'symbol': symbol, 'quantity': quantity, 'price': price, 'account_equity': account_equity}
+            details = {'symbol': symbol, 'quantity': quantity, 'price': price, 'side': side, 'account_equity': account_equity}
             if account_equity <= 0:
                 return ValidationResult(category=ValidationCategory.RISK_LIMITS, status=ValidationStatus.REJECTED, message='Invalid account equity', details=details, score=0.0, recommendations=['Verify account data'])
-            order_value = float(quantity) * float(price)
+            order_value = self._signed_order_value(quantity, price, side)
             current_symbol_value = self._notional_value(current_positions.get(symbol, {}))
             projected_symbol_value = current_symbol_value + order_value
             position_value = abs(projected_symbol_value)
@@ -297,11 +307,12 @@ class RiskValidator:
             symbol = proposed_trade.get('symbol')
             quantity = proposed_trade.get('quantity', 0)
             price = proposed_trade.get('price', 0.0)
+            side = proposed_trade.get('side')
             current_positions = portfolio_data.get('current_positions', {})
             correlations = portfolio_data.get('correlations', {})
             account_equity = portfolio_data.get('account_equity', 0)
             details = {'symbol': symbol, 'current_position_count': len(current_positions), 'account_equity': account_equity}
-            order_value = float(quantity) * float(price)
+            order_value = self._signed_order_value(quantity, price, side)
             correlation_exposure = self._calculate_correlation_exposure(symbol, order_value, current_positions, correlations)
             details['correlation_exposure'] = correlation_exposure
             if correlation_exposure > self.max_correlation_exposure:
@@ -332,7 +343,7 @@ class RiskValidator:
         try:
             position_score = max(0.0, 1.0 - position_pct / self.max_position_size)
             utilization_score = max(0.0, 1.0 - max(0.0, portfolio_utilization - 0.5) * 2)
-            return position_score * 0.6 + utilization_score * 0.4
+            return float(position_score * 0.6 + utilization_score * 0.4)
         except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.5
 
@@ -388,7 +399,7 @@ class RiskValidator:
             concentration_score = max(0.0, 1.0 - concentration_risk)
             optimal_positions = 20
             diversification_score = min(1.0, position_count / optimal_positions)
-            return correlation_score * 0.4 + concentration_score * 0.4 + diversification_score * 0.2
+            return cast(float, correlation_score * 0.4 + concentration_score * 0.4 + diversification_score * 0.2)
         except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.5
 
@@ -435,7 +446,7 @@ class PreTradeValidator:
             validation_results.append(liquidity_result)
             account_equity = portfolio_data.get('account_equity', 0)
             current_positions = portfolio_data.get('current_positions', {})
-            position_risk_result = self.risk_validator.validate_position_risk(symbol, quantity, price, account_equity, current_positions)
+            position_risk_result = self.risk_validator.validate_position_risk(symbol, quantity, price, account_equity, current_positions, trade_request.get('side'))
             validation_results.append(position_risk_result)
             if self.risk_validator.enable_portfolio_features:
                 portfolio_risk_result = self.risk_validator.validate_portfolio_risk(trade_request, portfolio_data)

@@ -4,6 +4,8 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING
 import re
 
+import numpy as np
+
 from ai_trading.utils.lazy_imports import load_pandas
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper
@@ -240,9 +242,12 @@ def normalize_ohlcv_df(
                 frame["close"] = frame[candidate]
                 break
 
+    missing_required = [column for column in REQUIRED if column not in frame.columns]
+    if missing_required:
+        return _empty_frame(include_timestamp=include_timestamp)
+
     for column in REQUIRED:
-        if column in frame.columns:
-            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
 
     if "timestamp" in frame.columns:
         ts = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
@@ -266,10 +271,20 @@ def normalize_ohlcv_df(
     if not valid_index.all():
         frame = frame.loc[valid_index]
 
-    subset = [column for column in REQUIRED if column in frame.columns]
-    if subset:
-        frame = frame.dropna(subset=subset, how="any")
+    frame = frame.dropna(subset=list(REQUIRED), how="any")
 
+    if frame.empty:
+        return _empty_frame(include_timestamp=include_timestamp)
+
+    numeric = frame.loc[:, list(REQUIRED)]
+    finite_mask = np.isfinite(numeric.to_numpy(dtype=float)).all(axis=1)
+    positive_ohlc = (numeric.loc[:, ["open", "high", "low", "close"]] > 0).all(axis=1)
+    valid_volume = numeric["volume"] >= 0
+    consistent_ohlc = (
+        (numeric["high"] >= numeric[["open", "low", "close"]].max(axis=1))
+        & (numeric["low"] <= numeric[["open", "high", "close"]].min(axis=1))
+    )
+    frame = frame.loc[finite_mask & positive_ohlc & valid_volume & consistent_ohlc]
     if frame.empty:
         return _empty_frame(include_timestamp=include_timestamp)
 
@@ -283,9 +298,7 @@ def normalize_ohlcv_df(
         if column not in {"timestamp", *REQUIRED}
         and column in frame.columns
     ]
-    cols = [column for column in REQUIRED if column in frame.columns]
-    if not cols:
-        return _empty_frame(include_timestamp=include_timestamp)
+    cols = list(REQUIRED)
     selected_cols = cols + [col for col in optional_columns if col not in cols]
     normalized = frame[selected_cols].copy()
     if normalized.index.tz is None:

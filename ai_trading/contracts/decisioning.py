@@ -65,6 +65,31 @@ def _normalize_reasons(raw: Any) -> list[str]:
     return out
 
 
+def _has_submission_evidence(
+    payload_map: Mapping[str, Any],
+    tca_map: Mapping[str, Any],
+    fills_seq: Sequence[Any],
+) -> bool:
+    status = str(payload_map.get("status") or "").strip().lower()
+    if status in {
+        "accepted",
+        "submitted",
+        "new",
+        "open",
+        "partially_filled",
+        "filled",
+        "done_for_day",
+        "pending_new",
+    }:
+        return True
+    if _safe_text(payload_map.get("broker_order_id") or payload_map.get("order_id")):
+        return True
+    if fills_seq:
+        return True
+    total_qty = _safe_float(tca_map.get("total_qty"))
+    return total_qty is not None and total_qty > 0.0
+
+
 @dataclass(frozen=True, slots=True)
 class Signal:
     symbol: str
@@ -506,7 +531,7 @@ def _derive_broker_result(
     fills = getattr(record, "fills", None)
     fills_seq = list(fills) if isinstance(fills, Sequence) else []
     gates = _normalize_reasons(getattr(record, "gates", None))
-    submitted = order_intent is not None
+    submitted = _has_submission_evidence(payload_map, tca_map, fills_seq)
     accepted = "OK_TRADE" in gates
     if not submitted and not payload_map:
         return None
@@ -631,7 +656,11 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
         feature_version=_safe_text(config_map.get("feature_version")),
         model_artifact_hash=_safe_text(config_map.get("model_artifact_hash")),
         accepted=risk_decision.accepted,
-        submitted=order_intent is not None,
+        submitted=(
+            broker_result.submitted
+            if broker_result is not None
+            else _has_submission_evidence(order_map, tca_map, fills_seq)
+        ),
         fills_count=len(fills_seq),
         metadata=metadata,
     )

@@ -8,7 +8,7 @@ from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
 import numpy as np
 
@@ -20,11 +20,12 @@ def _safe_import_sklearn():
     try:
         from sklearn.linear_model import Ridge, LogisticRegression
         from sklearn.ensemble import RandomForestRegressor
+        from sklearn.dummy import DummyClassifier
         from sklearn.preprocessing import StandardScaler
         from sklearn.pipeline import make_pipeline
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover
         raise ImportError("scikit-learn is required for stacking models") from exc
-    return Ridge, LogisticRegression, RandomForestRegressor, StandardScaler, make_pipeline
+    return Ridge, LogisticRegression, RandomForestRegressor, DummyClassifier, StandardScaler, make_pipeline
 
 
 @dataclass
@@ -44,10 +45,11 @@ class StackingMetaModel:
     meta_label_threshold: float | None = None
 
     def __post_init__(self) -> None:
-        (Ridge, LogisticRegression, RF, StandardScaler, make_pipeline) = _safe_import_sklearn()
+        (Ridge, LogisticRegression, RF, DummyClassifier, StandardScaler, make_pipeline) = _safe_import_sklearn()
         self._Ridge = Ridge
         self._LogisticRegression = LogisticRegression
         self._RF = RF
+        self._DummyClassifier = DummyClassifier
         self._StandardScaler = StandardScaler
         self._make_pipeline = make_pipeline
         self.base_models_: list[Any] = []
@@ -86,7 +88,14 @@ class StackingMetaModel:
             if self.meta_label_threshold is not None:
                 # Binary acceptance target based on threshold on y
                 target = (meta_y > float(self.meta_label_threshold)).astype(int)
-                self.meta_model_ = self._LogisticRegression(max_iter=500)
+                unique_target = np.unique(target)
+                if len(unique_target) < 2:
+                    self.meta_model_ = self._DummyClassifier(
+                        strategy="constant",
+                        constant=int(unique_target[0]),
+                    )
+                else:
+                    self.meta_model_ = self._LogisticRegression(max_iter=500)
                 self.meta_model_.fit(meta_X, target)
             else:
                 self.meta_model_ = self._make_pipeline(
@@ -117,11 +126,17 @@ class StackingMetaModel:
         try:
             meta_X = np.column_stack([m.predict(X) for m in self.base_models_])
             if self.meta_label_threshold is not None:
-                prob = self.meta_model_.predict_proba(meta_X)[:, 1]
+                probabilities = self.meta_model_.predict_proba(meta_X)
+                classes = getattr(self.meta_model_, "classes_", [])
+                positive_idx = next((idx for idx, value in enumerate(classes) if value == 1), None)
+                if positive_idx is None:
+                    prob = np.ones(len(meta_X), dtype=float) if 1 in set(classes) else np.zeros(len(meta_X), dtype=float)
+                else:
+                    prob = probabilities[:, positive_idx]
                 base_avg = meta_X.mean(axis=1)
-                return np.asarray(prob * base_avg, dtype=float)
+                return cast(np.ndarray, np.asarray(prob * base_avg, dtype=float))
             else:
-                return np.asarray(self.meta_model_.predict(meta_X), dtype=float)
+                return cast(np.ndarray, np.asarray(self.meta_model_.predict(meta_X), dtype=float))
         except AI_TRADING_FALLBACK_EXCEPTIONS as e:
             logger.error("STACKING_PREDICT_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
             raise

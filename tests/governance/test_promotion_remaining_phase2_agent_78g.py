@@ -152,7 +152,7 @@ def test_helper_env_clamps_and_disabled_event_store_paths(
     assert ModelPromotion._lineage_text("  ") is None
 
 
-def test_approval_with_unparseable_timestamp_still_allows_approved_decision(
+def test_approval_with_unparseable_timestamp_blocks_approved_decision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -183,17 +183,42 @@ def test_approval_with_unparseable_timestamp_still_allows_approved_decision(
         encoding="utf-8",
     )
 
-    assert promotion.promote_to_production(challenger, force=False) is True
-    governance = registry.model_index[challenger]["governance"]
-    assert governance["promotion_approval_id"] == "bad-ts"
-    assert governance["promotion_approved_by"] == "ops@example.com"
-    event = json.loads(
-        (tmp_path / "governance" / "promotion_events.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()[-1]
+    assert promotion.promote_to_production(challenger, force=False) is False
+    assert registry.get_production_model(strategy)[0] == champion
+
+
+def test_approval_with_missing_timestamp_blocks_approved_decision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PROMOTION_REQUIRE_APPROVAL", "1")
+    promotion, registry = _promotion(tmp_path, monkeypatch)
+    strategy = "approval_missing_ts"
+    champion = _register_model(registry, strategy=strategy, marker="champion")
+    challenger = _register_model(registry, strategy=strategy, marker="challenger")
+    registry.update_governance_status(champion, "production")
+    registry.update_governance_status(challenger, "shadow")
+    monkeypatch.setattr(
+        promotion,
+        "check_promotion_eligibility",
+        lambda _model_id: (True, {"eligible": True}),
     )
-    assert event["approval"]["ts"] == "not-a-date"
-    assert event["previous_model_id"] == champion
+    (tmp_path / "governance" / "promotion_approvals.jsonl").write_text(
+        json.dumps(
+            {
+                "approval_id": "missing-ts",
+                "strategy": strategy,
+                "model_id": challenger,
+                "approver": "ops@example.com",
+                "decision": "approved",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert promotion.promote_to_production(challenger, force=False) is False
+    assert registry.get_production_model(strategy)[0] == champion
 
 
 def test_active_model_path_and_shadow_listing_cover_helper_outputs(

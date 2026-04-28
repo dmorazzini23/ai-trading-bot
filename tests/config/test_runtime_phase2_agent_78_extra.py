@@ -66,8 +66,10 @@ def test_trading_config_update_validates_unknown_and_recomputes_paper() -> None:
         cfg.update(nope=True)
 
     assert cfg.paper is False
-    assert cfg.update(
+    updated = cfg.update(
         app_env="test",
         alpaca_base_url="https://paper-api.alpaca.markets",
-    ) is cfg
-    assert cfg.paper is True
+    )
+    assert updated is not cfg
+    assert cfg.paper is False
+    assert updated.paper is True

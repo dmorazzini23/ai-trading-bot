@@ -194,6 +194,22 @@ def test_submit_order_rejects_failed_safety_and_zero_sizing(monkeypatch) -> None
     assert coordinator.execution_stats["rejected_orders"] == 1
 
 
+def test_position_tracking_resets_average_price_on_sign_flip(monkeypatch) -> None:
+    coordinator = _coordinator(monkeypatch)
+    coordinator.current_positions["AAPL"] = {
+        "quantity": 5,
+        "avg_price": 100.0,
+        "last_updated": datetime.now(UTC),
+    }
+    order = _order(side=OrderSide.SELL, quantity=8, price=90.0)
+    order.average_fill_price = 90.0
+
+    coordinator._update_position_tracking(order)
+
+    assert coordinator.current_positions["AAPL"]["quantity"] == -3
+    assert coordinator.current_positions["AAPL"]["avg_price"] == pytest.approx(90.0)
+
+
 def test_comprehensive_safety_check_branches(monkeypatch) -> None:
     coordinator = _coordinator(monkeypatch)
     order = _order(quantity=10)

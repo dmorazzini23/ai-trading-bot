@@ -79,3 +79,27 @@ def test_crypto_remains_open_on_us_holidays_and_equity_holidays_are_lazy() -> No
     assert registry.is_market_open("BTCUSD", datetime(2025, 1, 1, 15, 0, tzinfo=UTC)) is True
     assert registry.is_trading_day("AAPL", date(2031, 1, 1)) is False
     assert 2031 in registry._holiday_years  # noqa: SLF001
+
+
+def test_overnight_futures_and_forex_respect_sunday_open_and_friday_close() -> None:
+    registry = CalendarRegistry()
+
+    assert registry.is_market_open("ESZ25", datetime(2025, 1, 5, 22, 59, tzinfo=UTC)) is False
+    assert registry.is_market_open("ESZ25", datetime(2025, 1, 5, 23, 0, tzinfo=UTC)) is True
+    assert registry.is_market_open("ESZ25", datetime(2025, 1, 10, 21, 59, tzinfo=UTC)) is True
+    assert registry.is_market_open("ESZ25", datetime(2025, 1, 10, 22, 0, tzinfo=UTC)) is False
+
+    assert registry.is_market_open("EURUSD", datetime(2025, 1, 5, 21, 59, tzinfo=UTC)) is False
+    assert registry.is_market_open("EURUSD", datetime(2025, 1, 5, 22, 0, tzinfo=UTC)) is True
+    assert registry.is_market_open("EURUSD", datetime(2025, 1, 10, 21, 59, tzinfo=UTC)) is True
+    assert registry.is_market_open("EURUSD", datetime(2025, 1, 10, 22, 0, tzinfo=UTC)) is False
+
+
+def test_equal_start_end_session_bounds_are_explicit_24h_sessions() -> None:
+    registry = CalendarRegistry()
+
+    start, end = registry.get_session_bounds("BTCUSD", date(2025, 1, 1))
+
+    assert start == datetime(2025, 1, 1, 0, 0, tzinfo=UTC)
+    assert end == datetime(2025, 1, 2, 0, 0, tzinfo=UTC)
+    assert registry.is_market_open("BTCUSD", datetime(2025, 1, 1, 23, 59, 59, tzinfo=UTC)) is True

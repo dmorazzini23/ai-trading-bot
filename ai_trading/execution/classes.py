@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import ItemsView, KeysView, Mapping, ValuesView
 from dataclasses import dataclass, field, replace, fields
 from datetime import UTC, datetime
-import time
+import uuid
 from typing import Any, Iterator
 
 from ..core.enums import OrderSide, OrderType
@@ -135,7 +135,7 @@ class OrderRequest:
     strategy: str = "unknown"
     time_in_force: str = "DAY"
     client_order_id: str = field(
-        default_factory=lambda: f"req_{int(time.time())}"
+        default_factory=lambda: f"req_{uuid.uuid4().hex}"
     )
     stop_price: float | None = None
     target_price: float | None = None
@@ -148,7 +148,7 @@ class OrderRequest:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     source_system: str = "ai_trading"
     request_id: str = field(
-        default_factory=lambda: f"req_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
+        default_factory=lambda: f"req_{uuid.uuid4().hex}"
     )
     _validation_errors: list[str] = field(default_factory=list, init=False, repr=False)
     _is_valid: bool = field(default=False, init=False, repr=False)
@@ -262,10 +262,9 @@ class OrderRequest:
 
     def copy(self, **updates: Any) -> "OrderRequest":
         if "client_order_id" not in updates:
-            updates["client_order_id"] = f"req_{int(time.time() * 1000)}"
+            updates["client_order_id"] = f"req_{uuid.uuid4().hex}"
         return replace(self, **updates)
 
     def as_validated(self) -> "OrderRequest":
         self._is_valid = self._validate()
         return self
-

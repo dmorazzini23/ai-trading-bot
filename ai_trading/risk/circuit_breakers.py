@@ -46,6 +46,14 @@ class DrawdownCircuitBreaker:
         self.reset_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
         emit_once(logger, 'DRAWDOWN_CB_INIT', 'info', 'DrawdownCircuitBreaker initialized', max_drawdown=self._safe_format_percentage(self.max_drawdown))
 
+    def _recovery_drawdown_threshold(self) -> float:
+        """Return the drawdown that must be reached before automatic reset."""
+        try:
+            threshold = float(self.max_drawdown) * float(self.recovery_threshold)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, min(float(self.max_drawdown), threshold))
+
     def _safe_format_percentage(self, value) -> str:
         """
         Safely format a value as a percentage, handling MagicMock objects during testing.
@@ -90,8 +98,7 @@ class DrawdownCircuitBreaker:
                     self._trigger_halt('Maximum drawdown exceeded')
                     return False
             elif self.state == CircuitBreakerState.OPEN:
-                recovery_ratio = current_equity / self.peak_equity if self.peak_equity > 0 else 0
-                if recovery_ratio >= self.recovery_threshold:
+                if self.current_drawdown <= self._recovery_drawdown_threshold():
                     self._reset_breaker('Drawdown recovery achieved')
                     return True
                 return False
@@ -132,9 +139,24 @@ class DrawdownCircuitBreaker:
         """Add callback for circuit breaker events."""
         self.reset_callbacks.append(callback)
 
+    def manual_reset(self, current_equity: float | None = None) -> bool:
+        """Reset only when current metrics show drawdown has recovered safely."""
+        if current_equity is not None:
+            if self.update_equity(current_equity) and self.state == CircuitBreakerState.CLOSED:
+                return True
+        if self.current_drawdown > self._recovery_drawdown_threshold():
+            logger.warning(
+                'Drawdown reset rejected: current drawdown %s above recovery threshold %s',
+                self._safe_format_percentage(self.current_drawdown),
+                self._safe_format_percentage(self._recovery_drawdown_threshold()),
+            )
+            return False
+        self._reset_breaker('Manual reset after drawdown recovery')
+        return True
+
     def get_status(self) -> dict[str, Any]:
         """Get current circuit breaker status."""
-        return {'state': self.state.value, 'current_drawdown': self.current_drawdown, 'max_drawdown': self.max_drawdown, 'peak_equity': self.peak_equity, 'halt_timestamp': self.halt_timestamp, 'trading_allowed': self.state == CircuitBreakerState.CLOSED}
+        return {'state': self.state.value, 'current_drawdown': self.current_drawdown, 'max_drawdown': self.max_drawdown, 'recovery_drawdown': self._recovery_drawdown_threshold(), 'peak_equity': self.peak_equity, 'halt_timestamp': self.halt_timestamp, 'trading_allowed': self.state == CircuitBreakerState.CLOSED}
 
 class VolatilityCircuitBreaker:
     """

@@ -19,6 +19,17 @@ def get_phase_logger(name: str, phase: str) -> Any:
     logger_name = f'{name}.{phase}' if phase else name
     return get_logger(logger_name)
 
+def _position_quantity(position: Any) -> float:
+    qty_raw = getattr(position, 'qty', getattr(position, 'quantity', 0.0))
+    qty = float(qty_raw or 0.0)
+    side = str(getattr(position, 'side', '') or '').strip().lower()
+    if side in {'short', 'sell', 'sell_short', 'sell-short', 'sell short'}:
+        return -abs(qty)
+    return qty
+
+def _position_symbol(position: Any) -> str:
+    return str(getattr(position, 'symbol', '') or '').strip().upper()
+
 class PositionDiscrepancy:
     """Represents a discrepancy between bot and broker positions."""
 
@@ -44,6 +55,7 @@ class PositionReconciler:
         self._lock = Lock()
         self._bot_positions: dict[str, float] = {}
         self._broker_positions: dict[str, float] = {}
+        self._last_broker_fetch_failed = False
         self._reconciliation_history: list[dict[str, Any]] = []
         self._current_discrepancies: list[PositionDiscrepancy] = []
         self._discrepancy_history: list[PositionDiscrepancy] = []
@@ -77,22 +89,41 @@ class PositionReconciler:
         """Fetch current positions from broker API."""
         if not self.api_client:
             self.logger.warning('NO_API_CLIENT', extra={'message': 'Cannot fetch broker positions without API client'})
-            return {}
+            self._last_broker_fetch_failed = True
+            with self._lock:
+                return self._broker_positions.copy()
         try:
+            fetch_positions = getattr(self.api_client, 'get_all_positions', None)
+            if not callable(fetch_positions):
+                fetch_positions = getattr(self.api_client, 'list_positions', None)
+            if not callable(fetch_positions):
+                raise AttributeError('broker client missing positions method')
+            raw_positions = fetch_positions() or []
             broker_positions: dict[str, float] = {}
+            for position in raw_positions:
+                symbol = _position_symbol(position)
+                if not symbol:
+                    continue
+                broker_positions[symbol] = _position_quantity(position)
             with self._lock:
                 self._broker_positions = broker_positions.copy()
+            self._last_broker_fetch_failed = False
             self.logger.debug('BROKER_POSITIONS_FETCHED', extra={'positions_count': len(broker_positions), 'timestamp': safe_utcnow().isoformat()})
             return broker_positions
-        except (ValueError, TypeError) as e:
+        except (AttributeError, ConnectionError, TimeoutError, ValueError, TypeError) as e:
+            self._last_broker_fetch_failed = True
             self.logger.error('BROKER_POSITION_FETCH_ERROR', extra={'error': str(e), 'timestamp': safe_utcnow().isoformat()})
-            return {}
+            with self._lock:
+                return self._broker_positions.copy()
 
     def reconcile_positions(self) -> list[PositionDiscrepancy]:
         """Perform position reconciliation and return any discrepancies."""
         self.logger.info('RECONCILIATION_START', extra={'timestamp': safe_utcnow().isoformat()})
         bot_positions = self.get_bot_positions()
         broker_positions = self.get_broker_positions()
+        if self._last_broker_fetch_failed:
+            self.logger.error('RECONCILIATION_SKIPPED_BROKER_FETCH_FAILED', extra={'timestamp': safe_utcnow().isoformat()})
+            return self.get_current_discrepancies()
         discrepancies = []
         all_symbols = set(bot_positions.keys()) | set(broker_positions.keys())
         for symbol in all_symbols:
@@ -207,6 +238,9 @@ class PositionReconciler:
         """Force sync bot positions from broker (emergency recovery)."""
         self.logger.warning('FORCE_SYNC_FROM_BROKER_INITIATED')
         broker_positions = self.get_broker_positions()
+        if self._last_broker_fetch_failed:
+            self.logger.error('FORCE_SYNC_SKIPPED_BROKER_FETCH_FAILED', extra={'timestamp': safe_utcnow().isoformat()})
+            return self.get_bot_positions()
         with self._lock:
             old_positions = self._bot_positions.copy()
             self._bot_positions = broker_positions.copy()

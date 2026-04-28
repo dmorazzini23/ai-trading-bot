@@ -117,6 +117,47 @@ def test_adaptive_position_combines_base_size_with_market_penalties(monkeypatch:
     assert "high volatility environment" in result["metadata"]["sizing_rationale"]
 
 
+def test_adaptive_position_reapplies_caps_after_positive_multipliers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sizer = adaptive.AdaptivePositionSizer(RiskLevel.MODERATE)
+    monkeypatch.setattr(
+        sizer.dynamic_sizer,
+        "calculate_optimal_position",
+        lambda *_args, **_kwargs: {
+            "recommended_size": 100,
+            "sizing_methods": {"concentration_limit": 50},
+            "warnings": [],
+        },
+    )
+    monkeypatch.setattr(
+        sizer.market_analyzer,
+        "analyze_market_regime",
+        lambda _price_data: adaptive.MarketRegime.BULL_TRENDING,
+    )
+    monkeypatch.setattr(
+        sizer.market_analyzer,
+        "assess_volatility_regime",
+        lambda _returns: adaptive.VolatilityRegime.EXTREMELY_LOW,
+    )
+    monkeypatch.setattr(
+        sizer.market_analyzer,
+        "calculate_correlation_matrix",
+        lambda _returns_data: {},
+    )
+
+    result = sizer.calculate_adaptive_position(
+        "SPY",
+        account_equity=100_000.0,
+        entry_price=100.0,
+        market_data={"atr": 2.0},
+        portfolio_data={"price_data": {"SPY": [100.0] * 60}, "returns_data": {"SPY": [0.0] * 60}},
+    )
+
+    assert result["recommended_size"] == 50
+    assert "Position size capped by concentration limit" in result["warnings"]
+
+
 def test_adaptive_position_returns_base_warnings_when_base_size_invalid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -155,6 +196,16 @@ def test_adaptive_limits_risk_assessment_and_rationale() -> None:
             "current_positions": {
                 "AAPL": {"notional_value": 5_000.0},
                 "MSFT": {"notional_value": 5_000.0},
+            }
+        },
+    ) == pytest.approx(0.5)
+    assert sizer._calculate_correlation_penalty(
+        "SPY",
+        {"SPY_AAPL": 0.6, "SPY_MSFT": 0.6},
+        {
+            "current_positions": {
+                "AAPL": {"notional_value": 10_000.0},
+                "MSFT": {"notional_value": -10_000.0},
             }
         },
     ) == pytest.approx(0.5)

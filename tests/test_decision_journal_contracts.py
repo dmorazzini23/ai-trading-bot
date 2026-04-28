@@ -301,6 +301,33 @@ def test_decision_journal_preserves_sell_short_intent_with_negative_delta() -> N
     assert journal["broker_result"]["broker_order"]["side"] == "sell_short"
 
 
+def test_decision_journal_submitted_requires_submission_evidence() -> None:
+    bar_ts = datetime.now(UTC)
+    record = build_decision_record(
+        symbol="AAPL",
+        bar_ts=bar_ts,
+        net_target=NettedTarget(
+            symbol="AAPL",
+            bar_ts=bar_ts,
+            target_dollars=1000.0,
+            target_shares=8.0,
+        ),
+        gates=["OK_TRADE"],
+        order={
+            "client_order_id": "coid-aapl-intent-only",
+            "side": "buy",
+            "qty": 8,
+            "price": 125.5,
+        },
+    )
+
+    journal = record.to_dict()["decision_journal"]
+
+    assert journal["order_intent"] is not None
+    assert journal["submitted"] is False
+    assert journal["broker_result"]["submitted"] is False
+
+
 def test_decision_journal_uses_explicit_event_and_freshness_metrics() -> None:
     bar_ts = datetime.now(UTC)
     record = build_decision_record(

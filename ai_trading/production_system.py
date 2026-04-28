@@ -42,6 +42,7 @@ class ProductionTradingSystem:
         self.alert_manager = AlertManager()
         self.performance_dashboard = PerformanceDashboard(self.alert_manager)
         self.execution_coordinator = ProductionExecutionCoordinator(account_equity, risk_level)
+        self._share_halt_manager_with_execution_coordinator()
         self.liquidity_manager = LiquidityManager()
         self.mtf_analyzer = MultiTimeframeAnalyzer()
         self.regime_detector = RegimeDetector()
@@ -68,6 +69,35 @@ class ProductionTradingSystem:
     def _requires_limit_price(order_type: OrderType) -> bool:
         value = order_type.value if isinstance(order_type, OrderType) else str(order_type)
         return str(value).strip().lower() in {OrderType.LIMIT.value, OrderType.STOP_LIMIT.value}
+
+    @staticmethod
+    def _is_buy_or_sell(side: OrderSide) -> bool:
+        value = side.value if isinstance(side, OrderSide) else str(side)
+        return str(value).strip().lower() in {OrderSide.BUY.value, OrderSide.SELL.value}
+
+    @staticmethod
+    def _risk_price(price: float | None, market_data: dict | None) -> float:
+        if price is not None:
+            return float(price)
+        if market_data:
+            return float(market_data.get('current_price', 0) or 0)
+        return 0.0
+
+    def _share_halt_manager_with_execution_coordinator(self) -> None:
+        coordinator = getattr(self, 'execution_coordinator', None)
+        if coordinator is None or not hasattr(coordinator, 'halt_manager'):
+            return
+        coordinator.halt_manager = self.halt_manager
+
+    def _active_trading_rejection(self) -> dict[str, Any] | None:
+        if not self.is_active:
+            return {'status': 'rejected', 'reason': 'Trading system inactive'}
+        trading_status = self.halt_manager.is_trading_allowed()
+        if not trading_status.get('trading_allowed', False):
+            reasons = trading_status.get('reasons', [])
+            reason_text = ', '.join(reasons) if reasons else 'unknown'
+            return {'status': 'rejected', 'reason': f'Trading halted: {reason_text}'}
+        return None
 
     async def start_system(self) -> dict[str, Any]:
         """Start the production trading system."""
@@ -134,11 +164,35 @@ class ProductionTradingSystem:
         """Execute a trade with comprehensive safety checks."""
         try:
             execution_start = datetime.now(UTC)
+            self._share_halt_manager_with_execution_coordinator()
+            active_rejection = self._active_trading_rejection()
+            if active_rejection is not None:
+                return active_rejection
+            if quantity <= 0:
+                return {'status': 'rejected', 'reason': 'Invalid quantity'}
             if market_data:
                 opportunity_analysis = await self.analyze_trading_opportunity(symbol, market_data)
                 final_rec = opportunity_analysis.get('final_recommendation', {})
                 if final_rec.get('action') == 'NO_TRADE':
                     return {'status': 'rejected', 'reason': 'Analysis recommends no trade', 'analysis': opportunity_analysis}
+                if self._is_buy_or_sell(side):
+                    risk_price = self._risk_price(price, market_data)
+                    if risk_price <= 0:
+                        return {'status': 'rejected', 'reason': 'Valid trade price required for risk assessment', 'analysis': opportunity_analysis}
+                    risk_assessment = self.risk_manager.assess_trade_risk(symbol, quantity, risk_price, self.account_equity, [])
+                    approved_quantity = int(risk_assessment.get('recommended_size', 0) or 0)
+                    opportunity_analysis['risk_assessment'] = risk_assessment
+                    opportunity_analysis['execution_risk_assessment'] = risk_assessment
+                    final_rec['recommended_quantity'] = approved_quantity
+                    final_rec['max_quantity'] = approved_quantity
+                    if not risk_assessment.get('approved', False):
+                        warnings = risk_assessment.get('warnings', [])
+                        reason = '; '.join(warnings) if warnings else 'Risk assessment failed'
+                        return {'status': 'rejected', 'reason': reason, 'analysis': opportunity_analysis}
+                    if approved_quantity <= 0:
+                        return {'status': 'rejected', 'reason': 'Approved quantity must be positive', 'analysis': opportunity_analysis}
+                    if quantity > approved_quantity:
+                        return {'status': 'rejected', 'reason': 'Requested quantity exceeds approved quantity', 'analysis': opportunity_analysis}
             if self._requires_limit_price(order_type) and price is None:
                 return {'status': 'rejected', 'reason': 'Limit price required for limit order'}
             raw_execution_result = await self.execution_coordinator.submit_order(

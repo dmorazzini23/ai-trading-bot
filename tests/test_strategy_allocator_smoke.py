@@ -62,3 +62,45 @@ def test_allocator_accepts_fallback_gap_signal():
     kept = out[0]
     assert kept.symbol == "MSFT"
     assert kept.metadata.get("price_reliable_override") is True
+
+
+def test_allocator_does_not_promote_yahoo_fallback_without_gap_evidence():
+    alloc = strategy_allocator.StrategyAllocator()
+    alloc.replace_config(
+        signal_confirmation_bars=1,
+        min_confidence=0.0,
+        delta_threshold=0.0,
+    )
+    meta = {
+        "price_reliable": False,
+        "price_reliable_reason": "fallback_without_gap_audit",
+        "fallback_provider": "yahoo",
+    }
+    sig = TradeSignal(symbol="MSFT", side="buy", confidence=0.9, metadata=meta)
+
+    out = alloc.allocate({"s": [sig]})
+
+    assert out
+    assert out[0].metadata["price_reliable"] is False
+    assert "price_reliable_override" not in out[0].metadata
+
+
+def test_allocator_accepts_yahoo_fallback_with_explicit_audited_override():
+    alloc = strategy_allocator.StrategyAllocator()
+    alloc.replace_config(
+        signal_confirmation_bars=1,
+        min_confidence=0.0,
+        delta_threshold=0.0,
+    )
+    meta = {
+        "price_reliable": False,
+        "price_reliable_reason": "fallback_without_gap_audit",
+        "fallback_provider": "yahoo",
+        "fallback_price_audited_override": True,
+    }
+    sig = TradeSignal(symbol="MSFT", side="buy", confidence=0.9, metadata=meta)
+
+    out = alloc.allocate({"s": [sig]})
+
+    assert out[0].metadata["price_reliable"] is True
+    assert out[0].metadata["price_reliable_override_reason"] == "audited_fallback_override"

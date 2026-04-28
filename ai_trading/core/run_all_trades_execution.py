@@ -175,12 +175,12 @@ def execute_run_all_trades_cycle(
     )
     setattr(state, "_legacy_decision_recorder", legacy_recorder)
     try:
-        can_list_orders = hasattr(api, "list_orders") and callable(
-            getattr(api, "list_orders", None)
-        )
+        can_list_orders = (
+            hasattr(api, "list_orders") and callable(getattr(api, "list_orders", None))
+        ) or (hasattr(api, "get_orders") and callable(getattr(api, "get_orders", None)))
         if not can_list_orders:
             if not getattr(state, "_warned_missing_list_orders", False):
-                be.logger.warning("API capability unavailable: list_orders")
+                be.logger.warning("API capability unavailable: list_orders/get_orders")
                 setattr(state, "_warned_missing_list_orders", True)
             open_orders = []
         else:

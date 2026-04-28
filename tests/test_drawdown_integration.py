@@ -82,8 +82,8 @@ class TestDrawdownIntegration(unittest.TestCase):
         self.assertEqual(breaker.state.value, "open")  # Trading halted
         self.assertGreater(breaker.current_drawdown, self.max_drawdown)
 
-    def test_drawdown_circuit_breaker_recovery(self):
-        """Test circuit breaker allows trading after recovery."""
+    def test_drawdown_circuit_breaker_recovery_requires_hysteresis(self):
+        """Test circuit breaker allows trading only after drawdown recovers safely."""
         breaker = DrawdownCircuitBreaker(max_drawdown=self.max_drawdown, recovery_threshold=0.8)
 
         # Set initial peak equity
@@ -94,12 +94,28 @@ class TestDrawdownIntegration(unittest.TestCase):
         breaker.update_equity(loss_equity)
         self.assertEqual(breaker.state.value, "open")
 
-        # Recover to 80% of peak (recovery threshold)
+        # Recovering to 80% of peak still leaves drawdown above the 15% halt threshold.
         recovery_equity = self.initial_equity * 0.8
         trading_allowed = breaker.update_equity(recovery_equity)
 
+        self.assertFalse(trading_allowed)
+        self.assertEqual(breaker.state.value, "open")
+
+        # Resume only after drawdown is below the hysteresis recovery threshold.
+        safe_recovery_equity = self.initial_equity * (1 - self.max_drawdown * 0.8 + 0.01)
+        trading_allowed = breaker.update_equity(safe_recovery_equity)
+
         self.assertTrue(trading_allowed)
         self.assertEqual(breaker.state.value, "closed")  # Trading resumed
+
+    def test_drawdown_manual_reset_rejects_unrecovered_metrics(self):
+        """Test manual reset does not reopen while drawdown remains unsafe."""
+        breaker = DrawdownCircuitBreaker(max_drawdown=self.max_drawdown, recovery_threshold=0.8)
+        breaker.update_equity(self.initial_equity)
+        breaker.update_equity(self.initial_equity * (1 - self.max_drawdown - 0.01))
+
+        self.assertFalse(breaker.manual_reset())
+        self.assertEqual(breaker.state.value, "open")
 
     def test_configuration_values(self):
         """Test that configuration values are correctly set."""

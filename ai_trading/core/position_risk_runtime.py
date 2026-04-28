@@ -70,9 +70,13 @@ def manage_position_risk_runtime(ctx: Any, position: Any) -> None:
             be.logger.critical("Invalid price computed for %s: %s", symbol, price)
             return
 
-        qty = int(_safe_float(getattr(position, "qty", 0.0)))
+        raw_qty = _safe_float(getattr(position, "qty", 0.0))
+        qty = int(raw_qty)
         if qty == 0:
             return
+        side_text = str(getattr(position, "side", "") or "").strip().lower()
+        if side_text in {"short", "sell", "sell_short", "sell-short", "sell short"}:
+            qty = -abs(qty)
         side = "long" if qty > 0 else "short"
         avg_entry_price = max(0.0, _safe_float(getattr(position, "avg_entry_price", 0.0)))
         vwap = _numeric_helper(be, "get_current_vwap", symbol, default=price)

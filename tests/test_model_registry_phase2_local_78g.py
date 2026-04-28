@@ -4,9 +4,11 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import joblib
 import pytest
 
 from ai_trading import model_registry as mr
+from ai_trading.models.artifacts import write_artifact_manifest
 
 
 def test_legacy_registry_helpers_handle_activation_and_malformed_payload(
@@ -53,17 +55,19 @@ def test_legacy_registry_helpers_handle_activation_and_malformed_payload(
 
 
 def test_model_registry_external_artifacts_metadata_and_production_paths(tmp_path: Path) -> None:
-    artifact = tmp_path / "artifact.json"
-    artifact.write_text('{"weights": [1, 2, 3]}')
+    artifact = tmp_path / "artifact.joblib"
+    joblib.dump({"weights": [1, 2, 3]}, artifact)
+    manifest = write_artifact_manifest(model_path=artifact, model_version="phase2-local")
     registry = mr.ModelRegistry(tmp_path / "registry")
 
     model_id = registry.register_model(
-        {"paths": {"model_path": str(artifact)}},
+        {"paths": {"model_path": str(artifact), "manifest_path": str(manifest)}},
         "mean reversion!",
         "json model",
         metadata={
             "created": datetime(2024, 1, 2, tzinfo=UTC),
             "path": artifact,
+            "manifest_path": manifest,
             "klass": mr.ModelRegistry,
             "nested": {"when": datetime(2024, 1, 3, tzinfo=UTC)},
         },
@@ -77,9 +81,10 @@ def test_model_registry_external_artifacts_metadata_and_production_paths(tmp_pat
         expected_dataset_fingerprint="dataset-1",
     )
 
-    assert loaded is None
+    assert loaded == {"weights": [1, 2, 3]}
     assert metadata["artifact_format"] == "external_path"
     assert metadata["path"] == str(artifact)
+    assert metadata["manifest_path"] == str(manifest)
     assert metadata["klass"] == "ai_trading.model_registry.ModelRegistry"
     assert metadata["tags"] == ["prod", "7"]
     assert registry.latest_for("mean reversion!", "json model") == model_id

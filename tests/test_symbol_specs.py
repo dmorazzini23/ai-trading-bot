@@ -4,7 +4,13 @@ from decimal import Decimal
 
 import pytest
 
-from ai_trading.market.symbol_specs import DEFAULT_SPEC, get_symbol_spec
+from ai_trading.market.symbol_specs import (
+    DEFAULT_SPEC,
+    LOT_BY_SYMBOL,
+    TICK_BY_SYMBOL,
+    add_symbol_spec,
+    get_symbol_spec,
+)
 
 
 @pytest.mark.parametrize("symbol", ["ADBE", "HD", "AMGN"])
@@ -28,3 +34,10 @@ def test_default_specs(symbol: str) -> None:
     assert spec.tick == Decimal("0.01")
     assert spec.lot == 1
 
+
+def test_runtime_spec_update_refreshes_exported_lookup_maps() -> None:
+    add_symbol_spec("ZZZ", Decimal("0.05"), 10)
+
+    assert get_symbol_spec("ZZZ").tick == Decimal("0.05")
+    assert TICK_BY_SYMBOL["ZZZ"] == Decimal("0.05")
+    assert LOT_BY_SYMBOL["ZZZ"] == 10

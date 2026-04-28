@@ -47,11 +47,19 @@ def predict(path: str):
     df = pd.read_csv(path)
     feature_prepare = importlib.import_module("ai_trading.features.prepare")
     features = feature_prepare.prepare_indicators(df)
+    latest_features = features.iloc[[-1]] if hasattr(features, "iloc") else features[-1:]
     model = load_model('default')
-    pred = model.predict(features)[0]
+    pred = model.predict(latest_features)[0]
     proba = None
     if hasattr(model, "predict_proba"):
-        proba = model.predict_proba(features)[0][0]
+        probabilities = model.predict_proba(latest_features)
+        row = probabilities[0]
+        classes = getattr(model, "classes_", None)
+        if classes is not None and len(classes) == len(row):
+            positive_idx = next((idx for idx, value in enumerate(classes) if value == 1), None)
+            proba = row[positive_idx if positive_idx is not None else len(row) - 1]
+        else:
+            proba = row[1] if len(row) > 1 else row[0]
     return (pred, proba)
 
 def load_model(regime: str):

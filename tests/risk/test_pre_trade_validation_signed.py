@@ -49,6 +49,29 @@ def test_position_risk_projects_signed_flip_to_resulting_gross(monkeypatch: pyte
     assert result.details["position_percentage"] == pytest.approx(0.20)
 
 
+def test_position_risk_uses_side_for_short_additions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        ptv,
+        "safe_settings",
+        lambda: SimpleNamespace(ENABLE_PORTFOLIO_FEATURES=False),
+    )
+    validator = ptv.RiskValidator()
+
+    result = validator.validate_position_risk(
+        "AAPL",
+        quantity=100,
+        price=100.0,
+        account_equity=100_000.0,
+        current_positions={"AAPL": {"notional_value": -20_000.0}},
+        side="sell_short",
+    )
+
+    assert result.details["order_value"] == pytest.approx(-10_000.0)
+    assert result.details["position_value"] == pytest.approx(-30_000.0)
+    assert result.details["position_percentage"] == pytest.approx(0.30)
+    assert result.status is ptv.ValidationStatus.REJECTED
+
+
 def test_correlation_exposure_uses_projected_gross_for_short_book(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -80,7 +103,7 @@ def test_portfolio_risk_concentration_uses_projected_flip(
     validator = ptv.RiskValidator()
 
     result = validator.validate_portfolio_risk(
-        {"symbol": "AAPL", "quantity": 400, "price": 100.0},
+        {"symbol": "AAPL", "quantity": 400, "price": 100.0, "side": "buy"},
         {
             "account_equity": 100_000.0,
             "current_positions": {"AAPL": {"notional_value": -20_000.0}},

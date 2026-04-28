@@ -9,7 +9,7 @@ pytest.importorskip("sklearn")
 
 import ai_trading.core.bot_engine as bot_engine
 import ai_trading.model_loader as model_loader
-from ai_trading.models.artifacts import default_manifest_path, verify_artifact, write_artifact_manifest
+from ai_trading.models.artifacts import default_manifest_path, write_artifact_manifest
 from sklearn.dummy import DummyClassifier
 import joblib
 
@@ -158,17 +158,35 @@ def test_load_model_from_internal_dir(tmp_path, monkeypatch):
     assert hasattr(loaded, "predict")
 
 
-def test_train_and_save_model_synthetic_fallback_handles_missing_daily_data(tmp_path, monkeypatch):
+def test_train_and_save_model_synthetic_fallback_is_test_only_and_not_persisted(tmp_path, monkeypatch):
     monkeypatch.setattr("ai_trading.data.fetch.get_daily_df", lambda *_args, **_kwargs: None)
 
     model = model_loader.train_and_save_model("SYN", tmp_path)
 
     model_path = tmp_path / "SYN.pkl"
     assert hasattr(model, "predict")
-    assert model_path.exists()
-    assert default_manifest_path(model_path).exists()
-    assert verify_artifact(model_path=model_path) == (True, "OK")
+    assert not model_path.exists()
+    assert not default_manifest_path(model_path).exists()
     assert set(model.predict(np.zeros((4, 9))).tolist()) <= {0, 1}
+
+
+def test_train_and_save_model_fails_closed_without_real_bars_in_runtime(tmp_path, monkeypatch):
+    monkeypatch.setattr("ai_trading.data.fetch.get_daily_df", lambda *_args, **_kwargs: None)
+
+    def fake_get_env(key, default=None, **_kwargs):
+        if key in {
+            "PYTEST_CURRENT_TEST",
+            "PYTEST_RUNNING",
+            "TESTING",
+            "AI_TRADING_MODEL_TRAINING_SMOKE",
+        }:
+            return "" if isinstance(default, str) else False
+        return default
+
+    monkeypatch.setattr(model_loader, "get_env", fake_get_env)
+
+    with pytest.raises(RuntimeError, match="Real training bars unavailable"):
+        model_loader.train_and_save_model("SYN", tmp_path)
 
 
 def test_training_frame_trend_uses_past_only_for_future_tail_mutation():

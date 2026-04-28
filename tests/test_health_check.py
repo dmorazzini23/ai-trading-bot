@@ -272,6 +272,34 @@ def test_standalone_health_app_fail_fast_env(monkeypatch):
         app_module.create_app(health_only=True, fail_fast_env=True)
 
 
+def test_create_app_caches_value_error_for_health_routes(monkeypatch):
+    def _fail(*args, **kwargs):
+        raise ValueError("shared config invalid")
+
+    monkeypatch.setattr(config_management, "validate_required_env", _fail)
+
+    app = app_module.create_app(fail_fast_env=False, force_ok_for_pytest=False)
+    assert app.config["_ENV_VALID"] is False
+    assert app.config["_ENV_ERR"] == "shared config invalid"
+
+    resp = app.test_client().get("/healthz")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert data["status"] == "degraded"
+    assert "shared config invalid" in data["error"]
+
+
+def test_create_app_fail_fast_reraises_value_error(monkeypatch):
+    def _fail(*args, **kwargs):
+        raise ValueError("shared config invalid")
+
+    monkeypatch.setattr(config_management, "validate_required_env", _fail)
+
+    with pytest.raises(ValueError, match="shared config invalid"):
+        app_module.create_app(fail_fast_env=True)
+
+
 def test_resolve_standalone_healthcheck_port_rejects_shared_port():
     settings = types.SimpleNamespace(api_port=9001, healthcheck_port=9001)
 

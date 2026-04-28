@@ -301,6 +301,15 @@ class AdaptivePositionSizer:
             final_multiplier = max(0.1, min(2.0, final_multiplier))
             result['final_multiplier'] = final_multiplier
             recommended_size = int(base_size * final_multiplier)
+            recommended_size = self._apply_final_position_caps(
+                symbol,
+                recommended_size,
+                account_equity,
+                entry_price,
+                base_result,
+                portfolio_data,
+                result,
+            )
             result['recommended_size'] = recommended_size
             result['risk_assessment'] = self._assess_position_risk(recommended_size, entry_price, account_equity, market_data)
             self._generate_sizing_warnings(result, market_regime, volatility_regime)
@@ -338,7 +347,7 @@ class AdaptivePositionSizer:
             if not current_positions or not correlation_matrix:
                 return 0.0
             total_correlation_exposure = 0.0
-            total_position_value = sum((pos.get('notional_value', 0) for pos in current_positions.values()))
+            total_position_value = sum((abs(pos.get('notional_value', 0)) for pos in current_positions.values()))
             if total_position_value <= 0:
                 return 0.0
             for other_symbol, position_info in current_positions.items():
@@ -346,7 +355,7 @@ class AdaptivePositionSizer:
                     continue
                 correlation_key = f'{symbol}_{other_symbol}'
                 correlation = correlation_matrix.get(correlation_key, 0.0)
-                position_weight = position_info.get('notional_value', 0) / total_position_value
+                position_weight = abs(position_info.get('notional_value', 0)) / total_position_value
                 correlation_contribution = abs(correlation) * position_weight
                 total_correlation_exposure += correlation_contribution
             penalty = min(0.5, total_correlation_exposure)
@@ -354,6 +363,39 @@ class AdaptivePositionSizer:
         except COMMON_EXC as e:
             logger.error(f'Error calculating correlation penalty: {e}')
             return 0.0
+
+    def _apply_final_position_caps(self, symbol: str, recommended_size: int, account_equity: float, entry_price: float, base_result: dict, portfolio_data: dict, result: dict) -> int:
+        """Reapply concentration and max-position caps after adaptive multipliers."""
+        try:
+            if recommended_size <= 0 or account_equity <= 0 or entry_price <= 0:
+                return 0
+            caps: list[int] = []
+            sizing_methods = base_result.get('sizing_methods', {}) if isinstance(base_result, dict) else {}
+            concentration_limit = sizing_methods.get('concentration_limit')
+            if concentration_limit is not None:
+                caps.append(max(0, int(concentration_limit)))
+            position_pcts = [RISK_PARAMETERS['MAX_POSITION_SIZE']]
+            dynamic_pct = getattr(self.dynamic_sizer, 'max_position_pct', None)
+            if isinstance(dynamic_pct, int | float) and dynamic_pct > 0:
+                position_pcts.append(float(dynamic_pct))
+            max_position_notional = account_equity * min(position_pcts)
+            current_positions = portfolio_data.get('current_positions', {})
+            current_symbol_value = 0.0
+            if isinstance(current_positions, dict):
+                symbol_position = current_positions.get(symbol, {})
+                if isinstance(symbol_position, dict):
+                    current_symbol_value = abs(float(symbol_position.get('notional_value', 0.0) or 0.0))
+                else:
+                    current_symbol_value = abs(float(getattr(symbol_position, 'notional_value', 0.0) or 0.0))
+            available_symbol_notional = max(0.0, max_position_notional - current_symbol_value)
+            caps.append(max(0, int(available_symbol_notional / entry_price)))
+            capped_size = min([recommended_size, *caps])
+            if capped_size < recommended_size:
+                result.setdefault('warnings', []).append('Position size capped by concentration limit')
+            return max(0, capped_size)
+        except COMMON_EXC as e:
+            logger.error(f'Error applying final adaptive caps for {symbol}: {e}')
+            return 0
 
     def _assess_position_risk(self, position_size: int, entry_price: float, account_equity: float, market_data: dict) -> dict[str, Any]:
         """Assess risk metrics for the proposed position."""

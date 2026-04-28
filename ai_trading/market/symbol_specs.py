@@ -111,6 +111,8 @@ def add_symbol_spec(
         trading_hours=trading_hours,
         currency=currency,
     )
+    TICK_BY_SYMBOL[symbol] = tick
+    LOT_BY_SYMBOL[symbol] = lot
     logger.info(
         "Added/updated spec for %s: tick=%s, lot=%s, multiplier=%s, trading_hours=%s, currency=%s",
         symbol,
@@ -148,4 +150,3 @@ def get_lot_by_symbol() -> dict[str, int]:
 
 TICK_BY_SYMBOL = get_tick_by_symbol()
 LOT_BY_SYMBOL = get_lot_by_symbol()
-

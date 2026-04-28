@@ -334,6 +334,28 @@ def test_shadow_metric_update_handles_returns_costs_calibration_and_challenger_g
     assert metrics.challenger_sequential_passes == 1
 
 
+def test_shadow_metrics_tca_gate_fails_closed_when_telemetry_absent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    promotion, registry = _promotion(tmp_path, monkeypatch)
+    monkeypatch.setenv("AI_TRADING_MODEL_GOVERNANCE_AUTO_VALIDATION_ENABLED", "0")
+    model_id = _register_model(registry, strategy="missing_tca", marker="candidate")
+    assert promotion.start_shadow_testing(model_id) is True
+
+    promotion.update_shadow_metrics(
+        model_id,
+        {
+            "trade_count": 1,
+            "turnover_ratio": 0.1,
+        },
+    )
+
+    metrics = promotion._load_shadow_metrics(model_id)
+    assert metrics is not None
+    assert metrics.tca_gate_passed is False
+
+
 def test_institutional_validation_derives_frame_and_calibration_metrics(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

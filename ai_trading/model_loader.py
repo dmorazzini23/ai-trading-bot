@@ -73,6 +73,15 @@ def _build_training_frame(df: Any) -> Any:
     return df.dropna()
 
 
+def _synthetic_training_allowed() -> bool:
+    return (
+        bool(get_env("PYTEST_CURRENT_TEST", "", cast=str))
+        or bool(get_env("PYTEST_RUNNING", False, cast=bool))
+        or bool(get_env("TESTING", False, cast=bool))
+        or bool(get_env("AI_TRADING_MODEL_TRAINING_SMOKE", False, cast=bool))
+    )
+
+
 def train_and_save_model(symbol: str, models_dir: Path) -> object:
     """Train a simple feature/label pipeline with rolling OOS validation and persist it.
 
@@ -104,11 +113,15 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
     except (ValueError, TypeError) as exc:
         logger.warning("Data fetch failed for %s: %s", symbol, exc)
         df = None
+    synthetic_data_used = False
     if df is None or df.empty or "close" not in df:
-        # Fallback synthetic series with both up and down labels.
+        if not _synthetic_training_allowed():
+            raise RuntimeError(f"Real training bars unavailable for {symbol}")
+        # Fallback synthetic series with both up and down labels for tests/smoke only.
         steps = np.arange(240, dtype=float)
         close = 100.0 + 0.02 * steps + np.sin(steps / 3.0)
         df = pd.DataFrame({"close": close, "volume": np.linspace(1e5, 2e5, 240)})
+        synthetic_data_used = True
 
     df = _build_training_frame(df)
 
@@ -127,6 +140,8 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
             y = df["y"].astype(int).values
         model = _classifier_for(y)
         model.fit(X, y)
+        if synthetic_data_used:
+            return model
         try:
             models_dir.mkdir(parents=True, exist_ok=True)
             model_path = models_dir / f"{symbol}.pkl"
@@ -166,6 +181,8 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
     final_pipe.fit(X[:cutoff], y[:cutoff])
 
     # Persist model and metadata
+    if synthetic_data_used:
+        return final_pipe
     try:
         models_dir.mkdir(parents=True, exist_ok=True)
         model_path = models_dir / f"{symbol}.pkl"

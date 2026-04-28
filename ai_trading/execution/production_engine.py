@@ -334,8 +334,16 @@ class ProductionExecutionCoordinator:
                 if new_quantity == 0:
                     del self.current_positions[symbol]
                 else:
-                    total_cost = current_pos['quantity'] * current_pos['avg_price'] + quantity * fill_price
-                    new_avg_price = total_cost / new_quantity
+                    current_qty = float(current_pos['quantity'])
+                    current_avg = float(current_pos['avg_price'])
+                    fill_qty = float(quantity)
+                    if current_qty * fill_qty > 0:
+                        total_cost = abs(current_qty) * current_avg + abs(fill_qty) * fill_price
+                        new_avg_price = total_cost / abs(float(new_quantity))
+                    elif current_qty * float(new_quantity) > 0:
+                        new_avg_price = current_avg
+                    else:
+                        new_avg_price = fill_price
                     self.current_positions[symbol] = {'quantity': new_quantity, 'avg_price': new_avg_price, 'last_updated': datetime.now(UTC)}
             elif quantity != 0:
                 self.current_positions[symbol] = {'quantity': quantity, 'avg_price': fill_price, 'last_updated': datetime.now(UTC)}

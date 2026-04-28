@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean, pstdev
-from typing import Any
+from typing import Any, cast
 from ..model_registry import ModelRegistry
 from ai_trading.config.management import get_env
 from ai_trading.research.institutional_validation import (
@@ -80,7 +80,7 @@ class PromotionMetrics:
     purged_walk_forward_pass_ratio: float = 0.0
     monte_carlo_p05_bps: float = 0.0
     regime_pass_ratio: float = 0.0
-    tca_gate_passed: bool = True
+    tca_gate_passed: bool = False
     reject_rate: float = 0.0
     execution_drift_bps: float = 0.0
     challenger_uplift_bps: float = 0.0
@@ -123,7 +123,7 @@ class ModelPromotion:
         self._event_store_init_failed = False
 
     def _governance_event_path(self, filename: str) -> Path:
-        return self.base_path / str(filename)
+        return cast(Path, self.base_path / str(filename))
 
     def _append_jsonl_event(
         self,
@@ -224,6 +224,14 @@ class ModelPromotion:
             return None
         parsed = str(value).strip()
         return parsed or None
+
+    @staticmethod
+    def _explicit_bool_pass(value: Any) -> bool:
+        if value is True:
+            return True
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "pass", "passed"}
+        return False
 
     def _extract_model_lineage(self, model_id: str | None) -> dict[str, Any]:
         resolved_model_id = str(model_id or "").strip()
@@ -492,7 +500,7 @@ class ModelPromotion:
         except AI_TRADING_FALLBACK_EXCEPTIONS:
             raw = ""
         if not raw:
-            return self.base_path / "live_kpi_breach_state.json"
+            return cast(Path, self.base_path / "live_kpi_breach_state.json")
         path = Path(raw).expanduser()
         if not path.is_absolute():
             path = self.base_path / path
@@ -1081,8 +1089,8 @@ class ModelPromotion:
             current_metrics.monte_carlo_p05_bps = alpha * float(
                 session_payload.get("monte_carlo_p05_bps", current_metrics.monte_carlo_p05_bps) or 0.0
             ) + (1 - alpha) * current_metrics.monte_carlo_p05_bps
-            current_metrics.tca_gate_passed = bool(
-                session_payload.get("tca_gate_passed", current_metrics.tca_gate_passed)
+            current_metrics.tca_gate_passed = self._explicit_bool_pass(
+                session_payload.get("tca_gate_passed")
             )
             current_metrics.reject_rate = alpha * float(
                 session_payload.get("reject_rate", current_metrics.reject_rate) or 0.0
@@ -1449,6 +1457,24 @@ class ModelPromotion:
                         approved_ts = datetime.fromisoformat(approved_ts_text)
                     except ValueError:
                         approved_ts = None
+                if approved_ts is None:
+                    self.logger.warning(
+                        "PROMOTION_APPROVAL_REQUIRED_TIMESTAMP_INVALID",
+                        extra={"strategy": strategy, "model_id": model_id},
+                    )
+                    self._append_governance_audit_event(
+                        event_type="MODEL_PROMOTION_BLOCKED",
+                        payload={
+                            "ts": datetime.now(UTC).isoformat(),
+                            "strategy": str(strategy),
+                            "model_id": str(model_id),
+                            "force": bool(force),
+                            "reason": "approval_timestamp_invalid",
+                            "approval": dict(approval_payload),
+                        },
+                        primary_lineage=model_lineage,
+                    )
+                    return False
                 if approved_ts is not None:
                     if approved_ts.tzinfo is None:
                         approved_ts = approved_ts.replace(tzinfo=UTC)
@@ -2018,7 +2044,7 @@ class ModelPromotion:
                 purged_walk_forward_pass_ratio=data.get('purged_walk_forward_pass_ratio', 0.0),
                 monte_carlo_p05_bps=data.get('monte_carlo_p05_bps', 0.0),
                 regime_pass_ratio=data.get('regime_pass_ratio', 0.0),
-                tca_gate_passed=bool(data.get('tca_gate_passed', True)),
+                tca_gate_passed=self._explicit_bool_pass(data.get('tca_gate_passed')),
                 reject_rate=data.get('reject_rate', 0.0),
                 execution_drift_bps=data.get('execution_drift_bps', 0.0),
                 gross_expectancy_bps=data.get('gross_expectancy_bps', 0.0),

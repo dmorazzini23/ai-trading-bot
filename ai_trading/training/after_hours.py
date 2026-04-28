@@ -651,7 +651,7 @@ def _build_symbol_dataset(
     frame["regime"] = _infer_regime(close_arr)
     timestamps = pd.to_datetime(frame.index, utc=True, errors="coerce")
     frame["timestamp"] = timestamps
-    frame["label_ts"] = timestamps + pd.Timedelta(days=1)
+    frame["label_ts"] = pd.Series(timestamps, index=frame.index).shift(-1)
     frame["symbol"] = symbol
     frame = frame.dropna(
         subset=list(FEATURE_COLUMNS)

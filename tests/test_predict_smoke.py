@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 
 pd = pytest.importorskip("pandas")
+np = pytest.importorskip("numpy")
 
 
 def _import_predict(monkeypatch):
@@ -44,6 +45,17 @@ class DummyModel:
         return [[1.0]]
 
 
+class LatestPositiveClassModel:
+    classes_ = np.array([0, 1])
+
+    def predict(self, X):
+        return [int(X["close"].iloc[0])]
+
+    def predict_proba(self, X):
+        assert X["close"].iloc[0] == 3.0
+        return [[0.2, 0.8]]
+
+
 @pytest.mark.smoke
 def test_predict_function(tmp_path, monkeypatch):
     predict = _import_predict(monkeypatch)
@@ -53,3 +65,15 @@ def test_predict_function(tmp_path, monkeypatch):
     pred, proba = predict.predict(str(csv_path))
     assert proba is not None
     force_coverage(predict)
+
+
+def test_predict_scores_latest_row_positive_class(tmp_path, monkeypatch):
+    predict = _import_predict(monkeypatch)
+    monkeypatch.setattr(predict, "load_model", lambda regime: LatestPositiveClassModel())
+    csv_path = tmp_path / "AAPL.csv"
+    pd.DataFrame({"close": [1.0, 2.0, 3.0]}).to_csv(csv_path, index=False)
+
+    pred, proba = predict.predict(str(csv_path))
+
+    assert pred == 3
+    assert proba == 0.8

@@ -65,10 +65,13 @@ class _FakeHaltManager:
 class _FakeRiskManager:
     def __init__(self, _risk_level):
         self.approved = True
+        self.recommended_size = 7
+        self.assessments: list[tuple[object, ...]] = []
 
     def assess_trade_risk(self, *_args):
+        self.assessments.append(_args)
         if self.approved:
-            return {"approved": True, "recommended_size": 7, "warnings": []}
+            return {"approved": True, "recommended_size": self.recommended_size, "warnings": []}
         return {"approved": False, "recommended_size": 0, "warnings": ["risk blocked"]}
 
 
@@ -87,6 +90,7 @@ class _FakeExecutionCoordinator:
     def __init__(self, account_equity, risk_level):
         self.account_equity = account_equity
         self.risk_level = risk_level
+        self.halt_manager = None
         self.next_result: object = {
             "status": "success",
             "symbol": "AAPL",
@@ -232,6 +236,7 @@ def test_analyze_trading_opportunity_halted_and_full_path(monkeypatch):
 
 def test_execute_trade_rejects_no_trade_and_records_success(monkeypatch):
     system = _build_system(monkeypatch)
+    system.is_active = True
     system.risk_manager.approved = False
 
     rejected = asyncio.run(
@@ -257,6 +262,7 @@ def test_execute_trade_rejects_no_trade_and_records_success(monkeypatch):
 
 def test_execute_trade_rejects_limit_without_price(monkeypatch):
     system = _build_system(monkeypatch)
+    system.is_active = True
 
     result = asyncio.run(system.execute_trade("AAPL", OrderSide.BUY, 5, order_type=OrderType.LIMIT))
 
@@ -266,6 +272,7 @@ def test_execute_trade_rejects_limit_without_price(monkeypatch):
 
 def test_execute_trade_normalizes_object_execution_result(monkeypatch):
     system = _build_system(monkeypatch)
+    system.is_active = True
     system.execution_coordinator.next_result = SimpleNamespace(status="SUCCESS")
 
     result = asyncio.run(system.execute_trade("MSFT", OrderSide.SELL, 3, price=50.0))
@@ -343,3 +350,82 @@ def test_update_equity_emergency_shutdown_and_health(monkeypatch):
     assert system.halt_manager.emergency_reasons == ["risk"]
     assert _system_alerts(system)[-2][1] == "EMERGENCY SHUTDOWN"
     assert not system.is_healthy()
+
+
+def test_execution_coordinator_uses_shared_halt_manager(monkeypatch):
+    system = _build_system(monkeypatch)
+
+    assert system.execution_coordinator.halt_manager is system.halt_manager
+
+
+def test_execute_trade_rejects_when_inactive_or_halted(monkeypatch):
+    system = _build_system(monkeypatch)
+
+    inactive = asyncio.run(system.execute_trade("AAPL", OrderSide.BUY, 5, price=100.0))
+
+    assert inactive == {"status": "rejected", "reason": "Trading system inactive"}
+    assert system.execution_coordinator.submitted == []
+
+    system.is_active = True
+    system.halt_manager.allowed = False
+    system.halt_manager.reasons = ["manual halt"]
+
+    halted = asyncio.run(system.execute_trade("AAPL", OrderSide.BUY, 5, price=100.0))
+
+    assert halted == {"status": "rejected", "reason": "Trading halted: manual halt"}
+    assert system.execution_coordinator.submitted == []
+
+
+def test_execute_trade_uses_requested_quantity_for_risk_and_enforces_approval(monkeypatch):
+    system = _build_system(monkeypatch)
+    system.is_active = True
+    system.risk_manager.recommended_size = 3
+
+    rejected = asyncio.run(
+        system.execute_trade(
+            "AAPL",
+            OrderSide.BUY,
+            5,
+            market_data={"current_price": 100.0, "price_data": [1], "timeframe_data": {}},
+        )
+    )
+
+    assert rejected["status"] == "rejected"
+    assert rejected["reason"] == "Requested quantity exceeds approved quantity"
+    assert system.risk_manager.assessments[-1] == ("AAPL", 5, 100.0, 100_000.0, [])
+    assert system.execution_coordinator.submitted == []
+
+    system.risk_manager.recommended_size = 0
+
+    zero = asyncio.run(
+        system.execute_trade(
+            "AAPL",
+            OrderSide.SELL,
+            1,
+            market_data={"current_price": 100.0, "price_data": [1], "timeframe_data": {}},
+        )
+    )
+
+    assert zero["status"] == "rejected"
+    assert zero["reason"] == "Approved quantity must be positive"
+    assert system.execution_coordinator.submitted == []
+
+
+def test_execute_trade_submits_requested_quantity_with_positive_approval(monkeypatch):
+    system = _build_system(monkeypatch)
+    system.is_active = True
+    system.risk_manager.recommended_size = 5
+
+    result = asyncio.run(
+        system.execute_trade(
+            "AAPL",
+            OrderSide.BUY,
+            5,
+            price=101.5,
+            market_data={"current_price": 100.0, "price_data": [1], "timeframe_data": {}},
+        )
+    )
+
+    assert result["status"] == "success"
+    assert system.risk_manager.assessments[-1] == ("AAPL", 5, 101.5, 100_000.0, [])
+    assert system.execution_coordinator.submitted[-1][2] == 5

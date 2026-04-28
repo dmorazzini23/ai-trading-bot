@@ -69,3 +69,21 @@ def test_from_env_rejects_fail_fast_deprecated_position_size(monkeypatch) -> Non
             },
             allow_missing_drawdown=True,
         )
+
+
+def test_trading_config_update_does_not_mutate_cached_config(monkeypatch) -> None:
+    monkeypatch.setattr(runtime_config, "_managed_env_snapshot", lambda: {})
+    runtime_config._clear_trading_config_cache()
+
+    cached = runtime_config.get_trading_config()
+    updated = cached.update(app_env="prod", alpaca_base_url="https://api.alpaca.markets")
+    cached_again = runtime_config.get_trading_config()
+
+    assert updated is not cached
+    assert cached_again is cached
+    assert cached.app_env == "test"
+    assert cached.paper is True
+    assert updated.app_env == "prod"
+    assert updated.paper is False
+
+    runtime_config._clear_trading_config_cache()

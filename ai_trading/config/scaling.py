@@ -17,6 +17,18 @@ _LEGACY_KEY_MAP: dict[str, str] = {
     "TAKE_PROFIT_FACTOR": "AI_TRADING_TAKE_PROFIT_FACTOR",
 }
 
+_ALLOWED_EXTRA_ENV_PREFIXES: tuple[str, ...] = ("AI_TRADING_SCALING_EXTRA_",)
+_SENSITIVE_KEY_FRAGMENTS: tuple[str, ...] = (
+    "SECRET",
+    "TOKEN",
+    "PASSWORD",
+    "PASSWD",
+    "API_KEY",
+    "PRIVATE_KEY",
+    "CREDENTIAL",
+)
+_REDACTED = "***"
+
 
 @dataclass
 class ScalingConfig:
@@ -45,12 +57,23 @@ def _coerce(value: str) -> Any:
         return value
 
 
+def _is_sensitive_key(key: str) -> bool:
+    upper_key = key.upper()
+    return any(fragment in upper_key for fragment in _SENSITIVE_KEY_FRAGMENTS)
+
+
+def _safe_extra_value(key: str, value: Any) -> Any:
+    if _is_sensitive_key(key):
+        return _REDACTED
+    return _coerce(str(value)) if isinstance(value, str) else value
+
+
 def from_env(env: Mapping[str, str] | None = None) -> ScalingConfig:
     """Build :class:`ScalingConfig` from environment mapping.
 
-    Unknown keys are collected into ``extras``.  When ``extras`` is empty
-    it is initialised to an empty dict rather than ``None``.  Numeric values
-    within ``extras`` are coerced to ``int`` or ``float`` for convenience.
+    Explicit ``TRADING_CONFIG_EXTRAS`` entries and allowlisted scaling extras
+    are collected into ``extras``.  Arbitrary unknown environment keys are
+    ignored so process secrets are not copied into runtime config snapshots.
     """
     source_env = env or merged_env_snapshot()
     env_map = {k.upper(): v for k, v in source_env.items()}
@@ -79,7 +102,9 @@ def from_env(env: Mapping[str, str] | None = None) -> ScalingConfig:
         except json.JSONDecodeError as exc:  # pragma: no cover - defensive
             raise ValueError("TRADING_CONFIG_EXTRAS must be valid JSON") from exc
         if isinstance(parsed, dict):
-            extras.update(parsed)
+            extras.update(
+                {str(k): _safe_extra_value(str(k), v) for k, v in parsed.items()}
+            )
 
     known = {
         "AI_TRADING_CAPITAL_CAP",
@@ -87,8 +112,8 @@ def from_env(env: Mapping[str, str] | None = None) -> ScalingConfig:
         "TRADING_CONFIG_EXTRAS",
     }
     for k, v in env_map.items():
-        if k not in known:
-            extras[k] = _coerce(v)
+        if k not in known and k.startswith(_ALLOWED_EXTRA_ENV_PREFIXES):
+            extras[k] = _safe_extra_value(k, v)
 
     return ScalingConfig(capital_cap=capital_cap, max_factor=max_factor, extras=extras)
 

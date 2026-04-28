@@ -148,3 +148,40 @@ def test_manage_position_risk_tolerates_missing_optional_utils_helpers(monkeypat
 
     assert calls["trailing_stop"] == (ctx, "AAPL", 100.0, 10, 1.0)
     assert calls["adjust"] == ("AAPL", 1.0)
+
+
+def test_manage_position_risk_signs_short_side_with_positive_qty(monkeypatch):
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(bot_engine.utils, "get_rolling_atr", lambda _symbol: 1.0, raising=False)
+    monkeypatch.setattr(bot_engine.utils, "get_current_vwap", lambda _symbol: 110.0, raising=False)
+    monkeypatch.setattr(bot_engine.utils, "get_volume_spike_factor", lambda _symbol: 0.0, raising=False)
+    monkeypatch.setattr(bot_engine.utils, "get_ml_confidence", lambda _symbol: 0.0, raising=False)
+    monkeypatch.setattr(
+        bot_engine,
+        "fetch_minute_df_safe",
+        lambda _symbol: pd.DataFrame({"close": [100.0]}),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "update_trailing_stop",
+        lambda ctx, symbol, price, qty, atr: calls.setdefault(
+            "trailing_stop",
+            (ctx, symbol, price, qty, atr),
+        ),
+    )
+    monkeypatch.setattr(bot_engine, "compute_kelly_scale", lambda atr, _edge: float(atr))
+    monkeypatch.setattr(bot_engine, "adjust_position_size", lambda *_args: None)
+
+    ctx = SimpleNamespace()
+    position = SimpleNamespace(
+        symbol="TSLA",
+        qty="7",
+        side="short",
+        avg_entry_price="125.0",
+        unrealized_plpc="0.01",
+    )
+
+    bot_engine.manage_position_risk(ctx, position)
+
+    assert calls["trailing_stop"] == (ctx, "TSLA", 100.0, -7, 1.0)

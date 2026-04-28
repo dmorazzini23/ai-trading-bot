@@ -163,10 +163,39 @@ def test_register_healthz_routes_returns_exception_payload() -> None:
 
     assert calls["route"] == "/healthz"
     assert calls["methods"] == ["GET"]
-    assert status == 500
+    assert status == 200
     assert payload["status"] == "degraded"
+    assert payload["ok"] is False
     assert payload["error"] == "boom"
     assert logger.events == ["HEALTH_CHECK_FAILED"]
+
+
+def test_register_health_routes_response_fallback_is_non_500() -> None:
+    calls: dict[str, Any] = {}
+
+    class _App:
+        def route(self, route: str, *, methods: list[str]):
+            def _decorator(func):
+                calls["handler"] = func
+                return func
+
+            return _decorator
+
+    def _broken_response(_payload: dict[str, Any], _status: int) -> Any:
+        raise RuntimeError("response busted")
+
+    health_payload.register_health_routes(
+        _App(),
+        payload_builder=lambda: {"ok": True, "status": "healthy"},
+        response_builder=_broken_response,
+    )
+
+    payload, status = calls["handler"]()
+
+    assert status == 200
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["error"] == "response busted"
 
 
 def test_register_health_routes_sanitizes_payload_before_response() -> None:

@@ -82,7 +82,7 @@ def test_validate_no_leakage_direct_temporal_t1_and_error_paths() -> None:
 
     assert validate_no_leakage(np.array([0, 1, 2]), np.array([3, 4]), timeline) is True
     assert validate_no_leakage(np.array([0, 1, 2]), np.array([2, 3]), timeline) is False
-    assert validate_no_leakage(np.array([3]), np.array([2]), timeline) is True
+    assert validate_no_leakage(np.array([3]), np.array([2]), timeline) is False
 
     t1 = pd.Series(timeline + pd.Timedelta(days=5))
     assert validate_no_leakage(np.array([0, 1]), np.array([3, 4]), timeline, t1=t1) is False

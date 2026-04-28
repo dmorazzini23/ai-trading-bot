@@ -224,6 +224,44 @@ def test_replay_live_parity_gate_cache_still_marks_required_failure_degraded(
     ]
 
 
+def test_execute_run_all_trades_cycle_accepts_native_get_orders(monkeypatch) -> None:
+    _clear_parity_cache()
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE", "0")
+    listed: list[object] = []
+    handled: list[list[object]] = []
+
+    monkeypatch.setattr(
+        bot_engine,
+        "list_open_orders",
+        lambda api: listed.append(api) or [SimpleNamespace(id="ord-1")],
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_handle_pending_orders",
+        lambda open_orders, _runtime: handled.append(list(open_orders)) or True,
+    )
+    monkeypatch.setattr(bot_engine, "_pending_orders_block_scope", lambda: "global")
+
+    class NativeOrdersOnly:
+        def get_orders(self, **_kwargs):
+            return []
+
+    api = NativeOrdersOnly()
+
+    execute_run_all_trades_cycle(
+        state=SimpleNamespace(),
+        runtime=SimpleNamespace(),
+        cfg_runtime=SimpleNamespace(post_submit_broker_sync=False),
+        loop_id="loop-get-orders",
+        loop_start=0.0,
+        api=api,
+        restore_last_run_timestamp=lambda: None,
+    )
+
+    assert listed == [api]
+    assert handled == [[SimpleNamespace(id="ord-1")]]
+
+
 def test_replay_live_parity_gate_disabled_when_not_required(monkeypatch) -> None:
     _clear_parity_cache()
     monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_GATE_ENABLED", "0")

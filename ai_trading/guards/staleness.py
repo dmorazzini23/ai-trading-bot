@@ -11,6 +11,7 @@ from ai_trading.utils.lazy_imports import load_pandas
 pd = load_pandas()
 logger = logging.getLogger(__name__)
 _UTC_ZONE = ZoneInfo("UTC")
+MAX_FUTURE_CLOCK_SKEW_SECONDS = 5
 STALENESS_GUARD_FALLBACK_EXCEPTIONS: tuple[type[Exception], ...] = (Exception,)
 
 
@@ -76,6 +77,8 @@ def _ensure_data_fresh(
         )
 
     age_secs = int((now - last_ts).total_seconds())
+    if age_secs < -MAX_FUTURE_CLOCK_SKEW_SECONDS:
+        raise RuntimeError(f"future_ts={abs(age_secs)}s")
     if age_secs > max_age_seconds:
         raise RuntimeError(f"age={age_secs}s")
 

@@ -10,6 +10,7 @@ from ai_trading.data.fetch import (
     ensure_ohlcv_schema,
 )
 from ai_trading.data.fetch.normalize import REQUIRED, normalize_ohlcv_df
+from ai_trading.data.normalize import ensure_ohlcv
 
 
 def test_normalize_basic_yfinance_columns():
@@ -38,10 +39,14 @@ def test_normalize_multiindex_columns_dedup():
     columns = pd.MultiIndex.from_product(
         [["Open", "High", "Low", "Close", "Volume"], ["AAPL", "MSFT"]]
     )
-    data = {
-        col: [float(i), float(i) + 0.5]
-        for i, col in enumerate(columns)
+    by_field = {
+        "Open": [10.0, 10.5],
+        "High": [10.6, 10.9],
+        "Low": [9.8, 10.1],
+        "Close": [10.2, 10.7],
+        "Volume": [1000.0, 1100.0],
     }
+    data = {col: by_field[col[0]] for col in columns}
     df = pd.DataFrame(data, index=idx)
 
     out = normalize_ohlcv_df(df)
@@ -49,14 +54,14 @@ def test_normalize_multiindex_columns_dedup():
     assert list(out.columns) == list(REQUIRED)
     # Ensure the first ticker's values survive the deduplication.
     expected = pd.Series(
-        [0.0, 0.5],
+        [10.0, 10.5],
         index=idx.rename("timestamp"),
         name="open",
     )
     pd.testing.assert_series_equal(out["open"], expected)
 
 
-def test_normalize_adj_close_mapping():
+def test_normalize_requires_complete_ohlcv_columns():
     idx = pd.date_range("2024-01-01", periods=2, freq="1D")
     df = pd.DataFrame(
         {
@@ -68,9 +73,47 @@ def test_normalize_adj_close_mapping():
 
     out = normalize_ohlcv_df(df)
 
-    assert "close" in out.columns
-    expected = pd.Series([100.0, 101.0], index=out.index, name="close")
-    pd.testing.assert_series_equal(out["close"], expected)
+    assert out.empty
+    assert list(out.columns) == list(REQUIRED)
+
+
+def test_normalize_rejects_nonpositive_and_inconsistent_ohlc():
+    idx = pd.date_range("2024-01-01", periods=4, freq="1D")
+    df = pd.DataFrame(
+        {
+            "Open": [10.0, 0.0, 10.0, 10.0],
+            "High": [10.5, 10.5, 9.5, 10.5],
+            "Low": [9.5, 9.5, 9.0, float("nan")],
+            "Close": [10.25, 10.0, 10.2, 10.1],
+            "Volume": [1000, 1000, 1000, 1000],
+        },
+        index=idx,
+    )
+
+    out = normalize_ohlcv_df(df)
+
+    assert len(out) == 1
+    assert out.iloc[0]["open"] == 10.0
+
+
+def test_simple_ensure_ohlcv_rejects_incomplete_and_inconsistent_rows():
+    idx = pd.date_range("2024-01-01", periods=2, freq="1D")
+    incomplete = pd.DataFrame({"open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0]}, index=idx[:1])
+    inconsistent = pd.DataFrame(
+        {
+            "open": [10.0, 11.0],
+            "high": [10.5, 10.0],
+            "low": [9.5, 10.5],
+            "close": [10.2, 10.8],
+            "volume": [100, 100],
+        },
+        index=idx,
+    )
+
+    assert ensure_ohlcv(incomplete) is None
+    normalized = ensure_ohlcv(inconsistent)
+    assert normalized is not None
+    assert len(normalized) == 1
 
 
 def test_flatten_handles_ticker_multiindex_level1():

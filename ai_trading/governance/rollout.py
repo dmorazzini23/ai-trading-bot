@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -39,6 +40,25 @@ def _as_float(raw: Any, default: float, *, min_value: float | None = None, max_v
     if max_value is not None:
         value = min(max_value, value)
     return float(value)
+
+
+def _required_metric_float(
+    telemetry: Mapping[str, Any],
+    key: str,
+    *,
+    min_value: float | None = None,
+) -> tuple[float, bool]:
+    if key not in telemetry:
+        return 0.0, False
+    try:
+        value = float(telemetry.get(key))
+    except (TypeError, ValueError):
+        return 0.0, False
+    if not math.isfinite(value):
+        return 0.0, False
+    if min_value is not None:
+        value = max(min_value, value)
+    return float(value), True
 
 
 def _normalize_mode(raw: Any) -> str:
@@ -288,19 +308,41 @@ def _evaluate_ramp(
         }
 
     if mode == "live":
-        pacing_hit_rate = _as_float(telemetry.get("order_pacing_cap_hit_rate_pct"), 0.0, min_value=0.0)
-        pending_oldest_age = _as_float(telemetry.get("pending_oldest_age_sec"), 0.0, min_value=0.0)
-        calibration_ece = _as_float(telemetry.get("live_calibration_ece"), 0.0, min_value=0.0)
-        calibration_brier = _as_float(telemetry.get("live_calibration_brier"), 0.0, min_value=0.0)
+        pacing_hit_rate, pacing_present = _required_metric_float(
+            telemetry,
+            "order_pacing_cap_hit_rate_pct",
+            min_value=0.0,
+        )
+        pending_oldest_age, pending_present = _required_metric_float(
+            telemetry,
+            "pending_oldest_age_sec",
+            min_value=0.0,
+        )
+        calibration_ece, ece_present = _required_metric_float(
+            telemetry,
+            "live_calibration_ece",
+            min_value=0.0,
+        )
+        calibration_brier, brier_present = _required_metric_float(
+            telemetry,
+            "live_calibration_brier",
+            min_value=0.0,
+        )
+        telemetry_complete = bool(
+            pacing_present and pending_present and ece_present and brier_present
+        )
 
         breached = bool(
-            pacing_hit_rate >= policy.max_pacing_hit_rate_pct
+            not telemetry_complete
+            or pacing_hit_rate >= policy.max_pacing_hit_rate_pct
             or pending_oldest_age >= policy.max_pending_oldest_age_sec
             or calibration_ece >= policy.max_calibration_ece
             or calibration_brier >= policy.max_calibration_brier
         )
 
-        if breached and policy.downgrade_on_breach and phase_index > 0:
+        if not telemetry_complete:
+            transition = "telemetry_missing"
+        elif breached and policy.downgrade_on_breach and phase_index > 0:
             phase_index -= 1
             phase_cycles = 0
             transition = "downgrade_on_breach"
@@ -330,6 +372,7 @@ def _evaluate_ramp(
         "multiplier": float(next_state.ramp_multiplier),
         "breached": bool(breached),
         "transition": str(transition),
+        "telemetry_complete": bool(mode != "live" or telemetry_complete),
     }
 
 
@@ -378,4 +421,3 @@ def apply_rollout_policies(
         "updated_at": str(ramp_state.updated_at),
     }
     return ramp_state, summary
-

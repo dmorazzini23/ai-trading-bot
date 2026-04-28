@@ -48,7 +48,6 @@ from ai_trading.utils.env import (
     get_alpaca_base_url,
     get_alpaca_creds,
 )
-from ai_trading.utils.ids import stable_client_order_id
 from ai_trading.utils.process_manager import file_lock as process_file_lock
 from ai_trading.utils.time import monotonic_time
 
@@ -2200,11 +2199,36 @@ def _pos_num(name: str, v) -> float:
     return x
 
 
-def _stable_order_id(symbol: str, side: str) -> str:
-    """Return a stable client order id for the current trading minute."""
+def _intent_fingerprint(*parts: Any) -> str:
+    """Return a compact deterministic fingerprint for retryable order intent."""
+
+    normalized = json.dumps([str(part) for part in parts], sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+
+
+def _stable_order_id(
+    symbol: str,
+    side: str,
+    *,
+    quantity: Any = None,
+    order_type: Any = None,
+    limit_price: Any = None,
+    notional: Any = None,
+) -> str:
+    """Return a deterministic client order id for the current trading minute and intent."""
 
     epoch_min = int(datetime.now(UTC).timestamp() // 60)
-    return str(stable_client_order_id(str(symbol), str(side).lower(), epoch_min))
+    symbol_token = str(symbol or "").strip().upper()
+    side_token = str(side or "").strip().lower()
+    fingerprint = _intent_fingerprint(
+        symbol_token,
+        side_token,
+        "" if quantity in (None, "") else quantity,
+        "" if order_type in (None, "") else order_type,
+        "" if limit_price in (None, "") else limit_price,
+        "" if notional in (None, "") else notional,
+    )
+    return f"{symbol_token}-{side_token}-{epoch_min}-{fingerprint}"
 
 
 @lru_cache(maxsize=1)
@@ -6348,10 +6372,19 @@ class ExecutionEngine:
         resolved = max(lower, min(float(base_bps), upper))
         return resolved
 
-    def _reserve_cycle_intent(self, symbol: str, side: str) -> bool:
+    def _reserve_cycle_intent(
+        self,
+        symbol: str,
+        side: str,
+        intent_fingerprint: str | None = None,
+    ) -> bool:
         """Reserve symbol/side for current cycle; False when already reserved."""
 
-        key = (str(symbol or "").upper(), str(side or "").lower())
+        key = (
+            str(symbol or "").upper(),
+            str(side or "").lower(),
+            str(intent_fingerprint or "").strip(),
+        )
         if not key[0] or key[1] not in {"buy", "sell", "sell_short"}:
             return True
         intents = getattr(self, "_cycle_reserved_intents", None)
@@ -6368,7 +6401,12 @@ class ExecutionEngine:
             intents.add(key)
         return True
 
-    def _should_suppress_duplicate_intent(self, symbol: str, side: str) -> bool:
+    def _should_suppress_duplicate_intent(
+        self,
+        symbol: str,
+        side: str,
+        intent_fingerprint: str | None = None,
+    ) -> bool:
         """Return True when duplicate intent should be skipped."""
 
         suppress_when_open = _resolve_bool_env("AI_TRADING_INTENT_BLOCK_WHEN_OPEN_ORDER")
@@ -6396,7 +6434,11 @@ class ExecutionEngine:
         window_s = self._duplicate_intent_window_seconds()
         if window_s <= 0:
             return False
-        key = (str(symbol or "").upper(), str(side or "").lower())
+        key = (
+            str(symbol or "").upper(),
+            str(side or "").lower(),
+            str(intent_fingerprint or "").strip(),
+        )
         if not key[0] or key[1] not in {"buy", "sell", "sell_short"}:
             return False
         now_ts = monotonic_time()
@@ -6417,14 +6459,24 @@ class ExecutionEngine:
                 "side": key[1],
                 "age_s": round(age_s, 3),
                 "window_s": round(window_s, 3),
+                "intent_fingerprint": key[2] or None,
             },
         )
         return True
 
-    def _record_order_intent(self, symbol: str, side: str) -> None:
+    def _record_order_intent(
+        self,
+        symbol: str,
+        side: str,
+        intent_fingerprint: str | None = None,
+    ) -> None:
         """Persist latest submit timestamp for duplicate-intent suppression."""
 
-        key = (str(symbol or "").upper(), str(side or "").lower())
+        key = (
+            str(symbol or "").upper(),
+            str(side or "").lower(),
+            str(intent_fingerprint or "").strip(),
+        )
         if not key[0] or key[1] not in {"buy", "sell", "sell_short"}:
             return
         intents = getattr(self, "_recent_order_intents", None)
@@ -18023,7 +18075,14 @@ class ExecutionEngine:
             or str(_runtime_env("PYTEST_RUNNING", "") or "").strip().lower() in {"1", "true", "yes", "on"}
         )
         price_hint_override = kwargs.pop("price_hint", None)
-        client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
+        client_order_id = kwargs.get("client_order_id") or _stable_order_id(
+            symbol,
+            side,
+            quantity=quantity,
+            order_type="market",
+            limit_price=price_hint_override,
+            notional=kwargs.get("notional"),
+        )
         asset_class = kwargs.get("asset_class")
         price_hint = price_hint_override if price_hint_override not in (None, "") else None
         if price_hint is None:
@@ -18789,7 +18848,14 @@ class ExecutionEngine:
             or str(_runtime_env("PYTEST_RUNNING", "") or "").strip().lower() in {"1", "true", "yes", "on"}
         )
         price_hint_override = kwargs.pop("price_hint", None)
-        client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
+        client_order_id = kwargs.get("client_order_id") or _stable_order_id(
+            symbol,
+            side,
+            quantity=quantity,
+            order_type="limit",
+            limit_price=limit_price,
+            notional=kwargs.get("notional"),
+        )
         asset_class = kwargs.get("asset_class")
         price_hint = price_hint_override if price_hint_override not in (None, "") else None
         if price_hint is None:
@@ -19932,7 +19998,19 @@ class ExecutionEngine:
                 submit_started_at=submit_started_at,
             )
             return None
-        if not closing_position and self._should_suppress_duplicate_intent(symbol, lifecycle_side):
+        intent_fingerprint = _intent_fingerprint(
+            symbol,
+            lifecycle_side,
+            qty,
+            order_type_normalized,
+            price_for_limit or resolved_limit_price or price_hint or "",
+            kwargs.get("notional", ""),
+        )
+        if not closing_position and self._should_suppress_duplicate_intent(
+            symbol,
+            lifecycle_side,
+            intent_fingerprint,
+        ):
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
             self._skip_submit(
@@ -21660,7 +21738,14 @@ class ExecutionEngine:
             str(order_kwargs.get("client_order_id") or "").strip() or None
         )
         if client_order_id is None:
-            client_order_id = _stable_order_id(symbol, mapped_side)
+            client_order_id = _stable_order_id(
+                symbol,
+                mapped_side,
+                quantity=qty,
+                order_type=order_type_normalized,
+                limit_price=price_for_limit or resolved_limit_price or price_hint,
+                notional=order_kwargs.get("notional"),
+            )
             order_kwargs["client_order_id"] = client_order_id
         order_data["client_order_id"] = client_order_id
         asset_class_for_log = order_kwargs.get("asset_class")
@@ -21721,7 +21806,11 @@ class ExecutionEngine:
                 },
             )
 
-        if not closing_position and not self._reserve_cycle_intent(symbol, lifecycle_side):
+        if not closing_position and not self._reserve_cycle_intent(
+            symbol,
+            lifecycle_side,
+            intent_fingerprint,
+        ):
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
             reserved_count = 0
@@ -22741,7 +22830,7 @@ class ExecutionEngine:
             )
             self._cycle_new_orders_submitted = current_submits + 1
             self._cycle_submitted_orders = self._cycle_new_orders_submitted
-            self._record_order_intent(symbol, lifecycle_side)
+            self._record_order_intent(symbol, lifecycle_side, intent_fingerprint)
 
         outcome_status = (
             _normalize_status(execution_result.status)

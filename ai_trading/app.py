@@ -636,7 +636,7 @@ def create_app(
         validate_required_env()
         app.config["_ENV_VALID"] = True
         app.config["_ENV_ERR"] = None
-    except (ImportError, RuntimeError) as e:
+    except (ImportError, RuntimeError, ValueError, KeyError) as e:
         _log.exception("ENV_VALIDATION_FAILED")
         app.config["_ENV_VALID"] = False
         app.config["_ENV_ERR"] = str(e)

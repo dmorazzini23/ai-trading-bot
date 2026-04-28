@@ -208,6 +208,43 @@ def test_capital_ramp_upgrades_and_downgrades_on_breach() -> None:
     assert summary["capital_ramp"]["transition"] == "downgrade_on_breach"
 
 
+def test_capital_ramp_does_not_advance_when_live_telemetry_missing() -> None:
+    state = RolloutState(ramp_phase_index=0, ramp_phase_cycles=1, ramp_multiplier=0.25)
+    burn_in = BurnInPolicy(
+        enabled=False,
+        min_paper_cycles=1,
+        min_paper_days=1,
+        require_policy_hash_stable=False,
+        require_config_hash_stable=False,
+    )
+    ramp = CapitalRampPolicy(
+        enabled=True,
+        phases=(0.25, 0.50, 1.00),
+        min_cycles_per_phase=2,
+        max_pacing_hit_rate_pct=30.0,
+        max_pending_oldest_age_sec=240.0,
+        max_calibration_ece=0.15,
+        max_calibration_brier=0.35,
+        downgrade_on_breach=True,
+    )
+
+    next_state, summary = apply_rollout_policies(
+        state=state,
+        burn_in=burn_in,
+        ramp=ramp,
+        execution_mode="live",
+        policy_hash="hash_a",
+        config_hash="cfg_a",
+        today=date(2026, 3, 1),
+        telemetry={},
+    )
+
+    assert next_state.ramp_phase_index == 0
+    assert next_state.ramp_phase_cycles == 1
+    assert summary["capital_ramp"]["telemetry_complete"] is False
+    assert summary["capital_ramp"]["transition"] == "telemetry_missing"
+
+
 def test_rollout_state_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "rollout_state.json"
     state = RolloutState(
@@ -225,4 +262,3 @@ def test_rollout_state_roundtrip(tmp_path: Path) -> None:
     assert loaded.burn_in_policy_hash == "policy"
     assert loaded.ramp_phase_index == 1
     assert loaded.ramp_multiplier == 0.5
-

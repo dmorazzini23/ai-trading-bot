@@ -51,8 +51,10 @@ def _bare_engine(**config_updates: Any) -> risk_engine.RiskEngine:
     engine.max_trades = 2
     engine.hard_stop = False
     engine.max_drawdown_threshold = 0.15
+    engine.hard_stop_recovery_threshold = 0.12
     engine.hard_stop_cooldown = 10.0
     engine._hard_stop_until = None
+    engine._hard_stop_requires_manual_reset = False
     engine.enable_portfolio_features = True
     engine.data_client = None
     return cast(risk_engine.RiskEngine, engine)
@@ -429,14 +431,20 @@ def test_can_trade_rejects_limits_and_allows_force_override(monkeypatch: pytest.
     assert engine.can_trade(_signal(weight="bad")) is True
 
 
-def test_can_trade_lifts_expired_hard_stop_and_handles_bad_drawdowns() -> None:
+def test_can_trade_keeps_expired_hard_stop_until_fresh_recovered_drawdown() -> None:
     engine = _bare_engine()
     engine.hard_stop = True
     engine._hard_stop_until = 0.0
 
-    assert engine.can_trade(_signal(), returns=[0.01], drawdowns=["bad"]) is True
-    assert engine.hard_stop is False
+    assert engine.can_trade(_signal(), returns=[0.01], drawdowns=["bad"]) is False
+    assert engine.hard_stop is True
     assert engine._returns[-1] == 0.01
+
+    assert engine.can_trade(_signal(), drawdowns=[0.13]) is False
+    assert engine.hard_stop is True
+
+    assert engine.can_trade(_signal(), drawdowns=[0.11]) is True
+    assert engine.hard_stop is False
 
 
 def test_register_fill_and_trade_slot_state_updates() -> None:
@@ -476,6 +484,12 @@ def test_trade_slots_and_explicit_hard_stop_with_missing_lock() -> None:
     assert engine.current_trades == 0
     engine.trigger_hard_stop()
     assert engine.hard_stop is True
+    engine._maybe_lift_hard_stop()
+    assert engine.hard_stop is True
+    assert engine.reset_hard_stop(current_drawdown=0.20) is False
+    assert engine.hard_stop is True
+    assert engine.reset_hard_stop(current_drawdown=0.05) is True
+    assert engine.hard_stop is False
 
 
 def test_apply_risk_scaling_uses_volatility_and_cvar(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -516,7 +530,7 @@ def test_position_size_atr_fallback_and_final_error(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(engine, "_get_atr_data", lambda _symbol: (_ for _ in ()).throw(ValueError("atr bad")))
     monkeypatch.setattr(engine, "_apply_weight_limits", lambda _signal: 0.10)
-    assert engine.position_size(_signal(strategy="default"), 1_000.0, 100.0) == 10
+    assert engine.position_size(_signal(strategy="default"), 1_000.0, 100.0) == 5
 
     monkeypatch.setattr(risk_engine, "_calculate_position_size", lambda *_args: (_ for _ in ()).throw(ValueError("qty bad")))
     assert engine.position_size(_signal(), 1_000.0, 100.0) == 0

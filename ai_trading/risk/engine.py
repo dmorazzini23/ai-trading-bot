@@ -156,6 +156,60 @@ def _calculate_position_size(
     return max(qty, 0)
 
 
+def _cap_final_position_size(
+    engine: "RiskEngine",
+    qty: int,
+    price: float,
+    signal: Any,
+    *,
+    cash: float,
+    total_equity: float,
+) -> int:
+    """Apply final cash and exposure caps after minimum floors/defaults."""
+    if qty <= 0 or price <= 0:
+        return 0
+    symbol = getattr(signal, "symbol", "UNKNOWN")
+    caps: list[int] = []
+
+    side = str(getattr(signal, "side", "buy")).strip().lower()
+    if _opens_gross_exposure(side):
+        try:
+            cash_cap = int(max(float(cash), 0.0) / price)
+        except (TypeError, ValueError, ZeroDivisionError):
+            cash_cap = 0
+        caps.append(max(cash_cap, 0))
+        asset_class = str(getattr(signal, "asset_class", "equity"))
+        strategy = str(getattr(signal, "strategy", "default"))
+        try:
+            asset_limit = float(engine.asset_limits.get(asset_class, engine.global_limit))
+            strategy_limit = float(engine.strategy_limits.get(strategy, engine.global_limit))
+            current_asset_exposure = float(engine.exposure.get(asset_class, 0.0))
+            current_strategy_exposure = float(engine.strategy_exposure.get(strategy, 0.0))
+            available_weight = min(
+                max(0.0, asset_limit - current_asset_exposure),
+                max(0.0, strategy_limit - current_strategy_exposure),
+                max(0.0, engine.available_exposure()),
+            )
+            exposure_cap = int(max(available_weight, 0.0) * max(float(total_equity), 0.0) / price)
+        except (TypeError, ValueError, ZeroDivisionError):
+            exposure_cap = 0
+        caps.append(max(exposure_cap, 0))
+
+    capped_qty = min([qty, *caps]) if caps else qty
+    if capped_qty < qty:
+        logger.warning(
+            "FINAL_POSITION_SIZE_CAPPED",
+            extra={
+                "symbol": symbol,
+                "requested_qty": qty,
+                "capped_qty": capped_qty,
+                "price": price,
+                "cash": cash,
+            },
+        )
+    return max(capped_qty, 0)
+
+
 try:
     StockHistoricalDataClient = get_data_client_cls()
 except (ImportError, RuntimeError, OSError, AttributeError):
@@ -298,9 +352,11 @@ class RiskEngine:
                 logger.warning("Invalid MAX_DRAWDOWN_THRESHOLD %s, using default 0.15", max_drawdown)
                 max_drawdown = 0.15
             self.max_drawdown_threshold = float(max_drawdown)
+            self.hard_stop_recovery_threshold = self.max_drawdown_threshold * 0.8
         except (RuntimeError, ValueError, TypeError) as e:
             logger.error("Error parsing MAX_DRAWDOWN_THRESHOLD: %s, using default 0.15", e)
             self.max_drawdown_threshold = 0.15
+            self.hard_stop_recovery_threshold = self.max_drawdown_threshold * 0.8
         try:
             cooldown = get_env("HARD_STOP_COOLDOWN_MIN", "10", cast=float)
             if cooldown < 0:
@@ -311,6 +367,7 @@ class RiskEngine:
             logger.error("Error parsing HARD_STOP_COOLDOWN_MIN: %s, using default 10", e)
             self.hard_stop_cooldown = 10.0
         self._hard_stop_until: float | None = None
+        self._hard_stop_requires_manual_reset = False
 
     def _init_data_client(self):
         """Return an initialized data client if available."""
@@ -913,8 +970,9 @@ class RiskEngine:
             try:
                 current_dd = float(drawdowns[-1])
             except (ValueError, TypeError, IndexError):
-                current_dd = 0.0
-            self._check_drawdown_and_update_stop(current_dd)
+                logger.warning("Invalid drawdown metric for hard stop evaluation: %s", drawdowns[-1] if drawdowns else None)
+            else:
+                self._check_drawdown_and_update_stop(current_dd)
         self._maybe_lift_hard_stop()
         if self.hard_stop:
             logger.error("TRADING_HALTED_RISK_LIMIT")
@@ -1051,25 +1109,39 @@ class RiskEngine:
         """
         if current_drawdown >= self.max_drawdown_threshold and (not self.hard_stop):
             self.hard_stop = True
+            self._hard_stop_requires_manual_reset = False
             import time
 
             self._hard_stop_until = time.time() + self.hard_stop_cooldown * 60
             logger.error(
                 "HARD_STOP_TRIGGERED", extra={"drawdown": current_drawdown, "threshold": self.max_drawdown_threshold}
             )
+        elif self.hard_stop and (not getattr(self, "_hard_stop_requires_manual_reset", False)):
+            recovery_threshold = getattr(
+                self,
+                "hard_stop_recovery_threshold",
+                self.max_drawdown_threshold * 0.8,
+            )
+            import time
+
+            cooldown_elapsed = self._hard_stop_until is None or time.time() >= self._hard_stop_until
+            if current_drawdown <= recovery_threshold and cooldown_elapsed:
+                self.hard_stop = False
+                self._hard_stop_until = None
+                logger.info(
+                    "HARD_STOP_CLEARED",
+                    extra={"drawdown": current_drawdown, "recovery_threshold": recovery_threshold},
+                )
 
     def _maybe_lift_hard_stop(self) -> None:
         """
-        Lift the hard stop if the cooldown period has expired.  This method
-        should be called before evaluating new trades.
+        Keep the hard stop latched until fresh metrics or a manual reset clear it.
         """
         import time
 
         if self.hard_stop and self._hard_stop_until is not None:
             if time.time() >= self._hard_stop_until:
-                self.hard_stop = False
-                self._hard_stop_until = None
-                logger.info("HARD_STOP_CLEARED")
+                logger.info("HARD_STOP_COOLDOWN_ELAPSED_AWAITING_METRICS")
 
     def acquire_trade_slot(self) -> bool:
         """Thread-safe check & increment of current_trades against max_trades."""
@@ -1091,6 +1163,27 @@ class RiskEngine:
 
     def trigger_hard_stop(self) -> None:
         self.hard_stop = True
+        self._hard_stop_requires_manual_reset = True
+
+    def reset_hard_stop(self, current_drawdown: float | None = None) -> bool:
+        """Manually clear a hard stop, optionally requiring recovered metrics."""
+        if current_drawdown is not None:
+            recovery_threshold = getattr(
+                self,
+                "hard_stop_recovery_threshold",
+                self.max_drawdown_threshold * 0.8,
+            )
+            if current_drawdown > recovery_threshold:
+                logger.warning(
+                    "HARD_STOP_RESET_REJECTED",
+                    extra={"drawdown": current_drawdown, "recovery_threshold": recovery_threshold},
+                )
+                return False
+        self.hard_stop = False
+        self._hard_stop_until = None
+        self._hard_stop_requires_manual_reset = False
+        logger.info("HARD_STOP_MANUAL_RESET")
+        return True
 
     def wait_for_exposure_update(self, timeout: float = 0.5) -> None:
         """Block until an exposure update occurs or ``timeout`` elapses."""
@@ -1218,6 +1311,14 @@ class RiskEngine:
             qty = _calculate_position_size(self, raw_qty, price, signal)
             if getattr(signal, "strategy", "") == "default":
                 qty = max(qty, 10)
+            qty = _cap_final_position_size(
+                self,
+                qty,
+                price,
+                signal,
+                cash=cash,
+                total_equity=total_equity,
+            )
             return max(qty, 0)
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:
             logger.warning("Error calculating final quantity: %s", exc)

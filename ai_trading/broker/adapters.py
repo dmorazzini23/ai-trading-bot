@@ -9,6 +9,8 @@ from typing import Any, Protocol
 OrderClass: Any
 OrderSide: Any
 TimeInForce: Any
+QueryOrderStatus: Any
+GetOrdersRequest: Any
 LimitOrderRequest: Any
 MarketOrderRequest: Any
 StopLimitOrderRequest: Any
@@ -21,9 +23,11 @@ try:
     from alpaca.trading.enums import (
         OrderClass as _OrderClass,
         OrderSide as _OrderSide,
+        QueryOrderStatus as _QueryOrderStatus,
         TimeInForce as _TimeInForce,
     )
     from alpaca.trading.requests import (
+        GetOrdersRequest as _GetOrdersRequest,
         LimitOrderRequest as _LimitOrderRequest,
         MarketOrderRequest as _MarketOrderRequest,
         StopLimitOrderRequest as _StopLimitOrderRequest,
@@ -35,7 +39,9 @@ try:
 except (ImportError, ModuleNotFoundError, RuntimeError, OSError):  # pragma: no cover - import guard
     OrderClass = None
     OrderSide = None
+    QueryOrderStatus = None
     TimeInForce = None
+    GetOrdersRequest = None
     LimitOrderRequest = None
     MarketOrderRequest = None
     StopLimitOrderRequest = None
@@ -46,7 +52,9 @@ except (ImportError, ModuleNotFoundError, RuntimeError, OSError):  # pragma: no 
 else:
     OrderClass = _OrderClass
     OrderSide = _OrderSide
+    QueryOrderStatus = _QueryOrderStatus
     TimeInForce = _TimeInForce
+    GetOrdersRequest = _GetOrdersRequest
     LimitOrderRequest = _LimitOrderRequest
     MarketOrderRequest = _MarketOrderRequest
     StopLimitOrderRequest = _StopLimitOrderRequest
@@ -91,11 +99,17 @@ class AlpacaBrokerAdapter:
 
     def list_orders(self, status: str = "open") -> list[Any]:
         lister = getattr(self.client, "list_orders", None)
-        if not callable(lister):
-            lister = getattr(self.client, "get_orders", None)
-        if not callable(lister):
-            return []
-        orders = lister(status=status)
+        if callable(lister):
+            orders = lister(status=status)
+        else:
+            getter = getattr(self.client, "get_orders", None)
+            if not callable(getter):
+                return []
+            if GetOrdersRequest is None or QueryOrderStatus is None:
+                raise RuntimeError("alpaca-py order query models are unavailable")
+            status_text = str(status or "open").strip().lower()
+            status_value = getattr(QueryOrderStatus, status_text.upper(), status_text)
+            orders = getter(filter=GetOrdersRequest(status=status_value))
         if orders is None:
             return []
         return list(orders)
@@ -245,14 +259,14 @@ def _float_from(value: Any, *, default: float) -> float:
 
 
 def _normalize_broker_side(side: Any) -> str:
-    raw = str(side or "buy").strip().lower()
+    raw = str(side or "").strip().lower()
     if raw in {"short", "sell_short", "sellshort", "sell-short", "sell short"}:
         return "sell_short"
     if raw in {"cover", "buy_to_cover", "buy-to-cover", "buy to cover"}:
         return "buy_to_cover"
     if raw in {"buy", "sell"}:
         return raw
-    return raw or "buy"
+    raise ValueError(f"Unsupported broker order side: {side!r}")
 
 
 def _first_present(payload: Mapping[str, Any], *keys: str) -> Any:

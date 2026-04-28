@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from ai_trading.execution import position_reconciler as pr
 
 
@@ -101,3 +103,29 @@ def test_global_position_reconciler_wrappers(monkeypatch) -> None:
     pr.stop_position_monitoring()
     assert pr.get_position_discrepancies() == []
     assert pr.get_reconciliation_statistics()["bot_positions_count"] == 1
+
+
+def test_get_broker_positions_fetches_real_positions_and_signs_shorts() -> None:
+    api = SimpleNamespace(
+        get_all_positions=lambda: [
+            SimpleNamespace(symbol="aapl", qty="5", side="long"),
+            SimpleNamespace(symbol="tsla", qty="3", side="short"),
+        ],
+    )
+    reconciler = pr.PositionReconciler(api_client=api)
+
+    assert reconciler.get_broker_positions() == {"AAPL": 5.0, "TSLA": -3.0}
+
+
+def test_reconcile_skips_authoritative_empty_on_broker_fetch_error() -> None:
+    class FailingApi:
+        def get_all_positions(self):
+            raise TimeoutError("broker timeout")
+
+    reconciler = pr.PositionReconciler(api_client=FailingApi())
+    reconciler.update_bot_position("AAPL", 5)
+    reconciler._broker_positions = {"AAPL": 5.0}
+
+    assert reconciler.reconcile_positions() == []
+    assert reconciler.get_bot_positions() == {"AAPL": 5}
+    assert reconciler.force_sync_from_broker() == {"AAPL": 5}

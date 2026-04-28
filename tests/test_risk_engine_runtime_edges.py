@@ -203,12 +203,16 @@ def test_update_exposure_requires_context_and_swallows_refresh_errors(
     assert any("Failed to update exposure" in rec.message for rec in caplog.records)
 
 
-def test_hard_stop_lifts_after_cooldown() -> None:
+def test_hard_stop_waits_for_recovered_metrics_after_cooldown() -> None:
     engine = _engine()
     engine.hard_stop = True
     engine._hard_stop_until = 0.0
 
     engine._maybe_lift_hard_stop()
+
+    assert engine.hard_stop is True
+
+    engine._check_drawdown_and_update_stop(0.01)
 
     assert engine.hard_stop is False
     assert engine._hard_stop_until is None

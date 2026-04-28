@@ -29,6 +29,15 @@ class _DummyClient:
         return {"id": "dummy", "status": "accepted", "payload": order_data}
 
 
+class _NativeGetOrdersClient:
+    def __init__(self) -> None:
+        self.filter = None
+
+    def get_orders(self, *, filter):
+        self.filter = filter
+        return [{"id": "native-1", "status": "open"}]
+
+
 class _FakeResponse:
     def __init__(self, payload, status_code: int = 200):
         self._payload = payload
@@ -102,6 +111,28 @@ def test_alpaca_adapter_builds_native_bracket_request_from_mapping() -> None:
     assert request.take_profit.limit_price == 130.0
     assert request.stop_loss.stop_price == 120.0
     assert request.stop_loss.limit_price == 119.5
+
+
+def test_alpaca_adapter_uses_native_get_orders_filter() -> None:
+    client = _NativeGetOrdersClient()
+    adapter = AlpacaBrokerAdapter(client=client)
+
+    orders = adapter.list_orders("open")
+
+    assert orders == [{"id": "native-1", "status": "open"}]
+    assert client.filter is not None
+    assert getattr(client.filter, "status", None).value == "open"
+
+
+def test_alpaca_adapter_rejects_unknown_side() -> None:
+    adapter = AlpacaBrokerAdapter(client=_DummyClient())
+
+    try:
+        adapter.submit_order({"symbol": "AAPL", "side": "hold", "quantity": 1})
+    except ValueError as exc:
+        assert "Unsupported broker order side" in str(exc)
+    else:  # pragma: no cover - assertion aid
+        raise AssertionError("unknown side should fail closed")
 
 
 def test_paper_adapter_supports_account_orders_and_submit() -> None:

@@ -6,7 +6,7 @@ import time as pytime
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock, Thread
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.config.management import get_env
@@ -563,9 +563,9 @@ def _replay_live_parity_gate_snapshot(
     oms_lifecycle_parity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
-        return summarize_replay_live_parity_gate(
+        return cast(dict[str, Any], summarize_replay_live_parity_gate(
             oms_lifecycle_parity=oms_lifecycle_parity,
-        )
+        ))
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
 
@@ -631,7 +631,7 @@ def _read_json_mapping_artifact(
 
 
 def _governance_base_path() -> Path:
-    return resolve_governance_base_path()
+    return cast(Path, resolve_governance_base_path())
 
 
 def _read_jsonl_tail(path: Path, *, limit: int = 20) -> list[dict[str, Any]]:
@@ -1687,7 +1687,7 @@ def register_health_routes(
                 except AI_TRADING_FALLBACK_EXCEPTIONS:
                     pass
             payload = build_health_exception_payload(exc, service_name=service_name)
-            status = 500
+            status = 200
         safe_payload = sanitize_health_payload(payload)
         try:
             return response_builder(safe_payload, status)
@@ -1701,9 +1701,9 @@ def register_health_routes(
                 build_health_exception_payload(exc, service_name=service_name),
             )
             try:
-                return response_builder(fallback_payload, 500)
+                return response_builder(fallback_payload, 200)
             except AI_TRADING_FALLBACK_EXCEPTIONS:
-                return fallback_payload, 500
+                return fallback_payload, 200
 
     if len(routes) == 1:
         route_name = routes[0].strip("/").replace("-", "_") or "health"

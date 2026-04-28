@@ -15,6 +15,19 @@ from ai_trading.logging.redact import redact_env
 
 logger = get_logger(__name__)
 
+_TRUTHY = {"1", "true", "yes", "on"}
+_DRY_RUN_ENV_KEYS = ("DRY_RUN", "AI_TRADING_DRY_RUN", "VALIDATE_ENV_DRY_RUN")
+_TEST_MODE_ENV_KEYS = ("PYTEST_RUNNING", "TESTING")
+
+
+def _env_flag_enabled(name: str) -> bool:
+    value = get_env(name, "", cast=str, resolve_aliases=False)
+    return str(value or "").strip().lower() in _TRUTHY
+
+
+def _allow_missing_required_env() -> bool:
+    return any(_env_flag_enabled(name) for name in (*_DRY_RUN_ENV_KEYS, *_TEST_MODE_ENV_KEYS))
+
 
 def _required_env(name: str) -> str:
     value = get_env(name, None, cast=str, resolve_aliases=False)
@@ -131,11 +144,13 @@ def validate_specific_env_var(name: str, required: bool = False) -> dict:
         if required:
             raise RuntimeError(f"Missing required env var: {name}")
         return result
+    masked = redact_env({name: str(val)}).get(name, str(val))
 
     return {
         "variable": name,
         "status": "set",
-        "value": val,
+        "value": masked,
+        "length": len(str(val)),
         "issues": [],
     }
 
@@ -143,7 +158,7 @@ def validate_specific_env_var(name: str, required: bool = False) -> dict:
 def main() -> int:
     """Validate critical environment variables.
 
-    Missing credentials are tolerated for dry-run scenarios.
+    Missing credentials are tolerated only for explicit dry-run/test scenarios.
     """
     try:
         validate_no_deprecated_env()
@@ -152,8 +167,12 @@ def main() -> int:
         return 1
     try:
         Settings()
-    except KeyError as exc:
-        logger.warning("Missing credential: %s", exc)
+    except (KeyError, ValueError) as exc:
+        if _allow_missing_required_env():
+            logger.warning("Missing credential: %s", exc)
+            return 0
+        logger.error("Missing required environment: %s", exc)
+        return 1
     return 0
 
 

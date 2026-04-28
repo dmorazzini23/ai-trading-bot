@@ -110,18 +110,31 @@ class TradingSession:
     def is_trading_day(self, dt: datetime | date) -> bool:
         """Check if given datetime falls on a trading day."""
         if isinstance(dt, datetime):
+            if self.start_time >= self.end_time:
+                return self.is_in_session(dt)
             dt = self._to_session_time(dt)
         return dt.weekday() in self.days_of_week
 
     def is_in_session(self, dt: datetime) -> bool:
         """Check if given datetime is within trading session."""
-        if not self.is_trading_day(dt):
-            return False
-        market_time = self._to_session_time(dt).time()
-        if self.start_time <= self.end_time:
+        market_dt = self._to_session_time(dt)
+        market_time = market_dt.time()
+        market_weekday = market_dt.weekday()
+        if self.start_time == self.end_time:
+            if market_time >= self.start_time:
+                return market_weekday in self.days_of_week
+            previous_weekday = (market_dt - timedelta(days=1)).weekday()
+            return previous_weekday in self.days_of_week
+        if self.start_time < self.end_time:
+            if market_weekday not in self.days_of_week:
+                return False
             return self.start_time <= market_time <= self.end_time
-        else:
-            return market_time >= self.start_time or market_time <= self.end_time
+        if market_time >= self.start_time:
+            return market_weekday in self.days_of_week
+        if market_time < self.end_time:
+            previous_weekday = (market_dt - timedelta(days=1)).weekday()
+            return previous_weekday in self.days_of_week
+        return False
 
 class CalendarRegistry:
     """
@@ -143,9 +156,9 @@ class CalendarRegistry:
         """Setup default trading sessions by asset class."""
         equity_session = TradingSession(name='US_EQUITY_REGULAR', start_time=time(9, 30), end_time=time(16, 0), days_of_week={0, 1, 2, 3, 4}, timezone_name='America/New_York')
         etf_session = TradingSession(name='US_ETF_REGULAR', start_time=time(9, 30), end_time=time(16, 0), days_of_week={0, 1, 2, 3, 4}, timezone_name='America/New_York')
-        futures_session = TradingSession(name='US_FUTURES_EXTENDED', start_time=time(18, 0), end_time=time(17, 0), days_of_week={0, 1, 2, 3, 4, 6}, timezone_name='America/New_York')
-        crypto_session = TradingSession(name='CRYPTO_24_7', start_time=time(0, 0), end_time=time(23, 59), days_of_week={0, 1, 2, 3, 4, 5, 6}, timezone_name='UTC')
-        forex_session = TradingSession(name='FOREX_EXTENDED', start_time=time(17, 0), end_time=time(17, 0), days_of_week={0, 1, 2, 3, 4, 6}, timezone_name='America/New_York')
+        futures_session = TradingSession(name='US_FUTURES_EXTENDED', start_time=time(18, 0), end_time=time(17, 0), days_of_week={0, 1, 2, 3, 6}, timezone_name='America/New_York')
+        crypto_session = TradingSession(name='CRYPTO_24_7', start_time=time(0, 0), end_time=time(0, 0), days_of_week={0, 1, 2, 3, 4, 5, 6}, timezone_name='UTC')
+        forex_session = TradingSession(name='FOREX_EXTENDED', start_time=time(17, 0), end_time=time(17, 0), days_of_week={0, 1, 2, 3, 6}, timezone_name='America/New_York')
         bond_session = TradingSession(name='US_BOND_REGULAR', start_time=time(9, 0), end_time=time(15, 0), days_of_week={0, 1, 2, 3, 4}, timezone_name='America/New_York')
         self._asset_calendars = {AssetClass.EQUITY: equity_session, AssetClass.ETF: etf_session, AssetClass.FUTURES: futures_session, AssetClass.CRYPTO: crypto_session, AssetClass.FOREX: forex_session, AssetClass.BOND: bond_session}
 
@@ -247,9 +260,11 @@ class CalendarRegistry:
         Returns:
             True if market is open, False otherwise
         """
+        session = self.get_session(symbol)
+        if session.name in {'CRYPTO_24_7', 'FOREX_EXTENDED', 'US_FUTURES_EXTENDED'}:
+            return session.is_in_session(dt)
         if not self.is_trading_day(symbol, dt):
             return False
-        session = self.get_session(symbol)
         is_in_session = session.is_in_session(dt)
         session_dt = session._to_session_time(dt)
         check_date = session_dt.date()
@@ -271,16 +286,19 @@ class CalendarRegistry:
         Returns:
             Tuple of (session_start, session_end) or (None, None) if not trading day
         """
-        if not self.is_trading_day(symbol, trading_date):
-            return (None, None)
         session = self.get_session(symbol)
+        if session.start_time >= session.end_time:
+            if trading_date.weekday() not in session.days_of_week:
+                return (None, None)
+        elif not self.is_trading_day(symbol, trading_date):
+            return (None, None)
         self._ensure_market_holidays(trading_date.year)
         session_tz = ZoneInfo(session.timezone_name)
         session_start = datetime.combine(trading_date, session.start_time, tzinfo=session_tz)
         session_end = datetime.combine(trading_date, session.end_time, tzinfo=session_tz)
-        if session.start_time > session.end_time:
+        if session.start_time >= session.end_time:
             session_end += timedelta(days=1)
-        if trading_date in self._half_days:
+        if session.name not in {'CRYPTO_24_7', 'FOREX_EXTENDED', 'US_FUTURES_EXTENDED'} and trading_date in self._half_days:
             session_end = datetime.combine(trading_date, time(13, 0), tzinfo=session_tz)
         session_start = session_start.astimezone(UTC)
         session_end = session_end.astimezone(UTC)

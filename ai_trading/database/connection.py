@@ -91,7 +91,7 @@ class DatabaseManager:
         self.pool_timeout = int(kwargs.get("pool_timeout", 30))
         self.pool_recycle = int(kwargs.get("pool_recycle", 3600))
         self.connect_timeout = int(kwargs.get("connect_timeout", 10))
-        self._connections: dict[int | None, "DatabaseSession"] = {}
+        self._connections: dict[int | None, list["DatabaseSession"]] = {}
         self._connection_lock = threading.RLock()
         self._is_connected = False
         self._engine: Engine | None = None
@@ -156,11 +156,12 @@ class DatabaseManager:
             if not self._is_connected:
                 logger.debug("Database not connected")
                 return
-            for session in list(self._connections.values()):
-                try:
-                    session.close()
-                except (SQLAlchemyError, RuntimeError, ValueError):
-                    logger.debug("Database session close failed", exc_info=True)
+            for sessions in list(self._connections.values()):
+                for session in list(sessions):
+                    try:
+                        session.close()
+                    except (SQLAlchemyError, RuntimeError, ValueError):
+                        logger.debug("Database session close failed", exc_info=True)
             self._connections.clear()
             if self._engine is not None:
                 try:
@@ -193,7 +194,7 @@ class DatabaseManager:
             "is_connected": self._is_connected,
             "pool_size": self.pool_size,
             "max_overflow": self.max_overflow,
-            "active_connections": len(self._connections),
+            "active_connections": sum(len(sessions) for sessions in self._connections.values()),
             "pool_timeout": self.pool_timeout,
             "pool_recycle": self.pool_recycle,
         }
@@ -207,7 +208,7 @@ class DatabaseManager:
             session_id = threading.current_thread().ident
             raw_session = self._session_factory()
             session = DatabaseSession(session_id=session_id, session=raw_session)
-            self._connections[session_id] = session
+            self._connections.setdefault(session_id, []).append(session)
         logger.debug(f"Database session {session_id} created")
         try:
             yield session
@@ -220,7 +221,14 @@ class DatabaseManager:
                 session.close()
             finally:
                 with self._connection_lock:
-                    self._connections.pop(session_id, None)
+                    sessions = self._connections.get(session_id)
+                    if sessions is not None:
+                        try:
+                            sessions.remove(session)
+                        except ValueError:
+                            pass
+                        if not sessions:
+                            self._connections.pop(session_id, None)
             logger.debug(f"Database session {session_id} closed")
 
 

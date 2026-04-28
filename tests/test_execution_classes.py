@@ -132,6 +132,16 @@ class TestOrderRequest:
         assert request.is_valid is True
         assert len(request.validation_errors) == 0
 
+    def test_order_request_default_ids_are_collision_resistant(self):
+        """Default request identifiers should not collide inside one second."""
+        first = OrderRequest(symbol="AAPL", side=OrderSide.BUY, quantity=1)
+        second = OrderRequest(symbol="AAPL", side=OrderSide.BUY, quantity=1)
+
+        assert first.client_order_id != second.client_order_id
+        assert first.request_id != second.request_id
+        copied = first.copy()
+        assert copied.client_order_id != first.client_order_id
+
     def test_order_request_limit_order(self):
         """Test limit order creation."""
         request = OrderRequest(

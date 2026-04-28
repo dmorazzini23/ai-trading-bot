@@ -19552,7 +19552,7 @@ def _enforce_buying_power_limit(
     if available is None:
         return qty, None
     if available <= 0:
-        return qty, available
+        return 0, available
 
     # AI-AGENT-REF: Fix floor division bug - use regular division with max(1, ...) to ensure at least 1 share
     max_qty = max(1, int(available / price))

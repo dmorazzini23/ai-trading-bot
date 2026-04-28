@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import datetime, timedelta
 import numpy as np
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from ai_trading.logging import logger
 from ai_trading.utils.lazy_imports import load_pandas
 
@@ -143,7 +143,7 @@ class PurgedGroupTimeSeriesSplit:
                         purged_train.append(idx)
                 except (IndexError, KeyError, ValueError, TypeError):
                     continue
-            return np.array(purged_train)
+            return cast(np.ndarray, np.array(purged_train))
         except (KeyError, ValueError, IndexError, TypeError) as e:
             logger.error(f'Error in purging overlapping observations: {e}')
             return train_indices
@@ -244,6 +244,7 @@ def validate_no_leakage(train_indices: np.ndarray, test_indices: np.ndarray, tim
                                 return False
                 if max_train_time >= min_test_time:
                     logger.warning('Potential temporal leakage: training data overlaps test period')
+                    return False
         logger.debug('No data leakage detected')
         return True
     except (ValueError, TypeError) as e:

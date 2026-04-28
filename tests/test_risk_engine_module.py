@@ -154,11 +154,29 @@ def test_position_size_zero_raw_qty_defaults_to_min(caplog):
     sig.weight = 0.0
     eng.asset_limits["equity"] = 1.0
     eng.strategy_limits["s"] = 1.0
+    eng.global_limit = 1.0
     eng.config = cast(Any, types.SimpleNamespace(position_size_min_usd=100, atr_multiplier=1.0))
     with caplog.at_level(logging.WARNING):
         qty = eng.position_size(sig, cash=1000, price=10)
     assert qty == 10
     assert any("falling back to minimum position size" in rec.message for rec in caplog.records)
+
+
+def test_position_size_floor_is_capped_by_cash_and_exposure():
+    eng = RiskEngine()
+    sig = make_signal()
+    sig.weight = 0.0
+    eng.asset_limits["equity"] = 1.0
+    eng.strategy_limits["s"] = 1.0
+    eng.global_limit = 1.0
+    eng.config = cast(Any, types.SimpleNamespace(position_size_min_usd=100, atr_multiplier=1.0))
+
+    assert eng.position_size(sig, cash=50, price=10) == 5
+
+    eng.asset_limits["equity"] = 0.05
+    eng.strategy_limits["s"] = 0.05
+    eng.exposure["equity"] = 0.04
+    assert eng.position_size(sig, cash=1_000, price=10) == 1
 
 
 def test_position_size_invalid_min_usd_falls_back_once(caplog):

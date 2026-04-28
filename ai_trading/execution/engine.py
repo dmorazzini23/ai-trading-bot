@@ -3286,6 +3286,7 @@ class ExecutionEngine:
             if isinstance(side, str):
                 side = OrderSide(side)
 
+            quantity = int(_ensure_positive_qty(quantity))
             available_qty_raw = self.get_available_qty(symbol)
             if callable(available_qty_raw):  # accommodate mocked attributes
                 available_qty_raw = available_qty_raw()
@@ -3298,12 +3299,27 @@ class ExecutionEngine:
                     self.logger.info("SKIP_NO_POSITION | no shares to sell, skipping")
                     self.execution_stats["rejected_orders"] += 1
                     return None
+                if quantity > available_qty:
+                    clipped_qty = int(math.floor(available_qty))
+                    if clipped_qty <= 0:
+                        self.logger.info("SKIP_NO_POSITION | no whole shares available to sell, skipping")
+                        self.execution_stats["rejected_orders"] += 1
+                        return None
+                    self.logger.warning(
+                        "SELL_QTY_CLIPPED_TO_AVAILABLE",
+                        extra={
+                            "symbol": symbol,
+                            "requested_qty": int(quantity),
+                            "available_qty": float(available_qty),
+                            "submitted_qty": int(clipped_qty),
+                        },
+                    )
+                    quantity = clipped_qty
             elif side == OrderSide.SELL_SHORT:
                 self.logger.info("SHORT_SELL_INITIATED | symbol=%s qty=%d", symbol, quantity)
                 if not self._validate_short_selling(api, symbol, quantity):
                     self.execution_stats["rejected_orders"] += 1
                     return None
-            quantity = int(_ensure_positive_qty(quantity))
             raw_price = kwargs.get("price")
             price_alias = _ensure_valid_price(raw_price)
             if price_alias is None:

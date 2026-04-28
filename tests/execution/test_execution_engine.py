@@ -113,6 +113,26 @@ def test_sell_gating_uses_symbol_specific_available_quantity(monkeypatch):
     assert submitted == ["AAPL"]
 
 
+def test_regular_sell_clips_to_available_long_quantity(monkeypatch):
+    engine = ExecutionEngine()
+    engine._position_tracker = {"AAPL": 3.0}
+    submitted: list[int] = []
+
+    def submit_and_track(self, order):
+        submitted.append(order.quantity)
+        self.orders[order.id] = order
+        self.active_orders[order.id] = order
+        return SimpleNamespace(id=order.id)
+
+    monkeypatch.setattr(OrderManager, "submit_order", submit_and_track, raising=False)
+    monkeypatch.setattr(ExecutionEngine, "_simulate_market_execution", lambda self, order: None, raising=False)
+
+    result = engine.execute_order("AAPL", OrderSide.SELL, 5)
+
+    assert isinstance(result, ExecutionResult)
+    assert submitted == [3]
+
+
 def test_order_add_fill_tracks_partial_then_full():
     order = Order("AAPL", OrderSide.BUY, 5)
 

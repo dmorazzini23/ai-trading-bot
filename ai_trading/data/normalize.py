@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import numpy as np
 
 
 def ensure_ohlcv(df: pd.DataFrame | None) -> pd.DataFrame | None:
@@ -27,9 +28,25 @@ def ensure_ohlcv(df: pd.DataFrame | None) -> pd.DataFrame | None:
         if df.index.tz is None:
             df.index = df.index.tz_localize("UTC")
 
-    df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype("int64")
+    for column in required:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    df = df.dropna(subset=required, how="any")
+    if df.empty:
+        return None
+
+    numeric = df.loc[:, required]
+    finite_mask = np.isfinite(numeric.to_numpy(dtype=float)).all(axis=1)
+    positive_ohlc = (numeric.loc[:, ["open", "high", "low", "close"]] > 0).all(axis=1)
+    valid_volume = numeric["volume"] >= 0
+    consistent_ohlc = (
+        (numeric["high"] >= numeric[["open", "low", "close"]].max(axis=1))
+        & (numeric["low"] <= numeric[["open", "high", "close"]].min(axis=1))
+    )
+    df = df.loc[finite_mask & positive_ohlc & valid_volume & consistent_ohlc]
+    if df.empty:
+        return None
+    df["volume"] = df["volume"].astype("int64")
     return df[required]
 
 
 __all__ = ["ensure_ohlcv"]
-

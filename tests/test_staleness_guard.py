@@ -31,6 +31,15 @@ class TestStalenessGuard:
         with pytest.raises(RuntimeError, match="Stale data for symbols"):
             ensure_data_fresh(mock_fetcher, ["AAPL"], max_age_seconds=300)
 
+    def test_staleness_guard_rejects_future_dated_bars(self):
+        """Future bars beyond clock skew should fail closed."""
+        now = datetime.datetime.now(datetime.UTC)
+        future_ts = now + datetime.timedelta(seconds=30)
+        df = pd.DataFrame({"timestamp": [future_ts], "close": [100.0]})
+
+        with pytest.raises(RuntimeError, match="future_ts="):
+            _ensure_data_fresh(df, 300, symbol="AAPL", now=now)
+
     def test_staleness_guard_no_data(self):
         """None from fetcher should raise."""
         mock_fetcher = Mock()

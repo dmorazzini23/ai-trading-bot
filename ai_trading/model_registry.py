@@ -23,6 +23,7 @@ from typing import Any
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
+from ai_trading.models.artifacts import load_verified_joblib_artifact, verify_artifact
 from ai_trading.paths import MODELS_DIR
 
 logger = get_logger(__name__)
@@ -228,6 +229,22 @@ class ModelRegistry:
                     return candidate
         return None
 
+    @staticmethod
+    def _manifest_reference_from_mapping(value: Any) -> str | None:
+        if not isinstance(value, Mapping):
+            return None
+        for key in ("manifest_path", "artifact_manifest_path"):
+            candidate = str(value.get(key, "") or "").strip()
+            if candidate:
+                return candidate
+        nested_paths = value.get("paths")
+        if isinstance(nested_paths, Mapping):
+            for key in ("manifest_path", "artifact_manifest_path"):
+                candidate = str(nested_paths.get(key, "") or "").strip()
+                if candidate:
+                    return candidate
+        return None
+
     def _extract_external_artifact_path(
         self,
         model: Any,
@@ -236,6 +253,19 @@ class ModelRegistry:
         for candidate in (
             self._artifact_reference_from_mapping(metadata),
             self._artifact_reference_from_mapping(model),
+        ):
+            if candidate:
+                return candidate
+        return None
+
+    def _extract_external_manifest_path(
+        self,
+        model: Any,
+        metadata: Mapping[str, Any] | None,
+    ) -> str | None:
+        for candidate in (
+            self._manifest_reference_from_mapping(metadata),
+            self._manifest_reference_from_mapping(model),
         ):
             if candidate:
                 return candidate
@@ -350,6 +380,7 @@ class ModelRegistry:
         registered_at = datetime.now(UTC)
         dataset_fp = str(dataset_fingerprint) if dataset_fingerprint is not None else None
         external_artifact_path = self._extract_external_artifact_path(model, metadata)
+        external_manifest_path = self._extract_external_manifest_path(model, metadata)
         payload: bytes | None = None
         artifact_format: str
         if external_artifact_path:
@@ -398,6 +429,7 @@ class ModelRegistry:
             "path": str(model_dir),
             "artifact_path": str(artifact_path),
             "artifact_format": artifact_format,
+            "manifest_path": str(Path(external_manifest_path).expanduser()) if external_manifest_path else None,
             "active": bool(activate),
             "model_hash": model_hash,
             "dataset_fingerprint": dataset_fp,
@@ -477,7 +509,15 @@ class ModelRegistry:
 
         artifact_format = str(info.get("artifact_format", "json") or "json").strip().lower()
         if artifact_format == "external_path":
-            return None, combined_meta
+            manifest_path = str(info.get("manifest_path", "") or "").strip() or None
+            ok, reason = verify_artifact(model_path=artifact_path, manifest_path=manifest_path)
+            if not ok:
+                raise RuntimeError(f"Failed to verify external model {model_id}: {reason}")
+            combined_meta["manifest_path"] = str(manifest_path or f"{artifact_path}.manifest.json")
+            return (
+                load_verified_joblib_artifact(artifact_path, manifest_path=manifest_path),
+                combined_meta,
+            )
         if artifact_format == "json":
             try:
                 return json.loads(artifact_path.read_text()), combined_meta
