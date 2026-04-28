@@ -54,6 +54,29 @@ def _fallback_runtime_root() -> Path:
     return (base_dir / _APP_NAME).resolve()
 
 
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_dev_runtime() -> bool:
+    for env_key in ("TRADING_ENV", "ENVIRONMENT", "AI_TRADING_ENV"):
+        raw = str(get_env(env_key, "", cast=str, resolve_aliases=False) or "").strip().lower()
+        if raw in {"dev", "development", "local", "test"}:
+            return True
+    return not any(
+        str(get_env(env_key, "", cast=str, resolve_aliases=False) or "").strip()
+        for env_key in ("TRADING_ENV", "ENVIRONMENT", "AI_TRADING_ENV")
+    )
+
+
+def _allow_tmp_fallback() -> bool:
+    raw = str(
+        get_env("AI_TRADING_ALLOW_TMP_RUNTIME_FALLBACK", "", cast=str, resolve_aliases=False)
+        or ""
+    )
+    return _truthy(raw) or is_test_runtime() or _is_dev_runtime()
+
+
 def _target_parent_writable(path: Path) -> bool:
     parent = path.parent
     if parent.exists():
@@ -122,6 +145,13 @@ def resolve_runtime_artifact_path(
     for candidate in candidates:
         if _target_parent_writable(candidate):
             return candidate
+
+    if not _allow_tmp_fallback():
+        raise RuntimeError(
+            "No writable runtime artifact root found outside test/dev runtime; "
+            "set AI_TRADING_DATA_DIR/STATE_DIRECTORY or explicitly set "
+            "AI_TRADING_ALLOW_TMP_RUNTIME_FALLBACK=1"
+        )
 
     fallback = _resolve_relative_candidate(target, _fallback_runtime_root())
     fallback.parent.mkdir(parents=True, exist_ok=True)

@@ -12,12 +12,31 @@ from pathlib import Path
 SENSITIVE_KEYS = (
     "ALPACA_API_KEY",
     "ALPACA_SECRET_KEY",
+    "ALPACA_DATA_API_KEY",
+    "ALPACA_DATA_SECRET_KEY",
+    "ALPACA_DATA_KEY",
     "WEBHOOK_SECRET",
+    "SLACK_WEBHOOK_URL",
+    "AI_TRADING_SLACK_WEBHOOK_URL",
+    "AI_TRADING_GRAFANA_API_TOKEN",
+    "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD",
+    "TRADIER_ACCESS_TOKEN",
     "NEWS_API_KEY",
     "SENTIMENT_API_KEY",
     "FINNHUB_API_KEY",
     "IEX_API_TOKEN",
+    "IEX_CLOUD_API_TOKEN",
+    "FRED_API_KEY",
+    "POLYGON_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "OPENAI_API_KEY",
     "API_SECRET_KEY",
+)
+
+SENSITIVE_KEY_RE = re.compile(
+    r"(^|_)(SECRET|TOKEN|PASSWORD|PRIVATE_KEY|API_KEY|ACCESS_KEY|CLIENT_SECRET|WEBHOOK_URL|DSN|AUTHORIZATION|BEARER)($|_)"
 )
 
 ASSIGNMENT_RE = re.compile(
@@ -89,6 +108,15 @@ PLACEHOLDER_TOKENS = (
     "masked",
 )
 
+LIVE_VALUE_PREFIXES = (
+    "ak_",
+    "ghp_",
+    "github_pat_",
+    "sk-",
+    "xoxb-",
+    "xoxp-",
+)
+
 
 def _git_tracked_files(root: Path) -> list[str]:
     result = subprocess.run(
@@ -153,6 +181,27 @@ def _looks_placeholder(value: str) -> bool:
     return any(token in lowered for token in PLACEHOLDER_TOKENS)
 
 
+def _is_sensitive_key(key: str) -> bool:
+    normalized = key.upper()
+    return normalized in SENSITIVE_KEYS or bool(SENSITIVE_KEY_RE.search(normalized))
+
+
+def _looks_live_value(value: str, *, exact_key: bool) -> bool:
+    normalized = value.strip()
+    lowered = normalized.lower()
+    if exact_key:
+        return True
+    if len(normalized) >= 10:
+        return True
+    if any(lowered.startswith(prefix) for prefix in LIVE_VALUE_PREFIXES):
+        return True
+    if "://hooks.slack.com/" in lowered:
+        return True
+    if re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$", normalized):
+        return True
+    return False
+
+
 def _scan_file(path: Path, rel_path: str) -> list[tuple[str, int, str, str]]:
     findings: list[tuple[str, int, str, str]] = []
     try:
@@ -168,10 +217,12 @@ def _scan_file(path: Path, rel_path: str) -> list[tuple[str, int, str, str]]:
         if not match:
             continue
         key = match.group("key")
-        if key not in SENSITIVE_KEYS:
+        if not _is_sensitive_key(key):
             continue
         value = _normalize_value(match.group("value"))
         if _looks_placeholder(value):
+            continue
+        if not _looks_live_value(value, exact_key=key.upper() in SENSITIVE_KEYS):
             continue
         findings.append((rel_path, line_no, key, value))
     return findings

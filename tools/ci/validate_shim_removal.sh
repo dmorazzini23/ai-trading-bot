@@ -65,11 +65,11 @@ PY
 
 # Step 4: Compile check for syntax errors
 echo "4. Running syntax validation..."
-python3 -m py_compile $(find ai_trading -name "*.py" | head -20) || {
+git ls-files -z '*.py' | xargs -0 -r -n 100 python3 -m py_compile || {
     echo "❌ Syntax errors found in Python files"
     exit 1
 }
-echo "✅ Core Python files compile successfully"
+echo "✅ Tracked Python files compile successfully"
 
 # Step 5: Test Settings access patterns
 echo "5. Testing standardized config access..."

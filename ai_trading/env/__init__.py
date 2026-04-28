@@ -6,7 +6,7 @@ import importlib.util
 import logging
 from pathlib import Path
 
-from ai_trading.config.management import is_test_runtime, set_runtime_env_override
+from ai_trading.config.management import get_env, is_test_runtime, set_runtime_env_override
 from ai_trading.utils.env import refresh_alpaca_credentials_cache
 
 def _ensure_dotenv_module() -> tuple[object | None, bool]:
@@ -37,6 +37,45 @@ _dotenv, PYTHON_DOTENV_RESOLVED = _ensure_dotenv_module()
 
 _ENV_LOADED = False
 _DOTENV_OVERRIDE_DEFAULT = False
+_DOTENV_RUNTIME_OVERRIDE_FLAG = "AI_TRADING_DOTENV_RUNTIME_OVERRIDE"
+
+
+def _runtime_dotenv_override_enabled() -> bool:
+    raw = get_env(_DOTENV_RUNTIME_OVERRIDE_FLAG, "", cast=str, resolve_aliases=False)
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _populate_blank_values_from_dotenv(dotenv_path: str) -> None:
+    """Fill explicitly blank process values without replacing configured ones."""
+
+    if not PYTHON_DOTENV_RESOLVED:
+        return
+    try:
+        if hasattr(_dotenv, "dotenv_values"):
+            values = _dotenv.dotenv_values(dotenv_path)  # type: ignore[union-attr]
+        else:
+            values = {}
+            for raw in Path(dotenv_path).read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in raw:
+                    continue
+                key, value = raw.split("=", 1)
+                key = key.strip()
+                if key:
+                    values[key] = value
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        logging.getLogger(__name__).debug(
+            "DOTENV_VALUES_LOAD_FAILED",
+            extra={"dotenv_path": dotenv_path},
+            exc_info=True,
+        )
+        return
+    for key, value in values.items():
+        if value is None:
+            continue
+        env_key = str(key)
+        if get_env(env_key, None, cast=str, resolve_aliases=False) == "":
+            set_runtime_env_override(env_key, str(value))
 
 
 def load_dotenv_if_present(
@@ -101,8 +140,11 @@ def ensure_dotenv_loaded(dotenv_path: str | None = None) -> None:
     runtime_path = str(Path(path).with_name(".env.runtime"))
     runtime_loaded = False
     runtime_loaded_now = False
+    runtime_override = _runtime_dotenv_override_enabled()
     if Path(runtime_path).exists():
-        runtime_loaded_now = load_dotenv_if_present(runtime_path, override=True)
+        runtime_loaded_now = load_dotenv_if_present(runtime_path, override=runtime_override)
+        if runtime_loaded_now and not runtime_override:
+            _populate_blank_values_from_dotenv(runtime_path)
         runtime_loaded = runtime_loaded_now
     loaded = load_dotenv_if_present(path, override=_DOTENV_OVERRIDE_DEFAULT)
     if not loaded and path != ".env":
@@ -112,7 +154,7 @@ def ensure_dotenv_loaded(dotenv_path: str | None = None) -> None:
         source = path if loaded else "<none>"
     _ENV_LOADED = True
     if runtime_loaded_now:
-        _log_env_loaded(runtime_path, override=True)
+        _log_env_loaded(runtime_path, override=runtime_override)
     if loaded:
         _log_env_loaded(source, override=_DOTENV_OVERRIDE_DEFAULT)
     if runtime_loaded or loaded:

@@ -27036,10 +27036,12 @@ def _current_qty(ctx, symbol: str) -> int:
     if position_map is None:
         fresh_map: dict[str, Any] = {}
         api_obj = getattr(ctx, "api", None)
+        get_all_positions = getattr(api_obj, "get_all_positions", None)
         list_positions = getattr(api_obj, "list_positions", None)
-        if callable(list_positions):
+        positions_fn = get_all_positions if callable(get_all_positions) else list_positions
+        if callable(positions_fn):
             try:
-                broker_positions = list_positions()
+                broker_positions = positions_fn()
             except COMMON_EXC:
                 broker_positions = ()
             for pos_entry in broker_positions or ():
@@ -27075,9 +27077,21 @@ def _current_qty(ctx, symbol: str) -> int:
     if qty in (None, ""):
         return 0
     try:
-        return int(float(qty))
+        parsed_qty = int(float(qty))
     except (TypeError, ValueError):
         return 0
+    if parsed_qty < 0:
+        return parsed_qty
+    side = getattr(pos, "side", None)
+    if side in (None, "") and isinstance(pos, MappingABC):
+        side = pos.get("side")
+    try:
+        side_token = str(getattr(side, "value", side) or "").strip().lower()
+    except BOT_ENGINE_FALLBACK_EXC:
+        side_token = ""
+    if side_token in {"short", "sell", "sell_short", "sellshort", "sell-short"}:
+        return -abs(parsed_qty)
+    return parsed_qty
 
 
 def _delta_quantity(
@@ -40743,6 +40757,16 @@ def compute_ichimoku(
             ich_df = pd.DataFrame(ich_df)
         if not hasattr(signal_df, "iloc") or not hasattr(signal_df, "columns"):
             signal_df = pd.DataFrame(signal_df)
+        leaky_cols = [
+            col for col in ich_df.columns if str(col).upper().startswith("ICS")
+        ]
+        if leaky_cols:
+            ich_df = ich_df.drop(columns=leaky_cols, errors="ignore")
+        signal_leaky_cols = [
+            col for col in signal_df.columns if str(col).upper().startswith("ICS")
+        ]
+        if signal_leaky_cols:
+            signal_df = signal_df.drop(columns=signal_leaky_cols, errors="ignore")
         return ich_df, signal_df
     except (
         FileNotFoundError,

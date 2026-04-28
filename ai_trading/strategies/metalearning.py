@@ -17,7 +17,6 @@ from importlib.util import find_spec
 from ai_trading.utils.lazy_imports import (
     load_sklearn_ensemble,
     load_sklearn_metrics,
-    load_sklearn_model_selection,
     load_sklearn_preprocessing,
 )
 from ai_trading.data.fetch import get_minute_df
@@ -196,16 +195,14 @@ class MetaLearning(BaseStrategy):
                 self.is_trained = True
                 self.last_training_date = datetime.now(UTC)
                 return True
-            model_sel = load_sklearn_model_selection()
             preproc = load_sklearn_preprocessing()
             ensemble = load_sklearn_ensemble()
             metrics = load_sklearn_metrics()
-            if not all([model_sel, preproc, ensemble, metrics]):
+            if not all([preproc, ensemble, metrics]):
                 logger.warning('Required sklearn components missing, using fallback mode')
                 self.is_trained = True
                 self.last_training_date = datetime.now(UTC)
                 return True
-            train_test_split = model_sel.train_test_split
             StandardScaler = preproc.StandardScaler
             GradientBoostingClassifier = ensemble.GradientBoostingClassifier
             RandomForestClassifier = ensemble.RandomForestClassifier
@@ -216,30 +213,49 @@ class MetaLearning(BaseStrategy):
             if features_df is None or len(features_df) < self.parameters['min_data_points']:
                 logger.error(f"Insufficient features for training: {(len(features_df) if features_df is not None else 0)} < {self.parameters['min_data_points']}")
                 return False
-            targets = self._create_target_labels(data, features_df.index)
-            common_index = features_df.index.intersection(targets.index)
+            horizon = self.parameters['prediction_horizon']
+            future_returns = data['close'].shift(-horizon) / data['close'] - 1
+            valid_returns = future_returns.dropna()
+            common_index = features_df.index.intersection(valid_returns.index)
             if len(common_index) < self.parameters['min_data_points']:
                 logger.error('Insufficient aligned data for training')
                 return False
             X = features_df.loc[common_index]
-            y = targets.loc[common_index]
+            aligned_returns = valid_returns.loc[common_index]
+            split_idx = int(len(X) * 0.8)
+            min_test_size = max(1, len(X) - split_idx)
+            if split_idx < self.parameters['min_data_points'] or min_test_size < 1:
+                logger.error('Insufficient chronological train/test data for training')
+                return False
+            train_returns = aligned_returns.iloc[:split_idx]
+            sell_threshold = train_returns.quantile(0.25)
+            buy_threshold = train_returns.quantile(0.75)
+            logger.debug(f'Dynamic thresholds from train data - Sell: {sell_threshold:.4f} ({sell_threshold * 100:.2f}%), Buy: {buy_threshold:.4f} ({buy_threshold * 100:.2f}%)')
+            y = self._create_target_labels(
+                data,
+                X.index,
+                thresholds=(float(sell_threshold), float(buy_threshold)),
+                future_returns=future_returns,
+            )
+            X = X.loc[y.index]
+            y = y.loc[X.index]
+            X_train = X.iloc[:split_idx]
+            X_test = X.iloc[split_idx:]
+            y_train = y.iloc[:split_idx]
+            y_test = y.iloc[split_idx:]
             unique_classes = y.unique()
             class_counts = y.value_counts()
             logger.info(f'Training data class distribution: {dict(class_counts)}')
             if len(unique_classes) < 2:
                 logger.error(f'Insufficient class diversity for ML training: only {len(unique_classes)} class(es)')
                 return False
+            train_unique_classes = y_train.unique()
+            if len(train_unique_classes) < 2:
+                logger.error(f'Insufficient train class diversity for ML training: only {len(train_unique_classes)} class(es)')
+                return False
             min_class_size = min(class_counts.values)
             if min_class_size < 3:
                 logger.warning(f'Small class size detected: {min_class_size} samples. This may affect training quality.')
-            try:
-                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-            except ValueError as e:
-                if 'The least populated class' in str(e):
-                    logger.warning('Cannot stratify split due to small class sizes, using random split')
-                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-                else:
-                    raise
             X_train_scaled = self.scaler.fit_transform(X_train)
             X_test_scaled = self.scaler.transform(X_test)
             self.rf_model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
@@ -416,7 +432,13 @@ class MetaLearning(BaseStrategy):
             logger.error(f'Error extracting features: {e}')
             return None
 
-    def _create_target_labels(self, data, feature_index) -> Any:
+    def _create_target_labels(
+        self,
+        data,
+        feature_index,
+        thresholds: tuple[float, float] | None = None,
+        future_returns: Any | None = None,
+    ) -> Any:
         """Create target labels for ML training using dynamic thresholds."""
         try:
             if not PANDAS_AVAILABLE:
@@ -424,18 +446,24 @@ class MetaLearning(BaseStrategy):
                 return []
             import pandas as pd
             horizon = self.parameters['prediction_horizon']
-            future_returns = data['close'].shift(-horizon) / data['close'] - 1
+            if future_returns is None:
+                future_returns = data['close'].shift(-horizon) / data['close'] - 1
             valid_returns = future_returns.dropna()
             if len(valid_returns) < self.parameters['min_data_points']:
                 logger.warning(f'Insufficient return data for labeling: {len(valid_returns)}')
                 return pd.Series(dtype=int)
-            sell_threshold = valid_returns.quantile(0.25)
-            buy_threshold = valid_returns.quantile(0.75)
+            if thresholds is None:
+                sell_threshold = valid_returns.quantile(0.25)
+                buy_threshold = valid_returns.quantile(0.75)
+            else:
+                sell_threshold, buy_threshold = thresholds
             logger.debug(f'Dynamic thresholds - Sell: {sell_threshold:.4f} ({sell_threshold * 100:.2f}%), Buy: {buy_threshold:.4f} ({buy_threshold * 100:.2f}%)')
             labels = pd.Series(1, index=data.index)
             labels[future_returns < sell_threshold] = 0
             labels[future_returns > buy_threshold] = 2
             aligned_labels = labels.reindex(feature_index).dropna()
+            aligned_returns = future_returns.reindex(aligned_labels.index).dropna()
+            aligned_labels = aligned_labels.loc[aligned_returns.index]
             unique_classes = aligned_labels.unique()
             class_counts = aligned_labels.value_counts()
             logger.debug(f'Label distribution: {dict(class_counts)} (unique classes: {len(unique_classes)})')

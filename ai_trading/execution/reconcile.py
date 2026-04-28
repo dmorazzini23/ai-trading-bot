@@ -34,6 +34,105 @@ def _coerce_quantity(value: Any, default: int = 0) -> int:
     except (TypeError, ValueError, OverflowError):
         return default
 
+
+def _empty_reconciliation_result() -> "ReconciliationResult":
+    return ReconciliationResult([], [], [], safe_utcnow())
+
+
+def _broker_symbol(record: Any) -> str:
+    symbol = getattr(record, "symbol", None)
+    if symbol in (None, "") and isinstance(record, dict):
+        symbol = record.get("symbol")
+    return str(symbol or "")
+
+
+def _broker_position_quantity(position: Any) -> int:
+    raw_qty = getattr(position, "qty", getattr(position, "quantity", 0))
+    if raw_qty in (None, "") and isinstance(position, dict):
+        raw_qty = position.get("qty", position.get("quantity", 0))
+    qty = _coerce_quantity(raw_qty)
+    if qty < 0:
+        return qty
+    side = getattr(position, "side", None)
+    if side in (None, "") and isinstance(position, dict):
+        side = position.get("side")
+    try:
+        side_token = str(getattr(side, "value", side) or "").strip().lower()
+    except (TypeError, ValueError):
+        side_token = ""
+    if side_token in {"short", "sell", "sell_short", "sellshort", "sell-short"}:
+        return -abs(qty)
+    return qty
+
+
+def _coerce_order_status(value: Any) -> OrderStatus:
+    status_value = getattr(value, "value", value)
+    try:
+        token = str(status_value or "").strip().lower()
+    except (TypeError, ValueError):
+        token = ""
+    if "." in token:
+        token = token.rsplit(".", 1)[-1]
+    token = token.replace("-", "_").replace(" ", "_")
+    if token in {"filled"}:
+        return OrderStatus.FILLED
+    if token in {"partially_filled", "partial_fill"}:
+        return OrderStatus.PARTIALLY_FILLED
+    if token in {"canceled", "cancelled"}:
+        return OrderStatus.CANCELED
+    if token in {"rejected"}:
+        return OrderStatus.REJECTED
+    return OrderStatus.PENDING
+
+
+def _orders_request(status: str) -> Any:
+    try:
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        raise RuntimeError("alpaca-py trading order request classes unavailable") from exc
+
+    status_name = str(status or "open").strip().upper()
+    status_value = getattr(QueryOrderStatus, status_name, QueryOrderStatus.OPEN)
+    return GetOrdersRequest(status=status_value)
+
+
+def _fetch_broker_positions(client: Any) -> list[Any]:
+    get_all_positions = getattr(client, "get_all_positions", None)
+    if callable(get_all_positions):
+        return list(get_all_positions() or [])
+    list_positions = getattr(client, "list_positions", None)
+    if callable(list_positions):
+        return list(list_positions() or [])
+    raise AttributeError("broker client missing positions method")
+
+
+def _fetch_broker_orders(client: Any) -> list[Any]:
+    get_orders = getattr(client, "get_orders", None)
+    list_orders = getattr(client, "list_orders", None)
+    if callable(get_orders):
+        try:
+            return list(get_orders(filter=_orders_request("open")) or [])
+        except TypeError:
+            return list(get_orders(status="open") or [])
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            if not callable(list_orders):
+                raise
+    if callable(list_orders):
+        return list(list_orders(status="open") or [])
+    return []
+
+
+def _fetch_broker_order_by_id(client: Any, order_id: str) -> Any:
+    get_order_by_id = getattr(client, "get_order_by_id", None)
+    if callable(get_order_by_id):
+        return get_order_by_id(order_id)
+    get_order = getattr(client, "get_order", None)
+    if callable(get_order):
+        return get_order(order_id)
+    raise AttributeError("broker client missing order lookup method")
+
+
 @dataclass
 class PositionDrift:
     """Represents a drift between local and broker position."""
@@ -265,18 +364,21 @@ def reconcile_with_broker(
     client = broker_client or reconciler.broker_client
     if client is None:
         logger.warning("reconcile_with_broker called without broker client")
-        return ReconciliationResult([], [], [], safe_utcnow())
+        return _empty_reconciliation_result()
 
     broker_positions: dict[str, Position] = {}
     broker_orders: dict[str, Order] = {}
 
     # Fetch current broker positions
     try:
-        positions = client.list_positions() or []
+        positions = _fetch_broker_positions(client)
         for pos in positions:
-            qty = _coerce_quantity(getattr(pos, "qty", getattr(pos, "quantity", 0)))
-            broker_positions[pos.symbol] = Position(
-                symbol=pos.symbol,
+            symbol = _broker_symbol(pos)
+            if not symbol:
+                continue
+            qty = _broker_position_quantity(pos)
+            broker_positions[symbol] = Position(
+                symbol=symbol,
                 quantity=qty,
                 market_value=float(getattr(pos, "market_value", 0.0)),
                 cost_basis=float(getattr(pos, "cost_basis", 0.0)),
@@ -285,15 +387,13 @@ def reconcile_with_broker(
             )
     except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - network issues
         logger.error(f"Failed to fetch broker positions: {e}")
+        return _empty_reconciliation_result()
 
     # Fetch open broker orders if supported
     try:
-        if hasattr(client, "list_orders"):
-            orders = client.list_orders(status="open") or []
-        else:
-            orders = []
+        orders = _fetch_broker_orders(client)
         for ord_obj in orders:
-            status = OrderStatus(getattr(ord_obj, "status"))
+            status = _coerce_order_status(getattr(ord_obj, "status", None))
             qty = _coerce_quantity(getattr(ord_obj, "qty", getattr(ord_obj, "quantity", 0)))
             filled_qty = _coerce_quantity(
                 getattr(ord_obj, "filled_qty", getattr(ord_obj, "filled_quantity", 0))
@@ -312,6 +412,7 @@ def reconcile_with_broker(
             )
     except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - network issues
         logger.error(f"Failed to fetch broker orders: {e}")
+        return _empty_reconciliation_result()
 
     return reconciler.full_reconciliation(
         local_positions=local_positions,
@@ -340,7 +441,7 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
         ``reconciled_at`` timestamp reflects when the reconciliation occurred.
     """
     if not getattr(ctx, "api", None):
-        return ReconciliationResult([], [], [], safe_utcnow())
+        return _empty_reconciliation_result()
 
     broker_client = ctx.api
 
@@ -357,8 +458,8 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
     # Update local orders with broker fill information
     for order in local_orders.values():
         try:
-            broker_order = broker_client.get_order(order.id)
-            broker_status = OrderStatus(getattr(broker_order, "status"))
+            broker_order = _fetch_broker_order_by_id(broker_client, order.id)
+            broker_status = _coerce_order_status(getattr(broker_order, "status", None))
             filled_qty = _coerce_quantity(
                 getattr(broker_order, "filled_qty", getattr(broker_order, "filled_quantity", order.filled_quantity))
             )
@@ -382,6 +483,7 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
                         local_positions[order.symbol] = local_positions.get(order.symbol, 0) + side_mult * fill_delta
         except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - defensive
             logger.error(f"Failed to update order {order.id}: {e}")
+            return _empty_reconciliation_result()
 
     # Perform reconciliation against broker state
     result = reconcile_with_broker(

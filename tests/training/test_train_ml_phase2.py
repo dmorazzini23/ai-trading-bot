@@ -49,7 +49,7 @@ def test_score_handles_scaled_predictions_nan_correlation_and_invalid_inputs() -
     trainer = MLTrainer(model_type="ridge")
 
     assert trainer._calculate_score(pd.Series([1.0, -1.0]), np.array([100.0, -100.0])) == pytest.approx(1.0)
-    assert trainer._calculate_score(pd.Series([0.01, -0.01]), np.array([-0.02, 0.02])) == pytest.approx(0.4)
+    assert trainer._calculate_score(pd.Series([0.01, -0.01]), np.array([-0.02, 0.02])) == pytest.approx(-0.4)
     assert trainer._calculate_score(pd.Series([0.01]), np.array(["bad"], dtype=object)) == 0.0
 
 

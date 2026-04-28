@@ -371,10 +371,10 @@ class MLTrainer:
                 pred_returns = y_pred / 100.0
                 true_returns = y_true.values / 100.0
             directional_accuracy = np.mean(np.sign(pred_returns) == np.sign(true_returns))
-            correlation = np.corrcoef(pred_returns, true_returns)[0, 1]
-            if np.isnan(correlation):
+            correlation = np.corrcoef(pred_returns, true_returns)[0, 1] if len(pred_returns) > 1 else 0.0
+            if not np.isfinite(correlation):
                 correlation = 0.0
-            score = float(0.6 * directional_accuracy + 0.4 * abs(correlation))
+            score = float(0.6 * directional_accuracy + 0.4 * correlation)
             return score
         except (ValueError, TypeError) as e:
             logger.error(f"Error calculating score: {e}")

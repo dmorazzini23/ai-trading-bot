@@ -2,9 +2,11 @@
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
+import inspect
 from dataclasses import dataclass, field
 from typing import Any
 
+from ai_trading.core.alpaca_client import list_open_orders
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
@@ -22,16 +24,12 @@ class CancelAllResult:
 def _list_open_orders(api: Any) -> list[Any]:
     list_orders = getattr(api, "list_orders", None)
     if callable(list_orders):
-        try:
-            return list(list_orders(status="open") or [])
-        except TypeError:
-            return list(list_orders() or [])
+        signature = inspect.signature(list_orders)
+        signature.bind(status="open")
+        return list(list_orders(status="open") or [])
     get_orders = getattr(api, "get_orders", None)
     if callable(get_orders):
-        try:
-            return list(get_orders(status="open") or [])
-        except TypeError:
-            return list(get_orders() or [])
+        return list(list_open_orders(api) or [])
     return []
 
 

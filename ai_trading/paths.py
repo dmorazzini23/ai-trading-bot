@@ -34,6 +34,31 @@ def _managed_env(name: str, default: str | None = None) -> str | None:
     return str(value)
 
 
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_dev_runtime() -> bool:
+    for name in ("TRADING_ENV", "ENVIRONMENT", "AI_TRADING_ENV"):
+        raw = _managed_env(name)
+        if raw and raw.strip().lower() in {"dev", "development", "local", "test"}:
+            return True
+    return not any(_managed_env(name) for name in ("TRADING_ENV", "ENVIRONMENT", "AI_TRADING_ENV"))
+
+
+def _allow_tmp_fallback() -> bool:
+    if _truthy(_managed_env("AI_TRADING_ALLOW_TMP_RUNTIME_FALLBACK")):
+        return True
+    try:
+        from ai_trading.config.management import is_test_runtime
+
+        if is_test_runtime(include_pytest_module=True):
+            return True
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        pass
+    return _is_dev_runtime()
+
+
 def _ensure_dir(path: Path) -> Path:
     """Ensure *path* exists, is absolute, and writable with 0700 perms."""
 
@@ -75,7 +100,13 @@ def _resolve_from_env(names: tuple[str, ...], default: Path) -> Path:
         return _ensure_dir(default)
     except RuntimeError as exc:
         logger.error("Default path %s unusable: %s", default, exc)
-        return _fallback_tmp_dir()
+        if _allow_tmp_fallback():
+            return _fallback_tmp_dir()
+        raise RuntimeError(
+            f"Default runtime path {default} unusable outside test/dev runtime; "
+            "set the appropriate AI_TRADING_*_DIR value or explicitly set "
+            "AI_TRADING_ALLOW_TMP_RUNTIME_FALLBACK=1"
+        ) from exc
 
 
 def _default_data_dir() -> Path:

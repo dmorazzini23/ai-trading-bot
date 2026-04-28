@@ -40,6 +40,20 @@ def test_render_runtime_env_copies_plain_env(tmp_path: Path) -> None:
     assert summary["secrets_backend"] == "none"
 
 
+def test_render_runtime_env_quotes_values_for_envfile(tmp_path: Path) -> None:
+    src = tmp_path / ".env"
+    dst = tmp_path / ".env.runtime"
+    src.write_text(
+        "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD=pa ss'word;$(touch /tmp/nope)\n",
+        encoding="utf-8",
+    )
+
+    runtime_env_sync._render_runtime_env(src, dst)
+    rendered = dst.read_text(encoding="utf-8")
+
+    assert 'AI_TRADING_PROM_REMOTE_WRITE_PASSWORD="pa ss\'word;$(touch /tmp/nope)"' in rendered
+
+
 def test_render_runtime_env_applies_aws_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     src = tmp_path / ".env"
     dst = tmp_path / ".env.runtime"

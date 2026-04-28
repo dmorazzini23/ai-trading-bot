@@ -105,6 +105,8 @@ class BuildFeatures:
                 raise ValueError('BuildFeatures must be fitted before transform')
             if not isinstance(X, pd.DataFrame):
                 raise ValueError('Input must be DataFrame')
+            self._validate_raw_price_columns(X)
+            raw_columns = set(X.columns)
             features = X.copy()
             if 'close' in X.columns:
                 price_col = 'close'
@@ -121,12 +123,30 @@ class BuildFeatures:
                 features = self._add_volume_features(features, X['volume'])
             if self.include_regime:
                 features = self._add_regime_features(features, prices)
-            features = features.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+            derived_columns = [col for col in features.columns if col not in raw_columns]
+            if derived_columns:
+                features[derived_columns] = (
+                    features[derived_columns]
+                    .replace([np.inf, -np.inf], np.nan)
+                    .fillna(0.0)
+                )
             logger.debug(f'Generated {features.shape[1]} features from {X.shape[1]} inputs')
             return features
         except (KeyError, ValueError, TypeError, pd.errors.EmptyDataError) as e:
             logger.error(f'Error transforming features: {e}')
             raise
+
+    def _validate_raw_price_columns(self, X: pd.DataFrame) -> None:
+        """Reject non-finite or non-positive raw price inputs before feature fill."""
+        pd = load_pandas()
+        price_columns = [col for col in ("open", "high", "low", "close", "price") if col in X.columns]
+        if not price_columns:
+            price_columns = [X.columns[0]]
+        for column in price_columns:
+            values = pd.to_numeric(X[column], errors="coerce")
+            finite_positive = np.isfinite(values.to_numpy(dtype=float, na_value=np.nan)) & (values > 0).to_numpy()
+            if not bool(finite_positive.all()):
+                raise ValueError(f"Raw price column {column!r} must be finite and positive")
 
     def _add_return_features(self, features: pd.DataFrame, prices: pd.Series) -> pd.DataFrame:
         """Add return-based features."""

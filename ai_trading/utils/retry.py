@@ -248,13 +248,22 @@ def retry(
         return float(base * (2 ** (n - 1)) if n > 0 else 0.0)
 
     def fallback_decorator(fn: Callable[..., T]) -> Callable[..., T]:
+        exc_types = exceptions or (Exception,)
+        if not isinstance(exc_types, tuple):
+            exc_types = (exc_types,)  # type: ignore[assignment]
+        catch_types = tuple(
+            exc_type
+            for exc_type in exc_types
+            if isinstance(exc_type, type) and issubclass(exc_type, Exception)
+        ) or (Exception,)
+
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> T:
             attempt = 0
             while True:
                 try:
                     return fn(*args, **kwargs)
-                except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+                except catch_types as exc:
                     # Determine if this exception is retryable under the provided
                     # policy. Support either a predicate via `retry` (from
                     # retry_if_exception_type) or the `exceptions` tuple.
@@ -264,10 +273,7 @@ def retry(
                             should_retry = bool(retry(exc))  # type: ignore[misc]
                         else:
                             # Fall back to tuple-based matching
-                            exc_types = exceptions or tuple()
-                            if not isinstance(exc_types, tuple):
-                                exc_types = (exc_types,)  # type: ignore[assignment]
-                            should_retry = isinstance(exc, exc_types)
+                            should_retry = isinstance(exc, catch_types)
                     except AI_TRADING_FALLBACK_EXCEPTIONS:
                         # If the retry policy itself errors, fail safe to no-retry
                         should_retry = False

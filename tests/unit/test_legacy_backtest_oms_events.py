@@ -100,3 +100,43 @@ def test_legacy_backtest_emits_oms_events(
     assert "ORDER_PARTIALLY_FILLED" in event_types
     assert "ORDER_FILLED" in event_types
     assert "INTENT_CLOSED" in event_types
+
+
+def test_legacy_backtest_executes_signal_on_next_bar_open() -> None:
+    start = datetime(2025, 1, 1, tzinfo=UTC)
+    historical_data = {
+        "AAPL": [
+            {
+                "timestamp": start + timedelta(days=offset),
+                "open": 90.0 + float(offset),
+                "high": 110.0 + float(offset),
+                "low": 90.0 + float(offset),
+                "close": 100.0 + float(offset),
+                "volume": 10_000.0,
+            }
+            for offset in range(4)
+        ]
+    }
+    historical_data["AAPL"][2]["open"] = 123.0
+
+    strategy = _AlwaysBuyLegacyStrategy()
+    engine = LegacyBacktestEngine(
+        initial_capital=10_000.0,
+        commission_bps=0.0,
+        commission_flat=0.0,
+        enable_slippage=False,
+        enable_partial_fills=False,
+    )
+    engine.estimate_half_spread = lambda *_args, **_kwargs: 0.0
+    engine._normal = lambda *_args, **_kwargs: 0.0
+
+    result = engine.run_backtest(
+        strategy=strategy,
+        historical_data=historical_data,
+        start_date=start,
+        end_date=start + timedelta(days=3),
+    )
+
+    first_trade = result["trades"][0]
+    assert first_trade["signal_price"] == 101.0
+    assert first_trade["execution_price"] == 123.0

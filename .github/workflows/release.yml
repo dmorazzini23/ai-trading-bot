@@ -70,6 +70,30 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -c constraints.txt build twine
+          python - <<'PY'
+          from __future__ import annotations
+
+          import os
+          import re
+          from pathlib import Path
+
+          from packaging.version import Version
+
+          raw_tag = os.environ["RELEASE_TAG"].strip()
+          version = raw_tag[1:] if raw_tag.startswith("v") else raw_tag
+          Version(version)
+          pyproject = Path("pyproject.toml")
+          text = pyproject.read_text(encoding="utf-8")
+          updated = re.sub(
+              r'(?m)^version = "0\.0\.0"$',
+              f'version = "{version}"',
+              text,
+              count=1,
+          )
+          if updated == text:
+              raise SystemExit("pyproject.toml did not contain the expected placeholder version")
+          pyproject.write_text(updated, encoding="utf-8")
+          PY
           python -m build
           python -m twine check dist/*
 

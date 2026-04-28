@@ -64,8 +64,7 @@ def ichimoku_fallback(high: PDSeries, low: PDSeries, close: PDSeries) -> tuple[P
         base = (high.rolling(26).max() + low.rolling(26).min()) / 2
         span_a = ((conv + base) / 2).shift(26)
         span_b = ((high.rolling(52).max() + low.rolling(52).min()) / 2).shift(26)
-        lagging = close.shift(-26)
-        df = pd.DataFrame({'ITS_9': conv, 'IKS_26': base, 'ISA_26': span_a, 'ISB_52': span_b, 'ICS_26': lagging})
+        df = pd.DataFrame({'ITS_9': conv, 'IKS_26': base, 'ISA_26': span_a, 'ISB_52': span_b})
         signal = pd.DataFrame(df)
         return (df, signal)
     except (KeyError, ValueError, TypeError, AttributeError):

@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from ai_trading.runtime import artifacts as runtime_artifacts
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
@@ -114,3 +116,22 @@ def test_resolve_runtime_artifact_path_prefers_existing_secondary_root_when_data
     )
 
     assert resolved == secondary_target
+
+
+def test_resolve_runtime_artifact_path_rejects_tmp_fallback_in_production(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("AI_TRADING_DATA_DIR", raising=False)
+    monkeypatch.delenv("STATE_DIRECTORY", raising=False)
+    monkeypatch.delenv("AI_TRADING_ALLOW_TMP_RUNTIME_FALLBACK", raising=False)
+    monkeypatch.setenv("TRADING_ENV", "production")
+    monkeypatch.setattr(runtime_artifacts, "is_test_runtime", lambda **_kwargs: False)
+    monkeypatch.setattr(runtime_artifacts, "_iter_runtime_roots", lambda: [Path("/proc/nope")])
+    monkeypatch.setattr(runtime_artifacts, "_REPO_ROOT", Path("/proc/nope-repo"))
+
+    with pytest.raises(RuntimeError, match="No writable runtime artifact root"):
+        resolve_runtime_artifact_path(
+            "runtime/order_events.jsonl",
+            default_relative="runtime/order_events.jsonl",
+            for_write=True,
+        )

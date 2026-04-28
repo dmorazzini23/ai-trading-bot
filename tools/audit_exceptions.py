@@ -59,15 +59,31 @@ def _iter_files(paths: Iterable[str]) -> list[pathlib.Path]:
     return files
 
 
-def find_broad_handlers(path: pathlib.Path, suppress_suffixes: tuple[str, ...]) -> list[dict[str, object]]:
+def find_broad_handlers(
+    path: pathlib.Path, suppress_suffixes: tuple[str, ...]
+) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     path_posix = path.as_posix()
     if any(path_posix.endswith(suffix) for suffix in suppress_suffixes):
-        return []
+        return [], None
     try:
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
-    except (SyntaxError, UnicodeDecodeError, OSError):
-        return []
+    except SyntaxError as exc:
+        return [], {
+            "file": str(path),
+            "line": exc.lineno,
+            "column": exc.offset,
+            "error": exc.__class__.__name__,
+            "message": exc.msg,
+        }
+    except (UnicodeDecodeError, OSError) as exc:
+        return [], {
+            "file": str(path),
+            "line": None,
+            "column": None,
+            "error": exc.__class__.__name__,
+            "message": str(exc),
+        }
     lines = source.splitlines(keepends=True)
     hits: list[dict[str, object]] = []
     for node in ast.walk(tree):
@@ -89,7 +105,7 @@ def find_broad_handlers(path: pathlib.Path, suppress_suffixes: tuple[str, ...]) 
                 "snippet": snippet,
             }
         )
-    return hits
+    return hits, None
 
 
 def main() -> int:
@@ -108,12 +124,18 @@ def main() -> int:
     suppressed = tuple(str(value) for value in args.suppress_path_suffix if str(value).strip())
 
     all_hits: list[dict[str, object]] = []
+    parse_errors: list[dict[str, object]] = []
     for file_path in files:
-        all_hits.extend(find_broad_handlers(file_path, suppressed))
+        hits, parse_error = find_broad_handlers(file_path, suppressed)
+        all_hits.extend(hits)
+        if parse_error is not None:
+            parse_errors.append(parse_error)
 
     report: dict[str, object] = {
         "total": len(all_hits),
         "silent_total": 0,
+        "parse_error_total": len(parse_errors),
+        "parse_errors": parse_errors,
         "by_type": {},
         "by_file": {},
     }
@@ -133,6 +155,8 @@ def main() -> int:
     report["silent_total"] = silent_total
 
     print(json.dumps(report, separators=(",", ":"), sort_keys=True))
+    if parse_errors:
+        return 3
     if args.fail_over is not None and len(all_hits) > args.fail_over:
         return 2
     return 0

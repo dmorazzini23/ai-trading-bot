@@ -40,3 +40,25 @@ def test_cancel_all_open_orders_logs_info_on_success(caplog) -> None:
     assert result.failed == 0
     assert records
     assert records[-1].levelname == "INFO"
+
+
+def test_cancel_all_open_orders_does_not_fallback_to_unfiltered_list() -> None:
+    class Api:
+        def __init__(self) -> None:
+            self.cancelled: list[str] = []
+
+        def list_orders(self, status: str = "open"):
+            if status == "open":
+                raise TypeError("status filtering failed")
+            return [SimpleNamespace(id="filled-order", status="filled")]
+
+        def cancel_order(self, order_id: str) -> None:
+            self.cancelled.append(order_id)
+
+    runtime = SimpleNamespace(api=Api())
+
+    result = cancel_all_open_orders(runtime)
+
+    assert result.cancelled == 0
+    assert result.failed == 1
+    assert runtime.api.cancelled == []

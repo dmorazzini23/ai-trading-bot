@@ -23350,6 +23350,8 @@ class ExecutionEngine:
             normalized_side = self._normalized_order_side(side_val)
         except LIVE_TRADING_FALLBACK_EXC:
             normalized_side = None
+        if qty_decimal is not None and qty_decimal < 0:
+            return -int(qty_decimal.copy_abs())
         qty_int = int(qty_decimal.copy_abs()) if qty_decimal is not None else 0
         if normalized_side in {"sell", "sell_short"}:
             return -qty_int
@@ -23683,6 +23685,7 @@ class ExecutionEngine:
 
     def _submit_cover_order(self, symbol: str, requested_qty: int) -> bool:
         client = getattr(self, "trading_client", None)
+        self._last_cover_order_quantity = 0
         if client is None:
             return False
         short_qty = self._position_quantity(symbol)
@@ -23711,6 +23714,7 @@ class ExecutionEngine:
             "COVER_ORDER_SUBMITTED",
             extra={"symbol": symbol, "quantity": cover_qty},
         )
+        self._last_cover_order_quantity = int(cover_qty)
         return True
 
     def _enforce_opposite_side_policy(
@@ -23740,7 +23744,7 @@ class ExecutionEngine:
         if not opposite_orders:
             return True, None
         policy = self._order_flip_mode()
-        conflict_extra = {
+        conflict_extra: dict[str, Any] = {
             "symbol": symbol,
             "desired_side": normalized_side,
             "policy": policy,
@@ -23762,6 +23766,8 @@ class ExecutionEngine:
         canceled_ids = self._cancel_opposite_orders(opposite_orders, symbol, normalized_side)
         conflict_extra["canceled_order_ids"] = tuple(canceled_ids)
         if policy == "cover_then_long" and normalized_side == "buy":
+            short_qty = self._position_quantity(symbol)
+            expected_cover_qty = min(abs(short_qty), max(int(quantity), 0)) if short_qty < 0 else 0
             if not self._submit_cover_order(symbol, quantity):
                 logger.warning("ORDER_FLIP_COVER_FAILED", extra=conflict_extra)
                 return False, {
@@ -23770,6 +23776,33 @@ class ExecutionEngine:
                     "policy": policy,
                     "symbol": symbol,
                 }
+            try:
+                covered_qty = int(getattr(self, "_last_cover_order_quantity", 0) or 0)
+            except (TypeError, ValueError):
+                covered_qty = 0
+            if covered_qty <= 0:
+                covered_qty = int(expected_cover_qty)
+            remaining_qty = max(int(quantity) - max(covered_qty, 0), 0)
+            conflict_extra["covered_qty"] = int(covered_qty)
+            conflict_extra["remaining_qty"] = int(remaining_qty)
+            if remaining_qty <= 0:
+                logger.info("ORDER_FLIP_COVER_ONLY", extra=conflict_extra)
+                return False, {
+                    "status": "skipped",
+                    "reason": "cover_order_submitted",
+                    "policy": policy,
+                    "symbol": symbol,
+                    "covered_qty": int(covered_qty),
+                }
+            logger.info("ORDER_FLIP_BUY_REDUCED_AFTER_COVER", extra=conflict_extra)
+            return True, {
+                "status": "adjusted",
+                "reason": "cover_then_long_remaining_qty",
+                "policy": policy,
+                "symbol": symbol,
+                "covered_qty": int(covered_qty),
+                "adjusted_qty": int(remaining_qty),
+            }
         return True, None
 
     @staticmethod
@@ -29329,6 +29362,23 @@ class ExecutionEngine:
                     precheck_context = context_candidate
             _mark_precheck_failure(precheck_reason, precheck_context)
             return False
+        if isinstance(skip_payload, Mapping):
+            adjusted_qty = _safe_int(skip_payload.get("adjusted_qty"), 0)
+            if adjusted_qty > 0 and adjusted_qty < quantity and isinstance(order, dict):
+                if "quantity" in order:
+                    order["quantity"] = adjusted_qty
+                if "qty" in order:
+                    order["qty"] = adjusted_qty
+                logger.info(
+                    "ORDER_QTY_ADJUSTED_AFTER_COVER",
+                    extra={
+                        "symbol": symbol,
+                        "requested_qty": quantity,
+                        "adjusted_qty": adjusted_qty,
+                        "covered_qty": _safe_int(skip_payload.get("covered_qty"), 0),
+                    },
+                )
+                quantity = adjusted_qty
 
         account_snapshot = order.get("account_snapshot")
         if not closing_position and account_snapshot is None:
@@ -31154,6 +31204,22 @@ class ExecutionEngine:
                 )
                 if not guard_ok:
                     return skip_payload or {"status": "skipped", "reason": "opposite_side_conflict"}
+                if isinstance(skip_payload, Mapping):
+                    adjusted_qty = _safe_int(skip_payload.get("adjusted_qty"), 0)
+                    if adjusted_qty > 0 and adjusted_qty < quantity:
+                        if "quantity" in order_data:
+                            order_data["quantity"] = adjusted_qty
+                        if "qty" in order_data:
+                            order_data["qty"] = adjusted_qty
+                        logger.info(
+                            "ORDER_QTY_ADJUSTED_AFTER_COVER",
+                            extra={
+                                "symbol": symbol,
+                                "requested_qty": quantity,
+                                "adjusted_qty": adjusted_qty,
+                                "covered_qty": _safe_int(skip_payload.get("covered_qty"), 0),
+                            },
+                        )
                 if not order_data.get("_opposite_retry_attempted"):
                     order_data["_opposite_retry_attempted"] = True
                     logger.info(

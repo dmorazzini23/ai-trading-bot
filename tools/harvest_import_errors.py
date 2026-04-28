@@ -67,6 +67,16 @@ PATTERNS = (
     re.compile(r"DistributionNotFound: (.+)"),
 )
 
+_COLLECT_TIMEOUT_S = int(os.environ.get("IMPORT_HARVEST_TIMEOUT_S", "120"))
+
+
+def _coerce_process_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
 
 # AI-AGENT-REF: summarize import errors into a Counter with trace pruning
 def _summarize_errors(text: str) -> Counter:
@@ -115,8 +125,27 @@ def build_report() -> tuple[str, str, str, int]:
     ]
     env = dict(os.environ)
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-    out = subprocess.run(cmd, cwd=root, env=env, capture_output=True, text=True)
-    text = out.stdout + "\n" + out.stderr
+    collection_returncode = 0
+    try:
+        out = subprocess.run(
+            cmd,
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=_COLLECT_TIMEOUT_S,
+        )
+        text = out.stdout + "\n" + out.stderr
+        collection_returncode = out.returncode
+    except subprocess.TimeoutExpired as exc:
+        stdout = _coerce_process_output(exc.stdout)
+        stderr = _coerce_process_output(exc.stderr)
+        text = (
+            f"pytest collection timed out after {_COLLECT_TIMEOUT_S} seconds\n"
+            f"command: {' '.join(cmd)}\n"
+            f"{stdout}\n{stderr}"
+        )
+        collection_returncode = 124
     collect_log = root / "artifacts/test-collect.log"
     collect_log.parent.mkdir(parents=True, exist_ok=True)
     collect_log.write_text(text, encoding="utf-8")
@@ -133,6 +162,7 @@ def build_report() -> tuple[str, str, str, int]:
     body_lines.append("# Import/Dependency Repair Report")
     body_lines.append("")
     body_lines.append("## Summary")
+    body_lines.append(f"- Pytest collection return code: {collection_returncode}")
     body_lines.append(f"- Internal import errors (unique): {len(internal)}")
     if internal:
         body_lines.extend(f"- `{m}`" for m in internal)
@@ -156,7 +186,7 @@ def build_report() -> tuple[str, str, str, int]:
     lines = [f"**Environment**: {env_line}", ""]
     lines.extend(body_lines)
     report_markdown = "\n".join(lines)
-    return report_markdown, text, env_line, out.returncode
+    return report_markdown, text, env_line, collection_returncode
 
 
 def main(argv: list[str] | None = None) -> None:

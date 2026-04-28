@@ -52,17 +52,6 @@ if "numpy" not in sys.modules:
     sys.modules["numpy"] = _NumpyStub()
 
 
-if "ai_trading.indicators" not in sys.modules:
-    indicators_stub = cast(Any, types.ModuleType("ai_trading.indicators"))
-    _zero = lambda *args, **kwargs: 0
-    indicators_stub.atr = _zero
-    indicators_stub.compute_atr = _zero
-    indicators_stub.mean_reversion_zscore = _zero
-    indicators_stub.rsi = _zero
-    indicators_stub.__getattr__ = lambda _name: _zero
-    sys.modules["ai_trading.indicators"] = indicators_stub
-
-
 if "portalocker" not in sys.modules:
     portalocker_stub = cast(Any, types.ModuleType("portalocker"))
     portalocker_stub.LOCK_EX = 1

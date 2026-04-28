@@ -812,7 +812,17 @@ class RLTrainer:
                 raise ValueError(
                     "price_series length must match RL training rows"
                 )
-            prices = np.clip(np.nan_to_num(prices, nan=0.0, posinf=0.0, neginf=0.0), 1e-06, None)
+            valid_price_rows = np.isfinite(prices) & (prices > 0)
+            if not bool(valid_price_rows.all()):
+                dropped = int((~valid_price_rows).sum())
+                logger.warning(
+                    "RL_TRAIN_DROPPED_INVALID_PRICE_ROWS",
+                    extra={"dropped_rows": dropped},
+                )
+                matrix = matrix[valid_price_rows]
+                prices = prices[valid_price_rows]
+            if prices.size == 0:
+                raise ValueError("RL training price_series contains no finite positive prices")
 
             self._raw_data = matrix.copy()
             self._raw_prices = prices.copy()

@@ -333,6 +333,35 @@ __all__ = [
 ]
 
 
+def _signed_position_qty(pos: Any) -> int:
+    """Return broker position quantity with short positions represented as negative."""
+
+    try:
+        qty_float = float(getattr(pos, "qty", getattr(pos, "quantity", 0)) or 0.0)
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        qty_float = 0.0
+    qty = int(qty_float)
+    if qty < 0:
+        return qty
+    try:
+        side = str(getattr(pos, "side", "") or "").strip().lower()
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        side = ""
+    if side in {"short", "sell", "sell_short"}:
+        return -abs(qty)
+    return qty
+
+
+def _list_positions_compat(api: Any) -> list[Any]:
+    get_all_positions = getattr(api, "get_all_positions", None)
+    if callable(get_all_positions):
+        return list(get_all_positions() or [])
+    list_positions = getattr(api, "list_positions", None)
+    if callable(list_positions):
+        return list(list_positions() or [])
+    raise AttributeError("broker client missing positions method")
+
+
 def send_exit_order(
     ctx: Any,
     symbol: str,
@@ -363,28 +392,28 @@ def send_exit_order(
         for raw_pos in raw_positions:
             if getattr(raw_pos, "symbol", "") != symbol:
                 continue
-            try:
-                snapshot_qty = abs(int(float(getattr(raw_pos, "qty", 0) or 0.0)))
-            except AI_TRADING_FALLBACK_EXCEPTIONS:
-                snapshot_qty = 0
+            snapshot_qty = _signed_position_qty(raw_pos)
             break
     try:
         pos = ctx.api.get_position(symbol)
-        held_qty = abs(int(float(getattr(pos, "qty", 0) or 0.0)))
+        held_qty_signed = _signed_position_qty(pos)
     except AI_TRADING_FALLBACK_EXCEPTIONS:
-        held_qty = snapshot_qty
-    if held_qty <= 0 and snapshot_qty > 0:
-        held_qty = snapshot_qty
+        held_qty_signed = snapshot_qty
+    held_qty = abs(held_qty_signed)
+    if held_qty <= 0 and abs(snapshot_qty) > 0:
+        held_qty_signed = snapshot_qty
+        held_qty = abs(snapshot_qty)
     if held_qty < exit_qty:
         logger.warning(
             f"No shares available to exit for {symbol} (requested {exit_qty}, have {held_qty})"
         )
         return
+    exit_side = OrderSide.BUY if held_qty_signed < 0 else OrderSide.SELL
     if price <= 0.0:
         req = MarketOrderRequest(
             symbol=symbol,
             qty=exit_qty,
-            side=OrderSide.SELL,
+            side=exit_side,
             time_in_force=TimeInForce.DAY,
         )
         _bot_engine.safe_submit_order(ctx.api, req)
@@ -394,7 +423,7 @@ def send_exit_order(
         LimitOrderRequest(
             symbol=symbol,
             qty=exit_qty,
-            side=OrderSide.SELL,
+            side=exit_side,
             time_in_force=TimeInForce.DAY,
             limit_price=price,
         ),
@@ -409,7 +438,7 @@ def send_exit_order(
                 MarketOrderRequest(
                     symbol=symbol,
                     qty=exit_qty,
-                    side=OrderSide.SELL,
+                    side=exit_side,
                     time_in_force=TimeInForce.DAY,
                 ),
             )
@@ -746,9 +775,9 @@ def execute_exit(ctx: Any, state: Any, symbol: str, qty: int) -> None:
 
 
 def exit_all_positions(ctx: Any) -> None:
-    raw_positions = ctx.api.list_positions()
+    raw_positions = _list_positions_compat(ctx.api)
     for pos in raw_positions:
-        qty = abs(int(pos.qty))
+        qty = abs(_signed_position_qty(pos))
         if qty:
             send_exit_order(ctx, pos.symbol, qty, 0.0, "eod_exit", raw_positions=raw_positions)
             logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
@@ -809,12 +838,15 @@ def liquidate_positions_if_needed(runtime: Any) -> None:
         return
 
     api = getattr(runtime, "api", None)
-    if api is None or not hasattr(api, "list_positions"):
+    if api is None or not (
+        callable(getattr(api, "get_all_positions", None))
+        or callable(getattr(api, "list_positions", None))
+    ):
         logger.warning("EOD_FLATTEN_SKIPPED", extra=context | {"detail": "missing_api"})
         return
 
     try:
-        raw_positions = list(api.list_positions())
+        raw_positions = _list_positions_compat(api)
     except (
         FileNotFoundError,
         PermissionError,

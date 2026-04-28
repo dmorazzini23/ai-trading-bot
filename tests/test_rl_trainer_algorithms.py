@@ -34,7 +34,7 @@ def test_rl_trainer_uses_continuous_action_space_for_sac(monkeypatch) -> None:
     monkeypatch.setattr(train_mod, "DummyVecEnv", DummyVec)
     monkeypatch.setattr(env_mod, "TradingEnv", DummyEnv)
     trainer = train_mod.RLTrainer(algorithm="SAC")
-    trainer._create_environments(np.zeros((40, 4), dtype=float), env_params={})
+    trainer._create_environments(np.ones((40, 4), dtype=float), env_params={})
 
     assert created_action_types
     assert all(action_type == "continuous" for action_type in created_action_types)
@@ -228,12 +228,38 @@ def test_rl_trainer_state_builder_wires_price_series(monkeypatch) -> None:
 
 def test_rl_trainer_rejects_mismatched_price_series_length() -> None:
     trainer = train_mod.RLTrainer(algorithm="PPO")
-    data = np.zeros((64, 4), dtype=np.float32)
+    data = np.ones((64, 4), dtype=np.float32)
     with pytest.raises(ValueError, match="price_series length must match RL training rows"):
         trainer._create_environments(
             data,
             env_params={"price_series": np.linspace(1.0, 2.0, 32, dtype=np.float32)},
         )
+
+
+def test_rl_trainer_drops_invalid_price_rows(monkeypatch) -> None:
+    captured_rows: list[int] = []
+
+    class DummyVec(list):
+        def __init__(self, env_fns):
+            super().__init__([fn() for fn in env_fns])
+
+    class DummyEnv:
+        def __init__(self, data, **kwargs):
+            del kwargs
+            captured_rows.append(len(data))
+
+    monkeypatch.setattr(train_mod, "DummyVecEnv", DummyVec)
+    monkeypatch.setattr(env_mod, "TradingEnv", DummyEnv)
+
+    data = np.ones((80, 4), dtype=np.float32)
+    prices = np.linspace(1.0, 2.0, 80, dtype=np.float32)
+    prices[2] = 0.0
+    prices[3] = np.nan
+
+    trainer = train_mod.RLTrainer(algorithm="PPO")
+    trainer._create_environments(data, env_params={"price_series": prices})
+
+    assert sum(captured_rows) == 78
 
 
 def test_rl_trainer_strips_registry_metadata_from_env_kwargs(monkeypatch) -> None:
@@ -252,7 +278,7 @@ def test_rl_trainer_strips_registry_metadata_from_env_kwargs(monkeypatch) -> Non
 
     trainer = train_mod.RLTrainer(algorithm="PPO")
     trainer._create_environments(
-        np.zeros((64, 4), dtype=np.float32),
+        np.ones((64, 4), dtype=np.float32),
         env_params={
             "use_state_builder": False,
             "register_model": True,

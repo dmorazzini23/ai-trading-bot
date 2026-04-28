@@ -48,6 +48,21 @@ def test_secret_guard_blocks_live_like_values(tmp_path: Path) -> None:
     assert "potential live secrets detected" in result.stderr.lower()
 
 
+def test_secret_guard_blocks_broad_runtime_secret_keys(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "runtime.env").write_text(
+        "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD=runtimeSecretValue123\n"
+        "CUSTOM_SERVICE_TOKEN=customTokenValue123\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "runtime.env"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    result = _run_guard(tmp_path)
+    assert result.returncode == 1
+    assert "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD" in result.stderr
+    assert "CUSTOM_SERVICE_TOKEN" in result.stderr
+
+
 def test_secret_guard_ignores_shell_placeholder_indirection_with_line_continuation(
     tmp_path: Path,
 ) -> None:

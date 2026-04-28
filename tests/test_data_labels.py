@@ -42,6 +42,12 @@ def test_fixed_horizon_return_error_path_returns_empty_series() -> None:
     assert out.empty
 
 
+def test_fixed_horizon_return_rejects_non_positive_horizon() -> None:
+    prices = pd.Series([100.0, 101.0], index=pd.date_range("2026-01-01", periods=2, freq="D"))
+    with pytest.raises(ValueError, match="horizon_bars must be positive"):
+        fixed_horizon_return(prices, horizon_bars=0)
+
+
 def test_triple_barrier_labels_hits_profit_loss_and_timeout() -> None:
     idx = pd.date_range("2026-01-01 09:30:00", periods=6, freq="min")
     prices = pd.Series([100.0, 103.0, 96.0, 100.0, 101.0, 101.0], index=idx)

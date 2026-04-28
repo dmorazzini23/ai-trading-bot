@@ -97,6 +97,35 @@ def test_validate_trading_api_does_not_inject_legacy_methods(
     assert "alpaca_list_positions_patch_failed" not in error_keys
 
 
+def test_validate_trading_api_fails_closed_when_class_resolution_fails(
+    stub_logger: _StubLogger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production validation should not accept an unresolvable TradingClient class."""
+
+    monkeypatch.setattr(alpaca_client, "ALPACA_AVAILABLE", True)
+    monkeypatch.setattr(alpaca_client, "is_shadow_mode", lambda: False)
+
+    def fake_get_env(name: str, default: Any = None, **_kwargs: Any) -> Any:
+        if name == "PYTEST_RUNNING":
+            return None
+        return default
+
+    monkeypatch.setattr(alpaca_client, "get_env", fake_get_env)
+    monkeypatch.setattr(
+        alpaca_client,
+        "get_trading_client_cls",
+        lambda: (_ for _ in ()).throw(RuntimeError("TradingClient unavailable")),
+    )
+
+    client = _FakeTradingClient()
+
+    result = alpaca_client._validate_trading_api(client)
+
+    assert result is False
+    error_keys = {kwargs.get("key") for _, kwargs in stub_logger.error_calls}
+    assert "alpaca_trading_client_class_missing" in error_keys
+
+
 def test_initialize_production_config_avoids_adapter_warning(
     stub_logger: _StubLogger, monkeypatch: pytest.MonkeyPatch
 ) -> None:

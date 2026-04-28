@@ -108,12 +108,21 @@ def _validate_trading_api(api: Any) -> bool:
 
     try:
         TradingClient = get_trading_client_cls()
-    except RuntimeError:
-        log_once.warning(
+    except RuntimeError as exc:
+        explicit_test_path = bool(get_env("PYTEST_RUNNING", None, resolve_aliases=False))
+        if is_shadow_mode() or explicit_test_path:
+            log_once.warning(
+                "ALPACA_TRADING_CLIENT_CLASS_MISSING",
+                key="alpaca_trading_client_class_missing",
+                extra={"error": str(exc)},
+            )
+            return True
+        log_once.error(
             "ALPACA_TRADING_CLIENT_CLASS_MISSING",
             key="alpaca_trading_client_class_missing",
+            extra={"error": str(exc)},
         )
-        return True
+        return False
     if isinstance(api, TradingClient):
         pass
     elif not get_env("PYTEST_RUNNING", None, resolve_aliases=False):

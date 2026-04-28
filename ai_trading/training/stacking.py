@@ -68,15 +68,21 @@ class StackingMetaModel:
             )
             bases = self._make_base_models()
             oof_meta = np.zeros((len(X), len(bases)), dtype=float)
+            oof_mask = np.zeros((len(X), len(bases)), dtype=bool)
             # OOF predictions for meta features
             for bi, base in enumerate(bases):
                 for train_idx, test_idx in splitter.split(X, y):
                     base.fit(X.iloc[train_idx], y.iloc[train_idx])
                     preds = base.predict(X.iloc[test_idx])
                     oof_meta[test_idx, bi] = preds
+                    oof_mask[test_idx, bi] = True
             # Meta learner
-            meta_X = oof_meta
             meta_y = y.values if hasattr(y, "values") else np.asarray(y)
+            predicted_rows = oof_mask.all(axis=1)
+            if not predicted_rows.any():
+                raise ValueError("No out-of-fold predictions available for meta learner")
+            meta_X = oof_meta[predicted_rows]
+            meta_y = meta_y[predicted_rows]
             if self.meta_label_threshold is not None:
                 # Binary acceptance target based on threshold on y
                 target = (meta_y > float(self.meta_label_threshold)).astype(int)

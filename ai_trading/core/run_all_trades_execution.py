@@ -15,6 +15,36 @@ _REPLAY_LIVE_PARITY_GATE_CACHE: dict[str, Any] = {
 }
 
 
+def _list_broker_positions(api: Any) -> list[Any]:
+    get_all_positions = getattr(api, "get_all_positions", None)
+    if callable(get_all_positions):
+        return list(get_all_positions() or [])
+    list_positions = getattr(api, "list_positions", None)
+    if callable(list_positions):
+        return list(list_positions() or [])
+    raise AttributeError("broker client missing positions method")
+
+
+def _position_symbol(position: Any) -> str:
+    return str(getattr(position, "symbol", "") or "")
+
+
+def _position_qty(position: Any) -> int:
+    try:
+        qty = int(float(getattr(position, "qty", getattr(position, "quantity", 0)) or 0))
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        qty = 0
+    if qty < 0:
+        return qty
+    try:
+        side = str(getattr(position, "side", "") or "").strip().lower()
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        side = ""
+    if side in {"short", "sell", "sell_short"}:
+        return -abs(qty)
+    return qty
+
+
 def _replay_live_parity_gate_cache_ttl_seconds() -> float:
     return max(
         0.0,
@@ -387,10 +417,10 @@ def execute_run_all_trades_cycle(
                         },
                     )
                     try:
-                        portfolio = runtime.api.list_positions()
+                        portfolio = _list_broker_positions(runtime.api)
                         for pos in portfolio:
                             be.manage_position_risk(runtime, pos)
-                    except (be.APIError, TimeoutError, ConnectionError) as e:
+                    except AI_TRADING_FALLBACK_EXCEPTIONS as e:
                         be.logger.warning(
                             "HALT_MANAGE_FAIL",
                             extra={"cause": e.__class__.__name__, "detail": str(e)},
@@ -414,10 +444,10 @@ def execute_run_all_trades_cycle(
             be._log_health_diagnostics(runtime, "halt_flag_loop")
             be.logger.info("TRADING_HALTED_VIA_FLAG: Managing existing positions only.")
             try:
-                portfolio = runtime.api.list_positions()
+                portfolio = _list_broker_positions(runtime.api)
                 for pos in portfolio:
                     be.manage_position_risk(runtime, pos)
-            except (be.APIError, TimeoutError, ConnectionError) as e:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as e:
                 be.logger.warning(
                     "HALT_MANAGE_FAIL",
                     extra={"cause": e.__class__.__name__, "detail": str(e)},
@@ -674,8 +704,10 @@ def execute_run_all_trades_cycle(
             be._record_broker_sync_metrics(state, broker_snapshot)
         try:
             be.get_risk_engine().refresh_positions(runtime.api)
-            pos_list = runtime.api.list_positions()
-            state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
+            pos_list = _list_broker_positions(runtime.api)
+            state.position_cache = {
+                _position_symbol(p): _position_qty(p) for p in pos_list if _position_symbol(p)
+            }
             state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
             state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
             try:
@@ -698,7 +730,7 @@ def execute_run_all_trades_cycle(
                                 "detail": str(e),
                             },
                         )
-        except (be.APIError, TimeoutError, ConnectionError) as e:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as e:
             be.logger.warning(
                 "REFRESH_POSITIONS_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
@@ -712,16 +744,16 @@ def execute_run_all_trades_cycle(
             acct = runtime.api.get_account()
             cash = float(acct.cash)
             equity = float(acct.equity)
-            positions = runtime.api.list_positions()
-            be.logger.debug("Raw Alpaca positions: %s", positions)
-            from ai_trading import portfolio
+            positions_snapshot = _list_broker_positions(runtime.api)
+            be.logger.debug("Raw Alpaca positions: %s", positions_snapshot)
+            from ai_trading import portfolio as portfolio_mod
             from ai_trading.utils import portfolio_lock
 
             try:
                 with portfolio_lock:
-                    runtime.portfolio_weights = portfolio.compute_portfolio_weights(
+                    runtime.portfolio_weights = portfolio_mod.compute_portfolio_weights(
                         runtime,
-                        [p.symbol for p in positions],
+                        [p.symbol for p in positions_snapshot],
                     )
             except (ZeroDivisionError, ValueError, KeyError) as e:
                 be.logger.warning(
@@ -730,7 +762,7 @@ def execute_run_all_trades_cycle(
                     exc_info=True,
                 )
             exposure = (
-                sum(abs(float(p.market_value)) for p in positions) / equity * 100
+                sum(abs(float(p.market_value)) for p in positions_snapshot) / equity * 100
                 if equity > 0
                 else 0.0
             )
@@ -753,7 +785,7 @@ def execute_run_all_trades_cycle(
                 cash,
                 equity,
                 exposure,
-                len(positions),
+                len(positions_snapshot),
             )
             be.logger.info(
                 "POSITIONS_DETAIL",
@@ -765,7 +797,7 @@ def execute_run_all_trades_cycle(
                             "avg_price": float(p.avg_entry_price),
                             "market_value": float(p.market_value),
                         }
-                        for p in positions
+                        for p in positions_snapshot
                     ],
                 },
             )
@@ -773,7 +805,7 @@ def execute_run_all_trades_cycle(
                 "WEIGHTS_VS_POSITIONS",
                 extra={
                     "weights": runtime.portfolio_weights,
-                    "positions": {p.symbol: int(p.qty) for p in positions},
+                    "positions": {p.symbol: int(p.qty) for p in positions_snapshot},
                     "cash": cash,
                 },
             )
@@ -790,7 +822,7 @@ def execute_run_all_trades_cycle(
                 cash,
                 equity,
                 exposure,
-                len(positions),
+                len(positions_snapshot),
                 adaptive_cap,
             )
             log_exec_summary = True

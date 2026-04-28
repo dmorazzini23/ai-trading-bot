@@ -122,12 +122,25 @@ class TradingEnv:
         matrix = np.asarray(data, dtype=np.float32)
         if matrix.ndim != 2:
             raise ValueError("TradingEnv data must be a 2D array")
+        raw_prices = np.asarray(
+            price_series if price_series is not None else matrix[:, 0],
+            dtype=np.float32,
+        ).reshape(-1)
+        if raw_prices.shape[0] != matrix.shape[0]:
+            raise ValueError("price_series length must match TradingEnv data rows")
+        valid_price_rows = np.isfinite(raw_prices) & (raw_prices > 0)
+        if not bool(valid_price_rows.all()):
+            dropped = int((~valid_price_rows).sum())
+            logger.warning(
+                "RL_ENV_DROPPED_INVALID_PRICE_ROWS",
+                extra={"dropped_rows": dropped},
+            )
+            matrix = matrix[valid_price_rows]
+            raw_prices = raw_prices[valid_price_rows]
         if matrix.shape[0] <= window:
             raise ValueError("TradingEnv data length must exceed window size")
         self.data = np.nan_to_num(matrix, nan=0.0, posinf=0.0, neginf=0.0)
-        self.prices = self._normalize_price_series(
-            price_series if price_series is not None else self.data[:, 0]
-        )
+        self.prices = self._normalize_price_series(raw_prices)
         self.window = window
         self.current = window
         self.action_config = action_config or ActionSpaceConfig()
@@ -210,9 +223,9 @@ class TradingEnv:
     @staticmethod
     def _normalize_price_series(raw_prices: np.ndarray) -> np.ndarray:
         prices = np.asarray(raw_prices, dtype=np.float32).reshape(-1)
-        prices = np.nan_to_num(prices, nan=0.0, posinf=0.0, neginf=0.0)
-        prices = np.abs(prices)
-        return np.clip(prices, 1e-06, None)
+        if not bool((np.isfinite(prices) & (prices > 0)).all()):
+            raise ValueError("price_series must contain only finite positive prices")
+        return prices
 
     def _net_worth(self, price: float) -> float:
         return float(self.cash + self.position * price)

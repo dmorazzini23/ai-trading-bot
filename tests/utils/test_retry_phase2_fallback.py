@@ -93,3 +93,37 @@ def test_fallback_retry_policy_error_fails_safe_to_no_retry(monkeypatch: pytest.
         raises_once()
 
     assert calls["count"] == 1
+
+
+def test_fallback_retry_honors_custom_exception_tuple(monkeypatch: pytest.MonkeyPatch) -> None:
+    retry_mod = _import_retry_without_tenacity(monkeypatch)
+    calls = {"count": 0}
+    monkeypatch.setattr(retry_mod.time, "sleep", lambda _seconds: None)
+
+    class CustomRetryable(Exception):
+        pass
+
+    @retry_mod.retry(retries=2, delay=0, exceptions=(CustomRetryable,))
+    def flaky() -> str:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise CustomRetryable("try again")
+        return "ok"
+
+    assert flaky() == "ok"
+    assert calls["count"] == 2
+
+
+def test_fallback_retry_does_not_catch_system_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    retry_mod = _import_retry_without_tenacity(monkeypatch)
+    calls = {"count": 0}
+
+    @retry_mod.retry(retries=3, delay=0, exceptions=(BaseException,))
+    def exits() -> None:
+        calls["count"] += 1
+        raise SystemExit(2)
+
+    with pytest.raises(SystemExit):
+        exits()
+
+    assert calls["count"] == 1

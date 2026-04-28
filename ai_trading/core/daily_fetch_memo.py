@@ -2,6 +2,7 @@ from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import time
+import inspect
 from contextlib import suppress
 from dataclasses import dataclass
 from types import GeneratorType
@@ -40,14 +41,27 @@ def get_daily_df_memoized(
     last_good_df = entry.df if entry else None
 
     factory_callable = callable(df_or_factory)
+    factory_accepts_context = True
+
+    if factory_callable:
+        try:
+            signature = inspect.signature(df_or_factory)
+        except (TypeError, ValueError):
+            factory_accepts_context = True
+        else:
+            try:
+                signature.bind(symbol, timeframe, start, end)
+                factory_accepts_context = True
+            except TypeError:
+                signature.bind()
+                factory_accepts_context = False
 
     def _invoke_factory() -> Any:
         if not factory_callable:
             return df_or_factory
-        try:
+        if factory_accepts_context:
             return df_or_factory(symbol, timeframe, start, end)
-        except TypeError:
-            return df_or_factory()
+        return df_or_factory()
 
     exhaustions = 0
     _RETRY = object()

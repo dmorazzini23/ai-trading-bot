@@ -6,15 +6,58 @@ SERVICE_SRC="${REPO_ROOT}/packaging/systemd/ai-trading-metrics-forwarder.service
 SERVICE_DST="/etc/systemd/system/ai-trading-metrics-forwarder.service"
 PROM_CFG_DST="/etc/ai-trading/prometheus-forwarder.yml"
 ENV_FILE="${REPO_ROOT}/.env.runtime"
+PYTHON_BIN="${REPO_ROOT}/venv/bin/python"
 
 if [[ ! -f "${ENV_FILE}" ]]; then
   ENV_FILE="${REPO_ROOT}/.env"
 fi
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  PYTHON_BIN="python3"
+fi
 
-set -a
-# shellcheck disable=SC1090
-source "${ENV_FILE}"
-set +a
+_load_env_file() {
+  local env_file="$1"
+  [[ -f "${env_file}" ]] || return 0
+  local exports
+  exports="$("${PYTHON_BIN}" - "${env_file}" <<'PY'
+from __future__ import annotations
+
+import re
+import shlex
+import sys
+from pathlib import Path
+
+try:
+    from dotenv import dotenv_values
+except Exception:
+    dotenv_values = None
+
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+path = Path(sys.argv[1])
+
+if dotenv_values is not None:
+    values = dotenv_values(path)
+else:
+    values = {}
+    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if ENV_KEY_RE.match(key):
+            values[key] = value.strip()
+
+for key, value in values.items():
+    if value is None or not ENV_KEY_RE.match(str(key)):
+        continue
+    print(f"export {key}={shlex.quote(str(value))}")
+PY
+)"
+  eval "${exports}"
+}
+
+_load_env_file "${ENV_FILE}"
 
 LOCAL_PORT="${AI_TRADING_PROMETHEUS_LOCAL_PORT:-19090}"
 API_PORT="${API_PORT:-9001}"

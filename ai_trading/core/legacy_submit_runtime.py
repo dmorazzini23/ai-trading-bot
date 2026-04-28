@@ -655,7 +655,7 @@ def submit_order_runtime(
     status_token = be._normalize_order_status_token(
         be._extract_order_value(order, "status")
     )
-    if status_token in {"rejected", "canceled", "cancelled", "expired", "done_for_day"}:
+    if status_token in {"rejected", "canceled", "cancelled", "expired", "done_for_day", "skipped"}:
         reason_code = f"BROKER_ORDER_{status_token.upper()}".replace("CANCELLED", "CANCELED")
         be._record_auth_forbidden_cooldown(
             be.state,

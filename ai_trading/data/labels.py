@@ -26,6 +26,8 @@ def fixed_horizon_return(prices: "pd.Series" | "pd.DataFrame", horizon_bars: int
     Returns:
         Series of future log returns net of fees
     """
+    if horizon_bars <= 0:
+        raise ValueError("horizon_bars must be positive")
     try:
         if isinstance(prices, pd.DataFrame):
             if 'close' in prices.columns:

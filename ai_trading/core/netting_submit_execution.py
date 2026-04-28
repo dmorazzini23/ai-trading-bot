@@ -10,7 +10,7 @@ from ai_trading.config.management import get_env
 from ai_trading.core.errors import ErrorCategory
 
 _NON_ACCEPTED_ORDER_STATUSES = frozenset(
-    {"rejected", "canceled", "cancelled", "expired", "done_for_day"}
+    {"rejected", "canceled", "cancelled", "expired", "done_for_day", "skipped"}
 )
 
 
@@ -106,7 +106,6 @@ def execute_netting_submission(
             price_hint=float(submit_arrival_price) if submit_arrival_price is not None else float(price),
             metadata=(dict(order_lineage_metadata) or None),
         )
-        breakers.record_success("broker_submit")
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         error_info = classify_exception_func(exc, dependency="broker_submit", symbol=symbol)
         breakers.record_failure("broker_submit", error_info)
@@ -268,6 +267,7 @@ def execute_netting_submission(
             decision_trace_id=decision_trace_id_for_order,
             order_intent_contract=intent.to_contract(),
         )
+    breakers.record_success("broker_submit")
     record_successful_submission_func(
         ledger=ledger,
         state=state,

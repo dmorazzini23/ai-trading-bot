@@ -99,5 +99,40 @@ def test_ensure_dotenv_loaded_prefers_env_runtime_for_blank_process_values(monke
 
     env_mod.ensure_dotenv_loaded(str(dotenv_file))
 
+    assert env_mod.get_env("ALPACA_API_KEY", "", cast=str, resolve_aliases=False) == "runtime_api"
+    assert env_mod.get_env("ALPACA_SECRET_KEY", "", cast=str, resolve_aliases=False) == "runtime_secret"
+
+
+def test_ensure_dotenv_loaded_does_not_override_process_values_from_runtime(
+    monkeypatch,
+    tmp_path,
+):
+    stub = _reset_env_module(monkeypatch)
+    dotenv_file = tmp_path / ".env"
+    runtime_file = tmp_path / ".env.runtime"
+    dotenv_file.write_text("", encoding="utf-8")
+    runtime_file.write_text("ALPACA_API_KEY=runtime_api\n", encoding="utf-8")
+
+    monkeypatch.setenv("ALPACA_API_KEY", "systemd_api")
+    monkeypatch.delenv("AI_TRADING_DOTENV_RUNTIME_OVERRIDE", raising=False)
+
+    env_mod.ensure_dotenv_loaded(str(dotenv_file))
+
+    assert os.environ["ALPACA_API_KEY"] == "systemd_api"
+    assert (str(runtime_file), False) in stub.calls
+
+
+def test_ensure_dotenv_loaded_allows_explicit_runtime_override(monkeypatch, tmp_path):
+    stub = _reset_env_module(monkeypatch)
+    dotenv_file = tmp_path / ".env"
+    runtime_file = tmp_path / ".env.runtime"
+    dotenv_file.write_text("", encoding="utf-8")
+    runtime_file.write_text("ALPACA_API_KEY=runtime_api\n", encoding="utf-8")
+
+    monkeypatch.setenv("ALPACA_API_KEY", "systemd_api")
+    monkeypatch.setenv("AI_TRADING_DOTENV_RUNTIME_OVERRIDE", "1")
+
+    env_mod.ensure_dotenv_loaded(str(dotenv_file))
+
     assert os.environ["ALPACA_API_KEY"] == "runtime_api"
-    assert os.environ["ALPACA_SECRET_KEY"] == "runtime_secret"
+    assert (str(runtime_file), True) in stub.calls

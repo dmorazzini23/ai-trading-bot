@@ -3,6 +3,7 @@ from __future__ import annotations
 import types
 
 import numpy as np
+import pytest
 
 import ai_trading.rl_trading.env as env_mod
 
@@ -166,3 +167,21 @@ def test_env_inventory_penalty_is_reported(monkeypatch):
 
     assert "inventory_penalty" in info
     assert float(info["inventory_penalty"]) > 0.0
+
+
+def test_env_drops_invalid_price_rows_instead_of_abs_or_penny(monkeypatch):
+    _stub_gym_stack(monkeypatch)
+    data = _ohlcv_rows(80)
+    prices = data[:, 0].copy()
+    prices[5] = -100.0
+    prices[6] = np.nan
+
+    env = env_mod.TradingEnv(data, window=10, price_series=prices)
+
+    assert len(env.prices) == len(data) - 2
+    assert float(env.prices.min()) > 0.0
+
+
+def test_normalize_price_series_rejects_invalid_prices() -> None:
+    with pytest.raises(ValueError, match="finite positive"):
+        env_mod.TradingEnv._normalize_price_series(np.array([1.0, -1.0], dtype=np.float32))

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,41 @@ import requests  # type: ignore[import-untyped]
 
 from ai_trading.config.management import get_env, reload_env
 from ai_trading.utils.env import get_alpaca_data_base_url, get_alpaca_http_headers
+
+_SENSITIVE_HEADER_NAMES = frozenset(
+    {
+        "APCA-API-KEY-ID",
+        "APCA-API-SECRET-KEY",
+        "AUTHORIZATION",
+    }
+)
+
+
+def _redacted_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Return request header names without persisting credential material."""
+
+    redacted: dict[str, str] = {}
+    for key, value in headers.items():
+        if key.upper() in _SENSITIVE_HEADER_NAMES:
+            redacted[key] = "<redacted>"
+        elif value:
+            redacted[key] = value
+    return redacted
+
+
+def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write JSON with owner-only permissions, even when the file is new."""
+
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+    finally:
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
 
 def _ensure_credentials() -> None:
@@ -75,7 +111,7 @@ def _capture_payload(symbol: str, timeframe: str, minutes: int, adjustment: str)
         "status_code": response.status_code,
         "url": response.url,
         "params": params,
-        "headers_used": {k: headers.get(k) for k in ("APCA-API-KEY-ID", "APCA-API-SECRET-KEY", "Authorization") if k in headers},
+        "headers_used": _redacted_headers(headers),
         "payload": payload,
     }
 
@@ -83,7 +119,7 @@ def _capture_payload(symbol: str, timeframe: str, minutes: int, adjustment: str)
     output_dir = Path("artifacts")
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"alpaca_payload_{symbol}_{timestamp}.json"
-    output_path.write_text(json.dumps(snapshot, indent=2, sort_keys=True))
+    _write_private_json(output_path, snapshot)
     return output_path
 
 

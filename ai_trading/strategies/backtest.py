@@ -282,32 +282,40 @@ class BacktestEngine:
             for symbol in strategy.symbols:
                 symbol_data = historical_data.get(symbol, [])
                 for i, data_point in enumerate(symbol_data):
-                    if i == 0:
+                    if i == 0 or i + 1 >= len(symbol_data):
                         continue
+                    execution_data_point = dict(symbol_data[i + 1])
+                    signal_close = float(data_point.get('close', 0.0) or 0.0)
+                    execution_data_point['_signal_price'] = signal_close
                     market_data = {symbol: data_point}
                     signals = strategy.generate_signals(market_data)
                     for signal in signals:
                         if strategy.validate_signal(signal):
                             position_size = strategy.calculate_position_size(signal, current_capital, 0)
                             if position_size > 0:
-                                trade_timestamp = self._resolve_trade_timestamp(
+                                signal_timestamp = self._resolve_trade_timestamp(
                                     data_point.get('timestamp'),
                                     start_date=start_date,
                                     bar_index=i,
+                                )
+                                execution_timestamp = self._resolve_trade_timestamp(
+                                    execution_data_point.get('timestamp'),
+                                    start_date=start_date,
+                                    bar_index=i + 1,
                                 )
                                 intent_id, base_token = self._emit_order_submit_lifecycle(
                                     symbol=str(signal.symbol),
                                     side=str(signal.side),
                                     quantity=int(position_size),
-                                    price=float(data_point.get('close', 0.0) or 0.0),
-                                    trade_timestamp=trade_timestamp,
+                                    price=signal_close,
+                                    trade_timestamp=signal_timestamp,
                                 )
-                                trade_result = self._simulate_trade(signal, position_size, data_point, trade_timestamp=trade_timestamp)
+                                trade_result = self._simulate_trade(signal, position_size, execution_data_point, trade_timestamp=execution_timestamp)
                                 self._emit_fill_lifecycle(
                                     intent_id=intent_id,
                                     base_token=base_token,
                                     trade_result=trade_result,
-                                    trade_timestamp=trade_timestamp,
+                                    trade_timestamp=execution_timestamp,
                                 )
                                 current_capital += trade_result['net_pnl']
                                 portfolio_values.append(current_capital)
@@ -375,10 +383,11 @@ class BacktestEngine:
         """
         try:
             close_price = float(market_data.get('close', 100.0) or 100.0)
+            executable_price = float(market_data.get('open', close_price) or close_price)
             high_price = float(market_data.get('high', close_price * 1.01) or (close_price * 1.01))
             low_price = float(market_data.get('low', close_price * 0.99) or (close_price * 0.99))
             volume = float(market_data.get('volume', 100000) or 100000)
-            signal_price = close_price
+            signal_price = float(market_data.get('_signal_price', close_price) or close_price)
             if self.microstructure_available:
                 volatility = abs(high_price - low_price) / close_price
                 liquidity_proxy = volume / 1000
@@ -387,9 +396,9 @@ class BacktestEngine:
                 volatility = abs(high_price - low_price) / close_price
                 half_spread = max(0.0005, min(0.005, volatility * 0.5))
             if signal.is_buy:
-                execution_price = signal_price * (1 + half_spread)
+                execution_price = executable_price * (1 + half_spread)
             else:
-                execution_price = signal_price * (1 - half_spread)
+                execution_price = executable_price * (1 - half_spread)
             slippage_amount = 0.0
             if self.enable_slippage and self.microstructure_available:
                 volatility = abs(high_price - low_price) / close_price

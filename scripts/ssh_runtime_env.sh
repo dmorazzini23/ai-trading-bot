@@ -4,8 +4,54 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_ENV_FILE="${ROOT_DIR}/.env.runtime"
 VENV_BIN="${ROOT_DIR}/venv/bin"
+PYTHON_BIN="${VENV_BIN}/python"
 
 export PATH="${VENV_BIN}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  PYTHON_BIN="python3"
+fi
+
+_load_env_file() {
+  local env_file="$1"
+  [[ -f "${env_file}" ]] || return 0
+  local exports
+  exports="$("${PYTHON_BIN}" - "${env_file}" <<'PY'
+from __future__ import annotations
+
+import re
+import shlex
+import sys
+from pathlib import Path
+
+try:
+    from dotenv import dotenv_values
+except Exception:
+    dotenv_values = None
+
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+path = Path(sys.argv[1])
+
+if dotenv_values is not None:
+    values = dotenv_values(path)
+else:
+    values = {}
+    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if ENV_KEY_RE.match(key):
+            values[key] = value.strip()
+
+for key, value in values.items():
+    if value is None or not ENV_KEY_RE.match(str(key)):
+        continue
+    print(f"export {key}={shlex.quote(str(value))}")
+PY
+)"
+  eval "${exports}"
+}
 
 # Match the installed service's writable runtime locations.
 export AI_TRADING_DATA_DIR="${AI_TRADING_DATA_DIR:-/var/lib/ai-trading-bot}"
@@ -44,12 +90,7 @@ mkdir -p \
   "${MPLCONFIGDIR}" \
   "${HUGGINGFACE_HUB_CACHE}"
 
-if [[ -f "${RUNTIME_ENV_FILE}" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "${RUNTIME_ENV_FILE}"
-  set +a
-fi
+_load_env_file "${RUNTIME_ENV_FILE}"
 
 # Mirror the later systemd model override drop-in after .env.runtime is loaded.
 export AI_TRADING_MODEL_PATH="/var/lib/ai-trading-bot/models/trained_model.pkl"

@@ -14,7 +14,8 @@ def test_indicator_validation_paths_and_fallbacks() -> None:
     close = high - 0.5
 
     cloud, signal = ind.ichimoku_fallback(high, low, close)
-    assert {"ITS_9", "IKS_26", "ISA_26", "ISB_52", "ICS_26"} <= set(cloud.columns)
+    assert {"ITS_9", "IKS_26", "ISA_26", "ISB_52"} <= set(cloud.columns)
+    assert "ICS_26" not in cloud.columns
     assert not signal.empty
     empty_cloud, empty_signal = ind.ichimoku_fallback(pd.Series([], dtype=float), low, close)
     assert empty_cloud.empty

@@ -14,6 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+try:
+    from dotenv import dotenv_values
+except Exception:  # pragma: no cover - script can fall back before deps are installed
+    dotenv_values = None
+
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SECRET_KEY_HINT_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|WEBHOOK_URL$|API_KEY$)")
 
@@ -65,6 +70,13 @@ def _parse_env_entries(text: str) -> list[EnvEntry]:
 def _load_env_entries(path: Path) -> list[EnvEntry]:
     if not path.exists():
         return []
+    if dotenv_values is not None:
+        parsed = dotenv_values(path)
+        return [
+            EnvEntry(key=str(key), value=str(value))
+            for key, value in parsed.items()
+            if value is not None and _ENV_KEY_RE.match(str(key))
+        ]
     return _parse_env_entries(path.read_text(encoding="utf-8", errors="ignore"))
 
 
@@ -73,6 +85,23 @@ def _entries_to_map(entries: list[EnvEntry]) -> dict[str, str]:
     for entry in entries:
         result[entry.key] = entry.value
     return result
+
+
+_SAFE_UNQUOTED_VALUE_RE = re.compile(r"^[A-Za-z0-9_@%+=:,./-]*$")
+
+
+def _quote_env_value(value: str) -> str:
+    """Render a dotenv/systemd EnvironmentFile-compatible value."""
+
+    if value and _SAFE_UNQUOTED_VALUE_RE.match(value):
+        return value
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+    return f'"{escaped}"'
 
 
 def _parse_bool(raw: str | None, default: bool = False) -> bool:
@@ -307,7 +336,10 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
             manager_overrides_applied += 1
 
     dst.parent.mkdir(parents=True, exist_ok=True)
-    rendered = "\n".join(f"{entry.key}={entry.value}" for entry in out_entries)
+    rendered = "\n".join(
+        f"{entry.key}={_quote_env_value(entry.value)}"
+        for entry in out_entries
+    )
     if rendered:
         rendered = f"{rendered}\n"
     dst.write_text(rendered, encoding="utf-8")
