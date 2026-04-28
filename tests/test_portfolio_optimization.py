@@ -119,6 +119,28 @@ class TestPortfolioOptimizer:
         assert 0.0 <= impact_analysis.confidence <= 1.0
         assert impact_analysis.transaction_cost >= 0.0
 
+    def test_expected_return_change_uses_return_units(self, monkeypatch):
+        """Expected return impact should be comparable with cost ratios."""
+        monkeypatch.setattr(
+            "ai_trading.execution.slippage_log.get_ewma_cost_bps",
+            lambda _symbol, default=2.0: default,
+        )
+        expected = self.optimizer._estimate_return_change(
+            'AAPL',
+            20.0,
+            {
+                'prices': {'AAPL': 150.0},
+                'returns': {'AAPL': [0.01] * 10},
+            },
+        )
+
+        assert expected == pytest.approx(0.01)
+        assert self.optimizer._estimate_transaction_cost(
+            'AAPL',
+            20.0,
+            {'AAPL': 150.0},
+        ) == pytest.approx(0.0006)
+
     def test_portfolio_decision_making(self):
         """Test portfolio-level trade decision making."""
         decision, reasoning = self.optimizer.make_portfolio_decision(

@@ -4,7 +4,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.logging import get_logger
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, TypeAlias, cast
 import json
 import numpy as np
 import zipfile
@@ -12,7 +12,7 @@ from ai_trading.strategies.base import StrategySignal
 from . import RLAgent
 from .env import ActionSpaceConfig, RewardConfig
 from .state_builder import MarketStateBuilder
-TradeSignal = StrategySignal
+TradeSignal: TypeAlias = StrategySignal
 logger = get_logger(__name__)
 _STATE_BUILDER_ZIP_MEMBER = "rl_state_builder.json"
 
@@ -171,8 +171,8 @@ class UnifiedRLInference:
             padding = np.tile(obs[0:1], (self.config.observation_window - obs.shape[0], 1))
             obs = np.vstack([padding, obs])
         if self.state_builder is not None:
-            obs = self.state_builder.transform(obs)
-        return obs.astype(np.float32, copy=False)
+            obs = cast(np.ndarray, self.state_builder.transform(obs))
+        return cast(np.ndarray, obs.astype(np.float32, copy=False))
 
     def _validate_observation_shape(self, observation: np.ndarray) -> None:
         model = self.agent.model
@@ -187,6 +187,16 @@ class UnifiedRLInference:
                 "RL observation shape mismatch: "
                 f"model expects {expected}, inference produced {observed}"
             )
+
+    @staticmethod
+    def _finite_unit_interval(value: Any, *, default: float = 0.0) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return default
+        if not np.isfinite(numeric):
+            return default
+        return float(max(0.0, min(1.0, numeric)))
 
     def postprocess_action(
         self,
@@ -237,6 +247,8 @@ class UnifiedRLInference:
             else:
                 action_array = np.asarray(raw_action, dtype=np.float32).reshape(-1)
                 action_float = float(action_array[0]) if action_array.size else 0.0
+            if not np.isfinite(action_float):
+                action_float = 0.0
             if action_float > self.config.confidence_threshold:
                 action_name = 'buy'
                 confidence = min(abs(action_float), 1.0)
@@ -247,7 +259,9 @@ class UnifiedRLInference:
                 action_name = 'hold'
                 confidence = 1.0 - abs(action_float)
             action_masked = False
-        return {'action': action_name, 'confidence': confidence, 'raw_action': raw_action, 'action_type': self.config.action_config.action_type, 'action_masked': bool(action_masked)}
+        confidence = self._finite_unit_interval(confidence)
+        strength = 0.0 if action_name == "hold" else confidence
+        return {'action': action_name, 'confidence': confidence, 'strength': strength, 'raw_action': raw_action, 'action_type': self.config.action_config.action_type, 'action_masked': bool(action_masked)}
 
     def predict(
         self,
@@ -279,7 +293,7 @@ class UnifiedRLInference:
                 action_mask=action_mask,
             )
             self._update_stats(action_details)
-            signal = TradeSignal(symbol=symbol, side=action_details['action'], confidence=action_details['confidence'], strategy='rl_unified', metadata={'action_type': action_details['action_type'], 'raw_action': str(action_details['raw_action']), 'model_path': self.config.model_path, 'action_masked': bool(action_details.get('action_masked', False))})
+            signal = TradeSignal(symbol=symbol, side=action_details['action'], strength=action_details['strength'], confidence=action_details['confidence'], strategy='rl_unified', metadata={'action_type': action_details['action_type'], 'raw_action': str(action_details['raw_action']), 'model_path': self.config.model_path, 'action_masked': bool(action_details.get('action_masked', False))})
             self._last_prediction = signal
             self._prediction_confidence = action_details['confidence']
             return signal
@@ -343,8 +357,8 @@ def predict_signal(agent: RLAgent, state: np.ndarray) -> TradeSignal | None:
     """Predict signal using agent (backward compatibility)."""
     prediction = agent.predict(state)
     if isinstance(prediction, list):
-        return prediction[0] if prediction else None
-    return prediction
+        return cast(TradeSignal, prediction[0]) if prediction else None
+    return cast(TradeSignal, prediction)
 
 def create_unified_inference(model_path: str, action_type: str='discrete', discrete_actions: int=3, observation_window: int=10) -> UnifiedRLInference:
     """

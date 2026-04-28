@@ -82,7 +82,7 @@ class SignalAggregator:
                 aggregated_signal = self._weighted_average_aggregation(resolved_signals)
             if aggregated_signal:
                 aggregated_signal = self._apply_turnover_penalty(aggregated_signal, timestamp)
-            self._update_performance_tracking(signals, aggregated_signal, timestamp)
+            self._update_performance_tracking(signals, aggregated_signal, timestamp, market_data)
             return aggregated_signal
         except COMMON_EXC as e:
             logger.error(f'Error aggregating signals: {e}')
@@ -343,12 +343,19 @@ class SignalAggregator:
             logger.error(f'Error preparing training data: {e}')
             return ([], [])
 
-    def _update_performance_tracking(self, input_signals: list[StrategySignal], output_signal: StrategySignal | None, timestamp: datetime | None=None) -> None:
+    def _update_performance_tracking(
+        self,
+        input_signals: list[StrategySignal],
+        output_signal: StrategySignal | None,
+        timestamp: datetime | None=None,
+        market_data: dict | None=None,
+    ) -> None:
         """Update performance tracking for meta-learning."""
         try:
             if not output_signal or not timestamp:
                 return
             side_value = getattr(output_signal.side, "value", output_signal.side)
+            features = self._prepare_meta_features(input_signals, market_data)
             entry = {
                 'timestamp': timestamp,
                 'input_signals': len(input_signals),
@@ -359,6 +366,7 @@ class SignalAggregator:
                     'side': side_value,
                 },
                 'signal_id': f'{output_signal.symbol}_{side_value}',
+                'features': features,
             }
             self.ensemble_history.append(entry)
             if len(self.ensemble_history) > 1000:
@@ -402,7 +410,10 @@ class SignalAggregator:
         try:
             for entry in reversed(self.ensemble_history[-50:]):
                 if entry.get('signal_id') == signal_id:
-                    observation = {'signal_id': signal_id, 'performance': actual_return, 'timestamp': entry['timestamp'], 'features': None}
+                    features = entry.get('features')
+                    if features is None:
+                        break
+                    observation = {'signal_id': signal_id, 'performance': actual_return, 'timestamp': entry['timestamp'], 'features': features}
                     self.signal_performance_history.append(observation)
                     if len(self.signal_performance_history) > 500:
                         self.signal_performance_history = self.signal_performance_history[-250:]

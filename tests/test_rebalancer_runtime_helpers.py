@@ -151,6 +151,37 @@ def test_calculate_optimal_rebalance_flags_near_long_term_sale(portfolio_setting
     assert any("AAPL" in rec for rec in plan["recommendations"])
 
 
+def test_calculate_optimal_rebalance_preserves_short_direction(portfolio_settings) -> None:
+    tax = _tax_rebalancer(portfolio_settings)
+    positions = {
+        "SHORT_COVER": {
+            "entry_price": 12.0,
+            "quantity": -100,
+            "entry_date": datetime.now(UTC) - timedelta(days=40),
+        },
+        "SHORT_MORE": {
+            "entry_price": 12.0,
+            "quantity": -100,
+            "entry_date": datetime.now(UTC) - timedelta(days=40),
+        },
+    }
+
+    plan = tax.calculate_optimal_rebalance(
+        positions,
+        {"SHORT_COVER": -0.25, "SHORT_MORE": -0.75},
+        {"SHORT_COVER": 10.0, "SHORT_MORE": 10.0},
+        account_equity=2_000.0,
+    )
+
+    trades = {trade["symbol"]: trade for trade in plan["rebalance_trades"]}
+    assert plan["current_weights"]["SHORT_COVER"] == pytest.approx(-0.5)
+    assert plan["current_weights"]["SHORT_MORE"] == pytest.approx(-0.5)
+    assert trades["SHORT_COVER"]["trade_quantity"] == 50
+    assert trades["SHORT_COVER"]["side"] == "buy_to_cover"
+    assert trades["SHORT_MORE"]["trade_quantity"] == -50
+    assert trades["SHORT_MORE"]["side"] == "sell_short"
+
+
 def test_tax_efficiency_priority_and_recommendation_helpers(portfolio_settings) -> None:
     tax = _tax_rebalancer(portfolio_settings)
 

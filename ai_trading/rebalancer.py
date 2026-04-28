@@ -93,6 +93,16 @@ def init_rebalancer() -> "TaxAwareRebalancer":
         logger.info('Portfolio-first trading capabilities loaded')
     return _rebalancer
 
+
+def _rebalance_order_side(current_quantity: float, trade_quantity: int) -> str:
+    """Return the order side needed to move a signed position toward target."""
+    if trade_quantity > 0:
+        return "buy_to_cover" if current_quantity < 0.0 else "buy"
+    if trade_quantity < 0:
+        return "sell_short" if current_quantity <= 0.0 else "sell"
+    return "hold"
+
+
 class TaxAwareRebalancer:
     """
     Tax-aware portfolio rebalancing with loss harvesting and wash sale avoidance.
@@ -213,14 +223,14 @@ class TaxAwareRebalancer:
             Dictionary with optimal rebalancing plan
         """
         try:
-            current_weights = {}
-            total_portfolio_value = 0
+            current_weights: dict[str, float] = {}
+            total_portfolio_value = 0.0
             for symbol, position in current_positions.items():
                 current_price = float(current_prices.get(symbol, np.nan))
                 if not (math.isfinite(current_price) and current_price > 0.0):
                     logger.warning('SIZING_SKIPPED', extra={'reason': 'invalid_price', 'symbol': symbol})
                     continue
-                position_value = position.get('quantity', 0) * current_price
+                position_value = abs(float(position.get('quantity', 0))) * current_price
                 total_portfolio_value += position_value
             if total_portfolio_value > 0:
                 for symbol, position in current_positions.items():
@@ -228,10 +238,10 @@ class TaxAwareRebalancer:
                     if not (math.isfinite(current_price) and current_price > 0.0):
                         logger.warning('SIZING_SKIPPED', extra={'reason': 'invalid_price', 'symbol': symbol})
                         continue
-                    position_value = position.get('quantity', 0) * current_price
+                    position_value = float(position.get('quantity', 0)) * current_price
                     current_weights[symbol] = position_value / total_portfolio_value
-            rebalance_trades = []
-            total_tax_impact = 0
+            rebalance_trades: list[dict[str, Any]] = []
+            total_tax_impact = 0.0
             for symbol in set(list(current_weights.keys()) + list(target_weights.keys())):
                 current_weight = current_weights.get(symbol, 0)
                 target_weight = target_weights.get(symbol, 0)
@@ -246,10 +256,12 @@ class TaxAwareRebalancer:
                     trade_value = target_value - current_value
                     trade_quantity = int(trade_value / current_price)
                     if trade_quantity != 0:
+                        position = current_positions.get(symbol, {})
+                        current_quantity = float(position.get('quantity', 0.0)) if isinstance(position, dict) else 0.0
+                        order_side = _rebalance_order_side(current_quantity, trade_quantity)
                         tax_impact = {'tax_liability': 0, 'is_optimal_timing': True}
-                        if trade_quantity < 0 and symbol in current_positions:
-                            position = current_positions[symbol]
-                            sell_quantity = min(abs(trade_quantity), position.get('quantity', 0))
+                        if trade_quantity < 0 and current_quantity > 0.0 and symbol in current_positions:
+                            sell_quantity = min(abs(trade_quantity), current_quantity)
                             partial_position = position.copy()
                             partial_position['quantity'] = sell_quantity
                             tax_impact = self.calculate_tax_impact(partial_position, current_price)
@@ -259,9 +271,9 @@ class TaxAwareRebalancer:
                             if holding_days > 300 and holding_days < 365 and (total_gain_loss > 0) and (not tax_impact.get('is_long_term', False)):
                                 tax_impact['is_optimal_timing'] = False
                                 tax_impact['delay_recommendation'] = 365 - holding_days
-                        trade = {'symbol': symbol, 'current_weight': current_weight, 'target_weight': target_weight, 'weight_diff': weight_diff, 'trade_quantity': trade_quantity, 'trade_value': trade_value, 'current_price': current_price, 'tax_impact': tax_impact, 'priority': self._calculate_rebalance_priority(weight_diff, tax_impact)}
+                        trade = {'symbol': symbol, 'current_weight': current_weight, 'target_weight': target_weight, 'weight_diff': weight_diff, 'trade_quantity': trade_quantity, 'trade_value': trade_value, 'current_price': current_price, 'side': order_side, 'tax_impact': tax_impact, 'priority': self._calculate_rebalance_priority(weight_diff, tax_impact)}
                         rebalance_trades.append(trade)
-            rebalance_trades.sort(key=lambda x: x['priority'], reverse=True)
+            rebalance_trades.sort(key=lambda x: float(x.get('priority', 0.0)), reverse=True)
             return {'rebalance_trades': rebalance_trades, 'total_tax_impact': total_tax_impact, 'current_weights': current_weights, 'target_weights': target_weights, 'portfolio_drift': self._calculate_portfolio_drift(current_weights, target_weights), 'tax_efficiency_score': self._calculate_overall_tax_efficiency(rebalance_trades), 'recommendations': self._generate_rebalance_recommendations(rebalance_trades)}
         except (KeyError, ValueError, TypeError) as e:
             logger.error('CALC_OPTIMAL_REBALANCE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
@@ -461,7 +473,7 @@ def portfolio_first_rebalance(ctx) -> None:
             for symbol, quantity in current_positions.items():
                 if quantity != 0:
                     formatted_positions[symbol] = {
-                        'quantity': abs(quantity),
+                        'quantity': quantity,
                         'purchase_price': current_prices.get(symbol, 100.0),
                         'purchase_date': datetime.now(UTC) - timedelta(days=100),
                     }

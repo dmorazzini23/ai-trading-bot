@@ -153,3 +153,29 @@ def test_backtest_signal_uses_prior_bars_for_order_decision() -> None:
         assert engine._generate_orders_for_bar("AAPL", close) == []
     assert engine._generate_orders_for_bar("AAPL", 20.0) == []
     assert engine._generate_orders_for_bar("AAPL", 20.0) != []
+
+
+def test_backtest_engine_executes_generated_order_on_next_bar() -> None:
+    index = pd.date_range("2025-01-01", periods=8, freq="D")
+    frame = pd.DataFrame(
+        {
+            "open": [10.0, 10.0, 10.0, 10.0, 10.0, 20.0, 30.0, 40.0],
+            "high": [11.0, 11.0, 11.0, 11.0, 11.0, 21.0, 31.0, 41.0],
+            "low": [9.0, 9.0, 9.0, 9.0, 9.0, 19.0, 29.0, 39.0],
+            "close": [10.0, 10.0, 10.0, 10.0, 10.0, 20.0, 30.0, 40.0],
+            "volume": [1_000.0] * 8,
+        },
+        index=index,
+    )
+    engine = backtester.BacktestEngine(
+        {"AAPL": frame},
+        backtester.DefaultExecutionModel(),
+        initial_cash=1_000.0,
+    )
+
+    result = engine.run(["AAPL"])
+
+    assert not result.trades.empty
+    first_trade = result.trades.iloc[0]
+    assert first_trade["timestamp"] == index[7]
+    assert first_trade["price"] == 40.0

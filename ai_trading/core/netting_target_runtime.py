@@ -384,6 +384,14 @@ def prepare_portfolio_optimizer_runtime(
         "enabled": bool(enabled),
         "openings_only": bool(openings_only),
     }
+    init_fail_open = bool(
+        get_env_func(
+            "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_INIT_FAIL_OPEN",
+            False,
+            cast=bool,
+        )
+    )
+    context["init_fail_open"] = bool(init_fail_open)
 
     if create_portfolio_optimizer_func is None:
         from ai_trading.portfolio import create_portfolio_optimizer
@@ -435,9 +443,10 @@ def prepare_portfolio_optimizer_runtime(
             context["active"] = True
         except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             optimizer = None
-            enabled = False
+            enabled = bool(not init_fail_open)
             context["active"] = False
             context["init_failed"] = True
+            context["fail_open_applied"] = bool(init_fail_open)
             context["error_type"] = exc.__class__.__name__
             context["error"] = str(exc)
             logger.warning(

@@ -113,6 +113,31 @@ def test_fetch_yf_batched_uses_cache_and_keeps_missing_multiindex_symbol_none(
     assert result["MSFT"] is None
 
 
+def test_fetch_yf_batched_does_not_cache_malformed_download(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fetch_yf, "_yf_chunk_size", lambda: 2)
+    monkeypatch.setattr(fetch_yf, "_cache_read_or_none", lambda _key: None)
+    monkeypatch.setattr(
+        fetch_yf,
+        "get_env",
+        lambda key, default=None, **_kwargs: True if key == "PYTEST_YF_ALLOW_NETWORK" else default,
+    )
+    writes: list[str] = []
+    malformed = pd.DataFrame(
+        {"Open": [100.0], "Close": [100.5]},
+        index=pd.DatetimeIndex([datetime(2026, 4, 24, 14, 30, tzinfo=UTC)]),
+    )
+
+    monkeypatch.setattr(fetch_yf, "_download_batch", lambda *_args, **_kwargs: malformed)
+    monkeypatch.setattr(fetch_yf, "_cache_write", lambda key, _frame: writes.append(key))
+
+    result = fetch_yf.fetch_yf_batched(["aapl"], interval="1d")
+
+    assert result == {"AAPL": None}
+    assert writes == []
+
+
 def test_safe_backup_get_bars_returns_empty_frame_when_provider_hook_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

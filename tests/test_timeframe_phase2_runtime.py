@@ -38,25 +38,18 @@ def test_canonicalize_timeframe_object_with_amount_unit_and_none_unit() -> None:
     assert _unit_name(getattr(defaulted, "unit")).lower().endswith("day")
 
 
-def test_timeframe_fallback_unit_and_base_init_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_timeframe_rejects_incomplete_unit_and_base_init_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class IncompleteUnit:
         Day = "Day"
 
-    class FallbackUnit:
-        Minute = "Minute"
-        Hour = "Hour"
-        Day = "Day"
-        Week = "Week"
-        Month = "Month"
-
     monkeypatch.setattr(timeframe, "TimeFrameUnit", IncompleteUnit)
-    monkeypatch.setattr(
-        "ai_trading.alpaca_api.TimeFrameUnit",
-        FallbackUnit,
-        raising=False,
-    )
 
-    assert timeframe._resolve_timeframe_unit_cls() is FallbackUnit
+    with pytest.raises(RuntimeError, match="missing required units"):
+        timeframe._resolve_timeframe_unit_cls()
+
+    monkeypatch.undo()
 
     original_init = timeframe._BaseTimeFrame.__init__
 
@@ -65,26 +58,7 @@ def test_timeframe_fallback_unit_and_base_init_failure(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(timeframe._BaseTimeFrame, "__init__", _raise_init)
     try:
-        fallback = timeframe.TimeFrame("bad", "Minute")  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="bad base"):
+            timeframe.TimeFrame("bad", "Minute")  # type: ignore[arg-type]
     finally:
         monkeypatch.setattr(timeframe._BaseTimeFrame, "__init__", original_init)
-
-    assert getattr(fallback, "amount", None) == 1
-    assert getattr(fallback, "unit", None) == "Minute"
-
-
-def test_timeframe_resolve_unit_uses_local_fallback_when_import_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class IncompleteUnit:
-        Day = "Day"
-
-    monkeypatch.setattr(timeframe, "TimeFrameUnit", IncompleteUnit)
-
-    import ai_trading.alpaca_api as alpaca_api
-
-    monkeypatch.delattr(alpaca_api, "TimeFrameUnit", raising=False)
-    resolved = timeframe._resolve_timeframe_unit_cls()
-
-    assert resolved.Minute == "Minute"
-    assert resolved.Month == "Month"

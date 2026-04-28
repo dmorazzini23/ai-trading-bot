@@ -92,7 +92,10 @@ def test_predict_batch_stats_reset_and_factory(monkeypatch: pytest.MonkeyPatch) 
     stats = inference.get_stats()
 
     assert buy is not None and buy.symbol == "AAPL" and buy.side == "buy"
+    assert buy.has_explicit_strength
+    assert np.isfinite(buy.strength)
     assert [signal.side if signal else None for signal in batch] == ["hold", "sell"]
+    assert all(signal is not None and signal.has_explicit_strength for signal in batch)
     assert stats["total_predictions"] == 3
     assert stats["buy_predictions"] == 1
     assert stats["hold_predictions"] == 1
@@ -191,6 +194,10 @@ def test_continuous_actions_and_prediction_failure(monkeypatch: pytest.MonkeyPat
     assert inference.postprocess_action(np.array([0.5]), obs)["action"] == "buy"
     assert inference.postprocess_action(-0.5, obs)["action"] == "sell"
     assert inference.postprocess_action("bad", obs)["action"] == "hold"
+    nan_action = inference.postprocess_action(np.array([np.nan]), obs)
+    assert nan_action["action"] == "hold"
+    assert np.isfinite(nan_action["strength"])
+    assert np.isfinite(nan_action["confidence"])
 
     buy = inference.predict(obs)
     sell = inference.predict(obs)

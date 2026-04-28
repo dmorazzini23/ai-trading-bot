@@ -46,3 +46,33 @@ def test_normalize_bars_lowercase():
     df.columns = ["Open", "High", "Low", "Close", "Volume"]
     normalized = normalize_bars(df, "1Min", tz=ZoneInfo("UTC"), rth_only=False)
     assert set(["open", "high", "low", "close", "volume"]).issubset(normalized.columns)
+
+
+def test_normalize_bars_rejects_naive_timestamps():
+    df = _sample_df(datetime(2026, 4, 27, 14, 30, tzinfo=UTC))
+    df.index = df.index.tz_localize(None)
+
+    try:
+        normalize_bars(df, "1Min", tz=ZoneInfo("UTC"), rth_only=False)
+    except ValueError as exc:
+        assert "naive timestamps" in str(exc)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("Expected naive timestamp rejection")
+
+
+def test_validate_bars_rejects_naive_timestamps():
+    df = _sample_df(datetime.now(UTC) - timedelta(minutes=2))
+    df.index = df.index.tz_localize(None)
+
+    result = validate_bars(df, "1Min", freshness_seconds=300, rth_only=False)
+
+    assert result.ok is False
+    assert result.reason == "NAIVE_INDEX"
+
+
+def test_rth_filter_excludes_exact_close_boundary():
+    df = _sample_df(datetime(2026, 4, 27, 19, 58, tzinfo=UTC), periods=3)
+
+    normalized = normalize_bars(df, "1Min", rth_only=True)
+
+    assert list(normalized.index) == list(df.index[:2])

@@ -5,13 +5,14 @@ Tests core trading enums, constants, and basic functionality
 of the institutional trading platform infrastructure.
 """
 
-from datetime import time
+from datetime import UTC, datetime, time
 
 from ai_trading.core.constants import (
     EXECUTION_PARAMETERS,
     KELLY_PARAMETERS,
     RISK_PARAMETERS,
     TRADING_CONSTANTS,
+    market_hours_utc_for,
 )
 from ai_trading.core.enums import (
     AssetClass,
@@ -122,6 +123,13 @@ class TestTradingConstants:
         assert "MARKET_CLOSE" in market_hours
         assert isinstance(market_hours["MARKET_OPEN"], time)
         assert isinstance(market_hours["MARKET_CLOSE"], time)
+
+    def test_market_hours_utc_conversion_honors_dst(self):
+        winter = market_hours_utc_for(datetime(2026, 1, 15, 12, tzinfo=UTC))
+        summer = market_hours_utc_for(datetime(2026, 7, 15, 12, tzinfo=UTC))
+
+        assert winter["MARKET_OPEN"] == time(14, 30)
+        assert summer["MARKET_OPEN"] == time(13, 30)
 
     def test_risk_parameters_exist(self):
         """Test risk parameters are defined."""

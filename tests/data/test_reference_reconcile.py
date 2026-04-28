@@ -72,6 +72,7 @@ def test_reference_reconcile_writes_and_dedupes(tmp_path, monkeypatch):
     assert payload["signal_metrics"]["signal_weight"] == 0.9
     assert first["reliability_path"] == str(reliability_path)
     reliability_payload = json.loads(reliability_path.read_text(encoding="utf-8"))
+    assert reliability_payload["lookback_rows"] == 1
     assert "AAPL" in reliability_payload["scores"]
 
     second = reference_reconcile.run_reference_reconciliation_once(max_rows=50, min_lag_minutes=10)

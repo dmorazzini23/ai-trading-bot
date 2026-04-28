@@ -76,6 +76,27 @@ def prepare_netting_submit_prelude(
     snapshot_updates: dict[str, Any] = {}
     gates_added: list[str] = []
 
+    if portfolio_optimizer_enabled and portfolio_optimizer is None:
+        opt_runtime_context = dict(portfolio_optimizer_context)
+        if bool(opt_runtime_context.get("init_failed")):
+            snapshot_updates["portfolio_optimizer"] = opt_runtime_context
+            if not bool(opt_runtime_context.get("init_fail_open")):
+                blocked_reason = "PORTFOLIO_OPTIMIZER_INIT_FAILED"
+                gates_added.append(blocked_reason)
+                return NettingSubmitPreludeResult(
+                    execution_intent_context=None,
+                    submit_quote_source=None,
+                    submit_bid_at_arrival=None,
+                    submit_ask_at_arrival=None,
+                    submit_mid_at_arrival=None,
+                    submit_arrival_price=None,
+                    gates_added=tuple(gates_added),
+                    snapshot_updates=snapshot_updates,
+                    blocked_reason=blocked_reason,
+                    blocked_metrics={"portfolio_optimizer": opt_runtime_context},
+                    blocked_order_intent=None,
+                )
+
     if (
         portfolio_optimizer_enabled
         and portfolio_optimizer is not None

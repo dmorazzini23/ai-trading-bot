@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import os
+import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from itertools import product
@@ -34,8 +35,16 @@ def grid_search(evaluator, param_grid: dict[str, Iterable[Any]], n_jobs: int=-1)
 
 def persist_artifacts(run: dict[str, Any], out_dir: str) -> str:
     ts = _timestamp()
-    run_dir = os.path.join(out_dir, f'run_{ts}')
-    os.makedirs(run_dir, exist_ok=True)
+    for _ in range(10):
+        run_dir = os.path.join(out_dir, f'run_{ts}_{uuid.uuid4().hex[:8]}')
+        try:
+            os.makedirs(run_dir, exist_ok=False)
+            break
+        except FileExistsError:
+            continue
+    else:
+        run_dir = os.path.join(out_dir, f'run_{ts}_{uuid.uuid4().hex}')
+        os.makedirs(run_dir, exist_ok=False)
     with open(os.path.join(run_dir, 'results.json'), 'w', encoding='utf-8') as f:
         json.dump(run, f, indent=2)
     return run_dir

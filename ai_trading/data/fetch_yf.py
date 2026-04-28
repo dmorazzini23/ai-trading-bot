@@ -82,6 +82,7 @@ _INTERVAL_ALIASES = {
     "1minute": "1m",
     "1hour": "1h",
 }
+_OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
 
 
 def _sleep_backoff(attempt: int) -> None:
@@ -149,6 +150,44 @@ def _cache_write(key: str, df: pd.DataFrame) -> None:
         logger.debug("YF_CACHE_WRITE_FAILED", extra={"path": str(path)}, exc_info=True)
 
 
+def _normalise_batch_by_symbol(
+    df: pd.DataFrame,
+    chunk: list[str],
+) -> dict[str, pd.DataFrame | None]:
+    normalised: dict[str, pd.DataFrame | None] = {symbol: None for symbol in chunk}
+    if df.empty:
+        return normalised
+    if isinstance(df.columns, pd.MultiIndex):
+        level0 = df.columns.get_level_values(0)
+        for symbol in chunk:
+            if symbol in level0:
+                slice_df = df[symbol].copy()
+            else:
+                slice_df = pd.DataFrame()
+            normalised[symbol] = ensure_ohlcv(slice_df)
+        return normalised
+    symbol = chunk[0] if chunk else None
+    if symbol:
+        normalised[symbol] = ensure_ohlcv(df.copy())
+    return normalised
+
+
+def _validated_cache_frame(
+    normalised: dict[str, pd.DataFrame | None],
+    chunk: list[str],
+) -> pd.DataFrame | None:
+    valid_frames = {
+        symbol: frame.loc[:, _OHLCV_COLUMNS].copy()
+        for symbol in chunk
+        if (frame := normalised.get(symbol)) is not None and not frame.empty
+    }
+    if not valid_frames:
+        return None
+    if len(chunk) == 1:
+        return valid_frames.get(chunk[0])
+    return pd.concat(valid_frames, axis=1)
+
+
 def fetch_yf_batched(
     tickers: Iterable[str], *, start=None, end=None, period="1y", interval="1d"
 ) -> Dict[str, Optional[pd.DataFrame]]:
@@ -168,6 +207,7 @@ def fetch_yf_batched(
         chunk = tickers_unique[i : i + chunk_size]
         cache_key = _cache_key(chunk, start, end, period, normalized_interval)
         df: pd.DataFrame | None = _cache_read_or_none(cache_key)
+        cache_hit = df is not None
         if df is None:
             for attempt in range(retries):
                 try:
@@ -184,19 +224,13 @@ def fetch_yf_batched(
                     df = None
             if df is None:
                 continue
-            _cache_write(cache_key, df)
-        if isinstance(df.columns, pd.MultiIndex):
-            level0 = df.columns.get_level_values(0)
-            for symbol in chunk:
-                if symbol in level0:
-                    slice_df = df[symbol].copy()
-                else:
-                    slice_df = pd.DataFrame()
-                out[symbol] = ensure_ohlcv(slice_df)
-        else:
-            symbol = chunk[0] if chunk else None
-            if symbol:
-                out[symbol] = ensure_ohlcv(df.copy())
+        normalised = _normalise_batch_by_symbol(df, chunk)
+        if not cache_hit:
+            cache_frame = _validated_cache_frame(normalised, chunk)
+            if cache_frame is not None:
+                _cache_write(cache_key, cache_frame)
+        for symbol, frame in normalised.items():
+            out[symbol] = frame
     return out
 
 

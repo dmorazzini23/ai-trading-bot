@@ -296,10 +296,12 @@ class PortfolioOptimizer:
             return (False, f'Error: {str(e)}')
 
     def _estimate_transaction_cost(self, symbol: str, trade_size: float, current_prices: dict[str, float]) -> float:
-        """Estimate transaction cost for a trade."""
+        """Estimate transaction cost as a fraction of trade value."""
         try:
             price = current_prices.get(symbol, 100.0)
             trade_value = abs(trade_size) * price
+            if trade_value <= 0.0:
+                return 0.0
             # Use realized EWMA slippage bps when available
             try:
                 from ai_trading.execution.slippage_log import get_ewma_cost_bps
@@ -312,19 +314,22 @@ class PortfolioOptimizer:
             commission = min(1.0, trade_value * 0.0001)
             market_impact = trade_value * 0.0003
             total_cost = slippage_cost + commission + market_impact
-            return total_cost
+            return total_cost / trade_value
         except (KeyError, TypeError, ValueError):
-            return 0.01
+            return 0.0001
 
     def _estimate_return_change(self, symbol: str, position_change: float, market_data: dict[str, Any]) -> float:
-        """Estimate expected return change from position modification."""
+        """Estimate expected return change as a fraction of trade value."""
         try:
             returns_data = market_data.get('returns', {})
             if symbol not in returns_data or len(returns_data[symbol]) < 10:
                 return 0.0
+            if position_change == 0.0:
+                return 0.0
             recent_returns = returns_data[symbol][-10:]
             avg_return = statistics.mean(recent_returns)
-            return float(position_change * avg_return)
+            direction = 1.0 if position_change > 0.0 else -1.0
+            return float(direction * avg_return)
         except (KeyError, statistics.StatisticsError, ValueError) as e:
             logger.error(f'Return change estimate failed for {symbol}: {e}')
             return 0.0

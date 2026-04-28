@@ -74,7 +74,7 @@ class PEADEventStrategy(BaseStrategy):
             # Continuation trigger: same sign close-open as the overnight gap.
             if np.sign(intraday_follow) != np.sign(gap):
                 continue
-            side = "buy" if gap > 0 else "sell"
+            side = "buy" if gap > 0 else "sell_short"
             strength = float(min(1.0, max(0.05, abs(gap) / (self.gap_threshold * 3.0))))
             confidence = float(min(0.95, 0.55 + (0.25 * strength)))
             edge_bps = float(max(2.0, abs(gap) * 10000.0 * min(vol_mult / self.volume_multiple, 2.0) * 0.25))

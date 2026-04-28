@@ -294,7 +294,7 @@ class VolatilityTargetingSizer:
                     adjusted_weights[symbol] = sign * min(abs_weight, self.max_weight)
             adjusted_weights = {k: v for k, v in adjusted_weights.items() if abs(v) > 0}
             total_weight = sum(abs(weight) for weight in adjusted_weights.values())
-            if total_weight > 0:
+            if total_weight > 1.0:
                 for symbol in adjusted_weights:
                     adjusted_weights[symbol] /= total_weight
             return adjusted_weights
@@ -426,7 +426,9 @@ class RiskParitySizer:
                 target_risk = portfolio_vol / n
                 new_weights = weights * (target_risk / risk_contributions)
                 new_weights = np.minimum(new_weights, self.max_weight)
-                new_weights = new_weights / np.sum(new_weights)
+                total_weight = float(np.sum(new_weights))
+                if total_weight > 1.0:
+                    new_weights = new_weights / total_weight
                 if np.max(np.abs(new_weights - weights)) < self.tolerance:
                     weights = new_weights
                     break

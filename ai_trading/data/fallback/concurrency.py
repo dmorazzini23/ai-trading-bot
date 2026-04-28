@@ -1231,21 +1231,13 @@ async def run_with_concurrency(
             for task in pending:
                 task.cancel()
             await _drain_cancelled_tasks(list(pending))
-            # Recover pending symbols synchronously to avoid timeouts in tests
             for task in pending:
                 symbol = task_to_symbol.get(task)
                 if symbol is None:
                     continue
                 FAILED_SYMBOLS.add(symbol)
-                try:
-                    result = await worker(symbol)
-                except asyncio.CancelledError:
-                    raise
-                except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-                    _log_worker_exception(symbol, exc)
-                else:
-                    SUCCESSFUL_SYMBOLS.add(symbol)
-                    results[symbol] = result
+                SUCCESSFUL_SYMBOLS.discard(symbol)
+                results[symbol] = None
         gather_outcomes: list[Any] = []
         for task in done:
             try:

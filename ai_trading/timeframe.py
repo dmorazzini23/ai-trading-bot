@@ -1,4 +1,4 @@
-"""Compat layer for Alpaca ``TimeFrame``.
+"""Alpaca ``TimeFrame`` helpers.
 
 This module exposes a wrapper around the Alpaca SDK's ``TimeFrame`` class
 that is safe to instantiate with no arguments.  ``TimeFrame()`` will
@@ -8,27 +8,17 @@ underlying SDK changes implementation details.
 """
 
 from __future__ import annotations
-from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from typing import Any
 
 from ai_trading.logging import get_logger
-from ai_trading.alpaca_api import ALPACA_AVAILABLE
 
 logger = get_logger(__name__)
 
-if ALPACA_AVAILABLE:  # pragma: no cover - depends on alpaca-py
+try:
     from alpaca.data.timeframe import TimeFrame as _BaseTimeFrame, TimeFrameUnit  # type: ignore
-else:  # pragma: no cover - exercised when SDK missing
-    from ai_trading.alpaca_api import TimeFrame as _BaseTimeFrame, TimeFrameUnit  # type: ignore
-
-if _BaseTimeFrame is None:
-    class _BaseTimeFrame:  # type: ignore[no-redef]
-        """Minimal base used when Alpaca imports are intentionally blocked."""
-
-        def __init__(self, amount: int = 1, unit: Any = None) -> None:
-            self.amount = amount
-            self.unit = unit
+except ModuleNotFoundError as exc:  # pragma: no cover - exercised in targeted import tests
+    raise RuntimeError("alpaca-py==0.42.1 is required for TimeFrame support") from exc
 
 
 def _safe_setattr(obj: object, name: str, value: object) -> None:
@@ -48,22 +38,7 @@ def _resolve_timeframe_unit_cls() -> Any:
     unit_cls = TimeFrameUnit
     if all(hasattr(unit_cls, name) for name in ("Minute", "Hour", "Day", "Week", "Month")):
         return unit_cls
-    try:
-        from ai_trading.alpaca_api import TimeFrameUnit as _FallbackUnit  # type: ignore
-
-        if all(hasattr(_FallbackUnit, name) for name in ("Minute", "Hour", "Day", "Week", "Month")):
-            return _FallbackUnit
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        logger.debug("FALLBACK_TIMEFRAME_UNIT_IMPORT_FAILED", exc_info=True)
-
-    class _UnitFallback:
-        Minute = "Minute"
-        Hour = "Hour"
-        Day = "Day"
-        Week = "Week"
-        Month = "Month"
-
-    return _UnitFallback
+    raise RuntimeError("alpaca-py TimeFrameUnit is missing required units")
 
 
 class TimeFrame(_BaseTimeFrame):  # type: ignore[misc]
@@ -72,28 +47,8 @@ class TimeFrame(_BaseTimeFrame):  # type: ignore[misc]
     def __init__(self, amount: int = 1, unit=None):  # type: ignore[assignment]
         unit_cls = _resolve_timeframe_unit_cls()
         if unit is None:
-            unit = getattr(unit_cls, "Day", "Day")
-        try:
-            super().__init__(amount, unit)
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
-            logger.debug(
-                "TIMEFRAME_BASE_INIT_FAILED",
-                extra={"amount": amount, "unit": unit},
-                exc_info=True,
-            )
-            # When third-party tests monkeypatch Alpaca's enum internals,
-            # base-class validation can crash. Keep a lightweight usable object.
-            try:
-                amount_value = int(amount)
-            except AI_TRADING_FALLBACK_EXCEPTIONS:
-                amount_value = 1
-            if amount_value <= 0:
-                amount_value = 1
-            _safe_setattr(self, "amount_value", amount_value)
-            _safe_setattr(self, "unit_value", unit)
-            _safe_setattr(self, "amount", amount_value)
-            _safe_setattr(self, "unit", unit)
-            return
+            unit = unit_cls.Day
+        super().__init__(amount, unit)
         # Guarantee ``amount`` and ``unit`` attributes for downstream code
         try:
             current_amount = getattr(self, "amount")
@@ -121,11 +76,8 @@ def canonicalize_timeframe(tf: Any) -> TimeFrame:
     ``1 Day``.
     """
 
-    try:
-        if isinstance(tf, TimeFrame) and tf.__class__ is TimeFrame:
-            return tf
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        logger.debug("TIMEFRAME_INSTANCE_CHECK_FAILED", exc_info=True)
+    if isinstance(tf, TimeFrame) and tf.__class__ is TimeFrame:
+        return tf
 
     unit_cls = _resolve_timeframe_unit_cls()
 
@@ -140,7 +92,7 @@ def canonicalize_timeframe(tf: Any) -> TimeFrame:
                 name = getattr(unit, "name", str(unit)).capitalize()
                 unit = getattr(unit_cls, name, unit_cls.Day)
             return TimeFrame(int(amount), unit)
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
+        except (TypeError, ValueError, AttributeError):
             logger.debug("TIMEFRAME_ATTR_COERCE_FAILED", exc_info=True)
 
     try:
@@ -168,7 +120,7 @@ def canonicalize_timeframe(tf: Any) -> TimeFrame:
                 }.get(unit_name, unit_name)
                 unit = getattr(unit_cls, unit_name, unit_cls.Day)
                 return TimeFrame(amt, unit)
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
+    except (TypeError, ValueError, AttributeError):
         logger.debug("TIMEFRAME_STRING_PARSE_FAILED", extra={"value": tf}, exc_info=True)
 
     return TimeFrame()

@@ -177,7 +177,17 @@ class ParameterValidator:
         logger.info('Current parameter optimizations:')
         for category, optimizations in validation_result['optimization_summary'].items():
             logger.info(f'  {category}: {len(optimizations)} optimizations applied')
-parameter_validator = ParameterValidator()
+_parameter_validator: ParameterValidator | None = None
+
+
+def get_parameter_validator() -> ParameterValidator:
+    """Return the process-local parameter validator, creating it on first use."""
+
+    global _parameter_validator
+    if _parameter_validator is None:
+        _parameter_validator = ParameterValidator()
+    return _parameter_validator
+
 
 def validate_trading_parameters() -> dict[str, Any]:
     """
@@ -186,7 +196,7 @@ def validate_trading_parameters() -> dict[str, Any]:
     Returns:
         Complete validation results
     """
-    return parameter_validator.validate_all_parameters()
+    return get_parameter_validator().validate_all_parameters()
 
 def log_parameter_changes():
     """Log summary of parameter optimization changes."""

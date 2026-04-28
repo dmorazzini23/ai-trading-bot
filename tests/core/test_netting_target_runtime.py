@@ -309,6 +309,48 @@ def test_prepare_portfolio_optimizer_runtime_normalizes_symbol_keys() -> None:
     assert captured_returns[-1] == {"AAPL": [0.01, 0.02, 0.03], "MSFT": [0.04, 0.05]}
 
 
+def test_prepare_portfolio_optimizer_runtime_keeps_init_failure_enabled_by_default() -> None:
+    logger = _Logger()
+
+    runtime = prepare_portfolio_optimizer_runtime(
+        latest_price={"AAPL": 100.0},
+        symbol_returns={},
+        rollout_toggle_func=lambda _name, default: True,
+        get_env_func=lambda key, default=None, cast=None: default,
+        build_symbol_return_correlation_matrix_func=lambda _returns: {},
+        logger=logger,
+        create_portfolio_optimizer_func=lambda _config: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    assert runtime.enabled is True
+    assert runtime.optimizer is None
+    assert runtime.context["init_failed"] is True
+    assert runtime.context["init_fail_open"] is False
+    assert runtime.context["fail_open_applied"] is False
+    assert logger.warnings[-1][0] == "PORTFOLIO_OPTIMIZER_INIT_FAILED"
+
+
+def test_prepare_portfolio_optimizer_runtime_can_explicitly_fail_open_on_init_failure() -> None:
+    runtime = prepare_portfolio_optimizer_runtime(
+        latest_price={"AAPL": 100.0},
+        symbol_returns={},
+        rollout_toggle_func=lambda _name, default: True,
+        get_env_func=lambda key, default=None, cast=None: (
+            True
+            if key == "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_INIT_FAIL_OPEN"
+            else default
+        ),
+        build_symbol_return_correlation_matrix_func=lambda _returns: {},
+        logger=_Logger(),
+        create_portfolio_optimizer_func=lambda _config: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    assert runtime.enabled is False
+    assert runtime.context["init_failed"] is True
+    assert runtime.context["init_fail_open"] is True
+    assert runtime.context["fail_open_applied"] is True
+
+
 def test_apply_target_construction_controls_normalizes_returns_and_skips_invalid_targets() -> None:
     logger = _Logger()
     targets = {

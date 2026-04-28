@@ -339,6 +339,31 @@ def summarize_oms_event_tca(
                 if price is None:
                     price = _as_float(payload.get("price"))
                 expected_price = _as_float(payload.get("expected_price"))
+                symbol, strategy_id, session_id = _extract_scope(payload)
+                fill_scope_bucket: dict[str, Any] | None = None
+                if symbol is not None or strategy_id is not None or session_id is not None:
+                    key = (
+                        str(symbol or "UNKNOWN").upper(),
+                        str(strategy_id or "unknown"),
+                        str(session_id or "unknown"),
+                    )
+                    fill_scope_bucket = outcomes_by_scope.setdefault(
+                        key,
+                        {
+                            "symbol": key[0],
+                            "strategy_id": key[1],
+                            "session_id": key[2],
+                            "submit_ack_events": 0,
+                            "submit_reject_events": 0,
+                            "order_reject_events": 0,
+                            "order_cancel_events": 0,
+                            "fill_events": 0,
+                            "slippage_sample_count": 0,
+                            "slippage_bps_sum": 0.0,
+                            "adverse_slippage_samples": 0,
+                        },
+                    )
+                    fill_scope_bucket["fill_events"] = int(fill_scope_bucket["fill_events"]) + 1
                 if qty is not None and price is not None and qty > 0 and price > 0:
                     fills_notional += abs(float(qty) * float(price))
                 if (
@@ -359,39 +384,16 @@ def summarize_oms_event_tca(
                     elif float(slippage_bps) < 0.0:
                         slippage_favorable_count += 1
                         slippage_favorable_sum += abs(float(slippage_bps))
-                    symbol, strategy_id, session_id = _extract_scope(payload)
-                    if symbol is not None or strategy_id is not None or session_id is not None:
-                        key = (
-                            str(symbol or "UNKNOWN").upper(),
-                            str(strategy_id or "unknown"),
-                            str(session_id or "unknown"),
+                    if fill_scope_bucket is not None:
+                        fill_scope_bucket["slippage_sample_count"] = (
+                            int(fill_scope_bucket["slippage_sample_count"]) + 1
                         )
-                        scope_bucket = outcomes_by_scope.setdefault(
-                            key,
-                            {
-                                "symbol": key[0],
-                                "strategy_id": key[1],
-                                "session_id": key[2],
-                                "submit_ack_events": 0,
-                                "submit_reject_events": 0,
-                                "order_reject_events": 0,
-                                "order_cancel_events": 0,
-                                "fill_events": 0,
-                                "slippage_sample_count": 0,
-                                "slippage_bps_sum": 0.0,
-                                "adverse_slippage_samples": 0,
-                            },
-                        )
-                        scope_bucket["fill_events"] = int(scope_bucket["fill_events"]) + 1
-                        scope_bucket["slippage_sample_count"] = (
-                            int(scope_bucket["slippage_sample_count"]) + 1
-                        )
-                        scope_bucket["slippage_bps_sum"] = float(scope_bucket["slippage_bps_sum"]) + float(
+                        fill_scope_bucket["slippage_bps_sum"] = float(fill_scope_bucket["slippage_bps_sum"]) + float(
                             slippage_bps
                         )
                         if float(slippage_bps) > 0.0:
-                            scope_bucket["adverse_slippage_samples"] = (
-                                int(scope_bucket["adverse_slippage_samples"]) + 1
+                            fill_scope_bucket["adverse_slippage_samples"] = (
+                                int(fill_scope_bucket["adverse_slippage_samples"]) + 1
                             )
             elif event_type == "RECONCILE_UPDATE":
                 record_type = str(payload.get("record_type") or "").strip().lower()

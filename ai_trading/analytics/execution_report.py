@@ -265,6 +265,19 @@ def _build_phase2_execution_edge_summary(
     max_execution_drift_bps = float(
         get_env("AI_TRADING_ROADMAP_PHASE2_MAX_EXECUTION_DRIFT_BPS", 25.0, cast=float)
     )
+    max_missing_timestamp_rate = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_ROADMAP_PHASE2_MAX_MISSING_TIMESTAMP_RATE",
+                    0.0,
+                    cast=float,
+                )
+            ),
+        ),
+    )
     max_stale_pending_increase = float(
         get_env("AI_TRADING_ROADMAP_PHASE2_MAX_STALE_PENDING_INCREASE", 0.0, cast=float)
     )
@@ -296,10 +309,17 @@ def _build_phase2_execution_edge_summary(
     resolved_now_utc = now_utc or datetime.now(UTC)
     window_start = resolved_now_utc - timedelta(days=resolved_window_days)
     window_records: list[dict[str, Any]] = []
+    invalid_timestamp_records = 0
     for record in records:
         ts = _parse_record_ts(record.get("ts"))
-        if ts is None or ts >= window_start:
+        if ts is None:
+            invalid_timestamp_records += 1
+            continue
+        if ts >= window_start:
             window_records.append(record)
+    timestamp_missing_rate = (
+        float(invalid_timestamp_records) / float(len(records)) if records else 0.0
+    )
 
     attempted = 0
     rejected = 0
@@ -412,6 +432,9 @@ def _build_phase2_execution_edge_summary(
             if baseline_stale_pending_count is not None
             else None
         ),
+        "timestamp_coverage": (
+            timestamp_missing_rate <= float(max_missing_timestamp_rate) if records else None
+        ),
     }
     effective_gates = {name: bool(value) if value is not None else False for name, value in gates.items()}
     gate_passed = bool(all(effective_gates.values())) if enabled else False
@@ -423,6 +446,8 @@ def _build_phase2_execution_edge_summary(
         "window_start_utc": window_start.isoformat(),
         "evaluated_at_utc": resolved_now_utc.isoformat(),
         "records_in_window": len(window_records),
+        "excluded_invalid_timestamp_records": int(invalid_timestamp_records),
+        "invalid_timestamp_rate": float(timestamp_missing_rate),
         "attempted_orders": attempted,
         "metrics": metrics,
         "baselines": {
@@ -450,6 +475,7 @@ def _build_phase2_execution_edge_summary(
             "max_fill_rate_degradation_pct": max_fill_rate_degradation_pct,
             "max_reject_rate": max_reject_rate,
             "max_execution_drift_bps": max_execution_drift_bps,
+            "max_missing_timestamp_rate": max_missing_timestamp_rate,
             "max_stale_pending_increase": max_stale_pending_increase,
         },
         "gates": gates,

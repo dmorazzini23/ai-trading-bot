@@ -50,3 +50,34 @@ def test_validate_manifest_metadata_rejects_missing_symbols() -> None:
     payload["symbols"] = []
     with pytest.raises(ManifestValidationError, match="symbols"):
         validate_manifest_metadata(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("default_threshold", float("nan")),
+        ("default_threshold", float("inf")),
+        ("default_threshold", 1.01),
+        ("default_threshold", -0.01),
+        ("cost_floor_bps", float("-inf")),
+        ("cost_floor_bps", -0.01),
+        ("cost_floor_bps", 10_000.01),
+    ],
+)
+def test_validate_manifest_metadata_rejects_invalid_thresholds_and_costs(
+    field: str,
+    value: float,
+) -> None:
+    payload = _valid_payload()
+    payload[field] = value
+
+    with pytest.raises(ManifestValidationError, match=field):
+        validate_manifest_metadata(payload)
+
+
+def test_validate_manifest_metadata_rejects_invalid_regime_threshold() -> None:
+    payload = _valid_payload()
+    payload["thresholds_by_regime"] = {"uptrend": float("nan")}
+
+    with pytest.raises(ManifestValidationError, match="thresholds_by_regime.uptrend"):
+        validate_manifest_metadata(payload)

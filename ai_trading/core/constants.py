@@ -4,14 +4,16 @@ Trading constants for institutional-grade trading platform.
 Contains configuration constants, market parameters, and system limits
 used throughout the trading platform.
 """
-from datetime import time
+from datetime import UTC, datetime, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
+MARKET_TIMEZONE = ZoneInfo("America/New_York")
 MARKET_HOURS = {
-    'PRE_MARKET_START': time(9, 0),
-    'MARKET_OPEN': time(14, 30),
-    'MARKET_CLOSE': time(21, 0),
-    'AFTER_HOURS_END': time(1, 0),
+    'PRE_MARKET_START': time(4, 0),
+    'MARKET_OPEN': time(9, 30),
+    'MARKET_CLOSE': time(16, 0),
+    'AFTER_HOURS_END': time(20, 0),
 }
 RISK_PARAMETERS = {
     'MAX_PORTFOLIO_RISK': 0.025,
@@ -35,6 +37,7 @@ DATABASE_PARAMETERS = {'CONNECTION_POOL_SIZE': 20, 'MAX_OVERFLOW': 10, 'POOL_TIM
 PERFORMANCE_THRESHOLDS = {'MIN_SHARPE_RATIO': 1.2, 'MAX_DRAWDOWN': 0.15, 'MIN_WIN_RATE': 0.48, 'MIN_PROFIT_FACTOR': 1.2, 'MAX_VAR_95': 0.05}
 SYSTEM_LIMITS = {'MAX_CONCURRENT_ORDERS': 100, 'MAX_DAILY_TRADES': 1000, 'MAX_SYMBOLS_TRACKED': 500, 'MAX_MEMORY_USAGE_GB': 8, 'MAX_CPU_USAGE_PERCENT': 80}
 TRADING_CONSTANTS: dict[str, Any] = {
+    'MARKET_TIMEZONE': MARKET_TIMEZONE,
     'MARKET_HOURS': MARKET_HOURS,
     'RISK_PARAMETERS': RISK_PARAMETERS,
     'KELLY_PARAMETERS': KELLY_PARAMETERS,
@@ -44,3 +47,18 @@ TRADING_CONSTANTS: dict[str, Any] = {
     'PERFORMANCE_THRESHOLDS': PERFORMANCE_THRESHOLDS,
     'SYSTEM_LIMITS': SYSTEM_LIMITS,
 }
+
+
+def market_hours_utc_for(timestamp: datetime | None = None) -> dict[str, time]:
+    """Return configured market hours converted to UTC for ``timestamp``'s date."""
+
+    base = timestamp or datetime.now(UTC)
+    if base.tzinfo is None:
+        raise ValueError("timestamp must be timezone-aware")
+    session_date = base.astimezone(MARKET_TIMEZONE).date()
+    return {
+        name: datetime.combine(session_date, value, tzinfo=MARKET_TIMEZONE)
+        .astimezone(UTC)
+        .time()
+        for name, value in MARKET_HOURS.items()
+    }

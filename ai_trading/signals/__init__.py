@@ -690,7 +690,7 @@ def compute_signal_matrix(df) -> Any | None:
         matrix["rsi"] = _z(rsi_series)
         matrix["sma_diff"] = _z(sma_diff)
         matrix["atr_move"] = _z(atr_move)
-        matrix["mean_rev_z"] = mean_rev
+        matrix["mean_rev_z"] = -mean_rev
         matrix = matrix.replace([np.inf, -np.inf], np.nan)
         matrix = matrix.dropna(how="all")
         _LAST_SIGNAL_BAR = last_bar

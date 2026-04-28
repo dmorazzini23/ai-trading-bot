@@ -297,7 +297,7 @@ class ExecutionApproval:
 
 def _env_map(env: Mapping[str, str] | None = None) -> dict[str, str]:
     if env is None:
-        return merged_env_snapshot()
+        return {str(k): str(v) for k, v in merged_env_snapshot().items() if v is not None}
     return {str(k): str(v) for k, v in env.items() if v is not None}
 
 
@@ -338,6 +338,19 @@ def _as_bool(raw: Any, default: bool = False) -> bool:
     if isinstance(raw, bool):
         return raw
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _as_governance_bool(raw: Any, default: bool, *, key: str) -> bool:
+    if raw in (None, ""):
+        return bool(default)
+    if isinstance(raw, bool):
+        return raw
+    token = str(raw).strip().lower()
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    if token in {"0", "false", "no", "off"}:
+        return False
+    raise PolicyConfigError(f"Invalid boolean value for {key}: {raw!r}")
 
 
 def _as_float(raw: Any, default: float, *, min_value: float | None = None, max_value: float | None = None) -> float:
@@ -424,8 +437,16 @@ def compile_effective_policy(cfg: Any, env: Mapping[str, str] | None = None) -> 
     """Compile immutable policy from canonical env + runtime config."""
 
     env_values = _env_map(env)
-    strict_governance = _as_bool(env_values.get("AI_TRADING_POLICY_STRICT_CONFIG_GOVERNANCE"), True)
-    unknown_key_fail = _as_bool(env_values.get("AI_TRADING_POLICY_UNKNOWN_KEY_FAIL"), True)
+    strict_governance = _as_governance_bool(
+        env_values.get("AI_TRADING_POLICY_STRICT_CONFIG_GOVERNANCE"),
+        True,
+        key="AI_TRADING_POLICY_STRICT_CONFIG_GOVERNANCE",
+    )
+    unknown_key_fail = _as_governance_bool(
+        env_values.get("AI_TRADING_POLICY_UNKNOWN_KEY_FAIL"),
+        True,
+        key="AI_TRADING_POLICY_UNKNOWN_KEY_FAIL",
+    )
     _enforce_removed_keys(env_values, strict=strict_governance)
     _enforce_unknown_policy_keys(env_values, strict=(strict_governance and unknown_key_fail))
 

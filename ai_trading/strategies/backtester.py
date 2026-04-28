@@ -567,7 +567,23 @@ class BacktestEngine:
             stats = self._stats(eq_df, trades_df)
             self._close_event_store()
             return BacktestResult(trades_df, eq_df, **stats)
+        pending_orders: list[Order] = []
         for ts in combined:
+            carry_orders: list[Order] = []
+            for order in pending_orders:
+                df = self.data.get(order.symbol)
+                close = self._close_at(df, ts) if df is not None else None
+                if close is None or close <= 0:
+                    carry_orders.append(order)
+                    continue
+                order.price = close
+                self._emit_order_submit_lifecycle(order, ts)
+                for fill in self.execution_model.on_order(order, timestamp=ts):
+                    self._apply_fill(fill, ts)
+            pending_orders = carry_orders
+            for fill in self.execution_model.on_bar(timestamp=ts):
+                self._apply_fill(fill, ts)
+
             orders: list[Order] = []
             for sym in symbols:
                 df = self.data.get(sym)
@@ -577,12 +593,7 @@ class BacktestEngine:
                 if close is None or close <= 0:
                     continue
                 orders.extend(self._generate_orders_for_bar(sym, close))
-            for order in orders:
-                self._emit_order_submit_lifecycle(order, ts)
-                for fill in self.execution_model.on_order(order, timestamp=ts):
-                    self._apply_fill(fill, ts)
-            for fill in self.execution_model.on_bar(timestamp=ts):
-                self._apply_fill(fill, ts)
+            pending_orders.extend(orders)
             self._snapshot(ts)
 
         trades_df = pd.DataFrame(

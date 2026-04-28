@@ -73,6 +73,46 @@ def test_prepare_netting_submit_prelude_blocks_on_portfolio_optimizer() -> None:
     assert result.snapshot_updates["portfolio_optimizer"]["why"] == "cluster_cap"
 
 
+def test_prepare_netting_submit_prelude_blocks_on_optimizer_init_failure() -> None:
+    kwargs = _base_kwargs()
+    kwargs["portfolio_optimizer_enabled"] = True
+    kwargs["portfolio_optimizer"] = None
+    kwargs["portfolio_optimizer_context"] = {
+        "enabled": True,
+        "active": False,
+        "init_failed": True,
+        "init_fail_open": False,
+        "error_type": "RuntimeError",
+    }
+
+    result = prepare_netting_submit_prelude(**cast(Any, kwargs))
+
+    assert result.blocked_reason == "PORTFOLIO_OPTIMIZER_INIT_FAILED"
+    assert result.blocked_metrics == {
+        "portfolio_optimizer": kwargs["portfolio_optimizer_context"]
+    }
+    assert result.snapshot_updates["portfolio_optimizer"]["init_failed"] is True
+
+
+def test_prepare_netting_submit_prelude_allows_explicit_optimizer_init_fail_open() -> None:
+    kwargs = _base_kwargs()
+    kwargs["portfolio_optimizer_enabled"] = True
+    kwargs["portfolio_optimizer"] = None
+    kwargs["portfolio_optimizer_context"] = {
+        "enabled": False,
+        "active": False,
+        "init_failed": True,
+        "init_fail_open": True,
+        "fail_open_applied": True,
+    }
+
+    result = prepare_netting_submit_prelude(**cast(Any, kwargs))
+
+    assert result.blocked_reason is None
+    assert result.execution_intent_context is not None
+    assert result.snapshot_updates["portfolio_optimizer"]["fail_open_applied"] is True
+
+
 def test_prepare_netting_submit_prelude_blocks_on_pretrade_and_exposes_order_intent() -> None:
     kwargs = _base_kwargs()
     kwargs["safe_validate_pretrade_func"] = lambda intent, **kwargs: (

@@ -253,6 +253,36 @@ def test_run_with_concurrency_preserves_cancellation(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_run_with_concurrency_timeout_does_not_rerun_worker(monkeypatch) -> None:
+    async def scenario() -> None:
+        concurrency.reset_tracking_state()
+        monkeypatch.setattr(concurrency, "_running_under_pytest_worker", lambda: False)
+        monkeypatch.setattr(concurrency, "_get_effective_host_limit", lambda: None)
+        monkeypatch.setattr(concurrency, "_get_host_limit_semaphore", lambda: None)
+        calls: list[str] = []
+
+        async def worker(symbol: str) -> str:
+            calls.append(symbol)
+            if calls.count(symbol) > 1:
+                return "rerun"
+            await asyncio.sleep(10)
+            return "slow"
+
+        results, succeeded, failed = await concurrency.run_with_concurrency(
+            ["AAPL"],
+            worker,
+            max_concurrency=1,
+            timeout_s=0.001,
+        )
+
+        assert calls == ["AAPL"]
+        assert results == {"AAPL": None}
+        assert succeeded == set()
+        assert failed == {"AAPL"}
+
+    asyncio.run(scenario())
+
+
 def test_peak_and_permit_helpers_are_defensive(monkeypatch) -> None:
     peaks: list[int] = []
     pooling_records: list[int] = []

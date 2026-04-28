@@ -5,7 +5,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ai_trading.slippage.recorder import log_slippage
-from ai_trading.tca.rollups import calibrate_cost_model_from_tca, load_slippage_records
+from ai_trading.tca.rollups import (
+    calibrate_cost_model_from_tca,
+    load_slippage_records,
+    summarize_tca_records,
+)
 
 
 def test_calibrate_cost_model_uses_slippage_bootstrap(
@@ -69,6 +73,30 @@ def test_load_slippage_records_accepts_legacy_five_column_rows(tmp_path: Path) -
     assert rows[0]["symbol"] == "MSFT"
     assert rows[0]["side"] == "unknown"
     assert rows[0]["is_bps"] == 50.0
+
+
+def test_tca_summary_includes_zero_slippage_filled_samples() -> None:
+    summary = summarize_tca_records(
+        [
+            {"status": "filled", "is_bps": 0.0},
+            {"status": "filled", "is_bps": 10.0},
+        ]
+    )
+
+    assert summary["sample_count"] == 2.0
+    assert summary["nonzero_sample_count"] == 1.0
+    assert summary["median_is_bps"] == 5.0
+
+
+def test_load_slippage_records_keeps_zero_slippage_rows(tmp_path: Path) -> None:
+    ts = datetime.now(UTC).isoformat()
+    slippage_path = tmp_path / "zero_slippage.csv"
+    slippage_path.write_text(f"{ts},AAPL,buy,1,100.0,100.0,0.0\n", encoding="utf-8")
+
+    rows = load_slippage_records(slippage_path, lookback_days=30)
+
+    assert len(rows) == 1
+    assert rows[0]["is_bps"] == 0.0
 
 
 def test_calibrate_cost_model_skips_write_when_not_calibrated(

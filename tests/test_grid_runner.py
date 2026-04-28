@@ -49,6 +49,20 @@ def test_persist_artifacts():
         assert len(saved_data["results"]) == 1
         assert saved_data["results"][0]["metrics"]["sharpe"] == 1.23
 
+
+def test_persist_artifacts_does_not_overwrite_same_second_runs(monkeypatch):
+    """Same-second grid runs get distinct artifact directories."""
+    run = {"count": 1, "results": [{"params": {}, "metrics": {"sharpe": 1.23}}]}
+    monkeypatch.setattr("ai_trading.backtesting.grid_runner._timestamp", lambda: "20260428_120000")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        first = persist_artifacts(run, tmp_dir)
+        second = persist_artifacts(run, tmp_dir)
+
+        assert first != second
+        assert os.path.exists(os.path.join(first, "results.json"))
+        assert os.path.exists(os.path.join(second, "results.json"))
+
 def test_grid_search_empty_grid():
     """Test grid search with empty parameter grid."""
     def evaluator(params):

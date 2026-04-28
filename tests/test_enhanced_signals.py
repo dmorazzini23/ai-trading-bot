@@ -27,6 +27,22 @@ def test_signal_matrix_and_vote():
     assert len(vote) == len(matrix)
 
 
+def test_signal_matrix_inverts_mean_reversion_zscore():
+    close = np.array([100.0] * 25 + [120.0])
+    df = pd.DataFrame(
+        {
+            "close": close,
+            "high": close + 1.0,
+            "low": close - 1.0,
+        },
+        index=pd.date_range("2026-04-27 14:30", periods=len(close), freq="min", tz="UTC"),
+    )
+
+    matrix = signals.compute_signal_matrix(df)
+
+    assert matrix["mean_rev_z"].iloc[-1] < 0.0
+
+
 def test_classify_regime_basic():
     df = pd.DataFrame({"close": np.linspace(100, 120, 40)})
     regime = signals.classify_regime(df)

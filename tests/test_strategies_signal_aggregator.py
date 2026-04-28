@@ -207,6 +207,7 @@ def test_aggregate_signals_updates_tracking_and_statistics() -> None:
     assert out is not None
     assert out.signal_type == "aggregated_weighted"
     assert len(agg.ensemble_history) == 1
+    assert agg.ensemble_history[0]["features"] is not None
 
     for ret in [0.02, -0.01, 0.03, 0.01, 0.0, 0.02]:
         agg.update_signal_performance("AAPL_buy", actual_return=ret)
@@ -215,6 +216,8 @@ def test_aggregate_signals_updates_tracking_and_statistics() -> None:
     assert stats["total_signals_processed"] == 1
     assert stats["tracked_signal_sources"] == 1
     assert "avg_recent_performance" in stats
+    assert agg.signal_performance_history
+    assert all(entry["features"] for entry in agg.signal_performance_history)
 
 
 def test_signal_processor_filters_and_orders_by_weighted_strength() -> None:
@@ -229,4 +232,3 @@ def test_signal_processor_filters_and_orders_by_weighted_strength() -> None:
     )
     assert [s.symbol for s in processed] == ["AAPL", "MSFT"]
     assert processed[0].weighted_strength >= processed[1].weighted_strength
-

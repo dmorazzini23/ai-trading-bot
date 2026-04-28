@@ -75,7 +75,7 @@ def test_build_replay_dataset_from_bad_session(tmp_path: Path) -> None:
     assert int(counts.get("broker", 0)) >= 1
 
 
-def test_bad_session_parser_accepts_tca_style_rows(tmp_path: Path) -> None:
+def test_bad_session_parser_rejects_tca_style_outcome_rows(tmp_path: Path) -> None:
     log_path = tmp_path / "tca_like.jsonl"
     row = {
         "ts": "2026-03-02T23:40:00Z",
@@ -87,6 +87,17 @@ def test_bad_session_parser_accepts_tca_style_rows(tmp_path: Path) -> None:
 
     events = canonical_bad_session_events(log_path)
 
-    assert len(events) == 1
-    assert events[0]["symbol"] == "AAPL"
-    assert events[0]["price"] == 191.42
+    assert events == []
+
+
+def test_bad_session_parser_rejects_terminal_status_even_with_market_price(tmp_path: Path) -> None:
+    log_path = tmp_path / "terminal_status.jsonl"
+    row = {
+        "timestamp": "2026-03-02T23:40:00Z",
+        "symbol": "AAPL",
+        "price": 191.42,
+        "status": "filled",
+    }
+    log_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    assert canonical_bad_session_events(log_path) == []

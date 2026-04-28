@@ -344,3 +344,41 @@ def test_execution_report_phase2_env_overrides_file_baselines(
     assert phase2["baselines"]["target_limit_fill_rate"] == 0.95
     assert phase2["baselines"]["stale_pending_count"] == 1.0
     assert phase2["baselines"]["sources"]["target_limit_fill_rate"] == "env"
+
+
+def test_execution_report_phase2_excludes_missing_timestamps_and_fails_coverage(
+    monkeypatch,
+) -> None:
+    now = datetime.now(UTC)
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_SLIPPAGE_MEDIAN_BPS", "10.0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_FILL_RATE", "0.90")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_BASELINE_STALE_PENDING_COUNT", "0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE2_MAX_MISSING_TIMESTAMP_RATE", "0.0")
+
+    report = execution_report.build_daily_execution_report(
+        [
+            {
+                "ts": (now - timedelta(hours=1)).isoformat(),
+                "symbol": "AAPL",
+                "status": "filled",
+                "is_bps": 8.0,
+                "order_type": "limit",
+                "midpoint_offset_bps": 4.0,
+                "execution_drift_bps": 3.0,
+            },
+            {
+                "symbol": "AAPL",
+                "status": "rejected",
+                "order_type": "limit",
+                "midpoint_offset_bps": 4.0,
+            },
+        ]
+    )
+
+    phase2 = report["roadmap"]["phase_2_execution_edge"]
+    assert phase2["records_in_window"] == 1
+    assert phase2["excluded_invalid_timestamp_records"] == 1
+    assert phase2["gates"]["timestamp_coverage"] is False
+    assert phase2["effective_gates"]["timestamp_coverage"] is False
+    assert phase2["gate_passed"] is False

@@ -97,6 +97,61 @@ Remaining High findings after this wave: none.
 
 Remaining Medium findings after this wave: 27.
 
+## Repair Wave 3 - 2026-04-28
+
+Status: completed during market hours with targeted validation only.
+
+Fixed in this wave:
+
+- Medium: 27 of 27 remaining
+
+Resolved findings:
+
+- Medium: optimizer init failure not blocking submit in `ai_trading/core/netting_target_runtime.py` and `ai_trading/core/netting_submit_prelude.py`
+- Medium: portfolio max-weight cap exceeded after normalization in `ai_trading/portfolio/sizing.py`
+- Medium: portfolio optimizer unit mismatch between expected returns and transaction costs in `ai_trading/portfolio/optimizer.py`
+- Medium: rebalance planning losing short direction in `ai_trading/rebalancer.py`
+- Medium: Yahoo fallback caching empty/malformed downloads in `ai_trading/data/fetch_yf.py`
+- Medium: reference reconciliation double-counting new rows in `ai_trading/data/reference_reconcile.py`
+- Medium: timed-out fallback workers rerunning outside timeout in `ai_trading/data/fallback/concurrency.py`
+- Medium: modern backtester same-bar fills in `ai_trading/strategies/backtester.py`
+- Medium: legacy backtest random PnL in `ai_trading/strategies/backtest.py`
+- Medium: opening short alpha emitted as plain `sell` in sleeve strategies
+- Medium: RL inference signals missing explicit finite strength in `ai_trading/rl_trading/inference.py`
+- Medium: stacking meta-model missing usable performance features in `ai_trading/strategies/signals.py`
+- Medium: strict governance env parsing failing open in `ai_trading/policy/compiler.py`
+- Medium: bad-session replay leaking execution outcomes into market inputs in `ai_trading/replay/bad_session.py`
+- Medium: scoped TCA fill counts excluding fills without expected price in `ai_trading/tca/event_analytics.py`
+- Medium: TCA cost calibration excluding zero-slippage fills in `ai_trading/tca/rollups.py`
+- Medium: missing execution timestamps never aging out of Phase 2 gates in `ai_trading/analytics/execution_report.py`
+- Medium: grid artifacts overwriting same-second runs in `ai_trading/backtesting/grid_runner.py`
+- Medium: Form 4 sentiment component dead code in `ai_trading/analysis/sentiment.py`
+- Medium: mean-reversion polarity inverted in `ai_trading/signals/__init__.py`
+- Medium: static UTC market hours DST drift in `ai_trading/core/constants.py`
+- Medium: TimeFrame fake fallback violating SDK fail-fast policy in `ai_trading/timeframe.py`
+- Medium: parameter validator import-time side effect in `ai_trading/core/parameter_validator.py`
+- Medium: manifest validation accepting non-finite/out-of-range values in `ai_trading/registry/manifest.py`
+- Medium: data contract silently reinterpreting naive timestamps and admitting 16:00 ET in `ai_trading/core/data_contract.py`
+- Medium: stale runtime Prometheus gauges after missing/unreadable reports in `ai_trading/telemetry/runtime_prom_metrics.py`
+- Medium: broker reconciliation errors not surfacing to callers in `ai_trading/services/reconciliation.py`
+
+Repair validation:
+
+- `./venv/bin/pytest -q $(git diff --name-only -- tests '*.py')` passed: 235 passed
+- `./venv/bin/pytest -q tests/test_rebalancer_runtime_helpers.py` passed: 17 passed after a type-cleanup patch
+- `./venv/bin/python -m py_compile $(git diff --name-only -- '*.py')` passed
+- `./venv/bin/ruff check $(git diff --name-only -- '*.py')` passed
+- `./venv/bin/mypy $(git diff --name-only -- ai_trading '*.py')` passed: no issues found in 60 source files
+- `git diff --check` passed
+
+Full repo validation was not run because the repair wave occurred during market hours.
+
+Remaining Critical findings after this wave: none.
+
+Remaining High findings after this wave: none.
+
+Remaining Medium findings after this wave: none.
+
 ## Ownership Coverage
 
 | Area | P1 files inspected | Critical | High | Medium | Total |

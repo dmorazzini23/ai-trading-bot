@@ -5,6 +5,8 @@ Validates that the parameter validation system correctly identifies
 safe and unsafe parameter values and changes.
 """
 
+import importlib
+
 import pytest
 
 def test_parameter_validator_initialization():
@@ -31,6 +33,14 @@ def test_parameter_validator_initialization():
 
     except ImportError as e:
         pytest.skip(f"Parameter validator test skipped due to import error: {e}")
+
+
+def test_parameter_validator_is_lazy_at_module_import():
+    from ai_trading.core import parameter_validator as parameter_validator_module
+
+    reloaded = importlib.reload(parameter_validator_module)
+
+    assert reloaded._parameter_validator is None
 
 
 def test_validate_all_parameters():

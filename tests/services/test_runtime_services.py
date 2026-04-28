@@ -185,6 +185,27 @@ def test_reconcile_position_targets_prunes_stale_entries() -> None:
     assert ctx._reconciliation_position_snapshots["AAPL"]["qty"] == 2.0
 
 
+def test_reconcile_position_targets_surfaces_broker_errors() -> None:
+    def _list_positions() -> list[object]:
+        raise OSError("broker unavailable")
+
+    ctx = types.SimpleNamespace(
+        api=types.SimpleNamespace(list_positions=_list_positions),
+        stop_targets={"AAPL": 100.0},
+        take_profit_targets={"AAPL": 120.0},
+    )
+
+    with pytest.raises(RuntimeError, match="position target reconciliation failed"):
+        reconcile_position_targets(
+            ctx,
+            logger=_DummyLogger(),
+            targets_lock=threading.Lock(),
+            warned=False,
+        )
+
+    assert ctx._reconciliation_error == "broker unavailable"
+
+
 def test_execution_service_blocks_legacy_live_submit(monkeypatch) -> None:
     monkeypatch.setenv("EXECUTION_MODE", "live")
     monkeypatch.delenv("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", raising=False)

@@ -79,6 +79,14 @@ def test_volatility_targeting_applies_limits_and_normalizes() -> None:
     assert sum(adjusted.values()) == pytest.approx(1.0)
 
 
+def test_volatility_targeting_leaves_unused_gross_when_max_weight_would_be_exceeded() -> None:
+    sizer = sizing.VolatilityTargetingSizer(min_weight=0.01, max_weight=0.4)
+    adjusted = sizer._apply_position_limits({"A": 0.5, "B": 0.5})
+
+    assert adjusted == {"A": 0.4, "B": 0.4}
+    assert sum(abs(weight) for weight in adjusted.values()) == pytest.approx(0.8)
+
+
 def test_turnover_penalty_dampens_to_configured_limit() -> None:
     sizer = sizing.TurnoverPenaltySizer(max_turnover=0.25)
     current = {"A": 1.0}
@@ -236,7 +244,7 @@ def test_scale_to_target_volatility_and_error_fallback() -> None:
 
     scaled = sizer._scale_to_target_volatility(weights, volatilities, corr)
     assert set(scaled) == {"AAA", "BBB"}
-    assert sum(scaled.values()) == pytest.approx(1.0)
+    assert all(abs(weight) <= sizer.max_weight for weight in scaled.values())
 
     zero = sizer._scale_to_target_volatility(
         weights,
@@ -245,7 +253,7 @@ def test_scale_to_target_volatility_and_error_fallback() -> None:
     )
     assert zero == weights
 
-    bad = sizer._scale_to_target_volatility(weights, volatilities, np.array([[1.0]]))
+    bad = sizer._scale_to_target_volatility(weights, volatilities, np.ones((3, 3)))
     assert bad == weights
 
 
@@ -309,7 +317,13 @@ def test_risk_parity_covariance_and_optimizer_fallbacks(
 
     optimized = sizer._optimize_risk_parity(np.array([[0.04, 0.01], [0.01, 0.09]]), ["AAA", "BBB"])
     assert set(optimized) == {"AAA", "BBB"}
-    assert sum(optimized.values()) == pytest.approx(1.0)
+    assert sum(optimized.values()) <= 1.000001
+
+    capped = sizing.RiskParitySizer(max_weight=0.4)._optimize_risk_parity(
+        np.array([[0.04, 0.01], [0.01, 0.09]]),
+        ["AAA", "BBB"],
+    )
+    assert max(capped.values()) <= 0.400001
 
     fallback = sizer._optimize_risk_parity(np.array([[1.0]]), ["AAA", "BBB"])
     assert fallback == {"AAA": 0.5, "BBB": 0.5}

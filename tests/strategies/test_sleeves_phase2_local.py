@@ -51,7 +51,7 @@ def test_cross_sectional_momentum_ranks_tails_and_loads_prices() -> None:
 
     assert {(signal.symbol, signal.side) for signal in signals} == {
         ("AAA", "buy"),
-        ("DDD", "sell"),
+        ("DDD", "sell_short"),
     }
     assert all(signal.metadata["expected_edge_bps"] >= 2.0 for signal in signals)
 
@@ -143,7 +143,7 @@ def test_pead_event_detects_buy_sell_and_filters_frames() -> None:
         {"frames": {"up": frame(0.05, 0.01), "down": frame(-0.05, -0.01), "fade": frame(0.05, -0.01)}}
     )
 
-    assert {(signal.symbol, signal.side) for signal in signals} == {("UP", "buy"), ("DOWN", "sell")}
+    assert {(signal.symbol, signal.side) for signal in signals} == {("UP", "buy"), ("DOWN", "sell_short")}
     assert all(signal.metadata["event_volume_multiple"] >= 1.5 for signal in signals)
     assert strategy.generate_signals({"frames": []}) == []
 

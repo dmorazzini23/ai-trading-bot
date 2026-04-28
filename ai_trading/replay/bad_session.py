@@ -17,7 +17,6 @@ def _coerce_timestamp(payload: dict[str, Any]) -> str:
         payload.get("ts"),
         payload.get("decision_ts"),
         payload.get("submit_ts"),
-        payload.get("first_fill_ts"),
     )
     for value in direct_fields:
         text = str(value or "").strip()
@@ -25,7 +24,7 @@ def _coerce_timestamp(payload: dict[str, Any]) -> str:
             return text
     benchmark = payload.get("benchmark")
     if isinstance(benchmark, dict):
-        for key in ("decision_ts", "submit_ts", "first_fill_ts"):
+        for key in ("decision_ts", "submit_ts"):
             text = str(benchmark.get(key) or "").strip()
             if text:
                 return text
@@ -35,8 +34,6 @@ def _coerce_timestamp(payload: dict[str, Any]) -> str:
 def _coerce_price(payload: dict[str, Any]) -> float | None:
     for key in (
         "price",
-        "fill_price",
-        "fill_vwap",
         "arrival_price",
         "decision_price",
         "submit_price_reference",
@@ -54,8 +51,45 @@ def _coerce_price(payload: dict[str, Any]) -> float | None:
     return None
 
 
+def _is_execution_outcome_payload(payload: dict[str, Any]) -> bool:
+    event_text = " ".join(
+        str(payload.get(key) or "")
+        for key in ("msg", "event", "event_type", "record_type")
+    ).strip().upper()
+    if any(
+        token in event_text
+        for token in (
+            "ORDER_FILLED",
+            "ORDER_PARTIALLY_FILLED",
+            "PARTIAL_FILL",
+            "FILL_EVENT",
+            "TCA",
+            "EXECUTION_REPORT",
+            "EXECUTION_OUTCOME",
+        )
+    ):
+        return True
+    status = str(payload.get("status") or "").strip().lower()
+    if status in {"filled", "partially_filled", "partial_fill", "canceled", "cancelled", "rejected"}:
+        return True
+    outcome_fields = {
+        "fill_price",
+        "fill_vwap",
+        "fill_qty",
+        "first_fill_ts",
+        "is_bps",
+        "expected_is_bps",
+        "spread_paid_bps",
+        "slippage_bps",
+        "execution_drift_bps",
+    }
+    return any(key in payload for key in outcome_fields)
+
+
 def _parse_event_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
+        return None
+    if _is_execution_outcome_payload(payload):
         return None
     symbol = str(payload.get("symbol") or "").strip().upper()
     timestamp = _coerce_timestamp(payload)

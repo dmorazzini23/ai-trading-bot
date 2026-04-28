@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from ai_trading.policy.compiler import (
     ExecutionCandidate,
+    PolicyConfigError,
     SafetyTier,
     approve_execution_candidate,
     compile_effective_policy,
@@ -164,3 +167,17 @@ def test_compile_policy_accepts_ablation_and_toggle_env_keys_under_strict_govern
         source_env["AI_TRADING_POLICY_ABLATION_ADAPTIVE_THRESHOLD_ENABLED"] == "1"
     )
     assert source_env["AI_TRADING_POLICY_TOGGLE_SIGNIFICANCE_ENABLED"] == "1"
+
+
+def test_compile_policy_rejects_malformed_governance_bool() -> None:
+    with pytest.raises(PolicyConfigError, match="AI_TRADING_POLICY_STRICT_CONFIG_GOVERNANCE"):
+        compile_effective_policy(
+            SimpleNamespace(trading_mode="balanced"),
+            env={"AI_TRADING_POLICY_STRICT_CONFIG_GOVERNANCE": "maybe"},
+        )
+
+    with pytest.raises(PolicyConfigError, match="AI_TRADING_POLICY_UNKNOWN_KEY_FAIL"):
+        compile_effective_policy(
+            SimpleNamespace(trading_mode="balanced"),
+            env={"AI_TRADING_POLICY_UNKNOWN_KEY_FAIL": "maybe"},
+        )

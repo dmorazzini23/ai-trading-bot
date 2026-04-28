@@ -120,7 +120,6 @@ def run_reference_reconciliation_once(
     now_utc = datetime.now(UTC)
     processed = 0
     written = 0
-    new_rows: list[dict[str, Any]] = []
 
     if not decisions:
         return {"processed": 0, "written": 0, "path": str(output_path), "reliability_path": str(reliability_path)}
@@ -193,11 +192,8 @@ def run_reference_reconciliation_once(
             handle.write(json.dumps(payload, sort_keys=True, default=str))
             handle.write("\n")
             written += 1
-            new_rows.append(payload)
 
     recent_reconciliations = list(_iter_jsonl(output_path, max_rows=reliability_lookback))
-    if new_rows:
-        recent_reconciliations.extend(new_rows)
     scored_rows = recent_reconciliations[-reliability_lookback:]
     reliability_scores = build_symbol_reliability_scores(
         scored_rows,

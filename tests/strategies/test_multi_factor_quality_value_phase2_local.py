@@ -65,9 +65,9 @@ def test_generate_signals_ranks_winners_and_losers() -> None:
 
     assert len(signals) == 4
     assert {signal.symbol for signal in by_side["buy"]} == {"DDD", "EEE"}
-    assert {signal.symbol for signal in by_side["sell"]} == {"GGG", "HHH"}
+    assert {signal.symbol for signal in by_side["sell_short"]} == {"GGG", "HHH"}
     assert all(signal.metadata["factor_composite"] > 0.0 for signal in by_side["buy"])
-    assert all(signal.metadata["factor_composite"] < 0.0 for signal in by_side["sell"])
+    assert all(signal.metadata["factor_composite"] < 0.0 for signal in by_side["sell_short"])
     assert all(signal.strategy_id == strategy.strategy_id for signal in signals)
     assert all(signal.metadata["expected_edge_bps"] >= 2.0 for signal in signals)
     assert all(0.05 <= signal.strength <= 1.0 for signal in signals)

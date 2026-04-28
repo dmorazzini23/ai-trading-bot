@@ -108,7 +108,7 @@ class CrossSectionalMomentumStrategy(BaseStrategy):
             signals.append(
                 StrategySignal(
                     symbol=sym,
-                    side="sell",
+                    side="sell_short",
                     strength=strength,
                     confidence=float(min(0.95, 0.55 + (0.25 * strength))),
                     strategy_id=self.strategy_id,
@@ -125,4 +125,3 @@ class CrossSectionalMomentumStrategy(BaseStrategy):
 
     def generate(self, ctx: Any) -> list[StrategySignal]:
         return self.generate_signals({"prices": self._load_prices(ctx)})
-

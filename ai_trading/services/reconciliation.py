@@ -75,6 +75,11 @@ class ReconciliationService:
             OSError,
         ) as exc:
             logger.exception("reconcile_positions failed", exc_info=exc)
+            try:
+                setattr(ctx, "_reconciliation_error", str(exc))
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
+                logger.debug("RECONCILIATION_ERROR_SET_FAILED", exc_info=True)
+            raise RuntimeError("position target reconciliation failed") from exc
         return warned
 
     @staticmethod

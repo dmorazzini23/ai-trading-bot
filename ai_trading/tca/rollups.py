@@ -120,7 +120,7 @@ def load_slippage_records(
                     continue
             except (TypeError, ValueError):
                 continue
-            if not math.isfinite(is_bps) or is_bps <= 0:
+            if not math.isfinite(is_bps) or is_bps < 0:
                 continue
             rows.append(
                 {
@@ -140,6 +140,7 @@ def summarize_tca_records(records: list[dict[str, Any]]) -> dict[str, float]:
     if not records:
         return {
             "sample_count": 0.0,
+            "nonzero_sample_count": 0.0,
             "median_is_bps": 0.0,
             "p90_is_bps": 0.0,
             "median_spread_paid_bps": 0.0,
@@ -154,7 +155,7 @@ def summarize_tca_records(records: list[dict[str, Any]]) -> dict[str, float]:
             is_bps = abs(float(row.get("is_bps", 0.0) or 0.0))
         except (TypeError, ValueError):
             is_bps = 0.0
-        if math.isfinite(is_bps) and is_bps > 0:
+        if math.isfinite(is_bps) and is_bps >= 0:
             is_values.append(is_bps)
         try:
             spread_bps = float(row.get("spread_paid_bps", 0.0) or 0.0)
@@ -184,6 +185,7 @@ def summarize_tca_records(records: list[dict[str, Any]]) -> dict[str, float]:
     )
     return {
         "sample_count": float(len(is_values)),
+        "nonzero_sample_count": float(sum(1 for value in is_values if value > 0.0)),
         "median_is_bps": float(med_is),
         "p90_is_bps": float(p90),
         "median_spread_paid_bps": float(med_spread),

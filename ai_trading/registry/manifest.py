@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Mapping
 
@@ -52,6 +53,21 @@ def _require_float(value: Any, *, field: str) -> float:
         parsed = float(value)
     except (TypeError, ValueError) as exc:
         raise ManifestValidationError(f"{field} must be numeric") from exc
+    if not math.isfinite(parsed):
+        raise ManifestValidationError(f"{field} must be finite")
+    return parsed
+
+
+def _require_float_range(
+    value: Any,
+    *,
+    field: str,
+    minimum: float,
+    maximum: float,
+) -> float:
+    parsed = _require_float(value, field=field)
+    if parsed < minimum or parsed > maximum:
+        raise ManifestValidationError(f"{field} must be between {minimum} and {maximum}")
     return parsed
 
 
@@ -71,8 +87,18 @@ def validate_manifest_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
     lookback_days = _require_positive_int(source.get("lookback_days"), field="lookback_days")
     horizon_days = _require_positive_int(source.get("horizon_days"), field="horizon_days")
     embargo_days = _require_positive_int(source.get("embargo_days"), field="embargo_days")
-    default_threshold = _require_float(source.get("default_threshold"), field="default_threshold")
-    cost_floor_bps = _require_float(source.get("cost_floor_bps"), field="cost_floor_bps")
+    default_threshold = _require_float_range(
+        source.get("default_threshold"),
+        field="default_threshold",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    cost_floor_bps = _require_float_range(
+        source.get("cost_floor_bps"),
+        field="cost_floor_bps",
+        minimum=0.0,
+        maximum=10_000.0,
+    )
     cost_model_version = _require_non_empty_str(
         source.get("cost_model_version"), field="cost_model_version"
     )
@@ -97,8 +123,11 @@ def validate_manifest_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
         source.get("thresholds_by_regime"), field="thresholds_by_regime"
     )
     normalized_thresholds = {
-        _require_non_empty_str(regime, field="thresholds_by_regime.key"): _require_float(
-            threshold, field=f"thresholds_by_regime.{regime}"
+        _require_non_empty_str(regime, field="thresholds_by_regime.key"): _require_float_range(
+            threshold,
+            field=f"thresholds_by_regime.{regime}",
+            minimum=0.0,
+            maximum=1.0,
         )
         for regime, threshold in thresholds_by_regime.items()
     }

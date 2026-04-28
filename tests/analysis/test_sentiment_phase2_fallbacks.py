@@ -235,18 +235,28 @@ def test_fetch_form4_filings_retries_and_parses_table(monkeypatch: pytest.Monkey
             return self.text.strip() if strip else self.text
 
     class Row:
-        def __init__(self, date_text: str) -> None:
+        def __init__(
+            self,
+            date_text: str,
+            transaction_code: str = "",
+            shares: str = "",
+            price: str = "",
+        ) -> None:
             self.date_text = date_text
+            self.transaction_code = transaction_code
+            self.shares = shares
+            self.price = price
 
         def find_all(self, _tag: str) -> list[Column]:
             return [Column("") for _ in range(3)] + [Column(self.date_text)] + [
-                Column("")
-                for _ in range(3)
+                Column(self.transaction_code),
+                Column(self.shares),
+                Column(self.price),
             ]
 
     class Table:
         def find_all(self, _tag: str) -> list[Row]:
-            return [Row("header"), Row("2026-04-20"), Row("bad-date")]
+            return [Row("header"), Row("2026-04-20", "P", "1000", "$55.00"), Row("bad-date")]
 
     class Soup:
         def __init__(self, content: bytes, parser: str) -> None:
@@ -261,5 +271,11 @@ def test_fetch_form4_filings_retries_and_parses_table(monkeypatch: pytest.Monkey
     monkeypatch.setattr(sentiment._http_session, "get", lambda *_args, **_kwargs: responses.pop(0))
     monkeypatch.setattr(sentiment.pytime, "sleep", lambda _seconds: None)
 
-    assert sentiment.fetch_form4_filings("SPY") == []
+    assert sentiment.fetch_form4_filings("SPY") == [
+        {
+            "date": sentiment.datetime(2026, 4, 20),
+            "type": "buy",
+            "dollar_amount": 55_000.0,
+        }
+    ]
     assert responses == []

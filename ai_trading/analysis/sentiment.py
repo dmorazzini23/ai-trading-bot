@@ -569,6 +569,88 @@ def analyze_text(text: str, logger=logger) -> dict:
             _SENTIMENT_STUB_LOGGED = True
         return _neutral_sentiment_payload(type(exc).__name__)
 
+
+def _parse_form4_number(raw: Any) -> float | None:
+    text = str(raw or "").strip()
+    if not text or "%" in text:
+        return None
+    negative = text.startswith("(") and text.endswith(")")
+    cleaned = (
+        text.replace("$", "")
+        .replace(",", "")
+        .replace("+", "")
+        .replace("(", "")
+        .replace(")", "")
+        .strip()
+    )
+    try:
+        value = float(cleaned)
+    except (TypeError, ValueError):
+        return None
+    if negative:
+        value = -value
+    return value
+
+
+def _form4_transaction_type(cells: list[str]) -> str | None:
+    for cell in cells:
+        token = cell.strip().upper()
+        if token in {"P", "BUY", "PURCHASE", "PURCHASED", "ACQUIRED", "A"}:
+            return "buy"
+        if token in {"S", "SELL", "SALE", "SOLD", "DISPOSED", "D"}:
+            return "sell"
+    return None
+
+
+def _form4_dollar_amount(cells: list[str], *, date_index: int) -> float | None:
+    dollar_values: list[float] = []
+    plain_values: list[float] = []
+    for index, cell in enumerate(cells):
+        if index == date_index:
+            continue
+        value = _parse_form4_number(cell)
+        if value is None or value <= 0:
+            continue
+        if "$" in cell:
+            dollar_values.append(value)
+        else:
+            plain_values.append(value)
+    if dollar_values and plain_values:
+        return float(max(plain_values) * max(dollar_values))
+    if dollar_values:
+        return float(max(dollar_values))
+    if len(plain_values) >= 2:
+        return float(plain_values[-2] * plain_values[-1])
+    if plain_values:
+        return float(plain_values[0])
+    return None
+
+
+def _parse_form4_cells(cells: list[str]) -> dict[str, Any] | None:
+    parsed_date: datetime | None = None
+    date_index = -1
+    for index, cell in enumerate(cells):
+        try:
+            parsed_date = datetime.strptime(cell.strip(), "%Y-%m-%d")
+        except ValueError:
+            continue
+        date_index = index
+        break
+    if parsed_date is None:
+        return None
+    transaction_type = _form4_transaction_type(cells)
+    if transaction_type is None:
+        return None
+    dollar_amount = _form4_dollar_amount(cells, date_index=date_index)
+    if dollar_amount is None:
+        return None
+    return {
+        "date": parsed_date,
+        "type": transaction_type,
+        "dollar_amount": float(dollar_amount),
+    }
+
+
 def fetch_form4_filings(ticker: str) -> list[dict]:
     """
     Scrape SEC Form 4 filings for insider trade info.
@@ -606,11 +688,10 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
             cols = row.find_all('td')
             if len(cols) < 6:
                 continue
-            date_str = cols[3].get_text(strip=True)
-            try:
-                datetime.strptime(date_str, '%Y-%m-%d')
-            except ValueError:
-                continue
+            cells = [col.get_text(strip=True) for col in cols]
+            filing = _parse_form4_cells(cells)
+            if filing is not None:
+                filings.append(filing)
         return filings
     except (ValueError, TypeError) as e:
         logger.debug(f'Error fetching Form 4 filings for {ticker}: {e}')

@@ -39,9 +39,12 @@ def _coerce_datetime_index(df: Any) -> Any:
             except AI_TRADING_FALLBACK_EXCEPTIONS:
                 continue
     try:
-        df.index = pd.to_datetime(df.index, utc=True, errors="coerce")
+        converted = pd.to_datetime(df.index, errors="coerce")
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         return df
+    if isinstance(converted, pd.DatetimeIndex) and converted.tz is None:
+        raise ValueError("naive timestamps are not allowed")
+    df.index = converted
     return df
 
 
@@ -63,14 +66,14 @@ def normalize_bars(
     df = _coerce_datetime_index(df)
     if isinstance(df.index, pd.DatetimeIndex):
         if df.index.tz is None:
-            df.index = df.index.tz_localize(tz or UTC)
+            raise ValueError("naive timestamps are not allowed")
         df.index = df.index.tz_convert(UTC)
     if rth_only and isinstance(df.index, pd.DatetimeIndex):
         eastern = df.index.tz_convert(_NY_TZ)
         is_weekday = eastern.weekday < 5
         is_rth = (
             (eastern.hour > 9) | ((eastern.hour == 9) & (eastern.minute >= 30))
-        ) & ((eastern.hour < 16) | ((eastern.hour == 16) & (eastern.minute == 0)))
+        ) & (eastern.hour < 16)
         df = df[is_weekday & is_rth]
     return df
 
@@ -91,6 +94,8 @@ def validate_bars(
         return DataContractResult(False, "MISSING_COLUMNS", {"missing": missing})
     if not isinstance(df.index, pd.DatetimeIndex):
         return DataContractResult(False, "INVALID_INDEX")
+    if df.index.tz is None:
+        return DataContractResult(False, "NAIVE_INDEX")
     if df.index.has_duplicates:
         return DataContractResult(False, "DUPLICATE_BARS")
     if not df.index.is_monotonic_increasing:
@@ -104,7 +109,7 @@ def validate_bars(
             return DataContractResult(False, "NAN_LAST_BAR", {"column": col})
     last_ts = df.index[-1]
     if last_ts.tzinfo is None:
-        last_ts = last_ts.replace(tzinfo=UTC)
+        return DataContractResult(False, "NAIVE_INDEX")
     now = datetime.now(UTC)
     age_seconds = max(0.0, (now - last_ts.astimezone(UTC)).total_seconds())
     if freshness_seconds >= 0 and age_seconds > freshness_seconds:
@@ -115,7 +120,7 @@ def validate_bars(
             return DataContractResult(False, "OUT_OF_SESSION", {"session": "weekend"})
         if not (
             (eastern.hour > 9 or (eastern.hour == 9 and eastern.minute >= 30))
-            and (eastern.hour < 16 or (eastern.hour == 16 and eastern.minute == 0))
+            and eastern.hour < 16
         ):
             return DataContractResult(False, "OUT_OF_SESSION", {"session": "extended"})
     return DataContractResult(True)

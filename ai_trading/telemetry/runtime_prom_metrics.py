@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any
@@ -18,9 +19,12 @@ def _as_float(value: Any) -> float | None:
     try:
         if value is None:
             return None
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
 
 
 def _runtime_report_path(path: str | None = None) -> Path:
@@ -57,6 +61,14 @@ def _gauges() -> dict[str, Any]:
             "ai_trading_runtime_report_age_seconds",
             "Age in seconds of the runtime daily performance report file.",
         ),
+        "runtime_report_present": get_gauge(
+            "ai_trading_runtime_report_present",
+            "Whether the runtime daily performance report file is present.",
+        ),
+        "runtime_report_stale": get_gauge(
+            "ai_trading_runtime_report_stale",
+            "Whether the runtime daily performance report file is missing or older than the configured maximum age.",
+        ),
     }
 
 
@@ -68,12 +80,19 @@ def refresh_runtime_execution_metrics(report_path: str | None = None) -> dict[st
         "execution_capture_ratio": None,
         "order_reject_rate_pct": None,
         "runtime_report_age_seconds": None,
+        "runtime_report_present": 0.0,
+        "runtime_report_stale": 1.0,
     }
 
     gauges = _gauges()
     path = _runtime_report_path(report_path)
     if not path.exists():
+        gauges["runtime_report_present"].set(0.0)
+        gauges["runtime_report_stale"].set(1.0)
         return output
+
+    output["runtime_report_present"] = 1.0
+    gauges["runtime_report_present"].set(1.0)
 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -82,8 +101,10 @@ def refresh_runtime_execution_metrics(report_path: str | None = None) -> dict[st
             "PROM_RUNTIME_REPORT_READ_FAILED",
             extra={"path": str(path), "error": str(exc)},
         )
+        gauges["runtime_report_stale"].set(1.0)
         return output
     if not isinstance(raw, dict):
+        gauges["runtime_report_stale"].set(1.0)
         return output
 
     execution = raw.get("execution_vs_alpha")
@@ -112,11 +133,26 @@ def refresh_runtime_execution_metrics(report_path: str | None = None) -> dict[st
         report_age_seconds = max(0.0, time.time() - float(path.stat().st_mtime))
     except OSError:
         report_age_seconds = None
+    max_age_seconds = _as_float(
+        get_env(
+            "AI_TRADING_RUNTIME_REPORT_MAX_AGE_SECONDS",
+            90_000,
+            cast=float,
+        )
+    )
+    if max_age_seconds is None or max_age_seconds <= 0:
+        max_age_seconds = 90_000.0
+    report_stale = (
+        1.0
+        if report_age_seconds is None or report_age_seconds > max_age_seconds
+        else 0.0
+    )
 
     output["slippage_drag_bps"] = slippage_drag_bps
     output["execution_capture_ratio"] = execution_capture_ratio
     output["order_reject_rate_pct"] = order_reject_rate_pct
     output["runtime_report_age_seconds"] = report_age_seconds
+    output["runtime_report_stale"] = report_stale
 
     if slippage_drag_bps is not None:
         gauges["slippage_drag_bps"].set(float(slippage_drag_bps))
@@ -125,6 +161,6 @@ def refresh_runtime_execution_metrics(report_path: str | None = None) -> dict[st
     gauges["order_reject_rate_pct"].set(float(order_reject_rate_pct))
     if report_age_seconds is not None:
         gauges["runtime_report_age_seconds"].set(float(report_age_seconds))
+    gauges["runtime_report_stale"].set(float(report_stale))
 
     return output
-

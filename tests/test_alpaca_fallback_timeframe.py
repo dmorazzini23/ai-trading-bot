@@ -108,3 +108,6 @@ def test_missing_sdk_does_not_install_timeframe_fallbacks(monkeypatch, request):
 
     with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
         alpaca_api.get_timeframe_cls()
+
+    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
+        importlib.import_module("ai_trading.timeframe")

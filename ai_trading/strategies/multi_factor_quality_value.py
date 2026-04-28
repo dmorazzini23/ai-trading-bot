@@ -138,7 +138,7 @@ class MultiFactorQualityValueStrategy(BaseStrategy):
             signals.append(
                 StrategySignal(
                     symbol=symbol,
-                    side="sell",
+                    side="sell_short",
                     strength=strength,
                     confidence=float(min(0.95, 0.55 + (0.25 * strength))),
                     strategy_id=self.strategy_id,

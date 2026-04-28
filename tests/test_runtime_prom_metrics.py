@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 
 import pytest
 
@@ -47,6 +49,8 @@ def test_refresh_runtime_execution_metrics_reads_daily_report(tmp_path, monkeypa
     assert values["execution_capture_ratio"] == 0.42
     assert values["order_reject_rate_pct"] == 1.75
     assert values["runtime_report_age_seconds"] is not None
+    assert values["runtime_report_present"] == 1.0
+    assert values["runtime_report_stale"] == 0.0
 
     from prometheus_client import generate_latest
 
@@ -54,6 +58,8 @@ def test_refresh_runtime_execution_metrics_reads_daily_report(tmp_path, monkeypa
     assert "ai_trading_slippage_drag_bps" in metrics_text
     assert "ai_trading_execution_capture_ratio" in metrics_text
     assert "ai_trading_order_reject_rate_pct" in metrics_text
+    assert "ai_trading_runtime_report_present" in metrics_text
+    assert "ai_trading_runtime_report_stale" in metrics_text
 
 
 def test_refresh_runtime_execution_metrics_defaults_reject_rate_when_missing(
@@ -90,3 +96,58 @@ def test_refresh_runtime_execution_metrics_defaults_reject_rate_when_missing(
     values = runtime_prom_metrics.refresh_runtime_execution_metrics()
     assert values["order_reject_rate_pct"] == 0.0
 
+
+def test_refresh_runtime_execution_metrics_exposes_missing_report_truth(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    if not PROMETHEUS_AVAILABLE:
+        pytest.skip("prometheus client unavailable")
+
+    missing_path = tmp_path / "missing.json"
+    monkeypatch.setattr(
+        runtime_prom_metrics,
+        "get_env",
+        lambda name, default=None, cast=None: str(missing_path)
+        if name == "AI_TRADING_RUNTIME_DAILY_REPORT_PATH"
+        else default,
+    )
+
+    reset_registry()
+    values = runtime_prom_metrics.refresh_runtime_execution_metrics()
+
+    assert values["runtime_report_present"] == 0.0
+    assert values["runtime_report_stale"] == 1.0
+
+
+def test_refresh_runtime_execution_metrics_exposes_stale_report_truth(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    if not PROMETHEUS_AVAILABLE:
+        pytest.skip("prometheus client unavailable")
+
+    report_path = tmp_path / "daily_performance_report.json"
+    report_path.write_text(
+        json.dumps({"execution_vs_alpha": {}, "go_no_go": {"observed": {}}}),
+        encoding="utf-8",
+    )
+    old_mtime = time.time() - 120.0
+    os.utime(report_path, (old_mtime, old_mtime))
+    monkeypatch.setattr(
+        runtime_prom_metrics,
+        "get_env",
+        lambda name, default=None, cast=None: (
+            str(report_path)
+            if name == "AI_TRADING_RUNTIME_DAILY_REPORT_PATH"
+            else 30.0
+            if name == "AI_TRADING_RUNTIME_REPORT_MAX_AGE_SECONDS"
+            else default
+        ),
+    )
+
+    reset_registry()
+    values = runtime_prom_metrics.refresh_runtime_execution_metrics()
+
+    assert values["runtime_report_present"] == 1.0
+    assert values["runtime_report_stale"] == 1.0

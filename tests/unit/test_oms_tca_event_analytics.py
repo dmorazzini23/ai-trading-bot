@@ -188,3 +188,37 @@ def test_summarize_oms_event_tca_side_normalizes_sell_slippage(tmp_path: Path) -
     assert decomposition["favorable_sample_count"] == 1
     assert decomposition["mean_adverse_bps"] == pytest.approx(100.0)
     assert decomposition["mean_favorable_bps"] == pytest.approx(100.0)
+
+
+def test_summarize_oms_event_tca_scoped_fill_counts_do_not_require_slippage(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "oms_tca_fill_without_expected.db"
+    store = EventStore(url=f"sqlite:///{db_path}")
+    store.append_oms_event_payload(
+        event_type="ORDER_FILLED",
+        event_source="unit_test",
+        idempotency_key="fill-no-expected",
+        intent_id="intent-fill-1",
+        payload={
+            "symbol": "AAPL",
+            "strategy_id": "mean_reversion_v2",
+            "session_id": "regular_hours",
+            "fill_qty": 2.0,
+            "fill_price": 101.0,
+        },
+    )
+    store.close()
+
+    summary = summarize_oms_event_tca(
+        database_url=f"sqlite:///{db_path}",
+        intent_store_path=str(db_path),
+        limit=1000,
+    )
+
+    assert summary["filled_events"] == 1
+    assert summary["slippage_sample_count"] == 0
+    outcomes_by_scope = summary["event_outcomes_by_scope"]
+    assert len(outcomes_by_scope) == 1
+    assert outcomes_by_scope[0]["fill_events"] == 1
+    assert outcomes_by_scope[0]["slippage_sample_count"] == 0
