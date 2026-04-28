@@ -100,26 +100,34 @@ for _module_name in (
         continue
 
 
-def _safe_patch_dict(in_dict: Any, values: Any = (), clear: bool = False, **kwargs: Any):  # pragma: no cover - test helper
+def _restore_snapshot_modules() -> None:
+    sys.modules.update(
+        {name: module for name, module in _SNAPSHOT_MODULES.items() if module is not None}
+    )
+
+
+class _SysModulesPatchContext:
+    def __init__(self, context: Any) -> None:
+        self._context = context
+
+    def __enter__(self) -> object:
+        result = self._context.__enter__()
+        _restore_snapshot_modules()
+        return result
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Any:
+        try:
+            return self._context.__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            _restore_snapshot_modules()
+
+
+def _safe_patch_dict(
+    in_dict: Any, values: Any = (), clear: bool = False, **kwargs: Any
+):  # pragma: no cover - test helper
     ctx = _ORIGINAL_PATCH_DICT(in_dict, values, clear, **kwargs)
     if clear and in_dict is sys.modules:
-        original_enter = ctx.__enter__
-        original_exit = ctx.__exit__
-
-        def _enter():
-            result = original_enter()
-            sys.modules.update({name: module for name, module in _SNAPSHOT_MODULES.items() if module is not None})
-            return result
-
-        def _exit(exc_type, exc_val, exc_tb):
-            try:
-                return original_exit(exc_type, exc_val, exc_tb)
-            finally:
-                sys.modules.update({name: module for name, module in _SNAPSHOT_MODULES.items() if module is not None})
-
-        ctx_any = cast(Any, ctx)
-        ctx_any.__enter__ = _enter
-        ctx_any.__exit__ = _exit
+        return _SysModulesPatchContext(ctx)
     return ctx
 
 
@@ -304,9 +312,15 @@ def _block_network(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _env_defaults(monkeypatch, tmp_path: pathlib.Path):
-    monkeypatch.setenv("ALPACA_API_KEY", "dummy")
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "dummy")
+def _env_defaults(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+):
+    if request.node.get_closest_marker("no_test_credentials"):
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+    else:
+        monkeypatch.setenv("ALPACA_API_KEY", "dummy")
+        monkeypatch.setenv("ALPACA_SECRET_KEY", "dummy")
     runtime_data_dir = tmp_path / "runtime_data"
     runtime_data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("AI_TRADING_DATA_DIR", str(runtime_data_dir))
@@ -358,7 +372,12 @@ def _restore_third_party_modules():
         (
             "sklearn",
             lambda m: getattr(m, "__file__", None) is not None,
-            ("sklearn.linear_model", "sklearn.metrics", "sklearn.pipeline", "sklearn.preprocessing"),
+            (
+                "sklearn.linear_model",
+                "sklearn.metrics",
+                "sklearn.pipeline",
+                "sklearn.preprocessing",
+            ),
         ),
         (
             "alpaca",
@@ -415,6 +434,7 @@ def reload_module(mod):
         return importlib.reload(importlib.import_module(mod))
     return importlib.reload(mod)
 
+
 # Compatibility fixtures expected by some tests
 @pytest.fixture(name="default_env")
 def _default_env(_env_defaults):  # reuse existing autouse env defaults
@@ -427,6 +447,7 @@ def _monkeypatch_fixture(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     """Provide legacy `_monkeypatch` alias used by older tests."""
 
     return monkeypatch
+
 
 @pytest.fixture
 def dummy_data_fetcher():
@@ -467,9 +488,7 @@ def dummy_data_fetcher_empty():
 
     class _F:
         def __init__(self):
-            self._df = pd.DataFrame(
-                {"open": [], "high": [], "low": [], "close": [], "volume": []}
-            )
+            self._df = pd.DataFrame({"open": [], "high": [], "low": [], "close": [], "volume": []})
 
         def get_daily_df(self, ctx, sym):  # noqa: ARG002 - tests expect method
             return self._df.copy()
@@ -535,7 +554,12 @@ def _reset_fallback_cache():
         if env_override is None:
             data_fetcher._ENABLE_HTTP_FALLBACK = True
         else:
-            data_fetcher._ENABLE_HTTP_FALLBACK = env_override.strip().lower() not in {"0", "false", "no", "off"}
+            data_fetcher._ENABLE_HTTP_FALLBACK = env_override.strip().lower() not in {
+                "0",
+                "false",
+                "no",
+                "off",
+            }
         setattr(data_fetcher, "_max_fallbacks_config", None)
         if hasattr(data_fetcher, "_reset_provider_auth_state_for_tests"):
             data_fetcher._reset_provider_auth_state_for_tests()

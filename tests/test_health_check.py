@@ -230,6 +230,38 @@ def test_standalone_health_app_only_registers_health_routes():
     assert ("/operator/control-plane", "GET") not in routes
 
 
+def test_metrics_endpoint_degrades_when_prometheus_generation_fails(monkeypatch):
+    runtime_prom_metrics = types.ModuleType("ai_trading.telemetry.runtime_prom_metrics")
+    runtime_prom_metrics.refresh_runtime_execution_metrics = lambda: None  # type: ignore[attr-defined]
+    monkeypatch.setitem(
+        sys.modules,
+        "ai_trading.telemetry.runtime_prom_metrics",
+        runtime_prom_metrics,
+    )
+
+    prometheus_client = types.ModuleType("prometheus_client")
+    prometheus_client.CONTENT_TYPE_LATEST = "text/plain; version=0.0.4"  # type: ignore[attr-defined]
+
+    def _raise_generate_latest(_registry):
+        raise RuntimeError("registry unavailable")
+
+    prometheus_client.generate_latest = _raise_generate_latest  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "prometheus_client", prometheus_client)
+    monkeypatch.setattr(app_module, "_PROM_OK", True)
+    monkeypatch.setattr(app_module, "_PROM_REG", object())
+
+    app = app_module.create_app(fail_fast_env=False)
+    routes = getattr(app, "_routes", {})
+    result = routes[("/metrics", "GET")]()
+
+    assert isinstance(result, tuple)
+    body, status, headers = result
+    assert status == 503
+    assert body == "metrics temporarily unavailable\n"
+    assert len(body) < 128
+    assert headers["Content-Type"] == "text/plain; charset=utf-8"
+
+
 def test_standalone_health_app_fail_fast_env(monkeypatch):
     def _fail(*args, **kwargs):
         raise RuntimeError("missing env")

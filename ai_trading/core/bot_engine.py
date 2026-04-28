@@ -10436,7 +10436,7 @@ def cancel_all_open_orders(runtime) -> None:
             if status.lower() not in cancelable_statuses:
                 continue
             try:
-                runtime.api.cancel_order(od.id)
+                runtime.api.cancel_order_by_id(od.id)
             except APIError as exc:
                 # AI-AGENT-REF: narrow Alpaca API exceptions
                 logger.exception(

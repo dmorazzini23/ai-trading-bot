@@ -56,57 +56,37 @@ def test_validate_trading_api_maps_get_order_and_cancel_batch(
     stub_logger: _StubLogger,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del stub_logger
-    requests_mod = ModuleType("alpaca.trading.requests")
-
-    class CancelOrdersRequest:
-        def __init__(self, **kwargs: Any) -> None:
-            if "order_id" in kwargs:
-                raise TypeError("unsupported")
-            self.kwargs = kwargs
-
-    requests_mod.CancelOrdersRequest = CancelOrdersRequest  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "alpaca.trading.requests", requests_mod)
-    monkeypatch.setattr(alpaca_client, "get_trading_client_cls", lambda: type("TradingClient", (), {}))
-
-    calls: list[Any] = []
+    del monkeypatch
 
     class Api:
-        def list_orders(self, **_kwargs: Any) -> list[Any]:
+        def get_orders(self, **_kwargs: Any) -> list[Any]:
             return []
 
-        def list_positions(self) -> list[Any]:
+        def get_all_positions(self) -> list[Any]:
             return []
 
         def get_order_by_id(self, order_id: str) -> tuple[str, str]:
             return ("got", order_id)
 
-        def cancel_orders(self, request: Any = None, **kwargs: Any) -> tuple[Any, dict[str, Any]]:
-            calls.append(request)
-            return request, kwargs
+        def cancel_order_by_id(self, order_id: str) -> tuple[str, str]:
+            return ("cancelled", order_id)
+
+        def submit_order(self, order_data: Any) -> Any:
+            return order_data
 
     api = Api()
 
     assert alpaca_client._validate_trading_api(api) is True
-    assert api.get_order("abc") == ("got", "abc")  # type: ignore[attr-defined]
-    request, kwargs = api.cancel_order("abc")  # type: ignore[attr-defined]
-    assert request.kwargs == {"order_ids": ["abc"]}
-    assert kwargs == {}
-    assert calls == [request]
+    assert not hasattr(api, "get_order")
+    assert not hasattr(api, "cancel_order")
+    warning_keys = {kwargs.get("key") for _message, kwargs in stub_logger.warning_calls}
+    assert "alpaca_native_methods_missing" not in warning_keys
 
 
 def test_validate_trading_api_list_orders_status_falls_back_when_filter_call_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    requests_mod = ModuleType("alpaca.trading.requests")
-
-    class GetOrdersRequest:
-        def __init__(self, *, status: Any) -> None:
-            self.status = status
-
-    requests_mod.GetOrdersRequest = GetOrdersRequest  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "alpaca.trading.requests", requests_mod)
-    monkeypatch.setattr(alpaca_client, "get_trading_client_cls", lambda: type("TradingClient", (), {}))
+    del monkeypatch
 
     calls: list[dict[str, Any]] = []
 
@@ -120,14 +100,22 @@ def test_validate_trading_api_list_orders_status_falls_back_when_filter_call_fai
         def get_all_positions(self) -> list[Any]:
             return []
 
+        def get_order_by_id(self, order_id: str) -> str:
+            return order_id
+
         def cancel_order_by_id(self, order_id: str) -> str:
             return order_id
+
+        def submit_order(self, order_data: Any) -> Any:
+            return order_data
 
     api = Api()
 
     assert alpaca_client._validate_trading_api(api) is True
-    assert api.list_orders(status="open") == ["order"]  # type: ignore[attr-defined]
-    assert calls == [{"filter": ANY}, {}]
+    assert not hasattr(api, "list_orders")
+    with pytest.raises(TypeError):
+        alpaca_client.list_open_orders(api)
+    assert calls == [{"filter": ANY}]
 
 
 def test_list_open_orders_filters_active_statuses_after_empty_open_snapshot() -> None:
@@ -144,7 +132,8 @@ def test_list_open_orders_filters_active_statuses_after_empty_open_snapshot() ->
     calls: list[str] = []
 
     class Api:
-        def list_orders(self, *, status: str) -> list[Any]:
+        def get_orders(self, *, filter: Any) -> list[Any]:
+            status = getattr(getattr(filter, "status", None), "value", filter.status)
             calls.append(status)
             return [] if status == "open" else orders
 
@@ -161,9 +150,11 @@ def test_ensure_alpaca_attached_sets_context_api_and_validates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api = SimpleNamespace(
-        list_orders=lambda **_kwargs: [],
-        list_positions=lambda: [],
-        cancel_order=lambda _order_id: None,
+        get_orders=lambda **_kwargs: [],
+        get_all_positions=lambda: [],
+        get_order_by_id=lambda _order_id: None,
+        cancel_order_by_id=lambda _order_id: None,
+        submit_order=lambda _order_data: None,
     )
     bot_engine = ModuleType("ai_trading.core.bot_engine")
     bot_engine.trading_client = api  # type: ignore[attr-defined]

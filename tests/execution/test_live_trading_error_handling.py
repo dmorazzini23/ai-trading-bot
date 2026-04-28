@@ -1,8 +1,7 @@
 import sys
 from decimal import Decimal
-from typing import Any
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from typing import Any
 
 import pytest
 
@@ -493,6 +492,38 @@ def test_bracket_submit_uses_order_request_with_protective_legs(engine_factory, 
     sl_stop = stop_loss["stop_price"] if isinstance(stop_loss, dict) else getattr(stop_loss, "stop_price")
     assert tp_limit == 130.0
     assert sl_stop == 120.0
+
+
+def test_bracket_submit_preserves_mapping_legs(engine_factory, monkeypatch):
+    class _BracketClient:
+        def __init__(self) -> None:
+            self.calls: list[Any] = []
+
+        def submit_order(self, *, order_data):
+            self.calls.append(order_data)
+            return {"id": "ok", "status": "accepted"}
+
+    monkeypatch.setattr(lt, "_runtime_env", lambda *_a, **_k: "")
+    client = _BracketClient()
+    engine = engine_factory(None, use_real_submit=True, trading_client=client)
+
+    result = engine.submit_limit_order(
+        "AAPL",
+        "buy",
+        5,
+        123.45,
+        order_class="bracket",
+        take_profit={"limit_price": 130.0},
+        stop_loss={"stop_price": 120.0, "limit_price": 119.5},
+    )
+
+    assert result is not None
+    request = client.calls[-1]
+    take_profit = request.take_profit
+    stop_loss = request.stop_loss
+    assert take_profit.limit_price == 130.0
+    assert stop_loss.stop_price == 120.0
+    assert stop_loss.limit_price == 119.5
 
 
 def test_ttl_replacement_price_uses_tick_quantization(engine_factory, monkeypatch):

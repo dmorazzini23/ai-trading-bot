@@ -4,7 +4,6 @@ import asyncio
 import builtins
 import datetime as dt
 import importlib
-import json
 import sys
 import types
 from dataclasses import dataclass
@@ -127,12 +126,8 @@ def test_initialize_uses_data_module_fallback(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_cancel_order_request_constructor_variants(monkeypatch: pytest.MonkeyPatch) -> None:
-    class Client:
-        def cancel_orders(self) -> dict[str, Any]:
-            return {"cancelled": "all"}
-
-    with pytest.raises(AttributeError, match="cancel_order_by_id"):
-        api.TradingClientAdapter(Client()).cancel_order("ord-7")
+    del monkeypatch
+    assert not hasattr(api, "TradingClientAdapter")
 
 
 def test_data_class_and_timeframe_helpers(monkeypatch: pytest.MonkeyPatch) -> None:

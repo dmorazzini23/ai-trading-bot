@@ -2,36 +2,44 @@
 set -euo pipefail
 fail=0
 
-INCLUDE='ai_trading/**/*.py'
 EXCLUDE='(venv|\.venv|site-packages|build|dist|migrations|_generated)'
-IMPORT_CHECK_PATHS=(
+ALPACA_RUNTIME_PATHS=(
   ai_trading/alpaca_api.py
-  ai_trading/core/context.py
-  ai_trading/exc.py
-  ai_trading/net/http.py
+  ai_trading/core/alpaca_client.py
   ai_trading/execution/live_trading.py
+  ai_trading/broker/adapters.py
 )
 
 echo "Checking for shim patterns in ai_trading/..."
 
-# 1) Import fallbacks (try/except ImportError around import/from)
-echo "1. Checking for import fallbacks..."
-import_guards=$(git grep -nE 'try:[[:space:]]*$' -- "${IMPORT_CHECK_PATHS[@]}" | \
-    while IFS= read -r line; do
-        file=$(echo "$line" | cut -d: -f1)
-        linenum=$(echo "$line" | cut -d: -f2)
-        # Check next few lines for import and except ImportError
-        awk -v start="$linenum" 'NR>=start && NR<=start+6 {
-            if ($0 ~ /(^[[:space:]]*import|^[[:space:]]*from[[:space:]]+.*[[:space:]]+import)/) import_found=1
-            if ($0 ~ /^[[:space:]]*except[[:space:]]+ImportError/) except_found=1
-        } END {
-            if (import_found && except_found) exit 0; else exit 1
-        }' "$file" && echo "$line"
-    done) || true
+# 1) Alpaca runtime compatibility surfaces
+echo "1. Checking Alpaca runtime compatibility surfaces..."
+runtime_shim_markers=$(git grep -nE '(_HTTPShim|TradingClientAdapter|CompatTradingClient|compatibility layer|shim)' -- "${ALPACA_RUNTIME_PATHS[@]}" || true)
+if [ -n "$runtime_shim_markers" ]; then
+    echo "Found Alpaca runtime shim markers:"
+    echo "$runtime_shim_markers"
+    fail=1
+fi
 
-if [ -n "$import_guards" ]; then
-    echo "Found import guard patterns:"
-    echo "$import_guards"
+legacy_method_mutations=$(git grep -nE 'setattr\([^,]+,[[:space:]]*"(list_orders|cancel_order|get_order|list_positions)"' -- "${ALPACA_RUNTIME_PATHS[@]}" || true)
+if [ -n "$legacy_method_mutations" ]; then
+    echo "Found legacy Alpaca method mutation:"
+    echo "$legacy_method_mutations"
+    fail=1
+fi
+
+legacy_submit_kwargs=$(git grep -nE 'submit_order\(\*\*|submit_order\(dict\(' -- "${ALPACA_RUNTIME_PATHS[@]}" || true)
+if [ -n "$legacy_submit_kwargs" ]; then
+    echo "Found legacy Alpaca submit_order call style:"
+    echo "$legacy_submit_kwargs"
+    fail=1
+fi
+
+shim_files=$(find ai_trading -type f \( -iname '*shim*.py' -o -iname '*compat*.py' \) \
+    ! -path '*/__pycache__/*' | sort || true)
+if [ -n "$shim_files" ]; then
+    echo "Found runtime shim/compat files:"
+    echo "$shim_files"
     fail=1
 fi
 

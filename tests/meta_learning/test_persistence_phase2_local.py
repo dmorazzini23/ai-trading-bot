@@ -68,12 +68,12 @@ def test_record_normalization_dedup_and_pickle_sidecar(monkeypatch: pytest.Monke
     assert normalized["entry_price"].iloc[0] == 100.5
 
 
-def test_read_parquet_fallbacks_and_broker_merge(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_read_parquet_and_broker_merge(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     path = tmp_path / "history.parquet"
-    sidecar = mp._pickle_sidecar_path(path)  # noqa: SLF001
-    pd.DataFrame([{"symbol": "MSFT", "qty": 2, "entry_time": "2026-04-27"}]).to_pickle(sidecar)
+    expected = pd.DataFrame([{"symbol": "MSFT", "qty": 2, "entry_time": "2026-04-27"}])
+    path.write_bytes(b"PAR1")
     monkeypatch.setattr(mp, "_CANONICAL_PATH", path)
-    monkeypatch.setattr(pd, "read_parquet", lambda *_args, **_kwargs: (_ for _ in ()).throw(ImportError("missing engine")))
+    monkeypatch.setattr(pd, "read_parquet", lambda *_args, **_kwargs: expected.copy())
     monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, *_args, **_kwargs: None)
 
     frame = mp._read_parquet(path)  # noqa: SLF001
@@ -96,19 +96,18 @@ def test_read_parquet_fallbacks_and_broker_merge(monkeypatch: pytest.MonkeyPatch
     assert list(mp._broker_rows(SimpleNamespace())) == []  # noqa: SLF001
 
 
-def test_parquet_patch_and_migration_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    monkeypatch.setattr(mp, "_PATCHED_PARQUET", False)
-    monkeypatch.setattr(mp, "_pytest_active", lambda: True)
-    original = pd.read_parquet
-    monkeypatch.setattr(pd, "read_pickle", lambda _path: pd.DataFrame([{"symbol": "PICKLE"}]))
-    monkeypatch.setattr(pd, "read_parquet", lambda *_args, **_kwargs: (_ for _ in ()).throw(ImportError("missing")))
-
-    mp._patch_parquet_fallback(pd)  # noqa: SLF001
-    assert pd.read_parquet(tmp_path / "x.parquet")["symbol"].iloc[0] == "PICKLE"
-    monkeypatch.setattr(pd, "read_parquet", original)
-
+def test_pickle_migration_helpers_are_explicit(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     path = tmp_path / "legacy.parquet"
     pd.DataFrame([{"symbol": "OLD"}]).to_pickle(path)
     assert mp._looks_like_pickle(path) is True  # noqa: SLF001
     assert mp._is_parquet_path(path) is True  # noqa: SLF001
     assert mp._pickle_sidecar_path(path).name == "legacy.parquet.pkl"  # noqa: SLF001
+
+    monkeypatch.setattr(mp, "_pytest_active", lambda: False)
+    monkeypatch.delenv("AI_TRADING_ALLOW_TRUSTED_PICKLE_TRADE_HISTORY_MIGRATION", raising=False)
+    assert mp._read_pickle_for_explicit_migration(path, pd) is None  # noqa: SLF001
+
+    monkeypatch.setenv("AI_TRADING_ALLOW_TRUSTED_PICKLE_TRADE_HISTORY_MIGRATION", "1")
+    migrated = mp._read_pickle_for_explicit_migration(path, pd)  # noqa: SLF001
+    assert migrated is not None
+    assert migrated["symbol"].iloc[0] == "OLD"

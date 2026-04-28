@@ -51,7 +51,12 @@ def test_submit_order_uses_client_and_returns(dummy_alpaca_client, monkeypatch):
 
 
 @pytest.mark.unit
-def test_trading_client_adapter_maps_modern_alpaca_py_methods():
+def test_trading_client_adapter_removed_from_public_alpaca_api():
+    assert not hasattr(alpaca_api, "TradingClientAdapter")
+
+
+@pytest.mark.unit
+def test_native_trading_client_methods_are_available_without_adapter():
     class ModernClient:
         def __init__(self):
             self.cancelled: list[str] = []
@@ -67,12 +72,11 @@ def test_trading_client_adapter_maps_modern_alpaca_py_methods():
             return [{"symbol": "AAPL"}]
 
     client = ModernClient()
-    adapter = alpaca_api.TradingClientAdapter(client)
 
-    assert adapter.cancel_order("order-1") is True
+    assert client.cancel_order_by_id("order-1") is True
     assert client.cancelled == ["order-1"]
-    assert adapter.get_order("order-2") == {"id": "order-2"}
-    assert adapter.list_positions() == [{"symbol": "AAPL"}]
+    assert client.get_order_by_id("order-2") == {"id": "order-2"}
+    assert client.get_all_positions() == [{"symbol": "AAPL"}]
 
 
 @pytest.mark.unit

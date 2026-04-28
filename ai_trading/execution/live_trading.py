@@ -226,7 +226,6 @@ def get_cached_credential_truth() -> tuple[bool, bool, float]:
     )
 
 
-from ai_trading.alpaca_api import AlpacaOrderHTTPError, TradingClientAdapter
 from ai_trading.analytics.tca import finalize_stale_pending_tca, reconcile_pending_tca_with_fill
 from ai_trading.config import AlpacaConfig, ExecutionSettingsSnapshot, get_alpaca_config, get_execution_settings
 from ai_trading.data.provider_monitor import (
@@ -254,9 +253,6 @@ from ai_trading.execution.order_policy import (
 )
 from ai_trading.meta_learning.persistence import record_trade_fill
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
-
-if TYPE_CHECKING:  # pragma: no cover - import for typing only
-    from ai_trading.core.enums import OrderSide as CoreOrderSide
 
 logger = get_logger(__name__)
 
@@ -296,6 +292,18 @@ def _is_submit_no_result_reason(reason: Any) -> bool:
 
     token = str(reason or "").strip().lower()
     return "submit_no_result" in token
+
+
+def _normalize_bracket_leg_payload(value: Any, *, scalar_field: str) -> Any | None:
+    """Return bracket leg mapping, wrapping only scalar shorthand values."""
+
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str | int | float | Decimal):
+        return {scalar_field: float(value)}
+    return value
 
 
 def _submit_no_result_error_fingerprint(
@@ -17094,7 +17102,7 @@ class ExecutionEngine:
                     "shadow_mode": self.shadow_mode,
                 },
             )
-            self.trading_client = TradingClientAdapter(raw_client)
+            self.trading_client = raw_client
             if self._validate_connection():
                 self.is_initialized = True
                 self._last_initialize_success_mono = float(monotonic_time())
@@ -18197,9 +18205,15 @@ class ExecutionEngine:
         if tp is not None or sl is not None:
             order_data["order_class"] = "bracket"
             if tp is not None:
-                order_data["take_profit"] = {"limit_price": float(tp)}
+                order_data["take_profit"] = _normalize_bracket_leg_payload(
+                    tp,
+                    scalar_field="limit_price",
+                )
             if sl is not None:
-                order_data["stop_loss"] = {"stop_price": float(sl)}
+                order_data["stop_loss"] = _normalize_bracket_leg_payload(
+                    sl,
+                    scalar_field="stop_price",
+                )
         if asset_class:
             order_data["asset_class"] = asset_class
 
@@ -18947,9 +18961,15 @@ class ExecutionEngine:
         if tp is not None or sl is not None:
             order_data["order_class"] = "bracket"
             if tp is not None:
-                order_data["take_profit"] = {"limit_price": float(tp)}
+                order_data["take_profit"] = _normalize_bracket_leg_payload(
+                    tp,
+                    scalar_field="limit_price",
+                )
             if sl is not None:
-                order_data["stop_loss"] = {"stop_price": float(sl)}
+                order_data["stop_loss"] = _normalize_bracket_leg_payload(
+                    sl,
+                    scalar_field="stop_price",
+                )
         if asset_class:
             order_data["asset_class"] = asset_class
 
@@ -23201,6 +23221,8 @@ class ExecutionEngine:
             return []
         list_orders = getattr(client, "list_orders", None)
         if not callable(list_orders):
+            list_orders = getattr(client, "get_orders", None)
+        if not callable(list_orders):
             return []
         try:
             orders = list_orders(status="open", symbols=[symbol])  # type: ignore[call-arg]
@@ -26055,8 +26077,10 @@ class ExecutionEngine:
                 open_orders = []
 
         if not positions:
-            client = self._capacity_broker(getattr(self, "trading_client", None))
-            list_positions = getattr(client, "list_positions", None)
+            client = getattr(self, "trading_client", None)
+            list_positions = getattr(client, "get_all_positions", None)
+            if not callable(list_positions):
+                list_positions = getattr(client, "list_positions", None)
             if callable(list_positions):
                 try:
                     positions = list(list_positions() or [])
@@ -30811,12 +30835,6 @@ class ExecutionEngine:
 
     def _submit_order_to_alpaca(self, order_data: dict[str, Any]) -> dict[str, Any]:
         """Submit an order using Alpaca TradingClient."""
-        import os
-
-        try:
-            account_snapshot = self._get_account_snapshot()
-        except LIVE_TRADING_FALLBACK_EXC:
-            account_snapshot = None
 
         closing_position = bool(
             order_data.get("closing_position")
@@ -30857,7 +30875,12 @@ class ExecutionEngine:
                     ),
                 )
             order_data["limit_price"] = float(normalized_limit_price)
-        take_profit_payload = order_data.get("take_profit")
+        take_profit_payload = _normalize_bracket_leg_payload(
+            order_data.get("take_profit"),
+            scalar_field="limit_price",
+        )
+        if take_profit_payload is not None:
+            order_data["take_profit"] = take_profit_payload
         if isinstance(take_profit_payload, Mapping):
             tp_limit_price = self._coerce_finite_float(
                 take_profit_payload.get("limit_price")
@@ -30881,6 +30904,12 @@ class ExecutionEngine:
                 tp_payload = dict(take_profit_payload)
                 tp_payload["limit_price"] = float(normalized_tp_limit_price)
                 order_data["take_profit"] = tp_payload
+        stop_loss_payload = _normalize_bracket_leg_payload(
+            order_data.get("stop_loss"),
+            scalar_field="stop_price",
+        )
+        if stop_loss_payload is not None:
+            order_data["stop_loss"] = stop_loss_payload
 
         resp: Any | None = None
         if self.trading_client is None:

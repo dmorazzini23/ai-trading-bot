@@ -82,7 +82,16 @@ def test_run_all_trades_worker_uses_base_universe_not_previous_cycle_overlay(mon
         def get_orders(self, *args, **kwargs):
             return []
 
-        def cancel_order(self, *args, **kwargs):
+        def cancel_order_by_id(self, *args, **kwargs):
+            return None
+
+        def get_all_positions(self):
+            return []
+
+        def get_order_by_id(self, order_id):
+            return None
+
+        def submit_order(self, *args, **kwargs):
             return None
 
     class DummyRiskEngine:

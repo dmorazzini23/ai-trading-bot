@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import builtins
 import types
-from typing import Any
 
 import pytest
 
@@ -47,37 +46,34 @@ def test_get_http_session_caches_lazy_session_and_raises_when_missing(monkeypatc
         api._get_http_session()
 
 
-def test_http_shim_adds_post_method_to_minimal_session(monkeypatch):
+def test_http_submit_requires_native_session_post(monkeypatch):
     api = _alpaca_api_module()
-    calls: list[tuple[str, str, float | int | None, dict[str, object]]] = []
 
     class MinimalSession:
         def request(self, method, url, *args, timeout=None, **kwargs):
-            calls.append((method, url, timeout, kwargs))
-            return {"method": method, "url": url, "timeout": timeout}
+            raise AssertionError("request fallback should not be used")
 
-    session = MinimalSession()
-    monkeypatch.setattr(api, "_HTTP_SESSION", session)
+    monkeypatch.setattr(api, "_get_http_session", lambda: MinimalSession())
+    cfg = api._AlpacaConfig(
+        base_url="https://paper-api.alpaca.markets",
+        key_id="key",
+        secret_key="secret",
+        shadow=False,
+    )
 
-    post = api._HTTPShim().post
-    result = post("https://example.test/orders", json={"symbol": "AAPL"}, timeout=3)
-
-    assert result == {"method": "POST", "url": "https://example.test/orders", "timeout": 3}
-    assert calls == [("POST", "https://example.test/orders", 3, {"json": {"symbol": "AAPL"}})]
-    assert getattr(session, "post") is post
-
-
-def test_http_shim_sets_public_attributes_on_underlying_session(monkeypatch):
-    api = _alpaca_api_module()
-    session = types.SimpleNamespace()
-    monkeypatch.setattr(api, "_HTTP_SESSION", session)
-
-    shim = api._HTTPShim()
-    shim.headers = {"Authorization": "Bearer token"}
-    shim._local = "value"
-
-    assert session.headers == {"Authorization": "Bearer token"}
-    assert shim._local == "value"
+    with pytest.raises(AttributeError, match="post"):
+        api._http_submit(
+            cfg,
+            symbol="AAPL",
+            qty=1,
+            side="buy",
+            type="market",
+            time_in_force="day",
+            limit_price=None,
+            stop_price=None,
+            idempotency_key=None,
+            timeout=3,
+        )
 
 
 def test_managed_env_delegates_to_config_get_env(monkeypatch):
@@ -169,15 +165,24 @@ def test_get_trading_client_cls_returns_loaded_class(monkeypatch):
     assert api.get_trading_client_cls() is FakeTradingClient
 
 
-def test_trading_client_adapter_proxies_helpers_and_cancel_by_id():
+def test_trading_client_adapter_is_not_exported():
+    assert not hasattr(alpaca_api, "TradingClientAdapter")
+
+
+def test_http_shim_is_not_exported():
+    assert not hasattr(alpaca_api, "_HTTPShim")
+    assert not hasattr(alpaca_api, "_HTTP")
+
+
+def test_native_trading_client_methods_are_used_directly():
     class Client:
         def __init__(self):
             self.cancelled = []
 
-        def list_orders(self):
+        def get_orders(self):
             return ["order"]
 
-        def list_positions(self):
+        def get_all_positions(self):
             return ["position"]
 
         def cancel_order_by_id(self, order_id):
@@ -185,40 +190,11 @@ def test_trading_client_adapter_proxies_helpers_and_cancel_by_id():
             return {"cancelled": order_id}
 
     client = Client()
-    adapter = alpaca_api.TradingClientAdapter(client)
 
-    assert adapter.list_orders() == ["order"]
-    assert adapter.list_positions() == ["position"]
-    assert adapter.cancel_order("ord-1") == {"cancelled": "ord-1"}
+    assert client.get_orders() == ["order"]
+    assert client.get_all_positions() == ["position"]
+    assert client.cancel_order_by_id("ord-1") == {"cancelled": "ord-1"}
     assert client.cancelled == ["ord-1"]
-    assert adapter._ai_trading_wrapped_client is client
-    assert getattr(adapter, "__ai_trading_adapter__") == "trading_client"
-
-
-def test_trading_client_adapter_rejects_cancel_orders_all_as_single_order_cancel(monkeypatch):
-    monkeypatch.setattr(alpaca_api, "AI_TRADING_FALLBACK_EXCEPTIONS", (ImportError,))
-
-    class Client:
-        def cancel_orders(self):
-            return {"ok": True}
-
-    with pytest.raises(AttributeError, match="cancel_order_by_id"):
-        alpaca_api.TradingClientAdapter(Client()).cancel_order("ord-2")
-
-
-def test_trading_client_adapter_without_cancel_methods_requires_cancel_support(monkeypatch):
-    monkeypatch.setattr(alpaca_api, "AI_TRADING_FALLBACK_EXCEPTIONS", (ImportError,))
-
-    class Client:
-        pass
-
-    with pytest.raises(AttributeError, match="cancel_order not supported"):
-        alpaca_api.TradingClientAdapter(Client()).cancel_order("ord-4")
-
-
-def test_trading_client_adapter_requires_cancel_support():
-    with pytest.raises(AttributeError, match="cancel_order not supported"):
-        alpaca_api.TradingClientAdapter(object()).cancel_order("ord-5")
 
 
 def test_lazy_client_fallback_classes_raise_clear_errors(monkeypatch):

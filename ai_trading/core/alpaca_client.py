@@ -6,12 +6,11 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from typing import Any
 import sys
 from importlib import import_module
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 
 from ai_trading.logging import get_logger, logger_once
 import ai_trading.alpaca_api as _alpaca_api
 from ai_trading.alpaca_api import (
-    TradingClientAdapter,
     get_trading_client_cls,
     get_data_client_cls,
     get_api_error_cls,
@@ -68,40 +67,9 @@ def _get_bot_logger_once() -> Any:
     return shared
 
 
-def _resolve_trading_client_adapter_cls() -> type:
-    """Resolve TradingClientAdapter from the active alpaca_api module."""
-
-    adapter_cls = getattr(_get_active_alpaca_api_module(), "TradingClientAdapter", None)
-    if isinstance(adapter_cls, type):
-        return adapter_cls
-    return TradingClientAdapter
-
-
 def _validate_trading_api(api: Any) -> bool:
-    """Ensure trading api exposes required methods across SDK variants.
-
-    - Guarantees `list_orders` exists, mapping to `get_orders(...)` if needed.
-    - Guarantees `list_positions` exists, mapping to `get_all_positions()` if needed.
-    """
+    """Ensure the trading API exposes the native alpaca-py TradingClient surface."""
     log_once = _get_bot_logger_once()
-    warned_adapter = False
-    adapted_api = False
-
-    def _try_setattr(target: Any, name: str, value: Any) -> bool:
-        """Set attribute on ``target`` or its wrapped client when possible."""
-
-        try:
-            setattr(target, name, value)
-            return True
-        except AttributeError:
-            wrapped = getattr(target, "_ai_trading_wrapped_client", None)
-            if wrapped is not None and wrapped is not target:
-                try:
-                    setattr(wrapped, name, value)
-                    return True
-                except AttributeError:
-                    return False
-            return False
 
     if api is None:
         if _alpaca_api.ALPACA_AVAILABLE and not is_shadow_mode():
@@ -109,201 +77,34 @@ def _validate_trading_api(api: Any) -> bool:
         else:
             log_once.warning("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
         return False
-    if not hasattr(api, "list_orders"):
-        if hasattr(api, "get_orders"):
-            import inspect
 
-            try:
-                sig = inspect.signature(api.get_orders)  # type: ignore[attr-defined]
-            except (TypeError, ValueError):  # pragma: no cover - defensive
-                sig = None
-            accepts_var_kwargs = bool(
-                sig
-                and any(
-                    param.kind is inspect.Parameter.VAR_KEYWORD
-                    for param in sig.parameters.values()
-                )
+    required_methods = (
+        "get_orders",
+        "get_all_positions",
+        "get_order_by_id",
+        "cancel_order_by_id",
+        "submit_order",
+    )
+    missing_methods = [
+        name for name in required_methods if not callable(getattr(api, name, None))
+    ]
+    if missing_methods:
+        log_method = log_once.warning if (
+            is_shadow_mode() or get_env("PYTEST_RUNNING", None, resolve_aliases=False)
+        ) else log_once.error
+        log_method(
+            "ALPACA_NATIVE_METHODS_MISSING",
+            key="alpaca_native_methods_missing",
+            extra={"missing_methods": missing_methods},
+        )
+        if not is_shadow_mode() and not get_env(
+            "PYTEST_RUNNING", None, resolve_aliases=False
+        ):
+            raise RuntimeError(
+                "Alpaca client missing native alpaca-py methods: "
+                + ", ".join(missing_methods)
             )
-
-            def _accepts_named_or_kwargs(param_name: str) -> bool:
-                if sig is None:
-                    return False
-                if param_name in sig.parameters:
-                    return True
-                return accepts_var_kwargs
-
-            accepts_status = _accepts_named_or_kwargs("status")
-            accepts_filter = _accepts_named_or_kwargs("filter")
-
-            def _list_orders_via_get_orders(*args: Any, **kwargs: Any):  # type: ignore[override]
-                status = kwargs.pop("status", None)
-                if status is None:
-                    return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-
-                enum_val: Any = status
-                try:  # optional import paths for SDK enums
-                    enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
-                    enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(
-                        enums_mod, "OrderStatus", None
-                    )
-                    if enum_cls is not None:
-                        enum_val = getattr(enum_cls, str(status).upper(), status)
-                except AI_TRADING_FALLBACK_EXCEPTIONS:
-                    logger.debug("LIST_ORDERS_STATUS_ENUM_MAP_FAILED", exc_info=True)
-
-                # Prefer building a filter object when available to be compatible
-                # with newer alpaca-py signatures and tests that assert this path.
-                filter_obj: Any | None = None
-                try:
-                    requests_mod = __import__(
-                        "alpaca.trading.requests", fromlist=["GetOrdersRequest"]
-                    )
-                    GetOrdersRequest = getattr(requests_mod, "GetOrdersRequest")
-                    try:
-                        filter_obj = GetOrdersRequest(status=enum_val)
-                    except TypeError:
-                        filter_obj = GetOrdersRequest(statuses=[enum_val])
-                except AI_TRADING_FALLBACK_EXCEPTIONS:
-                    if accepts_filter and accepts_var_kwargs:
-                        filter_obj = {"status": enum_val}
-                    logger.debug("LIST_ORDERS_FILTER_BUILD_FAILED", exc_info=True)
-
-                if filter_obj is not None and accepts_filter:
-                    try:
-                        return api.get_orders(
-                            *args, filter=filter_obj, **kwargs
-                        )  # type: ignore[attr-defined]
-                    except TypeError:
-                        logger.debug(
-                            "LIST_ORDERS_FILTER_CALL_TYPE_ERROR",
-                            exc_info=True,
-                        )
-                    except AI_TRADING_FALLBACK_EXCEPTIONS:
-                        raise
-
-                if accepts_status and not accepts_var_kwargs:
-                    kwargs["status"] = enum_val
-                    return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-                return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-
-            if _try_setattr(api, "list_orders", _list_orders_via_get_orders):
-                log_once.info(
-                    "API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"
-                )
-                adapted_api = True
-            else:  # pragma: no cover - defensive fallback
-                log_once.error(
-                    "ALPACA_LIST_ORDERS_PATCH_FAILED",
-                    key="alpaca_list_orders_patch_failed",
-                )
-        else:
-            if is_shadow_mode() or get_env("PYTEST_RUNNING", None, resolve_aliases=False):
-                log_once.warning(
-                    "ALPACA_LIST_ORDERS_MISSING",
-                    key="alpaca_list_orders_missing",
-                )
-            else:
-                log_once.error(
-                    "ALPACA_LIST_ORDERS_MISSING",
-                    key="alpaca_list_orders_missing",
-                )
-            if not is_shadow_mode() and not get_env(
-                "PYTEST_RUNNING", None, resolve_aliases=False
-            ):
-                raise RuntimeError("Alpaca client missing list_orders method")
-            return False
-
-    # Map positions accessor for alpaca-py `TradingClient`
-    if not hasattr(api, "list_positions") and hasattr(api, "get_all_positions"):
-        try:
-            def _list_positions_wrapper(*args: Any, **kwargs: Any):  # type: ignore[override]
-                # TradingClient.get_all_positions() takes no filters; ignore args
-                return api.get_all_positions()  # type: ignore[attr-defined]
-
-            if _try_setattr(api, "list_positions", _list_positions_wrapper):
-                log_once.info(
-                    "API_GET_POSITIONS_MAPPED", key="alpaca_get_positions_mapped"
-                )
-            else:  # pragma: no cover - defensive fallback
-                log_once.error(
-                    "ALPACA_LIST_POSITIONS_PATCH_FAILED",
-                    key="alpaca_list_positions_patch_failed",
-                )
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
-            # Non-fatal; caller may handle attribute absence
-            logger.debug("LIST_POSITIONS_PATCH_FAILED", exc_info=True)
-
-    if not hasattr(api, "get_order"):
-        getter = getattr(api, "get_order_by_id", None) or getattr(api, "get_order_by_client_order_id", None)
-        if callable(getter):
-
-            def _get_order_wrapper(order_id: Any):
-                return getter(order_id)
-
-            if _try_setattr(api, "get_order", _get_order_wrapper):
-                log_once.info("API_GET_ORDER_MAPPED", key="alpaca_get_order_mapped")
-            else:  # pragma: no cover - defensive fallback
-                log_once.error("ALPACA_GET_ORDER_PATCH_FAILED", key="alpaca_get_order_patch_failed")
-
-    if not hasattr(api, "cancel_order"):
-        cancel_by_id = getattr(api, "cancel_order_by_id", None)
-        cancel_orders = getattr(api, "cancel_orders", None)
-
-        if callable(cancel_by_id):
-            def _cancel_order_wrapper(order_id: Any):
-                return cancel_by_id(order_id)
-
-            if _try_setattr(api, "cancel_order", _cancel_order_wrapper):
-                log_once.info(
-                    "API_CANCEL_ORDER_MAPPED", key="alpaca_cancel_order_mapped"
-                )
-                adapted_api = True
-            else:  # pragma: no cover - defensive fallback
-                log_once.error(
-                    "ALPACA_CANCEL_ORDER_PATCH_FAILED",
-                    key="alpaca_cancel_order_patch_failed",
-                )
-        elif callable(cancel_orders):
-            def _cancel_order_via_batch(order_id: Any):
-                request: Any | None = None
-                try:
-                    requests_mod = __import__(
-                        "alpaca.trading.requests",
-                        fromlist=["CancelOrdersRequest"],
-                    )
-                    request_cls = getattr(requests_mod, "CancelOrdersRequest")
-                    request = request_cls(order_ids=[order_id])
-                except AI_TRADING_FALLBACK_EXCEPTIONS:
-                    logger.debug("CANCEL_ORDER_REQUEST_BUILD_FAILED", exc_info=True)
-                if request is not None:
-                    return cancel_orders(request=request)
-                request = SimpleNamespace(
-                    order_ids=[order_id],
-                    payload={"order_ids": [order_id]},
-                )
-                try:
-                    return cancel_orders(request=request)
-                except TypeError:
-                    return cancel_orders(order_ids=[order_id])
-
-            if _try_setattr(api, "cancel_order", _cancel_order_via_batch):
-                log_once.info(
-                    "API_CANCEL_ORDERS_MAPPED", key="alpaca_cancel_orders_mapped"
-                )
-                adapted_api = True
-            else:  # pragma: no cover - defensive fallback
-                log_once.error(
-                    "ALPACA_CANCEL_ORDER_PATCH_FAILED",
-                    key="alpaca_cancel_order_patch_failed",
-                )
-        else:
-            log_once.error(
-                "ALPACA_CANCEL_ORDER_MISSING", key="alpaca_cancel_order_missing"
-            )
-            return False
-    if adapted_api:
-        log_once.info("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
-        warned_adapter = True
+        return False
 
     try:
         TradingClient = get_trading_client_cls()
@@ -313,26 +114,42 @@ def _validate_trading_api(api: Any) -> bool:
             key="alpaca_trading_client_class_missing",
         )
         return True
-    wrapped_client = getattr(api, "_ai_trading_wrapped_client", None)
     if isinstance(api, TradingClient):
         pass
-    elif wrapped_client is not None and isinstance(wrapped_client, TradingClient):
-        pass
-    elif not warned_adapter:
-        log_once.info("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
-        warned_adapter = True
+    elif not get_env("PYTEST_RUNNING", None, resolve_aliases=False):
+        log_once.warning("ALPACA_CLIENT_NOT_NATIVE", key="alpaca_client_not_native")
     return True
 
 
+def _orders_request(status: str) -> Any:
+    """Build a native alpaca-py GetOrdersRequest for a query status."""
+
+    try:
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        raise RuntimeError("alpaca-py trading order request classes unavailable") from exc
+
+    status_value: Any = getattr(QueryOrderStatus, str(status).upper(), status)
+    return GetOrdersRequest(status=status_value)
+
+
+def _get_orders_by_status(api: Any, status: str) -> Any:
+    get_orders = getattr(api, "get_orders", None)
+    if not callable(get_orders):
+        raise RuntimeError("Alpaca client missing native get_orders method")
+    return get_orders(filter=_orders_request(status))
+
+
 def list_open_orders(api: Any):
-    """Return orders considered open across Alpaca SDK variants.
+    """Return orders considered open using the native alpaca-py order query.
 
     Some broker/API combinations do not include ``pending_new``/``accepted``
     orders in ``status="open"`` responses. This helper widens coverage by
     falling back to ``status="all"`` and filtering known active statuses.
     """
 
-    open_orders = api.list_orders(status="open")
+    open_orders = _get_orders_by_status(api, "open")
     if open_orders:
         return open_orders
 
@@ -349,7 +166,7 @@ def list_open_orders(api: Any):
     }
 
     try:
-        all_orders = api.list_orders(status="all")
+        all_orders = _get_orders_by_status(api, "all")
     except TypeError:
         return open_orders
 
@@ -505,19 +322,12 @@ def _initialize_alpaca_clients() -> bool:
             be.data_client = None
             return False
         try:
-            raw_trading_client = trading_client_cls(
+            be.trading_client = trading_client_cls(
                 api_key=key,
                 secret_key=secret,
                 paper="paper" in str(base_url).lower(),
                 url_override=base_url,
             )
-            adapter_cls = _resolve_trading_client_adapter_cls()
-            trading_client_obj: Any
-            if isinstance(raw_trading_client, adapter_cls):
-                trading_client_obj = raw_trading_client
-            else:
-                trading_client_obj = adapter_cls(raw_trading_client)
-            be.trading_client = trading_client_obj
             if not _validate_trading_api(be.trading_client):
                 be.trading_client = None
                 be.data_client = None

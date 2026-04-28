@@ -99,10 +99,24 @@ class _Runtime(SimpleNamespace):
     """Lightweight runtime stub that mirrors the required api attribute."""
 
 
+class _NativeAPIBase:
+    def get_all_positions(self):
+        return []
+
+    def get_order_by_id(self, order_id):
+        raise KeyError(order_id)
+
+    def cancel_order_by_id(self, order_id):
+        return None
+
+    def submit_order(self, *args, **kwargs):
+        return None
+
+
 def test_cancel_all_open_orders_handles_new_and_pending():
     cancelled = []
 
-    class DummyAPI:
+    class DummyAPI(_NativeAPIBase):
         def __init__(self):
             self._orders = [
                 SimpleNamespace(id="open", status="open"),
@@ -111,7 +125,7 @@ def test_cancel_all_open_orders_handles_new_and_pending():
                 SimpleNamespace(id="other", status="filled"),
             ]
 
-        def list_orders(self, status=None):
+        def get_orders(self, *args, **kwargs):
             return list(self._orders)
 
         def cancel_order_by_id(self, order_id):
@@ -127,8 +141,8 @@ def test_cancel_all_open_orders_handles_new_and_pending():
 def test_cancel_all_open_orders_handles_enum_status():
     cancelled = []
 
-    class DummyAPI:
-        def list_orders(self, status=None):
+    class DummyAPI(_NativeAPIBase):
+        def get_orders(self, *args, **kwargs):
             class StatusEnum:
                 def __init__(self, value):
                     self.value = value
@@ -146,58 +160,33 @@ def test_cancel_all_open_orders_handles_enum_status():
 
 
 def test_cancel_all_open_orders_uses_cancel_orders_request(monkeypatch):
-    cancelled_payloads = []
+    cancelled_order_ids = []
 
-    class DummyAPI:
-        def list_orders(self, status=None):
+    class DummyAPI(_NativeAPIBase):
+        def get_orders(self, *args, **kwargs):
             return [SimpleNamespace(id="target", status="open")]
 
-        def cancel_orders(self, *args, **kwargs):
-            if args:
-                request = args[0]
-            else:
-                request = (
-                    kwargs.get("request")
-                    or kwargs.get("cancel_orders_request")
-                )
-            if request is None:
-                raise TypeError("request required")
-            cancelled_payloads.append(getattr(request, "payload", {}))
-            return {"status": "ok"}
-
-    class FakeCancelOrdersRequest:
-        def __init__(self, **kwargs):
-            if not kwargs:
-                raise TypeError("payload required")
-            self.payload = kwargs
-
-    monkeypatch.setattr(
-        alpaca_requests,
-        "CancelOrdersRequest",
-        FakeCancelOrdersRequest,
-        raising=False,
-    )
+        def cancel_order_by_id(self, order_id):
+            cancelled_order_ids.append(order_id)
 
     runtime = _Runtime(api=DummyAPI())
 
     bot_engine.cancel_all_open_orders(runtime)
 
-    assert cancelled_payloads
-    payload = cancelled_payloads[0]
-    assert any("target" in value if isinstance(value, str) else "target" in value for value in payload.values())
+    assert cancelled_order_ids == ["target"]
 
 
 def test_execution_engine_cancel_order_shim(monkeypatch):
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
 
-    class DummyTradingClient:
+    class DummyTradingClient(_NativeAPIBase):
         def __init__(self):
             self.cancelled = []
 
         def cancel_order_by_id(self, order_id):
             self.cancelled.append(order_id)
 
-        def list_orders(self, status=None):
+        def get_orders(self, *args, **kwargs):
             return []
 
     client = DummyTradingClient()
@@ -211,18 +200,18 @@ def test_execution_engine_cancel_order_shim(monkeypatch):
 
 
 def test_send_exit_order_uses_cancel_order_shim(monkeypatch):
-    class DummyAPI:
+    class DummyAPI(_NativeAPIBase):
         def __init__(self):
             self.cancelled = []
             self.orders = {}
 
-        def list_orders(self, status=None):
+        def get_orders(self, *args, **kwargs):
             return []
 
         def get_position(self, symbol):
             return SimpleNamespace(qty=10)
 
-        def get_order(self, order_id):
+        def get_order_by_id(self, order_id):
             return self.orders[order_id]
 
         def cancel_order_by_id(self, order_id):
@@ -265,17 +254,17 @@ def test_send_exit_order_uses_cancel_order_shim(monkeypatch):
 
 
 def test_send_exit_order_uses_raw_positions_snapshot_when_get_position_fails(monkeypatch):
-    class DummyAPI:
+    class DummyAPI(_NativeAPIBase):
         def __init__(self):
             self.orders = {}
 
-        def list_orders(self, status=None):
+        def get_orders(self, *args, **kwargs):
             return []
 
         def get_position(self, symbol):
             raise RuntimeError("position lookup failed")
 
-        def get_order(self, order_id):
+        def get_order_by_id(self, order_id):
             return self.orders[order_id]
 
         def cancel_order_by_id(self, order_id):

@@ -145,18 +145,19 @@ import ai_trading.core.bot_engine as eng
 def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
     """A valid client with get_orders should not trigger a warning."""
 
-    # Stub Alpaca modules so the shim translates status -> GetOrdersRequest
+    # Stub Alpaca modules so native get_orders receives a GetOrdersRequest.
     enums_mod = types.ModuleType("alpaca.trading.enums")
     requests_mod = types.ModuleType("alpaca.trading.requests")
 
-    class OrderStatus:
+    class QueryOrderStatus:
         OPEN = "open"
+        ALL = "all"
 
     class GetOrdersRequest:
-        def __init__(self, *, statuses=None):
-            self.statuses = statuses
+        def __init__(self, *, status=None):
+            self.status = status
 
-    _set_module_attr(enums_mod, "OrderStatus", OrderStatus)
+    _set_module_attr(enums_mod, "QueryOrderStatus", QueryOrderStatus)
     _set_module_attr(requests_mod, "GetOrdersRequest", GetOrdersRequest)
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
@@ -172,8 +173,17 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
             self.called_with = kwargs
             return []
 
-        def cancel_order(self, *args, **kwargs):  # noqa: D401 - stub
+        def cancel_order_by_id(self, *args, **kwargs):  # noqa: D401 - stub
             """Provide minimal cancel capability for validation."""
+            return None
+
+        def get_all_positions(self):
+            return []
+
+        def get_order_by_id(self, order_id):
+            return None
+
+        def submit_order(self, *args, **kwargs):
             return None
 
     class DummyRiskEngine:
@@ -221,18 +231,16 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
 
     eng.run_all_trades_worker(state, runtime)
 
-    info_mock.assert_has_calls(
-        [
-            call("API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"),
-            call("ALPACA_API_ADAPTER", key="alpaca_api_adapter"),
-        ],
-        any_order=True,
-    )
-    assert info_mock.call_count == 2
+    info_mock.assert_not_called()
     warn_mock.assert_not_called()
     assert api.called_with is not None
     assert "filter" in api.called_with
-    assert api.called_with["filter"].statuses in ([OrderStatus.OPEN], ["all"])
+    assert getattr(api.called_with["filter"], "status", None) in (
+        QueryOrderStatus.OPEN,
+        QueryOrderStatus.ALL,
+        "open",
+        "all",
+    )
 
 
 def test_run_all_trades_creates_trade_log(tmp_path, monkeypatch):
@@ -241,14 +249,15 @@ def test_run_all_trades_creates_trade_log(tmp_path, monkeypatch):
     enums_mod = types.ModuleType("alpaca.trading.enums")
     requests_mod = types.ModuleType("alpaca.trading.requests")
 
-    class OrderStatus:
+    class QueryOrderStatus:
         OPEN = "open"
+        ALL = "all"
 
     class GetOrdersRequest:
-        def __init__(self, *, statuses=None):
-            self.statuses = statuses
+        def __init__(self, *, status=None):
+            self.status = status
 
-    _set_module_attr(enums_mod, "OrderStatus", OrderStatus)
+    _set_module_attr(enums_mod, "QueryOrderStatus", QueryOrderStatus)
     _set_module_attr(requests_mod, "GetOrdersRequest", GetOrdersRequest)
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
@@ -259,8 +268,17 @@ def test_run_all_trades_creates_trade_log(tmp_path, monkeypatch):
         def get_orders(self, *args, **kwargs):
             return []
 
-        def cancel_order(self, *args, **kwargs):  # noqa: D401 - stub
+        def cancel_order_by_id(self, *args, **kwargs):  # noqa: D401 - stub
             """Provide minimal cancel capability for validation."""
+            return None
+
+        def get_all_positions(self):
+            return []
+
+        def get_order_by_id(self, order_id):
+            return None
+
+        def submit_order(self, *args, **kwargs):
             return None
 
     class DummyRiskEngine:
@@ -398,8 +416,13 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
             ]
 
     class DummyAPI:
-        def list_positions(self):  # noqa: D401
+        def get_all_positions(self):  # noqa: D401
             """Return an empty portfolio."""
+
+            return []
+
+        def list_positions(self):  # noqa: D401
+            """Return an empty portfolio for local execution helpers."""
 
             return []
 
@@ -408,8 +431,17 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
 
             return types.SimpleNamespace(cash=10_000)
 
-        def cancel_order(self, *args, **kwargs):  # noqa: D401 - stub
+        def cancel_order_by_id(self, *args, **kwargs):  # noqa: D401 - stub
             """Provide minimal cancel capability for validation."""
+            return None
+
+        def get_orders(self, *args, **kwargs):
+            return []
+
+        def get_order_by_id(self, order_id):
+            return None
+
+        def submit_order(self, *args, **kwargs):
             return None
 
     class DummyQuote:
@@ -537,13 +569,25 @@ def test_run_multi_strategy_does_not_mark_fallback_when_active_quote_source_is_p
             return [sig for signals in signals_by_strategy.values() for sig in signals]
 
     class DummyAPI:
+        def get_all_positions(self):
+            return []
+
         def list_positions(self):
             return []
 
         def get_account(self):
             return types.SimpleNamespace(cash=10_000)
 
-        def cancel_order(self, *args, **kwargs):
+        def cancel_order_by_id(self, *args, **kwargs):
+            return None
+
+        def get_orders(self, *args, **kwargs):
+            return []
+
+        def get_order_by_id(self, order_id):
+            return None
+
+        def submit_order(self, *args, **kwargs):
             return None
 
     dummy_exec = DummyExecutionEngine()
@@ -613,10 +657,19 @@ def test_run_all_trades_worker_netting_invokes_execution_cycle_hooks(monkeypatch
             return None
 
     class DummyAPI:
-        def list_orders(self, *args, **kwargs):  # noqa: D401 - minimal stub
+        def get_orders(self, *args, **kwargs):  # noqa: D401 - minimal stub
             return []
 
-        def cancel_order(self, *args, **kwargs):  # noqa: D401 - minimal stub
+        def cancel_order_by_id(self, *args, **kwargs):  # noqa: D401 - minimal stub
+            return None
+
+        def get_all_positions(self):
+            return []
+
+        def get_order_by_id(self, order_id):
+            return None
+
+        def submit_order(self, *args, **kwargs):
             return None
 
     class DummyLock:

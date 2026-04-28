@@ -32,20 +32,20 @@ validate-env:
 
 # Collect only + harvest into artifact (always writes report)
 test-collect-report: ensure-runtime
-	@echo "[collect] running pytest --collect-only"
-	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-	$(PYTHON) tools/run_pytest.py --collect-only || true
 	@echo "[harvest] writing $(IMPORT_REPAIR_REPORT)"
 	@DISABLE_ENV_ASSERT=$(DISABLE_ENV_ASSERT) \
 	TOP_N=$(TOP_N) \
 	FAIL_ON_IMPORT_ERRORS=$(FAIL_ON_IMPORT_ERRORS) \
 	$(PYTHON) tools/harvest_import_errors.py --report $(IMPORT_REPAIR_REPORT)
 
-# Print head of artifact and propagate 0/101 from harvester
-ci-smoke: test-collect-report
-	@echo "=== BEGIN import-repair-report (head -40) ==="
-	@head -n 40 $(IMPORT_REPAIR_REPORT) || true
-	@echo "=== END import-repair-report ==="
+# Print head of artifact and propagate harvester/collection failures.
+ci-smoke: ensure-runtime
+	@status=0; \
+	$(MAKE) --no-print-directory test-collect-report FAIL_ON_IMPORT_ERRORS=1 || status=$$?; \
+	echo "=== BEGIN import-repair-report (head -40) ==="; \
+	head -n 40 $(IMPORT_REPAIR_REPORT) || true; \
+	echo "=== END import-repair-report ==="; \
+	exit $$status
 
 # Deterministic smoke: explicit test files, plugin autoload off
 smoke: tests-self

@@ -109,7 +109,6 @@ def test_http_submit_retries_once_then_succeeds(monkeypatch):
     """
     from ai_trading.alpaca_api import _http_submit, _AlpacaConfig
     from ai_trading.exc import RequestException
-    from ai_trading.alpaca_api import _HTTP
 
     calls = {"n": 0}
 
@@ -137,7 +136,10 @@ def test_http_submit_retries_once_then_succeeds(monkeypatch):
 
         return Resp()
 
-    monkeypatch.setattr(_HTTP, "post", fake_post)
+    monkeypatch.setattr(
+        "ai_trading.alpaca_api._get_http_session",
+        lambda: types.SimpleNamespace(post=fake_post),
+    )
 
     cfg = _AlpacaConfig(base_url="https://paper-api.alpaca.markets", key_id="k", secret_key="s", shadow=False)
     result = _http_submit(

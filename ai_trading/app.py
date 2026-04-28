@@ -102,9 +102,20 @@ def _register_metrics_endpoint(app: Any, logger: Any) -> None:
                 "PROM_RUNTIME_METRICS_REFRESH_SKIPPED",
                 extra={"error": str(exc)},
             )
-        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+        try:
+            from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-        return generate_latest(cast(Any, _PROM_REG)), 200, {"Content-Type": CONTENT_TYPE_LATEST}
+            return generate_latest(cast(Any, _PROM_REG)), 200, {"Content-Type": CONTENT_TYPE_LATEST}
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+            logger.warning(
+                "PROM_METRICS_GENERATE_FAILED",
+                extra={"error": str(exc)[:300]},
+            )
+            return (
+                "metrics temporarily unavailable\n",
+                503,
+                {"Content-Type": "text/plain; charset=utf-8"},
+            )
 
 
 def _resolve_standalone_healthcheck_port(settings: Any) -> int:

@@ -57,14 +57,15 @@ def test_run_all_trades_calls_trailing_stops(monkeypatch, caplog):
     enums_mod = cast(Any, types.ModuleType("alpaca.trading.enums"))
     requests_mod = cast(Any, types.ModuleType("alpaca.trading.requests"))
 
-    class OrderStatus:
+    class QueryOrderStatus:
         OPEN = "open"
+        ALL = "all"
 
     class GetOrdersRequest:
-        def __init__(self, *, statuses=None):
-            self.statuses = statuses
+        def __init__(self, *, status=None):
+            self.status = status
 
-    enums_mod.OrderStatus = OrderStatus
+    enums_mod.QueryOrderStatus = QueryOrderStatus
     requests_mod.GetOrdersRequest = GetOrdersRequest
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
@@ -75,8 +76,17 @@ def test_run_all_trades_calls_trailing_stops(monkeypatch, caplog):
         def get_orders(self, *args, **kwargs):
             return []
 
-        def cancel_order(self, *args, **kwargs):  # noqa: D401 - stub
+        def cancel_order_by_id(self, *args, **kwargs):  # noqa: D401 - stub
             """Provide minimal cancel capability for validation."""
+            return None
+
+        def get_all_positions(self):
+            return []
+
+        def get_order_by_id(self, order_id):
+            return None
+
+        def submit_order(self, *args, **kwargs):
             return None
 
     class DummyRiskEngine:

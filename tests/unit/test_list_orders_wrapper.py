@@ -17,14 +17,21 @@ class _GetOrdersClient:
     def cancel_order_by_id(self, order_id: Any) -> tuple[str, Any]:
         return ("cancelled", order_id)
 
+    def get_all_positions(self) -> list[Any]:
+        return []
 
-def test_validate_trading_api_maps_get_orders_to_list_orders() -> None:
+    def get_order_by_id(self, order_id: Any) -> Any:
+        return order_id
+
+    def submit_order(self, *args: Any, **kwargs: Any) -> Any:
+        return None
+
+
+def test_validate_trading_api_uses_native_get_orders() -> None:
     client = _GetOrdersClient()
 
     assert alpaca_client._validate_trading_api(client) is True
-    list_orders = cast(Any, getattr(client, "list_orders", None))
-    assert callable(list_orders)
-    assert list_orders(status="open") == ["ok"]
+    assert alpaca_client.list_open_orders(client) == ["ok"]
     assert client.kwargs is not None
     if "filter" in client.kwargs:
         filter_obj = client.kwargs["filter"]

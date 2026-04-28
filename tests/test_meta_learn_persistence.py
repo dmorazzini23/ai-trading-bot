@@ -83,9 +83,10 @@ def test_trade_persistence_updates_canonical_history(
     assert not fallback_logs, "empty log should not repeat after trades"
 
 
-def test_load_trade_history_falls_back_to_pickle_when_parquet_unavailable(
+def test_load_trade_history_blocks_pickle_when_migration_not_explicit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     canonical_path = tmp_path / "trade_history.parquet"
 
@@ -94,6 +95,7 @@ def test_load_trade_history_falls_back_to_pickle_when_parquet_unavailable(
     monkeypatch.setattr(persistence, "_CANONICAL_PATH", canonical_path)
     monkeypatch.setattr(persistence, "_READ_FAILURE_LOGGED", set(), raising=False)
     monkeypatch.setattr(persistence, "_pytest_active", lambda: False)
+    monkeypatch.delenv("AI_TRADING_ALLOW_TRUSTED_PICKLE_TRADE_HISTORY_MIGRATION", raising=False)
 
     expected = pd.DataFrame(
         [
@@ -116,15 +118,16 @@ def test_load_trade_history_falls_back_to_pickle_when_parquet_unavailable(
         ),
     )
 
+    caplog.set_level(logging.WARNING, logger=persistence.logger.name)
+
     frame, source = persistence.load_trade_history(sync_from_broker=False)
 
-    assert source == "canonical"
-    assert frame is not None
-    assert not frame.empty
-    assert frame.iloc[0]["symbol"] == "AAPL"
+    assert source is None
+    assert frame is None
+    assert any(rec.message == "TRADE_HISTORY_PICKLE_READ_BLOCKED" for rec in caplog.records)
 
 
-def test_record_trade_fill_falls_back_to_pickle_sidecar_when_parquet_unavailable_outside_pytest(
+def test_record_trade_fill_writes_pickle_sidecar_but_runtime_read_stays_parquet_only(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -160,10 +163,8 @@ def test_record_trade_fill_falls_back_to_pickle_sidecar_when_parquet_unavailable
     assert pickle_sidecar.exists()
     assert not canonical_path.exists()
     frame, source = persistence.load_trade_history(sync_from_broker=False)
-    assert source == "canonical"
-    assert frame is not None
-    assert len(frame) == 1
-    assert str(frame.iloc[0]["symbol"]) == "MSFT"
+    assert source is None
+    assert frame is None
 
 
 def test_trade_history_engine_missing_log_emits_once(

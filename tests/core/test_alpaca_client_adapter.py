@@ -1,4 +1,4 @@
-"""Tests for the Alpaca trading client adapter integration."""
+"""Tests for native Alpaca trading client integration."""
 
 import os
 import sys
@@ -13,7 +13,6 @@ import ai_trading.util.env_check as env_check
 
 env_check.assert_dotenv_not_shadowed = lambda: None  # type: ignore[assignment]
 
-from ai_trading.alpaca_api import TradingClientAdapter
 from ai_trading.config.management import reload_trading_config
 from ai_trading.core import alpaca_client
 
@@ -36,30 +35,20 @@ class _StubLogger:
 class _FakeTradingClient:
     """Mimic the modern alpaca-py TradingClient surface."""
 
-    def list_orders(self, *args: Any, **kwargs: Any) -> list[Any]:
+    def get_orders(self, *args: Any, **kwargs: Any) -> list[Any]:
         return []
 
-    def list_positions(self, *args: Any, **kwargs: Any) -> list[Any]:
+    def get_all_positions(self, *args: Any, **kwargs: Any) -> list[Any]:
         return []
+
+    def get_order_by_id(self, order_id: Any) -> tuple[str, Any]:
+        return ("order", order_id)
 
     def cancel_order_by_id(self, order_id: Any) -> tuple[str, Any]:
         return ("cancelled", order_id)
 
-
-class _GetOnlyTradingClient:
-    """Expose only get_* methods to exercise shim injection logic."""
-
-    def __init__(self) -> None:
-        self.orders_called = 0
-        self.positions_called = 0
-
-    def get_orders(self, *args: Any, **kwargs: Any) -> list[str]:
-        self.orders_called += 1
-        return ["order"]
-
-    def get_all_positions(self) -> list[str]:
-        self.positions_called += 1
-        return ["position"]
+    def submit_order(self, order_data: Any) -> Any:
+        return order_data
 
 
 @pytest.fixture
@@ -69,42 +58,39 @@ def stub_logger(monkeypatch: pytest.MonkeyPatch) -> _StubLogger:
     return logger
 
 
-def test_validate_trading_api_uses_adapter_without_warning(stub_logger: _StubLogger, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Wrapped TradingClient instances should not trigger adapter warnings."""
+def test_validate_trading_api_accepts_native_trading_client(
+    stub_logger: _StubLogger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Native TradingClient instances should validate without adapter warnings."""
 
     monkeypatch.setattr(alpaca_client, "ALPACA_AVAILABLE", True)
     monkeypatch.setattr(alpaca_client, "get_trading_client_cls", lambda: _FakeTradingClient)
 
-    adapter = TradingClientAdapter(_FakeTradingClient())
+    client = _FakeTradingClient()
 
-    result = alpaca_client._validate_trading_api(adapter)
+    result = alpaca_client._validate_trading_api(client)
 
     assert result is True
     assert ("ALPACA_API_ADAPTER", {"key": "alpaca_api_adapter"}) not in stub_logger.warning_calls
-    assert adapter.cancel_order("abc123") == ("cancelled", "abc123")
+    assert client.cancel_order_by_id("abc123") == ("cancelled", "abc123")
 
 
-def test_validate_trading_api_injects_shims_for_get_only_client(
+def test_validate_trading_api_does_not_inject_legacy_methods(
     stub_logger: _StubLogger, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Adapters with __slots__ accept shim injection without AttributeError."""
+    """Validation checks native methods without mutating the client object."""
 
     monkeypatch.setattr(alpaca_client, "ALPACA_AVAILABLE", True)
+    monkeypatch.setattr(alpaca_client, "get_trading_client_cls", lambda: _FakeTradingClient)
 
-    client = _GetOnlyTradingClient()
-    adapter = TradingClientAdapter(client)
-
-    result = alpaca_client._validate_trading_api(adapter)
+    client = _FakeTradingClient()
+    result = alpaca_client._validate_trading_api(client)
 
     assert result is True
-
-    # Shimmed methods are now exposed and delegate to the wrapped client.
-    assert callable(getattr(adapter, "list_orders"))
-    assert adapter.list_orders() == ["order"]
-    assert adapter.list_positions() == ["position"]
-
-    assert client.orders_called == 1
-    assert client.positions_called == 1
+    assert not hasattr(client, "list_orders")
+    assert not hasattr(client, "list_positions")
+    assert not hasattr(client, "cancel_order")
+    assert not hasattr(client, "get_order")
 
     error_keys = {kwargs.get("key") for _, kwargs in stub_logger.error_calls}
     assert "alpaca_list_orders_patch_failed" not in error_keys
@@ -129,8 +115,14 @@ def test_initialize_production_config_avoids_adapter_warning(
         def get_all_positions(self) -> list[str]:
             return ["position"]
 
+        def get_order_by_id(self, order_id: Any) -> dict[str, Any]:
+            return {"id": order_id}
+
         def cancel_order_by_id(self, order_id: Any) -> dict[str, Any]:
             return {"id": order_id}
+
+        def submit_order(self, order_data: Any) -> Any:
+            return order_data
 
     class _ProdDataClient:
         def __init__(self, *_, **__):
@@ -166,9 +158,10 @@ def test_initialize_production_config_avoids_adapter_warning(
         assert initialised is True
 
         trading_client = getattr(stub_be, "trading_client", None)
-        assert isinstance(trading_client, TradingClientAdapter)
-        assert trading_client.list_orders(status="open") == ["order"]
-        assert trading_client.list_positions() == ["position"]
+        assert isinstance(trading_client, _ProdTradingClient)
+        assert not hasattr(trading_client, "list_orders")
+        assert not hasattr(trading_client, "list_positions")
+        assert trading_client.get_all_positions() == ["position"]
 
         result = alpaca_client._validate_trading_api(trading_client)
         assert result is True
@@ -193,12 +186,21 @@ def test_initialize_uses_active_bot_engine_stub_after_real_import(
         def __init__(self, *_, **__):
             self._orders: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
 
-        def list_orders(self, *args: Any, **kwargs: Any) -> list[str]:
+        def get_orders(self, *args: Any, **kwargs: Any) -> list[str]:
             self._orders.append((args, dict(kwargs)))
             return ["order"]
 
-        def list_positions(self) -> list[str]:
+        def get_all_positions(self) -> list[str]:
             return ["position"]
+
+        def get_order_by_id(self, order_id: Any) -> dict[str, Any]:
+            return {"id": order_id}
+
+        def cancel_order_by_id(self, order_id: Any) -> dict[str, Any]:
+            return {"id": order_id}
+
+        def submit_order(self, order_data: Any) -> Any:
+            return order_data
 
     class _StubDataClient:
         def __init__(self, *_, **__):
@@ -251,10 +253,10 @@ def test_initialize_uses_active_bot_engine_stub_after_real_import(
         trading_client = getattr(stub_be, "trading_client", None)
         data_client = getattr(stub_be, "data_client", None)
 
-        assert isinstance(trading_client, TradingClientAdapter)
+        assert isinstance(trading_client, _StubTradingClient)
         assert isinstance(data_client, _StubDataClient)
-        assert trading_client.list_orders(status="open") == ["order"]
-        assert trading_client.list_positions() == ["position"]
+        assert trading_client.get_orders() == ["order"]
+        assert trading_client.get_all_positions() == ["position"]
         assert real_bot_engine.trading_client == "real-client"  # type: ignore[attr-defined]
         assert real_bot_engine.data_client == "real-data"  # type: ignore[attr-defined]
     finally:
@@ -275,7 +277,8 @@ def test_list_open_orders_uses_open_query_when_available() -> None:
         def __init__(self) -> None:
             self.calls: list[str] = []
 
-        def list_orders(self, *, status: str) -> list[Any]:
+        def get_orders(self, *, filter: Any) -> list[Any]:
+            status = getattr(getattr(filter, "status", None), "value", filter.status)
             self.calls.append(status)
             if status == "open":
                 return [SimpleNamespace(id="o1", status="open")]
@@ -298,7 +301,8 @@ def test_list_open_orders_falls_back_to_all_and_keeps_active_statuses() -> None:
         def __init__(self) -> None:
             self.calls: list[str] = []
 
-        def list_orders(self, *, status: str) -> list[Any]:
+        def get_orders(self, *, filter: Any) -> list[Any]:
+            status = getattr(getattr(filter, "status", None), "value", filter.status)
             self.calls.append(status)
             if status == "open":
                 return []
@@ -322,7 +326,8 @@ def test_list_open_orders_returns_open_when_all_not_supported() -> None:
         def __init__(self) -> None:
             self.calls: list[str] = []
 
-        def list_orders(self, *, status: str) -> list[Any]:
+        def get_orders(self, *, filter: Any) -> list[Any]:
+            status = getattr(getattr(filter, "status", None), "value", filter.status)
             self.calls.append(status)
             if status == "open":
                 return []
@@ -356,8 +361,6 @@ def test_get_orders_network_error_does_not_fallback_to_invalid_status_kwarg() ->
             return order_id
 
     api = _Api()
-    assert alpaca_client._validate_trading_api(api) is True
-    list_orders = getattr(api, "list_orders")
     with pytest.raises(_NetworkError):
-        list_orders(status="open")
+        alpaca_client.list_open_orders(api)
     assert api.calls

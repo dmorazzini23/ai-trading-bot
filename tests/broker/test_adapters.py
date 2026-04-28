@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from ai_trading.broker.adapters import (
     AlpacaBrokerAdapter,
     PaperBrokerAdapter,
@@ -11,6 +13,7 @@ from ai_trading.broker.adapters import (
 class _DummyClient:
     def __init__(self) -> None:
         self.submit_calls = 0
+        self.submitted_request: Any | None = None
         self.orders = [{"id": "1", "status": "open"}]
 
     def get_account(self):
@@ -22,7 +25,8 @@ class _DummyClient:
 
     def submit_order(self, order_data):
         self.submit_calls += 1
-        return {"id": "dummy", "status": "accepted", "payload": dict(order_data)}
+        self.submitted_request = order_data
+        return {"id": "dummy", "status": "accepted", "payload": order_data}
 
 
 class _FakeResponse:
@@ -62,13 +66,42 @@ def test_alpaca_adapter_passthrough() -> None:
 
     account = adapter.get_account()
     orders = adapter.list_orders("open")
-    result = adapter.submit_order({"symbol": "AAPL", "quantity": 1})
+    result = adapter.submit_order({"symbol": "AAPL", "side": "buy", "quantity": 1})
 
     assert account == {"buying_power": "1234"}
     assert orders == [{"id": "1", "status": "open"}]
     assert result["status"] == "accepted"
     assert client.submit_calls == 1
+    assert client.submitted_request is not None
+    assert client.submitted_request.symbol == "AAPL"
+    assert client.submitted_request.qty == 1
     _assert_submit_contract(result)
+
+
+def test_alpaca_adapter_builds_native_bracket_request_from_mapping() -> None:
+    client = _DummyClient()
+    adapter = AlpacaBrokerAdapter(client=client)
+
+    adapter.submit_order(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 1,
+            "type": "limit",
+            "limit_price": 125.50,
+            "order_class": "bracket",
+            "take_profit": {"limit_price": 130.0},
+            "stop_loss": {"stop_price": 120.0, "limit_price": 119.5},
+        },
+    )
+
+    request = client.submitted_request
+    assert request is not None
+    assert request.limit_price == 125.50
+    assert request.order_class.value == "bracket"
+    assert request.take_profit.limit_price == 130.0
+    assert request.stop_loss.stop_price == 120.0
+    assert request.stop_loss.limit_price == 119.5
 
 
 def test_paper_adapter_supports_account_orders_and_submit() -> None:

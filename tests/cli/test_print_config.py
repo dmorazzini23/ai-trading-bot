@@ -14,6 +14,14 @@ def test_parser_accepts_print_config_flag() -> None:
     assert args.print_config is True
 
 
+def test_parser_execution_mode_flags_are_tristate() -> None:
+    parser = cli._build_parser("test")
+
+    assert parser.parse_args([]).paper is None
+    assert parser.parse_args(["--paper"]).paper is True
+    assert parser.parse_args(["--live"]).paper is False
+
+
 def test_print_resolved_config_outputs_sanitized_canonical_payload(
     monkeypatch,
     capsys,

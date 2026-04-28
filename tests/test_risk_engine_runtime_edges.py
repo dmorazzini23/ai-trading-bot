@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib
 import logging
+import random
 import types
 from typing import Any, cast
 
@@ -127,6 +129,32 @@ def test_can_trade_force_continue_overrides_exposure_breach(monkeypatch: pytest.
     monkeypatch.setenv("FORCE_CONTINUE_ON_EXPOSURE", "true")
 
     assert engine.can_trade(_signal(weight=0.2)) is True
+
+
+def test_can_trade_rejects_negative_weight_short_exposure_breach() -> None:
+    engine = _engine()
+    engine.asset_limits["equity"] = 0.5
+    engine.strategy_limits["runtime"] = 0.5
+    engine.exposure["equity"] = 0.4
+
+    assert engine.can_trade(_signal(side="sell_short", weight=-0.2)) is False
+    assert engine.can_trade(_signal(side="short", weight=-0.05)) is True
+
+
+def test_risk_engine_import_does_not_reseed_global_rngs() -> None:
+    import ai_trading.risk.engine as risk_engine_module
+
+    random.seed(987654)
+    np.random.seed(987654)
+    expected_py = random.random()
+    expected_np = np.random.random()
+
+    random.seed(987654)
+    np.random.seed(987654)
+    importlib.reload(risk_engine_module)
+
+    assert random.random() == expected_py
+    assert np.random.random() == expected_np
 
 
 def test_register_fill_invalid_and_negative_sell_paths(caplog: pytest.LogCaptureFixture) -> None:

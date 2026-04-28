@@ -169,6 +169,23 @@ def test_timeout_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics: l
     assert capmetrics[idx_success].tags["feed"] == "sip"
 
 
+def test_requests_exception_aliases_catch_real_requests_classes() -> None:
+    requests_mod = pytest.importorskip("requests")
+
+    df._ensure_requests()  # noqa: SLF001
+
+    assert df.RequestException is requests_mod.exceptions.RequestException
+    assert df.Timeout is requests_mod.exceptions.Timeout
+    assert df.ConnectionError is requests_mod.exceptions.ConnectionError
+    assert df.HTTPError is requests_mod.exceptions.HTTPError
+    caught = False
+    try:
+        raise requests_mod.exceptions.Timeout("boom")
+    except df.Timeout:
+        caught = True
+    assert caught is True
+
+
 def test_unauthorized_sip_returns_empty(
     monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]
 ):
@@ -261,3 +278,25 @@ def test_window_no_session_metrics(monkeypatch: pytest.MonkeyPatch, capmetrics: 
     assert names == ["data.fetch.empty"]
     assert capmetrics[0].tags["feed"] == "no_session"
 
+
+def test_no_session_empty_yahoo_fallback_does_not_record_success(
+    monkeypatch: pytest.MonkeyPatch,
+    capmetrics: list[Rec],
+) -> None:
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("ENABLE_HTTP_FALLBACK", "1")
+    monkeypatch.setattr(df, "_window_has_trading_session", lambda *a, **k: False, raising=False)
+    monkeypatch.setattr(df, "_http_fallback_permitted", lambda *a, **k: True, raising=False)
+    monkeypatch.setattr(df, "_session_get", lambda *a, **k: Resp(200, {"bars": []}), raising=False)
+    monkeypatch.setattr(df, "_yahoo_get_bars", lambda *a, **k: pd.DataFrame(), raising=False)
+    monkeypatch.setattr(df.fallback_order, "register_fallback", lambda *a, **k: None)
+    start, end = _ts_window()
+
+    out = df._fetch_bars("AAPL", start, end, "1Min", feed="iex")
+
+    assert isinstance(out, pd.DataFrame)
+    assert out.empty
+    names = [r.name for r in capmetrics]
+    assert "data.fetch.fallback_attempt" in names
+    assert "data.fetch.fallback_success" not in names
+    assert "data.fetch.success" not in names

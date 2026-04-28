@@ -1,6 +1,7 @@
 import os
 import random
 import importlib
+import importlib.util
 import sys
 import types
 import gc
@@ -24,37 +25,6 @@ _ORIGINAL_MODULES: dict[str, types.ModuleType | None] = dict(sys.modules)
 def _install_test_mock_runtime_guards() -> None:
     """Keep ``sys.modules`` stable during aggressive test patching."""
 
-    def _safe_patch_dict(
-        in_dict: Any,
-        values: Any = (),
-        clear: bool = False,
-        **kwargs: Any,
-    ) -> Any:  # pragma: no cover
-        ctx = _ORIGINAL_PATCH_DICT(in_dict, values, clear, **kwargs)
-        if clear and in_dict is sys.modules:
-            original_enter = ctx.__enter__
-            original_exit = ctx.__exit__
-
-            def _enter() -> object:
-                result = original_enter()
-                sys.modules.update(
-                    {name: module for name, module in _ORIGINAL_MODULES.items() if module is not None}
-                )
-                return result
-
-            def _exit(exc_type: Any, exc_val: Any, exc_tb: Any) -> Any:
-                try:
-                    return cast(Any, original_exit(exc_type, exc_val, exc_tb))
-                finally:
-                    sys.modules.update(
-                        {name: module for name, module in _ORIGINAL_MODULES.items() if module is not None}
-                    )
-
-            ctx_any = cast(Any, ctx)
-            ctx_any.__enter__ = _enter
-            ctx_any.__exit__ = _exit
-        return ctx
-
     def _ensure_import_machinery(modules: dict[str, types.ModuleType]) -> None:
         for name in ("logging.config", "logging.handlers"):
             if name not in modules:
@@ -63,13 +33,45 @@ def _install_test_mock_runtime_guards() -> None:
                 except Exception:  # pragma: no cover - best effort
                     continue
 
-    def _safe_clear_dict(target: Any, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - simple wrapper
+    def _restore_snapshot_modules(modules: dict[str, types.ModuleType]) -> None:
+        modules.update(
+            {name: module for name, module in _ORIGINAL_MODULES.items() if module is not None}
+        )
+        _ensure_import_machinery(modules)
+
+    class _SysModulesPatchContext:
+        def __init__(self, context: Any) -> None:
+            self._context = context
+
+        def __enter__(self) -> object:
+            result = self._context.__enter__()
+            _restore_snapshot_modules(sys.modules)
+            return result
+
+        def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Any:
+            try:
+                return self._context.__exit__(exc_type, exc_val, exc_tb)
+            finally:
+                _restore_snapshot_modules(sys.modules)
+
+    def _safe_patch_dict(
+        in_dict: Any,
+        values: Any = (),
+        clear: bool = False,
+        **kwargs: Any,
+    ) -> Any:  # pragma: no cover
+        ctx = _ORIGINAL_PATCH_DICT(in_dict, values, clear, **kwargs)
+        if clear and in_dict is sys.modules:
+            return _SysModulesPatchContext(ctx)
+        return ctx
+
+    def _safe_clear_dict(
+        target: Any, *args: Any, **kwargs: Any
+    ) -> Any:  # pragma: no cover - simple wrapper
         preserved: dict[str, types.ModuleType] | None = None
         if target is sys.modules:
             preserved = {
-                name: module
-                for name, module in _ORIGINAL_MODULES.items()
-                if module is not None
+                name: module for name, module in _ORIGINAL_MODULES.items() if module is not None
             }
         if callable(_ORIGINAL_CLEAR_DICT):
             try:
@@ -105,6 +107,24 @@ def _install_test_mock_runtime_guards() -> None:
 
 
 _install_test_mock_runtime_guards()
+
+
+def _sanitize_module_file_attrs() -> None:
+    """Keep import inspection from seeing mocked ``__file__`` callables."""
+
+    valid_file_types = (str, bytes, os.PathLike)
+    for module in tuple(sys.modules.values()):
+        filename = getattr(module, "__file__", None)
+        if filename is None or isinstance(filename, valid_file_types):
+            continue
+        try:
+            delattr(module, "__file__")
+        except Exception:
+            try:
+                setattr(module, "__file__", None)
+            except Exception:
+                continue
+
 
 # Ensure optional light-weight stubs are available only when real deps are missing
 def _ensure_test_stubs() -> None:
@@ -325,6 +345,7 @@ def _seed_tests() -> None:
         import numpy as np
 
         np.random.seed(0)
+    _sanitize_module_file_attrs()
     if not _missing("torch"):
         import torch
 
@@ -475,6 +496,7 @@ def _reset_loaded_singletons() -> None:
     if isinstance(pybreaker_mod, types.ModuleType):
         cb_cls = getattr(pybreaker_mod, "CircuitBreaker", None)
         if _is_mock_like(cb_cls):
+
             class _NoopCircuitBreaker:
                 def __init__(self, *args: object, **kwargs: object) -> None:
                     pass
@@ -871,7 +893,11 @@ def _reset_loaded_singletons() -> None:
                 reset_monitor()
             except Exception:
                 pass
-        disable_cb = getattr(active_fetch_mod, "_disable_alpaca", None) if isinstance(active_fetch_mod, types.ModuleType) else None
+        disable_cb = (
+            getattr(active_fetch_mod, "_disable_alpaca", None)
+            if isinstance(active_fetch_mod, types.ModuleType)
+            else None
+        )
         register_cb = getattr(provider_monitor, "register_disable_callback", None)
         if callable(register_cb) and callable(disable_cb):
             try:
@@ -1111,7 +1137,9 @@ def _rebind_test_module_references(test_module: object | None) -> None:
             module_name = getattr(attr_value, "__name__", None)
             if not isinstance(module_name, str):
                 continue
-            if module_name not in _REBOUND_MODULE_NAMES and not module_name.startswith("ai_trading."):
+            if module_name not in _REBOUND_MODULE_NAMES and not module_name.startswith(
+                "ai_trading."
+            ):
                 continue
             try:
                 setattr(test_module, attr_name, importlib.import_module(module_name))
@@ -1120,15 +1148,15 @@ def _rebind_test_module_references(test_module: object | None) -> None:
             continue
 
         owner_module = getattr(attr_value, "__module__", None)
-        if (
-            owner_module not in _REBOUND_SYMBOL_MODULE_NAMES
-            and not (isinstance(owner_module, str) and owner_module.startswith("ai_trading."))
+        if owner_module not in _REBOUND_SYMBOL_MODULE_NAMES and not (
+            isinstance(owner_module, str) and owner_module.startswith("ai_trading.")
         ):
             rebound = False
             for module_name, symbol_names in _REBOUND_MUTABLE_SYMBOLS.items():
                 if (
                     module_name.startswith("tests.vendor_stubs.")
-                    and getattr(test_module, "__name__", "") != "tests.test_vendor_stub_alpaca_requests"
+                    and getattr(test_module, "__name__", "")
+                    != "tests.test_vendor_stub_alpaca_requests"
                 ):
                     continue
                 if attr_name not in symbol_names:
@@ -1229,7 +1257,9 @@ def _reset_runtime_singletons(
     )
     try:
         if is_alpaca_import_absence_test:
-            for module_name in [name for name in tuple(sys.modules.keys()) if "alpaca" in name.lower()]:
+            for module_name in [
+                name for name in tuple(sys.modules.keys()) if "alpaca" in name.lower()
+            ]:
                 try:
                     sys.modules.pop(module_name, None)
                 except Exception:

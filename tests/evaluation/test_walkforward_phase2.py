@@ -152,6 +152,54 @@ def test_run_single_fold_uses_feature_pipeline_and_trainer(
     assert "trade_metrics" in result
 
 
+def test_run_single_fold_predicts_raw_features_for_pipeline_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dates = pd.date_range("2026-01-01", periods=8, tz=UTC)
+    X = pd.DataFrame({"feature": np.arange(8, dtype=float)}, index=dates)
+    y = pd.Series(np.linspace(-0.02, 0.02, len(dates)), index=dates)
+    split = {
+        "train_start": dates[0],
+        "train_end": dates[4],
+        "test_start": dates[4],
+        "test_end": dates[7],
+    }
+
+    class _Pipeline:
+        def transform(self, _frame: Any) -> Any:
+            raise AssertionError("pipeline model should receive raw X_test")
+
+    class _PipelineModel:
+        def predict(self, frame: Any) -> np.ndarray:
+            assert isinstance(frame, pd.DataFrame)
+            return np.asarray(frame["feature"], dtype=float)
+
+    class _Trainer:
+        best_params: dict[str, float] = {}
+
+        def __init__(self, **_kwargs: Any) -> None:
+            self.model = _PipelineModel()
+
+        def train(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    monkeypatch.setattr(wf, "create_feature_pipeline", lambda **_kwargs: _Pipeline())
+    monkeypatch.setattr(wf, "_get_ml_trainer", lambda: _Trainer)
+    monkeypatch.setattr(wf, "_is_sklearn_pipeline", lambda _model: True)
+
+    result = _evaluator(tmp_path)._run_single_fold(
+        X,
+        y,
+        split,
+        model_type="ridge",
+        feature_pipeline_params={"include_regime": False},
+        fold_idx=0,
+    )
+
+    assert result["predictions"] == [4.0, 5.0, 6.0]
+
+
 def test_save_results_writes_csv_and_json_when_plotting_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     evaluator = _evaluator(tmp_path)
     evaluator.fold_results = [

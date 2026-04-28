@@ -34,7 +34,7 @@ def _default_execution_feed() -> str:
     try:
         from ai_trading.data.feed_roles import get_execution_feed
 
-        return get_execution_feed()
+        return str(get_execution_feed())
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         return str(
             _managed_env("ALPACA_EXECUTION_FEED", None, cast=str)
@@ -117,42 +117,6 @@ def _get_http_session() -> "HTTPSession":
     return session
 
 
-class _HTTPShim:
-    """Attribute-forwarding proxy exposing the shared HTTP session."""
-
-    def __getattr__(self, name):  # pragma: no cover - exercised in tests
-        session = _get_http_session()
-        try:
-            return getattr(session, name)
-        except AttributeError:
-            if name == "post":
-                # Provide a best-effort default when the underlying session
-                # lacks ``post`` (e.g. minimal test stubs without requests).
-                def _post(url, *args, **kwargs):
-                    timeout = kwargs.pop("timeout", None)
-                    if timeout is None:
-                        timeout = clamp_request_timeout(10.0)
-                    else:
-                        timeout = clamp_request_timeout(timeout)
-                    return session.request(
-                        "POST",
-                        url,
-                        *args,
-                        timeout=timeout,
-                        **kwargs,
-                    )
-
-                setattr(session, "post", _post)
-                return getattr(session, name)
-            raise
-
-    def __setattr__(self, name, value):  # pragma: no cover - exercised in tests
-        if name.startswith("_"):
-            return super().__setattr__(name, value)
-        setattr(_get_http_session(), name, value)
-
-
-_HTTP = _HTTPShim()
 from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
 import importlib
@@ -312,92 +276,6 @@ def get_trading_client_cls():
     """Return the Alpaca TradingClient class if available."""
 
     return _ensure_trading_client_cls()
-
-
-class TradingClientAdapter:
-    """Adapter that exposes ``cancel_order`` regardless of SDK shape.
-
-    The modern alpaca-py ``TradingClient`` exposes ``cancel_order_by_id`` and
-    ``cancel_orders`` helpers, but older call sites – including our validation
-    logic – expect a ``cancel_order`` method. This adapter provides that method
-    while transparently proxying all other attribute access to the wrapped
-    client. The adapter stores the underlying instance on
-    ``_ai_trading_wrapped_client`` so validation can recognise the concrete SDK
-    type and avoid emitting compatibility warnings.
-    """
-
-    __slots__ = (
-        "_client",
-        "_ai_trading_wrapped_client",
-        "__ai_trading_adapter__",
-        "__dict__",
-    )
-
-    def __init__(self, client: Any):
-        self._client = client
-        self._ai_trading_wrapped_client = client
-        self.__ai_trading_adapter__ = "trading_client"
-
-        if hasattr(client, "list_orders"):
-            self.list_orders = client.list_orders  # type: ignore[assignment]
-        if hasattr(client, "list_positions"):
-            self.list_positions = client.list_positions  # type: ignore[assignment]
-
-    def __getattr__(self, item: str) -> Any:
-        return getattr(self._client, item)
-
-    def __dir__(self) -> list[str]:  # pragma: no cover - convenience only
-        merged = set(dir(self._client))
-        merged.update(
-            [
-                "cancel_order",
-                "get_order",
-                "list_positions",
-                "_ai_trading_wrapped_client",
-            ]
-        )
-        return sorted(merged)
-
-    def __repr__(self) -> str:  # pragma: no cover - diagnostic aid
-        return f"TradingClientAdapter({self._client!r})"
-
-    def cancel_order(self, order_id: Any) -> Any:
-        """Cancel an order by delegating to the wrapped SDK client."""
-
-        cancel_by_id = getattr(self._client, "cancel_order_by_id", None)
-        if callable(cancel_by_id):
-            return cancel_by_id(order_id)
-
-        if callable(getattr(self._client, "cancel_orders", None)):
-            raise AttributeError(
-                "single-order cancellation requires Alpaca cancel_order_by_id; "
-                "cancel_orders cancels all open orders in alpaca-py"
-            )
-        raise AttributeError("cancel_order not supported by wrapped client")
-
-    def get_order(self, order_id: Any) -> Any:
-        """Return an order by delegating to the wrapped SDK client."""
-
-        get_by_id = getattr(self._client, "get_order_by_id", None)
-        if callable(get_by_id):
-            return get_by_id(order_id)
-
-        legacy_get = getattr(self._client, "get_order", None)
-        if callable(legacy_get):
-            return legacy_get(order_id)
-        raise AttributeError("get_order not supported by wrapped client")
-
-    def list_positions(self) -> Any:
-        """Return all positions by delegating to the wrapped SDK client."""
-
-        get_all_positions = getattr(self._client, "get_all_positions", None)
-        if callable(get_all_positions):
-            return get_all_positions()
-
-        legacy_list = getattr(self._client, "list_positions", None)
-        if callable(legacy_list):
-            return legacy_list()
-        raise AttributeError("list_positions not supported by wrapped client")
 
 
 def get_data_client_cls():
@@ -1355,6 +1233,7 @@ def _http_submit(
 
     _start_t = monotonic_time()
     _err: Exception | None = None
+    resp: Any | None = None
     try:
         timeout_v = timeout_clamper(timeout or 10)
         session = get_session()
@@ -1369,7 +1248,8 @@ def _http_submit(
         try:
             calls_counter.inc()
             latency_hist.observe(max(0.0, monotonic_time() - _start_t))
-            if _err is not None or resp.status_code >= 400:  # type: ignore[name-defined]
+            status = getattr(resp, "status_code", 0) if resp is not None else 0
+            if _err is not None or status >= 400:
                 errors_counter.inc()
         except AI_TRADING_FALLBACK_EXCEPTIONS:
             _log.debug("ALPACA_HTTP_POST_METRICS_RECORD_FAILED", exc_info=True)
@@ -1428,7 +1308,6 @@ def submit_order(
             _log.debug("TRADING_CONFIG_RELOAD_FOR_PYTEST_FAILED", exc_info=True)
 
     cfg = _AlpacaConfig.from_env()
-    explicit_shadow = shadow if shadow is not None else None
     do_shadow = cfg.shadow if shadow is None else bool(shadow)
     if (
         shadow is None
@@ -1709,7 +1588,6 @@ __all__ = [
     "partial_fills",
     "handle_trade_update",
     "initialize",
-    "_HTTP",
     "_pending_orders_lock",
     "_pending_orders",
 ]

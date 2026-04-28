@@ -8,8 +8,21 @@ from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from enum import Enum
+import re
 from zoneinfo import ZoneInfo
 logger = get_logger(__name__)
+
+_FOREX_CURRENCIES = {
+    "AUD",
+    "CAD",
+    "CHF",
+    "EUR",
+    "GBP",
+    "JPY",
+    "NZD",
+    "USD",
+}
+_FUTURES_SYMBOL_RE = re.compile(r"^/?[A-Z]{1,3}[FGHJKMNQUVXZ]\d{1,2}$")
 
 def _observed_fixed_holiday(year: int, month: int, day: int) -> date:
     holiday = date(year, month, day)
@@ -189,11 +202,13 @@ class CalendarRegistry:
             Inferred asset class
         """
         symbol = symbol.upper()
+        if len(symbol) == 6 and symbol[:3] in _FOREX_CURRENCIES and symbol[3:] in _FOREX_CURRENCIES:
+            return AssetClass.FOREX
+        if _FUTURES_SYMBOL_RE.fullmatch(symbol):
+            return AssetClass.FUTURES
         if any((crypto in symbol for crypto in ['BTC', 'ETH', 'USD', 'USDT'])):
             if 'USD' in symbol and len(symbol) <= 6:
                 return AssetClass.CRYPTO
-        if symbol.endswith(('F', 'G', 'H', 'J', 'K', 'M', 'N', 'Q', 'U', 'V', 'X', 'Z')) and len(symbol) >= 3 and symbol[-2:].isdigit():
-            return AssetClass.FUTURES
         etf_symbols = {'SPY', 'QQQ', 'IWM', 'EFA', 'VTI', 'GLD', 'SLV', 'TLT', 'AGG', 'LQD', 'HYG', 'XLF', 'XLK', 'XLE', 'XLI', 'XLV'}
         if symbol in etf_symbols:
             return AssetClass.ETF

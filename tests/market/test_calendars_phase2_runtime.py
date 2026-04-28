@@ -43,6 +43,11 @@ def test_custom_symbol_registration_and_asset_class_sessions() -> None:
     assert registry.is_market_open("test", datetime(2025, 1, 2, 10, 30, tzinfo=UTC)) is True
     assert registry.is_market_open("test", datetime(2025, 1, 2, 11, 30, tzinfo=UTC)) is False
     assert registry.get_session("BTCUSD").name == "CRYPTO_24_7"
+    assert registry.get_session("EURUSD").name == "FOREX_EXTENDED"
+    assert registry.get_session("GBPUSD").name == "FOREX_EXTENDED"
+    assert registry.get_session("USDJPY").name == "FOREX_EXTENDED"
+    assert registry.get_session("ESZ24").name == "US_FUTURES_EXTENDED"
+    assert registry.get_session("/ESZ24").name == "US_FUTURES_EXTENDED"
     assert registry.get_session("SPY").name == "US_ETF_REGULAR"
     assert registry.get_session("UNKNOWN", AssetClass.BOND).name == "US_BOND_REGULAR"
 

@@ -401,9 +401,9 @@ def send_exit_order(
     )
     pytime.sleep(5)
     try:
-        o2 = ctx.api.get_order(limit_order.id)
+        o2 = ctx.api.get_order_by_id(limit_order.id)
         if getattr(o2, "status", "") in {"new", "accepted", "partially_filled"}:
-            ctx.api.cancel_order(limit_order.id)
+            ctx.api.cancel_order_by_id(limit_order.id)
             _bot_engine.safe_submit_order(
                 ctx.api,
                 MarketOrderRequest(

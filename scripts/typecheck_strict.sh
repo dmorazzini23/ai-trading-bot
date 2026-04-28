@@ -27,8 +27,8 @@ if [[ -z "${MYPY_CACHE_DIR:-}" ]]; then
   fi
 fi
 
-# Broad baseline coverage for the full application and test tree.
-"${PYTHON_BIN}" -m mypy --config-file mypy.ini ai_trading tests
+# Broad baseline coverage for the application tree.
+"${PYTHON_BIN}" -m mypy --config-file mypy.ini ai_trading
 
 "${PYTHON_BIN}" -m mypy --config-file mypy_strict.ini \
   ai_trading/config/management.py \

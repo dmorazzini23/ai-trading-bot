@@ -39,7 +39,6 @@ _CANONICAL_PATH = Path(
 )
 
 _PANDAS_MISSING_LOGGED = False
-_PATCHED_PARQUET = False
 _READ_FAILURE_LOGGED: set[tuple[str, str, str]] = set()
 _WRITE_FALLBACK_LOGGED: set[str] = set()
 _PARQUET_PICKLE_MIGRATION_LOGGED: set[str] = set()
@@ -59,30 +58,6 @@ def _pytest_active() -> bool:
         or str(get_env("TESTING", "", cast=str, resolve_aliases=False)).strip().lower()
         in {"1", "true", "yes", "on"}
     )
-
-
-def _patch_parquet_fallback(pd: Any) -> None:
-    """Patch pandas.read_parquet to fallback to pickle in test mode."""
-
-    global _PATCHED_PARQUET
-    if _PATCHED_PARQUET or not _pytest_active():
-        return
-    original_read = getattr(pd, "read_parquet", None)
-    if not callable(original_read):
-        return
-
-    def _read_parquet(path: Any, *args: Any, **kwargs: Any):
-        try:
-            return original_read(path, *args, **kwargs)
-        except (ImportError, ModuleNotFoundError, ValueError, OSError) as exc:
-            try:
-                return pd.read_pickle(path)
-            except META_LEARNING_PERSISTENCE_FALLBACK_EXCEPTIONS:
-                raise exc
-
-    pd.read_parquet = _read_parquet  # type: ignore[assignment]
-    _PATCHED_PARQUET = True
-
 
 def _ensure_parent(path: Path) -> None:
     try:
@@ -157,6 +132,39 @@ def _looks_like_pickle(path: Path) -> bool:
     if len(magic) < 2:
         return False
     return bool(magic[0] == 0x80 and 0 <= magic[1] <= 5)
+
+
+def _trusted_pickle_migration_allowed() -> bool:
+    raw = str(
+        get_env(
+            "AI_TRADING_ALLOW_TRUSTED_PICKLE_TRADE_HISTORY_MIGRATION",
+            "",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or ""
+    ).strip().lower()
+    return raw in {"1", "true", "yes", "on"} or _pytest_active()
+
+
+def _read_pickle_for_explicit_migration(path: Path, pd: Any) -> "pd.DataFrame" | None:
+    if not _trusted_pickle_migration_allowed():
+        key = ("TRADE_HISTORY_PICKLE_READ_BLOCKED", str(path), "pickle")
+        if key not in _READ_FAILURE_LOGGED:
+            _READ_FAILURE_LOGGED.add(key)
+            logger.warning(
+                "TRADE_HISTORY_PICKLE_READ_BLOCKED",
+                extra={
+                    "path": str(path),
+                    "hint": "Run an explicit trusted migration before runtime reads this file",
+                },
+            )
+        return None
+    try:
+        frame = pd.read_pickle(path)
+    except META_LEARNING_PERSISTENCE_FALLBACK_EXCEPTIONS:
+        return None
+    return frame
 
 
 def _normalise_frame(frame: "pd.DataFrame") -> "pd.DataFrame":
@@ -307,36 +315,16 @@ def _read_parquet(path: Path) -> "pd.DataFrame" | None:
             logger.warning("TRADE_HISTORY_PANDAS_MISSING")
             _PANDAS_MISSING_LOGGED = True
         return None
-    _patch_parquet_fallback(pd)
     if not path.exists():
-        sidecar = _pickle_sidecar_path(path)
-        if sidecar.exists():
-            try:
-                return pd.read_pickle(sidecar)
-            except META_LEARNING_PERSISTENCE_FALLBACK_EXCEPTIONS:
-                return None
         return None
     try:
         return pd.read_parquet(path)
     except (OSError, ValueError, ImportError, ModuleNotFoundError) as exc:  # pragma: no cover - corrupt file guard
         if _is_parquet_path(path) and _looks_like_pickle(path):
-            try:
-                migrated = pd.read_pickle(path)
-            except META_LEARNING_PERSISTENCE_FALLBACK_EXCEPTIONS:
-                migrated = None
+            migrated = _read_pickle_for_explicit_migration(path, pd)
             if migrated is not None:
                 _attempt_parquet_migration(path, migrated)
                 return migrated
-        sidecar = _pickle_sidecar_path(path)
-        if sidecar.exists():
-            try:
-                return pd.read_pickle(sidecar)
-            except META_LEARNING_PERSISTENCE_FALLBACK_EXCEPTIONS:
-                pass
-        try:
-            return pd.read_pickle(path)
-        except META_LEARNING_PERSISTENCE_FALLBACK_EXCEPTIONS:
-            pass
         detail = str(exc)
         detail_lower = detail.lower()
         parquet_engine_missing = (
@@ -428,8 +416,6 @@ def record_trade_fill(record: Mapping[str, Any] | Any) -> None:
             logger.warning("TRADE_HISTORY_PANDAS_MISSING")
             _PANDAS_MISSING_LOGGED = True
         return
-    _patch_parquet_fallback(pd)
-
     existing = _read_parquet(_CANONICAL_PATH)
     new_frame = pd.DataFrame([data])
     if existing is not None and not existing.empty:

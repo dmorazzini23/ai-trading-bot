@@ -54,6 +54,15 @@ def _get_ml_trainer():
     from ..training.train_ml import MLTrainer
     return MLTrainer
 
+
+def _is_sklearn_pipeline(model: Any) -> bool:
+    try:
+        from sklearn.pipeline import Pipeline
+    except ImportError:
+        return False
+    return isinstance(model, Pipeline)
+
+
 class WalkForwardEvaluator:
     """
     Walk-forward analysis evaluator for trading models.
@@ -207,7 +216,7 @@ class WalkForwardEvaluator:
             MLTrainer = _get_ml_trainer()
             trainer = MLTrainer(model_type=model_type, cv_splits=3, random_state=42 + fold_idx)
             trainer.train(X_train, y_train, optimize_hyperparams=False, feature_pipeline=feature_pipeline)
-            if feature_pipeline:
+            if feature_pipeline and not _is_sklearn_pipeline(trainer.model):
                 X_test_processed = feature_pipeline.transform(X_test)
             else:
                 X_test_processed = X_test

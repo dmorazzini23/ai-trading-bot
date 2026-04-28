@@ -12,6 +12,7 @@ import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
+
 from packaging import tags as pkg_tags
 
 
@@ -89,7 +90,7 @@ def _summarize_errors(text: str) -> Counter:
     return counts
 
 
-def build_report() -> tuple[str, str, str]:
+def build_report() -> tuple[str, str, str, int]:
     """Run pytest collection and build a markdown report."""  # AI-AGENT-REF: factor report builder
     env_line = compute_env_summary_line()
     assert_expected_combo(env_line)
@@ -116,7 +117,9 @@ def build_report() -> tuple[str, str, str]:
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     out = subprocess.run(cmd, cwd=root, env=env, capture_output=True, text=True)
     text = out.stdout + "\n" + out.stderr
-    (root / "artifacts/test-collect.log").write_text(text, encoding="utf-8")
+    collect_log = root / "artifacts/test-collect.log"
+    collect_log.parent.mkdir(parents=True, exist_ok=True)
+    collect_log.write_text(text, encoding="utf-8")
 
     mod_not_found = re.findall(r"No module named ['\"]([^'\"]+)['\"]", text)
     import_errors = sorted(set(mod_not_found))
@@ -153,10 +156,10 @@ def build_report() -> tuple[str, str, str]:
     lines = [f"**Environment**: {env_line}", ""]
     lines.extend(body_lines)
     report_markdown = "\n".join(lines)
-    return report_markdown, text, env_line
+    return report_markdown, text, env_line, out.returncode
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--report",
@@ -166,14 +169,20 @@ def main() -> None:
         help="Output report path",
     )  # AI-AGENT-REF: expose output path
     parser.add_argument(
-        "--top", type=int, default=int(os.environ.get("TOP_N", "5")), help="Top N unique import errors to print"
+        "--top",
+        type=int,
+        default=int(os.environ.get("TOP_N", "5")),
+        help="Top N unique import errors to print",
     )  # AI-AGENT-REF: top count flag
     parser.add_argument(
-        "--fail-on-errors", action="store_true", default=os.environ.get("FAIL_ON_IMPORT_ERRORS") == "1", help="Exit non-zero if any import errors detected"
+        "--fail-on-errors",
+        action="store_true",
+        default=os.environ.get("FAIL_ON_IMPORT_ERRORS") == "1",
+        help="Exit non-zero if import errors or pytest collection failures are detected",
     )  # AI-AGENT-REF: optional failure
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    report_markdown, raw_error_text, env_line = build_report()
+    report_markdown, raw_error_text, env_line, collection_returncode = build_report()
 
     artifact = Path(args.out)
     artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -181,9 +190,12 @@ def main() -> None:
 
     # AI-AGENT-REF: echo env and ranked summary for CI logs
     print(f"[import-repair][env] {env_line}")
+    print(f"[import-repair][collect-returncode] {collection_returncode}")
     counts = _summarize_errors(raw_error_text)
     if not counts:
         print("No import errors detected")
+        if args.fail_on_errors and collection_returncode != 0:
+            sys.exit(collection_returncode)
     else:
         print("Top-N Import Errors:")
         for i, (key, n) in enumerate(counts.most_common(args.top), 1):

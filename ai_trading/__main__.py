@@ -75,9 +75,9 @@ def _build_parser(description: str, *, symbols: bool = False) -> argparse.Argume
         help="Delay between iterations in seconds",
     )
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--paper", dest="paper", action="store_true", help="Use paper trading (default)")
+    mode.add_argument("--paper", dest="paper", action="store_true", help="Use paper trading")
     mode.add_argument("--live", dest="paper", action="store_false", help="Use live trading")
-    parser.set_defaults(paper=True)
+    parser.set_defaults(paper=None)
     if symbols:
         parser.add_argument("--symbols", type=str)
     return parser
@@ -418,7 +418,8 @@ def run_trade() -> None:
         logging.shutdown()
         sys.exit(0)
 
-    _set_execution_mode(paper=bool(args.paper))
+    if args.paper is not None:
+        _set_execution_mode(paper=bool(args.paper))
     from ai_trading.env import ensure_dotenv_loaded
 
     ensure_dotenv_loaded()
@@ -464,7 +465,8 @@ def run_backtest() -> None:
         logging.shutdown()
         sys.exit(0)
 
-    _set_execution_mode(paper=bool(args.paper))
+    if args.paper is not None:
+        _set_execution_mode(paper=bool(args.paper))
     from ai_trading.env import ensure_dotenv_loaded
 
     ensure_dotenv_loaded()
@@ -517,7 +519,8 @@ def run_healthcheck() -> None:
         logging.shutdown()
         sys.exit(0)
 
-    _set_execution_mode(paper=bool(args.paper))
+    if args.paper is not None:
+        _set_execution_mode(paper=bool(args.paper))
     from ai_trading.env import ensure_dotenv_loaded
 
     ensure_dotenv_loaded()
@@ -574,7 +577,8 @@ def main(argv: list[str] | None = None) -> int:
             logging.shutdown()
             return 0
 
-        _set_execution_mode(paper=bool(args.paper))
+        if args.paper is not None:
+            _set_execution_mode(paper=bool(args.paper))
         from ai_trading.env import ensure_dotenv_loaded
 
         ensure_dotenv_loaded()

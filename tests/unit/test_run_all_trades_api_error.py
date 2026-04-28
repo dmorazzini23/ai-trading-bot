@@ -37,14 +37,15 @@ def test_run_all_trades_handles_api_error(monkeypatch, caplog):
     enums_mod = types.ModuleType("alpaca.trading.enums")
     requests_mod = types.ModuleType("alpaca.trading.requests")
 
-    class OrderStatus:
+    class QueryOrderStatus:
         OPEN = "open"
+        ALL = "all"
 
     class GetOrdersRequest:
-        def __init__(self, *, statuses=None):
-            self.statuses = statuses
+        def __init__(self, *, status=None):
+            self.status = status
 
-    cast(Any, enums_mod).OrderStatus = OrderStatus
+    cast(Any, enums_mod).QueryOrderStatus = QueryOrderStatus
     cast(Any, requests_mod).GetOrdersRequest = GetOrdersRequest
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
@@ -60,8 +61,17 @@ def test_run_all_trades_handles_api_error(monkeypatch, caplog):
             self.called_with = kwargs
             return []
 
-        def cancel_order(self, *args, **kwargs):  # noqa: D401 - stub
+        def cancel_order_by_id(self, *args, **kwargs):  # noqa: D401 - stub
             """Provide minimal cancel capability for validation."""
+            return None
+
+        def get_all_positions(self):
+            return []
+
+        def get_order_by_id(self, order_id):
+            return None
+
+        def submit_order(self, *args, **kwargs):
             return None
 
     class DummyRiskEngine:
@@ -101,4 +111,9 @@ def test_run_all_trades_handles_api_error(monkeypatch, caplog):
     assert state.running is False
     assert api.called_with is not None
     assert "filter" in api.called_with
-    assert api.called_with["filter"].statuses in ([OrderStatus.OPEN], ["all"])
+    assert getattr(api.called_with["filter"], "status", None) in (
+        QueryOrderStatus.OPEN,
+        QueryOrderStatus.ALL,
+        "open",
+        "all",
+    )

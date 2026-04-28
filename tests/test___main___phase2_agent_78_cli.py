@@ -96,6 +96,32 @@ def test_main_maps_once_interval_and_cancels_timer(monkeypatch) -> None:
     assert calls["timer_cancelled"] is True
 
 
+def test_main_without_mode_flag_does_not_override_execution_mode(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+    mode_calls: list[bool] = []
+    monkeypatch.setattr(cli, "_env_text", lambda name, default="": "")
+
+    env_module = types.ModuleType("ai_trading.env")
+    env_module.ensure_dotenv_loaded = lambda: calls.setdefault("dotenv", True)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ai_trading.env", env_module)
+
+    main_module = types.ModuleType("ai_trading.main")
+    main_module.preflight_import_health = lambda: True  # type: ignore[attr-defined]
+    main_module.should_enforce_strict_import_preflight = lambda: False  # type: ignore[attr-defined]
+    main_module.main = lambda argv=None: calls.setdefault("mapped_argv", list(argv or []))  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ai_trading.main", main_module)
+    monkeypatch.setattr(ai_trading, "main", main_module, raising=False)
+    monkeypatch.setattr(cli, "_validate_startup_config", lambda: calls.setdefault("validated", True))
+    monkeypatch.setattr(cli, "_set_execution_mode", lambda *, paper: mode_calls.append(paper))
+    monkeypatch.setattr(cli.stop_event, "clear", lambda: calls.setdefault("stop_cleared", True))
+
+    rc = cli.main(["--once", "--interval", "0"])
+
+    assert rc == 0
+    assert calls["mapped_argv"] == ["--interval", "0.0", "--iterations", "1"]
+    assert mode_calls == []
+
+
 def test_main_legacy_apca_runtime_error_returns_config_code(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_env_text", lambda name, default="": "")
     env_module = types.ModuleType("ai_trading.env")

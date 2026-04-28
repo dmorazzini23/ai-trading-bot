@@ -3,14 +3,11 @@ from ai_trading.logging import get_logger
 import logging
 import math
 import builtins
-import os
-import random
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import importlib
-import sys
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import numpy as np
@@ -38,7 +35,6 @@ try:
 except (ImportError, RuntimeError, OSError, AttributeError):
     TradingClient = None
 from ai_trading.config.management import (
-    SEED,
     TradingConfig,
     get_env,
     get_trading_config,
@@ -196,11 +192,22 @@ else:
 
 logger = get_logger(__name__)
 
-random.seed(SEED)
-np.random.seed(SEED)
 if not hasattr(np, "NaN"):
     setattr(np, "NaN", np.nan)
 MAX_DRAWDOWN = 0.05
+
+_OPENING_EXPOSURE_SIDES = {
+    "buy",
+    "sell_short",
+    "sellshort",
+    "short",
+    "sell-short",
+    "sell short",
+}
+
+
+def _opens_gross_exposure(side: Any) -> bool:
+    return str(side or "").strip().lower() in _OPENING_EXPOSURE_SIDES
 
 
 class RiskEngine:
@@ -811,9 +818,10 @@ class RiskEngine:
         if len(self._returns) < 3:
             return base_cap
         recent_returns = np.array(self._returns[-volatility_lookback_days:])
-        mean_return = np.mean(recent_returns)
-        vol = np.std(recent_returns) if np.std(recent_returns) > 0 else 0.01
-        sharpe_proxy = float(mean_return / vol)
+        mean_return = float(np.mean(recent_returns))
+        vol_std = float(np.std(recent_returns))
+        vol = vol_std if vol_std > 0 else 0.01
+        sharpe_proxy = mean_return / vol
         cumulative = np.cumprod(1 + recent_returns)
         running_max = np.maximum.accumulate(cumulative)
         drawdown = (cumulative - running_max) / running_max
@@ -916,6 +924,8 @@ class RiskEngine:
             return False
         asset_class = str(getattr(signal, "asset_class", "equity"))
         strategy = str(getattr(signal, "strategy", "default"))
+        side = str(getattr(signal, "side", "buy")).strip().lower()
+        opens_exposure = _opens_gross_exposure(side)
         symbol = str(getattr(signal, "symbol", "UNKNOWN"))
         asset_exp = self.exposure.get(asset_class, 0.0) + max(pending, 0.0)
         asset_cap = 1.1 * self._dynamic_cap(asset_class, volatility, cash_ratio)
@@ -930,21 +940,30 @@ class RiskEngine:
                 e,
             )
             signal_weight = 0.0
-        if asset_exp + signal_weight > asset_cap:
+        if not math.isfinite(signal_weight):
+            logger.warning(
+                "Invalid signal.weight value '%s' for %s, defaulting to 0.0: non-finite",
+                getattr(signal, "weight", None),
+                symbol,
+            )
+            signal_weight = 0.0
+        opening_weight = abs(signal_weight) if opens_exposure else 0.0
+        projected_asset_exp = asset_exp + opening_weight
+        if projected_asset_exp > asset_cap:
             logger.warning(
                 "Exposure cap breach: symbol=%s qty=%s alloc=%.3f exposure=%.2f vs cap=%.2f",
                 symbol,
                 getattr(signal, "qty", "n/a"),
-                signal_weight,
-                asset_exp + signal_weight,
+                opening_weight,
+                projected_asset_exp,
                 asset_cap,
             )
             if not get_env("FORCE_CONTINUE_ON_EXPOSURE", "false", cast=bool):
                 return False
             logger.warning("FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap")
         strat_cap = self.strategy_limits.get(strategy, self.global_limit)
-        if signal_weight > strat_cap:
-            logger.warning("Strategy %s weight %.2f exceeds cap %.2f", strategy, signal_weight, strat_cap)
+        if opening_weight > strat_cap:
+            logger.warning("Strategy %s weight %.2f exceeds cap %.2f", strategy, opening_weight, strat_cap)
             if not get_env("FORCE_CONTINUE_ON_EXPOSURE", "false", cast=bool):
                 return False
             logger.warning("FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap")
@@ -1004,8 +1023,6 @@ class RiskEngine:
                 "symbol": symbol,
             },
         )
-        import time
-
         self._last_update = monotonic_time()
         self._update_event.set()
 
@@ -1123,7 +1140,8 @@ class RiskEngine:
                     cvar_metric = capital_scaling.cvar_scaling(arr, alpha=0.05)
                     if cvar_metric > 1.0:
                         scale *= 1.0 / (1.0 + cvar_metric)
-            signal.weight = max(0.0, float(signal.weight) * scale)
+            scaled_weight = float(signal.weight) * scale
+            signal.weight = scaled_weight if scaled_weight < 0.0 else max(0.0, scaled_weight)
             return signal
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:
             logger.error("Risk scaling failed: %s", exc)

@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import gc
-import importlib
 import logging
 import math
 import os
@@ -1510,9 +1509,7 @@ class _RequestsModulePlaceholder:
     get = None
 
 
-requests: Any = _RequestsModulePlaceholder()
-if _requests is None:  # pragma: no cover - ensures alias available when requests missing
-    _requests = requests  # type: ignore[assignment]
+requests: Any = _requests if _requests is not None else _RequestsModulePlaceholder()
 
 
 class _YFinancePlaceholder:
@@ -1539,6 +1536,43 @@ class HTTPError(RequestException):
 
 
 FETCH_FALLBACK_EXCEPTIONS = _FETCH_BASE_EXCEPTIONS + (RequestException,)
+
+
+def _bind_requests_module(requests_mod: Any) -> None:
+    """Bind module request aliases to real requests exception classes."""
+
+    global requests, ConnectionError, FETCH_FALLBACK_EXCEPTIONS, HTTPError
+    global RequestException, Timeout, _requests
+
+    exceptions_mod = getattr(requests_mod, "exceptions", None)
+    request_exception = getattr(exceptions_mod, "RequestException", RequestException)
+
+    def _exception_alias(name: str, base: type[BaseException]) -> type[BaseException]:
+        alias_raw = getattr(exceptions_mod, name, None)
+        if isinstance(alias_raw, type) and issubclass(alias_raw, BaseException):
+            return cast(type[BaseException], alias_raw)
+        alias: type[BaseException] = type(name, (base,), {})
+        if exceptions_mod is not None:
+            try:
+                setattr(exceptions_mod, name, alias)
+            except FETCH_FALLBACK_EXCEPTIONS:
+                pass
+        return alias
+
+    timeout_exception = _exception_alias("Timeout", request_exception)
+    connection_error = _exception_alias("ConnectionError", request_exception)
+    http_error = _exception_alias("HTTPError", request_exception)
+    globals()["RequestException"] = request_exception
+    globals()["Timeout"] = timeout_exception
+    globals()["ConnectionError"] = connection_error
+    globals()["HTTPError"] = http_error
+    requests = requests_mod
+    _requests = requests_mod
+    FETCH_FALLBACK_EXCEPTIONS = _FETCH_BASE_EXCEPTIONS + (request_exception,)
+
+
+if _requests is not None and getattr(_requests, "get", None) is not None:
+    _bind_requests_module(_requests)
 
 
 def _incr(metric: str, *, value: float = 1.0, tags: dict[str, str] | None = None) -> None:
@@ -7699,26 +7733,16 @@ def _ensure_yfinance():
 
 def _ensure_requests():
     global requests, ConnectionError, HTTPError, RequestException, Timeout, _requests
-    if getattr(requests, "get", None) is None:
+    exceptions_mod = getattr(requests, "exceptions", None)
+    exceptions_complete = all(
+        hasattr(exceptions_mod, name)
+        for name in ("RequestException", "Timeout", "ConnectionError", "HTTPError")
+    )
+    if getattr(requests, "get", None) is None or not exceptions_complete:
         try:
             import requests as _requests_mod  # type: ignore
-            exceptions_mod = importlib.import_module("requests.exceptions")
-            _ConnectionError = getattr(exceptions_mod, "ConnectionError", ConnectionError)
-            _HTTPError = getattr(exceptions_mod, "HTTPError", HTTPError)
-            _RequestException = getattr(exceptions_mod, "RequestException", RequestException)
-            _Timeout = getattr(exceptions_mod, "Timeout", Timeout)
 
-            requests = _requests_mod
-            for placeholder, real in (
-                (RequestException, _RequestException),
-                (Timeout, _Timeout),
-                (ConnectionError, _ConnectionError),
-                (HTTPError, _HTTPError),
-            ):
-                try:
-                    placeholder.__bases__ = (real,)
-                except TypeError:  # pragma: no cover - fallback for exotic class wrappers
-                    continue
+            _bind_requests_module(_requests_mod)
         except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency
             requests = _RequestsModulePlaceholder()
     if _requests is None or getattr(_requests, "get", None) is None:
@@ -8792,6 +8816,12 @@ def _fetch_bars(
             _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
             _state["last_fallback_feed"] = "yahoo"
             _state["last_fallback_provider"] = "yahoo"
+            frame_has_rows = _frame_has_rows(annotated_df)
+            frame_is_usable = frame_has_rows and _fallback_frame_is_usable(
+                annotated_df,
+                _start,
+                _end,
+            )
             _mark_fallback(
                 symbol,
                 _interval,
@@ -8804,8 +8834,9 @@ def _fetch_bars(
                 reason=_state.get("fallback_reason") or "no_session_window",
             )
             _state["fallback_reason"] = None
-            _record_fallback_success_metric(tags)
-            _record_success_metric(tags, prefer_fallback=True)
+            if frame_is_usable:
+                _record_fallback_success_metric(tags)
+                _record_success_metric(tags, prefer_fallback=True)
             return _finalize_frame(annotated_df)
         window_has_session = False
         no_session_window = True
