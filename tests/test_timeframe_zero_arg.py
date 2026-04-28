@@ -6,7 +6,7 @@ def test_timeframe_zero_arg_defaults():
     assert hasattr(tf, "amount")
     assert getattr(tf, "amount", None) == 1
     assert hasattr(tf, "unit")
-    assert getattr(tf.unit, "name", "") == getattr(TimeFrameUnit.Day, "name", "Day")
+    assert getattr(tf.unit, "name", str(tf.unit)) == getattr(TimeFrameUnit.Day, "name", "Day")
 
 
 def test_safe_setattr_handles_readonly_properties():

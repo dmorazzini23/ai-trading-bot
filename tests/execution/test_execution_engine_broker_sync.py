@@ -49,6 +49,24 @@ def test_update_broker_snapshot_preserves_fractional_quantities() -> None:
     assert engine.open_order_totals("AAPL") == (0.6, 0.4)
 
 
+def test_update_broker_snapshot_prefers_remaining_open_quantity() -> None:
+    """Open-order exposure should use unfilled quantity, not original order size."""
+
+    engine = ExecutionEngine()
+    open_orders = [
+        {"symbol": "AAPL", "side": "buy", "qty": "10", "filled_qty": "4"},
+        {"symbol": "AAPL", "side": "sell", "qty": "7", "filled_qty": "2"},
+        {"symbol": "MSFT", "side": "buy_to_cover", "qty": "9", "unfilled_qty": "3"},
+    ]
+
+    snapshot = engine._update_broker_snapshot(open_orders, positions=[])
+
+    assert snapshot.open_buy_by_symbol["AAPL"] == 6
+    assert snapshot.open_sell_by_symbol["AAPL"] == 5
+    assert snapshot.open_buy_by_symbol["MSFT"] == 3
+    assert engine.open_order_totals("AAPL") == (6, 5)
+
+
 def test_update_broker_snapshot_persists_runtime_position_and_risk_snapshots(
     monkeypatch,
     tmp_path,
@@ -202,6 +220,22 @@ def test_live_engine_preserves_fractional_open_order_quantities() -> None:
     assert snapshot.open_buy_by_symbol["AMD"] == 0.6
     assert snapshot.open_sell_by_symbol["AMD"] == 0.2
     assert engine.open_order_totals("AMD") == (0.6, 0.2)
+
+
+def test_live_engine_snapshot_prefers_unfilled_quantity() -> None:
+    """Live broker sync should aggregate leaves/unfilled quantities first."""
+
+    engine = LiveTradingExecutionEngine(ctx=None)
+    open_orders = [
+        SimpleNamespace(symbol="AMD", side="buy", qty="10", filled_qty="4"),
+        SimpleNamespace(symbol="AMD", side="sell", qty="5", remaining_qty="2"),
+    ]
+
+    snapshot = engine._update_broker_snapshot(open_orders, positions=[])
+
+    assert snapshot.open_buy_by_symbol["AMD"] == 6
+    assert snapshot.open_sell_by_symbol["AMD"] == 2
+    assert engine.open_order_totals("AMD") == (6, 2)
 
 
 def test_live_engine_reconciles_terminal_broker_lookup_for_missing_open_intent(

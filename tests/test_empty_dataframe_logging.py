@@ -31,7 +31,7 @@ def test_parse_local_positions_logs_info_on_empty(caplog, tmp_path, monkeypatch)
     records = [
         r
         for r in caplog.records
-        if r.levelno == logging.INFO and str(trade_log) in r.getMessage()
+        if r.levelno == logging.INFO and trade_log.name in r.getMessage()
     ]
     assert len(records) == 1
     assert "PARSE_LOCAL_POSITIONS_EMPTY" in records[0].getMessage()
@@ -51,7 +51,7 @@ def test_parse_local_positions_warns_when_missing(caplog, tmp_path, monkeypatch)
     assert any(
         r.levelno == logging.WARNING
         and "PARSE_LOCAL_POSITIONS_MISSING" in r.getMessage()
-        and str(trade_log) in r.getMessage()
+        and trade_log.name in r.getMessage()
         for r in caplog.records
     )
 
@@ -68,7 +68,10 @@ def test_load_signal_weights_warning(caplog, tmp_path, monkeypatch):
     with caplog.at_level(logging.WARNING):
         manager.load_signal_weights()
 
-    assert any(r.levelno == logging.WARNING and str(weights_file) in r.getMessage() for r in caplog.records)
+    assert any(
+        r.levelno == logging.WARNING and weights_file.name in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_meta_learning_weight_optimizer_warning(caplog, tmp_path):
@@ -133,7 +136,10 @@ def test_average_reward_debug(caplog, tmp_path, monkeypatch):
     with caplog.at_level(logging.DEBUG):
         bot_engine._average_reward()
 
-    assert any(r.levelno == logging.DEBUG and str(reward_file) in r.getMessage() for r in caplog.records)
+    assert any(
+        r.levelno == logging.DEBUG and reward_file.name in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_too_correlated_uses_cached_trade_log(monkeypatch):

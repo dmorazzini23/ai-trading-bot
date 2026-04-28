@@ -18,6 +18,7 @@ from ai_trading.data.splits import PurgedGroupTimeSeriesSplit
 
 def _safe_import_sklearn():
     try:
+        from sklearn.base import clone
         from sklearn.linear_model import Ridge, LogisticRegression
         from sklearn.ensemble import RandomForestRegressor
         from sklearn.dummy import DummyClassifier
@@ -25,7 +26,14 @@ def _safe_import_sklearn():
         from sklearn.pipeline import make_pipeline
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover
         raise ImportError("scikit-learn is required for stacking models") from exc
-    return Ridge, LogisticRegression, RandomForestRegressor, DummyClassifier, StandardScaler, make_pipeline
+    return Ridge, LogisticRegression, RandomForestRegressor, DummyClassifier, StandardScaler, make_pipeline, clone
+
+
+def _drop_split_boundary_label_overlap(train_idx: np.ndarray, test_idx: np.ndarray) -> np.ndarray:
+    if len(train_idx) == 0 or len(test_idx) == 0:
+        return train_idx
+    first_test = int(test_idx[0])
+    return cast(np.ndarray, train_idx[train_idx + 1 < first_test])
 
 
 @dataclass
@@ -45,13 +53,14 @@ class StackingMetaModel:
     meta_label_threshold: float | None = None
 
     def __post_init__(self) -> None:
-        (Ridge, LogisticRegression, RF, DummyClassifier, StandardScaler, make_pipeline) = _safe_import_sklearn()
+        (Ridge, LogisticRegression, RF, DummyClassifier, StandardScaler, make_pipeline, clone) = _safe_import_sklearn()
         self._Ridge = Ridge
         self._LogisticRegression = LogisticRegression
         self._RF = RF
         self._DummyClassifier = DummyClassifier
         self._StandardScaler = StandardScaler
         self._make_pipeline = make_pipeline
+        self._clone = clone
         self.base_models_: list[Any] = []
         self.meta_model_: Any | None = None
         self._fitted = False
@@ -60,6 +69,9 @@ class StackingMetaModel:
         ridge = self._make_pipeline(self._StandardScaler(with_mean=True), self._Ridge(alpha=1.0))
         rf = self._RF(n_estimators=200, max_depth=5, random_state=42)
         return [ridge, rf]
+
+    def _clone_model(self, model: Any) -> Any:
+        return self._clone(model, safe=False)
 
     def fit(self, X, y) -> "StackingMetaModel":
         try:
@@ -74,8 +86,12 @@ class StackingMetaModel:
             # OOF predictions for meta features
             for bi, base in enumerate(bases):
                 for train_idx, test_idx in splitter.split(X, y):
-                    base.fit(X.iloc[train_idx], y.iloc[train_idx])
-                    preds = base.predict(X.iloc[test_idx])
+                    train_idx = _drop_split_boundary_label_overlap(train_idx, test_idx)
+                    if len(train_idx) == 0:
+                        continue
+                    fold_model = self._clone_model(base)
+                    fold_model.fit(X.iloc[train_idx], y.iloc[train_idx])
+                    preds = fold_model.predict(X.iloc[test_idx])
                     oof_meta[test_idx, bi] = preds
                     oof_mask[test_idx, bi] = True
             # Meta learner
@@ -105,13 +121,7 @@ class StackingMetaModel:
             # Fit base models on all data for prediction time
             self.base_models_ = []
             for base in bases:
-                m = base.__class__
-                # Recreate fresh instance to avoid data leakage
-                fitted = base
-                try:
-                    fitted = m() if m is not None else base
-                except AI_TRADING_FALLBACK_EXCEPTIONS:
-                    fitted = base
+                fitted = self._clone_model(base)
                 fitted.fit(X, y)
                 self.base_models_.append(fitted)
             self._fitted = True

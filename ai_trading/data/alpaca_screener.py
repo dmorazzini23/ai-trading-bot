@@ -3,7 +3,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import math
 from dataclasses import asdict, dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time
 from threading import Lock
 from typing import Any, cast
 from zoneinfo import ZoneInfo
@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from ai_trading.broker.alpaca_credentials import alpaca_auth_headers
 from ai_trading.config.management import get_env
 from ai_trading.logging import logger
+from ai_trading.market.calendar_wrapper import is_trading_day, previous_trading_session
 from ai_trading.utils.env import get_alpaca_data_base_url
 from ai_trading.utils.http import clamp_request_timeout, get as http_get
 
@@ -101,9 +102,10 @@ def _safe_float(raw_value: Any, default: float = 0.0) -> float:
 
 def _current_market_day(now: datetime | None = None) -> date:
     current = (now or _now_utc()).astimezone(_NY)
-    if current.time() < _MARKET_OPEN:
-        current = current - timedelta(days=1)
-    return current.date()
+    market_day = current.date()
+    if current.time() < _MARKET_OPEN or not is_trading_day(market_day):
+        return previous_trading_session(market_day)
+    return market_day
 
 
 def _snapshot_market_day(last_updated: datetime) -> date:

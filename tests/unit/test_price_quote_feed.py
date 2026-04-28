@@ -496,7 +496,7 @@ def test_execute_order_routes_market(monkeypatch):
     assert order_id == "OID-MARKET"
     assert "market" in calls and "limit" not in calls
     assert calls["market"]["side"] == "buy"
-    assert calls["market"]["kwargs"] == {}
+    assert set(calls["market"]["kwargs"]) == {"client_order_id"}
 
 
 def test_execute_order_routes_limit(monkeypatch):

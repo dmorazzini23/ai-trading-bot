@@ -31,7 +31,7 @@ def test_active_effective_policy_caches_until_config_changes(monkeypatch) -> Non
     assert first.policy_hash == second.policy_hash
 
     updated_cap = 0.07 if abs(float(cfg.capital_cap) - 0.07) > 1e-9 else 0.08
-    cfg.update(capital_cap=updated_cap)
+    cfg = cfg.update(capital_cap=updated_cap)
     bot_engine._active_effective_policy(state, cfg)
 
     assert calls["count"] == 2

@@ -51,6 +51,7 @@ def test_backfill_ffill():
     mid = out.loc[out["timestamp"] == ts[1]].iloc[0]
     assert mid["close"] == df["close"].iloc[0]
     assert mid["volume"] == 0
+    assert bool(mid["synthetic"]) is True
 
 def test_backfill_interpolate():
     df = _make_gap_df()
@@ -59,7 +60,8 @@ def test_backfill_interpolate():
         out = _verify_minute_continuity(df, "TEST", backfill="interpolate")
     ts = pd.date_range("2024-01-02 14:30", periods=3, freq="1min", tz="UTC")
     mid = out.loc[out["timestamp"] == ts[1]].iloc[0]
-    assert mid["close"] == pytest.approx((df["close"].iloc[0] + df["close"].iloc[1]) / 2)
+    assert mid["close"] == df["close"].iloc[0]
+    assert bool(mid["synthetic"]) is True
 
 
 def test_fetch_minute_df_safe_gap_fill(monkeypatch, caplog):

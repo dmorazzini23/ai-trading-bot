@@ -73,6 +73,28 @@ def _build_training_frame(df: Any) -> Any:
     return df.dropna()
 
 
+def _drop_next_bar_boundary_overlap(train_idx: Any, test_idx: Any) -> Any:
+    import numpy as np
+
+    train_idx = np.asarray(train_idx, dtype=int)
+    test_idx = np.asarray(test_idx, dtype=int)
+    if len(train_idx) == 0 or len(test_idx) == 0:
+        return train_idx
+    first_test = int(test_idx[0])
+    return train_idx[train_idx + 1 < first_test]
+
+
+def _next_bar_safe_time_series_splits(X: Any, *, n_splits: int = 5) -> Any:
+    from sklearn.model_selection import TimeSeriesSplit
+
+    try:
+        tscv = TimeSeriesSplit(n_splits=n_splits, gap=1)
+    except TypeError:
+        tscv = TimeSeriesSplit(n_splits=n_splits)
+    for train_idx, test_idx in tscv.split(X):
+        yield (_drop_next_bar_boundary_overlap(train_idx, test_idx), test_idx)
+
+
 def _synthetic_training_allowed() -> bool:
     return (
         bool(get_env("PYTEST_CURRENT_TEST", "", cast=str))
@@ -98,7 +120,6 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
     if pd is None or not hasattr(pd, "DataFrame"):
         raise ImportError("pandas is required for train_and_save_model")
     from sklearn.linear_model import LogisticRegression
-    from sklearn.model_selection import TimeSeriesSplit
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import make_pipeline
     from sklearn.metrics import accuracy_score
@@ -158,9 +179,8 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
     y = df["y"].astype(int).values
 
     # Walk-forward OOS validation
-    tscv = TimeSeriesSplit(n_splits=5)
     scores: list[float] = []
-    for train_idx, test_idx in tscv.split(X):
+    for train_idx, test_idx in _next_bar_safe_time_series_splits(X, n_splits=5):
         if len(test_idx) == 0 or len(train_idx) < 20:
             continue
         pipe = make_pipeline(StandardScaler(with_mean=True), _classifier_for(y[train_idx]))

@@ -7,7 +7,7 @@ import time as pytime
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock, Thread
-from typing import Any, Callable, Mapping, cast
+from typing import Any, Callable, Mapping
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.config.management import get_env
@@ -565,9 +565,10 @@ def _replay_live_parity_gate_snapshot(
     oms_lifecycle_parity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
-        return cast(dict[str, Any], summarize_replay_live_parity_gate(
+        result: dict[str, Any] = summarize_replay_live_parity_gate(
             oms_lifecycle_parity=oms_lifecycle_parity,
-        ))
+        )
+        return result
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         return {"enabled": True, "available": False, "ok": False, "error": str(exc)}
 
@@ -633,7 +634,8 @@ def _read_json_mapping_artifact(
 
 
 def _governance_base_path() -> Path:
-    return cast(Path, resolve_governance_base_path())
+    path: Path = resolve_governance_base_path()
+    return path
 
 
 def _read_jsonl_tail(path: Path, *, limit: int = 20) -> list[dict[str, Any]]:

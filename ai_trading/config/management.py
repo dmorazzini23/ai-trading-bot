@@ -11,9 +11,11 @@ from pathlib import Path
 
 _load_dotenv: Callable[..., bool] | None
 try:
-    from dotenv import load_dotenv as _load_dotenv
+    from dotenv import load_dotenv as _dotenv_load_dotenv
 except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - optional dependency may be absent
     _load_dotenv = None
+else:
+    _load_dotenv = _dotenv_load_dotenv
 
 _DOTENV_WARNING_EMITTED = False
 _RUNTIME_ENV_LOCK = RLock()
@@ -453,14 +455,31 @@ def validate_required_env(
         k.upper(): v for k, v in env_snapshot.items() if v not in (None, "")
     }
 
-    for key, value in list(required_fields.items()):
-        if value in (None, ""):
-            fallback = env_lookup.get(key)
-            if fallback not in (None, ""):
-                required_fields[key] = fallback
-                continue
+    def _raw_configured_required_value(key: str) -> str | None:
+        normalized_key = str(key).upper()
+        candidate_keys: list[str] = [normalized_key]
+        spec = SPEC_BY_ENV.get(normalized_key)
+        if spec is not None:
+            candidate_keys.extend(str(name).upper() for name in spec.env)
+            candidate_keys.extend(str(name).upper() for name in spec.deprecated_env)
+        if normalized_key == "DOLLAR_RISK_LIMIT":
+            candidate_keys.append("AI_TRADING_DAILY_LOSS_LIMIT")
+        for candidate in dict.fromkeys(candidate_keys):
+            value = env_lookup.get(candidate)
+            if value not in (None, ""):
+                return value
+        return None
 
-    missing = [name for name, value in required_fields.items() if not value]
+    raw_presence_required = {"DOLLAR_RISK_LIMIT"}
+    raw_required_fields: dict[str, str | None] = {}
+    for key in required_fields:
+        if key in raw_presence_required:
+            raw_required_fields[key] = _raw_configured_required_value(key)
+        else:
+            configured = _raw_configured_required_value(key)
+            raw_required_fields[key] = configured if configured not in (None, "") else required_fields[key]
+
+    missing = [name for name, value in raw_required_fields.items() if not value]
     if missing:
         logger.error(
             "CONFIG_REQUIRED_ENV_MISSING",
@@ -469,7 +488,7 @@ def validate_required_env(
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
     masked: dict[str, str] = {}
-    for name, value in required_fields.items():
+    for name, value in raw_required_fields.items():
         masked[name] = "***" if value else ""
     return masked
 
@@ -563,7 +582,7 @@ def validate_alpaca_credentials() -> None:
 
 
 def get_config_schema() -> str:
-    return generate_config_schema()
+    return str(generate_config_schema())
 
 
 def from_env_relaxed(env_overrides: Mapping[str, Any] | None = None) -> TradingConfig:

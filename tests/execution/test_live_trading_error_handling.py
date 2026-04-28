@@ -206,6 +206,80 @@ def test_execute_order_preserves_sell_short_lifecycle_side(engine_factory):
     assert engine._last_submit_outcome["side"] == "sell_short"
 
 
+def test_execute_order_rejects_ambiguous_qty_and_notional(engine_factory):
+    engine = engine_factory()
+
+    with pytest.raises(ValueError, match="ambiguous qty\\+notional"):
+        engine.execute_order("AAPL", "buy", 1, order_type="market", notional="100")
+
+
+def test_execute_order_propagates_notional_market_order(engine_factory):
+    captured: dict[str, Any] = {}
+
+    def _submit_market_stub(symbol, side, quantity, **kwargs):
+        captured.update(
+            {
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
+                "kwargs": dict(kwargs),
+            }
+        )
+        return {
+            "id": "notional-market-1",
+            "symbol": symbol,
+            "side": side,
+            "status": "accepted",
+            "notional": kwargs["notional"],
+            "filled_qty": "0",
+        }
+
+    engine = engine_factory()
+    engine.submit_market_order = _submit_market_stub
+
+    result = engine.execute_order("AAPL", "buy", 0, order_type="market", notional="100.25")
+
+    assert result is not None
+    assert captured["quantity"] == 0
+    assert captured["kwargs"]["notional"] == "100.25"
+
+
+def test_execute_order_marks_buy_over_short_as_closing(engine_factory):
+    captured: dict[str, Any] = {}
+
+    def _submit_market_stub(symbol, side, quantity, **kwargs):
+        captured.update(
+            {
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
+                "pending": dict(getattr(engine, "_pending_order_kwargs", {})),
+                "kwargs": dict(kwargs),
+            }
+        )
+        return {
+            "id": "cover-1",
+            "symbol": symbol,
+            "side": side,
+            "status": "accepted",
+            "qty": quantity,
+            "filled_qty": "0",
+        }
+
+    engine = engine_factory()
+    engine._position_quantity = lambda symbol: -5
+    engine.submit_market_order = _submit_market_stub
+
+    result = engine.execute_order("AAPL", "buy", 3, order_type="market")
+
+    assert result is not None
+    assert captured["side"] == "buy"
+    assert captured["pending"]["closing_position"] is True
+    assert captured["pending"]["reduce_only"] is True
+    assert captured["kwargs"]["closing_position"] is True
+    assert captured["kwargs"]["reduce_only"] is True
+
+
 def test_execute_order_limit_precheck_runs_once(engine_factory, monkeypatch):
     calls: list[tuple[Any, Any, Any, Any]] = []
 

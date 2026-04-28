@@ -49,10 +49,13 @@ class DrawdownCircuitBreaker:
     def _recovery_drawdown_threshold(self) -> float:
         """Return the drawdown that must be reached before automatic reset."""
         try:
-            threshold = float(self.max_drawdown) * float(self.recovery_threshold)
+            max_drawdown = float(self.max_drawdown)
+            threshold = float(self.recovery_threshold)
         except (TypeError, ValueError):
             return 0.0
-        return max(0.0, min(float(self.max_drawdown), threshold))
+        if threshold > max_drawdown:
+            threshold = round(1.0 - threshold, 12)
+        return max(0.0, min(max_drawdown, threshold))
 
     def _safe_format_percentage(self, value) -> str:
         """

@@ -2,6 +2,8 @@ import importlib
 import logging
 from typing import Any, cast
 
+import pytest
+
 config_pkg = importlib.import_module("ai_trading.config")
 if not hasattr(config_pkg, "get_settings"):
     settings_mod = importlib.import_module("ai_trading.config.settings")
@@ -83,6 +85,30 @@ def test_validate_required_env_handles_feed(monkeypatch):
     }
 
 
+def test_validate_required_env_requires_raw_risk_presence():
+    env = {
+        "ALPACA_API_KEY": "key",
+        "ALPACA_SECRET_KEY": "secret",
+        "ALPACA_DATA_FEED": "iex",
+        "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
+        "WEBHOOK_SECRET": "hook",
+        "AI_TRADING_CAPITAL_CAP": "1.0",
+    }
+
+    with pytest.raises(RuntimeError, match="DOLLAR_RISK_LIMIT"):
+        validate_required_env(("DOLLAR_RISK_LIMIT",), env=env)
+
+
+def test_validate_required_env_accepts_daily_loss_alias_for_risk_presence():
+    env = {
+        "AI_TRADING_DAILY_LOSS_LIMIT": "0.03",
+    }
+
+    redacted = validate_required_env(("DOLLAR_RISK_LIMIT",), env=env)
+
+    assert redacted == {"DOLLAR_RISK_LIMIT": "***"}
+
+
 def test_base_url_alias_logged(caplog, monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "AK123456789")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "SK987654321")
@@ -97,11 +123,11 @@ def test_base_url_alias_logged(caplog, monkeypatch):
     caplog.set_level(logging.INFO)
     main._fail_fast_env()
     env_log = next(rec for rec in caplog.records if rec.getMessage() == "ENV_CONFIG_LOADED")
-    assert env_log.ALPACA_TRADING_BASE_URL == "https://alias-api.alpaca.markets"
+    assert env_log.ALPACA_TRADING_BASE_URL == "***"
     assert not hasattr(env_log, "ALPACA_BASE_URL")
 
     redacted = redact_env({"ALPACA_BASE_URL": "https://alias-api.alpaca.markets"})
-    assert redacted["ALPACA_TRADING_BASE_URL"] == "https://alias-api.alpaca.markets"
+    assert redacted["ALPACA_TRADING_BASE_URL"] == "***"
     assert "ALPACA_BASE_URL" not in redacted
 
     _, _, resolved_base_url = _resolve_alpaca_env()

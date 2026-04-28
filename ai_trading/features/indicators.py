@@ -12,11 +12,39 @@ from ai_trading.logging import get_logger
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.indicators import ema
 from typing import Any
+from zoneinfo import ZoneInfo
 
 logger = get_logger(__name__)
 
 # Lazy pandas proxy
 pd = load_pandas()
+_ET = ZoneInfo("America/New_York")
+
+
+def _session_dates_from_timestamps(df: Any) -> Any | None:
+    """Return per-row session dates when timestamp data is available."""
+    try:
+        if isinstance(df.index, pd.DatetimeIndex):
+            index = df.index
+            if getattr(index, "tz", None) is not None:
+                index = index.tz_convert(_ET)
+            return pd.Series(index.date, index=df.index)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+    for column in ("timestamp", "datetime", "time"):
+        try:
+            if column not in df.columns:
+                continue
+            parsed = pd.to_datetime(df[column], errors="coerce")
+            if not bool(parsed.notna().any()):
+                continue
+            if getattr(parsed.dt, "tz", None) is not None:
+                parsed = parsed.dt.tz_convert(_ET)
+            return parsed.dt.date
+        except (AttributeError, KeyError, TypeError, ValueError):
+            continue
+    return None
 
 
 def compute_macd(df: Any) -> Any:
@@ -120,7 +148,15 @@ def compute_vwap(df: Any) -> Any:
             logger.error("Missing required columns for VWAP calculation")
             return df
         typical_price = (df["high"] + df["low"] + df["close"]) / 3
-        df["vwap"] = (typical_price * df["volume"]).cumsum() / df["volume"].cumsum()
+        price_volume = typical_price * df["volume"]
+        session_dates = _session_dates_from_timestamps(df)
+        if session_dates is not None:
+            df["vwap"] = (
+                price_volume.groupby(session_dates, sort=False).cumsum()
+                / df["volume"].groupby(session_dates, sort=False).cumsum()
+            )
+        else:
+            df["vwap"] = price_volume.cumsum() / df["volume"].cumsum()
         return df
     except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError):
         logger.error("VWAP computation failed", exc_info=True)

@@ -37,6 +37,7 @@ def _coerce_price(payload: dict[str, Any]) -> float | None:
         "arrival_price",
         "decision_price",
         "submit_price_reference",
+        "fill_price",
         "close",
     ):
         value = payload.get(key)
@@ -89,7 +90,7 @@ def _is_execution_outcome_payload(payload: dict[str, Any]) -> bool:
 def _parse_event_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
-    if _is_execution_outcome_payload(payload):
+    if _is_execution_outcome_payload(payload) and "fill_price" not in payload:
         return None
     symbol = str(payload.get("symbol") or "").strip().upper()
     timestamp = _coerce_timestamp(payload)

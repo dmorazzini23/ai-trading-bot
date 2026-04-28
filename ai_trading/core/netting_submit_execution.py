@@ -14,6 +14,21 @@ _NON_ACCEPTED_ORDER_STATUSES = frozenset(
 )
 
 
+def _is_short_reducing_buy(side: str, delta_shares: int, net_target: Any) -> bool:
+    side_token = str(side or "").strip().lower()
+    if side_token in {"cover", "buy_to_cover", "buy-to-cover", "buy to cover"}:
+        return True
+    if side_token != "buy" or int(delta_shares) <= 0:
+        return False
+    target_shares = getattr(net_target, "target_shares", None)
+    if target_shares is None:
+        return False
+    try:
+        return int(target_shares) <= 0
+    except (TypeError, ValueError):
+        return False
+
+
 @dataclass(frozen=True, slots=True)
 class NettingSubmitExecutionResult:
     status: str
@@ -85,6 +100,11 @@ def execute_netting_submission(
     logger: Any,
     breakers: Any,
 ) -> NettingSubmitExecutionResult:
+    closing_short = _is_short_reducing_buy(side, int(delta_shares), net_target)
+    submit_extra: dict[str, Any] = {}
+    if closing_short:
+        submit_extra["closing_position"] = True
+        submit_extra["reduce_only"] = True
     try:
         order = submit_order_func(
             runtime,
@@ -105,6 +125,7 @@ def execute_netting_submission(
             annotations=(dict(order_annotations) or None),
             price_hint=float(submit_arrival_price) if submit_arrival_price is not None else float(price),
             metadata=(dict(order_lineage_metadata) or None),
+            **submit_extra,
         )
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         error_info = classify_exception_func(exc, dependency="broker_submit", symbol=symbol)

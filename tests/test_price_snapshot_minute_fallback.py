@@ -48,12 +48,12 @@ def test_yahoo_minute_split_long_range(monkeypatch, caplog):
         calls.append((start, end))
         return pd.DataFrame(
             {
-                "timestamp": [pd.Timestamp(start)],
-                "open": [1.0],
-                "high": [1.0],
-                "low": [1.0],
-                "close": [float(len(calls))],
-                "volume": [0],
+                    "timestamp": [pd.Timestamp(start)],
+                    "open": [1.0],
+                    "high": [float(len(calls))],
+                    "low": [1.0],
+                    "close": [float(len(calls))],
+                    "volume": [0],
             }
         )
 

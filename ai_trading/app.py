@@ -163,6 +163,7 @@ def run_standalone_healthcheck_app(
     host: str,
     port: int,
     logger: Any | None = None,
+    raise_on_bind_error: bool = False,
 ) -> None:
     """Run ``app`` with the canonical standalone healthcheck server settings."""
 
@@ -171,10 +172,13 @@ def run_standalone_healthcheck_app(
         suppress_flask_startup_noise()
         app.run(host=host, port=port, threaded=True, use_reloader=False)
     except OSError as exc:
-        active_logger.warning(
+        log_method = active_logger.critical if raise_on_bind_error else active_logger.warning
+        log_method(
             "HEALTHCHECK_PORT_CONFLICT",
             extra={"host": host, "port": port, "error": str(exc)},
         )
+        if raise_on_bind_error:
+            raise SystemExit(1) from exc
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
         active_logger.warning(
             "HEALTH_SERVER_START_FAILED",
@@ -881,10 +885,13 @@ def create_app(
         if include_health:
             def _build_health_payload() -> dict[str, Any]:
                 pytest_mode = _pytest_active()
-                return build_api_health_payload(
-                    service_name=service_name,
-                    force_ok_for_pytest=pytest_mode,
-                    env_error=app.config.get("_ENV_ERR"),
+                return cast(
+                    dict[str, Any],
+                    build_api_health_payload(
+                        service_name=service_name,
+                        force_ok_for_pytest=pytest_mode,
+                        env_error=app.config.get("_ENV_ERR"),
+                    ),
                 )
 
             def _health_response(payload: dict[str, Any], status: int) -> Any:
@@ -1504,4 +1511,10 @@ if __name__ == "__main__":
         app = build_standalone_healthcheck_app(fail_fast_env=True)
         port = _resolve_standalone_healthcheck_port(s)
         app.logger.info("Starting Flask", extra={"port": port})
-        run_standalone_healthcheck_app(app, host="0.0.0.0", port=port, logger=app.logger)
+        run_standalone_healthcheck_app(
+            app,
+            host="0.0.0.0",
+            port=port,
+            logger=app.logger,
+            raise_on_bind_error=True,
+        )

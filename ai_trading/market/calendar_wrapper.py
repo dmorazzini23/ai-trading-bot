@@ -118,6 +118,68 @@ _FALLBACK_SESSIONS: dict[date, Session] = {
 }
 
 
+def _observed_fixed_holiday(year: int, month: int, day: int) -> date:
+    actual = date(year, month, day)
+    if actual.weekday() == 5:
+        return actual - timedelta(days=1)
+    if actual.weekday() == 6:
+        return actual + timedelta(days=1)
+    return actual
+
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    current = date(year, month, 1)
+    while current.weekday() != weekday:
+        current += timedelta(days=1)
+    return current + timedelta(days=7 * (n - 1))
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    current = date(year, 12, 31) if month == 12 else date(year, month + 1, 1) - timedelta(days=1)
+    while current.weekday() != weekday:
+        current -= timedelta(days=1)
+    return current
+
+
+def _easter_date(year: int) -> date:
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return date(year, month, day)
+
+
+def _computed_nyse_holidays(year: int) -> set[date]:
+    return {
+        _observed_fixed_holiday(year, 1, 1),
+        _nth_weekday(year, 1, 0, 3),
+        _nth_weekday(year, 2, 0, 3),
+        _easter_date(year) - timedelta(days=2),
+        _last_weekday(year, 5, 0),
+        _observed_fixed_holiday(year, 6, 19),
+        _observed_fixed_holiday(year, 7, 4),
+        _nth_weekday(year, 9, 0, 1),
+        _nth_weekday(year, 11, 3, 4),
+        _observed_fixed_holiday(year, 12, 25),
+    }
+
+
+def _is_fallback_holiday(d: date) -> bool:
+    if d in _HOLIDAYS:
+        return True
+    return any(d in _computed_nyse_holidays(year) for year in (d.year - 1, d.year, d.year + 1))
+
+
 def is_trading_day(d: date) -> bool:
     """Return ``True`` if *d* is an NYSE trading day."""
 
@@ -126,7 +188,7 @@ def is_trading_day(d: date) -> bool:
             return bool(_CAL.is_session(d))
         except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             logger.debug("CALENDAR_IS_SESSION_FAILED", extra={"date": d.isoformat()}, exc_info=True)
-    if d in _HOLIDAYS:
+    if _is_fallback_holiday(d):
         return False
     if d in _FALLBACK_SESSIONS:
         return True
@@ -154,6 +216,8 @@ def session_info(d: date) -> Session:
             logger.debug("CALENDAR_SESSION_INFO_FAILED", extra={"date": d.isoformat()}, exc_info=True)
     if d in _FALLBACK_SESSIONS:
         return _FALLBACK_SESSIONS[d]
+    if not is_trading_day(d):
+        return session_info(previous_trading_session(d))
     return _session_from_et(d, 16, 0)
 
 

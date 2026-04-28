@@ -28,6 +28,6 @@ def test_preflight_logs_context_fields_on_fallback(monkeypatch, caplog):
     record = records[0]
     assert record.status == "fallback"
     assert record.paper is True
-    assert record.alpaca_base_url == "https://paper-api.alpaca.markets"
+    assert record.alpaca_base_url == "***"
     assert record.alpaca_has_sip is False
     assert record.alpaca_allow_sip is False

@@ -841,7 +841,10 @@ def test_duplicate_intent_window_preserves_sell_short(monkeypatch):
 
     clock["value"] = 130.0
     assert engine._should_suppress_duplicate_intent("MSFT", "sell_short") is True
-    assert ("MSFT", "sell_short") in engine._recent_order_intents
+    assert any(
+        key[:2] == ("MSFT", "sell_short")
+        for key in engine._recent_order_intents
+    )
 
 
 def test_duplicate_intent_suppressed_when_open_order_present(monkeypatch):

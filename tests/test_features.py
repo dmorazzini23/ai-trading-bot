@@ -6,6 +6,7 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 from ai_trading.features import build_features_pipeline
+from ai_trading.features.indicators import compute_vwap
 
 ps_stub = types.ModuleType("pydantic_settings")
 setattr(cast(Any, ps_stub), "BaseSettings", object)
@@ -45,6 +46,29 @@ def test_features_pipeline():
     assert not df[['macd', 'macds', 'atr', 'vwap']].isnull().all().any(), "Indicators have all NaNs"
     na_counts = df[['macd', 'atr', 'vwap', 'macds']].isna().sum()
     assert (na_counts <= 20).all(), f"Excessive NaNs in features: {na_counts}"
+
+
+def test_intraday_vwap_resets_by_timestamp_date():
+    df = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                [
+                    "2026-04-17T14:30:00Z",
+                    "2026-04-17T14:31:00Z",
+                    "2026-04-20T14:30:00Z",
+                ],
+                utc=True,
+            ),
+            "high": [10.0, 20.0, 100.0],
+            "low": [10.0, 20.0, 100.0],
+            "close": [10.0, 20.0, 100.0],
+            "volume": [10.0, 10.0, 10.0],
+        }
+    )
+
+    out = compute_vwap(df)
+
+    assert out["vwap"].tolist() == [10.0, 15.0, 100.0]
 
 
 if __name__ == "__main__":

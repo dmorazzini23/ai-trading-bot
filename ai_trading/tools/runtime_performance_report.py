@@ -1645,7 +1645,21 @@ def _build_order_source_lookup(path: Path) -> dict[str, str]:
     return {order_id: source for order_id, (_priority, _ts, source) in selected.items()}
 
 
-def _load_trade_rows(path: Path) -> list[dict[str, Any]]:
+def _assert_trusted_pickle_allowed(path: Path, *, allow_trusted_pickle: bool) -> None:
+    if allow_trusted_pickle:
+        return
+    raise RuntimeError(
+        f"Refusing to read pickle trade artifact {path} without explicit trust. "
+        "Pass allow_trusted_pickle=True or use --allow-trusted-pickle-read only "
+        "for artifacts from a trusted source."
+    )
+
+
+def _load_trade_rows(
+    path: Path,
+    *,
+    allow_trusted_pickle: bool = False,
+) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     suffix = path.suffix.lower()
@@ -1670,11 +1684,19 @@ def _load_trade_rows(path: Path) -> list[dict[str, Any]]:
         try:
             frame = pd.read_parquet(path)
         except AI_TRADING_FALLBACK_EXCEPTIONS:
+            _assert_trusted_pickle_allowed(
+                path,
+                allow_trusted_pickle=allow_trusted_pickle,
+            )
             try:
                 frame = pd.read_pickle(path)
             except AI_TRADING_FALLBACK_EXCEPTIONS:
                 frame = None
     elif suffix in {".pkl", ".pickle"}:
+        _assert_trusted_pickle_allowed(
+            path,
+            allow_trusted_pickle=allow_trusted_pickle,
+        )
         try:
             frame = pd.read_pickle(path)
         except AI_TRADING_FALLBACK_EXCEPTIONS:
@@ -2984,6 +3006,7 @@ def summarize_trade_history(
     *,
     tca_path: Path | None = None,
     fill_events_path: Path | None = None,
+    allow_trusted_pickle: bool = False,
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "path": str(path),
@@ -3015,7 +3038,7 @@ def summarize_trade_history(
     if not path.exists():
         return summary
 
-    records = _load_trade_rows(path)
+    records = _load_trade_rows(path, allow_trusted_pickle=allow_trusted_pickle)
     symbol_scope = _runtime_gonogo_symbol_scope()
     if symbol_scope:
         records_unfiltered = len(records)
@@ -3041,7 +3064,10 @@ def summarize_trade_history(
     fill_open_positions: dict[str, float] = {}
     fill_open_lot_count = 0
     if resolved_fill_events_path.exists():
-        fill_records = _load_trade_rows(resolved_fill_events_path)
+        fill_records = _load_trade_rows(
+            resolved_fill_events_path,
+            allow_trusted_pickle=allow_trusted_pickle,
+        )
         if symbol_scope:
             fill_records_unfiltered = len(fill_records)
             fill_records = _filter_rows_by_symbol(fill_records, symbol_scope)
@@ -3089,7 +3115,10 @@ def summarize_trade_history(
     )
     cost_enrichment: dict[str, Any] | None = None
     if direct_trades and tca_path is not None and tca_path.exists():
-        tca_records = _load_trade_rows(tca_path)
+        tca_records = _load_trade_rows(
+            tca_path,
+            allow_trusted_pickle=allow_trusted_pickle,
+        )
         if tca_records:
             direct_trades, cost_enrichment = _enrich_direct_trades_with_tca_costs(
                 direct_trades,
@@ -4249,11 +4278,13 @@ def build_report(
     policy_runtime_toggles_path: Path | None = None,
     uncertainty_capital_state_path: Path | None = None,
     counterfactual_state_path: Path | None = None,
+    allow_trusted_pickle: bool = False,
 ) -> dict[str, Any]:
     trade_summary = summarize_trade_history(
         trade_history_path,
         tca_path=tca_path,
         fill_events_path=fill_events_path,
+        allow_trusted_pickle=allow_trusted_pickle,
     )
     gate_summary = summarize_gate_effectiveness(
         gate_summary_path,
@@ -5848,6 +5879,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to canonical trade history (parquet/pickle/json/jsonl/csv).",
     )
     parser.add_argument(
+        "--allow-trusted-pickle-read",
+        action="store_true",
+        help="Permit reading trusted pickle trade artifacts for this report.",
+    )
+    parser.add_argument(
         "--gate-summary",
         default=None,
         help="Path to gate effectiveness summary json.",
@@ -6009,6 +6045,7 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(paths.get("counterfactual_state"), Path)
             else None
         ),
+        allow_trusted_pickle=bool(args.allow_trusted_pickle_read),
     )
     if args.go_no_go or args.fail_on_no_go:
         thresholds = resolve_runtime_gonogo_thresholds()

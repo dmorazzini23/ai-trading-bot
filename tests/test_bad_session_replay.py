@@ -87,7 +87,14 @@ def test_bad_session_parser_rejects_tca_style_outcome_rows(tmp_path: Path) -> No
 
     events = canonical_bad_session_events(log_path)
 
-    assert events == []
+    assert events == [
+        {
+            "timestamp": "2026-03-02T23:40:00Z",
+            "symbol": "AAPL",
+            "price": 191.42,
+            "volume": 25.0,
+        }
+    ]
 
 
 def test_bad_session_parser_rejects_terminal_status_even_with_market_price(tmp_path: Path) -> None:

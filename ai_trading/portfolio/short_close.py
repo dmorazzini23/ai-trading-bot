@@ -17,7 +17,7 @@ def short_close(api: Any, submit: Callable[[str, int, str], Any]) -> int:
     Parameters
     ----------
     api:
-        Broker API instance with ``list_positions`` method.
+        Broker API instance with ``get_all_positions`` or ``list_positions`` method.
     submit:
         Callable used to submit buy orders. It must accept ``symbol``,
         ``quantity`` and ``side`` arguments.
@@ -28,9 +28,17 @@ def short_close(api: Any, submit: Callable[[str, int, str], Any]) -> int:
         Number of close orders submitted.
     """
     positions: Iterable[Any] = []
-    if hasattr(api, "list_positions"):
+    get_all_positions = getattr(api, "get_all_positions", None)
+    list_positions = getattr(api, "list_positions", None)
+    if callable(get_all_positions):
         try:
-            positions = api.list_positions() or []
+            positions = get_all_positions() or []
+        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
+            logger.warning("GET_ALL_POSITIONS_FAIL", exc_info=True)
+            positions = []
+    if not positions and callable(list_positions):
+        try:
+            positions = list_positions() or []
         except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             logger.warning("LIST_POSITIONS_FAIL", exc_info=True)
             positions = []

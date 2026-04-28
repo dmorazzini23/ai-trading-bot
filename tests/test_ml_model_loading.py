@@ -225,6 +225,17 @@ def test_training_frame_drops_final_missing_future_close_before_labeling():
     assert set(features["y"].astype(int).unique()) == {1}
 
 
+def test_next_bar_safe_time_series_splits_leave_label_gap():
+    pytest.importorskip("sklearn")
+
+    splits = list(model_loader._next_bar_safe_time_series_splits(np.arange(80), n_splits=4))
+
+    assert splits
+    for train_idx, test_idx in splits:
+        assert len(train_idx) > 0
+        assert train_idx.max() + 1 < test_idx.min()
+
+
 def test_live_model_loader_requires_verified_artifact(tmp_path, monkeypatch):
     monkeypatch.setenv("AI_TRADING_MODELS_DIR", str(tmp_path))
     monkeypatch.setenv("EXECUTION_MODE", "live")

@@ -290,6 +290,49 @@ def _normalize_order_side(side: OrderSide | str | None) -> OrderSide | None:
         return None
 
 
+def _extract_open_order_remaining_qty(order: Any) -> float:
+    """Return remaining open quantity, preferring broker leaves/unfilled fields."""
+
+    def _value(record: Any, name: str) -> Any:
+        if isinstance(record, Mapping):
+            return record.get(name)
+        return getattr(record, name, None)
+
+    def _finite_abs(value: Any) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(parsed):
+            return None
+        return abs(parsed)
+
+    for key in ("remaining_qty", "unfilled_qty", "leaves_qty", "leaves_quantity"):
+        qty = _finite_abs(_value(order, key))
+        if qty is not None:
+            return qty
+
+    total_qty: float | None = None
+    for key in ("qty", "quantity"):
+        total_qty = _finite_abs(_value(order, key))
+        if total_qty is not None:
+            break
+
+    filled_qty: float | None = None
+    for key in ("filled_qty", "filled_quantity", "executed_qty", "exec_quantity"):
+        filled_qty = _finite_abs(_value(order, key))
+        if filled_qty is not None:
+            break
+
+    if total_qty is not None and filled_qty is not None:
+        return max(0.0, total_qty - filled_qty)
+    if total_qty is not None:
+        return total_qty
+    return 0.0
+
+
 def _as_bool(value: Any) -> bool:
     """Parse booleans consistently for env-driven flags."""
 
@@ -2575,34 +2618,11 @@ class ExecutionEngine:
             except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 self.logger.debug("BROKER_SNAPSHOT_SIDE_NORMALIZE_FAILED", exc_info=True)
                 return None
-            if text in {"buy", "long", "cover"}:
+            if text in {"buy", "long", "cover", "buy_to_cover", "buytocover", "buy-to-cover", "buy to cover"}:
                 return "buy"
             if text in {"sell", "sell_short", "sellshort", "short"}:
                 return "sell"
             return None
-
-        def _extract_qty(value: Any) -> float:
-            candidates: list[Any] = []
-            if isinstance(value, Mapping):
-                candidates.extend(
-                    value.get(key)
-                    for key in ("qty", "quantity", "remaining_qty", "unfilled_qty", "filled_qty")
-                )
-            else:
-                for key in ("qty", "quantity", "remaining_qty", "unfilled_qty", "filled_qty"):
-                    if hasattr(value, key):
-                        candidates.append(getattr(value, key))
-            for candidate in candidates:
-                if candidate in (None, ""):
-                    continue
-                try:
-                    qty = float(candidate)
-                except (TypeError, ValueError):
-                    continue
-                if not math.isfinite(qty):
-                    continue
-                return abs(qty)
-            return 0.0
 
         for order in open_orders_tuple:
             if isinstance(order, Mapping):
@@ -2613,7 +2633,7 @@ class ExecutionEngine:
                 side = _extract_side(getattr(order, "side", None))
             if symbol is None or side is None:
                 continue
-            qty_val = _extract_qty(order)
+            qty_val = _extract_open_order_remaining_qty(order)
             if qty_val <= 0:
                 continue
             if side == "buy":

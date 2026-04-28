@@ -283,3 +283,51 @@ def test_yahoo_gap_interpolation_restores_contiguity() -> None:
     repaired_index = pd.to_datetime(repaired["timestamp"], utc=True)
     assert len(repaired_index) == expected_local.size
     assert repaired_index.is_monotonic_increasing
+
+
+def test_local_gap_repair_does_not_backfill_from_future_prices() -> None:
+    tz = ZoneInfo("America/New_York")
+    start_local = datetime(2024, 1, 8, 9, 30, tzinfo=tz)
+    end_local = datetime(2024, 1, 8, 9, 35, tzinfo=tz)
+    observed_local = pd.to_datetime(
+        [
+            datetime(2024, 1, 8, 9, 31, tzinfo=tz),
+            datetime(2024, 1, 8, 9, 33, tzinfo=tz),
+            datetime(2024, 1, 8, 9, 34, tzinfo=tz),
+        ]
+    )
+    yahoo_frame = pd.DataFrame(
+        {
+            "timestamp": observed_local.tz_convert("UTC"),
+            "open": [10.0, 30.0, 40.0],
+            "high": [10.0, 30.0, 40.0],
+            "low": [10.0, 30.0, 40.0],
+            "close": [10.0, 30.0, 40.0],
+            "volume": [100.0, 300.0, 400.0],
+        }
+    )
+    yahoo_frame.attrs["data_provider"] = "yahoo"
+
+    repaired, meta, used_backup = fetch_module._repair_rth_minute_gaps(  # type: ignore[attr-defined]
+        yahoo_frame,
+        symbol="AAPL",
+        start=start_local.astimezone(UTC),
+        end=end_local.astimezone(UTC),
+        tz=tz,
+    )
+
+    repaired_by_ts = repaired.set_index(pd.to_datetime(repaired["timestamp"], utc=True))
+    leading_ts = pd.Timestamp(start_local).tz_convert("UTC")
+    interior_ts = (pd.Timestamp(start_local) + pd.Timedelta(minutes=2)).tz_convert("UTC")
+
+    assert used_backup is False
+    assert pd.isna(repaired_by_ts.loc[leading_ts, "close"])
+    assert repaired_by_ts.loc[interior_ts, "close"] == 10.0
+    assert repaired_by_ts.loc[interior_ts, "close"] != 30.0
+    assert bool(repaired_by_ts.loc[leading_ts, "synthetic"]) is True
+    assert bool(repaired_by_ts.loc[interior_ts, "synthetic"]) is True
+    assert meta["missing_after"] == 1
+    assert meta["residual_gap"] is True
+    assert meta["synthetic_rows"] == 2
+    assert meta["synthetic_rows_filled"] == 1
+    assert meta["synthetic_rows_residual"] == 1

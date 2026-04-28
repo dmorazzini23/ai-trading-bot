@@ -482,14 +482,22 @@ def _broker_kwargs_for_route(route: str, extra: Mapping[str, Any] | None) -> dic
     """Return broker-safe keyword arguments for *route* without diagnostics."""
 
     route_norm = str(route or "").strip().lower()
-    if route_norm == "market" or not extra:
+    if not extra:
         return {}
 
-    allowed_keys: set[str] = {"time_in_force", "extended_hours"}
+    allowed_keys: set[str] = {
+        "asset_class",
+        "client_order_id",
+        "closing_position",
+        "close_position",
+        "extended_hours",
+        "notional",
+        "reduce_only",
+        "time_in_force",
+    }
     if route_norm in {"limit", "stop_limit", "stop"}:
         allowed_keys.add("limit_price")
         allowed_keys.add("stop_price")
-        allowed_keys.add("asset_class")
     if route_norm == "stop_limit":
         allowed_keys.add("stop_limit_price")
     result: dict[str, Any] = {}
@@ -1010,6 +1018,18 @@ def _bool_from_record(record: Any, *names: str) -> bool | None:
         return None
 
 
+def _positive_decimal(value: Any) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = _safe_decimal(value)
+    except LIVE_TRADING_FALLBACK_EXC:
+        return None
+    if parsed is None or parsed <= 0:
+        return None
+    return parsed
+
+
 def _effective_closing_position(
     engine: "ExecutionEngine" | None,
     *,
@@ -1026,7 +1046,9 @@ def _effective_closing_position(
         side_token = str(side).strip().lower() if side is not None else ""
     except LIVE_TRADING_FALLBACK_EXC:
         side_token = ""
-    if side_token != "sell" or engine is None:
+    if side_token in {"cover", "buy_to_cover", "buy-to-cover", "buy to cover"}:
+        side_token = "buy"
+    if side_token not in {"buy", "sell"} or engine is None:
         return False
     try:
         requested_qty = max(int(quantity), 0)
@@ -1035,7 +1057,7 @@ def _effective_closing_position(
     if requested_qty <= 0:
         return False
     try:
-        return int(engine._position_quantity(symbol)) > 0
+        position_qty = int(engine._position_quantity(symbol))
     except LIVE_TRADING_FALLBACK_EXC:
         logger.debug(
             "EFFECTIVE_CLOSING_POSITION_LOOKUP_FAILED",
@@ -1043,6 +1065,52 @@ def _effective_closing_position(
             exc_info=True,
         )
         return False
+    if side_token == "sell":
+        return position_qty > 0
+    return position_qty < 0
+
+
+def _extract_open_order_remaining_qty(order: Any) -> float:
+    """Return remaining open quantity, preferring broker leaves/unfilled fields."""
+
+    def _field(record: Any, name: str) -> Any:
+        if isinstance(record, Mapping):
+            return record.get(name)
+        return getattr(record, name, None)
+
+    def _finite_abs(value: Any) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(parsed):
+            return None
+        return abs(parsed)
+
+    for key in ("remaining_qty", "unfilled_qty", "leaves_qty", "leaves_quantity"):
+        qty = _finite_abs(_field(order, key))
+        if qty is not None:
+            return qty
+
+    total_qty: float | None = None
+    for key in ("qty", "quantity"):
+        total_qty = _finite_abs(_field(order, key))
+        if total_qty is not None:
+            break
+
+    filled_qty: float | None = None
+    for key in ("filled_qty", "filled_quantity", "executed_qty", "exec_quantity"):
+        filled_qty = _finite_abs(_field(order, key))
+        if filled_qty is not None:
+            break
+
+    if total_qty is not None and filled_qty is not None:
+        return max(0.0, total_qty - filled_qty)
+    if total_qty is not None:
+        return total_qty
+    return 0.0
 
 
 def _short_sale_precheck(
@@ -2742,7 +2810,7 @@ class ExecutionEngine:
         if client is None:
             return []
         try:
-            return list_alpaca_orders(client, status="open")
+            return cast(list[Any], list_alpaca_orders(client, status="open"))
         except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("PENDING_POLICY_LIST_ORDERS_FAILED", exc_info=True)
         return []
@@ -18009,11 +18077,21 @@ class ExecutionEngine:
         signal_weight = kwargs.get("signal_weight")
         submit_started_at = time.monotonic()
         self._refresh_settings()
+        notional_decimal = _positive_decimal(kwargs.get("notional"))
         try:
             symbol = _req_str("symbol", symbol)
             if len(symbol) > 5 or not symbol.isalpha():
                 return {"status": "error", "code": "SYMBOL_INVALID", "error": symbol, "order_id": None}
-            quantity = int(_pos_num("qty", quantity))
+            if notional_decimal is not None:
+                try:
+                    parsed_quantity = int(quantity)
+                except (TypeError, ValueError):
+                    parsed_quantity = 0
+                if parsed_quantity > 0:
+                    raise ValueError("ambiguous_qty_notional")
+                quantity = 0
+            else:
+                quantity = int(_pos_num("qty", quantity))
         except (ValueError, TypeError) as e:
             logger.error("ORDER_INPUT_INVALID", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
@@ -18132,6 +18210,8 @@ class ExecutionEngine:
             "account_snapshot": getattr(self, "_cycle_account", None),
             "time_in_force": resolved_tif,
         }
+        if notional_decimal is not None:
+            precheck_order["notional"] = str(notional_decimal)
         expected_edge_hint = self._coerce_finite_float(
             kwargs.get("expected_net_edge_bps")
         )
@@ -18240,6 +18320,11 @@ class ExecutionEngine:
             "time_in_force": resolved_tif,
             "client_order_id": client_order_id,
         }
+        if notional_decimal is not None:
+            order_data["notional"] = str(notional_decimal)
+        if closing_position:
+            order_data["closing_position"] = True
+            order_data["reduce_only"] = True
         if effective_order_type == "limit":
             order_data["limit_price"] = float(effective_limit_price)
         # Optional bracket fields (ATR-based levels should be passed in by caller)
@@ -19550,7 +19635,25 @@ class ExecutionEngine:
         if normalized_side_input is None:
             self._emit_validation_failure(symbol, side, qty, "invalid_side")
             raise ValueError(f"invalid side: {side}")
-        if qty is None or qty <= 0:
+        raw_notional = kwargs.get("notional")
+        notional_decimal = _positive_decimal(raw_notional)
+        order_type_initial = str(order_type or "limit").lower()
+        notional_market_order = (
+            notional_decimal is not None and order_type_initial == "market"
+        )
+        qty_positive = False
+        if qty is not None:
+            try:
+                qty_positive = int(qty) > 0
+            except (TypeError, ValueError):
+                qty_positive = False
+        if notional_decimal is not None and order_type_initial != "market":
+            self._emit_validation_failure(symbol, side, qty, "notional_requires_market")
+            raise ValueError("notional orders require order_type=market")
+        if notional_market_order and qty_positive:
+            self._emit_validation_failure(symbol, side, qty, "ambiguous_qty_notional")
+            raise ValueError("ambiguous qty+notional market order")
+        if not notional_market_order and (qty is None or qty <= 0):
             self._emit_validation_failure(symbol, side, qty, "invalid_qty")
             raise ValueError(f"execute_order invalid qty={qty}")
 
@@ -19564,6 +19667,8 @@ class ExecutionEngine:
             quantity = int(qty)
         except LIVE_TRADING_FALLBACK_EXC:
             quantity = qty
+        if notional_market_order:
+            quantity = 0
         closing_position = _effective_closing_position(
             self,
             symbol=symbol,
@@ -19708,7 +19813,6 @@ class ExecutionEngine:
         for key in list(ignored_keys):
             kwargs.pop(key, None)
 
-        order_type_initial = str(order_type or "limit").lower()
         using_fallback_price = False
         if annotations:
             using_fallback_price = _safe_bool(annotations.get("using_fallback_price"))
@@ -21632,6 +21736,7 @@ class ExecutionEngine:
             kwargs.pop("extended_hours", None)
         if closing_position:
             order_kwargs["closing_position"] = True
+            order_kwargs["reduce_only"] = True
         for passthrough in ("client_order_id", "notional", "trail_percent", "trail_price", "stop_loss", "take_profit", "order_class"):
             if passthrough in kwargs:
                 order_kwargs[passthrough] = kwargs.pop(passthrough)
@@ -31032,6 +31137,26 @@ class ExecutionEngine:
             raise RuntimeError("Alpaca TradingClient is not initialized")
 
         qty_payload = order_data.get("quantity")
+        notional_decimal = _positive_decimal(order_data.get("notional"))
+        if notional_decimal is not None and order_type != "market":
+            raise NonRetryableBrokerError(
+                "notional_requires_market",
+                code="notional_requires_market",
+                symbol=symbol_token or None,
+                detail="notional orders require order_type=market",
+            )
+        if notional_decimal is not None:
+            try:
+                qty_positive = int(qty_payload) > 0
+            except (TypeError, ValueError):
+                qty_positive = False
+            if qty_positive:
+                raise NonRetryableBrokerError(
+                    "ambiguous_qty_notional",
+                    code="ambiguous_qty_notional",
+                    symbol=symbol_token or None,
+                    detail="market orders cannot include both qty and notional",
+                )
         market_cls, limit_cls, side_enum, tif_enum = _ensure_request_models()
         if side_enum is None or tif_enum is None or market_cls is None or limit_cls is None:
             raise RuntimeError("Alpaca request models unavailable")
@@ -31041,6 +31166,7 @@ class ExecutionEngine:
                 "symbol": order_data.get("symbol"),
                 "side": order_data.get("side"),
                 "qty": qty_payload,
+                "notional": str(notional_decimal) if notional_decimal is not None else None,
                 "order_type": order_type,
                 "time_in_force": tif_token,
                 "client_order_id": order_data.get("client_order_id"),
@@ -31069,11 +31195,14 @@ class ExecutionEngine:
                         tif_member = candidate
                 common_kwargs = {
                     "symbol": order_data["symbol"],
-                    "qty": order_data["quantity"],
                     "side": side,
                     "time_in_force": tif_member,
                     "client_order_id": order_data.get("client_order_id"),
                 }
+                if notional_decimal is not None:
+                    common_kwargs["notional"] = str(notional_decimal)
+                else:
+                    common_kwargs["qty"] = order_data["quantity"]
                 asset_class = order_data.get("asset_class")
                 if asset_class:
                     common_kwargs["asset_class"] = asset_class
@@ -31624,34 +31753,11 @@ class ExecutionEngine:
             except LIVE_TRADING_FALLBACK_EXC:  # pragma: no cover - defensive
                 logger.debug("BROKER_SNAPSHOT_SIDE_NORMALIZE_FAILED", exc_info=True)
                 return None
-            if token in {"buy", "long", "cover"}:
+            if token in {"buy", "long", "cover", "buy_to_cover", "buytocover", "buy-to-cover", "buy to cover"}:
                 return "buy"
             if token in {"sell", "sell_short", "sellshort", "short"}:
                 return "sell"
             return None
-
-        def _extract_qty(value: Any) -> float:
-            candidates: list[Any] = []
-            if isinstance(value, Mapping):
-                candidates.extend(
-                    value.get(key)
-                    for key in ("qty", "quantity", "remaining_qty", "unfilled_qty", "filled_qty")
-                )
-            else:
-                for key in ("qty", "quantity", "remaining_qty", "unfilled_qty", "filled_qty"):
-                    if hasattr(value, key):
-                        candidates.append(getattr(value, key))
-            for candidate in candidates:
-                if candidate in (None, ""):
-                    continue
-                try:
-                    qty = float(candidate)
-                except (TypeError, ValueError):
-                    continue
-                if not math.isfinite(qty):
-                    continue
-                return abs(qty)
-            return 0.0
 
         for order in open_orders_tuple:
             if isinstance(order, Mapping):
@@ -31662,7 +31768,7 @@ class ExecutionEngine:
                 side = _extract_side(getattr(order, "side", None))
             if symbol is None or side is None:
                 continue
-            qty_val = _extract_qty(order)
+            qty_val = _extract_open_order_remaining_qty(order)
             if qty_val <= 0:
                 continue
             if side == "buy":

@@ -1229,15 +1229,20 @@ async def run_with_concurrency(
         )
         if pending:
             for task in pending:
-                task.cancel()
-            await _drain_cancelled_tasks(list(pending))
-            for task in pending:
                 symbol = task_to_symbol.get(task)
                 if symbol is None:
                     continue
                 FAILED_SYMBOLS.add(symbol)
                 SUCCESSFUL_SYMBOLS.discard(symbol)
                 results[symbol] = None
+            grace_timeout = max(0.05, min(float(effective_timeout) * 100.0, 0.25))
+            pending_gather = asyncio.gather(*pending, return_exceptions=True)
+            try:
+                await asyncio.wait_for(pending_gather, timeout=grace_timeout)
+            except TimeoutError:
+                for task in pending:
+                    task.cancel()
+                await _drain_cancelled_tasks(list(pending))
         gather_outcomes: list[Any] = []
         for task in done:
             try:

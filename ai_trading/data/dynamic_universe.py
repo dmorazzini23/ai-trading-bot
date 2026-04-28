@@ -2,6 +2,7 @@ from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -62,10 +63,19 @@ class DynamicUniverseResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-def _safe_float(raw_value: Any, default: float = 0.0) -> float:
+def _finite_float(raw_value: Any) -> float | None:
     try:
         value = float(raw_value)
     except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return value
+
+
+def _safe_float(raw_value: Any, default: float = 0.0) -> float:
+    value = _finite_float(raw_value)
+    if value is None:
         return default
     return value
 
@@ -158,11 +168,11 @@ def _asset_cache(runtime) -> dict[str, Any]:
     return new_cache
 
 
-def _liquidity_cache(runtime) -> dict[str, dict[str, float]]:
+def _liquidity_cache(runtime) -> dict[str, dict[str, float | bool]]:
     existing_cache = getattr(runtime, "_dynamic_universe_liquidity_cache", None)
     if isinstance(existing_cache, dict):
-        return cast(dict[str, dict[str, float]], existing_cache)
-    new_cache: dict[str, dict[str, float]] = {}
+        return cast(dict[str, dict[str, float | bool]], existing_cache)
+    new_cache: dict[str, dict[str, float | bool]] = {}
     setattr(runtime, "_dynamic_universe_liquidity_cache", new_cache)
     return new_cache
 
@@ -189,20 +199,32 @@ def _resolve_asset(runtime, symbol: str) -> Any:
     return asset
 
 
-def _resolve_liquidity(runtime, symbol: str, fallback_price: float) -> tuple[float, float, float]:
+def _resolve_liquidity(runtime, symbol: str, fallback_price: float) -> tuple[float, float, float, bool]:
     cache = _liquidity_cache(runtime)
     cached = cache.get(symbol)
     if isinstance(cached, dict):
+        price = _safe_float(cached.get("price"), fallback_price)
+        volume = _safe_float(cached.get("volume"))
+        dollar_volume = _safe_float(cached.get("dollar_volume"))
+        finite = bool(
+            cached.get(
+                "finite",
+                math.isfinite(price) and math.isfinite(volume) and math.isfinite(dollar_volume),
+            )
+        )
         return (
-            float(cached.get("price", fallback_price)),
-            float(cached.get("volume", 0.0)),
-            float(cached.get("dollar_volume", 0.0)),
+            price,
+            volume,
+            dollar_volume,
+            finite,
         )
     data_fetcher = getattr(runtime, "data_fetcher", None)
     get_daily_df = getattr(data_fetcher, "get_daily_df", None) if data_fetcher is not None else None
-    last_price = fallback_price
+    fallback_price_finite = _finite_float(fallback_price)
+    last_price = fallback_price_finite if fallback_price_finite is not None else 0.0
     volume = 0.0
     dollar_volume = 0.0
+    finite = fallback_price_finite is not None
     if callable(get_daily_df):
         try:
             frame = get_daily_df(runtime, symbol)
@@ -215,12 +237,15 @@ def _resolve_liquidity(runtime, symbol: str, fallback_price: float) -> tuple[flo
             if frame is not None and not getattr(frame, "empty", True):
                 try:
                     last_row = frame.iloc[-1]
-                    last_price = max(
-                        _safe_float(getattr(last_row, "get", lambda *_a: None)("close"), fallback_price),
-                        fallback_price,
-                    )
-                    volume = _safe_float(getattr(last_row, "get", lambda *_a: None)("volume"))
-                    dollar_volume = last_price * max(volume, 0.0)
+                    close_value = _finite_float(getattr(last_row, "get", lambda *_a: None)("close"))
+                    volume_value = _finite_float(getattr(last_row, "get", lambda *_a: None)("volume"))
+                    if close_value is None or volume_value is None:
+                        finite = False
+                    else:
+                        last_price = max(close_value, last_price)
+                        volume = volume_value
+                        dollar_volume = last_price * max(volume, 0.0)
+                        finite = math.isfinite(dollar_volume)
                 except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                     logger.debug(
                         "DYNAMIC_UNIVERSE_LIQUIDITY_PARSE_FAILED",
@@ -230,8 +255,9 @@ def _resolve_liquidity(runtime, symbol: str, fallback_price: float) -> tuple[flo
         "price": last_price,
         "volume": volume,
         "dollar_volume": dollar_volume,
+        "finite": finite,
     }
-    return last_price, volume, dollar_volume
+    return last_price, volume, dollar_volume, finite
 
 
 def _short_overlay_enabled() -> bool:
@@ -311,10 +337,12 @@ def _build_candidate(
         "easy_to_borrow_flag",
         "easy_to_borrow_shares",
     )
-    price, volume, dollar_volume = _resolve_liquidity(runtime, mover.symbol, mover.price)
+    price, volume, dollar_volume, finite_liquidity = _resolve_liquidity(runtime, mover.symbol, mover.price)
     reason = "accepted"
     if tradable is False:
         reason = "asset_not_tradable"
+    elif not finite_liquidity:
+        reason = "liquidity_non_finite"
     elif price < config.min_price:
         reason = "price_below_floor"
     elif volume < config.min_volume:

@@ -717,6 +717,29 @@ class RiskEngine:
                         if hasattr(bars_df, "empty"):
                             if not bars_df.empty:
                                 df = bars_df.copy()
+                            else:
+                                raw_get_stock_bars = getattr(client, "get_stock_bars", None)
+                                if callable(raw_get_stock_bars):
+                                    try:
+                                        raw_response = raw_get_stock_bars(request)
+                                    except (
+                                        APIError,
+                                        RuntimeError,
+                                        TimeoutError,
+                                        ConnectionError,
+                                        ValueError,
+                                        TypeError,
+                                        OSError,
+                                        AttributeError,
+                                    ) as exc:
+                                        logger.debug("ATR raw stock bars fallback failed for %s: %s", symbol, exc)
+                                    else:
+                                        raw_bars = getattr(raw_response, "df", raw_response)
+                                        if hasattr(raw_bars, "empty"):
+                                            if not raw_bars.empty:
+                                                df = raw_bars.copy()
+                                        elif raw_bars is not None and pd is not None:
+                                            df = pd.DataFrame(raw_bars)
                         elif bars_df is not None and pd is not None:
                             df = pd.DataFrame(bars_df)
                     except (

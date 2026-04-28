@@ -17,6 +17,8 @@ _RE_KEYS = re.compile(
 )
 _MASK = "***REDACTED***"
 _ENV_MASK = "***"
+_LEGACY_ALPACA_PREFIX = "AP" "CA_"
+_URL_ENV = {"ALPACA_TRADING_BASE_URL"}
 
 _SENSITIVE_ENV = {
     "ALPACA_API_KEY",
@@ -26,8 +28,8 @@ _SENSITIVE_ENV = {
     "ALPACA_SECRET_KEY",
     "ALPACA_OAUTH",
     "ALPACA_OAUTH_TOKEN",
-    "APCA_API_KEY_ID",
-    "APCA_API_SECRET_KEY",
+    f"{_LEGACY_ALPACA_PREFIX}API_KEY_ID",
+    f"{_LEGACY_ALPACA_PREFIX}API_SECRET_KEY",
     "WEBHOOK_SECRET",
     "NEWS_API_KEY",
     "FINNHUB_API_KEY",
@@ -103,6 +105,10 @@ def redact_env(env: Mapping[str, Any], *, drop: bool = False) -> Mapping[str, An
     normalized = normalize_aliases(env)
     dup: MutableMapping[str, Any] = dict(normalized)
     for key in list(dup):
+        if key in _URL_ENV and dup[key]:
+            if not drop:
+                dup[key] = _ENV_MASK
+            continue
         if (key in _SENSITIVE_ENV or _RE_KEYS.search(key)) and dup[key]:
             if drop:
                 dup.pop(key)

@@ -176,6 +176,27 @@ def test_submit_order_recovers_when_submit_returns_none(monkeypatch):
     assert result["client_order_id"] == "recover-cid-1"
 
 
+def test_submit_order_builds_notional_market_request(monkeypatch):
+    engine = _make_engine(monkeypatch, response={"id": "ok", "status": "accepted"})
+
+    result = engine._submit_order_to_alpaca(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 0,
+            "notional": "125.50",
+            "type": "market",
+            "time_in_force": "day",
+            "client_order_id": "notional-cid-1",
+        }
+    )
+
+    submitted = engine.trading_client.submitted[-1]
+    assert result is not None
+    assert getattr(submitted, "notional") == "125.50"
+    assert not hasattr(submitted, "qty")
+
+
 def test_submit_order_quantizes_limit_price_before_broker_request(monkeypatch):
     engine = _make_engine(monkeypatch, response={"id": "ok", "status": "accepted"})
     monkeypatch.setattr(live_trading, "get_tick_size", lambda _symbol: Decimal("0.1"))

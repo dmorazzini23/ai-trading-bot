@@ -35,6 +35,36 @@ def test_run_standalone_healthcheck_app_logs_oserror() -> None:
     ]
 
 
+def test_run_standalone_healthcheck_app_raises_for_standalone_bind_error() -> None:
+    events: list[tuple[str, dict[str, object] | None]] = []
+
+    class _App:
+        def run(self, **_kwargs) -> None:
+            raise OSError("address in use")
+
+    logger = types.SimpleNamespace(
+        critical=lambda event, extra=None: events.append((event, extra)),
+        warning=lambda event, extra=None: events.append((event, extra)),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        app_module.run_standalone_healthcheck_app(
+            _App(),
+            host="127.0.0.1",
+            port=8081,
+            logger=logger,
+            raise_on_bind_error=True,
+        )
+
+    assert excinfo.value.code == 1
+    assert events == [
+        (
+            "HEALTHCHECK_PORT_CONFLICT",
+            {"host": "127.0.0.1", "port": 8081, "error": "address in use"},
+        )
+    ]
+
+
 def test_parse_operator_token_map_accepts_json_and_fallback(monkeypatch) -> None:
     monkeypatch.setattr(
         app_module,

@@ -13,6 +13,25 @@ def test_default_trade_history_path_uses_runtime_trade_history() -> None:
     assert rpt._DEFAULT_TRADE_HISTORY_PATH == "runtime/trade_history.parquet"
 
 
+def test_pickle_trade_history_requires_explicit_trust(tmp_path: Path) -> None:
+    pd = pytest.importorskip("pandas")
+    path = tmp_path / "trade_history.pkl"
+    pd.DataFrame([{"symbol": "AAPL", "pnl": 1.0}]).to_pickle(path)
+
+    with pytest.raises(RuntimeError, match="explicit trust"):
+        rpt._load_trade_rows(path)
+
+
+def test_pickle_trade_history_loads_when_explicitly_trusted(tmp_path: Path) -> None:
+    pd = pytest.importorskip("pandas")
+    path = tmp_path / "trade_history.pkl"
+    pd.DataFrame([{"symbol": "AAPL", "pnl": 1.0}]).to_pickle(path)
+
+    rows = rpt._load_trade_rows(path, allow_trusted_pickle=True)
+
+    assert rows == [{"symbol": "AAPL", "pnl": 1.0}]
+
+
 def test_summarize_oms_lifecycle_parity_degrades_on_sqlalchemy_error(monkeypatch) -> None:
     from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 

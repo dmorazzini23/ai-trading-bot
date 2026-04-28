@@ -37,8 +37,8 @@ def _frame(ts: datetime | None = None, close: float = 101.0) -> pd.DataFrame:
         {
             "timestamp": [timestamp],
             "open": [100.0],
-            "high": [102.0],
-            "low": [99.0],
+            "high": [max(102.0, close)],
+            "low": [min(99.0, close)],
             "close": [close],
             "volume": [1000],
         }

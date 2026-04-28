@@ -364,7 +364,7 @@ def test_broker_kwargs_preserve_degraded_hints() -> None:
     filtered = live_trading._broker_kwargs_for_route("limit", payload)
 
     assert filtered is not payload
-    assert filtered == {}
+    assert filtered == {"client_order_id": "abc123"}
 
 
 def test_realtime_nbbo_gate_skips_degraded_openings(monkeypatch, caplog) -> None:

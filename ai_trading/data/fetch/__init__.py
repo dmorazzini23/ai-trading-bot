@@ -1028,12 +1028,12 @@ def _current_intraday_feed() -> str:
     if env_feed not in (None, ""):
         normalized = str(env_feed).strip().lower()
         if normalized:
-            return get_execution_feed(normalized)
+            return cast(str, get_execution_feed(normalized))
     env_feed = get_env("DATA_FEED_INTRADAY")
     if env_feed not in (None, ""):
         normalized = str(env_feed).strip().lower()
         if normalized:
-            return get_execution_feed(normalized)
+            return cast(str, get_execution_feed(normalized))
     try:
         from ai_trading.config import (
             DATA_FEED_INTRADAY as _CFG_INTRADAY,  # local import to avoid cycles
@@ -1055,7 +1055,7 @@ def _current_intraday_feed() -> str:
             )
     if feed in (None, ""):
         feed = get_env("ALPACA_DATA_FEED")
-    return get_execution_feed(str(feed or "iex"))
+    return cast(str, get_execution_feed(str(feed or "iex")))
 
 
 def _intraday_feed_prefers_sip() -> bool:
@@ -6504,7 +6504,11 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
             bucket.add(key)
         if frames:
             if pd_local is not None:
-                valid_frames = [frame for frame in frames if isinstance(frame, pd_local.DataFrame)]
+                valid_frames = [
+                    frame
+                    for frame in frames
+                    if isinstance(frame, pd_local.DataFrame) and not frame.empty
+                ]
                 combined: Any
                 if valid_frames:
                     try:
@@ -6785,22 +6789,30 @@ def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: st
 
     df = df.copy()
     df["timestamp"] = pd_local.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    observed_index = pd_local.DatetimeIndex(df["timestamp"].dropna()).unique()
     df = df.set_index("timestamp").reindex(expected_utc)
     df.index.name = "timestamp"
+    synthetic_mask = ~df.index.isin(observed_index)
+    synthetic_series = pd_local.Series(synthetic_mask, index=df.index)
 
     if backfill == "ffill":
-        df["close"] = df["close"].ffill()
-        df["open"] = df["open"].fillna(df["close"])
-        df["high"] = df["high"].fillna(df["close"])
-        df["low"] = df["low"].fillna(df["close"])
+        ohlc_cols = [c for c in ["open", "high", "low", "close"] if c in df.columns]
+        if ohlc_cols:
+            prior_values = df[ohlc_cols].ffill()
+            df.loc[synthetic_series, ohlc_cols] = prior_values.loc[synthetic_series, ohlc_cols]
         if "volume" in df.columns:
-            df["volume"] = df["volume"].fillna(0)
+            df.loc[synthetic_series, "volume"] = df.loc[synthetic_series, "volume"].fillna(0)
     elif backfill == "interpolate":
         cols = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
-        df[cols] = df[cols].interpolate(method="time")  # type: ignore[assignment]
-        if "volume" in df.columns:
-            df["volume"] = df["volume"].fillna(0)
-        df[cols] = df[cols].ffill().bfill()
+        if cols:
+            prior_values = df[cols].ffill()
+            df.loc[synthetic_series, cols] = prior_values.loc[synthetic_series, cols]
+            if "volume" in df.columns:
+                df.loc[synthetic_series, "volume"] = df.loc[synthetic_series, "volume"].fillna(0)
+    if "synthetic" in df.columns:
+        df["synthetic"] = df["synthetic"].fillna(False).astype(bool) | synthetic_series
+    else:
+        df["synthetic"] = synthetic_series
 
     return df.reset_index()
 
@@ -6895,43 +6907,59 @@ def _repair_yahoo_minute_contiguity(
     *,
     expected_index: Any,
     existing_index: Any,
-) -> tuple[Any, bool]:
+) -> tuple[Any, bool, dict[str, int]]:
     pd_local = _ensure_pandas()
     if pd_local is None:
-        return df, False
+        return df, False, {}
     if df is None or getattr(df, "empty", True):
-        return df, False
+        return df, False, {}
     try:
         base = df.set_index(existing_index)
     except FETCH_FALLBACK_EXCEPTIONS:
-        return df, False
+        return df, False, {}
     try:
         repaired = base.reindex(expected_index)
     except FETCH_FALLBACK_EXCEPTIONS:
-        return df, False
+        return df, False, {}
     repaired.index.name = "timestamp"
     repaired = repaired.copy()
     if "timestamp" in repaired.columns:
         repaired = repaired.drop(columns=["timestamp"])
+    try:
+        observed_index = pd_local.DatetimeIndex(existing_index).dropna().unique()
+        synthetic_mask = ~repaired.index.isin(observed_index)
+        synthetic_series = pd_local.Series(synthetic_mask, index=repaired.index)
+    except FETCH_FALLBACK_EXCEPTIONS:
+        synthetic_series = pd_local.Series(False, index=repaired.index)
     numeric_cols = [col for col in ("open", "high", "low", "close") if col in repaired.columns]
     try:
         if numeric_cols:
-            repaired[numeric_cols] = repaired[numeric_cols].interpolate(
-                method="time", limit_direction="both",
-            )
-            repaired[numeric_cols] = repaired[numeric_cols].ffill().bfill()
-        if "close" in repaired.columns:
-            for column in ("open", "high", "low"):
-                if column in repaired.columns:
-                    repaired[column] = repaired[column].fillna(repaired["close"])
+            prior_values = repaired[numeric_cols].ffill()
+            repaired.loc[synthetic_series, numeric_cols] = prior_values.loc[synthetic_series, numeric_cols]
         if "volume" in repaired.columns:
-            repaired["volume"] = repaired["volume"].fillna(0)
+            repaired.loc[synthetic_series, "volume"] = repaired.loc[synthetic_series, "volume"].fillna(0)
+        if "synthetic" in repaired.columns:
+            repaired["synthetic"] = repaired["synthetic"].fillna(False).astype(bool) | synthetic_series
+        else:
+            repaired["synthetic"] = synthetic_series
     except FETCH_FALLBACK_EXCEPTIONS:
-        return df, False
+        return df, False, {}
+    synthetic_rows = int(synthetic_series.sum())
+    synthetic_filled = 0
+    synthetic_residual = 0
+    if "close" in repaired.columns:
+        synthetic_close = repaired.loc[synthetic_series, "close"]
+        synthetic_filled = int(synthetic_close.notna().sum())
+        synthetic_residual = synthetic_rows - synthetic_filled
+    repair_info = {
+        "synthetic_rows": synthetic_rows,
+        "synthetic_rows_filled": synthetic_filled,
+        "synthetic_rows_residual": synthetic_residual,
+    }
     repaired = repaired.reset_index()
     if "timestamp" not in repaired.columns and "index" in repaired.columns:
         repaired.rename(columns={"index": "timestamp"}, inplace=True)
-    return repaired, True
+    return repaired, True, repair_info
 
 
 def _repair_rth_minute_gaps(
@@ -7005,6 +7033,9 @@ def _repair_rth_minute_gaps(
             return empty_index, empty_index
         try:
             mask = ~raw_index.isna()
+            if hasattr(frame, "columns") and "close" in frame.columns:
+                close_values = pd_local.to_numeric(frame["close"], errors="coerce")
+                mask = mask & close_values.notna().to_numpy()
             coverage_index = raw_index[mask]
         except FETCH_FALLBACK_EXCEPTIONS:
             coverage_index = raw_index
@@ -7092,6 +7123,7 @@ def _repair_rth_minute_gaps(
     used_backup = False
     yahoo_repaired = False
     local_backfill = False
+    local_repair_info: dict[str, int] = {}
     if len(missing) > 0 and allow_backup_fill:
         try:
             missing_start = missing.min()
@@ -7149,7 +7181,7 @@ def _repair_rth_minute_gaps(
             extra={"symbol": symbol, "window_start": start.isoformat(), "window_end": end.isoformat()},
         )
     if len(missing) > 0 and skip_backup_fill:
-        repaired_df, yahoo_repaired = _repair_yahoo_minute_contiguity(
+        repaired_df, yahoo_repaired, local_repair_info = _repair_yahoo_minute_contiguity(
             work_df if mutated else df,
             expected_index=expected_utc,
             existing_index=current_raw_index,
@@ -7160,7 +7192,7 @@ def _repair_rth_minute_gaps(
             mutated = True
             current_raw_index, combined_index = _extract_minute_indexes(work_df)
     elif len(missing) > 0 and backup_suppressed:
-        repaired_df, local_repaired = _repair_yahoo_minute_contiguity(
+        repaired_df, local_repaired, local_repair_info = _repair_yahoo_minute_contiguity(
             work_df if mutated else df,
             expected_index=expected_utc,
             existing_index=current_raw_index,
@@ -7301,6 +7333,9 @@ def _repair_rth_minute_gaps(
         "fallback_repaired": local_backfill,
         "fallback_contiguous": (using_fallback_provider or local_backfill) and missing_after == 0,
         "coverage_last_timestamp": last_timestamp_dt,
+        "synthetic_rows": int(local_repair_info.get("synthetic_rows", 0)),
+        "synthetic_rows_filled": int(local_repair_info.get("synthetic_rows_filled", 0)),
+        "synthetic_rows_residual": int(local_repair_info.get("synthetic_rows_residual", 0)),
     }
     if fallback_provider_hint:
         metadata["fallback_provider"] = fallback_provider_hint
@@ -13297,7 +13332,12 @@ def get_minute_df(
                     _register_backup_skip()
                 cur_start = cur_end
             if pd is not None and dfs:
-                df = pd.concat(dfs, ignore_index=True)
+                dfs = [
+                    frame
+                    for frame in dfs
+                    if isinstance(frame, pd.DataFrame) and not frame.empty
+                ]
+                df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
                 first_attrs = getattr(dfs[0], "attrs", {}) if dfs else {}
                 provider_attr = first_attrs.get("data_provider") or first_attrs.get("fallback_provider")
                 feed_attr = first_attrs.get("data_feed") or first_attrs.get("fallback_feed")

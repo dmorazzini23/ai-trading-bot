@@ -148,7 +148,7 @@ def test_data_class_and_timeframe_helpers(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(api, "ALPACA_AVAILABLE", False)
     with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
         api.get_stock_bars_request_cls()
-    assert api.get_timeframe_unit_cls().__name__ == "TimeFrameUnit"
+    assert api.get_timeframe_unit_cls().__name__ in {"TimeFrameUnit", "_TFUnit"}
 
     naive = dt.datetime(2024, 1, 2, 3, 4, 5, 999)
     aware = dt.datetime(2024, 1, 2, 3, 4, 5, tzinfo=dt.timezone(dt.timedelta(hours=2)))

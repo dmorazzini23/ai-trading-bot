@@ -51,6 +51,30 @@ def test_portfolio_limits_can_disable_vol_targeting() -> None:
     assert "VOL_TARGET_SCALE" not in result.reasons
 
 
+def test_portfolio_limits_concentration_requires_explicit_denominator() -> None:
+    sparse = apply_portfolio_limits(
+        targets={"AAPL": 10_000.0},
+        vol_targeting_enabled=False,
+        concentration_cap_enabled=True,
+        max_symbol_weight=0.12,
+        corr_cap_enabled=False,
+    )
+    assert sparse.scaled_targets["AAPL"] == pytest.approx(10_000.0)
+    assert "RISK_CAP_PORTFOLIO" not in sparse.reasons
+
+    capped = apply_portfolio_limits(
+        targets={"AAPL": 15_000.0, "MSFT": 5_000.0},
+        vol_targeting_enabled=False,
+        concentration_cap_enabled=True,
+        max_symbol_weight=0.10,
+        corr_cap_enabled=False,
+        portfolio_equity=100_000.0,
+    )
+    assert capped.scaled_targets["AAPL"] == pytest.approx(10_000.0)
+    assert capped.scaled_targets["MSFT"] == pytest.approx(5_000.0)
+    assert "RISK_CAP_PORTFOLIO" in capped.reasons
+
+
 def test_portfolio_limits_corr_cap_respects_cluster_cap() -> None:
     result = apply_portfolio_limits(
         targets={"AAPL": 10000.0, "MSFT": 10000.0, "GOOG": 10000.0},
@@ -68,4 +92,48 @@ def test_portfolio_limits_corr_cap_respects_cluster_cap() -> None:
     )
     assert result.scaled_targets["AAPL"] == pytest.approx(3000.0)
     assert result.scaled_targets["MSFT"] == pytest.approx(3000.0)
+    assert "CORR_CLUSTER_CAP" in result.reasons
+
+
+def test_portfolio_limits_corr_cap_filters_inactive_symbols() -> None:
+    result = apply_portfolio_limits(
+        targets={"AAPL": 10_000.0, "MSFT": 10_000.0},
+        symbol_returns={
+            "AAPL": [0.02, -0.01, 0.02, -0.01, 0.02],
+            "MSFT": [0.01, 0.00, -0.01, 0.00, 0.01],
+            "ZZZ": [0.02, -0.01, 0.02, -0.01, 0.02],
+        },
+        vol_targeting_enabled=False,
+        concentration_cap_enabled=False,
+        corr_cap_enabled=True,
+        corr_threshold=0.8,
+        corr_group_gross_cap=0.2,
+        max_cluster_weight=1.0,
+    )
+
+    assert result.scaled_targets == {"AAPL": 10_000.0, "MSFT": 10_000.0}
+    assert "CORR_CLUSTER_CAP" not in result.reasons
+
+
+def test_portfolio_limits_corr_cap_scales_connected_component() -> None:
+    result = apply_portfolio_limits(
+        targets={"AAPL": 10_000.0, "MSFT": 10_000.0, "GOOG": 10_000.0, "TLT": 10_000.0},
+        symbol_returns={
+            "AAPL": [0.02, -0.01, 0.02, -0.01, 0.02],
+            "MSFT": [0.02, -0.01, 0.02, -0.01, 0.02],
+            "GOOG": [0.02, -0.01, 0.02, -0.01, 0.02],
+            "TLT": [0.00, 0.01, 0.00, -0.01, 0.00],
+        },
+        vol_targeting_enabled=False,
+        concentration_cap_enabled=False,
+        corr_cap_enabled=True,
+        corr_threshold=0.8,
+        corr_group_gross_cap=0.3,
+        max_cluster_weight=1.0,
+    )
+
+    assert result.scaled_targets["AAPL"] == pytest.approx(4_000.0)
+    assert result.scaled_targets["MSFT"] == pytest.approx(4_000.0)
+    assert result.scaled_targets["GOOG"] == pytest.approx(4_000.0)
+    assert result.scaled_targets["TLT"] == pytest.approx(10_000.0)
     assert "CORR_CLUSTER_CAP" in result.reasons

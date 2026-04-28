@@ -75,6 +75,42 @@ def _portfolio_return_series(
     return portfolio_returns
 
 
+def _explicit_cap_denominator(
+    *,
+    portfolio_equity: float | None,
+    configured_gross_cap: float | None,
+) -> float:
+    for candidate in (configured_gross_cap, portfolio_equity):
+        if candidate is None:
+            continue
+        try:
+            parsed = float(candidate)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(parsed) and parsed > 0:
+            return parsed
+    return 0.0
+
+
+def _connected_components(graph: dict[str, set[str]]) -> list[set[str]]:
+    seen: set[str] = set()
+    components: list[set[str]] = []
+    for symbol in graph:
+        if symbol in seen:
+            continue
+        stack = [symbol]
+        component: set[str] = set()
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            component.add(current)
+            stack.extend(graph[current] - seen)
+        components.append(component)
+    return components
+
+
 def apply_portfolio_limits(
     *,
     targets: dict[str, float],
@@ -91,6 +127,8 @@ def apply_portfolio_limits(
     corr_lookback_days: int = 30,
     corr_threshold: float = 0.80,
     corr_group_gross_cap: float = 0.35,
+    portfolio_equity: float | None = None,
+    configured_gross_cap: float | None = None,
 ) -> PortfolioLimitsResult:
     reasons: list[str] = []
     scaled = dict(targets)
@@ -116,8 +154,12 @@ def apply_portfolio_limits(
             scaled[symbol] = float(scaled[symbol]) * scale
         gross = sum(abs(value) for value in scaled.values())
 
-    if concentration_cap_enabled and gross > 0 and max_symbol_weight > 0:
-        symbol_cap = gross * float(max_symbol_weight)
+    cap_denominator = _explicit_cap_denominator(
+        portfolio_equity=portfolio_equity,
+        configured_gross_cap=configured_gross_cap,
+    )
+    if concentration_cap_enabled and cap_denominator > 0 and max_symbol_weight > 0:
+        symbol_cap = cap_denominator * float(max_symbol_weight)
         for symbol, value in list(scaled.items()):
             clipped = max(-symbol_cap, min(symbol_cap, float(value)))
             if clipped != value:
@@ -126,10 +168,13 @@ def apply_portfolio_limits(
                     reasons.append("RISK_CAP_PORTFOLIO")
 
     if symbol_returns and corr_cap_enabled and corr_group_gross_cap > 0:
-        symbols = list(symbol_returns.keys())
+        symbols = [
+            symbol
+            for symbol, value in scaled.items()
+            if abs(float(value)) > 0 and symbol in symbol_returns
+        ]
         if len(symbols) >= 2:
-            most_corr_pair: tuple[str, str] | None = None
-            most_corr = 0.0
+            graph: dict[str, set[str]] = {symbol: set() for symbol in symbols}
             for idx, left in enumerate(symbols):
                 for right in symbols[idx + 1 :]:
                     left_series = symbol_returns[left]
@@ -140,22 +185,24 @@ def apply_portfolio_limits(
                             left_series = left_series[-lookback:]
                         if len(right_series) > lookback:
                             right_series = right_series[-lookback:]
-                    corr = abs(_correlation(left_series, right_series))
-                    if corr > most_corr:
-                        most_corr = corr
-                        most_corr_pair = (left, right)
-            if most_corr_pair and most_corr >= corr_threshold:
-                left, right = most_corr_pair
-                gross_now = sum(abs(v) for v in scaled.values()) or 1.0
-                pair_gross = abs(scaled.get(left, 0.0)) + abs(scaled.get(right, 0.0))
+                    corr = abs(_correlation(list(left_series), list(right_series)))
+                    if corr >= corr_threshold:
+                        graph[left].add(right)
+                        graph[right].add(left)
+            gross_now = sum(abs(v) for v in scaled.values()) or 1.0
+            for component in _connected_components(graph):
+                if len(component) < 2:
+                    continue
+                component_gross = sum(abs(scaled.get(symbol, 0.0)) for symbol in component)
                 corr_cap_fraction = float(corr_group_gross_cap)
                 if max_cluster_weight > 0:
                     corr_cap_fraction = min(corr_cap_fraction, float(max_cluster_weight))
                 allowed = gross_now * corr_cap_fraction
-                if pair_gross > allowed:
-                    ratio = allowed / pair_gross
-                    scaled[left] *= ratio
-                    scaled[right] *= ratio
-                    reasons.append("CORR_CLUSTER_CAP")
+                if component_gross > allowed:
+                    ratio = allowed / component_gross
+                    for symbol in component:
+                        scaled[symbol] *= ratio
+                    if "CORR_CLUSTER_CAP" not in reasons:
+                        reasons.append("CORR_CLUSTER_CAP")
 
     return PortfolioLimitsResult(scaled_targets=scaled, scale=scale, reasons=reasons)

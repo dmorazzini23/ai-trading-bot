@@ -8,6 +8,7 @@ def test_startup_without_max_position_size(monkeypatch, caplog):
     env = {
         "ALPACA_API_KEY": "dummy",
         "ALPACA_SECRET_KEY": "dummy",
+        "ALPACA_DATA_FEED": "iex",
         "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
         "WEBHOOK_SECRET": "secret",
         "AI_TRADING_CAPITAL_CAP": "0.04",

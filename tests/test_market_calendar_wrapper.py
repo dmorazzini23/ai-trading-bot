@@ -5,6 +5,7 @@ from datetime import date
 
 import pytest
 from tests.optdeps import require
+import ai_trading.market.calendar_wrapper as cw
 from ai_trading.market.calendar_wrapper import (
     is_trading_day,
     rth_session_utc,
@@ -57,3 +58,12 @@ def test_dst_transition_sessions() -> None:
         assert s.hour == sh and s.minute == sm
         assert e.hour == eh and e.minute == em
 
+
+def test_fallback_calendar_handles_2026_holidays(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cw, "_CAL", None)
+
+    assert is_trading_day(date(2026, 1, 1)) is False
+    assert is_trading_day(date(2026, 1, 19)) is False
+    assert is_trading_day(date(2026, 4, 3)) is False
+    assert is_trading_day(date(2026, 7, 3)) is False
+    assert cw.previous_trading_session(date(2026, 1, 19)) == date(2026, 1, 16)

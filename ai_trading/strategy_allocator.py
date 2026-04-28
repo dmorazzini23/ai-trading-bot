@@ -173,17 +173,22 @@ class StrategyAllocator:
             fallback_label is not None and not fallback_label.startswith("alpaca")
         )
         audited_override = self._explicit_audited_fallback_override(metadata)
-        finite_gap_evidence = gap_ratio is not None and gap_ratio >= 0.0
+        gap_ratio_value = float(gap_ratio) if gap_ratio is not None else None
+        finite_gap_evidence = gap_ratio_value is not None and gap_ratio_value >= 0.0
 
         if not reliable and allow_fallback:
-            if audited_override or (finite_gap_evidence and gap_ratio <= fallback_limit):
+            if audited_override or (
+                finite_gap_evidence
+                and gap_ratio_value is not None
+                and gap_ratio_value <= fallback_limit
+            ):
                 metadata["price_reliable"] = True
                 metadata.pop("price_reliable_reason", None)
                 metadata.setdefault("price_reliable_override", True)
                 if audited_override:
                     metadata["price_reliable_override_reason"] = "audited_fallback_override"
-                if gap_ratio is not None:
-                    metadata["gap_ratio"] = gap_ratio
+                if gap_ratio_value is not None:
+                    metadata["gap_ratio"] = gap_ratio_value
                 logger.info(
                     "FALLBACK_PRICE_ACCEPTED",
                     extra={

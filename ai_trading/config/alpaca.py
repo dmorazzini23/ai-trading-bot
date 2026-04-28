@@ -39,6 +39,9 @@ ENV_PREFIXES = (
     "LIVE_",
 )
 
+_LIVE_MODE_ALIASES = {"live", "prod", "production", "live_prod"}
+_PAPER_MODE_ALIASES = {"paper", "broker", "alpaca"}
+
 
 def _normalize_key_name(name: str) -> str:
     name = name.strip().upper()
@@ -46,6 +49,54 @@ def _normalize_key_name(name: str) -> str:
         if name.startswith(prefix):
             return name[len(prefix):]
     return name
+
+
+def _normalize_execution_mode(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in _LIVE_MODE_ALIASES:
+        return "live"
+    if raw in _PAPER_MODE_ALIASES:
+        return "paper"
+    if raw in {"simulation", "sim", "test"}:
+        return "sim"
+    if raw in {"disabled", "off", "none"}:
+        return "disabled"
+    return raw
+
+
+def _resolve_base_url_and_paper(settings: Any) -> tuple[str, bool]:
+    raw_base_url = str(
+        get_env("ALPACA_TRADING_BASE_URL", "", cast=str, resolve_aliases=False) or ""
+    ).strip()
+    settings_base_url = str(getattr(settings, "alpaca_base_url", "") or "").strip()
+    execution_mode = _normalize_execution_mode(
+        get_env(
+            "EXECUTION_MODE",
+            getattr(settings, "execution_mode", "sim"),
+            cast=str,
+        )
+    )
+    app_env = str(getattr(settings, "env", "dev") or "dev").strip().lower()
+    default_paper_url = "https://paper-api.alpaca.markets"
+
+    base_url = raw_base_url
+    if not base_url and settings_base_url and (
+        settings_base_url != default_paper_url or execution_mode != "live"
+    ):
+        base_url = settings_base_url
+
+    if base_url:
+        normalized_url = base_url.lower()
+        if "paper" in normalized_url:
+            return base_url, True
+        if "api.alpaca.markets" in normalized_url:
+            return base_url, False
+        return base_url, execution_mode != "live" and app_env not in _LIVE_MODE_ALIASES
+
+    if execution_mode == "live" or app_env in _LIVE_MODE_ALIASES:
+        return "https://api.alpaca.markets", False
+
+    return default_paper_url, True
 
 
 def get_alpaca_config() -> AlpacaConfig:
@@ -69,10 +120,7 @@ def get_alpaca_config() -> AlpacaConfig:
         secret = normalized.get("SECRET") or normalized.get("ALPACA_SECRET_KEY", "")
     else:
         key_id, secret = [str(x).strip() for x in keys]
-    use_paper = getattr(s, 'env', 'dev') != 'prod'
-    base_url = getattr(s, 'alpaca_base_url', None)
-    if not base_url:
-        base_url = 'https://paper-api.alpaca.markets' if use_paper else 'https://api.alpaca.markets'
+    base_url, use_paper = _resolve_base_url_and_paper(s)
     rate_limit = getattr(s, 'alpaca_rate_limit_per_min', None)
     feed = str(
         get_env("ALPACA_DATA_FEED", getattr(s, "alpaca_data_feed", "iex"), cast=str, resolve_aliases=False)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from ai_trading.data import alpaca_screener
 
@@ -116,6 +116,15 @@ def test_fetch_market_movers_rejects_prior_day_last_good(monkeypatch):
     assert fresh.used_fallback is False
     assert stale.used_fallback is True
     assert stale.gainers == []
+
+
+def test_current_market_day_preopen_uses_previous_trading_session(monkeypatch):
+    monkeypatch.setattr(alpaca_screener, "previous_trading_session", lambda _day: date(2026, 4, 17))
+    monkeypatch.setattr(alpaca_screener, "is_trading_day", lambda _day: True)
+
+    market_day = alpaca_screener._current_market_day(datetime(2026, 4, 20, 12, 0, tzinfo=UTC))
+
+    assert market_day == date(2026, 4, 17)
 
 
 def test_fetch_most_actives_rejects_expired_last_good(monkeypatch):

@@ -138,3 +138,38 @@ def test_build_dynamic_universe_filters_non_etb_shorts(monkeypatch, tmp_path):
 
     assert result.merged_symbols == ["MSFT"]
     assert result.additions == []
+
+
+def test_build_dynamic_universe_rejects_non_finite_liquidity(monkeypatch, tmp_path):
+    runtime = _runtime_with_assets(
+        asset_map={
+            "NVDA": {"tradable": True, "marginable": True, "shortable": True, "easy_to_borrow": True},
+        },
+        price_map={"NVDA": (900.0, float("inf"))},
+    )
+    monkeypatch.setattr(
+        du,
+        "fetch_market_movers",
+        lambda *args, **kwargs: MarketMoversSnapshot(
+            gainers=[MarketMover(symbol="NVDA", percent_change=5.0, change=20.0, price=900.0)],
+            losers=[],
+            market_type="stocks",
+            last_updated=pd.Timestamp("2026-04-17T15:25:00Z").to_pydatetime(),
+            used_fallback=False,
+        ),
+    )
+    monkeypatch.setattr(du, "_short_overlay_enabled", lambda: True)
+    config = du.DynamicUniverseConfig(
+        enabled=True,
+        gainers_top=1,
+        losers_top=0,
+        min_price=5.0,
+        min_dollar_volume=1.0,
+        min_volume=1.0,
+        snapshot_path=str(tmp_path / "dynamic_universe.jsonl"),
+    )
+
+    result = du.build_dynamic_universe(runtime, ["MSFT"], config=config)
+
+    assert result.merged_symbols == ["MSFT"]
+    assert result.additions == []
