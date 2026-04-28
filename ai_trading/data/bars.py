@@ -319,6 +319,71 @@ def _is_minute_timeframe(tf) -> bool:
         return False
 
 
+def _timeframe_unit_text(tf: Any) -> str:
+    unit = getattr(tf, "unit", None)
+    if unit is None:
+        return ""
+    value = getattr(unit, "value", unit)
+    name = getattr(unit, "name", value)
+    try:
+        return str(name).strip().lower()
+    except (ValueError, TypeError):
+        return ""
+
+
+def _is_daily_timeframe(tf: Any) -> bool:
+    unit_text = _timeframe_unit_text(tf)
+    if unit_text:
+        return "day" in unit_text
+    try:
+        text = str(tf).strip().lower()
+    except (ValueError, TypeError):
+        return False
+    if any(token in text for token in ("min", "hour", "hr")):
+        return False
+    return text in {"1day", "1d", "day", "1 day"} or "day" in text
+
+
+def _canonical_bars_timeframe(tf: Any) -> str:
+    amount = getattr(tf, "amount", None)
+    try:
+        amount_int = int(amount) if amount is not None else 1
+    except (ValueError, TypeError):
+        amount_int = 1
+    unit_text = _timeframe_unit_text(tf)
+    if "min" in unit_text:
+        return f"{amount_int}Min"
+    if "hour" in unit_text or unit_text == "h":
+        return f"{amount_int}Hour"
+    if "day" in unit_text:
+        return f"{amount_int}Day"
+    try:
+        text = str(tf).strip().lower()
+    except (ValueError, TypeError):
+        return _canon_tf(tf)
+    compact = text.replace(" ", "")
+    aliases = {
+        "1m": "1Min",
+        "1min": "1Min",
+        "minute": "1Min",
+        "1minute": "1Min",
+        "5m": "5Min",
+        "5min": "5Min",
+        "5minute": "5Min",
+        "15m": "15Min",
+        "15min": "15Min",
+        "15minute": "15Min",
+        "1h": "1Hour",
+        "1hr": "1Hour",
+        "1hour": "1Hour",
+        "hour": "1Hour",
+        "1d": "1Day",
+        "1day": "1Day",
+        "day": "1Day",
+    }
+    return aliases.get(compact, _canon_tf(tf))
+
+
 # Legacy-compatible entitlement cache:
 # key -> {"feeds": set[str], "generation": datetime | None}
 
@@ -791,8 +856,20 @@ def safe_get_stock_bars(client: Any, request: Any, symbol: str, context: str='')
     except RuntimeError:
         fallback_open = now.astimezone(UTC) - timedelta(days=1)
         prev_open = fallback_open.replace(hour=9, minute=30, second=0, microsecond=0)
-    end_dt = ensure_utc_datetime(getattr(request, 'end', None) or now, default=now, clamp_to='eod', allow_callables=False)
-    start_dt = ensure_utc_datetime(getattr(request, 'start', None) or prev_open, default=prev_open, clamp_to='bod', allow_callables=False)
+    raw_timeframe = getattr(request, 'timeframe', '')
+    daily_request = _is_daily_timeframe(raw_timeframe)
+    end_dt = ensure_utc_datetime(
+        getattr(request, 'end', None) or now,
+        default=now,
+        clamp_to='eod' if daily_request else None,
+        allow_callables=False,
+    )
+    start_dt = ensure_utc_datetime(
+        getattr(request, 'start', None) or prev_open,
+        default=prev_open,
+        clamp_to='bod' if daily_request else None,
+        allow_callables=False,
+    )
     iso_start = start_dt.isoformat()
     iso_end = end_dt.isoformat()
     try:
@@ -803,7 +880,7 @@ def safe_get_stock_bars(client: Any, request: Any, symbol: str, context: str='')
         request.end = end_dt
     except (AttributeError, TypeError, ValueError):
         pass
-    tf_str = _canon_tf(getattr(request, 'timeframe', ''))
+    tf_str = _canonical_bars_timeframe(getattr(request, 'timeframe', ''))
     feed_req = _canon_feed(getattr(request, 'feed', None))
     if feed_req:
         request.feed = _ensure_entitled_feed(client, feed_req)
@@ -853,7 +930,7 @@ def safe_get_stock_bars(client: Any, request: Any, symbol: str, context: str='')
                 symbol,
                 str(context),
                 _canon_feed(getattr(request, 'feed', None)),
-                _canon_tf(getattr(request, 'timeframe', '')),
+                _canonical_bars_timeframe(getattr(request, 'timeframe', '')),
                 now_ts.date().isoformat(),
             )
             if _empty_should_emit(key, now_ts):
@@ -873,7 +950,7 @@ def safe_get_stock_bars(client: Any, request: Any, symbol: str, context: str='')
             except COMMON_EXC:
                 df = empty_bars_dataframe()
             if df.empty:
-                tf_str = _canon_tf(getattr(request, 'timeframe', ''))
+                tf_str = _canonical_bars_timeframe(getattr(request, 'timeframe', ''))
                 feed_str = _canon_feed(getattr(request, 'feed', None))
                 if tf_str.lower() in {'1day', 'day'}:
                     if not pytest_mode:
@@ -920,7 +997,7 @@ def safe_get_stock_bars(client: Any, request: Any, symbol: str, context: str='')
                     if df is None or df.empty:
                         return _create_empty_bars_dataframe()
         if df.empty:
-            tf_str = _canon_tf(getattr(request, 'timeframe', ''))
+            tf_str = _canonical_bars_timeframe(getattr(request, 'timeframe', ''))
             feed_str = _canon_feed(getattr(request, 'feed', None))
             http_df = http_get_bars(symbol, tf_str, iso_start, iso_end, feed=feed_str)
             df = _coerce_http_bars(http_df)
@@ -934,14 +1011,14 @@ def safe_get_stock_bars(client: Any, request: Any, symbol: str, context: str='')
         if not df.empty:
             return _normalize_bars_frame(df)
         _now = datetime.now(UTC)
-        _key = (symbol, str(context), _canon_feed(getattr(request, 'feed', None)), _canon_tf(getattr(request, 'timeframe', '')), _now.date().isoformat())
+        _key = (symbol, str(context), _canon_feed(getattr(request, 'feed', None)), _canonical_bars_timeframe(getattr(request, 'timeframe', '')), _now.date().isoformat())
         if _empty_should_emit(_key, _now):
             lvl = _empty_classify(is_market_open=False)
             cnt = _empty_record(_key, _now)
-            _log.log(lvl, 'ALPACA_PARSE_EMPTY', extra={'symbol': symbol, 'context': context, 'feed': _canon_feed(getattr(request, 'feed', None)), 'timeframe': _canon_tf(getattr(request, 'timeframe', '')), 'occurrences': cnt})
+            _log.log(lvl, 'ALPACA_PARSE_EMPTY', extra={'symbol': symbol, 'context': context, 'feed': _canon_feed(getattr(request, 'feed', None)), 'timeframe': _canonical_bars_timeframe(getattr(request, 'timeframe', '')), 'occurrences': cnt})
         return empty_bars_dataframe()
     except COMMON_EXC as e:
-        tf_str = _canon_tf(getattr(request, 'timeframe', ''))
+        tf_str = _canonical_bars_timeframe(getattr(request, 'timeframe', ''))
         feed_str = _canon_feed(getattr(request, 'feed', None))
         if _is_minute_timeframe(tf_str):
             try:
@@ -1051,7 +1128,17 @@ def get_daily_bars(symbol: str, client, start: datetime, end: datetime, feed: st
     if df is not None and (not df.empty):
         return _normalize_bars_frame(df)
     alt = 'iex' if feed == 'sip' else 'sip'
-    df = _fetch_daily_bars(client, symbol, start, end, feed=alt, adjustment=adjustment)
+    try:
+        df = _fetch_daily_bars(client, symbol, start, end, feed=alt, adjustment=adjustment)
+    except _BAR_FETCH_EXCEPTIONS as e:
+        status = _extract_status_code(e)
+        if status not in (401, 403):
+            raise
+        _log.warning(
+            'ALPACA_DAILY_ALT_FEED_UNAUTHORIZED',
+            extra={'symbol': symbol, 'feed': alt, 'error': str(e), 'status': status},
+        )
+        df = empty_bars_dataframe()
     if df is not None and (not df.empty):
         return _normalize_bars_frame(df)
     try:

@@ -312,7 +312,8 @@ def run_main_startup_runtime(ctx: Any) -> None:
         )
         stale_data = summary.get("stale_data", [])
         allow_stale_on_startup = (
-            str(be.get_env("ALLOW_STALE_DATA_STARTUP", "true") or "").lower() == "true"
+            str(be.get_env("ALLOW_STALE_DATA_STARTUP", "false") or "").strip().lower()
+            == "true"
         )
         if stale_data and allow_stale_on_startup:
             be.logger.warning(

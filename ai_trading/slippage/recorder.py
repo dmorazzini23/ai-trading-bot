@@ -13,6 +13,12 @@ from ai_trading.paths import SLIPPAGE_LOG_PATH
 logger = get_logger(__name__)
 
 
+def _side_normalized_slippage_bps(expected_price: float, actual_price: float, side: str) -> float:
+    side_token = str(side or "").strip().lower()
+    sign = -1.0 if side_token.startswith("sell") else 1.0
+    return sign * ((float(actual_price) - float(expected_price)) / float(expected_price)) * 10000.0
+
+
 def _ensure_file(path: Path) -> None:
     """Ensure directory exists and file has CSV header."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -51,7 +57,7 @@ def log_slippage(
     try:
         expected_price = float(expected)
         actual_price = float(actual)
-        slippage_bps = ((actual_price - expected_price) / expected_price) * 10000.0
+        slippage_bps = _side_normalized_slippage_bps(expected_price, actual_price, side)
     except (TypeError, ValueError, ZeroDivisionError) as e:
         logger.warning("SLIPPAGE_LOG_VALUE_INVALID", extra={"cause": e.__class__.__name__, "detail": str(e)})
         return

@@ -61,6 +61,17 @@ def _normalize_token(value: Any, *, default: str = "unknown") -> str:
     return token
 
 
+def _side_normalized_slippage_bps(
+    *,
+    expected_price: float,
+    fill_price: float,
+    side: Any,
+) -> float:
+    side_token = str(side or "").strip().lower()
+    sign = -1.0 if side_token.startswith("sell") else 1.0
+    return sign * ((float(fill_price) - float(expected_price)) / float(expected_price)) * 10000.0
+
+
 def _extract_text(payload: dict[str, Any], *keys: str) -> str | None:
     for key in keys:
         value = payload.get(key)
@@ -336,7 +347,11 @@ def summarize_oms_event_tca(
                     and expected_price > 0
                     and price > 0
                 ):
-                    slippage_bps = ((price - expected_price) / expected_price) * 10000.0
+                    slippage_bps = _side_normalized_slippage_bps(
+                        expected_price=float(expected_price),
+                        fill_price=float(price),
+                        side=payload.get("side") or payload.get("order_side"),
+                    )
                     slippage_samples.append(float(slippage_bps))
                     if float(slippage_bps) > 0.0:
                         slippage_adverse_count += 1

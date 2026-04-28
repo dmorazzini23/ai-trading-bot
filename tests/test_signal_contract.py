@@ -29,3 +29,28 @@ def test_signal_requires_explicit_strength_confidence():
     strat = _DummyStrategy()
     sig = StrategySignal("AAPL", "buy")
     assert strat.validate_signal(sig) is False
+
+
+def test_signal_neutralizes_non_finite_strength_confidence():
+    sig = StrategySignal("AAPL", "buy", strength=float("nan"), confidence=float("inf"))
+
+    assert sig.strength == 0.0
+    assert sig.confidence == 0.0
+    assert sig.weighted_strength == 0.0
+    assert sig.score == 0.0
+
+
+def test_validate_signal_rejects_non_finite_values():
+    strat = _DummyStrategy()
+    sig = StrategySignal("AAPL", "buy", strength=0.7, confidence=0.8)
+
+    sig.strength = float("nan")
+    assert strat.validate_signal(sig) is False
+
+    sig.strength = 0.7
+    sig.confidence = float("inf")
+    assert strat.validate_signal(sig) is False
+
+    sig.confidence = 0.8
+    sig.risk_score = float("nan")
+    assert strat.validate_signal(sig) is False

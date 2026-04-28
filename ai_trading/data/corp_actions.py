@@ -186,7 +186,7 @@ class CorporateActionRegistry:
         for action in relevant_actions:
             price_factor *= action.price_adjustment_factor
             volume_factor *= action.volume_adjustment_factor
-        if reference_date > target_date:
+        if reference_date < target_date:
             price_factor = 1.0 / price_factor if price_factor != 0 else 1.0
             volume_factor = 1.0 / volume_factor if volume_factor != 0 else 1.0
         return (price_factor, volume_factor)

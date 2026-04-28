@@ -71,8 +71,8 @@ def test_adjustment_factors_and_bars_use_registry(monkeypatch: pytest.MonkeyPatc
         target_date=date(2020, 9, 2),
     )
 
-    assert (price_factor, volume_factor) == pytest.approx((4.0, 0.25))
-    assert (forward_price_factor, forward_volume_factor) == pytest.approx((0.25, 4.0))
+    assert (price_factor, volume_factor) == pytest.approx((0.25, 4.0))
+    assert (forward_price_factor, forward_volume_factor) == pytest.approx((4.0, 0.25))
     assert registry.get_adjustment_factors("AAPL", date(2020, 9, 2), date(2020, 9, 2)) == (
         1.0,
         1.0,
@@ -90,8 +90,8 @@ def test_adjustment_factors_and_bars_use_registry(monkeypatch: pytest.MonkeyPatc
 
     adjusted = corp_actions.adjust_bars(bars, "AAPL", reference_date=date(2020, 9, 2))
 
-    assert adjusted.loc[pd.Timestamp("2020-08-28"), "open"] == pytest.approx(400.0)
-    assert adjusted.loc[pd.Timestamp("2020-08-28"), "volume"] == pytest.approx(250.0)
+    assert adjusted.loc[pd.Timestamp("2020-08-28"), "open"] == pytest.approx(25.0)
+    assert adjusted.loc[pd.Timestamp("2020-08-28"), "volume"] == pytest.approx(4_000.0)
     assert adjusted.loc[pd.Timestamp("2020-09-02"), "close"] == pytest.approx(201.0)
     assert adjusted.loc[pd.Timestamp("2020-08-28"), "note"] == "pre"
     assert corp_actions.apply_adjustment_factor(10.0, 0.25) == pytest.approx(2.5)

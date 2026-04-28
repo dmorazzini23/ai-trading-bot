@@ -170,8 +170,6 @@ def test_emergency_shutdown_runs_critical_steps(monkeypatch):
 
 
 def test_signal_setup_failure_and_signal_handler_delegation(monkeypatch):
-    calls: list[str] = []
-
     def fail_signal(*_args):
         raise OSError("signals unavailable")
 
@@ -179,20 +177,59 @@ def test_signal_setup_failure_and_signal_handler_delegation(monkeypatch):
     handler = sh.ShutdownHandler()
     assert handler.get_shutdown_status().phase is sh.ShutdownPhase.INITIATED
 
+
+def test_signal_handler_schedules_on_running_loop(monkeypatch):
+    handler = _handler(monkeypatch)
+    calls: list[str] = []
+
     async def fake_shutdown(reason):
         calls.append(reason.value)
 
-    def fake_create_task(coro):
-        coro.close()
-        calls.append("scheduled")
-        return None
+    class FakeLoop:
+        def create_task(self, coro):
+            calls.append("scheduled")
+            coro.close()
+            return None
 
     monkeypatch.setattr(handler, "shutdown", fake_shutdown)
-    monkeypatch.setattr(sh.asyncio, "create_task", fake_create_task)
+    monkeypatch.setattr(sh.asyncio, "get_running_loop", lambda: FakeLoop())
 
     handler._signal_handler(signal.SIGTERM, None)
 
     assert calls == ["scheduled"]
+
+
+def test_signal_handler_uses_thread_without_running_loop(monkeypatch):
+    handler = _handler(monkeypatch)
+    calls: list[str] = []
+
+    async def fake_shutdown(reason):
+        calls.append(reason.value)
+
+    class FakeThread:
+        def __init__(self, *, target, daemon=False):
+            self.target = target
+            self.daemon = daemon
+
+        def start(self):
+            calls.append("thread")
+            self.target()
+
+    def fail_get_running_loop():
+        raise RuntimeError("no running event loop")
+
+    def fail_create_task(coro):
+        coro.close()
+        raise AssertionError("asyncio.create_task must not be used")
+
+    monkeypatch.setattr(handler, "shutdown", fake_shutdown)
+    monkeypatch.setattr(sh.asyncio, "get_running_loop", fail_get_running_loop)
+    monkeypatch.setattr(sh.asyncio, "create_task", fail_create_task)
+    monkeypatch.setattr(sh.threading, "Thread", FakeThread)
+
+    handler._signal_handler(signal.SIGTERM, None)
+
+    assert calls == ["thread", "signal_received"]
 
 
 def test_global_shutdown_helpers_reuse_single_handler(monkeypatch):

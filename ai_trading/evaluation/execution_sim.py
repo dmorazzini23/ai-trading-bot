@@ -7,6 +7,14 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 
+def _finite_float(value: Any, default: float) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    return numeric if np.isfinite(numeric) else default
+
+
 def _as_bool(value: Any, default: bool) -> bool:
     if value is None:
         return bool(default)
@@ -30,31 +38,31 @@ class ExecutionSimConfig:
     allow_short: bool = True
     max_abs_position: float = 1.0
 
+    def __post_init__(self) -> None:
+        self.signal_threshold = max(0.0, _finite_float(self.signal_threshold, 0.0))
+        self.transaction_cost_bps = max(0.0, _finite_float(self.transaction_cost_bps, 1.0))
+        self.slippage_bps = max(0.0, _finite_float(self.slippage_bps, 5.0))
+        self.max_abs_position = max(0.0, _finite_float(self.max_abs_position, 1.0))
+
     @classmethod
     def from_mapping(
         cls,
         params: Mapping[str, Any] | None,
     ) -> "ExecutionSimConfig":
         source = params or {}
-        try:
-            signal_threshold = max(0.0, float(source.get("signal_threshold", 0.0) or 0.0))
-        except (TypeError, ValueError):
-            signal_threshold = 0.0
-        try:
-            transaction_cost_bps = max(
-                0.0, float(source.get("transaction_cost_bps", 1.0) or 0.0)
-            )
-        except (TypeError, ValueError):
-            transaction_cost_bps = 1.0
-        try:
-            slippage_bps = max(0.0, float(source.get("slippage_bps", 5.0) or 0.0))
-        except (TypeError, ValueError):
-            slippage_bps = 5.0
+        signal_threshold = max(
+            0.0, _finite_float(source.get("signal_threshold", 0.0) or 0.0, 0.0)
+        )
+        transaction_cost_bps = max(
+            0.0, _finite_float(source.get("transaction_cost_bps", 1.0) or 0.0, 1.0)
+        )
+        slippage_bps = max(
+            0.0, _finite_float(source.get("slippage_bps", 5.0) or 0.0, 5.0)
+        )
         allow_short = _as_bool(source.get("allow_short", True), True)
-        try:
-            max_abs_position = max(0.0, float(source.get("max_abs_position", 1.0) or 0.0))
-        except (TypeError, ValueError):
-            max_abs_position = 1.0
+        max_abs_position = max(
+            0.0, _finite_float(source.get("max_abs_position", 1.0) or 0.0, 1.0)
+        )
         return cls(
             signal_threshold=signal_threshold,
             transaction_cost_bps=transaction_cost_bps,
@@ -85,7 +93,16 @@ def simulate_executed_trades(
 ) -> dict[str, float]:
     """Simulate realized fold-level PnL from predictions and returns."""
 
-    cfg = params if isinstance(params, ExecutionSimConfig) else ExecutionSimConfig.from_mapping(params)
+    if isinstance(params, ExecutionSimConfig):
+        cfg = ExecutionSimConfig(
+            signal_threshold=params.signal_threshold,
+            transaction_cost_bps=params.transaction_cost_bps,
+            slippage_bps=params.slippage_bps,
+            allow_short=params.allow_short,
+            max_abs_position=params.max_abs_position,
+        )
+    else:
+        cfg = ExecutionSimConfig.from_mapping(params)
     true_arr = np.asarray(y_true, dtype=float).reshape(-1)
     pred_arr = np.asarray(y_pred, dtype=float).reshape(-1)
     steps = int(min(true_arr.size, pred_arr.size))
@@ -105,6 +122,22 @@ def simulate_executed_trades(
     profitable_steps = 0
 
     for pred, actual in zip(pred_arr[:steps], true_arr[:steps], strict=False):
+        if not np.isfinite(actual):
+            target_position = 0.0
+            turnover = abs(target_position - prev_position)
+            step_cost = float(turnover * total_cost_rate)
+            if turnover > 0.0:
+                trade_count += 1
+            cost_return += step_cost
+            turnover_units += turnover
+            equity *= 1.0 + max(-step_cost, -0.99)
+            running_peak = max(running_peak, equity)
+            drawdown = 0.0 if running_peak <= 0.0 else (running_peak - equity) / running_peak
+            max_drawdown = max(max_drawdown, drawdown)
+            prev_position = target_position
+            continue
+        if not np.isfinite(pred):
+            pred = 0.0
         if pred > cfg.signal_threshold:
             target_position = cfg.max_abs_position
         elif pred < -cfg.signal_threshold and cfg.allow_short:

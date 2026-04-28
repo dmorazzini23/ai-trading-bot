@@ -395,14 +395,29 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
     """
     _record_sentiment_failure('rate_limit')
     fallback_sources = [
-        _try_alternative_sentiment_sources,
-        _try_cached_similar_symbols,
-        _try_sector_sentiment_proxy,
-        _get_cached_or_neutral_sentiment,
+        (
+            _try_alternative_sentiment_sources,
+            lambda: _try_alternative_sentiment_sources(ticker),
+        ),
+        (
+            _try_cached_similar_symbols,
+            lambda: _try_cached_similar_symbols(ticker),
+        ),
+        (
+            _try_sector_sentiment_proxy,
+            lambda: _try_sector_sentiment_proxy(ticker),
+        ),
+        (
+            _get_cached_or_neutral_sentiment,
+            lambda: _get_cached_or_neutral_sentiment(
+                ticker,
+                reason="rate_limit_without_cache",
+            ),
+        ),
     ]
-    for fallback_func in fallback_sources:
+    for fallback_func, fallback_call in fallback_sources:
         try:
-            result = fallback_func(ticker)
+            result = fallback_call()
             if result is not None:
                 logger.info(f'SENTIMENT_FALLBACK_SUCCESS | ticker={ticker} source={fallback_func.__name__} value={result}')
                 return float(result)
@@ -419,10 +434,11 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
                     f'age_hours={int((pytime.time() - cache_ts) / 3600)}'
                 )
                 return sentiment_val
-        now_ts = pytime.time()
-        _sentiment_cache[ticker] = (now_ts, 0.0)
     logger.warning('SENTIMENT_RATE_LIMIT_ALL_FALLBACKS_EXHAUSTED', extra={'ticker': ticker, 'fallback_strategies_tried': len(fallback_sources), 'cache_ttl_hours': SENTIMENT_RATE_LIMITED_TTL_SEC / 3600, 'recommendation': 'Consider upgrading NewsAPI plan, adding alternative sentiment sources, or reviewing rate limits'})
-    return 0.0
+    return _get_cached_or_neutral_sentiment(
+        ticker,
+        reason="rate_limit_all_fallbacks_exhausted",
+    )
 
 def _try_alternative_sentiment_sources(ticker: str) -> float | None:
     """Try alternative sentiment data sources when primary is rate limited."""

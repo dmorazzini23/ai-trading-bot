@@ -143,3 +143,48 @@ def test_summarize_oms_event_tca_from_immutable_events(tmp_path: Path) -> None:
     assert top_scope["symbol"] == "AAPL"
     assert top_scope["strategy_id"] == "mean_reversion_v2"
     assert top_scope["session_id"] == "regular_hours"
+
+
+def test_summarize_oms_event_tca_side_normalizes_sell_slippage(tmp_path: Path) -> None:
+    db_path = tmp_path / "oms_tca_sell_slippage.db"
+    store = EventStore(url=f"sqlite:///{db_path}")
+    store.append_oms_event_payload(
+        event_type="ORDER_FILLED",
+        event_source="unit_test",
+        idempotency_key="sell-adverse",
+        intent_id="intent-sell-1",
+        payload={
+            "symbol": "AAPL",
+            "side": "sell",
+            "fill_qty": 2.0,
+            "fill_price": 99.0,
+            "expected_price": 100.0,
+        },
+    )
+    store.append_oms_event_payload(
+        event_type="ORDER_FILLED",
+        event_source="unit_test",
+        idempotency_key="sell-favorable",
+        intent_id="intent-sell-2",
+        payload={
+            "symbol": "AAPL",
+            "side": "sell",
+            "fill_qty": 2.0,
+            "fill_price": 101.0,
+            "expected_price": 100.0,
+        },
+    )
+    store.close()
+
+    summary = summarize_oms_event_tca(
+        database_url=f"sqlite:///{db_path}",
+        intent_store_path=str(db_path),
+        limit=1000,
+    )
+
+    decomposition = summary["realized_slippage_decomposition"]
+    assert decomposition["sample_count"] == 2
+    assert decomposition["adverse_sample_count"] == 1
+    assert decomposition["favorable_sample_count"] == 1
+    assert decomposition["mean_adverse_bps"] == pytest.approx(100.0)
+    assert decomposition["mean_favorable_bps"] == pytest.approx(100.0)

@@ -248,3 +248,17 @@ def test_auto_mode_aborts_when_equity_unavailable(monkeypatch, caplog):
     assert any(r.getMessage() == "AUTO_SIZING_ABORTED" for r in records) or (
         ps._CACHE.equity_error == "request_error:Timeout"
     )
+
+
+def test_build_runtime_auto_mode_propagates_sizing_failure(monkeypatch):
+    _reset_cache()
+
+    def failing_resolve(*_args, **_kwargs):
+        raise RuntimeError("equity unavailable")
+
+    monkeypatch.setattr(rt, "resolve_max_position_size", failing_resolve)
+
+    cfg = SimpleNamespace(capital_cap=0.05, max_position_mode="AUTO", max_position_size=99999)
+
+    with pytest.raises(RuntimeError, match="equity unavailable"):
+        rt.build_runtime(cfg)

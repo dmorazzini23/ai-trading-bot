@@ -107,13 +107,15 @@ def _run_loop(fn: Callable[[], None], args: argparse.Namespace, label: str) -> N
         request_stop("keyboard-interrupt")
         logger.info("%s interrupted", label)
         sys.exit(0)
-    except SystemExit as e:  # AI-AGENT-REF: do not crash the service on exit codes
-        # Log and return to allow the supervisor to decide on restart policy.
+    except SystemExit as e:
         try:
             code = int(getattr(e, "code", 1) or 0)
         except AI_TRADING_FALLBACK_EXCEPTIONS:
             code = 1
-        logger.error("%s exited with code %s; continuing", label, code, exc_info=True)
+        if code != 0:
+            logger.error("%s exited with code %s", label, code, exc_info=True)
+            raise
+        logger.info("%s exited with code 0", label)
         return
 
 

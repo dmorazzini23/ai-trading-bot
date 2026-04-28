@@ -8,6 +8,7 @@ from __future__ import annotations
 import uuid
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
+from math import isfinite
 from typing import Any
 from ai_trading.logging import logger, logger_once
 from ..core.enums import RiskLevel
@@ -49,10 +50,8 @@ class StrategySignal:
         self.side = self._normalize_side(side)
         self._strength_provided = strength is not None
         self._confidence_provided = confidence is not None
-        strength_val = 0.0 if strength is None else float(strength)
-        confidence_val = 0.0 if confidence is None else float(confidence)
-        self.strength = max(0.0, min(1.0, strength_val))
-        self.confidence = max(0.0, min(1.0, confidence_val))
+        self.strength = self._coerce_unit_interval(strength)
+        self.confidence = self._coerce_unit_interval(confidence)
         self.timestamp = datetime.now(UTC)
         self.strategy_id = kwargs.get('strategy_id')
         self.timeframe = kwargs.get('timeframe', '1d')
@@ -62,6 +61,15 @@ class StrategySignal:
         self.risk_score = kwargs.get('risk_score', 0.5)
         self.signal_type = kwargs.get('signal_type', 'momentum')
         self.metadata = kwargs.get('metadata', {})
+
+    @staticmethod
+    def _coerce_unit_interval(value: float | None) -> float:
+        if value is None:
+            return 0.0
+        numeric = float(value)
+        if not isfinite(numeric):
+            return 0.0
+        return max(0.0, min(1.0, numeric))
 
     @staticmethod
     def _normalize_side(side: str | OrderSide | None) -> str:
@@ -264,13 +272,19 @@ class BaseStrategy(ABC):
             if not getattr(signal, "has_explicit_strength", False) or not getattr(signal, "has_explicit_confidence", False):
                 logger.warning("SIGNAL_MISSING_STRENGTH_CONFIDENCE", extra={"symbol": getattr(signal, "symbol", None)})
                 return False
-            if not signal.symbol or signal.strength <= 0:
+            strength = float(signal.strength)
+            confidence = float(signal.confidence)
+            risk_score = float(signal.risk_score)
+            if not (isfinite(strength) and isfinite(confidence) and isfinite(risk_score)):
+                logger.warning("SIGNAL_NON_FINITE_VALUES", extra={"symbol": getattr(signal, "symbol", None)})
                 return False
-            if signal.risk_score > 0.8:
-                logger.warning(f'High risk signal for {signal.symbol}: {signal.risk_score}')
+            if not signal.symbol or strength <= 0:
                 return False
-            if signal.confidence < 0.3:
-                logger.debug(f'Low confidence signal for {signal.symbol}: {signal.confidence}')
+            if risk_score > 0.8:
+                logger.warning(f'High risk signal for {signal.symbol}: {risk_score}')
+                return False
+            if confidence < 0.3:
+                logger.debug(f'Low confidence signal for {signal.symbol}: {confidence}')
                 return False
             return True
         except (ValueError, TypeError) as e:

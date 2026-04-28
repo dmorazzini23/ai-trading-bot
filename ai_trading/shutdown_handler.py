@@ -97,7 +97,30 @@ class ShutdownHandler:
         signal_name = signal.Signals(signum).name
         self.logger.info(f'Received signal: {signal_name}')
         if not self._status.is_shutting_down:
-            asyncio.create_task(self.shutdown(ShutdownReason.SIGNAL_RECEIVED))
+            self._schedule_signal_shutdown()
+
+    def _schedule_signal_shutdown(self) -> None:
+        """Schedule signal-triggered shutdown on a running loop or a worker thread."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                thread = threading.Thread(target=self._run_signal_shutdown, daemon=True)
+                thread.start()
+            except (RuntimeError, OSError) as e:
+                self.logger.error('SIGNAL_SHUTDOWN_SCHEDULE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            return
+        try:
+            loop.create_task(self.shutdown(ShutdownReason.SIGNAL_RECEIVED))
+        except (RuntimeError, OSError) as e:
+            self.logger.error('SIGNAL_SHUTDOWN_SCHEDULE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+
+    def _run_signal_shutdown(self) -> None:
+        """Run signal-triggered shutdown when no event loop is active."""
+        try:
+            asyncio.run(self.shutdown(ShutdownReason.SIGNAL_RECEIVED))
+        except (APIError, TimeoutError, ConnectionError, OSError, RuntimeError) as e:
+            self.logger.error('SIGNAL_SHUTDOWN_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
 
     def register_pre_shutdown_hook(self, hook: Hook | None=None) -> None:
         """Register a pre-shutdown hook."""

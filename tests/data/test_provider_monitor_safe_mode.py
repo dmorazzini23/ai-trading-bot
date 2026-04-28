@@ -96,6 +96,17 @@ def test_provider_monitor_safe_mode_triggers_and_resets(
     assert monitor.is_disabled("alpaca") is True
 
     monitor.record_success("alpaca")
+    assert pm.is_safe_mode_active() is True
+
+    monkeypatch.setattr(pm, "_SAFE_MODE_RECOVERY_TARGET", 1, raising=False)
+    monitor.disabled_until["alpaca"] = pm.datetime.now(pm.UTC) - pm.timedelta(seconds=1)
+    pm._maybe_clear_safe_mode(
+        success=True,
+        gap_ratio=0.0,
+        quote_timestamp_present=True,
+        quote_age_ms=0.0,
+        disabled_until=monitor.disabled_until.get("alpaca"),
+    )
     assert pm.is_safe_mode_active() is False
 
 

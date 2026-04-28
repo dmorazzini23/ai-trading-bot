@@ -257,3 +257,82 @@ def test_configure_main_runtime_jobs_is_idempotent(monkeypatch):
     assert run_calls == ["run"]
     assert ctx._runtime_jobs_configured is True
     assert "RUNTIME_JOBS_ALREADY_CONFIGURED" in info_events
+
+
+class _Logger:
+    def info(self, *_args, **_kwargs):
+        return None
+
+    def warning(self, *_args, **_kwargs):
+        return None
+
+    def error(self, *_args, **_kwargs):
+        return None
+
+
+class _Lock:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def _fake_bot_engine(*, stale_data: list[str], allow_stale: str | None = None):
+    summary = {
+        "failures": [],
+        "insufficient_rows": [],
+        "missing_columns": [],
+        "invalid_values": [],
+        "timezone_issues": [],
+        "stale_data": stale_data,
+    }
+
+    def get_env(name, default=None):
+        if name == "ALLOW_STALE_DATA_STARTUP" and allow_stale is not None:
+            return allow_stale
+        return default
+
+    return types.SimpleNamespace(
+        cancel_all_open_orders=lambda ctx: None,
+        audit_positions=lambda ctx: None,
+        load_tickers=lambda path: ["AAPL"],
+        pre_trade_health_check=lambda ctx, symbols: summary,
+        logger=_Logger(),
+        get_env=get_env,
+        TICKERS_FILE="tickers.csv",
+        CFG=types.SimpleNamespace(min_health_rows=120),
+        pytime=types.SimpleNamespace(time=lambda: 1.0),
+        sentiment_lock=_Lock(),
+        _SENTIMENT_CACHE={},
+    )
+
+
+def test_run_main_startup_runtime_stale_data_fails_closed_by_default(monkeypatch):
+    from ai_trading.core import startup_runtime
+
+    monkeypatch.setattr(
+        startup_runtime,
+        "_bot_engine",
+        lambda: _fake_bot_engine(stale_data=["AAPL"]),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        startup_runtime.run_main_startup_runtime(types.SimpleNamespace())
+
+    assert excinfo.value.code == 1
+
+
+def test_run_main_startup_runtime_stale_data_allows_explicit_override(monkeypatch):
+    from ai_trading.core import startup_runtime
+
+    be = _fake_bot_engine(stale_data=["AAPL"], allow_stale="true")
+    monkeypatch.setattr(startup_runtime, "_bot_engine", lambda: be)
+
+    ctx = types.SimpleNamespace(
+        data_fetcher=types.SimpleNamespace(get_minute_df=lambda *args, **kwargs: None),
+        api=types.SimpleNamespace(list_positions=lambda: []),
+        _rebalance_done=True,
+    )
+
+    startup_runtime.run_main_startup_runtime(ctx)

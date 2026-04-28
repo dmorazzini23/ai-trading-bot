@@ -15,6 +15,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.logging import logger
 from ai_trading.utils.time import safe_utcnow
 
@@ -102,7 +103,7 @@ class SafetyMonitor:
         for action in self.emergency_actions:
             try:
                 action(reason)
-            except (ValueError, TypeError) as e:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as e:
                 logger.error(f'Error executing emergency action: {e}')
         self._send_alert(AlertSeverity.EMERGENCY, f'Emergency stop triggered: {reason}')
         self.pause_trading('Emergency stop')
@@ -215,7 +216,7 @@ class SafetyMonitor:
         for callback in self.alert_callbacks:
             try:
                 callback(alert)
-            except (ValueError, TypeError) as e:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as e:
                 logger.error(f'Error in alert callback: {e}')
 
 class KillSwitch:

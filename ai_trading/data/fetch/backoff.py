@@ -218,10 +218,21 @@ def _fetch_feed(
     """Fetch bars while enforcing empty-bar backoff and feed fallback."""
     tf_key = (symbol, timeframe)
     if tf_key in _SKIPPED_SYMBOLS:
-        logger.debug(
-            "SKIP_SYMBOL_EMPTY_BARS", extra={"symbol": symbol, "timeframe": timeframe}
-        )
-        return _empty_df()
+        attempts = _EMPTY_BAR_COUNTS.get(tf_key, 0)
+        if attempts < _EMPTY_BAR_MAX_RETRIES:
+            _SKIPPED_SYMBOLS.discard(tf_key)
+            fetch_skips = getattr(_fetch_module, "_SKIPPED_SYMBOLS", None)
+            if isinstance(fetch_skips, set):
+                fetch_skips.discard(tf_key)
+            logger.debug(
+                "PRIMARY_EMPTY_SKIP_CLEARED",
+                extra={"symbol": symbol, "timeframe": timeframe, "attempts": attempts},
+            )
+        else:
+            logger.debug(
+                "SKIP_SYMBOL_EMPTY_BARS", extra={"symbol": symbol, "timeframe": timeframe}
+            )
+            return _empty_df()
 
     record_attempt(symbol, timeframe)
     tf_norm = _canon_tf(timeframe)
@@ -355,6 +366,11 @@ def _fetch_feed(
         _EMPTY_BAR_COUNTS.pop(tf_key, None)
         mark_success(symbol, timeframe)
         _disable_primary_provider()
+    elif attempts < _EMPTY_BAR_MAX_RETRIES:
+        _SKIPPED_SYMBOLS.discard(tf_key)
+        fetch_skips = getattr(_fetch_module, "_SKIPPED_SYMBOLS", None)
+        if isinstance(fetch_skips, set):
+            fetch_skips.discard(tf_key)
     return yahoo_df
 
 

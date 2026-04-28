@@ -55,13 +55,14 @@ def test_emergency_stop_runs_actions_and_blocks_resume_until_reset():
     calls: list[str] = []
 
     monitor.add_emergency_action(lambda reason: calls.append(reason))
-    monitor.add_emergency_action(lambda _reason: (_ for _ in ()).throw(ValueError("action failed")))
+    monitor.add_emergency_action(lambda _reason: (_ for _ in ()).throw(RuntimeError("action failed")))
+    monitor.add_emergency_action(lambda reason: calls.append(f"after:{reason}"))
 
     monitor.emergency_stop("manual")
 
     assert monitor.emergency_stop_triggered
     assert monitor.state is monitoring.TradingState.EMERGENCY_STOP
-    assert calls == ["manual"]
+    assert calls == ["manual", "after:manual"]
     assert not monitor.resume_trading()
     assert not monitor.reset_emergency_stop("wrong")
     assert monitor.reset_emergency_stop("RESET_AUTHORIZED")
@@ -117,13 +118,15 @@ def test_send_alert_handles_callback_failures():
     monitor = monitoring.SafetyMonitor()
     received: list[dict[str, object]] = []
     monitor.add_alert_callback(received.append)
-    monitor.add_alert_callback(lambda _alert: (_ for _ in ()).throw(TypeError("bad callback")))
+    monitor.add_alert_callback(lambda _alert: (_ for _ in ()).throw(ConnectionError("bad callback")))
+    monitor.add_alert_callback(lambda alert: received.append({"after": alert["severity"]}))
 
     monitor._send_alert(monitoring.AlertSeverity.CRITICAL, "critical message")
 
-    assert received
+    assert len(received) == 2
     assert received[0]["severity"] == "critical"
     assert received[0]["message"] == "critical message"
+    assert received[1] == {"after": "critical"}
 
 
 def test_kill_switch_detects_file_and_triggers_monitor(tmp_path):

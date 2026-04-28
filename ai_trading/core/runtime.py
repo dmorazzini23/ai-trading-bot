@@ -163,8 +163,27 @@ def build_runtime(cfg: Any, **kwargs: Any) -> BotRuntime:
             )
             return _fallback_sizing(f"unexpected_error:{type(exc).__name__}")
 
+    def _resolve_auto_sizing() -> tuple[float, dict[str, Any]]:
+        try:
+            return cast(
+                tuple[float, dict[str, Any]],
+                resolve_max_position_size(cfg, cfg, force_refresh=True),
+            )
+        except RuntimeError as exc:
+            logger.error(
+                "POSITION_SIZING_AUTO_RESOLVE_FAILED",
+                extra={"mode": mode, "error": str(exc), "error_type": type(exc).__name__},
+            )
+            raise
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+            logger.error(
+                "POSITION_SIZING_AUTO_RESOLVE_FAILED",
+                extra={"mode": mode, "error": str(exc), "error_type": type(exc).__name__},
+            )
+            raise RuntimeError("AUTO max position sizing failed") from exc
+
     if mode == "AUTO":
-        resolved, sizing_meta = _resolve_sizing_with_fallback()
+        resolved, sizing_meta = _resolve_auto_sizing()
     else:
         if val is None and not explicit_none:
             try:

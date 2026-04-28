@@ -31,3 +31,19 @@ def test_run_loop_unexpected_exception_propagates():
     with pytest.raises(RuntimeError):
         _run_loop(fn, _args(), "Test")
 
+
+def test_run_loop_nonzero_system_exit_propagates():
+    def fn():
+        raise SystemExit(2)
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_loop(fn, _args(), "Test")
+
+    assert excinfo.value.code == 2
+
+
+def test_run_loop_zero_system_exit_returns_success():
+    def fn():
+        raise SystemExit(0)
+
+    _run_loop(fn, _args(), "Test")

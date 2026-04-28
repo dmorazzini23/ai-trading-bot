@@ -22,6 +22,7 @@ _CACHE: dict[
     tuple[float, "MarketMoversSnapshot | MostActivesSnapshot"],
 ] = {}
 _LAST_GOOD: dict[tuple[str, int, str], "MarketMoversSnapshot | MostActivesSnapshot"] = {}
+_LAST_GOOD_AT: dict[tuple[str, int, str], float] = {}
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,33 @@ def _cache_valid(
     if isinstance(last_updated, datetime):
         return _snapshot_market_day(last_updated) == _current_market_day(now)
     return True
+
+
+def _last_good_max_age_seconds() -> int:
+    return max(
+        0,
+        int(
+            get_env(
+                "AI_TRADING_SCREENER_LAST_GOOD_MAX_AGE_SEC",
+                _cache_ttl_seconds(),
+                cast=int,
+            )
+        ),
+    )
+
+
+def _last_good_valid(
+    snapshot: MarketMoversSnapshot | MostActivesSnapshot,
+    fetched_at: float | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    if fetched_at is None:
+        return False
+    max_age = _last_good_max_age_seconds()
+    if max_age <= 0:
+        return False
+    return _cache_valid(snapshot, fetched_at, max_age, now=now)
 
 
 def _movers_url(market_type: str) -> str:
@@ -250,7 +278,8 @@ def fetch_market_movers(
         )
         with _CACHE_LOCK:
             fallback = _LAST_GOOD.get(key)
-        if isinstance(fallback, MarketMoversSnapshot):
+            fallback_at = _LAST_GOOD_AT.get(key)
+        if isinstance(fallback, MarketMoversSnapshot) and _last_good_valid(fallback, fallback_at, now=now):
             logger.info(
                 "ALPACA_SCREENER_STALE_CACHE_USED",
                 extra={"kind": "market_movers", "top": max(1, int(top))},
@@ -263,9 +292,11 @@ def fetch_market_movers(
             last_updated=now or _now_utc(),
             used_fallback=True,
         )
+    fetched_at = _now_utc().timestamp()
     with _CACHE_LOCK:
-        _CACHE[key] = (_now_utc().timestamp(), snapshot)
+        _CACHE[key] = (fetched_at, snapshot)
         _LAST_GOOD[key] = snapshot
+        _LAST_GOOD_AT[key] = fetched_at
     logger.info(
         "ALPACA_SCREENER_REFRESHED",
         extra={
@@ -320,7 +351,8 @@ def fetch_most_actives(
         )
         with _CACHE_LOCK:
             fallback = _LAST_GOOD.get(key)
-        if isinstance(fallback, MostActivesSnapshot):
+            fallback_at = _LAST_GOOD_AT.get(key)
+        if isinstance(fallback, MostActivesSnapshot) and _last_good_valid(fallback, fallback_at, now=now):
             logger.info(
                 "ALPACA_SCREENER_STALE_CACHE_USED",
                 extra={"kind": "most_actives", "top": max(1, int(top))},
@@ -331,9 +363,11 @@ def fetch_most_actives(
             last_updated=now or _now_utc(),
             used_fallback=True,
         )
+    fetched_at = _now_utc().timestamp()
     with _CACHE_LOCK:
-        _CACHE[key] = (_now_utc().timestamp(), snapshot)
+        _CACHE[key] = (fetched_at, snapshot)
         _LAST_GOOD[key] = snapshot
+        _LAST_GOOD_AT[key] = fetched_at
     logger.info(
         "ALPACA_SCREENER_REFRESHED",
         extra={
@@ -350,6 +384,7 @@ def reset_screener_cache() -> None:
     with _CACHE_LOCK:
         _CACHE.clear()
         _LAST_GOOD.clear()
+        _LAST_GOOD_AT.clear()
 
 
 def snapshot_to_dict(snapshot: MarketMoversSnapshot | MostActivesSnapshot) -> dict[str, Any]:

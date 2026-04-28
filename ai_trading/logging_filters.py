@@ -60,12 +60,17 @@ class SecretFilter(logging.Filter):
     def _mask_in_text(self, text: str, candidates: Iterable[str]) -> str:
         out = text
         try:
-            for val in candidates:
+            for val in sorted(candidates, key=len, reverse=True):
                 if val and val in out:
                     out = out.replace(val, _ENV_MASK)
         except AI_TRADING_FALLBACK_EXCEPTIONS:
             return text
         return out
+
+    def _mask_value(self, value: Any, candidates: Iterable[str]) -> Any:
+        if isinstance(value, str):
+            return self._mask_in_text(value, candidates)
+        return value
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
@@ -84,13 +89,21 @@ class SecretFilter(logging.Filter):
                 try:
                     if isinstance(record.args, tuple):
                         record.args = tuple(
-                            _ENV_MASK if (isinstance(a, str) and a in candidates) else a
+                            self._mask_value(a, candidates)
                             for a in record.args
                         )
                     elif isinstance(record.args, dict):
                         for k, v in list(record.args.items()):
-                            if isinstance(v, str) and v in candidates:
-                                record.args[k] = _ENV_MASK
+                            record.args[k] = self._mask_value(v, candidates)
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
+                    pass
+            if candidates:
+                try:
+                    formatted = record.getMessage()
+                    redacted = self._mask_in_text(formatted, candidates)
+                    if redacted != formatted:
+                        record.msg = redacted
+                        record.args = ()
                 except AI_TRADING_FALLBACK_EXCEPTIONS:
                     pass
         except AI_TRADING_FALLBACK_EXCEPTIONS:

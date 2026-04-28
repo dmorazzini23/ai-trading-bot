@@ -1861,12 +1861,6 @@ class ProviderMonitor:
             provider_disabled.labels(provider=provider).set(0)
         except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
             logger.debug("PROVIDER_DISABLED_METRIC_CLEAR_FAILED", extra={"provider": provider}, exc_info=True)
-        if provider.startswith("alpaca"):
-            global _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON, _SAFE_MODE_DEGRADED_ONLY
-            _SAFE_MODE_ACTIVE = False
-            _SAFE_MODE_REASON = None
-            _SAFE_MODE_DEGRADED_ONLY = False
-
     def _migrate_provider_state(self, old: str, new: str) -> None:
         if not old or old == new:
             return

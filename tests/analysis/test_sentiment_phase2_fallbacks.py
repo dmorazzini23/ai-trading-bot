@@ -116,7 +116,21 @@ def test_rate_limit_fallback_uses_sector_proxy_and_final_neutral(
     monkeypatch.setattr(sentiment, "_try_sector_sentiment_proxy", lambda _ticker: None)
 
     assert sentiment._handle_rate_limit_with_enhanced_strategies("UNKNOWN") == 0.0
-    assert sentiment._sentiment_cache["UNKNOWN"] == (200.0, 0.0)
+    assert "UNKNOWN" not in sentiment._sentiment_cache
+
+
+def test_rate_limit_fallback_respects_fail_closed_without_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_SENTIMENT_FAIL_CLOSED", "1")
+    monkeypatch.setattr(sentiment, "_try_alternative_sentiment_sources", lambda _ticker: None)
+    monkeypatch.setattr(sentiment, "_try_cached_similar_symbols", lambda _ticker: None)
+    monkeypatch.setattr(sentiment, "_try_sector_sentiment_proxy", lambda _ticker: None)
+
+    with pytest.raises(RuntimeError, match="rate_limit_without_cache"):
+        sentiment._handle_rate_limit_with_enhanced_strategies("UNKNOWN")
+
+    assert "UNKNOWN" not in sentiment._sentiment_cache
 
 
 def test_alternative_sentiment_sources_primary_and_alt(monkeypatch: pytest.MonkeyPatch) -> None:

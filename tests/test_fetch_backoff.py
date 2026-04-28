@@ -90,6 +90,63 @@ def test_fetch_feed_uses_http_fallback_when_enabled(monkeypatch):
     assert fallback_calls == [("TEST", "1m")]
 
 
+def test_fetch_feed_clears_non_terminal_empty_skip(monkeypatch):
+    start, end = _dt_range(1)
+    key = ("RECOVER", "1Min")
+    calls: list[str] = []
+
+    def primary_success(symbol, s, e, timeframe, *, feed):
+        calls.append(feed)
+        return pd.DataFrame({"timestamp": [s]})
+
+    fb._SKIPPED_SYMBOLS.clear()
+    fb._EMPTY_BAR_COUNTS.clear()
+    fetch._SKIPPED_SYMBOLS.clear()
+    fb._SKIPPED_SYMBOLS.add(key)
+    fetch._SKIPPED_SYMBOLS.add(key)
+    fb._EMPTY_BAR_COUNTS[key] = 1
+
+    monkeypatch.setattr(fb, "_fetch_bars", primary_success)
+
+    out = fb._fetch_feed("RECOVER", start, end, "1Min", feed="iex")
+
+    assert not out.empty
+    assert calls == ["iex"]
+    assert key not in fb._SKIPPED_SYMBOLS
+    assert key not in fetch._SKIPPED_SYMBOLS
+    assert key not in fb._EMPTY_BAR_COUNTS
+
+
+def test_fetch_feed_empty_result_does_not_leave_skip_poison(monkeypatch):
+    start, end = _dt_range(1)
+    key = ("EMPTYONCE", "1Min")
+    calls: list[str] = []
+
+    def empty_primary(symbol, s, e, timeframe, *, feed):
+        calls.append(feed)
+        return pd.DataFrame()
+
+    fb._SKIPPED_SYMBOLS.clear()
+    fb._EMPTY_BAR_COUNTS.clear()
+    fetch._SKIPPED_SYMBOLS.clear()
+
+    monkeypatch.setattr(fb, "_fetch_bars", empty_primary)
+    monkeypatch.setattr(fb, "_yahoo_get_bars", lambda *_args, **_kwargs: pd.DataFrame())
+    monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", False, raising=False)
+    monkeypatch.setattr(fb, "_provider_decision_window", lambda: 0.0)
+    monkeypatch.setattr(fb, "_EMPTY_BAR_MAX_RETRIES", 5)
+
+    first = fb._fetch_feed("EMPTYONCE", start, end, "1Min", feed="iex")
+    second = fb._fetch_feed("EMPTYONCE", start, end, "1Min", feed="iex")
+
+    assert first.empty
+    assert second.empty
+    assert calls == ["iex", "sip", "iex", "sip"]
+    assert key not in fb._SKIPPED_SYMBOLS
+    assert key not in fetch._SKIPPED_SYMBOLS
+    assert fb._EMPTY_BAR_COUNTS[key] == 2
+
+
 def test_fetch_feed_cooldown_skips_primary_after_fallback(monkeypatch):
     start, end = _dt_range(1)
     call_feeds: list[str] = []
