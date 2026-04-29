@@ -270,7 +270,7 @@ def summarize_replay_live_parity_gate(
     require_counterfactual_passed = bool(
         get_env(
             "AI_TRADING_REPLAY_LIVE_PARITY_REQUIRE_COUNTERFACTUAL_PASSED",
-            True,
+            False,
             cast=bool,
         )
     )

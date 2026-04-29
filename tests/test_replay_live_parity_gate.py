@@ -131,6 +131,31 @@ def test_replay_live_parity_gate_requires_explicit_counterfactual_pass(
     assert payload["observed"]["replay_counterfactual_passed"] is False
 
 
+def test_replay_live_parity_gate_does_not_require_counterfactual_by_default(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data-root"
+    now = datetime.now(UTC)
+    artifact = data_root / "runtime" / "replay_outputs" / "replay_hash_failed_cf.json"
+    _write_replay_artifact(artifact, ts=now, violations_count=0, counterfactual_passed=False)
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_root))
+
+    payload = summarize_replay_live_parity_gate(
+        oms_lifecycle_parity={
+            "enabled": True,
+            "available": True,
+            "ok": True,
+            "total_violations": 0,
+        }
+    )
+
+    assert payload["ok"] is True
+    assert payload["observed"]["replay_counterfactual_passed"] is False
+    assert payload["thresholds"]["require_counterfactual_passed"] is False
+
+
 def test_replay_live_parity_gate_selects_newest_payload_ts_over_lexical_name(
     monkeypatch,
     tmp_path: Path,
