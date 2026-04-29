@@ -160,6 +160,37 @@ def test_promotion_approval_gate_classifies_stale_checkpoint(
     assert blocked["age_hours"] > blocked["max_age_hours"]
 
 
+def test_promotion_approval_gate_blocks_future_checkpoint_beyond_skew(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PROMOTION_REQUIRE_APPROVAL", "1")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_APPROVAL_FUTURE_SKEW_SECONDS", "30")
+    promotion, registry, champion, challenger, audit_events = _promotion_with_challenger(
+        tmp_path,
+        monkeypatch,
+        strategy="approval_future",
+    )
+    approval = {
+        "approval_id": "future-approval",
+        "ts": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+        "strategy": "approval_future",
+        "model_id": challenger,
+        "approver": "ops@example.com",
+        "decision": "approved",
+    }
+    (tmp_path / "governance" / "promotion_approvals.jsonl").write_text(
+        json.dumps(approval) + "\n",
+        encoding="utf-8",
+    )
+
+    assert promotion.promote_to_production(challenger, force=False) is False
+    assert registry.get_production_model("approval_future")[0] == champion
+    blocked = audit_events[-1]["payload"]
+    assert blocked["reason"] == "approval_timestamp_future"
+    assert blocked["future_seconds"] > blocked["future_skew_seconds"]
+
+
 def test_promotion_approval_gate_blocks_missing_then_promotes_fresh_approval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -190,6 +221,39 @@ def test_promotion_approval_gate_blocks_missing_then_promotes_fresh_approval(
     assert governance["promotion_approved_by"] == "ops@example.com"
     assert governance["promotion_approval_ts"]
     assert registry.model_index[champion]["governance"]["status"] == "challenger"
+
+
+def test_promote_restores_active_pointer_when_registry_status_commit_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = "registry_failure"
+    promotion, registry, champion, challenger, audit_events = _promotion_with_challenger(
+        tmp_path,
+        monkeypatch,
+        strategy=strategy,
+    )
+    promotion._create_active_symlink(strategy, champion)
+    champion_active_path = promotion.get_active_model_path(strategy)
+    assert champion_active_path is not None
+    real_update = registry.update_governance_status
+
+    def fail_challenger_production(
+        model_id: str,
+        status: str,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        if model_id == challenger and status == "production":
+            raise OSError("registry unavailable")
+        real_update(model_id, status, extra)
+
+    monkeypatch.setattr(registry, "update_governance_status", fail_challenger_production)
+
+    assert promotion.promote_to_production(challenger, force=True) is False
+    assert promotion.get_active_model_path(strategy) == champion_active_path
+    assert registry.model_index[champion]["governance"]["status"] == "production"
+    assert registry.model_index[challenger]["governance"]["status"] == "shadow"
+    assert audit_events[-1]["payload"]["reason"] == "registry_status_failed"
 
 
 def test_promotion_eligibility_reports_threshold_gate_failures(
@@ -239,6 +303,7 @@ def test_promotion_eligibility_reports_threshold_gate_failures(
             calibration_samples=50,
             challenger_eval_samples=20,
             challenger_sequential_passes=3,
+            last_updated=datetime.now(UTC),
         ),
     )
 

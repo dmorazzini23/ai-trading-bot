@@ -20,7 +20,7 @@ from ai_trading.utils.time import safe_utcnow
 logger = get_logger(__name__)
 
 
-def _coerce_quantity(value: Any, default: int = 0) -> int:
+def _coerce_quantity(value: Any, default: float = 0.0) -> float:
     """Parse broker/local quantity payloads defensively."""
     if value in (None, ""):
         return default
@@ -30,14 +30,15 @@ def _coerce_quantity(value: Any, default: int = 0) -> int:
         return default
     if not math.isfinite(numeric):
         return default
-    try:
-        return int(numeric)
-    except (TypeError, ValueError, OverflowError):
-        return default
+    return numeric
 
 
 def _empty_reconciliation_result() -> "ReconciliationResult":
     return ReconciliationResult([], [], [], safe_utcnow())
+
+
+def _error_reconciliation_result(error: str) -> "ReconciliationResult":
+    return ReconciliationResult([], [], [], safe_utcnow(), ok=False, error=error)
 
 
 def _broker_symbol(record: Any) -> str:
@@ -47,7 +48,7 @@ def _broker_symbol(record: Any) -> str:
     return str(symbol or "")
 
 
-def _broker_position_quantity(position: Any) -> int:
+def _broker_position_quantity(position: Any) -> float:
     raw_qty = getattr(position, "qty", getattr(position, "quantity", 0))
     if raw_qty in (None, "") and isinstance(position, dict):
         raw_qty = position.get("qty", position.get("quantity", 0))
@@ -105,7 +106,10 @@ def _fetch_broker_orders(client: Any) -> list[Any]:
         except AI_TRADING_FALLBACK_EXCEPTIONS:
             if not callable(list_orders):
                 raise
-            return []
+            try:
+                return list(list_orders(status="open") or [])
+            except TypeError:
+                return list(list_orders() or [])
     return []
 
 
@@ -149,6 +153,8 @@ class ReconciliationResult:
     order_drifts: list[OrderDrift]
     actions_taken: list[str]
     reconciled_at: datetime
+    ok: bool = True
+    error: str | None = None
 
     @property
     def has_drifts(self) -> bool:
@@ -373,7 +379,7 @@ def reconcile_with_broker(
             )
     except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - network issues
         logger.error(f"Failed to fetch broker positions: {e}")
-        return _empty_reconciliation_result()
+        return _error_reconciliation_result(f"broker_positions_fetch_failed: {e}")
 
     # Fetch open broker orders if supported
     try:
@@ -398,7 +404,7 @@ def reconcile_with_broker(
             )
     except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - network issues
         logger.error(f"Failed to fetch broker orders: {e}")
-        return _empty_reconciliation_result()
+        return _error_reconciliation_result(f"broker_orders_fetch_failed: {e}")
 
     return reconciler.full_reconciliation(
         local_positions=local_positions,
@@ -432,7 +438,7 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
     broker_client = ctx.api
 
     # Extract local state
-    local_positions: dict[str, int] = {}
+    local_positions: dict[str, float] = {}
     for sym, pos in (getattr(ctx, "positions", {}) or {}).items():
         raw_qty = pos.quantity if isinstance(pos, Position) else pos
         qty = _coerce_quantity(raw_qty)
@@ -469,7 +475,7 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
                         local_positions[order.symbol] = local_positions.get(order.symbol, 0) + side_mult * fill_delta
         except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # pragma: no cover - defensive
             logger.error(f"Failed to update order {order.id}: {e}")
-            return _empty_reconciliation_result()
+            return _error_reconciliation_result(f"broker_order_update_failed: {e}")
 
     # Perform reconciliation against broker state
     result = reconcile_with_broker(

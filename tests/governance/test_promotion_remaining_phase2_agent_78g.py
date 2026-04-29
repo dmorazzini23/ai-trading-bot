@@ -95,6 +95,7 @@ def test_promotion_eligibility_accepts_exact_threshold_boundaries(
             calibration_samples=criteria.min_calibration_samples,
             challenger_eval_samples=20,
             challenger_sequential_passes=criteria.challenger_sequential_required_passes,
+            last_updated=datetime.now(UTC),
         ),
     )
 
@@ -122,6 +123,62 @@ def test_malformed_shadow_metrics_artifact_blocks_eligibility_without_raising(
 
     assert eligible is False
     assert details == {"error": "No shadow metrics found"}
+
+
+def test_shadow_metrics_without_fresh_last_updated_block_eligibility(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PROMOTION_SHADOW_METRICS_MAX_AGE_HOURS", "1")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_SHADOW_METRICS_FUTURE_SKEW_SECONDS", "30")
+    criteria = PromotionCriteria(min_shadow_days=0)
+    promotion, registry = _promotion(tmp_path, monkeypatch, criteria=criteria)
+    model_id = _register_model(registry, strategy="metrics_freshness", marker="candidate")
+    registry.update_governance_status(model_id, "shadow")
+
+    base_metrics = PromotionMetrics(
+        sessions_completed=criteria.min_shadow_sessions,
+        total_trades=criteria.min_trade_count,
+        turnover_ratio=0.0,
+        live_sharpe_ratio=criteria.min_live_sharpe,
+        live_sortino_ratio=criteria.min_live_sortino,
+        live_calmar_ratio=criteria.min_live_calmar,
+        max_drawdown=0.0,
+        tail_loss_95=0.0,
+        risk_of_ruin=0.0,
+        purged_walk_forward_pass_ratio=criteria.min_purged_walk_forward_pass_ratio,
+        monte_carlo_p05_bps=criteria.min_monte_carlo_p05_bps,
+        regime_pass_ratio=criteria.min_regime_pass_ratio,
+        tca_gate_passed=True,
+        reject_rate=0.0,
+        execution_drift_bps=0.0,
+        challenger_uplift_bps=criteria.min_challenger_uplift_bps,
+        challenger_p_value=criteria.challenger_significance_alpha,
+        net_expectancy_bps=criteria.min_net_expectancy_bps,
+        live_calibration_ece=0.0,
+        live_calibration_brier=0.0,
+        calibration_samples=criteria.min_calibration_samples,
+        challenger_eval_samples=criteria.challenger_sequential_min_samples,
+        challenger_sequential_passes=criteria.challenger_sequential_required_passes,
+    )
+
+    promotion._save_shadow_metrics(model_id, base_metrics)
+    eligible, details = promotion.check_promotion_eligibility(model_id)
+    assert eligible is False
+    assert details["checks"]["shadow_metrics_freshness"] is False
+    assert details["metrics"]["freshness"]["reason"] == "missing_last_updated"
+
+    base_metrics.last_updated = datetime.now(UTC).replace(year=2099)
+    promotion._save_shadow_metrics(model_id, base_metrics)
+    eligible, details = promotion.check_promotion_eligibility(model_id)
+    assert eligible is False
+    assert details["metrics"]["freshness"]["reason"] == "future_last_updated"
+
+    base_metrics.last_updated = datetime.now(UTC).replace(year=2020)
+    promotion._save_shadow_metrics(model_id, base_metrics)
+    eligible, details = promotion.check_promotion_eligibility(model_id)
+    assert eligible is False
+    assert details["metrics"]["freshness"]["reason"] == "stale_last_updated"
 
 
 def test_helper_env_clamps_and_disabled_event_store_paths(

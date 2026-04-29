@@ -47,5 +47,7 @@ def test_build_bracket_contains_exit_legs() -> None:
         stop_loss=95.0,
         client_order_id="cid-1",
     )
-    assert order["type"] == "bracket"
-    assert "legs" in order
+    assert order["type"] == "limit"
+    assert order["order_class"] == "bracket"
+    assert order["take_profit"] == {"limit_price": 110.0}
+    assert order["stop_loss"] == {"stop_price": 95.0}

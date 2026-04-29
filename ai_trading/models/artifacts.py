@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 import joblib
 
-from ai_trading.config.management import get_env
+from ai_trading.config.management import get_env, is_test_runtime
 from ai_trading.logging import get_logger
 from ai_trading.runtime.atomic_io import atomic_write_text
 
@@ -152,13 +152,14 @@ def enforce_artifact_verification(
     if ok:
         return resolved
 
+    execution_mode = _execution_mode()
     details = {
         "model_path": str(resolved),
         "manifest_path": str(manifest_file),
         "reason_code": reason,
-        "execution_mode": _execution_mode(),
+        "execution_mode": execution_mode,
     }
-    if _execution_mode() == "live":
+    if execution_mode == "live" or not is_test_runtime():
         logger.error("MODEL_VERIFICATION_FAILED", extra=details)
         raise RuntimeError(f"MODEL_VERIFICATION_FAILED: {reason}")
     logger.warning("MODEL_VERIFICATION_SKIPPED", extra=details)

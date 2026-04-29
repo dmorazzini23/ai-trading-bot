@@ -206,6 +206,85 @@ class ModelPromotion:
             value = 168.0
         return max(1.0, min(value, 24.0 * 365.0))
 
+    def _promotion_approval_future_skew_seconds(self) -> float:
+        try:
+            value = float(get_env("AI_TRADING_PROMOTION_APPROVAL_FUTURE_SKEW_SECONDS", 300.0, cast=float))
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            value = 300.0
+        if not math.isfinite(value):
+            value = 300.0
+        return max(0.0, min(value, 24.0 * 3600.0))
+
+    def _shadow_metrics_max_age_hours(self) -> float:
+        try:
+            value = float(get_env("AI_TRADING_PROMOTION_SHADOW_METRICS_MAX_AGE_HOURS", 24.0, cast=float))
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            value = 24.0
+        if not math.isfinite(value):
+            value = 24.0
+        return max(1.0, min(value, 24.0 * 365.0))
+
+    def _shadow_metrics_future_skew_seconds(self) -> float:
+        try:
+            value = float(get_env("AI_TRADING_PROMOTION_SHADOW_METRICS_FUTURE_SKEW_SECONDS", 300.0, cast=float))
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            value = 300.0
+        if not math.isfinite(value):
+            value = 300.0
+        return max(0.0, min(value, 24.0 * 3600.0))
+
+    def _shadow_metrics_freshness(self, metrics: PromotionMetrics) -> tuple[bool, dict[str, Any]]:
+        max_age_hours = self._shadow_metrics_max_age_hours()
+        future_skew_seconds = self._shadow_metrics_future_skew_seconds()
+        if metrics.last_updated is None:
+            return (
+                False,
+                {
+                    "reason": "missing_last_updated",
+                    "max_age_hours": max_age_hours,
+                    "future_skew_seconds": future_skew_seconds,
+                },
+            )
+        last_updated = metrics.last_updated
+        if last_updated.tzinfo is None:
+            last_updated = last_updated.replace(tzinfo=UTC)
+        else:
+            last_updated = last_updated.astimezone(UTC)
+        now = datetime.now(UTC)
+        delta_seconds = (now - last_updated).total_seconds()
+        if delta_seconds < -future_skew_seconds:
+            return (
+                False,
+                {
+                    "reason": "future_last_updated",
+                    "last_updated": last_updated.isoformat(),
+                    "future_seconds": abs(delta_seconds),
+                    "future_skew_seconds": future_skew_seconds,
+                    "max_age_hours": max_age_hours,
+                },
+            )
+        age_hours = max(delta_seconds, 0.0) / 3600.0
+        if age_hours > max_age_hours:
+            return (
+                False,
+                {
+                    "reason": "stale_last_updated",
+                    "last_updated": last_updated.isoformat(),
+                    "age_hours": age_hours,
+                    "max_age_hours": max_age_hours,
+                    "future_skew_seconds": future_skew_seconds,
+                },
+            )
+        return (
+            True,
+            {
+                "last_updated": last_updated.isoformat(),
+                "age_hours": age_hours,
+                "max_age_hours": max_age_hours,
+                "future_skew_seconds": future_skew_seconds,
+            },
+        )
+
     def _governance_event_store_enabled(self) -> bool:
         try:
             return bool(get_env("AI_TRADING_GOVERNANCE_EVENT_STORE_ENABLED", True, cast=bool))
@@ -1247,6 +1326,7 @@ class ModelPromotion:
             metrics = self._load_shadow_metrics(model_id)
             if metrics is None:
                 return (False, {'error': 'No shadow metrics found'})
+            metrics_fresh, metrics_freshness = self._shadow_metrics_freshness(metrics)
             model_data = self.registry.load_model(model_id, verify_dataset_hash=False)[1]
             governance = model_data.get('governance', {})
             shadow_start = governance.get('shadow_start_time')
@@ -1273,6 +1353,7 @@ class ModelPromotion:
                 )
             )
             checks = {
+                'shadow_metrics_freshness': metrics_fresh,
                 'min_sessions': metrics.sessions_completed >= self.criteria.min_shadow_sessions,
                 'min_days': days_in_shadow >= self.criteria.min_shadow_days,
                 'min_trades': metrics.total_trades >= self.criteria.min_trade_count,
@@ -1354,6 +1435,8 @@ class ModelPromotion:
                     'challenger_sequential_passes': metrics.challenger_sequential_passes,
                     'policy_min_oos_samples': policy_min_oos_samples,
                     'policy_min_oos_net_bps': policy_min_oos_net_bps,
+                    'last_updated': metrics_freshness.get('last_updated'),
+                    'freshness': metrics_freshness,
                 },
                 'criteria': {
                     'min_sessions': self.criteria.min_shadow_sessions,
@@ -1504,18 +1587,45 @@ class ModelPromotion:
                         approved_ts = approved_ts.replace(tzinfo=UTC)
                     else:
                         approved_ts = approved_ts.astimezone(UTC)
-                    age_hours = max(
-                        (datetime.now(UTC) - approved_ts).total_seconds() / 3600.0,
-                        0.0,
-                    )
-                    if age_hours > self._promotion_approval_max_age_hours():
+                    now = datetime.now(UTC)
+                    max_age_hours = self._promotion_approval_max_age_hours()
+                    future_skew_seconds = self._promotion_approval_future_skew_seconds()
+                    approval_age_seconds = (now - approved_ts).total_seconds()
+                    if approval_age_seconds < -future_skew_seconds:
+                        future_seconds = abs(approval_age_seconds)
+                        self.logger.warning(
+                            "PROMOTION_APPROVAL_REQUIRED_TIMESTAMP_FUTURE",
+                            extra={
+                                "strategy": strategy,
+                                "model_id": model_id,
+                                "future_seconds": future_seconds,
+                                "future_skew_seconds": future_skew_seconds,
+                            },
+                        )
+                        self._append_governance_audit_event(
+                            event_type="MODEL_PROMOTION_BLOCKED",
+                            payload={
+                                "ts": now.isoformat(),
+                                "strategy": str(strategy),
+                                "model_id": str(model_id),
+                                "force": bool(force),
+                                "reason": "approval_timestamp_future",
+                                "approval": dict(approval_payload),
+                                "future_seconds": future_seconds,
+                                "future_skew_seconds": future_skew_seconds,
+                            },
+                            primary_lineage=model_lineage,
+                        )
+                        return False
+                    age_hours = max(approval_age_seconds, 0.0) / 3600.0
+                    if age_hours > max_age_hours:
                         self.logger.warning(
                             "PROMOTION_APPROVAL_REQUIRED_STALE",
                             extra={
                                 "strategy": strategy,
                                 "model_id": model_id,
                                 "age_hours": age_hours,
-                                "max_age_hours": self._promotion_approval_max_age_hours(),
+                                "max_age_hours": max_age_hours,
                             },
                         )
                         self._append_governance_audit_event(
@@ -1528,7 +1638,7 @@ class ModelPromotion:
                                 "reason": "approval_stale",
                                 "approval": dict(approval_payload),
                                 "age_hours": age_hours,
-                                "max_age_hours": self._promotion_approval_max_age_hours(),
+                                "max_age_hours": max_age_hours,
                             },
                             primary_lineage=model_lineage,
                         )
@@ -1545,47 +1655,10 @@ class ModelPromotion:
                 previous_model_id = old_model_id
                 previous_model_lineage = self._extract_model_lineage(old_model_id)
                 governance_snapshots[str(old_model_id)] = self._snapshot_model_governance(old_model_id)
-                if old_model_id != model_id:
-                    self.registry.update_governance_status(
-                        old_model_id,
-                        'challenger',
-                        {
-                            'demoted_at': promoted_at,
-                            'replaced_by': model_id,
-                        },
-                    )
-                    self.logger.info(f'Demoted previous production model {old_model_id} for strategy {strategy}')
-            self.registry.update_governance_status(
-                model_id,
-                'production',
-                {
-                    'promoted_at': promoted_at,
-                    'previous_production_model_id': previous_model_id,
-                    'promotion_approval_id': (
-                        str(approval_payload.get("approval_id"))
-                        if isinstance(approval_payload, dict)
-                        and approval_payload.get("approval_id") not in (None, "")
-                        else None
-                    ),
-                    'promotion_approved_by': (
-                        str(approval_payload.get("approver"))
-                        if isinstance(approval_payload, dict)
-                        and approval_payload.get("approver") not in (None, "")
-                        else None
-                    ),
-                    'promotion_approval_ts': (
-                        str(approval_payload.get("ts"))
-                        if isinstance(approval_payload, dict)
-                        and approval_payload.get("ts") not in (None, "")
-                        else None
-                    ),
-                },
-            )
+            previous_active_path = self.get_active_model_path(strategy)
             try:
                 self._create_active_symlink(strategy, model_id)
             except OSError as exc:
-                for restore_model_id, governance in governance_snapshots.items():
-                    self._restore_model_governance(restore_model_id, governance)
                 self.logger.error(
                     "PROMOTION_ACTIVE_SYMLINK_FAILED",
                     extra={
@@ -1602,6 +1675,71 @@ class ModelPromotion:
                         "model_id": str(model_id),
                         "force": bool(force),
                         "reason": "active_symlink_failed",
+                        "error": str(exc),
+                    },
+                    primary_lineage=model_lineage,
+                    related_lineages={"previous_production": previous_model_lineage},
+                )
+                return False
+            try:
+                if current_production:
+                    old_model_id, _ = current_production
+                    if old_model_id != model_id:
+                        self.registry.update_governance_status(
+                            old_model_id,
+                            'challenger',
+                            {
+                                'demoted_at': promoted_at,
+                                'replaced_by': model_id,
+                            },
+                        )
+                        self.logger.info(f'Demoted previous production model {old_model_id} for strategy {strategy}')
+                self.registry.update_governance_status(
+                    model_id,
+                    'production',
+                    {
+                        'promoted_at': promoted_at,
+                        'previous_production_model_id': previous_model_id,
+                        'promotion_approval_id': (
+                            str(approval_payload.get("approval_id"))
+                            if isinstance(approval_payload, dict)
+                            and approval_payload.get("approval_id") not in (None, "")
+                            else None
+                        ),
+                        'promotion_approved_by': (
+                            str(approval_payload.get("approver"))
+                            if isinstance(approval_payload, dict)
+                            and approval_payload.get("approver") not in (None, "")
+                            else None
+                        ),
+                        'promotion_approval_ts': (
+                            str(approval_payload.get("ts"))
+                            if isinstance(approval_payload, dict)
+                            and approval_payload.get("ts") not in (None, "")
+                            else None
+                        ),
+                    },
+                )
+            except (OSError, ValueError, TypeError) as exc:
+                for restore_model_id, governance in governance_snapshots.items():
+                    self._restore_model_governance(restore_model_id, governance)
+                self._restore_active_symlink(strategy, previous_active_path)
+                self.logger.error(
+                    "PROMOTION_REGISTRY_STATUS_FAILED",
+                    extra={
+                        "strategy": str(strategy),
+                        "model_id": str(model_id),
+                        "error": str(exc),
+                    },
+                )
+                self._append_governance_audit_event(
+                    event_type="MODEL_PROMOTION_BLOCKED",
+                    payload={
+                        "ts": datetime.now(UTC).isoformat(),
+                        "strategy": str(strategy),
+                        "model_id": str(model_id),
+                        "force": bool(force),
+                        "reason": "registry_status_failed",
                         "error": str(exc),
                     },
                     primary_lineage=model_lineage,
@@ -2126,6 +2264,8 @@ class ModelPromotion:
             tmp_path = self.active_dir / f'.{strategy}_active.{uuid.uuid4().hex}.tmp'
             tmp_path.symlink_to(model_path.absolute())
             tmp_path.replace(symlink_path)
+            if not symlink_path.is_symlink() or symlink_path.resolve() != model_path.absolute().resolve():
+                raise OSError("active symlink target verification failed")
             self.logger.debug(f'Created active symlink for {strategy}: {symlink_path} -> {model_path}')
         except OSError as e:
             if tmp_path is not None:
@@ -2137,6 +2277,25 @@ class ModelPromotion:
             raise
         except (ValueError, TypeError) as e:
             self.logger.error(f'Error creating active symlink for {strategy}: {e}')
+
+    def _restore_active_symlink(self, strategy: str, previous_active_path: str | None) -> None:
+        """Restore active symlink after a failed registry status commit."""
+        symlink_path = self.active_dir / f'{strategy}_active'
+        tmp_path: Path | None = None
+        try:
+            if previous_active_path:
+                tmp_path = self.active_dir / f'.{strategy}_active.restore.{uuid.uuid4().hex}.tmp'
+                tmp_path.symlink_to(Path(previous_active_path).absolute())
+                tmp_path.replace(symlink_path)
+            elif symlink_path.exists() or symlink_path.is_symlink():
+                symlink_path.unlink()
+        except OSError as e:
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self.logger.error(f'Error restoring active symlink for {strategy}: {e}')
 
     def _remove_active_symlink(self, strategy: str) -> None:
         """Remove active symlink for strategy."""

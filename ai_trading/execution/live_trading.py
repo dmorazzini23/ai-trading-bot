@@ -17723,7 +17723,31 @@ class ExecutionEngine:
         }
         now_mono = float(monotonic_time())
         attempted_count = 0
+        live_mode = str(getattr(self, "execution_mode", "") or "").strip().lower() == "live"
         for provider_index, provider in enumerate(providers, start=1):
+            if live_mode and provider in {"paper", "paper_sim", "sim", "simulation"}:
+                self.stats.setdefault("failover_live_sim_provider_skips", 0)
+                self.stats["failover_live_sim_provider_skips"] += 1
+                logger.error(
+                    "BROKER_FAILOVER_SIM_PROVIDER_SUPPRESSED_LIVE",
+                    extra={
+                        "provider": provider,
+                        "symbol": order_data.get("symbol"),
+                        "client_order_id": order_data.get("client_order_id"),
+                    },
+                )
+                self._record_broker_resilience_playbook(
+                    action="failover_sim_provider_suppressed_live",
+                    provider=provider,
+                    reason="live_mode_disallows_simulated_broker_failover",
+                    details={
+                        "primary_error": str(primary_error),
+                        "attempt_index": int(provider_index),
+                        "providers_total": int(len(providers)),
+                        "symbol": str(order_data.get("symbol") or ""),
+                    },
+                )
+                continue
             cooldown_remaining = self._failover_provider_cooldown_remaining(
                 provider=provider,
                 now_mono=now_mono,
@@ -18172,7 +18196,7 @@ class ExecutionEngine:
             payload["side"] = side
         logger.warning("ORDER_SUBMIT_RATE_LIMIT_COOLDOWN", extra=payload)
 
-    def submit_market_order(self, symbol: str, side: str, quantity: int, **kwargs) -> dict | None:
+    def submit_market_order(self, symbol: str, side: str, quantity: int | float, **kwargs) -> dict | None:
         """
         Submit a market order with comprehensive error handling.
 
@@ -18308,7 +18332,7 @@ class ExecutionEngine:
                 )
                 return None
             if adjusted_qty != int(quantity):
-                quantity = int(adjusted_qty)
+                quantity = adjusted_qty
         if (
             _semantic_order_side(side_lower) == "cover"
             or (
@@ -18340,7 +18364,7 @@ class ExecutionEngine:
                 )
                 return None
             if adjusted_qty != int(quantity):
-                quantity = int(adjusted_qty)
+                quantity = adjusted_qty
 
         resolved_tif = self._resolve_time_in_force(kwargs.get("time_in_force"))
         kwargs["time_in_force"] = resolved_tif
@@ -18988,7 +19012,7 @@ class ExecutionEngine:
                 )
         return cast(dict[Any, Any] | None, result)
 
-    def submit_limit_order(self, symbol: str, side: str, quantity: int, limit_price: float, **kwargs) -> dict | None:
+    def submit_limit_order(self, symbol: str, side: str, quantity: int | float, limit_price: float, **kwargs) -> dict | None:
         """
         Submit a limit order with comprehensive error handling.
 
@@ -19123,7 +19147,7 @@ class ExecutionEngine:
                 )
                 return None
             if adjusted_qty != int(quantity):
-                quantity = int(adjusted_qty)
+                quantity = adjusted_qty
         if (
             _semantic_order_side(side_lower) == "cover"
             or (
@@ -19155,7 +19179,7 @@ class ExecutionEngine:
                 )
                 return None
             if adjusted_qty != int(quantity):
-                quantity = int(adjusted_qty)
+                quantity = adjusted_qty
 
         resolved_tif = self._resolve_time_in_force(kwargs.get("time_in_force"))
         kwargs["time_in_force"] = resolved_tif
@@ -23648,7 +23672,7 @@ class ExecutionEngine:
             )
         return canceled_ids
 
-    def _position_quantity(self, symbol: str) -> int:
+    def _position_quantity(self, symbol: str) -> float:
         client = getattr(self, "trading_client", None)
         if client is None:
             return 0
@@ -23686,31 +23710,31 @@ class ExecutionEngine:
                 cached_qty = tracker.get(str(symbol).upper(), tracker.get(symbol))
                 if cached_qty is not None:
                     try:
-                        return int(cached_qty)
+                        return float(cached_qty)
                     except (TypeError, ValueError):
                         logger.debug(
                             "POSITION_QTY_CACHE_PARSE_FAILED",
                             extra={"symbol": symbol, "qty_raw": cached_qty},
                             exc_info=True,
                         )
-            return 0
+            return 0.0
         qty_raw = _extract_value(position_obj, "qty", "quantity", "position")
         try:
             qty_decimal = _safe_decimal(qty_raw)
         except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("POSITION_QTY_PARSE_FAILED", extra={"symbol": symbol, "qty_raw": qty_raw}, exc_info=True)
-            return 0
+            return 0.0
         try:
             side_val = _extract_value(position_obj, "side")
             normalized_side = self._normalized_order_side(side_val)
         except LIVE_TRADING_FALLBACK_EXC:
             normalized_side = None
         if qty_decimal is not None and qty_decimal < 0:
-            return -int(qty_decimal.copy_abs())
-        qty_int = int(qty_decimal.copy_abs()) if qty_decimal is not None else 0
+            return -float(qty_decimal.copy_abs())
+        qty_value = float(qty_decimal.copy_abs()) if qty_decimal is not None else 0.0
         if normalized_side in {"sell", "sell_short"}:
-            return -qty_int
-        return qty_int
+            return -qty_value
+        return qty_value
 
     def _clip_sell_quantity_to_available_position(
         self,
@@ -23720,7 +23744,7 @@ class ExecutionEngine:
         closing_position: bool,
         order_type: str,
         client_order_id: str | None,
-    ) -> tuple[int, dict[str, Any] | None]:
+    ) -> tuple[float, dict[str, Any] | None]:
         """Clip sell quantity to currently available long shares when applicable."""
 
         if requested_qty <= 0:
@@ -23729,7 +23753,7 @@ class ExecutionEngine:
         if not symbol_token:
             return requested_qty, None
 
-        position_qty = int(self._position_quantity(symbol_token))
+        position_qty = float(self._position_quantity(symbol_token))
         # Opening short sells should not be clipped to long inventory.
         if position_qty <= 0:
             if closing_position:
@@ -23737,7 +23761,7 @@ class ExecutionEngine:
                     "symbol": symbol_token,
                     "requested_qty": int(requested_qty),
                     "available_qty": 0,
-                    "position_qty": int(position_qty),
+                    "position_qty": float(position_qty),
                     "open_sell_qty": 0.0,
                     "reserved_shares": 0,
                     "closing_position": True,
@@ -23753,22 +23777,22 @@ class ExecutionEngine:
         _, open_sell_qty = self.open_order_totals(symbol_token)
         open_sell_qty_val = max(_safe_float(open_sell_qty) or 0.0, 0.0)
         reserved_shares = int(math.ceil(open_sell_qty_val - 1e-9))
-        available_qty = max(position_qty - max(reserved_shares, 0), 0)
+        available_qty = max(position_qty - max(reserved_shares, 0), 0.0)
         if requested_qty <= available_qty:
             return requested_qty, None
 
         context: dict[str, Any] = {
             "symbol": symbol_token,
             "requested_qty": int(requested_qty),
-            "available_qty": int(available_qty),
-            "position_qty": int(position_qty),
+            "available_qty": float(available_qty),
+            "position_qty": float(position_qty),
             "open_sell_qty": float(open_sell_qty_val),
             "reserved_shares": int(max(reserved_shares, 0)),
             "closing_position": bool(closing_position),
             "client_order_id": client_order_id,
             "order_type": str(order_type),
         }
-        adjusted_qty = int(max(available_qty, 0))
+        adjusted_qty = float(max(available_qty, 0.0))
         context["adjusted_qty"] = adjusted_qty
         logger.warning("ORDER_QTY_CLIPPED_TO_AVAILABLE_POSITION", extra=context)
         return adjusted_qty, context
@@ -23780,7 +23804,7 @@ class ExecutionEngine:
         requested_qty: int,
         order_type: str,
         client_order_id: str | None,
-    ) -> tuple[int, dict[str, Any] | None]:
+    ) -> tuple[float, dict[str, Any] | None]:
         """Clip buy-to-close quantity to currently available short shares."""
 
         if requested_qty <= 0:
@@ -23789,13 +23813,13 @@ class ExecutionEngine:
         if not symbol_token:
             return requested_qty, None
 
-        position_qty = int(self._position_quantity(symbol_token))
+        position_qty = float(self._position_quantity(symbol_token))
         if position_qty >= 0:
             context = {
                 "symbol": symbol_token,
                 "requested_qty": int(requested_qty),
                 "available_qty": 0,
-                "position_qty": int(position_qty),
+                "position_qty": float(position_qty),
                 "open_buy_qty": 0.0,
                 "reserved_shares": 0,
                 "client_order_id": client_order_id,
@@ -23809,21 +23833,21 @@ class ExecutionEngine:
         open_buy_qty, _ = self.open_order_totals(symbol_token)
         open_buy_qty_val = max(_safe_float(open_buy_qty) or 0.0, 0.0)
         reserved_shares = int(math.ceil(open_buy_qty_val - 1e-9))
-        available_qty = max(abs(position_qty) - max(reserved_shares, 0), 0)
+        available_qty = max(abs(position_qty) - max(reserved_shares, 0), 0.0)
         if requested_qty <= available_qty:
             return requested_qty, None
 
         context = {
             "symbol": symbol_token,
             "requested_qty": int(requested_qty),
-            "available_qty": int(available_qty),
-            "position_qty": int(position_qty),
+            "available_qty": float(available_qty),
+            "position_qty": float(position_qty),
             "open_buy_qty": float(open_buy_qty_val),
             "reserved_shares": int(max(reserved_shares, 0)),
             "client_order_id": client_order_id,
             "order_type": str(order_type),
         }
-        adjusted_qty = int(max(available_qty, 0))
+        adjusted_qty = float(max(available_qty, 0.0))
         context["adjusted_qty"] = adjusted_qty
         logger.warning("COVER_QTY_CLIPPED_TO_CURRENT_SHORT", extra=context)
         return adjusted_qty, context
@@ -31435,8 +31459,8 @@ class ExecutionEngine:
                         detail=str(clip_context or {}),
                     )
                 if adjusted_qty != requested_qty:
-                    order_data["quantity"] = int(adjusted_qty)
-                    qty_payload = int(adjusted_qty)
+                    order_data["quantity"] = adjusted_qty
+                    qty_payload = adjusted_qty
         if (
             qty_payload not in (None, "")
             and semantic_side == "sell"
@@ -31459,8 +31483,8 @@ class ExecutionEngine:
                         detail=str(clip_context or {}),
                     )
                 if adjusted_qty != requested_qty:
-                    order_data["quantity"] = int(adjusted_qty)
-                    qty_payload = int(adjusted_qty)
+                    order_data["quantity"] = adjusted_qty
+                    qty_payload = adjusted_qty
         notional_decimal = _positive_decimal(order_data.get("notional"))
         if notional_decimal is not None and order_type != "market":
             raise NonRetryableBrokerError(

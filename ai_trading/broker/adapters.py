@@ -9,6 +9,7 @@ from typing import Any, Protocol, Sequence
 
 OrderClass: Any
 OrderSide: Any
+PositionIntent: Any
 TimeInForce: Any
 QueryOrderStatus: Any
 GetOrdersRequest: Any
@@ -24,6 +25,7 @@ try:
     from alpaca.trading.enums import (
         OrderClass as _OrderClass,
         OrderSide as _OrderSide,
+        PositionIntent as _PositionIntent,
         QueryOrderStatus as _QueryOrderStatus,
         TimeInForce as _TimeInForce,
     )
@@ -40,6 +42,7 @@ try:
 except (ImportError, ModuleNotFoundError, RuntimeError, OSError):  # pragma: no cover - import guard
     OrderClass = None
     OrderSide = None
+    PositionIntent = None
     QueryOrderStatus = None
     TimeInForce = None
     GetOrdersRequest = None
@@ -53,6 +56,7 @@ except (ImportError, ModuleNotFoundError, RuntimeError, OSError):  # pragma: no 
 else:
     OrderClass = _OrderClass
     OrderSide = _OrderSide
+    PositionIntent = _PositionIntent
     QueryOrderStatus = _QueryOrderStatus
     TimeInForce = _TimeInForce
     GetOrdersRequest = _GetOrdersRequest
@@ -198,6 +202,55 @@ def _alpaca_bracket_leg(value: Any, *, scalar_field: str, request_cls: Any) -> A
     return request_cls(**{scalar_field: value}) if request_cls is not None else {scalar_field: value}
 
 
+def _alpaca_position_intent(order_data: Mapping[str, Any], side_raw: str) -> Any | None:
+    explicit_intent = order_data.get("position_intent")
+    if explicit_intent not in (None, ""):
+        return _alpaca_enum_value(PositionIntent, explicit_intent, default=explicit_intent)
+    if PositionIntent is None:
+        return None
+    closing_position = bool(
+        order_data.get("closing_position")
+        or order_data.get("close_position")
+        or order_data.get("reduce_only")
+    )
+    intent_name: str | None = None
+    if side_raw == "sell_short":
+        intent_name = "SELL_TO_CLOSE" if closing_position else "SELL_TO_OPEN"
+    elif side_raw == "buy_to_cover":
+        intent_name = "BUY_TO_CLOSE"
+    elif side_raw == "buy" and closing_position:
+        intent_name = "BUY_TO_CLOSE"
+    elif side_raw == "sell" and closing_position:
+        intent_name = "SELL_TO_CLOSE"
+    if intent_name is None:
+        return None
+    return getattr(PositionIntent, intent_name, None)
+
+
+def _alpaca_order_payload(order_data: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(order_data)
+    order_type = str(payload.get("type") or payload.get("order_type") or "market").strip().lower()
+    if order_type in {"bracket", "oco", "oto"}:
+        payload.setdefault("order_class", order_type)
+        legs = payload.get("legs")
+        if isinstance(legs, Mapping):
+            for leg_name in ("take_profit", "stop_loss"):
+                if payload.get(leg_name) is None and legs.get(leg_name) is not None:
+                    payload[leg_name] = legs.get(leg_name)
+        if order_type == "oco":
+            take_profit = payload.get("take_profit")
+            if payload.get("limit_price") in (None, ""):
+                if isinstance(take_profit, Mapping):
+                    payload["limit_price"] = take_profit.get("limit_price")
+                elif take_profit not in (None, ""):
+                    payload["limit_price"] = take_profit
+            payload["type"] = "limit" if payload.get("limit_price") not in (None, "") else "market"
+            payload.pop("take_profit", None)
+        elif order_type in {"bracket", "oto"}:
+            payload["type"] = "limit" if payload.get("limit_price", payload.get("price")) not in (None, "") else "market"
+    return payload
+
+
 def _build_alpaca_order_request(order_data: Mapping[str, Any]) -> Any:
     if (
         OrderClass is None
@@ -208,15 +261,16 @@ def _build_alpaca_order_request(order_data: Mapping[str, Any]) -> Any:
     ):
         raise RuntimeError("alpaca-py request models are unavailable")
 
-    order_type = str(order_data.get("type") or order_data.get("order_type") or "market").strip().lower()
-    symbol = str(order_data.get("symbol") or "").strip().upper()
+    payload = _alpaca_order_payload(order_data)
+    order_type = str(payload.get("type") or payload.get("order_type") or "market").strip().lower()
+    symbol = str(payload.get("symbol") or "").strip().upper()
     if not symbol:
         raise ValueError("Alpaca order requires symbol")
-    side_raw = _normalize_broker_side(order_data.get("side"))
+    side_raw = _normalize_broker_side(payload.get("side"))
     side = OrderSide.BUY if side_raw in {"buy", "buy_to_cover"} else OrderSide.SELL
     tif = _alpaca_enum_value(
         TimeInForce,
-        order_data.get("time_in_force") or "day",
+        payload.get("time_in_force") or "day",
         default=TimeInForce.DAY,
     )
     request_kwargs: dict[str, Any] = {
@@ -224,35 +278,38 @@ def _build_alpaca_order_request(order_data: Mapping[str, Any]) -> Any:
         "side": side,
         "time_in_force": tif,
     }
-    qty = order_data.get("qty", order_data.get("quantity"))
-    notional = order_data.get("notional")
+    qty = payload.get("qty", payload.get("quantity"))
+    notional = payload.get("notional")
     if qty not in (None, ""):
         request_kwargs["qty"] = qty
     elif notional not in (None, ""):
         request_kwargs["notional"] = notional
     else:
         raise ValueError("Alpaca order requires qty, quantity, or notional")
-    client_order_id = order_data.get("client_order_id")
+    client_order_id = payload.get("client_order_id")
     if client_order_id not in (None, ""):
         request_kwargs["client_order_id"] = str(client_order_id)
-    if order_data.get("extended_hours") is not None:
-        request_kwargs["extended_hours"] = bool(order_data.get("extended_hours"))
-    order_class = order_data.get("order_class")
+    if payload.get("extended_hours") is not None:
+        request_kwargs["extended_hours"] = bool(payload.get("extended_hours"))
+    order_class = payload.get("order_class")
     if order_class not in (None, ""):
         request_kwargs["order_class"] = _alpaca_enum_value(
             OrderClass,
             order_class,
             default=order_class,
         )
+    position_intent = _alpaca_position_intent(payload, side_raw)
+    if position_intent is not None:
+        request_kwargs["position_intent"] = position_intent
     take_profit = _alpaca_bracket_leg(
-        order_data.get("take_profit"),
+        payload.get("take_profit"),
         scalar_field="limit_price",
         request_cls=TakeProfitRequest,
     )
     if take_profit is not None:
         request_kwargs["take_profit"] = take_profit
     stop_loss = _alpaca_bracket_leg(
-        order_data.get("stop_loss"),
+        payload.get("stop_loss"),
         scalar_field="stop_price",
         request_cls=StopLossRequest,
     )
@@ -262,22 +319,22 @@ def _build_alpaca_order_request(order_data: Mapping[str, Any]) -> Any:
     if order_type == "market":
         return MarketOrderRequest(**request_kwargs)
     if order_type == "limit":
-        limit_price = order_data.get("limit_price", order_data.get("price"))
+        limit_price = payload.get("limit_price", payload.get("price"))
         if limit_price in (None, ""):
             raise ValueError("Alpaca limit orders require limit_price")
         return LimitOrderRequest(limit_price=limit_price, **request_kwargs)
     if order_type == "stop":
         if StopOrderRequest is None:
             raise RuntimeError("Alpaca StopOrderRequest model is unavailable")
-        stop_price = order_data.get("stop_price")
+        stop_price = payload.get("stop_price")
         if stop_price in (None, ""):
             raise ValueError("Alpaca stop orders require stop_price")
         return StopOrderRequest(stop_price=stop_price, **request_kwargs)
     if order_type == "stop_limit":
         if StopLimitOrderRequest is None:
             raise RuntimeError("Alpaca StopLimitOrderRequest model is unavailable")
-        stop_price = order_data.get("stop_price")
-        limit_price = order_data.get("limit_price", order_data.get("price"))
+        stop_price = payload.get("stop_price")
+        limit_price = payload.get("limit_price", payload.get("price"))
         if stop_price in (None, "") or limit_price in (None, ""):
             raise ValueError("Alpaca stop_limit orders require stop_price and limit_price")
         return StopLimitOrderRequest(
@@ -288,8 +345,8 @@ def _build_alpaca_order_request(order_data: Mapping[str, Any]) -> Any:
     if order_type == "trailing_stop":
         if TrailingStopOrderRequest is None:
             raise RuntimeError("Alpaca TrailingStopOrderRequest model is unavailable")
-        trail_price = order_data.get("trail_price")
-        trail_percent = order_data.get("trail_percent")
+        trail_price = payload.get("trail_price")
+        trail_percent = payload.get("trail_percent")
         if trail_price not in (None, ""):
             return TrailingStopOrderRequest(trail_price=trail_price, **request_kwargs)
         if trail_percent not in (None, ""):

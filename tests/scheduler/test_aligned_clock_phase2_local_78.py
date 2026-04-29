@@ -53,14 +53,31 @@ def test_calendar_loading_and_timeframe_branches(monkeypatch: pytest.MonkeyPatch
     assert clock._parse_timeframe_minutes("5m") == 5  # noqa: SLF001
     assert clock._parse_timeframe_minutes("1h") == 60  # noqa: SLF001
     assert clock._parse_timeframe_minutes("1d") == 1440  # noqa: SLF001
-    with pytest.raises(ValueError):
-        clock._parse_timeframe_minutes("bad")  # noqa: SLF001
+    assert clock._parse_timeframe_minutes("bad") == 1  # noqa: SLF001
+    assert clock._parse_timeframe_minutes("0m") == 1  # noqa: SLF001
 
     close_1m = clock.next_bar_close("AAPL", "1m")
     close_daily = clock.next_bar_close("AAPL", "1d")
     assert close_1m == datetime(2026, 4, 27, 16, 0, tzinfo=UTC)
     assert close_daily == datetime(2026, 4, 27, 16, 0, tzinfo=UTC)
     assert clock.next_bar_close("AAPL", "1m") is close_1m
+
+
+def test_next_bar_close_rolls_over_midnight_and_invalid_timeframes() -> None:
+    class FixedClock(ac.AlignedClock):
+        def __init__(self) -> None:
+            super().__init__(max_skew_ms=1.0)
+            self.calendar = None
+
+        def get_exchange_time(self, tz=None):
+            current = datetime(2026, 4, 27, 23, 59, 45, tzinfo=UTC)
+            return current if tz is None else current.astimezone(tz)
+
+    clock = FixedClock()
+
+    assert clock.next_bar_close("AAPL", "1m") == datetime(2026, 4, 28, 0, 0, tzinfo=UTC)
+    assert clock.next_bar_close("MSFT", "0m") == datetime(2026, 4, 28, 0, 0, tzinfo=UTC)
+    assert clock.next_bar_close("TSLA", "bad") == datetime(2026, 4, 28, 0, 0, tzinfo=UTC)
 
 
 def test_final_bar_market_open_wait_and_global_helpers(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -167,6 +167,54 @@ def _normalize_signal_side(side: Any) -> str:
     return token
 
 
+def _finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _resolve_signal_quantity(signal: Any, market_data: dict[str, Any], ctx: Any | None = None) -> float | None:
+    for attr in ("quantity", "qty"):
+        if hasattr(signal, attr):
+            quantity = _finite_float(getattr(signal, attr))
+            if quantity is not None:
+                return abs(quantity)
+
+    weight = _finite_float(getattr(signal, "weight", None))
+    metadata = getattr(signal, "metadata", None)
+    if weight is None and isinstance(metadata, dict):
+        weight = _finite_float(metadata.get("weight"))
+    if weight is None:
+        return None
+
+    symbol = getattr(signal, "symbol", "")
+    price = _finite_float(getattr(signal, "price", None))
+    if price is None:
+        price = _finite_float(getattr(signal, "current_price", None))
+    if price is None and symbol:
+        price = _finite_float(market_data.get("prices", {}).get(symbol))
+
+    equity = _finite_float(getattr(signal, "equity", None))
+    if equity is None:
+        equity = _finite_float(getattr(signal, "portfolio_value", None))
+    if equity is None and ctx is not None:
+        for attr in ("equity", "portfolio_value", "account_equity", "account_value"):
+            equity = _finite_float(getattr(ctx, attr, None))
+            if equity is not None:
+                break
+        if equity is None:
+            account = getattr(ctx, "account", None)
+            equity = _finite_float(getattr(account, "equity", None))
+    if equity is None:
+        equity = _finite_float(market_data.get("equity") or market_data.get("portfolio_value"))
+
+    if price is None or price <= 0.0 or equity is None or equity <= 0.0:
+        return None
+    return abs(weight) * equity / price
+
+
 def load_module(name):
     if not isinstance(name, str):
         logger.warning("Skipping load_module on non-string: %s", type(name))
@@ -951,9 +999,13 @@ def filter_signals_with_portfolio_optimization(signals: list, ctx, current_posit
             try:
                 symbol = getattr(signal, "symbol", "")
                 side = _normalize_signal_side(getattr(signal, "side", ""))
-                quantity = getattr(signal, "quantity", 0)
                 if not symbol or not side:
                     filtered_signals.append(signal)
+                    continue
+                quantity = _resolve_signal_quantity(signal, market_data, ctx)
+                if quantity is None:
+                    filtered_signals.append(signal)
+                    logger.debug("SIGNAL_PORTFOLIO_SIZE_UNAVAILABLE", extra={"symbol": symbol, "side": side})
                     continue
                 current_position = current_positions.get(symbol, 0.0)
                 if side == "buy":
@@ -973,7 +1025,7 @@ def filter_signals_with_portfolio_optimization(signals: list, ctx, current_posit
                 )
                 if decision == PortfolioDecision.APPROVE:
                     try:
-                        expected_profit = _estimate_signal_profit(signal, market_data)
+                        expected_profit = _estimate_signal_profit(signal, market_data, quantity=quantity)
                         position_change = abs(proposed_position - current_position)
                         profitability = _transaction_cost_calculator.validate_trade_profitability(
                             symbol, position_change, expected_profit, market_data, TradeType.LIMIT_ORDER
@@ -1128,16 +1180,20 @@ def _get_current_portfolio_positions(ctx) -> dict:
         return {}
 
 
-def _estimate_signal_profit(signal, market_data: dict) -> float:
+def _estimate_signal_profit(signal, market_data: dict, quantity: float | None = None) -> float:
     """Estimate expected profit from a trading signal."""
     try:
         symbol = getattr(signal, "symbol", "")
         getattr(signal, "side", "")
-        quantity = float(getattr(signal, "quantity", 0) or 0.0)
+        resolved_quantity = quantity
+        if resolved_quantity is None:
+            resolved_quantity = _resolve_signal_quantity(signal, market_data)
+        if resolved_quantity is None:
+            return 0.0
         if not symbol or symbol not in market_data["prices"]:
             return 0.0
         price = float(market_data["prices"][symbol])
-        trade_value = abs(quantity) * price
+        trade_value = abs(float(resolved_quantity)) * price
         returns = market_data.get("returns", {}).get(symbol, [])
         if len(returns) > 5:
             positive_returns = [r for r in returns[-10:] if r > 0]

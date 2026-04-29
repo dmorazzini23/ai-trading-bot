@@ -75,8 +75,11 @@ def test_trading_phase_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
     optimizer = AlgorithmOptimizer()
 
     class FakeDateTime:
+        seen_tz = None
+
         @classmethod
-        def now(cls, _tz):
+        def now(cls, tz):
+            cls.seen_tz = tz
             return SimpleNamespace(time=lambda: FakeDateTime.current)
 
     monkeypatch.setattr(opt, "datetime", FakeDateTime)
@@ -90,6 +93,7 @@ def test_trading_phase_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
     for current, expected in cases:
         FakeDateTime.current = current
         assert optimizer._get_trading_phase() is expected  # noqa: SLF001
+        assert str(FakeDateTime.seen_tz) == "America/New_York"
 
 
 def test_parameter_optimization_adjusts_regime_time_performance_and_bounds() -> None:

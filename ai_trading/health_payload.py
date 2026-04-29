@@ -1715,6 +1715,8 @@ def register_health_routes(
             payload = build_health_exception_payload(exc, service_name=service_name)
             status = 503
         safe_payload = sanitize_health_payload(payload)
+        if not bool(safe_payload.get("ok", True)):
+            status = 503
         try:
             return response_builder(safe_payload, status)
         except AI_TRADING_FALLBACK_EXCEPTIONS as exc:

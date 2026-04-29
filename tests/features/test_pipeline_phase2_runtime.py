@@ -92,6 +92,26 @@ def test_build_features_serving_transform_preserves_training_lookback_tail() -> 
     assert serving["ret_momentum"].iloc[0] != 0.0
 
 
+def test_build_features_does_not_prepend_stale_or_cross_symbol_tail() -> None:
+    train = _market_frame(90)
+    stale_test = _market_frame(10)
+    stale_test.index = pd.date_range(train.index[-1] + pd.Timedelta(days=10), periods=len(stale_test), freq="D")
+
+    builder = pipe_mod.BuildFeatures(regime_span=20, vol_span=20).fit(train)
+    stale = builder.transform(stale_test)
+
+    assert stale["ret_1d"].iloc[0] == 0.0
+
+    symbol_train = train.assign(symbol="AAPL")
+    symbol_test = _market_frame(10).assign(symbol="MSFT")
+    symbol_test.index = pd.date_range(symbol_train.index[-1] + pd.Timedelta(days=1), periods=len(symbol_test), freq="D")
+    symbol_builder = pipe_mod.BuildFeatures(regime_span=20, vol_span=20).fit(symbol_train)
+
+    cross_symbol = symbol_builder.transform(symbol_test)
+
+    assert cross_symbol["ret_1d"].iloc[0] == 0.0
+
+
 def test_build_features_supports_price_column_without_volume_or_hilo() -> None:
     frame = pd.DataFrame({"price": np.linspace(10.0, 15.0, 40)})
     builder = pipe_mod.BuildFeatures(include_volume=True, regime_span=10).fit(frame)

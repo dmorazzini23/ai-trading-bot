@@ -353,4 +353,5 @@ def test_prepare_indicators_intraday_ffill_stays_within_session(
     assert "timestamp" in result.columns
     assert result["timestamp"].tolist() == list(result.index)
     assert pd.notna(result["macd"].iloc[2])
-    assert pd.isna(result["macd"].iloc[3])
+    assert index[3] not in result.index
+    assert pd.notna(result["macd"].iloc[3])

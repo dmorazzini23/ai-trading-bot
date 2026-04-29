@@ -175,14 +175,22 @@ class DataQualityValidator:
         if df is None or len(df) == 0:
             return df
         
-        # Forward fill NaN values (use last known price)
-        df = df.ffill()
-        
-        # Backward fill any remaining NaN at the start
-        df = df.bfill()
-        
-        # Remove rows with non-positive prices
-        for col in ['open', 'high', 'low', 'close']:
+        df = df.copy()
+
+        # Price fields may only use past observations; never backfill from future rows.
+        required_price_cols = [
+            col for col in ['open', 'high', 'low', 'close'] if col in df.columns
+        ]
+        for col in required_price_cols:
+            df[col] = df[col].ffill()
+        if 'volume' in df.columns:
+            df['volume'] = df['volume'].ffill().fillna(0)
+
+        if required_price_cols:
+            df = df.dropna(subset=required_price_cols)
+
+        # Remove rows with non-positive prices.
+        for col in required_price_cols:
             if col in df.columns:
                 df = df[df[col] > 0]
         

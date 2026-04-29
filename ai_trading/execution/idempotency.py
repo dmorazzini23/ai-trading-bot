@@ -1,7 +1,7 @@
 """
 Order idempotency module to prevent duplicate orders on retries.
 
-Provides TTL cache keyed by (symbol, side, qty, intent_ts_bucket) to ensure
+Provides TTL cache keyed by durable order intent fields to ensure
 orders are idempotent across retry attempts.
 """
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
@@ -120,13 +120,36 @@ class IdempotencyKey:
     side: OrderSide
     quantity: float
     intent_bucket: int
+    intent_id: str | None = None
+    client_order_id: str | None = None
+    order_type: str | None = None
+    limit_price: str | None = None
+    stop_price: str | None = None
+    notional: str | None = None
 
     def __str__(self) -> str:
-        return f'{self.symbol}_{self.side.value}_{self.quantity}_{self.intent_bucket}'
+        return (
+            f"{self.symbol}_{self.side.value}_{self.quantity}_{self.intent_bucket}_"
+            f"{self.intent_id or ''}_{self.client_order_id or ''}_{self.order_type or ''}_"
+            f"{self.limit_price or ''}_{self.stop_price or ''}_{self.notional or ''}"
+        )
 
     def hash(self) -> str:
         """Generate hash for this idempotency key."""
-        content = f'{self.symbol}{self.side.value}{self.quantity}{self.intent_bucket}'
+        content = "|".join(
+            (
+                self.symbol,
+                self.side.value,
+                str(self.quantity),
+                str(self.intent_bucket),
+                self.intent_id or "",
+                self.client_order_id or "",
+                self.order_type or "",
+                self.limit_price or "",
+                self.stop_price or "",
+                self.notional or "",
+            )
+        )
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 class OrderIdempotencyCache:
@@ -155,7 +178,21 @@ class OrderIdempotencyCache:
         self._lock = threading.RLock()
         self._intent_store = intent_store
 
-    def generate_key(self, symbol: str, side: OrderSide | str, quantity: float, intent_timestamp: datetime | None=None, bucket_minutes: int=1) -> IdempotencyKey:
+    def generate_key(
+        self,
+        symbol: str,
+        side: OrderSide | str,
+        quantity: float,
+        intent_timestamp: datetime | None = None,
+        bucket_minutes: int = 1,
+        *,
+        intent_id: str | None = None,
+        client_order_id: str | None = None,
+        order_type: str | None = None,
+        limit_price: Any | None = None,
+        stop_price: Any | None = None,
+        notional: Any | None = None,
+    ) -> IdempotencyKey:
         """
         Generate idempotency key for order parameters.
 
@@ -174,7 +211,18 @@ class OrderIdempotencyCache:
         if isinstance(side, str):
             side = OrderSide(side.lower())
         bucket_ts = int(intent_timestamp.timestamp() // (bucket_minutes * 60))
-        return IdempotencyKey(symbol=symbol.upper(), side=side, quantity=round(quantity, 6), intent_bucket=bucket_ts)
+        return IdempotencyKey(
+            symbol=symbol.upper(),
+            side=side,
+            quantity=round(quantity, 6),
+            intent_bucket=bucket_ts,
+            intent_id=str(intent_id) if intent_id not in (None, "") else None,
+            client_order_id=str(client_order_id) if client_order_id not in (None, "") else None,
+            order_type=str(order_type).strip().lower() if order_type not in (None, "") else None,
+            limit_price=str(limit_price) if limit_price not in (None, "") else None,
+            stop_price=str(stop_price) if stop_price not in (None, "") else None,
+            notional=str(notional) if notional not in (None, "") else None,
+        )
 
     def is_duplicate(self, key: IdempotencyKey) -> bool:
         """
@@ -231,7 +279,15 @@ class OrderIdempotencyCache:
                     quantity=key.quantity,
                     decision_ts=datetime.now(UTC).isoformat(),
                     status="PENDING_SUBMIT",
-                    metadata={"intent_bucket": key.intent_bucket},
+                    metadata={
+                        "intent_bucket": key.intent_bucket,
+                        "intent_id": key.intent_id,
+                        "client_order_id": key.client_order_id,
+                        "order_type": key.order_type,
+                        "limit_price": key.limit_price,
+                        "stop_price": key.stop_price,
+                        "notional": key.notional,
+                    },
                 )
                 claimed = self._intent_store.claim_for_submit(
                     intent.intent_id,

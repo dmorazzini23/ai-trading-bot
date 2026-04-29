@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any, TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
@@ -29,6 +30,9 @@ from ai_trading.utils.lazy_imports import load_pandas
 
 if TYPE_CHECKING:  # pragma: no cover
     import pandas as pd
+
+
+_ET = ZoneInfo("America/New_York")
 
 
 class MarketRegime(Enum):
@@ -232,7 +236,7 @@ class AlgorithmOptimizer:
     def _get_trading_phase(self) -> TradingPhase:
         """Determine current trading phase based on time."""
 
-        now = datetime.now(UTC).time()
+        now = datetime.now(_ET).time()
         if now.hour < 9 or (now.hour == 9 and now.minute < 30):
             return TradingPhase.PRE_MARKET
         if now.hour == 9 or (now.hour == 10 and now.minute < 30):

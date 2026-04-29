@@ -19,7 +19,7 @@ def test_health_endpoint_reports_runtime_state():
     client = hc.app.test_client()
     response = client.get("/healthz")
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     payload = response.get_json()
     assert payload["service"] == "ai-trading"
     assert payload["fallback_active"] is True
@@ -69,7 +69,7 @@ def test_health_endpoint_keeps_unknown_provider_unhealthy() -> None:
 
     response = client.get("/healthz")
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     payload = response.get_json()
     assert payload["status"] == "degraded"
     assert payload["ok"] is False

@@ -108,6 +108,15 @@ class _FullTA(_RequiredOnlyTA):
         return close.rolling(length, min_periods=1).mean()
 
 
+class _PartialRequiredTA(_FullTA):
+    @staticmethod
+    def macd(close: Any, fast: int = 12, slow: int = 26, signal: int = 9) -> Any:
+        macd = pd.Series(close * 0.01, index=close.index)
+        signal_line = pd.Series(close * 0.005, index=close.index)
+        macd.iloc[0] = np.nan
+        return pd.DataFrame({"MACD_12_26_9": macd, "MACDs_12_26_9": signal_line})
+
+
 class _ExplodingOptionalTA(_RequiredOnlyTA):
     @staticmethod
     def kc(*_args: Any, **_kwargs: Any) -> Any:
@@ -200,6 +209,18 @@ def test_prepare_indicators_optional_failures_do_not_drop_base_features(
     assert result["macd"].isna().all()
     assert result["adx"].isna().all()
     assert result["tema"].isna().all()
+
+
+def test_prepare_indicators_drops_rows_with_partial_required_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = _frame()
+    monkeypatch.setattr(prepare_mod.importlib, "import_module", lambda _name: _PartialRequiredTA)
+
+    result = prepare_mod.prepare_indicators(frame, freq="daily")
+
+    assert len(result) == len(frame) - 1
+    assert result["macd"].notna().all()
 
 
 def test_prepare_indicators_missing_close_and_import_error(monkeypatch: pytest.MonkeyPatch) -> None:

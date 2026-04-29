@@ -54,8 +54,28 @@ def _ensure_executors() -> None:
         pred_workers = max(1, min(int(pred_workers), max(1, cpu)))
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         pred_workers = default_workers
-    executor = ThreadPoolExecutor(max_workers=exec_workers)
-    prediction_executor = ThreadPoolExecutor(max_workers=pred_workers)
+    if executor is None:
+        executor = ThreadPoolExecutor(max_workers=exec_workers)
+    if prediction_executor is None:
+        prediction_executor = ThreadPoolExecutor(max_workers=pred_workers)
+
+
+def get_executor() -> ThreadPoolExecutor:
+    """Return the main executor, creating pools on first use."""
+
+    _ensure_executors()
+    if executor is None:  # pragma: no cover - defensive invariant guard
+        raise RuntimeError("executor unavailable after initialization")
+    return executor
+
+
+def get_prediction_executor() -> ThreadPoolExecutor:
+    """Return the prediction executor, creating pools on first use."""
+
+    _ensure_executors()
+    if prediction_executor is None:  # pragma: no cover - defensive invariant guard
+        raise RuntimeError("prediction executor unavailable after initialization")
+    return prediction_executor
 
 
 def cleanup_executors(*, wait: bool = True) -> None:

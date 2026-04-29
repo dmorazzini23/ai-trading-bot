@@ -340,3 +340,102 @@ def test_portfolio_filter_includes_sell_short_in_portfolio_and_cost_checks(monke
     assert filtered == [signal]
     assert calls["proposed_position"] == -2.0
     assert calls["cost_trade_size"] == 7.0
+
+
+def test_portfolio_filter_derives_strategy_signal_size_from_weight(monkeypatch):
+    from ai_trading.portfolio import PortfolioDecision
+    from ai_trading.strategies.base import StrategySignal
+
+    frame = _market_frame(80)
+    calls: dict[str, object] = {}
+
+    class Fetcher:
+        def get_daily_df(self, _ctx, _symbol):
+            return frame.copy()
+
+    class Optimizer:
+        improvement_threshold = 0.0
+        rebalance_drift_threshold = 0.0
+        max_correlation_penalty = 0.0
+
+        def make_portfolio_decision(self, symbol, proposed_position, current_positions, market_data):
+            calls["proposed_position"] = proposed_position
+            return PortfolioDecision.APPROVE, "ok"
+
+    class Costs:
+        def validate_trade_profitability(self, symbol, trade_size, expected_profit, market_data, trade_type):
+            calls["cost_trade_size"] = trade_size
+            calls["expected_profit"] = expected_profit
+            return SimpleNamespace(is_profitable=True, transaction_cost=0.01)
+
+    class Regime:
+        def detect_current_regime(self, _market_data):
+            return SimpleNamespace(value="balanced"), {}
+
+        def calculate_dynamic_thresholds(self, _regime, _metrics):
+            return SimpleNamespace(
+                minimum_improvement_threshold=0.0,
+                rebalance_drift_threshold=0.0,
+                correlation_penalty_adjustment=0.0,
+            )
+
+    monkeypatch.setattr(signals, "get_settings", lambda: SimpleNamespace(ENABLE_PORTFOLIO_FEATURES=True))
+    monkeypatch.setattr(signals, "_portfolio_optimizer", Optimizer())
+    monkeypatch.setattr(signals, "_transaction_cost_calculator", Costs())
+    monkeypatch.setattr(signals, "_regime_detector", Regime())
+
+    signal = StrategySignal("AAPL", "buy", strength=0.8, confidence=0.8)
+    signal.weight = 0.1
+    filtered = signals.filter_signals_with_portfolio_optimization(
+        [signal],
+        SimpleNamespace(data_fetcher=Fetcher(), portfolio_value=1_120.0),
+        current_positions={"AAPL": 2.0},
+    )
+
+    assert filtered == [signal]
+    assert calls["proposed_position"] == pytest.approx(3.0)
+    assert calls["cost_trade_size"] == pytest.approx(1.0)
+    assert calls["expected_profit"] > 0.0
+
+
+def test_portfolio_filter_keeps_strategy_signal_when_size_unavailable(monkeypatch):
+    from ai_trading.strategies.base import StrategySignal
+
+    frame = _market_frame(80)
+
+    class Fetcher:
+        def get_daily_df(self, _ctx, _symbol):
+            return frame.copy()
+
+    class Optimizer:
+        improvement_threshold = 0.0
+        rebalance_drift_threshold = 0.0
+        max_correlation_penalty = 0.0
+
+        def make_portfolio_decision(self, *_args, **_kwargs):
+            pytest.fail("size-specific portfolio decision should be skipped")
+
+    class Regime:
+        def detect_current_regime(self, _market_data):
+            return SimpleNamespace(value="balanced"), {}
+
+        def calculate_dynamic_thresholds(self, _regime, _metrics):
+            return SimpleNamespace(
+                minimum_improvement_threshold=0.0,
+                rebalance_drift_threshold=0.0,
+                correlation_penalty_adjustment=0.0,
+            )
+
+    monkeypatch.setattr(signals, "get_settings", lambda: SimpleNamespace(ENABLE_PORTFOLIO_FEATURES=True))
+    monkeypatch.setattr(signals, "_portfolio_optimizer", Optimizer())
+    monkeypatch.setattr(signals, "_transaction_cost_calculator", object())
+    monkeypatch.setattr(signals, "_regime_detector", Regime())
+
+    signal = StrategySignal("AAPL", "buy", strength=0.8, confidence=0.8)
+    filtered = signals.filter_signals_with_portfolio_optimization(
+        [signal],
+        SimpleNamespace(data_fetcher=Fetcher()),
+        current_positions={"AAPL": 2.0},
+    )
+
+    assert filtered == [signal]

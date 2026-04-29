@@ -121,6 +121,28 @@ def test_fetch_sentiment_missing_api_key_fails_closed_outside_pytest(monkeypatch
         sentiment.fetch_sentiment(None, "AAPL")
 
 
+def test_fetch_sentiment_fail_closed_runtime_error_is_not_retried(monkeypatch):
+    calls = {"count": 0}
+
+    class DummySettings:
+        sentiment_api_url = "http://example.com"
+        sentiment_api_key = None
+
+    def fail_closed(_ticker, *, reason):
+        calls["count"] += 1
+        raise RuntimeError(f"Sentiment unavailable: {reason}")
+
+    monkeypatch.setattr(sentiment, "get_settings", lambda: DummySettings())
+    monkeypatch.setattr(sentiment, "get_news_api_key", lambda: "")
+    monkeypatch.delenv("SENTIMENT_API_KEY", raising=False)
+    monkeypatch.setattr(sentiment, "_get_cached_or_neutral_sentiment", fail_closed)
+
+    with pytest.raises(RuntimeError, match="missing_api_key"):
+        sentiment.fetch_sentiment(None, "AAPL")
+
+    assert calls["count"] == 1
+
+
 def test_fetch_sentiment_resolves_fresh_key_over_import_constant(monkeypatch):
     class DummySettings:
         sentiment_api_url = "http://example.com"

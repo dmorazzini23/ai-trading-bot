@@ -48,7 +48,7 @@ def test_fail_fast_env_backfills_positive_risk_defaults(monkeypatch):
         def from_env(cls, *args, **kwargs):  # noqa: D401, ARG003
             return cls()
 
-    monkeypatch.setattr(m, "TradingConfig", DummyConfig)
+    monkeypatch.setattr(m, "_trading_config_from_env", DummyConfig.from_env)
     monkeypatch.setattr(m, "reload_env", lambda override=False: None)
     monkeypatch.setattr(m, "validate_required_env", lambda *a, **k: ())
     monkeypatch.setattr(m, "redact_config_env", lambda snapshot: snapshot)

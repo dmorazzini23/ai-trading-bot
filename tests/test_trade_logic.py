@@ -18,8 +18,11 @@ def test_extract_price_generic():
     assert extract_price(df) == 2.0
     assert extract_price({"close": 3.0}) == 3.0
     assert extract_price([4.0, 5.0]) == 5.0
+    assert extract_price(None) is None
+    assert extract_price({"close": 0.0}) is None
 
 
 def test_compute_order_price_slippage():
     price = compute_order_price({"close": 10})
     assert price > 0
+    assert compute_order_price({}) is None

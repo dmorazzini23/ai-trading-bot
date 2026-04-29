@@ -73,6 +73,8 @@ def _normalize_order_side(side: Any) -> str:
     token = str(side or "").strip().lower().replace("-", "_").replace(" ", "_")
     if token in {"short", "sellshort", "entry_short", "open_short", "short_sell"}:
         return "sell_short"
+    if token in {"buy_to_cover", "cover", "covered_buy", "short_cover", "cover_short"}:
+        return "buy"
     if token in {"buy", "sell", "sell_short"}:
         return token
     return ""
@@ -122,7 +124,8 @@ def implementation_shortfall_bps(
     fill = float(fill_vwap)
     if base <= 0:
         return 0.0
-    sign = 1.0 if str(side).lower() == "buy" else -1.0
+    side_token = _normalize_order_side(side)
+    sign = 1.0 if side_token == "buy" else -1.0
     is_bps = sign * (fill - base) / base * 10_000.0
     qty_abs = abs(float(qty))
     if qty_abs > 0 and fees:
@@ -136,7 +139,8 @@ def spread_paid_bps(side: str, mid_at_arrival: float, fill_vwap: float) -> float
     fill = float(fill_vwap)
     if mid <= 0:
         return 0.0
-    if str(side).lower() == "buy":
+    side_token = _normalize_order_side(side)
+    if side_token == "buy":
         return max(0.0, (fill - mid) / mid * 10_000.0)
     return max(0.0, (mid - fill) / mid * 10_000.0)
 
@@ -182,10 +186,11 @@ def build_tca_record(
     rank_reason: str | None = None,
     rank_reasons: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
+    side_token = _normalize_order_side(side) or str(side or "").strip().lower()
     arrival = float(benchmark.arrival_price)
     fill_vwap = float(fill.fill_vwap) if fill.fill_vwap is not None else arrival
     is_bps = implementation_shortfall_bps(
-        side=side,
+        side=side_token,
         arrival_price=arrival,
         fill_vwap=fill_vwap,
         fees=float(fill.fees),
@@ -193,7 +198,7 @@ def build_tca_record(
     )
     spread_bps = None
     if benchmark.mid_at_arrival is not None:
-        spread_bps = spread_paid_bps(side, benchmark.mid_at_arrival, fill_vwap)
+        spread_bps = spread_paid_bps(side_token, benchmark.mid_at_arrival, fill_vwap)
 
     latency = None
     if benchmark.submit_ts is not None and benchmark.first_fill_ts is not None:
@@ -203,8 +208,8 @@ def build_tca_record(
         "ts": (generated_ts if generated_ts is not None else datetime.now(UTC)).isoformat(),
         "client_order_id": client_order_id,
         "symbol": symbol,
-        "side": side,
-        "order_side": side,
+        "side": side_token,
+        "order_side": side_token,
         "sleeve": sleeve,
         "model_id": model_id,
         "model_version": model_version,
@@ -285,7 +290,7 @@ def resolve_pending_tca_from_fill(
         raise ValueError("pending_record_missing_decision_price")
 
     status_token = str(status or pending_record.get("status") or "filled").strip().lower() or "filled"
-    side_token = str(pending_record.get("side") or "buy").strip().lower() or "buy"
+    side_token = _normalize_order_side(pending_record.get("side") or pending_record.get("order_side")) or "buy"
     submit_ts = _coerce_utc_datetime(benchmark.get("submit_ts"))
     fill_timestamp = _coerce_utc_datetime(fill_ts) or datetime.now(UTC)
 

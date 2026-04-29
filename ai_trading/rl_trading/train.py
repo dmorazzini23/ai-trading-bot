@@ -694,14 +694,17 @@ class RLTrainer:
         }
         all_pass = all(gates.values())
         requested = str(self._artifact_context.get("requested_governance_status", "shadow")).lower()
-        if requested == "production" and all_pass:
-            status = "production"
-        elif all_pass and bool(get_env("AI_TRADING_RL_AUTO_PROMOTE", False, cast=bool)):
-            status = "production"
-        else:
-            status = "shadow"
+        auto_promote_requested = bool(get_env("AI_TRADING_RL_AUTO_PROMOTE", False, cast=bool))
+        production_requested = all_pass and (
+            requested == "production" or auto_promote_requested
+        )
+        status = "registered" if requested == "registered" and not production_requested else "shadow"
         details = {
             "gates": gates,
+            "requested_status": requested,
+            "production_requested": production_requested,
+            "production_status_blocked": production_requested,
+            "production_status_authority": "central_promotion_governance",
             "thresholds": {
                 "min_reward": min_reward,
                 "min_net_return": min_net_return,

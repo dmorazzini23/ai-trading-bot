@@ -100,7 +100,7 @@ def test_health_endpoint_handles_import_error(monkeypatch):
     app = app_module.create_app()
     client = app.test_client()
     resp = client.get("/health")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
 
     data = resp.get_json()
     _assert_payload_structure(data)
@@ -130,6 +130,9 @@ def test_health_endpoint_handles_import_error(monkeypatch):
     assert handler is not None, "health handler should be registered"
 
     dict_payload = handler()
+    if isinstance(dict_payload, tuple):
+        dict_payload, status = dict_payload
+        assert status == 503
     assert isinstance(dict_payload, dict)
     _assert_payload_structure(dict_payload)
     _assert_fallback_meta(dict_payload, used=False)
@@ -153,7 +156,7 @@ def test_health_endpoint_returns_plain_dict_when_jsonify_fails(monkeypatch):
     app = app_module.create_app()
     client = app.test_client()
     resp = client.get("/health")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     data = resp.get_json()
     _assert_payload_structure(data)
     _assert_fallback_meta(data, used=True, reasons=("json busted", "RuntimeError"))
@@ -283,7 +286,7 @@ def test_create_app_caches_value_error_for_health_routes(monkeypatch):
     assert app.config["_ENV_ERR"] == "shared config invalid"
 
     resp = app.test_client().get("/healthz")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     data = resp.get_json()
     assert data["ok"] is False
     assert data["status"] == "degraded"
@@ -316,7 +319,7 @@ def test_health_endpoint_jsonify_failure_uses_sanitized_payload(monkeypatch):
     app = app_module.create_app()
     client = app.test_client()
     resp = client.get("/health")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     data = resp.get_json()
     _assert_payload_structure(data)
     _assert_fallback_meta(data, used=True, reasons=("json busted", "RuntimeError"))
@@ -330,7 +333,7 @@ def test_health_endpoint_handles_missing_jsonify(monkeypatch):
     app = app_module.create_app()
     client = app.test_client()
     resp = client.get("/health")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     data = resp.get_json()
     _assert_payload_structure(data)
     _assert_fallback_meta(data, used=True, reasons=("TypeError",))
@@ -355,6 +358,9 @@ def test_health_endpoint_missing_jsonify_dict_fallback_structure(monkeypatch):
     assert handler is not None, "health handler should be registered"
 
     payload = handler()
+    if isinstance(payload, tuple):
+        payload, status = payload
+        assert status == 503
     assert isinstance(payload, dict)
     _assert_payload_structure(payload)
     _assert_fallback_meta(payload, used=True, reasons=("TypeError",))
@@ -368,7 +374,7 @@ def test_health_endpoint_handles_jsonify_import_error(monkeypatch):
     app = app_module.create_app()
     client = app.test_client()
     resp = client.get("/health")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     data = resp.get_json()
     _assert_payload_structure(data)
     _assert_fallback_meta(
@@ -403,6 +409,9 @@ def test_health_endpoint_dict_fallback_preserves_structure(monkeypatch):
     assert handler is not None, "health handler should be registered"
 
     payload = handler()
+    if isinstance(payload, tuple):
+        payload, status = payload
+        assert status == 503
     assert isinstance(payload, dict)
     _assert_payload_structure(payload)
     _assert_fallback_meta(payload, used=True, reasons=("json busted", "RuntimeError"))
@@ -450,7 +459,7 @@ def test_jsonify_failure_preserves_ok_when_healthy(monkeypatch):
     app = app_module.create_app()
     client = app.test_client()
     resp = client.get("/health")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     data = resp.get_json()
     _assert_payload_structure(data)
     _assert_fallback_meta(data, used=True, reasons=("json busted", "RuntimeError"))
@@ -497,7 +506,7 @@ def test_json_dump_failure_rebuilds_payload(monkeypatch):
     app = app_module.create_app()
     client = app.test_client()
     resp = client.get("/health")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     data = resp.get_json()
     _assert_payload_structure(data)
     _assert_fallback_meta(data, used=True, reasons=("not serializable",))

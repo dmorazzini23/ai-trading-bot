@@ -20,7 +20,7 @@ def test_health_degraded_payload_includes_diagnostics() -> None:
     client = hc.app.test_client()
 
     response = client.get("/healthz")
-    assert response.status_code == 200
+    assert response.status_code == 503
     payload = response.get_json()
 
     assert payload["status"] == "degraded"
@@ -34,4 +34,3 @@ def test_health_degraded_payload_includes_diagnostics() -> None:
     assert provider["status"] == "down"
     assert provider["cooldown_seconds_remaining"] == 120.0
     assert provider["gap_ratio_recent"] == 0.15
-

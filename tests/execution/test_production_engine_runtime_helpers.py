@@ -296,6 +296,45 @@ def test_market_impact_and_execution_monitoring(monkeypatch) -> None:
     assert result.actual_slippage_bps == pytest.approx(5.0)
 
 
+def test_live_execution_requires_broker_adapter(monkeypatch) -> None:
+    coordinator = _coordinator(monkeypatch)
+    coordinator.execution_mode = "live"
+    order = _order(quantity=10, price=100.0)
+
+    result = _run(coordinator._execute_order_with_monitoring(order, {"estimated_slippage_bps": 5}))
+
+    assert result.status == "failed"
+    assert result.error_code == "live_broker_adapter_required"
+    assert order.status is OrderStatus.REJECTED
+
+
+def test_live_execution_uses_broker_adapter(monkeypatch) -> None:
+    class Adapter:
+        provider = "alpaca"
+
+        def __init__(self) -> None:
+            self.payload: dict[str, Any] | None = None
+
+        def submit_order(self, payload):
+            self.payload = dict(payload)
+            return {"id": "broker-1", "status": "accepted", "client_order_id": payload["client_order_id"]}
+
+    adapter = Adapter()
+    coordinator = _coordinator(monkeypatch)
+    coordinator.execution_mode = "live"
+    coordinator.broker_adapter = adapter
+    order = _order(quantity=10, price=100.0)
+
+    result = _run(coordinator._execute_order_with_monitoring(order, {"estimated_slippage_bps": 5}))
+
+    assert result.status == "success"
+    assert result.order_id == "broker-1"
+    assert result.venue == "alpaca"
+    assert adapter.payload is not None
+    assert adapter.payload["symbol"] == "AAPL"
+    assert order.status is OrderStatus.PENDING
+
+
 def test_post_execution_processing_alert_paths(monkeypatch) -> None:
     coordinator = _coordinator(monkeypatch)
     trading_alerts: list[tuple[object, ...]] = []

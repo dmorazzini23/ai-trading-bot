@@ -6,7 +6,9 @@ information leaks into training data during cross-validation.
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, TYPE_CHECKING
+from zoneinfo import ZoneInfo
 import numpy as np
 from ai_trading.utils.lazy_imports import (
     load_pandas,
@@ -20,6 +22,8 @@ try:
 except (ImportError, ValueError):
     sklearn_available = False
 from ai_trading.logging import logger
+from ai_trading.market.calendar_wrapper import previous_trading_session
+_ET = ZoneInfo("America/New_York")
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
@@ -55,6 +59,9 @@ class BuildFeatures:
         self.feature_params_: dict[str, Any] = {}
         self.is_fitted_ = False
         self._lookback_tail_: Any | None = None
+        self._lookback_tail_symbol_: str | None = None
+        self._lookback_tail_last_session_: date | None = None
+        self._lookback_tail_last_ts_: Any | None = None
 
     def fit(self, X: pd.DataFrame, y: pd.Series | None=None) -> 'BuildFeatures':
         """
@@ -74,6 +81,10 @@ class BuildFeatures:
             lookback_rows = self._max_lookback_rows()
             self.feature_params_ = {'lookback_window': self.lookback_window, 'vol_span': self.vol_span, 'regime_span': self.regime_span, 'columns': X.columns.tolist(), 'lookback_tail_rows': lookback_rows}
             self._lookback_tail_ = X.tail(lookback_rows).copy()
+            self._lookback_tail_symbol_ = self._single_symbol_value(self._lookback_tail_)
+            tail_sessions = self._session_values(self._lookback_tail_)
+            self._lookback_tail_last_session_ = tail_sessions[-1] if tail_sessions else None
+            self._lookback_tail_last_ts_ = self._timestamp_values(self._lookback_tail_)[-1] if self._timestamp_values(self._lookback_tail_) else None
             if 'close' in X.columns or 'price' in X.columns:
                 price_col = 'close' if 'close' in X.columns else 'price'
                 prices = X[price_col]
@@ -159,12 +170,16 @@ class BuildFeatures:
         )
 
     def _with_lookback_tail(self, X: pd.DataFrame) -> pd.DataFrame:
-        """Prepend fitted training tail when transforming a later serving window."""
+        """Prepend fitted training tail only for the adjacent same-symbol session."""
         pd = load_pandas()
         tail = self._lookback_tail_
         if tail is None or len(tail) == 0 or len(X) == 0:
             return X
         if list(tail.columns) != list(X.columns):
+            return X
+        if not self._same_tail_symbol(X):
+            return X
+        if not self._is_adjacent_tail_window(X):
             return X
         try:
             if len(tail.index.intersection(X.index)) > 0:
@@ -176,6 +191,80 @@ class BuildFeatures:
         except (TypeError, ValueError, AttributeError):
             return X
         return pd.concat([tail, X], axis=0)
+
+    def _single_symbol_value(self, frame: pd.DataFrame) -> str | None:
+        """Return a single frame symbol if one is explicitly available."""
+        pd = load_pandas()
+        values = None
+        if "symbol" in frame.columns:
+            values = frame["symbol"]
+        elif "ticker" in frame.columns:
+            values = frame["ticker"]
+        elif getattr(frame.index, "names", None) and "symbol" in frame.index.names:
+            values = pd.Series(frame.index.get_level_values("symbol"), index=frame.index)
+        if values is None:
+            return None
+        unique = pd.Series(values).dropna().astype(str).str.strip().unique()
+        if len(unique) != 1 or not unique[0]:
+            return None
+        return str(unique[0])
+
+    def _same_tail_symbol(self, X: pd.DataFrame) -> bool:
+        tail_symbol = self._lookback_tail_symbol_
+        current_symbol = self._single_symbol_value(X)
+        if tail_symbol is None and current_symbol is None:
+            return True
+        return tail_symbol is not None and current_symbol == tail_symbol
+
+    def _timestamp_values(self, frame: pd.DataFrame) -> list[Any]:
+        pd = load_pandas()
+        try:
+            if "timestamp" in frame.columns:
+                values = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+            elif isinstance(frame.index, pd.DatetimeIndex):
+                index = frame.index
+                if getattr(index, "tz", None) is None:
+                    values = pd.Series(index.tz_localize("UTC"), index=frame.index)
+                else:
+                    values = pd.Series(index.tz_convert("UTC"), index=frame.index)
+            else:
+                return []
+            values = values.dropna()
+            return list(values)
+        except (AttributeError, TypeError, ValueError):
+            return []
+
+    def _session_values(self, frame: pd.DataFrame) -> list[date]:
+        timestamps = self._timestamp_values(frame)
+        sessions: list[date] = []
+        for ts in timestamps:
+            try:
+                sessions.append(ts.tz_convert("America/New_York").date())
+            except AttributeError:
+                sessions.append(ts.astimezone(_ET).date())
+            except (TypeError, ValueError):
+                return []
+        return sessions
+
+    def _is_adjacent_tail_window(self, X: pd.DataFrame) -> bool:
+        tail_session = self._lookback_tail_last_session_
+        current_sessions = self._session_values(X)
+        if tail_session is None or not current_sessions:
+            return False
+        first_session = current_sessions[0]
+        if first_session == tail_session:
+            tail_ts = self._lookback_tail_last_ts_
+            current_ts_values = self._timestamp_values(X)
+            if tail_ts is None or not current_ts_values:
+                return False
+            try:
+                return bool(current_ts_values[0] > tail_ts)
+            except (TypeError, ValueError):
+                return False
+        try:
+            return previous_trading_session(first_session) == tail_session
+        except (RecursionError, ValueError, TypeError, AttributeError):
+            return False
 
     def _validate_raw_price_columns(self, X: pd.DataFrame) -> None:
         """Reject non-finite or non-positive raw price inputs before feature fill."""

@@ -93,6 +93,33 @@ def test_attempt_failover_submit_disabled(monkeypatch) -> None:
     assert response is None
 
 
+def test_attempt_failover_submit_suppresses_paper_provider_in_live(monkeypatch) -> None:
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+    monkeypatch.setenv("AI_TRADING_BROKER_FAILOVER_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_BROKER_FAILOVER_PROVIDER", "paper")
+
+    def _build_adapter(**_kwargs):
+        raise AssertionError("live failover must not build simulated paper adapter")
+
+    monkeypatch.setattr(lt, "build_broker_adapter", _build_adapter)
+
+    response = engine._attempt_failover_submit(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 1,
+            "type": "limit",
+            "limit_price": 190.0,
+            "client_order_id": "cid-live-paper",
+        },
+        primary_error=TimeoutError("primary broker timeout"),
+    )
+
+    assert response is None
+    assert engine.stats["failover_live_sim_provider_skips"] == 1
+
+
 def test_attempt_failover_submit_provider_chain_and_cooldown(
     monkeypatch,
     tmp_path: Path,

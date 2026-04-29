@@ -660,6 +660,8 @@ def test_standalone_risk_helpers_and_trailing_stop(monkeypatch: pytest.MonkeyPat
     portfolio = SimpleNamespace(positions={"AAPL": SimpleNamespace(quantity=1), "MSFT": SimpleNamespace(quantity=0)})
     assert risk_engine.check_exposure_caps(portfolio, {"AAPL": 0.6, "MSFT": 0.8}, 0.5) is False
     assert risk_engine.check_exposure_caps(portfolio, {"AAPL": 0.1, "MSFT": 0.8}, 0.5) is None
+    short_portfolio = SimpleNamespace(positions={"TSLA": SimpleNamespace(quantity=-2)})
+    assert risk_engine.check_exposure_caps(short_portfolio, {"TSLA": -0.6}, 0.5) is False
 
     df = pd.DataFrame({"High": [10.0, 10.0, 10.0], "Low": [9.0, 9.0, 9.0], "Close": [7.0, 7.0, 7.0]})
     scheduled: list[tuple[str, int]] = []

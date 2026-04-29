@@ -1,7 +1,7 @@
 import logging
 import importlib
 import numpy as np
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 from ai_trading.utils.base import safe_to_datetime
 from ai_trading.utils.lazy_imports import load_pandas
@@ -14,20 +14,37 @@ MFI_PERIOD = 14
 _ET = ZoneInfo("America/New_York")
 
 
-def _intraday_session_keys(df: "pd.DataFrame", pd: object) -> object | None:
+def _intraday_session_keys(df: "pd.DataFrame", pd: Any) -> object | None:
     try:
         if "timestamp" in df.columns:
             parsed = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")  # type: ignore[attr-defined]
             if bool(parsed.notna().any()):
-                return cast(object, parsed.dt.tz_convert(_ET).dt.date)
+                return cast(
+                    object,
+                    pd.Series(
+                        [
+                            value.to_pydatetime().astimezone(_ET).date()
+                            if not pd.isna(value)  # type: ignore[attr-defined]
+                            else None
+                            for value in parsed
+                        ],
+                        index=df.index,
+                    ),
+                )
         if isinstance(df.index, pd.DatetimeIndex):  # type: ignore[attr-defined]
             index = df.index
             if getattr(index, "tz", None) is None:
                 index = index.tz_localize("UTC")
             else:
                 index = index.tz_convert("UTC")
-            return cast(object, pd.Series(index.tz_convert(_ET).date, index=df.index))  # type: ignore[attr-defined]
-    except (AttributeError, TypeError, ValueError):
+            return cast(
+                object,
+                pd.Series(
+                    [value.to_pydatetime().astimezone(_ET).date() for value in index],
+                    index=df.index,
+                ),
+            )
+    except (AttributeError, ImportError, TypeError, ValueError):
         return None
     return None
 
@@ -261,7 +278,13 @@ def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame
         except (ValueError, TypeError) as e:
             logger.exception('SMA calculation failed: %s', e)
         required += ['sma_50', 'sma_200']
-    df.dropna(subset=required, how='all', inplace=True)
+    required_present = [
+        column
+        for column in required
+        if column in df.columns and not bool(df[column].isna().all())
+    ]
+    if required_present:
+        df.dropna(subset=required_present, how='any', inplace=True)
     if intraday and "timestamp" not in df.columns and isinstance(df.index, pd.DatetimeIndex):
         df["timestamp"] = df.index
     return df

@@ -110,11 +110,9 @@ def build_bracket(
         limit_price=entry_limit,
         client_order_id=client_order_id,
     )
-    order["type"] = "bracket"
-    order["legs"] = {
-        "take_profit": {"limit_price": float(take_profit)},
-        "stop_loss": {"stop_price": float(stop_loss)},
-    }
+    order["order_class"] = "bracket"
+    order["take_profit"] = {"limit_price": float(take_profit)}
+    order["stop_loss"] = {"stop_price": float(stop_loss)}
     return order
 
 
@@ -127,12 +125,15 @@ def build_oco(
     stop_loss: float,
     client_order_id: str | None = None,
 ) -> dict[str, Any]:
-    order = _base(symbol=symbol, side=side, qty=qty, client_order_id=client_order_id)
-    order["type"] = "oco"
-    order["legs"] = {
-        "take_profit": {"limit_price": float(take_profit)},
-        "stop_loss": {"stop_price": float(stop_loss)},
-    }
+    order = build_limit(
+        symbol=symbol,
+        side=side,
+        qty=qty,
+        limit_price=take_profit,
+        client_order_id=client_order_id,
+    )
+    order["order_class"] = "oco"
+    order["stop_loss"] = {"stop_price": float(stop_loss)}
     return order
 
 
@@ -152,8 +153,8 @@ def build_oto(
         limit_price=entry_limit,
         client_order_id=client_order_id,
     )
-    order["type"] = "oto"
-    order["legs"] = {"stop_loss": {"stop_price": float(stop_loss)}}
+    order["order_class"] = "oto"
+    order["stop_loss"] = {"stop_price": float(stop_loss)}
     return order
 
 

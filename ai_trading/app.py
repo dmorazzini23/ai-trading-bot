@@ -811,6 +811,7 @@ def create_app(
                     reasons=fallback_reasons,
                 ),
             )
+            final_payload = dict(sanitized_payload)
             try:
                 body = json.dumps(sanitized_payload, default=str)
             except AI_TRADING_FALLBACK_EXCEPTIONS:
@@ -819,6 +820,9 @@ def create_app(
                     '"timestamp": "", "alpaca": {}, '
                     '"error": "health_payload_unserializable"}'
                 )
+
+        if status == 200 and not bool(sanitized_payload.get("ok", True)):
+            status = 503
 
         response_factory = getattr(app, "response_class", None)
         if callable(response_factory):
@@ -829,6 +833,17 @@ def create_app(
                     reasons=fallback_reasons,
                 ),
             )
+            if status == 200 and not bool(sanitized_payload.get("ok", True)):
+                status = 503
+            try:
+                body = json.dumps(sanitized_payload, default=str)
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
+                body = (
+                    '{"ok": false, "service": "ai-trading", '
+                    '"timestamp": "", "alpaca": {}, '
+                    '"error": "health_payload_unserializable"}'
+                )
+                status = 503
             return response_factory(body, status=status, mimetype="application/json")
 
         # When ``response_class`` is unavailable (for example when stub clients swap
@@ -843,7 +858,7 @@ def create_app(
                 reasons=fallback_reasons,
             ),
         )
-        return sanitized_payload
+        return final_payload if status == 200 else (final_payload, status)
 
     def _safe_response(payload: dict, *, status: int = 200) -> Any:
         """Return a Flask response when available, otherwise a plain payload."""

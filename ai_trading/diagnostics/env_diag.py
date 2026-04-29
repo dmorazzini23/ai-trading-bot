@@ -21,20 +21,21 @@ def _mask(value: str | None, keep: int = 4) -> str:
     return f"{prefix}{_MASK}"
 
 
-def _get_env_str(name: str, default: str = "") -> str:
+def _get_env_str(name: str, default: str = "", *, resolve_aliases: bool = True) -> str:
     """Return an environment value via config management with safe fallback."""
 
-    value = get_env(name, default, cast=str)
+    value = get_env(name, default, cast=str, resolve_aliases=resolve_aliases)
     if value is None:
         return default
     return str(value)
 
 
 def _resolve_trading_base_url() -> str:
-    base_url = _get_env_str("ALPACA_TRADING_BASE_URL", "")
-    if not base_url:
-        base_url = "https://paper-api.alpaca.markets"
-    return base_url
+    return _get_env_str(
+        "ALPACA_TRADING_BASE_URL",
+        "",
+        resolve_aliases=False,
+    ).strip()
 
 
 def _resolve_data_base_url() -> str:
@@ -58,9 +59,15 @@ def gather_alpaca_diag(extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
     trading_key = _get_env_str("ALPACA_API_KEY", "")
     secret_key = _get_env_str("ALPACA_SECRET_KEY", "")
 
-    environment = "paper" if "paper" in trading_base_url.lower() else "live"
+    missing_base_url = not bool(trading_base_url)
+    environment = (
+        "missing"
+        if missing_base_url
+        else "paper" if "paper" in trading_base_url.lower() else "live"
+    )
     diag: Dict[str, Any] = {
         "trading_base_url": trading_base_url,
+        "trading_base_url_missing": missing_base_url,
         "data_base_url": data_base_url,
         "environment": environment,
         "paper": environment == "paper",

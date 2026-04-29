@@ -11980,15 +11980,31 @@ finnhub_breaker = pybreaker.CircuitBreaker(
 
 from ai_trading.core import executors as _executors
 
-_executors._ensure_executors()
 executors = _executors
 
 # Expose cleanup function on this module for tests/back-compat
 cleanup_executors = executors.cleanup_executors
-prediction_executor = executors.prediction_executor
 
 # Ensure executor cleanup is registered with the correct reference
 atexit.register(cleanup_executors)
+
+
+class _LazyPredictionExecutor:
+    """Create the prediction executor pool when an executor method is used."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(executors.get_prediction_executor(), name)
+
+
+prediction_executor = _LazyPredictionExecutor()
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve heavyweight module attributes on first use."""
+
+    if name == "prediction_executor":
+        return prediction_executor
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # EVENT cooldown
 _LAST_EVENT_TS: dict[str, float] = {}

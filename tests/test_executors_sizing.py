@@ -1,6 +1,8 @@
 """Test auto-sizing logic and environment overrides for executors."""
 
 import os
+import subprocess
+import sys
 from unittest.mock import patch
 
 from ai_trading.utils.exec import get_worker_env_override
@@ -130,6 +132,33 @@ def test_executor_cleanup_available():
     # Check that cleanup function exists
     assert hasattr(bot_engine, 'cleanup_executors')
     assert callable(bot_engine.cleanup_executors)
+
+
+def test_bot_engine_import_does_not_create_executor_pools():
+    code = """
+import os
+
+os.environ["PYTEST_RUNNING"] = "1"
+
+from ai_trading.core import executors
+
+executors.cleanup_executors(wait=False)
+
+import ai_trading.core.bot_engine  # noqa: F401
+
+assert executors.executor is None
+assert executors.prediction_executor is None
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def teardown_module():

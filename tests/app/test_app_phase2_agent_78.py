@@ -163,7 +163,7 @@ def test_create_health_only_app_wraps_non_mapping_payload(monkeypatch) -> None:
 
     response = app.test_client().get("/healthz")
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     payload = response.get_json()
     assert payload["ok"] is False
     assert payload["service"] == "ai-trading"

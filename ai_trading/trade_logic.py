@@ -1,3 +1,4 @@
+import math
 import random
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -5,7 +6,6 @@ from typing import Any
 from ai_trading.logging import get_logger
 from ai_trading.capital_scaling import drawdown_adjusted_kelly
 from ai_trading.config.settings import get_settings
-from ai_trading.core.bot_engine import _fetch_intraday_bars_chunked
 logger = get_logger(__name__)
 
 def should_enter_trade(price_data, signals, risk_params):
@@ -34,41 +34,57 @@ def should_enter_trade(price_data, signals, risk_params):
     logger.debug('Trade entry evaluation: signal=%.3f, gain=%.4f, risk=%.3f, result=%s', signal_strength, recent_gain, max_risk, result)
     return result
 
-def extract_price(data: Any) -> float:
+def _fetch_intraday_bars_chunked(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.core.bot_engine import _fetch_intraday_bars_chunked
+
+    return _fetch_intraday_bars_chunked(*args, **kwargs)
+
+
+def _fetch_intraday_frames(*args: Any, **kwargs: Any) -> Any:
+    return _fetch_intraday_bars_chunked(*args, **kwargs)
+
+
+def extract_price(data: Any) -> float | None:
     """Return the last price from various data structures."""
-    import logging
-    logger = get_logger(__name__)
     try:
         if data is None:
-            logger.warning('extract_price called with None; returning fallback value')
-            return 0.001
+            logger.warning('extract_price called with None')
+            return None
         if hasattr(data, 'iloc'):
             if 'close' in data.columns and (not data.empty):
                 val = data['close'].iloc[-1]
             else:
-                logger.warning("extract_price: DataFrame missing 'close' column or empty; using fallback")
-                return 0.001
+                logger.warning("extract_price: DataFrame missing 'close' column or empty")
+                return None
         elif isinstance(data, dict):
-            val = data.get('close') or data.get('price')
+            val = data.get('close')
             if val is None:
-                logger.warning("extract_price: dict missing 'close'/'price'; using fallback")
-                return 0.001
-        elif isinstance(data, Sequence):
+                val = data.get('price')
+            if val is None:
+                logger.warning("extract_price: dict missing 'close'/'price'")
+                return None
+        elif isinstance(data, Sequence) and not isinstance(data, str | bytes):
             if not data:
-                logger.warning('extract_price: empty sequence; using fallback')
-                return 0.001
+                logger.warning('extract_price: empty sequence')
+                return None
             val = data[-1]
         else:
             val = float(data)
-        return float(val or 0.001)
+        price = float(val)
+        if not math.isfinite(price) or price <= 0:
+            logger.warning('extract_price invalid price: %s', val)
+            return None
+        return price
     except (ValueError, TypeError) as exc:
         logger.warning('extract_price failed: %s', exc)
-        return 0.001
+        return None
 
 def compute_order_price(symbol_data):
     raw_price = extract_price(symbol_data)
-    price = max(raw_price, 0.001)
-    _, slipped = simulate_execution(price, 1)
+    if raw_price is None:
+        logger.warning('compute_order_price skipped because price is unavailable')
+        return None
+    _, slipped = simulate_execution(raw_price, 1)
     return slipped
 
 def simulate_execution(price: float, qty: int) -> tuple[int, float]:
@@ -108,7 +124,7 @@ def evaluate_entries(ctx, candidates):
     lookback_min = max(5, int(getattr(settings, 'intraday_lookback_minutes', 120)))
     end_ts = getattr(ctx, 'intraday_end', None) or datetime.now(UTC)
     start_ts = getattr(ctx, 'intraday_start', None) or end_ts - timedelta(minutes=lookback_min)
-    frames = _fetch_intraday_bars_chunked(
+    frames = _fetch_intraday_frames(
         candidates, start=start_ts, end=end_ts, feed=getattr(ctx, 'data_feed', None)
     )
     signals = {}
@@ -135,7 +151,7 @@ def evaluate_exits(ctx, open_positions):
     lookback_min = max(5, int(getattr(settings, 'intraday_lookback_minutes', 120)))
     end_ts = getattr(ctx, 'intraday_end', None) or datetime.now(UTC)
     start_ts = getattr(ctx, 'intraday_start', None) or end_ts - timedelta(minutes=lookback_min)
-    frames = _fetch_intraday_bars_chunked(
+    frames = _fetch_intraday_frames(
         syms, start=start_ts, end=end_ts, feed=getattr(ctx, 'data_feed', None)
     )
     exits = {}

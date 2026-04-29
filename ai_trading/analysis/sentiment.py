@@ -261,7 +261,7 @@ def _record_sentiment_failure(reason: str = 'error', error: str | None = None) -
 @retry(
     stop=stop_after_attempt(SENTIMENT_MAX_RETRIES),
     wait=_SENTIMENT_WAIT,
-    retry=retry_if_exception_type((Exception,)),
+    retry=retry_if_exception_type((RequestException, HTTPError, ValueError, TypeError)),
     reraise=True,
 )
 def fetch_sentiment(ctx, ticker: str) -> float:

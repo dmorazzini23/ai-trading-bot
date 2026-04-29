@@ -174,10 +174,31 @@ def _computed_nyse_holidays(year: int) -> set[date]:
     }
 
 
+def _computed_nyse_early_closes(year: int) -> set[date]:
+    """Return fallback NYSE early closes that can be computed by rule."""
+    candidates = {
+        _nth_weekday(year, 11, 3, 4) + timedelta(days=1),  # Black Friday
+        date(year, 12, 24),  # Christmas Eve when it is a trading day
+        date(year, 7, 3),  # Day before Independence Day when it is a trading day
+    }
+    holidays = _computed_nyse_holidays(year)
+    return {
+        candidate
+        for candidate in candidates
+        if candidate.weekday() < 5 and candidate not in holidays
+    }
+
+
 def _is_fallback_holiday(d: date) -> bool:
     if d in _HOLIDAYS:
         return True
     return any(d in _computed_nyse_holidays(year) for year in (d.year - 1, d.year, d.year + 1))
+
+
+def _is_fallback_early_close(d: date) -> bool:
+    if d in _FALLBACK_SESSIONS:
+        return _FALLBACK_SESSIONS[d].is_early_close
+    return d in _computed_nyse_early_closes(d.year)
 
 
 def is_trading_day(d: date) -> bool:
@@ -218,6 +239,8 @@ def session_info(d: date) -> Session:
         return _FALLBACK_SESSIONS[d]
     if not is_trading_day(d):
         return session_info(previous_trading_session(d))
+    if _is_fallback_early_close(d):
+        return _session_from_et(d, 13, 0, True)
     return _session_from_et(d, 16, 0)
 
 

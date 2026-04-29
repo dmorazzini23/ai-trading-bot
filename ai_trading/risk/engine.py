@@ -1770,7 +1770,9 @@ def register_trade(engine: RiskEngine, size: int) -> dict | None:
 
 def check_exposure_caps(portfolio, exposure, cap):
     for sym, pos in portfolio.positions.items():
-        if pos.quantity > 0 and exposure[sym] > cap:
+        quantity = getattr(pos, "quantity", getattr(pos, "qty", 0))
+        gross_exposure = abs(float(exposure.get(sym, 0.0) or 0.0))
+        if abs(float(quantity or 0.0)) > 0 and gross_exposure > cap:
             logger.warning("Exposure cap triggered, blocking new orders for %s", sym)
             return False
 

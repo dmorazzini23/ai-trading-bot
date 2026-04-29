@@ -1,7 +1,11 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from ai_trading.execution.reconcile import ReconciliationResult, reconcile_positions_and_orders
+from ai_trading.execution.reconcile import (
+    ReconciliationResult,
+    reconcile_positions_and_orders,
+    reconcile_with_broker,
+)
 from ai_trading.core.interfaces import Order, OrderStatus, OrderType
 from ai_trading.order.types import OrderSide
 
@@ -128,4 +132,22 @@ def test_reconcile_with_fractional_string_quantities():
 
     assert isinstance(result, ReconciliationResult)
     assert isinstance(ctx.positions, dict)
+    assert ctx.positions["AAPL"] == 0.5
     assert ctx.orders[0].status is OrderStatus.FILLED
+
+
+def test_reconcile_with_broker_fetch_failure_returns_error_result():
+    class FailingBroker:
+        def get_all_positions(self):
+            raise RuntimeError("positions unavailable")
+
+    result = reconcile_with_broker(
+        FailingBroker(),
+        local_positions={},
+        local_orders={},
+        apply_fixes=False,
+    )
+
+    assert result.ok is False
+    assert result.error is not None
+    assert "broker_positions_fetch_failed" in result.error

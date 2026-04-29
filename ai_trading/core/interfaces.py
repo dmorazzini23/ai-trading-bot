@@ -47,7 +47,7 @@ class TradingSignal:
 class Position:
     """Position data structure."""
     symbol: str
-    quantity: int
+    quantity: float
     market_value: float
     cost_basis: float
     unrealized_pnl: float
@@ -62,8 +62,8 @@ class Order:
     side: OrderSide
     order_type: OrderType
     status: OrderStatus
-    quantity: int
-    filled_quantity: int
+    quantity: float
+    filled_quantity: float
     price: float | None
     filled_price: float | None
     timestamp: datetime

@@ -121,12 +121,9 @@ class AlignedClock:
         else:
             minutes_since_midnight = current_time.hour * 60 + current_time.minute
             next_interval = (minutes_since_midnight // interval_minutes + 1) * interval_minutes
-            next_close = current_time.replace(
-                hour=next_interval // 60, minute=next_interval % 60, second=0, microsecond=0
-            )
-            if next_close.day != current_time.day:
-                next_close = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
-                next_close += timedelta(days=1)
+            days_offset, minute_of_day = divmod(next_interval, 1440)
+            next_close = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            next_close += timedelta(days=days_offset, minutes=minute_of_day)
         if self.calendar:
             try:
                 valid_days: Callable[..., Any] = getattr(
@@ -150,15 +147,22 @@ class AlignedClock:
 
     def _parse_timeframe_minutes(self, timeframe: str) -> int:
         """Parse timeframe string into minutes."""
-        timeframe = timeframe.lower()
-        if timeframe.endswith("m"):
-            return int(timeframe[:-1])
-        elif timeframe.endswith("h"):
-            return int(timeframe[:-1]) * 60
-        elif timeframe.endswith("d"):
-            return int(timeframe[:-1]) * 1440
-        else:
+        raw_timeframe = str(timeframe or "1m").strip().lower()
+        units = {"m": 1, "h": 60, "d": 1440}
+        unit = raw_timeframe[-1:] if raw_timeframe else "m"
+        if unit not in units:
+            self.logger.warning("Invalid timeframe %r; defaulting to 1m", timeframe)
             return 1
+        try:
+            amount = int(raw_timeframe[:-1])
+        except (TypeError, ValueError):
+            self.logger.warning("Invalid timeframe %r; defaulting to 1m", timeframe)
+            return 1
+        interval_minutes = amount * units[unit]
+        if interval_minutes <= 0:
+            self.logger.warning("Invalid timeframe %r; defaulting to 1m", timeframe)
+            return 1
+        return interval_minutes
 
     def check_skew(self, reference_time: datetime | None = None, tz: tzinfo | None = None) -> float:
         """

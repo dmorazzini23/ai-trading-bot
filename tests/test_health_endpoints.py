@@ -128,7 +128,7 @@ def test_app_health_unknown_provider_is_not_upgraded_to_healthy(monkeypatch):
     client = app.test_client()
     response = client.get("/healthz")
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     payload = response.get_json()
     assert payload["status"] == "degraded"
     assert payload["ok"] is False
@@ -218,7 +218,7 @@ def test_health_connectivity_mode_requires_known_broker_status(monkeypatch):
     response = client.get("/healthz")
     payload = response.get_json()
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     assert payload["ok"] is False
     assert payload["status"] == "degraded"
     assert payload["reason"] == "broker_status_unknown"
@@ -299,7 +299,7 @@ def test_health_market_closed_does_not_hide_unknown_broker(monkeypatch):
     response = client.get("/healthz")
     payload = response.get_json()
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     assert payload["ok"] is False
     assert payload["status"] == "degraded"
 
@@ -372,7 +372,7 @@ def test_health_payload_does_not_report_healthy_when_ok_is_false(monkeypatch):
     response = client.get("/healthz")
     payload = response.get_json()
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     assert payload["ok"] is False
     assert payload["status"] == "degraded"
     assert payload["reason"] == "runtime_health_pending"
@@ -408,7 +408,7 @@ def test_health_payload_service_degraded_marks_unhealthy(monkeypatch):
     response = client.get("/healthz")
     payload = response.get_json()
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     assert payload["ok"] is False
     assert payload["status"] == "degraded"
     assert payload["reason"] == "trade_updates_stream_failed"
@@ -544,6 +544,22 @@ def test_health_route_builder_failure_returns_503_json():
     assert payload["ok"] is False
     assert payload["status"] == "degraded"
     assert payload["error"] == "builder down"
+
+
+def test_health_route_false_ok_returns_503():
+    app = _RouteCaptureApp()
+
+    register_health_routes(
+        app,
+        payload_builder=lambda: {"ok": False, "status": "degraded", "reason": "not_ready"},
+        response_builder=lambda payload, status: (payload, status),
+    )
+
+    payload, status = _call_healthz(app)
+
+    assert status == 503
+    assert payload["ok"] is False
+    assert payload["reason"] == "not_ready"
 
 
 def test_health_route_response_failure_returns_503_json_tuple():

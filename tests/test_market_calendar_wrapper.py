@@ -67,3 +67,11 @@ def test_fallback_calendar_handles_2026_holidays(monkeypatch: pytest.MonkeyPatch
     assert is_trading_day(date(2026, 4, 3)) is False
     assert is_trading_day(date(2026, 7, 3)) is False
     assert cw.previous_trading_session(date(2026, 1, 19)) == date(2026, 1, 16)
+
+
+def test_fallback_calendar_computes_future_early_closes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cw, "_CAL", None)
+
+    assert cw.is_early_close(date(2026, 11, 27)) is True
+    assert cw.rth_session_utc(date(2026, 11, 27))[1].hour == 18
+    assert cw.is_early_close(date(2026, 12, 24)) is True

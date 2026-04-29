@@ -4,7 +4,10 @@ from pathlib import Path
 
 import json
 
-from ai_trading.models.artifacts import verify_artifact, write_artifact_manifest
+import pytest
+
+from ai_trading.models import artifacts
+from ai_trading.models.artifacts import enforce_artifact_verification, verify_artifact, write_artifact_manifest
 
 
 def test_verify_artifact_round_trip(tmp_path: Path) -> None:
@@ -35,6 +38,23 @@ def test_verify_artifact_detects_checksum_mismatch(tmp_path: Path) -> None:
     ok, reason = verify_artifact(model_path=model_path)
     assert ok is False
     assert reason == "CHECKSUM_MISMATCH"
+
+
+def test_enforce_artifact_verification_fails_closed_outside_tests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_path = tmp_path / "model.pkl"
+    model_path.write_bytes(b"model-payload-v1")
+    manifest_path = write_artifact_manifest(model_path=model_path, model_version="v1")
+    model_path.write_bytes(b"tampered")
+
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.setenv("AI_TRADING_MODEL_VERIFY_CHECKSUM", "1")
+    monkeypatch.setattr(artifacts, "is_test_runtime", lambda: False)
+
+    with pytest.raises(RuntimeError, match="MODEL_VERIFICATION_FAILED: CHECKSUM_MISMATCH"):
+        enforce_artifact_verification(model_path=model_path, manifest_path=manifest_path)
 
 
 def test_write_artifact_manifest_includes_metadata(tmp_path: Path) -> None:

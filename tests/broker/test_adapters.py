@@ -8,6 +8,7 @@ from ai_trading.broker.adapters import (
     TradierBrokerAdapter,
     build_broker_adapter,
 )
+from ai_trading.oms.orders import build_bracket, build_oco, build_oto
 
 
 class _DummyClient:
@@ -116,6 +117,67 @@ def test_alpaca_adapter_builds_native_bracket_request_from_mapping() -> None:
     assert request.take_profit.limit_price == 130.0
     assert request.stop_loss.stop_price == 120.0
     assert request.stop_loss.limit_price == 119.5
+
+
+def test_alpaca_adapter_translates_legacy_order_family_legs() -> None:
+    client = _DummyClient()
+    adapter = AlpacaBrokerAdapter(client=client)
+
+    adapter.submit_order(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 1,
+            "type": "bracket",
+            "limit_price": 125.50,
+            "legs": {
+                "take_profit": {"limit_price": 130.0},
+                "stop_loss": {"stop_price": 120.0},
+            },
+        },
+    )
+
+    request = client.submitted_request
+    assert request.type.value == "limit"
+    assert request.order_class.value == "bracket"
+    assert request.take_profit.limit_price == 130.0
+    assert request.stop_loss.stop_price == 120.0
+
+
+def test_oms_order_family_builders_are_alpaca_adapter_compatible() -> None:
+    bracket = build_bracket(
+        symbol="AAPL",
+        side="buy",
+        qty=1,
+        entry_limit=100,
+        take_profit=110,
+        stop_loss=95,
+    )
+    oco = build_oco(symbol="AAPL", side="sell", qty=1, take_profit=110, stop_loss=95)
+    oto = build_oto(symbol="AAPL", side="buy", qty=1, entry_limit=100, stop_loss=95)
+
+    for payload, order_class in ((bracket, "bracket"), (oco, "oco"), (oto, "oto")):
+        client = _DummyClient()
+        AlpacaBrokerAdapter(client=client).submit_order(payload)
+        request = client.submitted_request
+        assert request.type.value == "limit"
+        assert request.order_class.value == order_class
+        assert request.stop_loss.stop_price == 95.0
+
+
+def test_alpaca_adapter_preserves_short_position_intent() -> None:
+    client = _DummyClient()
+    adapter = AlpacaBrokerAdapter(client=client)
+
+    adapter.submit_order({"symbol": "MSFT", "side": "sell_short", "quantity": 2})
+
+    assert client.submitted_request.side.value == "sell"
+    assert client.submitted_request.position_intent.value == "sell_to_open"
+
+    adapter.submit_order({"symbol": "MSFT", "side": "buy_to_cover", "quantity": 2})
+
+    assert client.submitted_request.side.value == "buy"
+    assert client.submitted_request.position_intent.value == "buy_to_close"
 
 
 def test_alpaca_adapter_uses_native_get_orders_filter() -> None:

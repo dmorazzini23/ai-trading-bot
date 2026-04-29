@@ -12,6 +12,8 @@ from typing import Any, cast
 from types import SimpleNamespace
 
 from alpaca.common.exceptions import APIError
+from ai_trading.broker.adapters import build_broker_adapter
+from ai_trading.config.management import get_env
 from ai_trading.config.settings import get_settings
 from ai_trading.logging import logger
 from ..core.constants import EXECUTION_PARAMETERS
@@ -33,10 +35,27 @@ class ProductionExecutionCoordinator:
     monitoring, and safety mechanisms for production trading.
     """
 
-    def __init__(self, account_equity: float, risk_level: RiskLevel=RiskLevel.MODERATE):
+    def __init__(
+        self,
+        account_equity: float,
+        risk_level: RiskLevel = RiskLevel.MODERATE,
+        *,
+        broker_client: Any | None = None,
+        broker_adapter: Any | None = None,
+        execution_mode: str | None = None,
+    ):
         """Initialize production execution coordinator."""
         self.account_equity = account_equity
         self.risk_level = risk_level
+        self.execution_mode = str(
+            execution_mode
+            or get_env("EXECUTION_MODE", "sim")
+            or "sim"
+        ).strip().lower()
+        self.broker_adapter = broker_adapter
+        if self.broker_adapter is None and broker_client is not None:
+            provider = str(get_env("BROKER_PROVIDER", "alpaca") or "alpaca")
+            self.broker_adapter = build_broker_adapter(provider=provider, client=broker_client)
         self.position_sizer = DynamicPositionSizer(risk_level)
         self.halt_manager = TradingHaltManager()
         self.risk_manager = RiskManager(risk_level)
@@ -222,6 +241,8 @@ class ProductionExecutionCoordinator:
     async def _execute_order_with_monitoring(self, order: Order, impact_analysis: dict) -> ExecutionResult:
         """Execute order with real-time monitoring."""
         try:
+            if self.execution_mode == "live":
+                return await self._execute_order_with_broker(order)
             self.pending_orders[order.id] = order
             await asyncio.sleep(0.1)
             fill_price = float(order.price or 100.0)
@@ -247,6 +268,95 @@ class ProductionExecutionCoordinator:
             if order.id in self.pending_orders:
                 del self.pending_orders[order.id]
             return ExecutionResult(status='failed', order_id=order.id, symbol=order.symbol, side=order.side.value if isinstance(order.side, OrderSide) else order.side, quantity=order.quantity, message=f'Execution failed: {e}', error_code='execution_error')
+
+    async def _execute_order_with_broker(self, order: Order) -> ExecutionResult:
+        """Submit live orders to the configured broker adapter; never simulate live fills."""
+
+        adapter = getattr(self, "broker_adapter", None)
+        submit = getattr(adapter, "submit_order", None)
+        if not callable(submit):
+            message = "Live execution requires a broker adapter; simulation fill suppressed"
+            logger.error(
+                "LIVE_EXECUTION_BROKER_ADAPTER_REQUIRED",
+                extra={"order_id": order.id, "symbol": order.symbol},
+            )
+            order.status = OrderStatus.REJECTED
+            self.rejected_orders[order.id] = order
+            return ExecutionResult(
+                status="failed",
+                order_id=order.id,
+                symbol=order.symbol,
+                side=order.side.value if isinstance(order.side, OrderSide) else order.side,
+                quantity=order.quantity,
+                message=message,
+                error_code="live_broker_adapter_required",
+                venue="live",
+            )
+
+        payload: dict[str, Any] = {
+            "symbol": order.symbol,
+            "side": order.side.value if isinstance(order.side, OrderSide) else order.side,
+            "quantity": order.quantity,
+            "qty": order.quantity,
+            "type": order.order_type.value if isinstance(order.order_type, OrderType) else order.order_type,
+            "time_in_force": getattr(order, "time_in_force", "day") or "day",
+            "client_order_id": getattr(order, "client_order_id", None) or order.id,
+        }
+        if order.price is not None:
+            payload["limit_price"] = float(order.price)
+
+        local_order_id = order.id
+        self.pending_orders[local_order_id] = order
+        try:
+            response = await asyncio.to_thread(submit, payload)
+        except (APIError, TimeoutError, ConnectionError):
+            self.pending_orders.pop(local_order_id, None)
+            raise
+
+        status_raw = self._broker_response_value(response, "status") or "accepted"
+        status_token = str(getattr(status_raw, "value", status_raw) or "").strip().lower()
+        broker_order_id = str(
+            self._broker_response_value(response, "id", "order_id")
+            or order.id
+        )
+        filled_qty = self._broker_response_value(response, "filled_qty", "filled_quantity")
+        fill_price = self._broker_response_value(response, "filled_avg_price", "average_fill_price")
+        self.pending_orders.pop(local_order_id, None)
+        order.id = broker_order_id
+        if status_token == "filled":
+            order.status = OrderStatus.FILLED
+            order.filled_quantity = int(float(filled_qty or order.quantity))
+            order.average_fill_price = cast(Any, float(fill_price or order.price or 0.0))
+            order.executed_at = datetime.now(UTC)
+            self.completed_orders[order.id] = order
+            self._update_position_tracking(order)
+        else:
+            order.status = OrderStatus.PENDING
+            self.pending_orders[order.id] = order
+
+        provider = str(getattr(adapter, "provider", "broker"))
+        return ExecutionResult(
+            status="success",
+            order_id=broker_order_id,
+            symbol=order.symbol,
+            side=order.side.value if isinstance(order.side, OrderSide) else order.side,
+            quantity=order.quantity,
+            fill_price=float(fill_price) if fill_price not in (None, "") else None,
+            execution_time=datetime.now(UTC),
+            message=f"Order submitted to {provider}: {status_token or 'accepted'}",
+            venue=provider,
+        )
+
+    @staticmethod
+    def _broker_response_value(response: Any, *keys: str) -> Any:
+        for key in keys:
+            if isinstance(response, dict):
+                value = response.get(key)
+            else:
+                value = getattr(response, key, None)
+            if value not in (None, ""):
+                return value
+        return None
 
     async def _post_execution_processing(self, order: Order, execution_result: Any, original_quantity: int):
         """Handle post-execution processing and notifications."""

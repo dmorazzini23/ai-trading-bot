@@ -18,22 +18,12 @@ from pathlib import Path
 import importlib.util
 from typing import Any, Callable, Mapping, Tuple, cast
 from types import SimpleNamespace
-from ai_trading.env import ensure_dotenv_loaded
-
-# Ensure environment variables are loaded before any logging configuration
-ensure_dotenv_loaded()
 
 import ai_trading.logging as _logging
-from ai_trading.paths import LOG_DIR, ensure_runtime_paths
-from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.runtime.shutdown import register_signal_handlers, request_stop, should_stop, stop_event
-from ai_trading.data.fetch import DataFetchError, EmptyBarsError
-from ai_trading.execution.live_trading import APIError, NonRetryableBrokerError
-from ai_trading.execution import timing as execution_timing
 from ai_trading.utils.datetime import ensure_datetime
 
 MAIN_FALLBACK_EXC: tuple[type[Exception], ...] = (
-    APIError,
     ArithmeticError,
     AssertionError,
     AttributeError,
@@ -54,6 +44,22 @@ _MANAGED_GET_ENV_READY = False
 _MANAGED_GET_ENV: Callable[..., Any] | None = None
 _SHUTDOWN_FORCE_EXIT_TIMER: threading.Timer | None = None
 _SHUTDOWN_FORCE_EXIT_LOCK = threading.Lock()
+_RUNTIME_ENVIRONMENT_INITIALIZED = False
+_RUNTIME_ENVIRONMENT_LOCK = threading.Lock()
+
+
+def ensure_dotenv_loaded(*args: Any, **kwargs: Any) -> None:
+    """Load dotenv only from explicit runtime startup paths."""
+
+    from ai_trading.env import ensure_dotenv_loaded as _ensure_dotenv_loaded
+
+    _ensure_dotenv_loaded(*args, **kwargs)
+
+
+def resolve_runtime_artifact_path(*args: Any, **kwargs: Any) -> Path:
+    from ai_trading.runtime.artifacts import resolve_runtime_artifact_path as _resolve
+
+    return cast(Path, _resolve(*args, **kwargs))
 
 
 def _managed_env(name: str, default: Any = None) -> Any:
@@ -106,20 +112,33 @@ def _resolve_log_file() -> str:
             raise SystemExit("BOT_LOG_FILE must be an absolute path when set")
         path.parent.mkdir(parents=True, exist_ok=True)
         return str(path)
+    from ai_trading.paths import LOG_DIR, ensure_runtime_paths
+
     ensure_runtime_paths()
     log_path = (LOG_DIR / "bot.log").resolve()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     return str(log_path)
 
 
-LOG_FILE = _resolve_log_file()
-# Configure logging with the desired file
-# Logging must be initialized once here before importing heavy modules like
-# ``ai_trading.core.bot_engine``.
-_logging.configure_logging(log_file=LOG_FILE)
+LOG_FILE: str | None = None
+
+class _LazyModuleLogger:
+    """Delay structured logger setup until runtime code actually logs."""
+
+    @property
+    def name(self) -> str:
+        return __name__
+
+    @property
+    def logger(self) -> logging.Logger:
+        return cast(logging.Logger, _logging.get_logger(__name__).logger)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_logging.get_logger(__name__), name)
+
 
 # Module logger
-logger = _logging.get_logger(__name__)
+logger = _LazyModuleLogger()
 _AUTH_PREFLIGHT_LOGGED = False
 _TEST_ALPACA_CREDS_BACKFILLED = False
 
@@ -143,6 +162,42 @@ _PRIMARY_FALLBACK_STREAK_SINCE_TS: float | None = None
 _PRIMARY_FALLBACK_LAST_ALERT_TS = 0.0
 _PROVIDER_TELEMETRY_STALE_LAST_ALERT_TS = 0.0
 _EXECUTION_QUALITY_LAST_ALERT_TS = 0.0
+
+
+def initialize_runtime_environment() -> None:
+    """Load runtime env and configure file logging on explicit startup paths."""
+
+    global LOG_FILE, _RUNTIME_ENVIRONMENT_INITIALIZED
+    if _RUNTIME_ENVIRONMENT_INITIALIZED:
+        return
+    with _RUNTIME_ENVIRONMENT_LOCK:
+        if _RUNTIME_ENVIRONMENT_INITIALIZED:
+            return
+        ensure_dotenv_loaded()
+        LOG_FILE = _resolve_log_file()
+        _logging.configure_logging(log_file=LOG_FILE)
+        _RUNTIME_ENVIRONMENT_INITIALIZED = True
+
+
+def _runtime_trading_exceptions() -> tuple[type[Exception], ...]:
+    """Resolve trading exception classes only when runtime error handling needs them."""
+
+    from ai_trading.data.fetch import DataFetchError, EmptyBarsError
+    from ai_trading.execution.live_trading import APIError, NonRetryableBrokerError
+
+    return (EmptyBarsError, DataFetchError, NonRetryableBrokerError, APIError)
+
+
+def _reset_execution_cycle_timing() -> None:
+    from ai_trading.execution import timing as execution_timing
+
+    execution_timing.reset_cycle()
+
+
+def _execution_cycle_seconds() -> float:
+    from ai_trading.execution import timing as execution_timing
+
+    return float(execution_timing.cycle_seconds())
 
 
 def _claim_market_close_training(date_key: str) -> bool:
@@ -311,17 +366,8 @@ if not ALPACA_AVAILABLE:
     if sys.modules.get("alpaca.trading.client") is not None or sys.modules.get("alpaca") is not None:
         ALPACA_AVAILABLE = True
 
-from ai_trading.settings import get_seed_int
-from ai_trading.config import get_settings
-from ai_trading.utils import get_pid_on_port
 from ai_trading.utils.prof import StageTimer, SoftBudget
 from ai_trading.utils.time import monotonic_time
-from ai_trading.logging.redact import redact as _redact
-from ai_trading.env.config_redaction import redact_config_env
-from ai_trading.net.http import build_retrying_session, set_global_session, mount_host_retry_profile
-from ai_trading.utils.http import clamp_request_timeout
-from ai_trading.utils.base import is_market_open as _is_market_open_base, next_market_open
-from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca, _CACHE
 
 try:  # prefer modern budget context
     from ai_trading.core.budget import set_cycle_budget_context
@@ -331,42 +377,236 @@ except MAIN_FALLBACK_EXC:  # pragma: no cover - fallback when budget module unav
     def set_cycle_budget_context(*args, **kwargs):  # type: ignore[override]
         return nullcontext()
 
-try:
-    from ai_trading.core.bot_engine import (
-        emit_cycle_budget_summary,
-        clear_cycle_budget_context,
-    )
-except MAIN_FALLBACK_EXC:  # pragma: no cover - fallback when bot engine unavailable
+def emit_cycle_budget_summary(logger: logging.Logger) -> None:
+    """Emit bot-engine cycle budget summary without importing engine at module load."""
 
-    def emit_cycle_budget_summary(logger: logging.Logger) -> None:
-        _ = logger
+    try:
+        from ai_trading.core.bot_engine import emit_cycle_budget_summary as _emit
+    except MAIN_FALLBACK_EXC:  # pragma: no cover - fallback when bot engine unavailable
         return None
+    return _emit(logger)
 
-    def clear_cycle_budget_context() -> None:
+
+def clear_cycle_budget_context() -> None:
+    """Clear bot-engine cycle budget context without importing engine at module load."""
+
+    try:
+        from ai_trading.core.bot_engine import clear_cycle_budget_context as _clear
+    except MAIN_FALLBACK_EXC:  # pragma: no cover - fallback when bot engine unavailable
         return None
-from ai_trading.config.management import (
-    get_env,
-    validate_required_env,
-    validate_no_deprecated_env,
-    reload_env,
-    _resolve_alpaca_env,
-    TradingConfig,
-    config_snapshot_hash,
-    enforce_alpaca_feed_policy,
-    get_trading_config,
-    set_runtime_env_override,
-    clear_runtime_env_override,
-    clear_runtime_env_overrides,
-)
-from ai_trading.metrics import get_histogram, get_counter
-from ai_trading.monitoring.alerts import emit_runtime_alert
-from ai_trading.monitoring.model_liveness import (
-    check_model_liveness,
-    get_model_liveness_snapshot,
-    maybe_trigger_canary_auto_rollback,
-)
+    return _clear()
 from ai_trading.telemetry import runtime_state
-from ai_trading.utils.env import alpaca_credential_status
+
+
+def get_seed_int() -> int:
+    from ai_trading.settings import get_seed_int as _get_seed_int
+
+    return int(_get_seed_int())
+
+
+def get_settings() -> Any:
+    from ai_trading.config import get_settings as _get_settings
+
+    return _get_settings()
+
+
+def get_pid_on_port(port: int) -> int | None:
+    from ai_trading.utils import get_pid_on_port as _get_pid_on_port
+
+    return _get_pid_on_port(port)
+
+
+def _redact(value: Mapping[str, Any]) -> dict[str, Any]:
+    from ai_trading.logging.redact import redact
+
+    return cast(dict[str, Any], redact(value))
+
+
+def redact_config_env(value: Mapping[str, Any]) -> dict[str, Any]:
+    from ai_trading.env.config_redaction import redact_config_env as _redact_config_env
+
+    return cast(dict[str, Any], _redact_config_env(value))
+
+
+def build_retrying_session(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.net.http import build_retrying_session as _build_retrying_session
+
+    return _build_retrying_session(*args, **kwargs)
+
+
+def set_global_session(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.net.http import set_global_session as _set_global_session
+
+    return _set_global_session(*args, **kwargs)
+
+
+def mount_host_retry_profile(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.net.http import mount_host_retry_profile as _mount_host_retry_profile
+
+    return _mount_host_retry_profile(*args, **kwargs)
+
+
+def clamp_request_timeout(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.utils.http import clamp_request_timeout as _clamp_request_timeout
+
+    return _clamp_request_timeout(*args, **kwargs)
+
+
+def _is_market_open_base(*args: Any, **kwargs: Any) -> bool:
+    from ai_trading.utils.base import is_market_open as _is_market_open
+
+    return bool(_is_market_open(*args, **kwargs))
+
+
+def next_market_open(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.utils.base import next_market_open as _next_market_open
+
+    return _next_market_open(*args, **kwargs)
+
+
+def resolve_max_position_size(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.position_sizing import resolve_max_position_size as _resolve_max_position_size
+
+    return _resolve_max_position_size(*args, **kwargs)
+
+
+def _get_equity_from_alpaca(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.position_sizing import _get_equity_from_alpaca as _get_equity
+
+    return _get_equity(*args, **kwargs)
+
+
+class _PositionSizingCacheProxy:
+    def _target(self) -> Any:
+        from ai_trading.position_sizing import _CACHE as _position_cache
+
+        return _position_cache
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._target(), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "_target":
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._target(), name, value)
+
+
+_CACHE = _PositionSizingCacheProxy()
+
+
+def get_env(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.config.management import get_env as _get_env
+
+    return _get_env(*args, **kwargs)
+
+
+def validate_required_env(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.config.management import validate_required_env as _validate_required_env
+
+    return _validate_required_env(*args, **kwargs)
+
+
+def validate_no_deprecated_env(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.config.management import validate_no_deprecated_env as _validate_no_deprecated_env
+
+    return _validate_no_deprecated_env(*args, **kwargs)
+
+
+def reload_env(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.config.management import reload_env as _reload_env
+
+    return _reload_env(*args, **kwargs)
+
+
+def _resolve_alpaca_env(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.config.management import _resolve_alpaca_env as _resolve
+
+    return _resolve(*args, **kwargs)
+
+
+def _trading_config_from_env(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.config.management import TradingConfig
+
+    return TradingConfig.from_env(*args, **kwargs)
+
+
+def config_snapshot_hash(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.config.management import config_snapshot_hash as _config_snapshot_hash
+
+    return _config_snapshot_hash(*args, **kwargs)
+
+
+def enforce_alpaca_feed_policy(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.config.management import enforce_alpaca_feed_policy as _enforce
+
+    return _enforce(*args, **kwargs)
+
+
+def get_trading_config(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.config.management import get_trading_config as _get_trading_config
+
+    return _get_trading_config(*args, **kwargs)
+
+
+def set_runtime_env_override(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.config.management import set_runtime_env_override as _set_runtime_env_override
+
+    return _set_runtime_env_override(*args, **kwargs)
+
+
+def clear_runtime_env_override(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.config.management import clear_runtime_env_override as _clear_runtime_env_override
+
+    return _clear_runtime_env_override(*args, **kwargs)
+
+
+def clear_runtime_env_overrides(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.config.management import clear_runtime_env_overrides as _clear_runtime_env_overrides
+
+    return _clear_runtime_env_overrides(*args, **kwargs)
+
+
+def get_histogram(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.metrics import get_histogram as _get_histogram
+
+    return _get_histogram(*args, **kwargs)
+
+
+def get_counter(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.metrics import get_counter as _get_counter
+
+    return _get_counter(*args, **kwargs)
+
+
+def emit_runtime_alert(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.monitoring.alerts import emit_runtime_alert as _emit_runtime_alert
+
+    return _emit_runtime_alert(*args, **kwargs)
+
+
+def check_model_liveness(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.monitoring.model_liveness import check_model_liveness as _check
+
+    return _check(*args, **kwargs)
+
+
+def get_model_liveness_snapshot(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.monitoring.model_liveness import get_model_liveness_snapshot as _snapshot
+
+    return _snapshot(*args, **kwargs)
+
+
+def maybe_trigger_canary_auto_rollback(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.monitoring.model_liveness import maybe_trigger_canary_auto_rollback as _rollback
+
+    return _rollback(*args, **kwargs)
+
+
+def alpaca_credential_status(*args: Any, **kwargs: Any) -> Any:
+    from ai_trading.utils.env import alpaca_credential_status as _alpaca_credential_status
+
+    return _alpaca_credential_status(*args, **kwargs)
 
 
 def _config_snapshot(cfg: Any) -> dict[str, Any]:
@@ -2184,7 +2424,7 @@ def run_cycle() -> None:
 
     try:
         run_all_trades_worker(state, runtime)
-    except (EmptyBarsError, DataFetchError, NonRetryableBrokerError, APIError) as exc:
+    except _runtime_trading_exceptions() as exc:
         logger.warning(
             "WARMUP_SYMBOL_ERRORS_TOLERATED",
             extra={"error": str(exc), "exc_type": exc.__class__.__name__},
@@ -2457,7 +2697,7 @@ def _fail_fast_env() -> None:
         required.remove("DOLLAR_RISK_LIMIT")
     required_tuple = tuple(required)
     try:
-        trading_cfg = TradingConfig.from_env(
+        trading_cfg = _trading_config_from_env(
             allow_missing_drawdown=allow_missing_drawdown
         )
     except (RuntimeError, ValueError) as e:
@@ -2829,7 +3069,7 @@ def run_bot(*_a, **_k) -> int:
 
     Sets up logging, validates configuration, and starts the bot.
     """
-    ensure_dotenv_loaded()
+    initialize_runtime_environment()
     global config
     from ai_trading.logging import validate_logging_setup
 
@@ -3101,7 +3341,7 @@ def _preflight_bind_server_port(host: str, port: int) -> None:
 def start_api(ready_signal: threading.Event | None = None) -> None:
     """Spin up the Flask API server or raise if the port is unavailable."""
 
-    ensure_dotenv_loaded()
+    initialize_runtime_environment()
     settings = get_settings()
     port = int(getattr(settings, "api_port", 9001) or 9001)
     wait_window = _get_wait_window(settings)
@@ -3563,7 +3803,7 @@ def _update_interval_autotune_state(
 
 def main(argv: list[str] | None = None) -> None:
     """Start the API thread and repeatedly run trading cycles."""
-    ensure_dotenv_loaded()
+    initialize_runtime_environment()
     _check_alpaca_sdk()
     _fail_fast_env()
     args = parse_cli(argv)
@@ -3768,7 +4008,7 @@ def main(argv: list[str] | None = None) -> None:
                 exc_info=e,
             )
             raise
-        except (NonRetryableBrokerError, DataFetchError, EmptyBarsError, APIError, ConnectionError, TimeoutError) as e:
+        except _runtime_trading_exceptions() + (ConnectionError, TimeoutError) as e:
             warmup_ok = False
             logger.warning(
                 "WARMUP_RECOVERED",
@@ -3992,7 +4232,7 @@ def main(argv: list[str] | None = None) -> None:
                 interval_ms = max(0.0, float(effective_interval)) * 1000.0
                 fraction_clamped = max(0.0, min(1.0, float(fraction)))
                 budget = SoftBudget(int(interval_ms * fraction_clamped))
-                execution_timing.reset_cycle()
+                _reset_execution_cycle_timing()
                 try:
                     _t0 = monotonic_time()
                     with StageTimer(logger, "CYCLE_FETCH"):
@@ -4126,7 +4366,7 @@ def main(argv: list[str] | None = None) -> None:
                             logger.debug("LIVE_KPI_CONTROL_BAND_EVALUATION_FAILED", exc_info=True)
                     except MAIN_FALLBACK_EXC:
                         logger.debug("MODEL_LIVENESS_EVALUATION_FAILED", exc_info=True)
-                    execute_seconds = execution_timing.cycle_seconds()
+                    execute_seconds = _execution_cycle_seconds()
                     with StageTimer(
                         logger,
                         "CYCLE_EXECUTE",
@@ -4347,7 +4587,7 @@ def _emit_capture_handler_record(detail: str, action: str) -> None:
     try:
         base_logger = logger.logger  # type: ignore[attr-defined]
     except AttributeError:
-        base_logger = logger
+        base_logger = cast(Any, logger)
     for handler_ref in list(handler_refs):
         handler = handler_ref() if callable(handler_ref) else handler_ref
         if handler is None:

@@ -119,6 +119,22 @@ class TestDataQualityValidator:
         
         # NaN should be filled with previous value
         assert cleaned['close'].iloc[1] == 101
+
+    def test_clean_ohlcv_does_not_backfill_future_prices(self):
+        """Rows missing required prices after past-only fill are dropped."""
+
+        df = pd.DataFrame({
+            'open': [np.nan, 101, 102],
+            'high': [np.nan, 103, 104],
+            'low': [np.nan, 100, 101],
+            'close': [np.nan, 102, 103],
+            'volume': [1000, 2000, 3000]
+        })
+
+        cleaned = DataQualityValidator.clean_ohlcv(df)
+
+        assert len(cleaned) == 2
+        assert cleaned['close'].iloc[0] == 102
     
     def test_clean_ohlcv_remove_non_positive(self):
         """Test cleaning removes non-positive prices."""
@@ -295,4 +311,3 @@ class TestRetryDecorator:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

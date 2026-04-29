@@ -27,6 +27,11 @@ def test_implementation_shortfall_sell_direction() -> None:
     assert round(value, 6) == 100.0
 
 
+def test_implementation_shortfall_cover_direction_is_buy_like() -> None:
+    value = implementation_shortfall_bps("buy_to_cover", 100.0, 101.0, fees=0.0, qty=10)
+    assert round(value, 6) == 100.0
+
+
 def test_tca_record_includes_canonical_price_fields() -> None:
     ts = datetime(2025, 1, 1, 14, 30, tzinfo=UTC)
     record = build_tca_record(
@@ -89,6 +94,32 @@ def test_resolve_pending_tca_from_fill_updates_pending_fields() -> None:
     assert resolved["fill_latency_ms"] == 2000
     assert resolved["benchmark"]["first_fill_ts"] == fill_ts.isoformat()
     assert resolved["pending_resolved_source"] == "unit_test"
+
+
+def test_resolve_pending_tca_from_fill_cover_slippage_is_not_inverted() -> None:
+    submit_ts = datetime(2026, 3, 13, 15, 0, tzinfo=UTC)
+    fill_ts = datetime(2026, 3, 13, 15, 0, 2, tzinfo=UTC)
+    pending = {
+        "client_order_id": "cid-cover",
+        "symbol": "AAPL",
+        "side": "cover",
+        "decision_price": 100.0,
+        "qty": 10.0,
+        "pending_event": True,
+        "benchmark": {"mid_at_arrival": 100.0, "submit_ts": submit_ts.isoformat()},
+    }
+
+    resolved = resolve_pending_tca_from_fill(
+        pending_record=pending,
+        fill_price=101.0,
+        fill_qty=10.0,
+        status="filled",
+        fill_ts=fill_ts,
+        source="unit_test",
+    )
+
+    assert resolved["is_bps"] == 100.0
+    assert resolved["spread_paid_bps"] == 100.0
 
 
 def test_reconcile_pending_tca_with_fill_appends_resolved_row(tmp_path: Path) -> None:

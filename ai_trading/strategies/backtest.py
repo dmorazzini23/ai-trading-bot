@@ -287,6 +287,10 @@ class BacktestEngine:
                     execution_data_point = dict(symbol_data[i + 1])
                     signal_close = float(data_point.get('close', 0.0) or 0.0)
                     execution_data_point['_signal_price'] = signal_close
+                    execution_data_point['_cost_close'] = signal_close
+                    execution_data_point['_cost_high'] = data_point.get('high', signal_close)
+                    execution_data_point['_cost_low'] = data_point.get('low', signal_close)
+                    execution_data_point['_cost_volume'] = data_point.get('volume', 100000)
                     market_data = {symbol: data_point}
                     signals = strategy.generate_signals(market_data)
                     for signal in signals:
@@ -332,11 +336,7 @@ class BacktestEngine:
             results['total_return'] = (current_capital - self.initial_capital) / self.initial_capital
             results['net_return'] = results['total_return']
             gross_pnl_total = results.get('gross_pnl_total', 0)
-            if gross_pnl_total > 0:
-                gross_capital = self.initial_capital + gross_pnl_total
-                results['gross_return'] = (gross_capital - self.initial_capital) / self.initial_capital
-            else:
-                results['gross_return'] = results['total_return']
+            results['gross_return'] = gross_pnl_total / self.initial_capital if self.initial_capital else 0.0
             if results['total_trades'] > 0:
                 results['win_rate'] = results['winning_trades'] / results['total_trades']
                 wins = [t['net_pnl'] for t in results['trades'] if t.get('net_pnl', 0) > 0]
@@ -384,16 +384,19 @@ class BacktestEngine:
         try:
             close_price = float(market_data.get('close', 100.0) or 100.0)
             executable_price = float(market_data.get('open', close_price) or close_price)
-            high_price = float(market_data.get('high', close_price * 1.01) or (close_price * 1.01))
-            low_price = float(market_data.get('low', close_price * 0.99) or (close_price * 0.99))
-            volume = float(market_data.get('volume', 100000) or 100000)
             signal_price = float(market_data.get('_signal_price', close_price) or close_price)
+            cost_close_price = float(market_data.get('_cost_close', signal_price) or signal_price)
+            if cost_close_price <= 0.0:
+                cost_close_price = close_price
+            high_price = float(market_data.get('_cost_high', cost_close_price * 1.01) or (cost_close_price * 1.01))
+            low_price = float(market_data.get('_cost_low', cost_close_price * 0.99) or (cost_close_price * 0.99))
+            volume = float(market_data.get('_cost_volume', 100000) or 100000)
             if self.microstructure_available:
-                volatility = abs(high_price - low_price) / close_price
+                volatility = abs(high_price - low_price) / cost_close_price
                 liquidity_proxy = volume / 1000
-                half_spread = self.estimate_half_spread(volatility, close_price, liquidity_proxy)
+                half_spread = self.estimate_half_spread(volatility, cost_close_price, liquidity_proxy)
             else:
-                volatility = abs(high_price - low_price) / close_price
+                volatility = abs(high_price - low_price) / cost_close_price
                 half_spread = max(0.0005, min(0.005, volatility * 0.5))
             if signal.is_buy:
                 execution_price = executable_price * (1 + half_spread)
@@ -401,7 +404,7 @@ class BacktestEngine:
                 execution_price = executable_price * (1 - half_spread)
             slippage_amount = 0.0
             if self.enable_slippage and self.microstructure_available:
-                volatility = abs(high_price - low_price) / close_price
+                volatility = abs(high_price - low_price) / cost_close_price
                 trade_size_fraction = position_size / max(volume, 1)
                 slippage_amount = self.calculate_slippage(volatility=volatility, trade_size=trade_size_fraction, liquidity=volume / 10000, k=1.0)
                 if signal.is_buy:
@@ -409,7 +412,7 @@ class BacktestEngine:
                 else:
                     execution_price *= 1 - slippage_amount
             elif self.enable_slippage:
-                volatility = abs(high_price - low_price) / close_price
+                volatility = abs(high_price - low_price) / cost_close_price
                 slippage_pct = volatility * np.sqrt(position_size / max(volume, 1)) * 0.1
                 slippage_amount = min(0.01, slippage_pct)
                 if signal.is_buy:
