@@ -149,6 +149,7 @@ class OrderHealthMonitor:
             for order_id, order_info in _active_orders.items():
                 age = current_time - order_info.submitted_time
                 if age > self.order_timeout_seconds and (not order_info.cancel_attempted):
+                    order_info.cancel_attempted = True
                     stale_orders.append(order_info)
         for order_info in stale_orders:
             self.logger.warning('STALE_ORDER_DETECTED', extra={'order_id': order_info.order_id, 'symbol': order_info.symbol, 'age_seconds': current_time - order_info.submitted_time, 'status': order_info.last_status})

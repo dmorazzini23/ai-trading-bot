@@ -103,6 +103,15 @@ def _rebalance_order_side(current_quantity: float, trade_quantity: int) -> str:
     return "hold"
 
 
+def _extract_position_quantity(position: Any) -> float:
+    """Extract signed share quantity from runtime position payloads."""
+    if isinstance(position, dict):
+        raw_quantity = position.get('quantity', position.get('qty', 0.0))
+    else:
+        raw_quantity = getattr(position, 'quantity', getattr(position, 'qty', position))
+    return float(raw_quantity)
+
+
 class TaxAwareRebalancer:
     """
     Tax-aware portfolio rebalancing with loss harvesting and wash sale avoidance.
@@ -230,7 +239,7 @@ class TaxAwareRebalancer:
                 if not (math.isfinite(current_price) and current_price > 0.0):
                     logger.warning('SIZING_SKIPPED', extra={'reason': 'invalid_price', 'symbol': symbol})
                     continue
-                position_value = abs(float(position.get('quantity', 0))) * current_price
+                position_value = abs(_extract_position_quantity(position)) * current_price
                 total_portfolio_value += position_value
             if total_portfolio_value > 0:
                 for symbol, position in current_positions.items():
@@ -238,7 +247,7 @@ class TaxAwareRebalancer:
                     if not (math.isfinite(current_price) and current_price > 0.0):
                         logger.warning('SIZING_SKIPPED', extra={'reason': 'invalid_price', 'symbol': symbol})
                         continue
-                    position_value = float(position.get('quantity', 0)) * current_price
+                    position_value = _extract_position_quantity(position) * current_price
                     current_weights[symbol] = position_value / total_portfolio_value
             rebalance_trades: list[dict[str, Any]] = []
             total_tax_impact = 0.0
@@ -257,12 +266,15 @@ class TaxAwareRebalancer:
                     trade_quantity = int(trade_value / current_price)
                     if trade_quantity != 0:
                         position = current_positions.get(symbol, {})
-                        current_quantity = float(position.get('quantity', 0.0)) if isinstance(position, dict) else 0.0
+                        current_quantity = _extract_position_quantity(position)
                         order_side = _rebalance_order_side(current_quantity, trade_quantity)
                         tax_impact = {'tax_liability': 0, 'is_optimal_timing': True}
                         if trade_quantity < 0 and current_quantity > 0.0 and symbol in current_positions:
                             sell_quantity = min(abs(trade_quantity), current_quantity)
-                            partial_position = position.copy()
+                            partial_position = position.copy() if isinstance(position, dict) else {
+                                'entry_price': getattr(position, 'entry_price', getattr(position, 'purchase_price', 0.0)),
+                                'entry_date': getattr(position, 'entry_date', getattr(position, 'purchase_date', None)),
+                            }
                             partial_position['quantity'] = sell_quantity
                             tax_impact = self.calculate_tax_impact(partial_position, current_price)
                             total_tax_impact += tax_impact.get('tax_liability', 0)
@@ -551,7 +563,7 @@ def _get_current_positions_for_rebalancing(ctx) -> dict:
         filtered_positions = {}
         for symbol, quantity in positions.items():
             try:
-                qty = float(quantity)
+                qty = _extract_position_quantity(quantity)
                 if abs(qty) > 0.001:
                     filtered_positions[symbol] = qty
             except (ValueError, TypeError):

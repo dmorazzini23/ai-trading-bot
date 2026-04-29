@@ -201,10 +201,9 @@ class _ModelLivenessMonitor:
             "AI_TRADING_MODEL_LIVENESS_REQUIRE_MARKET_OPEN",
             True,
         )
-        if enforce_only_when_market_open and not market_open:
-            return []
-        if not signals_expected_now:
-            return []
+        enforce_signal_liveness = bool(signals_expected_now) and (
+            bool(market_open) or not enforce_only_when_market_open
+        )
         alert_cooldown = max(
             0.0,
             _env_float("AI_TRADING_MODEL_LIVENESS_ALERT_COOLDOWN_SECONDS", 300.0),
@@ -222,12 +221,12 @@ class _ModelLivenessMonitor:
         else:
             enforce_rl = bool(enforce_rl_cfg) and bool(rl_expected)
         thresholds: dict[str, float] = {}
-        if enforce_ml:
+        if enforce_signal_liveness and enforce_ml:
             thresholds[_METRIC_ML_SIGNAL] = max(
                 1.0,
                 _env_float("AI_TRADING_ML_SIGNAL_MAX_AGE_SECONDS", 5400.0),
             )
-        if enforce_rl:
+        if enforce_signal_liveness and enforce_rl:
             thresholds[_METRIC_RL_SIGNAL] = max(
                 1.0,
                 _env_float("AI_TRADING_RL_SIGNAL_MAX_AGE_SECONDS", 5400.0),

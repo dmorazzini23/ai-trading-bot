@@ -70,6 +70,13 @@ def test_check_stale_orders_invokes_execution_engine() -> None:
     monitor._check_stale_orders()
 
     assert engine.canceled == ["stale"]
+    with ohm._order_tracking_lock:
+        assert ohm._active_orders["stale"].cancel_attempted is True
+        assert ohm._active_orders["fresh"].cancel_attempted is False
+
+    monitor._check_stale_orders()
+
+    assert engine.canceled == ["stale"]
 
 
 def test_check_stale_orders_logs_cancel_errors() -> None:

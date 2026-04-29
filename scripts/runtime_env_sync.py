@@ -10,6 +10,7 @@ import pwd
 import re
 import stat
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -258,6 +259,33 @@ def _aws_cli_env() -> dict[str, str]:
     return env
 
 
+def _write_runtime_env_atomic(dst: Path, rendered: str) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{dst.name}.", dir=dst.parent)
+    temp_path = Path(temp_name)
+    try:
+        os.chmod(temp_path, stat.S_IRUSR | stat.S_IWUSR)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(rendered)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, dst)
+        try:
+            dir_fd = os.open(dst.parent, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
     entries = _load_env_entries(src)
     env_map = _entries_to_map(entries)
@@ -335,15 +363,13 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
             seen.add(key)
             manager_overrides_applied += 1
 
-    dst.parent.mkdir(parents=True, exist_ok=True)
     rendered = "\n".join(
         f"{entry.key}={_quote_env_value(entry.value)}"
         for entry in out_entries
     )
     if rendered:
         rendered = f"{rendered}\n"
-    dst.write_text(rendered, encoding="utf-8")
-    os.chmod(dst, stat.S_IRUSR | stat.S_IWUSR)
+    _write_runtime_env_atomic(dst, rendered)
 
     return {
         "src": str(src),

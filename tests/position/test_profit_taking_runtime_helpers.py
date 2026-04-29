@@ -68,6 +68,32 @@ def test_create_profit_plan_builds_risk_technical_and_time_targets() -> None:
     assert plan.targets == sorted(plan.targets, key=lambda target: (target.priority, target.level))
 
 
+def test_short_profit_plan_uses_absolute_size_and_downside_targets() -> None:
+    class _Fetcher:
+        def get_minute_df(self, _ctx, _symbol):
+            return pd.DataFrame({"close": [100.0]})
+
+        def get_daily_df(self, _ctx, _symbol):
+            return pd.DataFrame({"close": [100.0] * 30, "high": [101.0] * 30})
+
+    engine = ProfitTakingEngine(SimpleNamespace(data_fetcher=_Fetcher()))
+
+    plan = engine.create_profit_plan("AAPL", _position(qty=-100), 100.0, 300.0)
+
+    assert plan is not None
+    assert plan.position_size == 100
+    assert plan.remaining_quantity == 100
+    assert plan.side == "short"
+    risk_targets = [target for target in plan.targets if target.strategy is ProfitTakingStrategy.RISK_MULTIPLE]
+    assert [target.level for target in risk_targets] == pytest.approx([94.0, 91.0, 85.0])
+
+    assert engine.update_profit_plan("AAPL", 99.0, _position(qty=-100)) == []
+    triggered = engine.update_profit_plan("AAPL", 94.0, _position(qty=-80))
+
+    assert [target.level for target in triggered] == pytest.approx([94.0])
+    assert plan.remaining_quantity == 80
+
+
 def test_create_profit_plan_returns_none_for_empty_position_or_missing_price() -> None:
     engine = ProfitTakingEngine()
 
@@ -149,6 +175,20 @@ def test_create_risk_multiple_targets_uses_risk_per_share() -> None:
 
     assert [target.level for target in targets] == pytest.approx([106.0, 109.0, 115.0])
     assert all(target.strategy is ProfitTakingStrategy.RISK_MULTIPLE for target in targets)
+
+
+def test_short_percentage_and_time_targets_are_side_aware() -> None:
+    engine = ProfitTakingEngine()
+
+    percentage_targets = engine._create_percentage_targets(100.0, -100)  # noqa: SLF001
+    time_targets = engine._create_time_based_targets(100.0, 96.0, -100)  # noqa: SLF001
+    short_plan = _plan(current_price=94.0)
+    short_plan.side = "short"
+
+    assert [target.level for target in percentage_targets] == pytest.approx([95.0, 90.0, 80.0])
+    assert len(time_targets) == 1
+    assert time_targets[0].level == pytest.approx(94.08)
+    assert engine._is_target_triggered(ProfitTarget(94.0, 25.0, ProfitTakingStrategy.RISK_MULTIPLE, 1), short_plan) is True  # noqa: SLF001
 
 
 def test_create_technical_targets_uses_resistance_and_rsi(monkeypatch) -> None:

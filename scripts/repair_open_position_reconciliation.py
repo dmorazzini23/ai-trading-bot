@@ -52,6 +52,14 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Apply changes (default is dry-run).",
     )
+    parser.add_argument(
+        "--allow-trusted-pickle-read",
+        action="store_true",
+        help=(
+            "Allow reading an explicit .pkl/.pickle trade history file. "
+            "Only use for trusted local migration artifacts."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -111,11 +119,6 @@ def _is_parquet_path(path: Path) -> bool:
     return path.suffix.lower() in {".parquet", ".pq"}
 
 
-def _pickle_sidecar_path(path: Path) -> Path:
-    suffix = path.suffix if path.suffix else ""
-    return path.with_suffix(f"{suffix}.pkl")
-
-
 def _normalize_trade_history_frame(frame: pd.DataFrame) -> pd.DataFrame:
     normalized = frame.copy()
     if normalized.empty:
@@ -151,17 +154,20 @@ def _normalize_trade_history_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
-def _load_trade_history(path: Path) -> tuple[pd.DataFrame, str, str]:
+def _load_trade_history(
+    path: Path,
+    *,
+    allow_trusted_pickle_read: bool = False,
+) -> tuple[pd.DataFrame, str, str]:
     suffix = path.suffix.lower()
     if suffix in {".parquet", ".pq"}:
-        try:
-            return pd.read_parquet(path), "parquet", "parquet"
-        except Exception:
-            sidecar = _pickle_sidecar_path(path)
-            if sidecar.exists():
-                return pd.read_pickle(sidecar), "pickle_sidecar", "parquet"
-            return pd.read_pickle(path), "pickle_alias", "parquet"
+        return pd.read_parquet(path), "parquet", "parquet"
     if suffix in {".pkl", ".pickle"}:
+        if not allow_trusted_pickle_read:
+            raise ValueError(
+                "Refusing to read pickle trade history without "
+                "--allow-trusted-pickle-read"
+            )
         return pd.read_pickle(path), "pickle", "pickle"
     if suffix == ".csv":
         return pd.read_csv(path), "csv", "csv"
@@ -287,7 +293,10 @@ def main() -> int:
             args.output_json.write_text(output, encoding="utf-8")
         return 0
 
-    frame, loaded_fmt, write_fmt = _load_trade_history(trade_history_path)
+    frame, loaded_fmt, write_fmt = _load_trade_history(
+        trade_history_path,
+        allow_trusted_pickle_read=bool(args.allow_trusted_pickle_read),
+    )
     price_map = _last_price_by_symbol(frame)
     repair_rows = _repair_rows(deltas, price_map)
     summary["repair_rows"] = len(repair_rows)
@@ -308,17 +317,7 @@ def main() -> int:
             )
         else:
             frame_out = frame
-        if write_fmt == "parquet":
-            try:
-                _write_trade_history(trade_history_path, "parquet", frame_out)
-            except Exception as exc:
-                sidecar = _pickle_sidecar_path(trade_history_path)
-                _write_trade_history(sidecar, "pickle", frame_out)
-                summary["write_fallback"] = "pickle_sidecar"
-                summary["write_fallback_path"] = str(sidecar)
-                summary["write_fallback_cause"] = str(exc)
-        else:
-            _write_trade_history(trade_history_path, write_fmt, frame_out)
+        _write_trade_history(trade_history_path, write_fmt, frame_out)
         summary["status"] = "applied"
         summary["rows_before"] = int(len(frame))
         summary["rows_after"] = int(len(frame_out))

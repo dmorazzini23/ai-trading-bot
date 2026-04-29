@@ -116,3 +116,15 @@ def test_config_loading_and_module_recording_wrappers(monkeypatch, tmp_path) -> 
     invalid_path = tmp_path / "bad_slo_config.json"
     invalid_path.write_text("{not-json", encoding="utf-8")
     SLOMonitor(config_path=str(invalid_path))
+
+
+def test_unthresholded_component_error_rate_updates_canonical_metric(monkeypatch) -> None:
+    monitor = SLOMonitor()
+    monkeypatch.setattr(slo, "_global_slo_monitor", monitor)
+    monitor._metrics["broker_error_rate_pct"].clear()  # noqa: SLF001
+    monitor._metrics["error_rate_pct"].clear()  # noqa: SLF001
+
+    slo.record_error_rate("broker", 50.0)
+
+    assert monitor._metrics["broker_error_rate_pct"][-1].value == 50.0  # noqa: SLF001
+    assert monitor._metrics["error_rate_pct"][-1].value == 50.0  # noqa: SLF001

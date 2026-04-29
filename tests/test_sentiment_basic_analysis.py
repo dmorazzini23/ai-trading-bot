@@ -8,6 +8,7 @@ from ai_trading.analysis import sentiment
 @pytest.fixture(autouse=True)
 def _sentiment_setup(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("SENTIMENT_API_KEY", "test")
     monkeypatch.setattr(sentiment, "SENTIMENT_API_KEY", "test", raising=False)
     sentiment._sentiment_cache.clear()
     sentiment._sentiment_circuit_breaker = {
@@ -106,6 +107,7 @@ def test_fetch_sentiment_missing_api_key_fails_closed_outside_pytest(monkeypatch
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.delenv("AI_TRADING_SENTIMENT_FAIL_CLOSED", raising=False)
+    monkeypatch.delenv("SENTIMENT_API_KEY", raising=False)
     monkeypatch.setattr(sentiment, "SENTIMENT_API_KEY", "", raising=False)
 
     class DummySettings:
@@ -117,6 +119,43 @@ def test_fetch_sentiment_missing_api_key_fails_closed_outside_pytest(monkeypatch
 
     with pytest.raises(RuntimeError, match="missing_api_key"):
         sentiment.fetch_sentiment(None, "AAPL")
+
+
+def test_fetch_sentiment_resolves_fresh_key_over_import_constant(monkeypatch):
+    class DummySettings:
+        sentiment_api_url = "http://example.com"
+        sentiment_api_key = "fresh-settings-key"
+
+    captured = {}
+    monkeypatch.setattr(sentiment, "SENTIMENT_API_KEY", "stale-import-key", raising=False)
+    monkeypatch.setattr(sentiment, "get_settings", lambda: DummySettings())
+    monkeypatch.setattr(sentiment, "get_news_api_key", lambda: "fresh-env-key")
+    monkeypatch.setattr(
+        sentiment,
+        "analyze_text",
+        lambda _text: {"available": True, "pos": 0.5, "neg": 0.2, "neu": 0.3},
+    )
+    monkeypatch.setattr(sentiment, "fetch_form4_filings", lambda _ticker: [])
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"articles": [{"title": "t", "description": "d"}]}
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **_kwargs):
+        captured["url"] = url
+        return Resp()
+
+    monkeypatch.setattr(sentiment._http_session, "get", fake_get)
+
+    sentiment.fetch_sentiment(None, "AAPL")
+
+    assert "apiKey=fresh-settings-key" in captured["url"]
+    assert "stale-import-key" not in captured["url"]
 
 
 def test_circuit_breaker_recovers(monkeypatch):

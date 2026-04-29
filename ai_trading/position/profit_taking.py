@@ -55,6 +55,7 @@ class ProfitTakingPlan:
     total_profit_realized: float
     created_time: datetime
     last_updated: datetime
+    side: str = 'long'
 
 class ProfitTakingEngine:
     """
@@ -94,18 +95,20 @@ class ProfitTakingEngine:
             ProfitTakingPlan with all target levels
         """
         try:
-            position_size = int(getattr(position_data, 'qty', 0))
+            signed_position_size = int(getattr(position_data, 'qty', 0))
+            position_size = abs(signed_position_size)
+            side = 'short' if signed_position_size < 0 else 'long'
             current_price = self._get_current_price(symbol)
             if position_size == 0 or current_price <= 0:
                 return None
             targets = []
-            targets.extend(self._create_risk_multiple_targets(entry_price, risk_amount, position_size))
-            technical_targets = self._create_technical_targets(symbol, current_price, position_size)
+            targets.extend(self._create_risk_multiple_targets(entry_price, risk_amount, signed_position_size))
+            technical_targets = self._create_technical_targets(symbol, current_price, signed_position_size)
             targets.extend(technical_targets)
-            time_targets = self._create_time_based_targets(entry_price, current_price, position_size)
+            time_targets = self._create_time_based_targets(entry_price, current_price, signed_position_size)
             targets.extend(time_targets)
             targets.sort(key=lambda t: (t.priority, t.level))
-            plan = ProfitTakingPlan(symbol=symbol, entry_price=entry_price, current_price=current_price, position_size=position_size, risk_amount=risk_amount, targets=targets, remaining_quantity=position_size, total_profit_realized=0.0, created_time=datetime.now(UTC), last_updated=datetime.now(UTC))
+            plan = ProfitTakingPlan(symbol=symbol, entry_price=entry_price, current_price=current_price, position_size=position_size, risk_amount=risk_amount, targets=targets, remaining_quantity=position_size, total_profit_realized=0.0, created_time=datetime.now(UTC), last_updated=datetime.now(UTC), side=side)
             self.profit_plans[symbol] = plan
             self.logger.info('PROFIT_PLAN_CREATED | %s entry=%.2f size=%d targets=%d', symbol, entry_price, position_size, len(targets))
             return plan
@@ -132,7 +135,7 @@ class ProfitTakingEngine:
             plan.current_price = current_price
             plan.last_updated = datetime.now(UTC)
             if position_data:
-                current_qty = int(getattr(position_data, 'qty', 0))
+                current_qty = abs(int(getattr(position_data, 'qty', 0)))
                 plan.remaining_quantity = current_qty
             triggered_targets = []
             for target in plan.targets:
@@ -177,12 +180,16 @@ class ProfitTakingEngine:
         """Create risk-multiple based profit targets."""
         targets: list[ProfitTarget] = []
         try:
+            quantity = abs(position_size)
+            direction = -1.0 if position_size < 0 else 1.0
             if risk_amount <= 0:
                 return self._create_percentage_targets(entry_price, position_size)
-            risk_per_share = risk_amount / position_size
+            if quantity <= 0:
+                return targets
+            risk_per_share = risk_amount / quantity
             r_multiples: list[tuple[float, float, int]] = [(2.0, 25.0, 1), (3.0, 25.0, 2), (5.0, 25.0, 3)]
             for r_multiple, qty_pct, priority in r_multiples:
-                target_price = entry_price + risk_per_share * r_multiple
+                target_price = entry_price + direction * risk_per_share * r_multiple
                 target = ProfitTarget(
                     level=target_price,
                     quantity_pct=qty_pct,
@@ -199,9 +206,10 @@ class ProfitTakingEngine:
     def _create_percentage_targets(self, entry_price: float, position_size: int) -> list[ProfitTarget]:
         """Create percentage-based profit targets as fallback."""
         targets: list[ProfitTarget] = []
+        direction = -1.0 if position_size < 0 else 1.0
         percentage_levels: list[tuple[float, float, int]] = [(5.0, 25.0, 1), (10.0, 25.0, 2), (20.0, 25.0, 3)]
         for pct, qty_pct, priority in percentage_levels:
-            target_price = entry_price * (1 + pct / 100)
+            target_price = entry_price * (1 + direction * pct / 100)
             target = ProfitTarget(
                 level=target_price,
                 quantity_pct=qty_pct,
@@ -235,9 +243,10 @@ class ProfitTakingEngine:
         """Create time-based profit targets for high-velocity moves."""
         targets = []
         try:
-            current_gain_pct = (current_price - entry_price) / entry_price * 100
+            direction = -1.0 if position_size < 0 else 1.0
+            current_gain_pct = direction * (current_price - entry_price) / entry_price * 100
             if current_gain_pct > 3.0:
-                velocity_target = ProfitTarget(level=current_price * 1.02, quantity_pct=20.0, strategy=ProfitTakingStrategy.TIME_BASED, priority=6, reason='Time-decay profit taking')
+                velocity_target = ProfitTarget(level=current_price * (1 + direction * 0.02), quantity_pct=20.0, strategy=ProfitTakingStrategy.TIME_BASED, priority=6, reason='Time-decay profit taking')
                 targets.append(velocity_target)
         except COMMON_EXC as exc:
             self.logger.warning('_create_time_based_targets failed: %s', exc)
@@ -247,16 +256,18 @@ class ProfitTakingEngine:
         """Check if a profit target has been triggered."""
         try:
             current_price = plan.current_price
+            is_short = getattr(plan, 'side', 'short' if plan.position_size < 0 else 'long') == 'short'
             if target.strategy in (ProfitTakingStrategy.RISK_MULTIPLE, ProfitTakingStrategy.TECHNICAL_LEVELS, ProfitTakingStrategy.PERCENTAGE_BASED):
-                return current_price >= target.level
+                return current_price <= target.level if is_short else current_price >= target.level
             elif target.strategy == ProfitTakingStrategy.TIME_BASED:
                 days_held = (datetime.now(UTC) - plan.created_time).days
                 if days_held >= self.time_decay_days:
                     time_factor = min(1.0, days_held / 30.0)
-                    adjusted_level = target.level * (1 - time_factor * 0.02)
-                    return current_price >= adjusted_level
+                    adjustment = 1 + time_factor * 0.02 if is_short else 1 - time_factor * 0.02
+                    adjusted_level = target.level * adjustment
+                    return current_price <= adjusted_level if is_short else current_price >= adjusted_level
                 else:
-                    return current_price >= target.level
+                    return current_price <= target.level if is_short else current_price >= target.level
             elif target.strategy == ProfitTakingStrategy.CORRELATION_BASED:
                 return False
             return False
@@ -267,7 +278,9 @@ class ProfitTakingEngine:
         """Check for correlation-based profit taking adjustments."""
         triggered_targets = []
         try:
-            current_gain_pct = (plan.current_price - plan.entry_price) / plan.entry_price * 100
+            is_short = getattr(plan, 'side', 'short' if plan.position_size < 0 else 'long') == 'short'
+            direction = -1.0 if is_short else 1.0
+            current_gain_pct = direction * (plan.current_price - plan.entry_price) / plan.entry_price * 100
             if current_gain_pct > 10.0:
                 correlation_target = ProfitTarget(level=plan.current_price * 0.98, quantity_pct=15.0, strategy=ProfitTakingStrategy.CORRELATION_BASED, priority=7, reason='Portfolio correlation risk management')
                 recent_correlation_targets = [t for t in plan.targets if t.strategy == ProfitTakingStrategy.CORRELATION_BASED and t.triggered and t.trigger_time and ((datetime.now(UTC) - t.trigger_time).days < 5)]

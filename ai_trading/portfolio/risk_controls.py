@@ -276,6 +276,7 @@ class AdaptiveRiskController:
         Returns:
             Dict of symbol -> target position value
         """
+        self.reset_daily_budget()
         if current_positions is None:
             current_positions = {}
         volatilities = self.calculate_volatilities(returns_data)

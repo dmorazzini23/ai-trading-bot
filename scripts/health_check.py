@@ -23,6 +23,9 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 import psutil
+
+from ai_trading.config.management import get_env, validate_no_deprecated_env
+
 try:
     from production_monitoring import CircuitBreaker, ProductionMonitor, get_production_monitor
     PRODUCTION_MONITORING_AVAILABLE = True
@@ -224,11 +227,12 @@ class HealthMonitor:
     def _check_environment_variables(self) -> HealthCheckResult:
         """Check critical environment variables."""
         try:
+            validate_no_deprecated_env()
             required_vars = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_TRADING_BASE_URL']
             missing_vars = []
             details = {}
             for var in required_vars:
-                value = os.getenv(var)
+                value = get_env(var, None, resolve_aliases=False)
                 if value:
                     details[var] = 'SET'
                 else:
@@ -241,7 +245,7 @@ class HealthMonitor:
                 status = HealthStatus.HEALTHY
                 message = 'All required environment variables are set'
             return HealthCheckResult(name='environment_variables', status=status, message=message, details=details, timestamp=datetime.now(UTC))
-        except (ValueError, TypeError) as e:
+        except (RuntimeError, ValueError, TypeError) as e:
             return HealthCheckResult(name='environment_variables', status=HealthStatus.CRITICAL, message=f'Failed to check environment variables: {e}', details={'error': str(e)}, timestamp=datetime.now(UTC))
 health_monitor = HealthMonitor()
 

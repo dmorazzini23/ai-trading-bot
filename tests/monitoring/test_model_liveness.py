@@ -38,6 +38,25 @@ def test_liveness_skips_when_signals_not_expected(monkeypatch) -> None:
     assert breaches == []
 
 
+def test_after_hours_training_liveness_ignores_signal_market_gates(monkeypatch) -> None:
+    _set_liveness_defaults(monkeypatch)
+    _install_bot_engine_module(monkeypatch, use_ml=True)
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_MAX_AGE_SECONDS", "60")
+    model_liveness._reset_model_liveness_state_for_tests()
+
+    breaches = model_liveness.check_model_liveness(
+        market_open=False,
+        signals_expected_now=False,
+        now=datetime.now(UTC) + timedelta(seconds=120),
+    )
+
+    assert [breach["metric"] for breach in breaches] == ["after_hours_training"]
+    assert breaches[0]["event"] == "AFTER_HOURS_TRAINING_COMPLETE"
+    assert breaches[0]["market_open"] is False
+    assert breaches[0]["signals_expected_now"] is False
+
+
 def test_liveness_does_not_enforce_ml_when_model_disabled(monkeypatch) -> None:
     _set_liveness_defaults(monkeypatch)
     _install_bot_engine_module(monkeypatch, use_ml=False)

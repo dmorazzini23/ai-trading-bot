@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import stat
 import sys
 from pathlib import Path
 
@@ -38,6 +39,27 @@ def test_render_runtime_env_copies_plain_env(tmp_path: Path) -> None:
     assert "HEALTHCHECK_PORT=8081" in rendered
     assert "AI_TRADING_EXEC_ALLOW_FALLBACK_WITHOUT_NBBO" not in rendered
     assert summary["secrets_backend"] == "none"
+
+
+def test_render_runtime_env_replaces_with_private_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / ".env"
+    dst = tmp_path / ".env.runtime"
+    src.write_text("HEALTHCHECK_PORT=8081\n", encoding="utf-8")
+    observed_modes: list[int] = []
+    real_replace = runtime_env_sync.os.replace
+
+    def _replace(src_path: Path, dst_path: Path) -> None:
+        observed_modes.append(stat.S_IMODE(Path(src_path).stat().st_mode))
+        real_replace(src_path, dst_path)
+
+    monkeypatch.setattr(runtime_env_sync.os, "replace", _replace)
+
+    runtime_env_sync._render_runtime_env(src, dst)
+
+    assert observed_modes == [0o600]
+    assert stat.S_IMODE(dst.stat().st_mode) == 0o600
 
 
 def test_render_runtime_env_quotes_values_for_envfile(tmp_path: Path) -> None:

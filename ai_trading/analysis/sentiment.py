@@ -34,7 +34,7 @@ from ai_trading.exc import RequestException, HTTPError
 from ai_trading.metrics import get_counter, get_gauge
 from ai_trading.data.provider_monitor import provider_monitor
 
-SENTIMENT_API_KEY = get_env("SENTIMENT_API_KEY", "")
+SENTIMENT_API_KEY = ""
 _http_session: HTTPSession = get_http_session()
 _device = None
 _sentiment_initialized = False
@@ -84,6 +84,16 @@ def _neutral_sentiment_payload(reason: str) -> dict[str, float | bool]:
     if _sentiment_fail_closed():
         _raise_sentiment_unavailable(reason)
     return {"available": False, "pos": 0.0, "neg": 0.0, "neu": 1.0}
+
+
+def _resolve_sentiment_api_key(settings: Any) -> str:
+    """Resolve sentiment API key from current settings/config each call."""
+    return str(
+        getattr(settings, 'sentiment_api_key', None)
+        or get_news_api_key()
+        or get_env("SENTIMENT_API_KEY", "", cast=str, resolve_aliases=False)
+        or ""
+    )
 
 def _load_bs4(log=logger):
     global _bs4, _SENT_DEPS_LOGGED
@@ -270,11 +280,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
     """
     _init_sentiment()
     settings = get_settings()
-    api_key = (
-        SENTIMENT_API_KEY
-        or getattr(settings, 'sentiment_api_key', None)
-        or get_news_api_key()
-    )
+    api_key = _resolve_sentiment_api_key(settings)
     if not api_key:
         logger.debug('No sentiment API key configured (checked settings.sentiment_api_key and news API key)')
         return _get_cached_or_neutral_sentiment(

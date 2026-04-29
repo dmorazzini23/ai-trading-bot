@@ -4,6 +4,7 @@ from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
+import hashlib
 import logging
 import math
 import statistics
@@ -119,8 +120,7 @@ def _get_gaussian_hmm():
 
 
 GaussianHMM = _get_gaussian_hmm()
-_LAST_SIGNAL_BAR = None
-_LAST_SIGNAL_MATRIX = None
+_INDICATOR_CACHE_VERSION = "v2"
 
 
 def robust_signal_price(df) -> float:
@@ -397,6 +397,31 @@ def _apply_psar(data) -> Any:
     return _psar(data)
 
 
+def _indicator_cache_path(ticker: str, data) -> Path:
+    """Return a cache path tied to the input data and indicator version."""
+    safe_ticker = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in ticker)
+    fingerprint = _fingerprint_indicator_data(data)
+    return Path(f"cache_{safe_ticker}_{_INDICATOR_CACHE_VERSION}_{fingerprint}.parquet")
+
+
+def _fingerprint_indicator_data(data) -> str:
+    pd = _get_pandas()
+    digest = hashlib.blake2b(digest_size=12)
+    digest.update(_INDICATOR_CACHE_VERSION.encode("ascii"))
+    try:
+        cols = [col for col in ("open", "high", "low", "close", "volume") if col in data.columns]
+        digest.update("|".join(cols).encode("utf-8"))
+        if pd is not None and hasattr(pd, "util"):
+            hashed = pd.util.hash_pandas_object(data[cols], index=True).values
+            digest.update(hashed.tobytes())
+        else:
+            digest.update(str(data[cols].to_dict("split")).encode("utf-8"))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        digest.update(str(len(data) if hasattr(data, "__len__") else "unknown").encode("utf-8"))
+        digest.update(str(getattr(data, "index", "")).encode("utf-8"))
+    return digest.hexdigest()
+
+
 def prepare_indicators(data, ticker: str | None = None) -> Any | None:
     """Prepare indicator columns for a trading strategy.
 
@@ -420,7 +445,7 @@ def prepare_indicators(data, ticker: str | None = None) -> Any | None:
     """
     pd = _get_pandas()
     _validate_input_df(data)
-    cache_path = Path(f"cache_{ticker}.parquet") if ticker else None
+    cache_path = _indicator_cache_path(ticker, data) if ticker else None
     if _get_env("DISABLE_PARQUET", False, cast=bool, resolve_aliases=False):
         cache_path = None
     if (
@@ -431,8 +456,11 @@ def prepare_indicators(data, ticker: str | None = None) -> Any | None:
     ):
         try:
             return pd.read_parquet(cache_path)
-        except AttributeError:
-            logger.warning("pandas lacks read_parquet; ignoring cache")
+        except (AttributeError, ImportError, OSError, ValueError) as e:
+            logger.warning(
+                "INDICATOR_CACHE_READ_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e), "path": str(cache_path)},
+            )
     data = _apply_macd(data.copy())
     data = _apply_psar(data)
     if pd is not None:
@@ -440,7 +468,7 @@ def prepare_indicators(data, ticker: str | None = None) -> Any | None:
     if pd is not None and cache_path:
         try:
             data.to_parquet(cache_path, engine="pyarrow")
-        except (OSError, ValueError) as e:
+        except (AttributeError, ImportError, OSError, ValueError) as e:
             logger.warning(
                 "INDICATOR_CACHE_WRITE_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "path": str(cache_path)},
@@ -451,16 +479,18 @@ def prepare_indicators(data, ticker: str | None = None) -> Any | None:
 def prepare_indicators_parallel(symbols: list[str], data: dict[str, Any], max_workers: int | None = None) -> None:
     """Run :func:`prepare_indicators` over ``symbols`` concurrently,
     but fall back to serial execution for small symbol sets."""
-    if _get_env("DISABLE_PARQUET", False, cast=bool, resolve_aliases=False):
-        return
+    def _prepare(sym: str) -> tuple[str, Any | None]:
+        return sym, prepare_indicators(data[sym], sym)
+
     SERIAL_THRESHOLD = 8
     if len(symbols) <= SERIAL_THRESHOLD:
         for sym in symbols:
-            prepare_indicators(data[sym])
+            data[sym] = prepare_indicators(data[sym], sym)
         return
     max_workers = max_workers or min(4, len(symbols))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        executor.map(lambda s: prepare_indicators(data[s], s), symbols)
+        for sym, prepared in executor.map(_prepare, symbols):
+            data[sym] = prepared
 
 
 def generate_signal(df: PDDataFrame, column: str) -> PDSeries:
@@ -598,10 +628,11 @@ def detect_market_regime_hmm(df, n_components: int = 3, window_size: int = 1000,
     if col not in df:
         return np.zeros(len(df), dtype=int)
     series = pd.to_numeric(df[col], errors="coerce")
-    returns = np.log(series).diff().dropna()
-    if returns.size < n_components or not np.isfinite(returns).all():
+    returns = np.log(series).diff().replace([np.inf, -np.inf], np.nan)
+    valid_returns = returns.dropna()
+    if valid_returns.size < n_components:
         return np.zeros(len(df), dtype=int)
-    arr = returns.values.reshape(-1, 1)
+    arr = valid_returns.values.reshape(-1, 1)
     train = arr[-window_size:] if arr.shape[0] > window_size else arr
     _lin_alg_error: type[Exception]
     try:
@@ -618,11 +649,12 @@ def detect_market_regime_hmm(df, n_components: int = 3, window_size: int = 1000,
         model = GaussianHMM(n_components=n_components, covariance_type="diag", n_iter=max_iter, random_state=42)
         model.fit(train)
         hidden_full = model.predict(arr)
-        result = np.concatenate([[hidden_full[0]], hidden_full])
+        result = pd.Series(0, index=df.index, dtype=int)
+        result.loc[valid_returns.index] = np.asarray(hidden_full, dtype=int)
     except (ValueError, RuntimeError, _lin_alg_error) as exc:
         logger.warning("MODEL_FIT_FAILED", extra={"cause": exc.__class__.__name__, "detail": str(exc)})
         return np.zeros(len(df), dtype=int)
-    return np.asarray(result, dtype=int)
+    return result.to_numpy(dtype=int)
 
 
 def compute_signal_matrix(df) -> Any | None:
@@ -634,14 +666,6 @@ def compute_signal_matrix(df) -> Any | None:
         return pd.DataFrame() if pd is not None and hasattr(pd, "DataFrame") else None
     if df is None or df.empty:
         logger.warning("compute_signal_matrix received empty dataframe")
-        return pd.DataFrame()
-    global _LAST_SIGNAL_BAR, _LAST_SIGNAL_MATRIX
-    last_bar = df.index[-1] if not df.empty else None
-    if last_bar is not None and last_bar == _LAST_SIGNAL_BAR:
-        logger.debug("Reusing cached signal matrix for bar: %s", last_bar)
-        cached_matrix = _LAST_SIGNAL_MATRIX
-        if cached_matrix is not None:
-            return cast(Any, cached_matrix).copy()
         return pd.DataFrame()
     required = {"close", "high", "low"}
     if not required.issubset(df.columns):
@@ -693,8 +717,6 @@ def compute_signal_matrix(df) -> Any | None:
         matrix["mean_rev_z"] = -mean_rev
         matrix = matrix.replace([np.inf, -np.inf], np.nan)
         matrix = matrix.dropna(how="all")
-        _LAST_SIGNAL_BAR = last_bar
-        _LAST_SIGNAL_MATRIX = matrix.copy()
         logger.debug("Successfully computed signal matrix with %d rows, %d columns", len(matrix), len(matrix.columns))
         return matrix
     except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
@@ -1166,11 +1188,41 @@ class SignalDecisionPipeline:
         Returns decision with reason code and metrics.
         """
         try:
+            predicted_edge = float(predicted_edge)
+            quantity = float(quantity)
+            if not math.isfinite(predicted_edge) or not math.isfinite(quantity) or quantity <= 0:
+                return {
+                    "decision": "REJECT",
+                    "reason": "REJECT_INVALID_INPUT",
+                    "symbol": symbol,
+                    "predicted_edge": predicted_edge,
+                    "quantity": quantity,
+                }
             current_price = robust_signal_price(df)
+            if not math.isfinite(current_price) or current_price <= 0:
+                return {
+                    "decision": "REJECT",
+                    "reason": "REJECT_INVALID_INPUT",
+                    "symbol": symbol,
+                    "predicted_edge": predicted_edge,
+                    "current_price": current_price,
+                    "quantity": quantity,
+                }
             current_atr = self._calculate_current_atr(df)
+            if not math.isfinite(current_atr) or current_atr < 0:
+                return {
+                    "decision": "REJECT",
+                    "reason": "REJECT_INVALID_INPUT",
+                    "symbol": symbol,
+                    "predicted_edge": predicted_edge,
+                    "current_price": current_price,
+                    "atr": current_atr,
+                    "quantity": quantity,
+                }
             estimated_costs = self._estimate_transaction_costs(symbol, current_price, quantity)
             regime_info = self._analyze_market_regime(df)
-            total_cost = estimated_costs["total_cost_pct"] + self.transaction_cost_buffer
+            total_cost_pct = float(estimated_costs["total_cost_pct"])
+            total_cost = total_cost_pct + self.transaction_cost_buffer
             signal_score = predicted_edge - total_cost
             decision = {
                 "symbol": symbol,
@@ -1184,7 +1236,19 @@ class SignalDecisionPipeline:
                 "decision": "REJECT",
                 "reason": "UNKNOWN",
             }
-            if signal_score <= 0:
+            if not all(
+                math.isfinite(float(value))
+                for value in (
+                    total_cost_pct,
+                    total_cost,
+                    signal_score,
+                    float(estimated_costs.get("total_cost", 0.0)),
+                    float(estimated_costs.get("notional", current_price * quantity)),
+                )
+            ):
+                decision["decision"] = "REJECT"
+                decision["reason"] = "REJECT_INVALID_INPUT"
+            elif signal_score <= 0:
                 decision["decision"] = "REJECT"
                 decision["reason"] = "REJECT_COST_UNPROFITABLE"
             elif signal_score < self.min_edge_threshold:

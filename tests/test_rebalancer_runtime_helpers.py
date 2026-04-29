@@ -182,6 +182,31 @@ def test_calculate_optimal_rebalance_preserves_short_direction(portfolio_setting
     assert trades["SHORT_MORE"]["side"] == "sell_short"
 
 
+def test_calculate_optimal_rebalance_accepts_qty_payloads(portfolio_settings) -> None:
+    tax = _tax_rebalancer(portfolio_settings)
+
+    plan = tax.calculate_optimal_rebalance(
+        {
+            "DICT_QTY": {
+                "entry_price": 12.0,
+                "qty": -100,
+                "entry_date": datetime.now(UTC) - timedelta(days=40),
+            },
+            "OBJECT_QTY": SimpleNamespace(
+                entry_price=12.0,
+                qty=50,
+                entry_date=datetime.now(UTC) - timedelta(days=40),
+            ),
+        },
+        {"DICT_QTY": -0.25, "OBJECT_QTY": 0.25},
+        {"DICT_QTY": 10.0, "OBJECT_QTY": 20.0},
+        account_equity=2_000.0,
+    )
+
+    assert plan["current_weights"]["DICT_QTY"] == pytest.approx(-0.5)
+    assert plan["current_weights"]["OBJECT_QTY"] == pytest.approx(0.5)
+
+
 def test_tax_efficiency_priority_and_recommendation_helpers(portfolio_settings) -> None:
     tax = _tax_rebalancer(portfolio_settings)
 
@@ -327,11 +352,26 @@ def test_check_portfolio_first_rebalancing_uses_regime_signals(monkeypatch) -> N
 
 def test_rebalancing_position_and_target_helpers() -> None:
     ctx = SimpleNamespace(
-        portfolio_positions={"AAPL": "2", "ZERO": "0", "BAD": "nan", "TINY": "0.0001"}
+        portfolio_positions={
+            "AAPL": "2",
+            "SHORT": {"qty": "-3"},
+            "OBJECT": SimpleNamespace(quantity=4),
+            "ZERO": "0",
+            "BAD": "nan",
+            "TINY": "0.0001",
+        }
     )
 
-    assert rebalancer._get_current_positions_for_rebalancing(ctx) == {"AAPL": 2.0}  # noqa: SLF001
-    assert rebalancer._get_target_weights_for_rebalancing(ctx) == {"AAPL": 1.0}  # noqa: SLF001
+    assert rebalancer._get_current_positions_for_rebalancing(ctx) == {  # noqa: SLF001
+        "AAPL": 2.0,
+        "SHORT": -3.0,
+        "OBJECT": 4.0,
+    }
+    assert rebalancer._get_target_weights_for_rebalancing(ctx) == {  # noqa: SLF001
+        "AAPL": pytest.approx(1 / 3),
+        "SHORT": pytest.approx(1 / 3),
+        "OBJECT": pytest.approx(1 / 3),
+    }
     assert rebalancer._get_target_weights_for_rebalancing(  # noqa: SLF001
         SimpleNamespace(target_weights={"AAPL": "0.25", 7: 0.75})
     ) == {"AAPL": 0.25, "7": 0.75}

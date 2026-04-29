@@ -8,7 +8,9 @@ import json
 import os
 import pwd
 import shutil
+import stat
 import subprocess
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -51,6 +53,41 @@ def _aws_cli_base(*, region: str, profile: str) -> list[str]:
     return command
 
 
+def _redacted_command(command: list[str]) -> str:
+    redacted: list[str] = []
+    redact_next = False
+    for part in command:
+        if redact_next:
+            redacted.append("<redacted>")
+            redact_next = False
+            continue
+        if part.startswith("--secret-string="):
+            redacted.append("--secret-string=<redacted>")
+            continue
+        redacted.append(part)
+        if part == "--secret-string":
+            redact_next = True
+    return " ".join(redacted)
+
+
+def _redact_secret_args(command: list[str], message: str) -> str:
+    redacted = message
+    redact_next = False
+    for part in command:
+        if redact_next:
+            if part:
+                redacted = redacted.replace(part, "<redacted>")
+            redact_next = False
+            continue
+        if part == "--secret-string":
+            redact_next = True
+        elif part.startswith("--secret-string="):
+            _, value = part.split("=", 1)
+            if value:
+                redacted = redacted.replace(value, "<redacted>")
+    return redacted
+
+
 def _run_json(command: list[str]) -> dict[str, Any]:
     aws_env = _aws_cli_env()
     try:
@@ -67,13 +104,18 @@ def _run_json(command: list[str]) -> dict[str, Any]:
         ) from exc
     if proc.returncode != 0:
         message = proc.stderr.strip() or proc.stdout.strip() or "aws command failed"
-        raise RuntimeError(f"{' '.join(command)} failed: {message}")
+        message = _redact_secret_args(command, message)
+        raise RuntimeError(f"{_redacted_command(command)} failed: {message}")
     try:
         parsed = json.loads(proc.stdout or "{}")
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"command returned invalid JSON: {' '.join(command)}") from exc
+        raise RuntimeError(
+            f"command returned invalid JSON: {_redacted_command(command)}"
+        ) from exc
     if not isinstance(parsed, dict):
-        raise RuntimeError(f"command returned non-object JSON: {' '.join(command)}")
+        raise RuntimeError(
+            f"command returned non-object JSON: {_redacted_command(command)}"
+        )
     return parsed
 
 
@@ -163,23 +205,37 @@ def _write_secret(secret_id: str, payload: dict[str, str], *, region: str, profi
     base = _aws_cli_base(region=region, profile=profile) + [
         "secretsmanager",
     ]
-    if _secret_exists(secret_id, region=region, profile=profile):
-        command = base + [
-            "put-secret-value",
-            "--secret-id",
-            secret_id,
-            "--secret-string",
-            secret_string,
-        ]
-    else:
-        command = base + [
-            "create-secret",
-            "--name",
-            secret_id,
-            "--secret-string",
-            secret_string,
-        ]
-    _run_json(command)
+    fd, temp_name = tempfile.mkstemp(prefix="ai-trading-secret-", suffix=".json")
+    temp_path = Path(temp_name)
+    try:
+        os.chmod(temp_path, stat.S_IRUSR | stat.S_IWUSR)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(secret_string)
+            handle.flush()
+            os.fsync(handle.fileno())
+        secret_arg = f"file://{temp_path}"
+        if _secret_exists(secret_id, region=region, profile=profile):
+            command = base + [
+                "put-secret-value",
+                "--secret-id",
+                secret_id,
+                "--secret-string",
+                secret_arg,
+            ]
+        else:
+            command = base + [
+                "create-secret",
+                "--name",
+                secret_id,
+                "--secret-string",
+                secret_arg,
+            ]
+        _run_json(command)
+    finally:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _aws_cli_env() -> dict[str, str]:

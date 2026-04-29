@@ -109,6 +109,43 @@ def test_cluster_limits_and_position_size_turnover_paths(monkeypatch: pytest.Mon
     assert controller.turnover_budget.remaining_turnover == pytest.approx(0.0)
 
 
+def test_position_sizing_resets_stale_daily_turnover_before_budgeting(monkeypatch: pytest.MonkeyPatch) -> None:
+    controller = risk_controls.AdaptiveRiskController(
+        risk_controls.RiskBudget(max_turnover_daily=0.05)
+    )
+    controller.turnover_budget = risk_controls.TurnoverBudget(
+        date=datetime.now(UTC).date() - timedelta(days=1),
+        used_turnover=0.05,
+        remaining_turnover=0.0,
+        total_budget=0.05,
+    )
+    monkeypatch.setattr(
+        controller,
+        "calculate_volatilities",
+        lambda _returns_data: {"AAPL": 0.2},
+    )
+    monkeypatch.setattr(
+        controller,
+        "calculate_correlation_clusters",
+        lambda _returns_data: {"AAPL": 0},
+    )
+    monkeypatch.setattr(
+        controller,
+        "calculate_kelly_fractions",
+        lambda _expected, _vols: {"AAPL": 0.1},
+    )
+
+    targets = controller.calculate_position_sizes(
+        {"AAPL": 1.0},
+        _returns_frame(),
+        portfolio_value=100_000.0,
+        current_positions={"AAPL": 0.0},
+    )
+
+    assert controller.turnover_budget.date == datetime.now(UTC).date()
+    assert targets["AAPL"] == pytest.approx(5_000.0)
+
+
 def test_adaptive_risk_controller_preserves_short_targets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

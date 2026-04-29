@@ -294,7 +294,13 @@ def record_latency(operation: str, latency_ms: float) -> None:
 def record_error_rate(component: str, error_rate_pct: float) -> None:
     """Record component error rate."""
     monitor = get_slo_monitor()
-    monitor.record_metric(f'{component}_error_rate_pct', error_rate_pct)
+    value = float(error_rate_pct)
+    component_name = str(component or '').strip()
+    metric_name = f'{component_name}_error_rate_pct' if component_name else 'error_rate_pct'
+    monitor.record_metric(metric_name, value)
+    thresholds = getattr(monitor, '_slo_thresholds', {})
+    if metric_name != 'error_rate_pct' and metric_name not in thresholds:
+        monitor.record_metric('error_rate_pct', value)
 
 def record_performance_metric(name: str, value: float, tags: dict[str, str] | None=None) -> None:
     """Record performance metric."""

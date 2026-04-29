@@ -187,6 +187,20 @@ class DataReplicationManager:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         self.logger.info(f'Data replication manager initialized: {self.primary_data_dir} -> {self.backup_dir}')
 
+    def _resolve_restore_backup_path(self, backup_name: str) -> Path | None:
+        backup_ref = Path(backup_name)
+        if backup_ref.is_absolute() or '..' in backup_ref.parts:
+            self.logger.error(f'Invalid backup name: {backup_name}')
+            return None
+        backup_root = self.backup_dir.resolve()
+        backup_path = (backup_root / backup_ref).resolve()
+        try:
+            backup_path.relative_to(backup_root)
+        except ValueError:
+            self.logger.error(f'Backup path escapes backup directory: {backup_name}')
+            return None
+        return backup_path
+
     def create_backup(self, backup_name: str | None=None) -> dict[str, Any]:
         """Create a full backup of critical data."""
         try:
@@ -235,7 +249,9 @@ class DataReplicationManager:
     def restore_backup(self, backup_name: str) -> bool:
         """Restore from a specific backup."""
         try:
-            backup_path = self.backup_dir / backup_name
+            backup_path = self._resolve_restore_backup_path(backup_name)
+            if backup_path is None:
+                return False
             if not backup_path.exists():
                 self.logger.error(f'Backup not found: {backup_name}')
                 return False
