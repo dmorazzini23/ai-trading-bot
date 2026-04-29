@@ -328,8 +328,6 @@ class IntentStore:
             with _BOOTSTRAP_LOCK:
                 if shared_bootstrap_key in _BOOTSTRAPPED_DATABASE_URLS:
                     return
-                with self._engine.begin() as conn:
-                    _METADATA.create_all(conn, checkfirst=True)
                 _BOOTSTRAPPED_DATABASE_URLS.add(shared_bootstrap_key)
             return
         with self._engine.begin() as conn:

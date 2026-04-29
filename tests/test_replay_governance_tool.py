@@ -39,8 +39,10 @@ def test_replay_governance_tool_invokes_engine_with_force(
 
     assert captured["force"] is True
     assert captured["market_open_now"] is False
-    assert payload["status"] == "ok"
+    assert payload["status"] == "failed"
+    assert payload["reason"] == "missing_fresh_replay_artifact"
     assert payload["replay"]["exists"] is False
+    assert payload["fresh_artifact"] is False
 
 
 def test_replay_governance_tool_writes_summary_payload(
@@ -105,3 +107,25 @@ def test_replay_governance_tool_writes_summary_payload(
     saved = json.loads(summary_path.read_text(encoding="utf-8"))
     assert saved["replay"]["exists"] is True
     assert saved["replay"]["counterfactual_passed"] is True
+
+
+def test_replay_governance_main_returns_nonzero_without_fresh_artifact(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        tool.bot_engine,
+        "_run_replay_governance",
+        lambda state, **_kwargs: setattr(state, "last_replay_run_date", _kwargs["now"].date()),
+    )
+    monkeypatch.setattr(tool, "ensure_dotenv_loaded", lambda: None)
+
+    exit_code = tool.main(
+        [
+            "--force",
+            "--replay-output-dir",
+            str(tmp_path / "replay_outputs"),
+        ],
+    )
+
+    assert exit_code == 1

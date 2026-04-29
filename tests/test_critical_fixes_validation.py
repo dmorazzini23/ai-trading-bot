@@ -206,14 +206,23 @@ class TestCriticalFixes(unittest.TestCase):
         systemd_dir = Path(os.getcwd()) / "packaging" / "systemd"
         main_content = (systemd_dir / "ai-trading.service").read_text(encoding="utf-8")
         env_file_idx = main_content.index("EnvironmentFile=-/home/aiuser/ai-trading-bot/.env")
+        runtime_env_file_idx = main_content.index(
+            "EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime"
+        )
         paper_url_idx = main_content.index(
             "Environment=ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets"
         )
         api_port_idx = main_content.index("Environment=API_PORT=9001")
         health_port_idx = main_content.index("Environment=HEALTHCHECK_PORT=9001")
+        alembic_idx = main_content.index("ExecStartPre=/home/aiuser/ai-trading-bot/venv/bin/alembic upgrade head")
+        exec_start_idx = main_content.index("ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading")
         self.assertLess(paper_url_idx, env_file_idx)
+        self.assertLess(env_file_idx, runtime_env_file_idx)
+        self.assertLess(runtime_env_file_idx, api_port_idx)
+        self.assertLess(runtime_env_file_idx, health_port_idx)
         self.assertLess(env_file_idx, api_port_idx)
         self.assertLess(env_file_idx, health_port_idx)
+        self.assertLess(alembic_idx, exec_start_idx)
 
         debug_content = (systemd_dir / "ai-trading-api.service").read_text(encoding="utf-8")
         debug_env_file_idx = debug_content.index(

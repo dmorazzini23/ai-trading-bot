@@ -183,7 +183,8 @@ def test_prepare_indicators_fills_missing_ohlv_and_intraday_schema(
 
     result = prepare_mod.prepare_indicators(frame, freq="minute")
 
-    assert isinstance(result.index, pd.RangeIndex)
+    assert isinstance(result.index, pd.DatetimeIndex)
+    assert "timestamp" in result.columns
     assert result[["open", "high", "low", "close"]].eq(result["close"], axis=0).all().all()
     assert result["volume"].eq(1.0).all()
     assert {"vwap", "rsi", "atr", "mfi_14", "macd", "stochrsi", "lag_close_1"} <= set(
@@ -303,5 +304,53 @@ def test_prepare_indicators_does_not_backfill_lagged_features(
 
     result = prepare_mod.prepare_indicators(_market_frame(), freq="minute")
 
-    assert pd.isna(result.loc[0, "lag_close_1"])
-    assert pd.isna(result.loc[0, "ret_5m"])
+    assert pd.isna(result["lag_close_1"].iloc[0])
+    assert pd.isna(result["ret_5m"].iloc[0])
+
+
+def test_prepare_indicators_intraday_ffill_stays_within_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SessionGapTA(_FullTA):
+        @staticmethod
+        def macd(close: Any, fast: int = 12, slow: int = 26, signal: int = 9) -> Any:
+            macd = close * 0.01
+            signal_values = close * 0.02
+            macd.iloc[3] = np.nan
+            signal_values.iloc[3] = np.nan
+            return pd.DataFrame(
+                {"MACD_12_26_9": macd, "MACDs_12_26_9": signal_values},
+                index=close.index,
+            )
+
+    _patch_ta(monkeypatch, SessionGapTA)
+    index = pd.DatetimeIndex(
+        [
+            "2026-01-05T14:30:00Z",
+            "2026-01-05T14:31:00Z",
+            "2026-01-05T14:32:00Z",
+            "2026-01-06T14:30:00Z",
+            "2026-01-06T14:31:00Z",
+            "2026-01-06T14:32:00Z",
+        ],
+        tz="UTC",
+    )
+    close = pd.Series(np.linspace(100.0, 105.0, len(index)), index=index)
+    frame = pd.DataFrame(
+        {
+            "open": close - 0.5,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "volume": 1000.0,
+        },
+        index=index,
+    )
+
+    result = prepare_mod.prepare_indicators(frame, freq="minute")
+
+    assert isinstance(result.index, pd.DatetimeIndex)
+    assert "timestamp" in result.columns
+    assert result["timestamp"].tolist() == list(result.index)
+    assert pd.notna(result["macd"].iloc[2])
+    assert pd.isna(result["macd"].iloc[3])

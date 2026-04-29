@@ -414,7 +414,10 @@ def _database_readiness_snapshot() -> dict[str, Any]:
 
 
 def _database_readiness_snapshot_cached() -> dict[str, Any]:
-    if not _health_snapshot_cache_enabled():
+    if (
+        _env_bool("AI_TRADING_HEALTH_REQUIRE_DB_READY", False)
+        or not _health_snapshot_cache_enabled()
+    ):
         return _database_readiness_snapshot()
     return _cached_background_snapshot(
         name="database_readiness",
@@ -479,7 +482,13 @@ def _oms_invariants_snapshot() -> dict[str, Any]:
 
 
 def _oms_invariants_snapshot_cached() -> dict[str, Any]:
-    if not _health_snapshot_cache_enabled():
+    if (
+        _env_bool(
+            "AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS",
+            _default_fail_closed_outside_tests(),
+        )
+        or not _health_snapshot_cache_enabled()
+    ):
         return _oms_invariants_snapshot()
     return _cached_background_snapshot(
         name="oms_invariants",
@@ -544,7 +553,13 @@ def _oms_lifecycle_parity_snapshot() -> dict[str, Any]:
 
 
 def _oms_lifecycle_parity_snapshot_cached() -> dict[str, Any]:
-    if not _health_snapshot_cache_enabled():
+    if (
+        _env_bool(
+            "AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY",
+            _default_fail_closed_outside_tests(),
+        )
+        or not _health_snapshot_cache_enabled()
+    ):
         return _oms_lifecycle_parity_snapshot()
     return _cached_background_snapshot(
         name="oms_lifecycle_parity",
@@ -577,7 +592,13 @@ def _replay_live_parity_gate_snapshot_cached(
     *,
     oms_lifecycle_parity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if not _health_snapshot_cache_enabled():
+    if (
+        _env_bool(
+            "AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE",
+            _default_fail_closed_outside_tests(),
+        )
+        or not _health_snapshot_cache_enabled()
+    ):
         return _replay_live_parity_gate_snapshot(
             oms_lifecycle_parity=oms_lifecycle_parity,
         )

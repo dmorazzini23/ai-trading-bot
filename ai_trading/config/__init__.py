@@ -26,7 +26,7 @@ from .runtime import (
 from .management import (
     get_env,
     merged_env_snapshot,
-    reload_env,
+    reload_env as _management_reload_env,
     is_shadow_mode,
     validate_required_env,
     validate_alpaca_credentials as _validate_alpaca_credentials_from_management,
@@ -241,6 +241,37 @@ PRICE_PROVIDER_ORDER = tuple(getattr(_CFG, "price_provider_order", (
     "yahoo",
     "bars",
 )))
+
+
+def _refresh_exported_runtime_constants(cfg: TradingConfig | None = None) -> TradingConfig:
+    """Refresh module-level runtime exports after environment/config reloads."""
+
+    global _CFG
+    global EXECUTION_MODE, SHADOW_MODE, DATA_FEED_INTRADAY, ALPACA_EXECUTION_FEED
+    global ALPACA_REFERENCE_FEED, SAFE_MODE_ALLOW_PAPER, PRICE_PROVIDER_ORDER
+
+    _CFG = cfg or get_trading_config()
+    EXECUTION_MODE = str(getattr(_CFG, "execution_mode", "sim") or "sim").lower()
+    SHADOW_MODE = bool(getattr(_CFG, "shadow_mode", False))
+    DATA_FEED_INTRADAY = _derive_intraday_feed(_CFG)
+    ALPACA_EXECUTION_FEED = str(
+        getattr(_CFG, "alpaca_execution_feed", getattr(_CFG, "alpaca_data_feed", DATA_FEED_INTRADAY))
+        or DATA_FEED_INTRADAY
+    ).lower()
+    ALPACA_REFERENCE_FEED = str(
+        getattr(_CFG, "alpaca_reference_feed", "delayed_sip") or "delayed_sip"
+    ).lower()
+    SAFE_MODE_ALLOW_PAPER = bool(getattr(_CFG, "safe_mode_allow_paper", False))
+    PRICE_PROVIDER_ORDER = tuple(getattr(_CFG, "price_provider_order", PRICE_PROVIDER_ORDER))
+    return _CFG
+
+
+def reload_env(path: str | None = None, override: bool = True) -> str | None:
+    """Reload environment variables and refresh exported config constants."""
+
+    result = _management_reload_env(path=path, override=override)
+    _refresh_exported_runtime_constants()
+    return result
 
 
 def _env_value(*names: str) -> str | None:

@@ -4,6 +4,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import argparse
 import json
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -135,6 +136,13 @@ def _collect_replay_snapshot(path: Path) -> dict[str, Any]:
     return snapshot
 
 
+def _artifact_mtime_ns(path: Path) -> int | None:
+    try:
+        return int(path.stat().st_mtime_ns)
+    except OSError:
+        return None
+
+
 def _apply_runtime_overrides(args: argparse.Namespace) -> list[str]:
     overrides: dict[str, str] = {}
 
@@ -196,6 +204,9 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
     now = _parse_now(args.now)
     override_keys = _apply_runtime_overrides(args)
     try:
+        replay_path = _resolve_replay_output_path(now)
+        before_mtime_ns = _artifact_mtime_ns(replay_path)
+        started_mono = time.monotonic()
         state = bot_engine.BotState()
         bot_engine._run_replay_governance(
             state,
@@ -203,19 +214,29 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
             market_open_now=bool(args.market_open_now),
             force=bool(args.force),
         )
-        replay_path = _resolve_replay_output_path(now)
+        replay_snapshot = _collect_replay_snapshot(replay_path)
+        after_mtime_ns = _artifact_mtime_ns(replay_path)
+        fresh_artifact = bool(
+            replay_snapshot.get("exists")
+            and after_mtime_ns is not None
+            and (before_mtime_ns is None or after_mtime_ns > before_mtime_ns)
+        )
         payload: dict[str, Any] = {
-            "status": "ok",
+            "status": "ok" if fresh_artifact else "failed",
             "now": now.isoformat(),
             "force": bool(args.force),
             "market_open_now": bool(args.market_open_now),
+            "fresh_artifact": fresh_artifact,
             "last_replay_run_date": (
                 state.last_replay_run_date.isoformat()
                 if getattr(state, "last_replay_run_date", None) is not None
                 else None
             ),
-            "replay": _collect_replay_snapshot(replay_path),
+            "replay": replay_snapshot,
         }
+        if not fresh_artifact:
+            payload["reason"] = "missing_fresh_replay_artifact"
+            payload["elapsed_sec"] = max(0.0, time.monotonic() - started_mono)
         if args.summary_json is not None:
             _write_summary(Path(args.summary_json), payload)
             payload["summary_path"] = str(args.summary_json)
@@ -225,7 +246,9 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
                 "force": bool(args.force),
                 "market_open_now": bool(args.market_open_now),
                 "replay_path": payload["replay"]["path"],
+                "status": payload["status"],
                 "replay_exists": bool(payload["replay"]["exists"]),
+                "fresh_artifact": fresh_artifact,
                 "violations_count": int(payload["replay"].get("violations_count", 0) or 0),
                 "cap_adjustments_count": int(payload["replay"].get("cap_adjustments_count", 0) or 0),
             },
@@ -242,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("REPLAY_GOVERNANCE_TOOL_FAILED", extra={"error": str(exc)}, exc_info=True)
         return 1
     sys.stdout.write(f"{json.dumps(payload, sort_keys=True, indent=2, default=str)}\n")
-    return 0
+    return 0 if payload.get("status") == "ok" else 1
 
 
 if __name__ == "__main__":  # pragma: no cover

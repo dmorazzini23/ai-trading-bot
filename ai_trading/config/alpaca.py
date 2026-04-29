@@ -69,12 +69,21 @@ def _resolve_base_url_and_paper(settings: Any) -> tuple[str, bool]:
         get_env("ALPACA_TRADING_BASE_URL", "", cast=str, resolve_aliases=False) or ""
     ).strip()
     settings_base_url = str(getattr(settings, "alpaca_base_url", "") or "").strip()
-    execution_mode = _normalize_execution_mode(
-        get_env(
+    raw_execution_mode = get_env(
+        "AI_TRADING_EXECUTION_MODE",
+        None,
+        cast=str,
+        resolve_aliases=False,
+    )
+    if raw_execution_mode in (None, ""):
+        raw_execution_mode = get_env(
             "EXECUTION_MODE",
             getattr(settings, "execution_mode", "sim"),
             cast=str,
+            resolve_aliases=False,
         )
+    execution_mode = _normalize_execution_mode(
+        raw_execution_mode
     )
     app_env = str(getattr(settings, "env", "dev") or "dev").strip().lower()
     default_paper_url = "https://paper-api.alpaca.markets"

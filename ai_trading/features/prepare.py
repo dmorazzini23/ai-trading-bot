@@ -1,7 +1,8 @@
 import logging
 import importlib
 import numpy as np
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
+from zoneinfo import ZoneInfo
 from ai_trading.utils.base import safe_to_datetime
 from ai_trading.utils.lazy_imports import load_pandas
 
@@ -10,6 +11,25 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 MFI_PERIOD = 14
+_ET = ZoneInfo("America/New_York")
+
+
+def _intraday_session_keys(df: "pd.DataFrame", pd: object) -> object | None:
+    try:
+        if "timestamp" in df.columns:
+            parsed = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")  # type: ignore[attr-defined]
+            if bool(parsed.notna().any()):
+                return cast(object, parsed.dt.tz_convert(_ET).dt.date)
+        if isinstance(df.index, pd.DatetimeIndex):  # type: ignore[attr-defined]
+            index = df.index
+            if getattr(index, "tz", None) is None:
+                index = index.tz_localize("UTC")
+            else:
+                index = index.tz_convert("UTC")
+            return cast(object, pd.Series(index.tz_convert(_ET).date, index=df.index))  # type: ignore[attr-defined]
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return None
 
 def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame":
     pd = load_pandas()
@@ -23,6 +43,7 @@ def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame
         )
         raise ImportError(msg) from exc
     df = df.copy()
+    intraday = str(freq).lower() != "daily"
     rename_map = {}
     variants = {'high': ['High', 'HIGH', 'H', 'h'], 'low': ['Low', 'LOW', 'L', 'l'], 'close': ['Close', 'CLOSE', 'C', 'c'], 'open': ['Open', 'OPEN', 'O', 'o'], 'volume': ['Volume', 'VOLUME', 'V', 'v']}
     for std, cols in variants.items():
@@ -44,11 +65,21 @@ def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame
     for col in ['high', 'low', 'close', 'volume', 'open']:
         if col in df.columns:
             df[col] = df[col].astype(float)
-    idx = safe_to_datetime(df.index, context='retrain index')
+    if intraday and "timestamp" not in df.columns and isinstance(df.index, pd.DatetimeIndex):
+        df["timestamp"] = df.index
+    idx_source = df["timestamp"] if intraday and "timestamp" in df.columns else df.index
+    idx = safe_to_datetime(idx_source, context='retrain index')
     if idx.empty:
         raise ValueError('Invalid date values in dataframe')
-    df = df.sort_index()
-    idx = safe_to_datetime(df.index, context='retrain index')
+    if intraday and "timestamp" in df.columns:
+        df["timestamp"] = idx
+        df = df.sort_values("timestamp")
+        df.index = pd.DatetimeIndex(df["timestamp"])
+        df.index.name = None
+    else:
+        df = df.sort_index()
+    idx_source = df["timestamp"] if intraday and "timestamp" in df.columns else df.index
+    idx = safe_to_datetime(idx_source, context='retrain index')
     df['vwap'] = ta.vwap(df['high'], df['low'], df['close'], df['volume']).astype(float)
     df.dropna(subset=['vwap'], inplace=True)
     df['rsi'] = ta.rsi(df['close'], length=14).astype('float64')
@@ -211,7 +242,14 @@ def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame
         df['lag_close_3'] = df['close'].shift(3).astype(float)
     except (ValueError, TypeError) as e:
         logger.exception('Multi-timeframe features failed: %s', e)
-    df.ffill(inplace=True)
+    if intraday:
+        session_keys = _intraday_session_keys(df, pd)
+        if session_keys is not None:
+            df = df.groupby(session_keys, group_keys=False, sort=False).ffill()
+        else:
+            df.ffill(inplace=True)
+    else:
+        df.ffill(inplace=True)
     required = ['vwap', 'rsi', 'atr', 'macd', 'macds', 'ichimoku_conv', 'ichimoku_base', 'stochrsi']
     if freq == 'daily':
         df['sma_50'] = np.nan
@@ -224,8 +262,8 @@ def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame
             logger.exception('SMA calculation failed: %s', e)
         required += ['sma_50', 'sma_200']
     df.dropna(subset=required, how='all', inplace=True)
-    if freq != 'daily':
-        df.reset_index(drop=True, inplace=True)
+    if intraday and "timestamp" not in df.columns and isinstance(df.index, pd.DatetimeIndex):
+        df["timestamp"] = df.index
     return df
 
 __all__ = ['prepare_indicators']

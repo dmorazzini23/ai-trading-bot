@@ -238,6 +238,81 @@ def test_build_report_uses_blocked_gate_counts_for_rejection_concentration(
     assert gate["top_rejection_concentration_ratio"] == pytest.approx(8 / 70)
 
 
+def test_build_report_excludes_soft_scale_fallback_from_rejection_concentration(
+    tmp_path: Path,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text("[]", encoding="utf-8")
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 100,
+                "total_accepted_records": 90,
+                "total_rejected_records": 10,
+                "gate_totals": {
+                    "SAFETY_TIER_ATTACK_SCALE_RELAXED": 70,
+                    "DERISK_PRIMARY_FEED_SCALE": 40,
+                    "CAPACITY_THROTTLE_SCALE": 30,
+                    "RISK_SYMBOL_SOFT_THROTTLE": 20,
+                    "PRE_EXECUTION_ORDER_CHECKS_FAILED": 4,
+                    "OK_TRADE": 90,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+
+    gate = report["gate_effectiveness"]
+    assert gate["top_rejection_reasons_by_count"] == [
+        {"gate": "PRE_EXECUTION_ORDER_CHECKS_FAILED", "count": 4}
+    ]
+    assert gate["top_rejection_concentration_gate"] == "PRE_EXECUTION_ORDER_CHECKS_FAILED"
+    assert gate["top_rejection_concentration_ratio"] == pytest.approx(4 / 10)
+
+
+def test_build_report_clamps_rejection_concentration_to_rejected_records(
+    tmp_path: Path,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text("[]", encoding="utf-8")
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 25,
+                "total_accepted_records": 5,
+                "total_rejected_records": 20,
+                "gate_totals": {"PRE_EXECUTION_ORDER_CHECKS_FAILED": 25},
+                "gate_attribution": {
+                    "PRE_EXECUTION_ORDER_CHECKS_FAILED": {
+                        "count": 25,
+                        "blocked_records": 25,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+
+    concentration = report["gate_effectiveness"]["rejection_concentration"][0]
+    assert concentration == {
+        "gate": "PRE_EXECUTION_ORDER_CHECKS_FAILED",
+        "count": 20,
+        "ratio": pytest.approx(1.0),
+    }
+
+
 def test_build_report_excludes_non_blocking_model_tags_from_rejection_concentration(
     tmp_path: Path,
 ) -> None:
@@ -2133,6 +2208,90 @@ def test_evaluate_go_no_go_lookback_days_uses_recent_window_metrics() -> None:
     assert observed["gate_metric_scope"]["mode"] == "rolling_days"
     assert observed["closed_trades"] == 50
     assert observed["acceptance_rate"] == pytest.approx(0.02)
+
+
+def test_evaluate_go_no_go_lookback_expected_edge_ignores_full_history_edge() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 20,
+            "profit_factor": 2.0,
+            "win_rate": 0.7,
+            "pnl_sum": 100.0,
+            "daily_trade_stats": [
+                {
+                    "date": "2026-03-10",
+                    "trades": 10,
+                    "wins": 7,
+                    "losses": 3,
+                    "gross_win_pnl": 140.0,
+                    "gross_loss_pnl": 40.0,
+                    "net_pnl": 100.0,
+                },
+                {
+                    "date": "2026-03-11",
+                    "trades": 10,
+                    "wins": 7,
+                    "losses": 3,
+                    "gross_win_pnl": 140.0,
+                    "gross_loss_pnl": 40.0,
+                    "net_pnl": 100.0,
+                },
+            ],
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.5,
+            "accepted_records": 20,
+            "total_expected_net_edge_bps": 160.0,
+            "daily_gate_stats": [
+                {
+                    "date": "2026-03-10",
+                    "total_records": 20,
+                    "accepted_records": 10,
+                    "rejected_records": 10,
+                    "total_expected_net_edge_bps": 100.0,
+                },
+                {
+                    "date": "2026-03-11",
+                    "total_records": 20,
+                    "accepted_records": 10,
+                    "rejected_records": 10,
+                    "total_expected_net_edge_bps": -20.0,
+                },
+            ],
+        },
+        "expected_edge_per_filled_trade_bps": 8.0,
+        "execution_vs_alpha": {
+            "expected_edge_per_traded_notional_bps": 8.0,
+            "expected_edge_for_realism_bps": 8.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 5,
+            "min_win_rate": 0.55,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.2,
+            "min_expected_net_edge_bps": 1.0,
+            "lookback_days": 1,
+            "trade_fill_source": "all",
+            "auto_live_fail_closed": False,
+            "require_open_position_reconciliation": False,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "expected_net_edge_bps" in decision["failed_checks"]
+    observed = decision["observed"]
+    assert observed["gate_metric_scope"]["mode"] == "rolling_days"
+    assert observed["expected_net_edge_bps"] == pytest.approx(-2.0)
+    assert observed["expected_net_edge_bps_source"] == "gate_per_accept_rolling"
+    assert observed["expected_net_edge_bps_raw_sum"] == pytest.approx(-20.0)
 
 
 def test_evaluate_go_no_go_lookback_days_enforces_min_used_days() -> None:

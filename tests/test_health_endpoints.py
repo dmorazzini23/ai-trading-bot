@@ -856,6 +856,50 @@ def test_expensive_health_snapshots_use_slow_refresh_default(monkeypatch):
     assert captured["replay_live_parity_gate"] == 300.0
 
 
+def test_required_health_snapshots_bypass_async_placeholders(monkeypatch):
+    monkeypatch.setattr(health_payload_module, "_health_snapshot_cache_enabled", lambda: True)
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_DB_READY", "1")
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS", "1")
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY", "1")
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
+
+    def _unexpected_cache(**_kwargs):
+        raise AssertionError("required health gates should sample synchronously")
+
+    monkeypatch.setattr(health_payload_module, "_cached_background_snapshot", _unexpected_cache)
+    monkeypatch.setattr(
+        health_payload_module,
+        "_database_readiness_snapshot",
+        lambda: {"enabled": True, "ok": True, "sample": "db"},
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_invariants_snapshot",
+        lambda: {"enabled": True, "ok": True, "sample": "oms"},
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_oms_lifecycle_parity_snapshot",
+        lambda: {"enabled": True, "ok": True, "sample": "lifecycle"},
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_replay_live_parity_gate_snapshot",
+        lambda **_kwargs: {"enabled": True, "ok": True, "sample": "replay"},
+    )
+
+    assert health_payload_module._database_readiness_snapshot_cached()["sample"] == "db"
+    assert health_payload_module._oms_invariants_snapshot_cached()["sample"] == "oms"
+    assert (
+        health_payload_module._oms_lifecycle_parity_snapshot_cached()["sample"]
+        == "lifecycle"
+    )
+    assert (
+        health_payload_module._replay_live_parity_gate_snapshot_cached()["sample"]
+        == "replay"
+    )
+
+
 def test_replay_live_parity_gate_does_not_cache_warming_oms_snapshot(monkeypatch):
     monkeypatch.setattr(health_payload_module, "_health_snapshot_cache_enabled", lambda: True)
     monkeypatch.setattr(

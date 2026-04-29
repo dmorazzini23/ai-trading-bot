@@ -23,7 +23,7 @@ def test_replay_lifecycle_parity_reports_no_mismatches(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "oms_lifecycle_parity_replay.db"
-    monkeypatch.setenv("AI_TRADING_OMS_EVENT_DUAL_WRITE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_DUAL_WRITE_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
 
     payload = replay_lifecycle_parity(
@@ -37,6 +37,25 @@ def test_replay_lifecycle_parity_reports_no_mismatches(
     comparisons = payload["comparisons"]
     assert isinstance(comparisons, list)
     assert all(bool(item.get("parity_ok")) for item in comparisons)
+    assert str(payload["run_id"]).startswith("replay-")
+
+
+def test_replay_lifecycle_parity_defaults_to_temp_database(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_db = tmp_path / "runtime_should_not_be_used.db"
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_PATH", str(runtime_db))
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_DUAL_WRITE_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
+
+    payload = replay_lifecycle_parity(fixture_path=str(_fixture_path()))
+
+    assert payload["ok"] is True
+    assert payload["intent_store_path"] != str(runtime_db)
+    assert "oms-lifecycle-parity-" in payload["intent_store_path"]
+    assert not runtime_db.exists()
 
 
 def test_replay_lifecycle_parity_cli_main_returns_zero(

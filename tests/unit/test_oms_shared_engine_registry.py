@@ -71,7 +71,7 @@ def test_event_store_reuses_shared_postgres_engine(monkeypatch: pytest.MonkeyPat
 
     assert len(created) == 1
     assert first._engine is second._engine
-    assert bootstrap_calls["create_all"] == 1
+    assert bootstrap_calls["create_all"] == 0
     assert bootstrap_calls["guards"] == 1
     first.close()
     second.close()

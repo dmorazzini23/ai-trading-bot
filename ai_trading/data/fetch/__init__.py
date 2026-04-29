@@ -1126,17 +1126,38 @@ def _safe_empty_classify(**kwargs: Any) -> int:
 
 
 def _safe_backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
+    def _empty_with_failure(reason: str, exc: BaseException | None = None) -> pd.DataFrame:
+        pd_local = _ensure_pandas()
+        if pd_local is None:
+            return []  # type: ignore[return-value]
+        frame = pd_local.DataFrame()
+        try:
+            frame.attrs["fallback_failure_reason"] = reason
+            if exc is not None:
+                frame.attrs["fallback_failure_error"] = str(exc)
+        except FETCH_FALLBACK_EXCEPTIONS:
+            pass
+        return frame
+
     with fallback_slot():
         hook = _backup_get_bars
         if callable(hook):
             try:
                 return hook(symbol, start, end, interval)
-            except FETCH_FALLBACK_EXCEPTIONS:
-                pass
-        pd_local = _ensure_pandas()
-        if pd_local is None:
-            return []  # type: ignore[return-value]
-        return pd_local.DataFrame()
+            except FETCH_FALLBACK_EXCEPTIONS as exc:
+                logger.warning(
+                    "BACKUP_GET_BARS_FAILED",
+                    extra={
+                        "symbol": symbol,
+                        "start": str(start),
+                        "end": str(end),
+                        "interval": interval,
+                        "reason": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                )
+                return _empty_with_failure(type(exc).__name__, exc)
+        return _empty_with_failure("backup_get_bars_unavailable")
 
 
 def _time_now(default: float | None = 0.0) -> float:
@@ -2934,9 +2955,22 @@ def _fallback_frame_is_usable(
                 return False
         except FETCH_FALLBACK_EXCEPTIONS:
             return False
+    timestamp_source = None
     if "timestamp" in frame.columns:
+        timestamp_source = frame["timestamp"]
+    elif isinstance(frame.index, pd_local.DatetimeIndex):
+        timestamp_source = frame.index
+    else:
         try:
-            ts_index = pd_local.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+            start_utc = ensure_utc_datetime(start_dt)
+            end_utc = ensure_utc_datetime(end_dt)
+            if (end_utc - start_utc) <= _dt.timedelta(days=2):
+                return False
+        except FETCH_FALLBACK_EXCEPTIONS:
+            return False
+    if timestamp_source is not None:
+        try:
+            ts_index = pd_local.to_datetime(timestamp_source, utc=True, errors="coerce")
         except FETCH_FALLBACK_EXCEPTIONS:
             return False
         if getattr(ts_index, "isna", None) and ts_index.isna().all():
@@ -13393,7 +13427,6 @@ def get_minute_df(
                 existing_coverage_meta = attrs.get("_coverage_meta")
                 if isinstance(existing_coverage_meta, dict):
                     attrs["_coverage_meta"] = dict(existing_coverage_meta)
-            _set_price_reliability(df, reliable=True)
             mark_success(symbol, "1Min")
             success_marked = True
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
@@ -13736,8 +13769,12 @@ def get_minute_df(
                 attrs = getattr(fallback_candidate, "attrs", None)
             except FETCH_FALLBACK_EXCEPTIONS:
                 attrs = None
-            if isinstance(attrs, dict) and "price_reliable" not in attrs:
-                _set_price_reliability(fallback_candidate, reliable=True)
+            if isinstance(attrs, dict):
+                _set_price_reliability(
+                    fallback_candidate,
+                    reliable=price_reliable,
+                    reason=unreliable_reason,
+                )
             _apply_last_complete_meta(fallback_candidate)
             _register_backup_skip()
             last_empty_error = None

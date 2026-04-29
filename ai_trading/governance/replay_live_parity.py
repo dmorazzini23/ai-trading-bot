@@ -87,7 +87,7 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
             24.0 * 14.0,
         ),
     )
-    candidates = sorted(output_dir.glob("replay_hash_*.json"))
+    candidates = list(output_dir.glob("replay_hash_*.json"))
     if not candidates:
         return {
             "enabled": True,
@@ -98,20 +98,58 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
             "max_age_hours": float(max_age_hours),
         }
 
-    candidate = candidates[-1]
-    try:
-        payload = json.loads(candidate.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError):
+    ranked_candidates: list[
+        tuple[datetime, str, Path, dict[str, Any] | None, str | None]
+    ] = []
+    for path in candidates:
+        try:
+            mtime_ts = datetime.fromtimestamp(path.stat().st_mtime, UTC)
+        except OSError:
+            mtime_ts = datetime.fromtimestamp(0.0, UTC)
+        try:
+            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            ranked_candidates.append(
+                (mtime_ts, str(path), path, None, "replay_governance_artifact_invalid")
+            )
+            continue
+        if not isinstance(raw_payload, Mapping):
+            ranked_candidates.append(
+                (mtime_ts, str(path), path, None, "replay_governance_artifact_invalid")
+            )
+            continue
+        payload = dict(raw_payload)
+        payload_ts = _parse_ts(payload.get("ts"))
+        ranked_candidates.append(
+            (
+                payload_ts if payload_ts is not None else mtime_ts,
+                str(path),
+                path,
+                payload,
+                None,
+            )
+        )
+
+    _, _, candidate, payload, load_error = max(
+        ranked_candidates,
+        key=lambda item: (item[0], item[1]),
+    )
+    if payload is None:
         return {
             "enabled": True,
             "available": False,
             "fresh": False,
             "path": str(candidate),
-            "reason": "replay_governance_artifact_invalid",
+            "reason": load_error or "replay_governance_artifact_invalid",
             "max_age_hours": float(max_age_hours),
         }
 
     ts = _parse_ts(payload.get("ts"))
+    if ts is None:
+        try:
+            ts = datetime.fromtimestamp(candidate.stat().st_mtime, UTC)
+        except OSError:
+            ts = None
     age_hours: float | None = None
     if ts is not None:
         age_hours = max((datetime.now(UTC) - ts).total_seconds(), 0.0) / 3600.0
@@ -136,6 +174,7 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         "fresh": bool(fresh),
         "path": str(candidate),
         "ts": ts.isoformat() if ts is not None else None,
+        "ts_source": "payload" if _parse_ts(payload.get("ts")) is not None else "mtime",
         "age_hours": float(age_hours) if age_hours is not None else None,
         "max_age_hours": float(max_age_hours),
         "rows": _as_int(payload.get("rows"), 0),

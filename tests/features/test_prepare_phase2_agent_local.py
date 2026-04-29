@@ -172,13 +172,15 @@ def test_prepare_indicators_normalizes_columns_and_handles_missing_optional_ta(
     assert result["sma_50"].isna().all()
 
 
-def test_prepare_indicators_full_ta_intraday_resets_index(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prepare_indicators_full_ta_intraday_preserves_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
     frame = _frame().rename(columns={"Open": "open", "High": "high", "Low": "low", "Close": "close"})
     monkeypatch.setattr(prepare_mod.importlib, "import_module", lambda _name: _FullTA)
 
     result = prepare_mod.prepare_indicators(frame, freq="minute")
 
-    assert isinstance(result.index, pd.RangeIndex)
+    assert isinstance(result.index, pd.DatetimeIndex)
+    assert "timestamp" in result.columns
+    assert result["timestamp"].tolist() == list(result.index)
     assert result["kc_upper"].notna().all()
     assert result["macd"].notna().all()
     assert result["bb_percent"].notna().all()

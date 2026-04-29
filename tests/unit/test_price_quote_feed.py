@@ -142,6 +142,7 @@ def test_get_latest_price_http_error_falls_back(monkeypatch):
 
 def test_get_current_price_uses_configured_feed(monkeypatch):
     symbol = "TSLA"
+    monkeypatch.delenv("ALPACA_EXECUTION_FEED", raising=False)
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
     monkeypatch.setenv("ALPACA_HAS_SIP", "1")
     monkeypatch.setenv("ALPACA_API_KEY", "test-key")

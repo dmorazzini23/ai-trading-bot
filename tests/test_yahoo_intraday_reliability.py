@@ -71,11 +71,6 @@ def test_unreliable_minute_data_blocks_fallback(monkeypatch):
     price_reliable = df.attrs.get("price_reliable")
     reason = df.attrs.get("price_reliable_reason")
     coverage_meta = df.attrs.get("_coverage_meta")
-    if price_reliable is not False:
-        reason = reason or "gap_ratio=forced"
-        price_reliable = False
-        df.attrs["price_reliable"] = price_reliable
-        df.attrs["price_reliable_reason"] = reason
     assert price_reliable is False
     assert isinstance(reason, str) and "gap_ratio" in reason
     assert isinstance(coverage_meta, dict)

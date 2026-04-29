@@ -107,14 +107,12 @@ class TestAlpacaCredentials:
             for record in caplog.records
         )
 
-    @patch("ai_trading.config.management.TESTING", True)
     def test_validate_skip_in_testing(self) -> None:
-        with patch.dict(os.environ, {}, clear=True):
+        with patch.dict(os.environ, {"TESTING": "true"}, clear=True):
             validate_alpaca_credentials()  # Should not raise
 
-    @patch("ai_trading.config.management.TESTING", False)
     def test_validate_missing_production(self) -> None:
-        with patch.dict(os.environ, {}, clear=True):
+        with patch.dict(os.environ, {"TESTING": "false"}, clear=True):
             with pytest.raises(RuntimeError) as exc_info:
                 validate_alpaca_credentials()
             assert "ALPACA_API_KEY" in str(exc_info.value)

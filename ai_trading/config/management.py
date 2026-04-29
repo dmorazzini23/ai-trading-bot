@@ -281,6 +281,16 @@ def reload_env(path: str | os.PathLike[str] | None = None, override: bool = True
             # Best-effort cache invalidation; runtime config reload still proceeds.
             pass
 
+    def _refresh_config_exports() -> None:
+        try:
+            import ai_trading.config as config_pkg
+
+            refresh_constants = getattr(config_pkg, "_refresh_exported_runtime_constants", None)
+            if callable(refresh_constants):
+                refresh_constants()
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            pass
+
     skip_dotenv = is_test_runtime(include_pytest_module=False)
 
     if path is None:
@@ -292,11 +302,13 @@ def reload_env(path: str | os.PathLike[str] | None = None, override: bool = True
     if path is None:
         _invalidate_settings_caches()
         reload_trading_config()
+        _refresh_config_exports()
         refresh_alpaca_credentials_cache()
         return None
     _maybe_load_dotenv(path, override=override)
     _invalidate_settings_caches()
     reload_trading_config()
+    _refresh_config_exports()
     refresh_alpaca_credentials_cache()
     return os.fspath(path)
 
@@ -564,7 +576,8 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
 
 
 def validate_alpaca_credentials() -> None:
-    if TESTING:
+    testing = str(get_env("TESTING", "", cast=str, resolve_aliases=False) or "").strip().lower()
+    if testing in {"1", "true", "yes", "on"}:
         return
     reload_trading_config()
     validate_no_deprecated_env()

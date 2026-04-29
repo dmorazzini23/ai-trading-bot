@@ -60,9 +60,32 @@ _NON_BLOCKING_REJECTION_GATES = frozenset(
         "REPLAY_QUALITY_UPLIFT",
         "REPLAY_QUALITY_DEWEIGHT",
         "RANK_DOWNSIDE_OVERLAP_CAP",
+        "SAFETY_TIER_ATTACK_SCALE",
+        "SAFETY_TIER_ATTACK_SCALE_RELAXED",
+        "DERISK_PRIMARY_FEED_SCALE",
+        "DERISK_PRIMARY_FEED_SCALE_RELAXED",
+        "DERISK_SECONDARY_FEED_SCALE",
+        "DERISK_SECONDARY_FEED_SCALE_RELAXED",
+        "CAPACITY_THROTTLE_SCALE",
+        "CAPACITY_THROTTLE_SCALE_RELAXED",
+        "RISK_FACTOR_SOFT_THROTTLE",
+        "RISK_SYMBOL_SOFT_THROTTLE",
+        "RISK_PORTFOLIO_SOFT_THROTTLE",
+        "UNCERTAINTY_CAPITAL_SCALE",
+        "UNCERTAINTY_CAPITAL_SCALE_RELAXED",
     }
 )
-_NON_BLOCKING_REJECTION_PREFIXES = ("BANDIT_",)
+_NON_BLOCKING_REJECTION_PREFIXES = (
+    "BANDIT_",
+    "SAFETY_TIER_ATTACK_SCALE",
+    "DERISK_PRIMARY_FEED_SCALE",
+    "DERISK_SECONDARY_FEED_SCALE",
+    "CAPACITY_THROTTLE_SCALE",
+    "RISK_FACTOR_SOFT_THROTTLE",
+    "RISK_SYMBOL_SOFT_THROTTLE",
+    "RISK_PORTFOLIO_SOFT_THROTTLE",
+    "UNCERTAINTY_CAPITAL_SCALE",
+)
 
 _NY_TZ = ZoneInfo("America/New_York")
 
@@ -3199,11 +3222,15 @@ def _rejection_concentration_rows(
         gate_count = _as_int(item.get("count")) or 0
         if not gate_name or gate_count <= 0:
             continue
+        concentration_count = min(int(gate_count), int(rejected_records))
         rows.append(
             {
                 "gate": gate_name,
-                "count": int(gate_count),
-                "ratio": float(gate_count / float(rejected_records)),
+                "count": int(concentration_count),
+                "ratio": min(
+                    1.0,
+                    max(0.0, float(concentration_count / float(rejected_records))),
+                ),
             }
         )
     return rows
@@ -5007,22 +5034,76 @@ def evaluate_go_no_go(
         if expected_net_edge_bps_raw_sum is not None and accepted_records > 0
         else None
     )
-    expected_net_edge_bps = _as_float(report.get("expected_edge_per_filled_trade_bps"))
-    if expected_net_edge_bps is None:
+    rolling_gate_scope = bool(
+        lookback_days > 0 and gate_metric_scope.get("mode") == "rolling_days"
+    )
+
+    def _expected_edge_scope_matches(raw_scope: Any) -> bool:
+        if not rolling_gate_scope or not isinstance(raw_scope, Mapping):
+            return False
+        scope = dict(raw_scope)
+        mode = str(scope.get("mode") or scope.get("scope") or "").strip().lower()
+        if mode not in {"rolling_days", "lookback_days", "rolling_window"}:
+            return False
+        scope_lookback = _as_int(scope.get("lookback_days"))
+        if scope_lookback is None:
+            scope_lookback = _as_int(scope.get("days"))
+        if scope_lookback is not None and int(scope_lookback) != int(lookback_days):
+            return False
+        for key in ("start_date", "end_date"):
+            expected_day = _normalise_iso_date(gate_metric_scope.get(key))
+            observed_day = _normalise_iso_date(scope.get(key))
+            if expected_day and observed_day and expected_day != observed_day:
+                return False
+        return True
+
+    report_expected_edge_scope = report.get("expected_edge_metric_scope")
+    if not isinstance(report_expected_edge_scope, Mapping):
+        report_expected_edge_scope = report.get("expected_edge_scope")
+    execution_expected_edge_scope = execution_attribution.get("expected_edge_metric_scope")
+    if not isinstance(execution_expected_edge_scope, Mapping):
+        execution_expected_edge_scope = execution_attribution.get("metric_scope")
+    if not isinstance(execution_expected_edge_scope, Mapping):
+        execution_expected_edge_scope = execution_attribution.get("scope")
+    report_expected_edge_same_scope = _expected_edge_scope_matches(
+        report_expected_edge_scope
+    ) or _expected_edge_scope_matches(execution_expected_edge_scope)
+    execution_expected_edge_same_scope = _expected_edge_scope_matches(
+        execution_expected_edge_scope
+    )
+
+    expected_net_edge_bps = None
+    expected_net_edge_source = "unavailable"
+    report_expected_edge_bps = _as_float(report.get("expected_edge_per_filled_trade_bps"))
+    if report_expected_edge_bps is not None and (
+        not rolling_gate_scope or report_expected_edge_same_scope
+    ):
+        expected_net_edge_bps = report_expected_edge_bps
+        expected_net_edge_source = "execution_vs_alpha_per_fill"
+    if expected_net_edge_bps is None and (
+        not rolling_gate_scope or execution_expected_edge_same_scope
+    ):
         expected_net_edge_bps = _as_float(
             execution_attribution.get("expected_edge_per_traded_notional_bps")
         )
-    if expected_net_edge_bps is None:
-        expected_net_edge_bps = _as_float(
-            execution_attribution.get("expected_edge_for_realism_bps")
-        )
-    expected_net_edge_source = "execution_vs_alpha_per_fill"
+        if expected_net_edge_bps is None:
+            expected_net_edge_bps = _as_float(
+                execution_attribution.get("expected_edge_for_realism_bps")
+            )
+        if expected_net_edge_bps is not None:
+            expected_net_edge_source = "execution_vs_alpha_per_fill"
     if expected_net_edge_bps is None:
         expected_net_edge_bps = expected_net_edge_per_accept_bps
-        expected_net_edge_source = "gate_per_accept"
+        expected_net_edge_source = (
+            "gate_per_accept_rolling" if rolling_gate_scope else "gate_per_accept"
+        )
     if expected_net_edge_bps is None:
         expected_net_edge_bps = expected_net_edge_bps_raw_sum
-        expected_net_edge_source = "gate_sum_fallback"
+        expected_net_edge_source = (
+            "gate_sum_rolling_fallback"
+            if rolling_gate_scope
+            else "gate_sum_fallback"
+        )
     execution_capture_ratio = _as_float(
         execution_attribution.get("execution_capture_ratio")
     )

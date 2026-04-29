@@ -5,7 +5,9 @@ from datetime import UTC, datetime
 import json
 from pathlib import Path
 import sys
+import tempfile
 from typing import Any
+from uuid import uuid4
 
 from ai_trading.config.management import get_env
 from ai_trading.oms.event_store import EventStore
@@ -37,6 +39,7 @@ def _run_live(
     *,
     database_url: str,
     intent_store_path: str,
+    run_id: str,
     scenario_name: str,
     symbol: str,
     side: str,
@@ -46,12 +49,16 @@ def _run_live(
     terminal_status: str,
     last_error: str | None = None,
 ) -> str:
-    store = IntentStore(url=database_url, path=intent_store_path)
+    store = IntentStore(
+        url=database_url,
+        path=intent_store_path,
+        event_dual_write_enabled=True,
+    )
     try:
-        intent_id = f"replay-live-{scenario_name}"
+        intent_id = f"{run_id}-live-{scenario_name}"
         record, _created = store.create_intent(
             intent_id=intent_id,
-            idempotency_key=f"replay-live-key-{scenario_name}",
+            idempotency_key=f"{run_id}-live-key-{scenario_name}",
             symbol=symbol,
             side=side,
             quantity=float(quantity),
@@ -59,7 +66,7 @@ def _run_live(
             decision_ts=datetime.now(UTC).isoformat(),
         )
         store.claim_for_submit(record.intent_id)
-        store.mark_submitted(record.intent_id, f"replay-live-broker-{scenario_name}")
+        store.mark_submitted(record.intent_id, f"{run_id}-live-broker-{scenario_name}")
         if float(fill_qty) > 0.0:
             store.record_fill(
                 record.intent_id,
@@ -81,6 +88,7 @@ def _run_simulated(
     *,
     database_url: str,
     intent_store_path: str,
+    run_id: str,
     scenario_name: str,
     symbol: str,
     side: str,
@@ -98,13 +106,13 @@ def _run_simulated(
     )
     try:
         ref = lifecycle.open_submitted_intent(
-            intent_id=f"replay-sim-{scenario_name}",
-            idempotency_key=f"replay-sim-key-{scenario_name}",
+            intent_id=f"{run_id}-sim-{scenario_name}",
+            idempotency_key=f"{run_id}-sim-key-{scenario_name}",
             symbol=symbol,
             side=side,
             quantity=float(quantity),
             decision_ts=datetime.now(UTC).isoformat(),
-            broker_order_id=f"replay-sim-broker-{scenario_name}",
+            broker_order_id=f"{run_id}-sim-broker-{scenario_name}",
             strategy_id="replay_harness",
             metadata={"fixture_scenario": scenario_name},
         )
@@ -135,21 +143,18 @@ def replay_lifecycle_parity(
 ) -> dict[str, Any]:
     fixture = Path(str(fixture_path)).expanduser()
     scenarios = _load_fixture(fixture)
+    run_id = f"replay-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%f')}-{uuid4().hex[:8]}"
     resolved_database_url = str(
         database_url
         or get_env("DATABASE_URL", "", cast=str, resolve_aliases=False)
         or ""
     ).strip()
-    resolved_intent_store_path = str(
-        intent_store_path
-        or get_env(
-            "AI_TRADING_OMS_INTENT_STORE_PATH",
-            "runtime/oms_intents.db",
-            cast=str,
-            resolve_aliases=False,
-        )
-        or "runtime/oms_intents.db"
-    ).strip()
+    if intent_store_path:
+        resolved_intent_store_path = str(intent_store_path).strip()
+        temp_dir_cm: tempfile.TemporaryDirectory[str] | None = None
+    else:
+        temp_dir_cm = tempfile.TemporaryDirectory(prefix="oms-lifecycle-parity-")
+        resolved_intent_store_path = str(Path(temp_dir_cm.name) / "oms_intents.db")
     if not resolved_database_url:
         resolved_database_url = f"sqlite:///{resolved_intent_store_path}"
 
@@ -182,6 +187,7 @@ def replay_lifecycle_parity(
             live_intent_id = _run_live(
                 database_url=resolved_database_url,
                 intent_store_path=resolved_intent_store_path,
+                run_id=run_id,
                 scenario_name=scenario_name,
                 symbol=symbol,
                 side=side,
@@ -194,6 +200,7 @@ def replay_lifecycle_parity(
             simulated_intent_id = _run_simulated(
                 database_url=resolved_database_url,
                 intent_store_path=resolved_intent_store_path,
+                run_id=run_id,
                 scenario_name=scenario_name,
                 symbol=symbol,
                 side=side,
@@ -220,10 +227,13 @@ def replay_lifecycle_parity(
                 mismatches.append(comparison)
     finally:
         event_store.close()
+        if temp_dir_cm is not None:
+            temp_dir_cm.cleanup()
 
     return {
         "ok": len(mismatches) == 0,
         "fixture_path": str(fixture),
+        "run_id": run_id,
         "database_url": resolved_database_url,
         "intent_store_path": resolved_intent_store_path,
         "scenario_count": len(comparisons),
@@ -254,16 +264,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--intent-store-path",
         type=str,
-        default=str(
-            get_env(
-                "AI_TRADING_OMS_INTENT_STORE_PATH",
-                "runtime/oms_intents.db",
-                cast=str,
-                resolve_aliases=False,
-            )
-            or "runtime/oms_intents.db"
-        ),
-        help="SQLite fallback path used when database URL is not configured.",
+        default="",
+        help="Optional SQLite fallback path used when database URL is not configured.",
     )
     return parser
 

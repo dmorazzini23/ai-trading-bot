@@ -69,6 +69,45 @@ def test_replay_live_parity_gate_fails_on_stale_replay(monkeypatch, tmp_path: Pa
     assert payload["status"] == "fail"
 
 
+def test_replay_live_parity_gate_selects_newest_payload_ts_over_lexical_name(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data-root"
+    output_dir = data_root / "runtime" / "replay_outputs"
+    now = datetime.now(UTC)
+    older_lexically_later = output_dir / "replay_hash_zzzz.json"
+    newer_lexically_earlier = output_dir / "replay_hash_aaaa.json"
+    _write_replay_artifact(
+        older_lexically_later,
+        ts=now - timedelta(hours=2),
+        violations_count=3,
+        counterfactual_passed=False,
+    )
+    _write_replay_artifact(
+        newer_lexically_earlier,
+        ts=now - timedelta(hours=1),
+        violations_count=0,
+        counterfactual_passed=True,
+    )
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_root))
+
+    payload = summarize_replay_live_parity_gate(
+        oms_lifecycle_parity={
+            "enabled": True,
+            "available": True,
+            "ok": True,
+            "total_violations": 0,
+        }
+    )
+
+    assert payload["ok"] is True
+    assert payload["replay_governance"]["path"] == str(newer_lexically_earlier)
+    assert payload["replay_governance"]["violations_count"] == 0
+    assert payload["replay_governance"]["ts_source"] == "payload"
+
+
 def test_replay_live_parity_gate_requires_lifecycle_parity_by_default_outside_pytest(
     monkeypatch,
     tmp_path: Path,
