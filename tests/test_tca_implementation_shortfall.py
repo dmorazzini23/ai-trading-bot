@@ -373,6 +373,45 @@ def test_finalize_stale_pending_tca_skips_when_fill_events_contains_match(tmp_pa
     assert summary["skipped_fill_event_match"] == 1
 
 
+def test_finalize_stale_pending_tca_matches_sell_short_fill_event_fallback(tmp_path: Path) -> None:
+    tca_path = tmp_path / "tca_records.jsonl"
+    fill_events_path = tmp_path / "fill_events.jsonl"
+    ts = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)
+    pending = {
+        "ts": ts.isoformat(),
+        "symbol": "TSLA",
+        "side": "sell_short",
+        "decision_price": 250.0,
+        "qty": 3.0,
+        "pending_event": True,
+        "benchmark": {"mid_at_arrival": 250.0, "submit_ts": ts.isoformat()},
+    }
+    fill_event = {
+        "ts": datetime(2026, 3, 17, 10, 2, tzinfo=UTC).isoformat(),
+        "event": "fill_recorded",
+        "symbol": "TSLA",
+        "side": "short",
+        "entry_time": datetime(2026, 3, 17, 10, 1, tzinfo=UTC).isoformat(),
+        "fill_price": 249.5,
+        "fill_qty": 3.0,
+    }
+    tca_path.write_text(json.dumps(pending) + "\n", encoding="utf-8")
+    fill_events_path.write_text(json.dumps(fill_event) + "\n", encoding="utf-8")
+
+    summary = finalize_stale_pending_tca(
+        str(tca_path),
+        stale_after_seconds=3600.0,
+        now=datetime(2026, 3, 18, 12, 0, tzinfo=UTC),
+        max_records=10,
+        source="unit_finalize",
+        fill_events_path=str(fill_events_path),
+    )
+
+    assert summary["ok"] is True
+    assert summary["finalized"] == 0
+    assert summary["skipped_fill_event_match"] == 1
+
+
 def test_finalize_stale_pending_tca_compacts_matched_pending_rows(tmp_path: Path) -> None:
     tca_path = tmp_path / "tca_records.jsonl"
     fill_events_path = tmp_path / "fill_events.jsonl"

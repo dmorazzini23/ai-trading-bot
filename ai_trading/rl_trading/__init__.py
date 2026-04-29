@@ -4,9 +4,12 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 import inspect
+import json
 import sys
 import time
 import uuid
+import zipfile
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
@@ -18,7 +21,13 @@ logger = get_logger(__name__)
 
 # Exposed for tests to monkeypatch
 PPO: Any | None = None
+A2C: Any | None = None
+DQN: Any | None = None
+SAC: Any | None = None
+TD3: Any | None = None
 DummyVecEnv: Any | None = None
+
+_SUPPORTED_SB3_ALGOS = ("PPO", "A2C", "DQN", "SAC", "TD3")
 
 _TRAIN_MODULE_STATE: dict[str, Any] = {
     "loader_id": uuid.uuid4().hex,
@@ -44,12 +53,16 @@ def _load_rl_stack() -> dict[str, Any] | None:
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.exception("RL stack unavailable: %s", exc)
         return None
-    global PPO, DummyVecEnv
+    global PPO, A2C, DQN, SAC, TD3, DummyVecEnv
     try:
         PPO = sb3.PPO
+        A2C = sb3.A2C
+        DQN = sb3.DQN
+        SAC = sb3.SAC
+        TD3 = sb3.TD3
         DummyVecEnv = sb3.common.vec_env.DummyVecEnv
     except AttributeError as exc:  # pragma: no cover - sanity guard
-        raise ImportError("stable-baselines3 missing PPO or DummyVecEnv") from exc
+        raise ImportError("stable-baselines3 missing supported algorithms or DummyVecEnv") from exc
     return {"sb3": sb3, "gym": gym}
 
 
@@ -65,18 +78,124 @@ class RLAgent:
         self.model_path = str(model_path)
         self.model: Any | None = None
 
+    @staticmethod
+    def _algorithm_from_payload(payload: Any) -> str | None:
+        if not isinstance(payload, Mapping):
+            return None
+        for key in (
+            "algorithm",
+            "algo",
+            "algo_name",
+            "algorithm_name",
+            "sb3_algorithm",
+            "model_algorithm",
+            "model_class",
+            "algo_class",
+            "class_name",
+        ):
+            value = payload.get(key)
+            if isinstance(value, str):
+                normalized = value.rsplit(".", maxsplit=1)[-1].strip().upper()
+                if normalized in _SUPPORTED_SB3_ALGOS:
+                    return normalized
+        for key in ("metadata", "model_metadata", "training", "training_results"):
+            found = RLAgent._algorithm_from_payload(payload.get(key))
+            if found is not None:
+                return found
+        return None
+
+    @staticmethod
+    def _read_json(path: Path) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    @staticmethod
+    def _algorithm_from_zip(model_path: Path) -> str | None:
+        try:
+            with zipfile.ZipFile(model_path) as model_zip:
+                for member_name in (
+                    "rl_model_metadata.json",
+                    "metadata.json",
+                    "meta.json",
+                    "training_results.json",
+                    "data",
+                ):
+                    try:
+                        raw = model_zip.read(member_name)
+                    except KeyError:
+                        continue
+                    try:
+                        payload = json.loads(raw.decode("utf-8"))
+                    except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+                        continue
+                    found = RLAgent._algorithm_from_payload(payload)
+                    if found is not None:
+                        return found
+        except (OSError, zipfile.BadZipFile):
+            return None
+        return None
+
+    @classmethod
+    def _resolve_algorithm(cls, model_path: Path) -> str:
+        found = cls._algorithm_from_zip(model_path)
+        if found is not None:
+            return found
+        candidates = [
+            Path(f"{model_path}.meta.json"),
+            model_path.with_suffix(f"{model_path.suffix}.meta.json")
+            if model_path.suffix
+            else Path(f"{model_path}.meta.json"),
+            model_path.parent / "meta.json",
+            model_path.parent / "training_results.json",
+        ]
+        seen: set[Path] = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if not candidate.is_file():
+                continue
+            found = cls._algorithm_from_payload(cls._read_json(candidate))
+            if found is not None:
+                return found
+        filename = model_path.name.upper()
+        for algorithm in _SUPPORTED_SB3_ALGOS:
+            if f"_{algorithm}" in filename or f"-{algorithm}" in filename:
+                return algorithm
+        return "PPO"
+
+    @staticmethod
+    def _algorithm_class(algorithm: str) -> Any:
+        algo_cls = globals().get(algorithm)
+        if algo_cls is None:
+            supported = ", ".join(_SUPPORTED_SB3_ALGOS)
+            raise ImportError(
+                f"RL algorithm {algorithm} unavailable; supported algorithms: {supported}"
+            )
+        return algo_cls
+
     def load(self) -> None:
         model_path = Path(self.model_path)
-        if not is_rl_available() or PPO is None:
+        if not is_rl_available():
             raise ImportError(
                 "RL stack not available; install stable-baselines3, gymnasium, and torch"
             )
         if not model_path.exists():
             raise FileNotFoundError(f"RL model not found at {self.model_path}")
+        algorithm = self._resolve_algorithm(model_path)
+        algo_cls = self._algorithm_class(algorithm)
         try:
-            self.model = PPO.load(self.model_path)
+            self.model = algo_cls.load(self.model_path)
         except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive guard
-            logger.error("RL model load failed for %s: %s", self.model_path, exc)
+            logger.error(
+                "RL model load failed for %s with %s: %s",
+                self.model_path,
+                algorithm,
+                exc,
+            )
             raise RuntimeError(f"RL model load failed for {self.model_path}") from exc
 
     def predict(
@@ -166,6 +285,10 @@ class RLTrader(RLAgent):
 __all__ = [
     "DummyVecEnv",
     "PPO",
+    "A2C",
+    "DQN",
+    "SAC",
+    "TD3",
     "RLAgent",
     "RLTrader",
     "is_rl_available",

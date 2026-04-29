@@ -14,11 +14,21 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from enum import Enum
 from typing import Any
+from ai_trading.config.management import get_env
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.logging import logger
 from ai_trading.utils import http
 from ai_trading.utils.timing import HTTP_TIMEOUT
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.exc import RequestException
+
+
+def _resolve_alert_queue_maxsize() -> int:
+    try:
+        raw = get_env("AI_TRADING_ALERT_QUEUE_MAXSIZE", 1000, cast=int)
+        return max(1, int(raw if raw is not None else 1000))
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        return 1000
 
 class AlertSeverity(Enum):
     """Alert severity levels."""
@@ -186,11 +196,25 @@ class AlertManager:
         self.max_history_size = 1000
         self.email_recipients = []
         self.escalation_recipients = []
-        self.alert_queue: queue.Queue[Alert] = queue.Queue()
+        self.alert_queue_maxsize = _resolve_alert_queue_maxsize()
+        self.alert_queue: queue.Queue[Alert] = queue.Queue(maxsize=self.alert_queue_maxsize)
         self.processing_thread = None
         self.is_running = False
         self.custom_handlers = {}
+        self._stats_lock = threading.Lock()
+        self.alerts_dropped = 0
+        self.alerts_suppressed = 0
+        self.alert_backpressure_events = 0
         logger.info('AlertManager initialized')
+
+    def _record_alert_drop(self) -> None:
+        with self._stats_lock:
+            self.alerts_dropped += 1
+            self.alert_backpressure_events += 1
+
+    def _record_alert_suppressed(self) -> None:
+        with self._stats_lock:
+            self.alerts_suppressed += 1
 
     def configure_email(self, smtp_server: str, smtp_port: int, username: str, password: str, recipients: list[str]):
         """Configure email alerting."""
@@ -220,6 +244,7 @@ class AlertManager:
             self.processing_thread.start()
             logger.info('Alert processing started')
         except (RuntimeError, OSError, ValueError) as e:
+            self.is_running = False
             logger.error(f'Error starting alert processing: {e}')
 
     def stop_processing(self):
@@ -250,9 +275,23 @@ class AlertManager:
         try:
             alert = Alert(title, message, severity, source, metadata)
             if not force and self._is_rate_limited(alert):
+                self._record_alert_suppressed()
                 logger.debug(f'Alert rate limited: {alert.title}')
                 return alert.id
-            self.alert_queue.put(alert)
+            try:
+                self.alert_queue.put_nowait(alert)
+            except queue.Full:
+                self._record_alert_drop()
+                logger.warning(
+                    'ALERT_QUEUE_FULL_DROPPED',
+                    extra={
+                        'queue_size': self.alert_queue.qsize(),
+                        'queue_maxsize': self.alert_queue_maxsize,
+                        'dropped': self.alerts_dropped,
+                        'backpressure_events': self.alert_backpressure_events,
+                    },
+                )
+                return alert.id
             self._update_alert_history(alert)
             logger.debug(f'Alert queued: {alert.id} - {alert.title}')
             return alert.id
@@ -310,25 +349,44 @@ class AlertManager:
         """Main alert processing loop."""
         try:
             while self.is_running:
+                alert = None
+                task_acquired = False
                 try:
                     alert = self.alert_queue.get(timeout=1.0)
+                    task_acquired = True
                     channels = self.alert_routing.get(alert.severity, [AlertChannel.SLACK])
                     for channel in channels:
-                        success = self._send_to_channel(alert, channel)
-                        if success:
-                            alert.channels_sent.append(channel)
+                        try:
+                            success = self._send_to_channel(alert, channel)
+                            if success:
+                                alert.channels_sent.append(channel)
+                        except AI_TRADING_FALLBACK_EXCEPTIONS as e:
+                            logger.error(f'Error dispatching alert channel {channel}: {e}')
                     if alert.severity in self.custom_handlers:
                         try:
                             self.custom_handlers[alert.severity](alert)
-                        except (ValueError, RuntimeError, KeyError, OSError) as e:
+                        except AI_TRADING_FALLBACK_EXCEPTIONS as e:
                             logger.error(f'Error in custom alert handler: {e}')
-                    self.alert_queue.task_done()
                 except queue.Empty:
                     continue
-                except (ValueError, RuntimeError, AttributeError, OSError) as e:
+                except AI_TRADING_FALLBACK_EXCEPTIONS as e:
                     logger.error(f'Error processing alert: {e}')
-        except (RuntimeError, OSError, ValueError, TypeError) as e:
+                finally:
+                    if task_acquired:
+                        try:
+                            self.alert_queue.task_done()
+                        except AI_TRADING_FALLBACK_EXCEPTIONS as e:
+                            logger.error(f'Error marking alert task done: {e}')
+        except AI_TRADING_FALLBACK_EXCEPTIONS as e:
             logger.error(f'Error in alert processing loop: {e}')
+        finally:
+            try:
+                running = bool(self.is_running)
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
+                running = True
+            if running:
+                logger.error('ALERT_PROCESSOR_EXITED_UNEXPECTEDLY')
+                self.is_running = False
 
     def _send_to_channel(self, alert: Alert, channel: AlertChannel) -> bool:
         """Send alert to specific channel."""
@@ -382,7 +440,11 @@ class AlertManager:
             recent_alerts_hour = [a for a in self.alert_history if a.timestamp >= last_hour]
             recent_alerts_day = [a for a in self.alert_history if a.timestamp >= last_day]
             severity_counts: dict[str, int] = {}
-            stats: dict[str, Any] = {'total_alerts': len(self.alert_history), 'alerts_last_hour': len(recent_alerts_hour), 'alerts_last_day': len(recent_alerts_day), 'queue_size': self.alert_queue.qsize(), 'processing_active': self.is_running, 'severity_counts': severity_counts}
+            with self._stats_lock:
+                dropped = self.alerts_dropped
+                suppressed = self.alerts_suppressed
+                backpressure = self.alert_backpressure_events
+            stats: dict[str, Any] = {'total_alerts': len(self.alert_history), 'alerts_last_hour': len(recent_alerts_hour), 'alerts_last_day': len(recent_alerts_day), 'queue_size': self.alert_queue.qsize(), 'queue_maxsize': self.alert_queue_maxsize, 'processing_active': self.is_running, 'alerts_dropped': dropped, 'alerts_suppressed': suppressed, 'alert_backpressure_events': backpressure, 'severity_counts': severity_counts}
             for severity in AlertSeverity:
                 count = len([a for a in recent_alerts_day if a.severity == severity])
                 severity_counts[severity.value] = count

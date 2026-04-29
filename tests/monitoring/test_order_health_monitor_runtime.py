@@ -99,6 +99,29 @@ def test_check_stale_orders_logs_cancel_errors() -> None:
     monitor._check_stale_orders()
 
 
+def test_check_stale_orders_survives_network_cancel_errors() -> None:
+    class FailingExecutionEngine:
+        def _cancel_stale_order(self, _order_id: str) -> bool:
+            raise ConnectionError("broker network down")
+
+    monitor = ohm.OrderHealthMonitor(FailingExecutionEngine())
+    monitor.order_timeout_seconds = 1
+    with ohm._order_tracking_lock:
+        ohm._active_orders["stale"] = ohm.OrderInfo(
+            order_id="stale",
+            symbol="MSFT",
+            side="buy",
+            qty=10,
+            submitted_time=time.time() - 30,
+            last_status="NEW",
+        )
+
+    monitor._check_stale_orders()
+
+    with ohm._order_tracking_lock:
+        assert ohm._active_orders["stale"].cancel_attempted is True
+
+
 def test_start_stop_monitoring_uses_thread_and_ignores_duplicate_start(monkeypatch: pytest.MonkeyPatch) -> None:
     starts: list[bool] = []
     joins: list[float | None] = []

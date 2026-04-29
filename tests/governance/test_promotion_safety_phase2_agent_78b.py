@@ -100,6 +100,33 @@ def test_promotion_approval_gate_classifies_rejected_and_invalid_decisions(
     assert blocked["approval"]["decision"] == "rejected"
 
 
+def test_promote_rolls_back_governance_when_active_symlink_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = "symlink_failure"
+    promotion, registry, champion, challenger, audit_events = _promotion_with_challenger(
+        tmp_path,
+        monkeypatch,
+        strategy=strategy,
+    )
+
+    def fail_symlink(_strategy: str, _model_id: str) -> None:
+        raise OSError("cannot create active link")
+
+    monkeypatch.setattr(promotion, "_create_active_symlink", fail_symlink)
+
+    assert promotion.promote_to_production(challenger, force=True) is False
+
+    production = registry.get_production_model(strategy)
+    assert production is not None
+    assert production[0] == champion
+    assert registry.model_index[champion]["governance"]["status"] == "production"
+    assert registry.model_index[challenger]["governance"]["status"] == "shadow"
+    assert audit_events[-1]["event_type"] == "MODEL_PROMOTION_BLOCKED"
+    assert audit_events[-1]["payload"]["reason"] == "active_symlink_failed"
+
+
 def test_promotion_approval_gate_classifies_stale_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

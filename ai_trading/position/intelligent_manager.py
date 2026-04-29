@@ -41,6 +41,7 @@ class PositionRecommendation:
     urgency: float
     quantity_to_sell: int | None = None
     percentage_to_sell: float | None = None
+    order_side: str | None = None
     target_price: float | None = None
     stop_price: float | None = None
     primary_reason: str = ''
@@ -273,8 +274,9 @@ class IntelligentPositionManager:
                 contributing_factors.append('Low portfolio correlation')
             action, confidence, urgency = self._determine_action_from_scores(hold_score, sell_score, partial_sell_score)
             quantity_to_sell, percentage_to_sell, target_price, stop_price = self._calculate_action_details(action, position_data, current_price, triggered_targets, stop_analysis)
+            order_side = self._exit_order_side(action, position_data)
             primary_reason = self._determine_primary_reason(action, regime_analysis, technical_analysis, profit_analysis, stop_analysis, correlation_analysis)
-            recommendation = PositionRecommendation(symbol=symbol, action=action, confidence=confidence, urgency=urgency, quantity_to_sell=quantity_to_sell, percentage_to_sell=percentage_to_sell, target_price=target_price, stop_price=stop_price, primary_reason=primary_reason, contributing_factors=contributing_factors, regime_influence=hold_score * self.analysis_weights['regime'], technical_influence=max(hold_score, sell_score) * self.analysis_weights['technical'], profit_taking_influence=partial_sell_score * self.analysis_weights['profit_taking'], correlation_influence=correlation_factor, timestamp=datetime.now(UTC))
+            recommendation = PositionRecommendation(symbol=symbol, action=action, confidence=confidence, urgency=urgency, quantity_to_sell=quantity_to_sell, percentage_to_sell=percentage_to_sell, order_side=order_side, target_price=target_price, stop_price=stop_price, primary_reason=primary_reason, contributing_factors=contributing_factors, regime_influence=hold_score * self.analysis_weights['regime'], technical_influence=max(hold_score, sell_score) * self.analysis_weights['technical'], profit_taking_influence=partial_sell_score * self.analysis_weights['profit_taking'], correlation_influence=correlation_factor, timestamp=datetime.now(UTC))
             return recommendation
         except COMMON_EXC as exc:
             self.logger.warning('_generate_integrated_recommendation failed for %s: %s', symbol, exc)
@@ -301,7 +303,7 @@ class IntelligentPositionManager:
     def _calculate_action_details(self, action: PositionAction, position_data: Any, current_price: float, triggered_targets: list, stop_analysis: dict) -> tuple[int | None, float | None, float | None, float | None]:
         """Calculate specific details for the recommended action."""
         try:
-            qty = int(getattr(position_data, 'qty', 0))
+            qty = abs(int(float(getattr(position_data, 'qty', 0))))
             quantity_to_sell = None
             percentage_to_sell = None
             target_price = None
@@ -330,6 +332,18 @@ class IntelligentPositionManager:
             return (quantity_to_sell, percentage_to_sell, target_price, stop_price)
         except COMMON_EXC:
             return (None, None, None, None)
+
+    def _exit_order_side(self, action: PositionAction, position_data: Any) -> str | None:
+        if action not in {PositionAction.FULL_SELL, PositionAction.PARTIAL_SELL, PositionAction.REDUCE_SIZE}:
+            return None
+        try:
+            qty = float(getattr(position_data, 'qty', 0) or 0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        side = str(getattr(position_data, 'side', getattr(position_data, 'position_side', '')) or '').strip().lower()
+        if qty < 0 or side in {'short', 'sell_short', 'sellshort'}:
+            return 'buy_to_cover'
+        return 'sell'
 
     def _determine_primary_reason(self, action: PositionAction, regime_analysis: dict, technical_analysis: dict, profit_analysis: dict, stop_analysis: dict, correlation_analysis: dict) -> str:
         """Determine the primary reason for the recommendation."""

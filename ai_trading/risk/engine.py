@@ -959,8 +959,18 @@ class RiskEngine:
             for p in positions:
                 asset = getattr(p, "asset_class", "equity")
                 qty = float(getattr(p, "qty", 0) or 0)
-                price = float(getattr(p, "avg_entry_price", 0) or 0)
-                weight = abs(qty * price) / equity if equity > 0 else 0.0
+                market_value_raw = getattr(p, "market_value", None)
+                try:
+                    market_value = abs(float(market_value_raw))
+                except (TypeError, ValueError):
+                    market_value = 0.0
+                if market_value <= 0.0:
+                    current_price = float(getattr(p, "current_price", 0) or 0)
+                    market_value = abs(qty * current_price)
+                if market_value <= 0.0:
+                    avg_entry_price = float(getattr(p, "avg_entry_price", 0) or 0)
+                    market_value = abs(qty * avg_entry_price)
+                weight = market_value / equity if equity > 0 else 0.0
                 exposure[asset] = exposure.get(asset, 0.0) + weight
             self.exposure = exposure
         except (AttributeError, APIError) as exc:
@@ -1043,8 +1053,14 @@ class RiskEngine:
                 return False
             logger.warning("FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap")
         strat_cap = self.strategy_limits.get(strategy, self.global_limit)
-        if opening_weight > strat_cap:
-            logger.warning("Strategy %s weight %.2f exceeds cap %.2f", strategy, opening_weight, strat_cap)
+        projected_strategy_exp = self.strategy_exposure.get(strategy, 0.0) + max(pending, 0.0) + opening_weight
+        if projected_strategy_exp > strat_cap:
+            logger.warning(
+                "Strategy %s exposure %.2f exceeds cap %.2f",
+                strategy,
+                projected_strategy_exp,
+                strat_cap,
+            )
             if not get_env("FORCE_CONTINUE_ON_EXPOSURE", "false", cast=bool):
                 return False
             logger.warning("FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap")

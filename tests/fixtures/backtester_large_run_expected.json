@@ -61,8 +61,8 @@
   "symbols": [
     {
       "bars": 20,
-      "cagr": 0.0013414676468725961,
-      "drawdown": 6.088981313423503e-05,
+      "cagr": 0.0009630666802102894,
+      "drawdown": 8.088727643140725e-05,
       "load_report": {
         "duplicate_timestamp_rows": 0,
         "inferred_range_index": false,
@@ -75,17 +75,17 @@
         "rows_read": 20,
         "timestamp_column": "event_time"
       },
-      "net_pnl": 10.64000000001397,
-      "pnl": 10.64000000001397,
-      "sharpe": 4.429476354566692,
+      "net_pnl": 7.64000000001397,
+      "pnl": 7.64000000001397,
+      "sharpe": 3.2705958711300354,
       "symbol": "AAPL",
       "trades": 12,
-      "turnover": 0.0122104
+      "turnover": 0.0122404
     },
     {
       "bars": 19,
-      "cagr": 0.0020803349217071165,
-      "drawdown": 2.089628881907224e-05,
+      "cagr": 0.001017762769055075,
+      "drawdown": 4.089519072558723e-05,
       "load_report": {
         "duplicate_timestamp_rows": 2,
         "inferred_range_index": false,
@@ -98,9 +98,9 @@
         "rows_read": 20,
         "timestamp_column": "event_time"
       },
-      "net_pnl": 15.670000000012806,
-      "pnl": 15.670000000012806,
-      "sharpe": 8.433757957269961,
+      "net_pnl": 7.670000000012806,
+      "pnl": 7.670000000012806,
+      "sharpe": 4.090125064752657,
       "symbol": "MSFT",
       "trades": 11,
       "turnover": 0.0125302

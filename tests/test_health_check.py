@@ -479,11 +479,16 @@ def test_json_dump_failure_rebuilds_payload(monkeypatch):
     monkeypatch.setattr(app_module, "jsonify", broken_jsonify, raising=False)
 
     original_dumps = app_module.json.dumps
-    call_count = {"calls": 0}
+    call_count = {"calls": 0, "failed": False}
 
     def flaky_dumps(payload, *args, **kwargs):
         call_count["calls"] += 1
-        if call_count["calls"] == 1:
+        if (
+            isinstance(payload, dict)
+            and payload.get("service") == "ai-trading"
+            and not call_count["failed"]
+        ):
+            call_count["failed"] = True
             raise TypeError("not serializable")
         return original_dumps(payload, *args, **kwargs)
 
@@ -500,4 +505,5 @@ def test_json_dump_failure_rebuilds_payload(monkeypatch):
     assert data["alpaca"]["has_key"] is True
     assert data["alpaca"]["has_secret"] is True
     _assert_error_contains(data, "not serializable")
+    assert call_count["failed"] is True
     assert call_count["calls"] >= 2

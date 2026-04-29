@@ -146,3 +146,36 @@ def test_prepare_run_all_trades_cycle_initializes_cycle_state(monkeypatch) -> No
     assert state.cycle_submit_compaction == set()
     assert state._strategies_loaded is True
     assert runtime.strategies == ["s1"]
+
+
+def test_prepare_run_all_trades_cycle_rolls_back_active_state_on_late_failure(
+    monkeypatch,
+) -> None:
+    state = _base_state()
+    runtime = _base_runtime()
+    kwargs = _base_kwargs()
+    now = kwargs.pop("_now")
+    previous_last_run_at = now - timedelta(minutes=10)
+    state.last_run_at = previous_last_run_at
+    state.minute_feed_cache = {"AAPL": 1}
+    state.cycle_order_intents = {"x": 1}
+    state.cycle_submit_compaction = {"y"}
+    kwargs["get_strategies_func"] = lambda: (_ for _ in ()).throw(
+        RuntimeError("strategy load failed")
+    )
+
+    try:
+        prepare_run_all_trades_cycle(
+            state=state,
+            runtime=runtime,
+            utc_now_func=lambda: now,
+            **kwargs,
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "strategy load failed"
+    else:
+        raise AssertionError("expected strategy load failure")
+
+    assert state.running is False
+    assert state.last_run_at == previous_last_run_at
+    assert state._strategies_loaded is False

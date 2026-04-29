@@ -362,6 +362,19 @@ def test_reload_host_limit_handles_invalid_env(monkeypatch):
     _reload_pooling(pooling)
 
 
+def test_sync_host_limiter_handles_invalid_http_host_limit(monkeypatch):
+    monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
+    monkeypatch.setenv("AI_TRADING_HTTP_HOST_LIMIT", "bad-value")
+    pooling = _reload_pooling()
+
+    limiter = pooling.get_host_limiter("example.com")
+
+    assert getattr(limiter, "_ai_trading_host_limit") == pooling._DEFAULT_LIMIT
+
+    monkeypatch.delenv("AI_TRADING_HTTP_HOST_LIMIT", raising=False)
+    _reload_pooling(pooling)
+
+
 def test_http_host_limit_survives_partial_pooling_stub(monkeypatch):
     http_host_limit = reload_module("ai_trading.net.http_host_limit")
     monkeypatch.setenv("AI_TRADING_HTTP_HOST_LIMIT", "2")

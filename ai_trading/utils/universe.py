@@ -20,11 +20,18 @@ def load_universe(path_or_csv: str | None, limit: int | None = None) -> list[str
     """Load symbols from file path or CSV string and return sanitized list."""
     raw: list[str] = []
     if path_or_csv:
-        p = Path(path_or_csv)
-        if p.exists() and p.is_file():
-            raw = _symbols_from_file(p)
-        else:
+        if _looks_like_inline_csv(path_or_csv):
             raw = _split_symbols(path_or_csv)
+        else:
+            p = Path(path_or_csv)
+            try:
+                is_file = p.exists() and p.is_file()
+            except (OSError, ValueError):
+                is_file = False
+            if is_file:
+                raw = _symbols_from_file(p)
+            else:
+                raw = _split_symbols(path_or_csv)
     if not raw:
         raise RuntimeError(
             f"No tickers found at '{path_or_csv}'. Provide a tickers.csv or CSV env list."
@@ -62,6 +69,10 @@ def _symbols_from_file(path: Path) -> list[str]:
 
     # Default CSV interpretation: first column contains symbols.
     return [row[0].strip() for row in rows if row and row[0].strip()]
+
+
+def _looks_like_inline_csv(value: str) -> bool:
+    return any(separator in value for separator in (",", "\n", "\r"))
 
 
 def _split_symbols(s: str) -> list[str]:

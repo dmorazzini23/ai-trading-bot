@@ -133,6 +133,7 @@ class ExecutionService:
     ) -> list[tuple[str, str]]:
         """Submit simple directional test/runtime orders through the attached broker client."""
 
+        self._require_supported_mode(ctx=ctx, operation="execute_signal_orders")
         orders: list[tuple[str, str]] = []
         items = getattr(signals, "items", None)
         if not callable(items):

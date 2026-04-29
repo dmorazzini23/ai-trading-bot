@@ -221,15 +221,37 @@ class RiskValidator:
 
     @staticmethod
     def _notional_value(position_info: Any) -> float:
+        qty: float | None = None
+        side = ""
         if isinstance(position_info, dict):
             raw_value = position_info.get('notional_value')
             if raw_value in (None, ""):
-                raw_value = position_info.get('market_value', 0.0)
+                raw_value = position_info.get('market_value')
+            qty_raw = position_info.get('qty', position_info.get('quantity'))
+            side = str(position_info.get('side') or position_info.get('position_side') or '').strip().lower()
+            price_raw = position_info.get('current_price', position_info.get('price', position_info.get('avg_entry_price')))
         else:
             raw_value = getattr(position_info, 'notional_value', None)
             if raw_value in (None, ""):
-                raw_value = getattr(position_info, 'market_value', 0.0)
-        return float(raw_value or 0.0)
+                raw_value = getattr(position_info, 'market_value', None)
+            qty_raw = getattr(position_info, 'qty', getattr(position_info, 'quantity', None))
+            side = str(getattr(position_info, 'side', getattr(position_info, 'position_side', '')) or '').strip().lower()
+            price_raw = getattr(position_info, 'current_price', getattr(position_info, 'price', getattr(position_info, 'avg_entry_price', None)))
+        try:
+            qty = float(qty_raw)
+        except (TypeError, ValueError):
+            qty = None
+        if raw_value in (None, "") and qty is not None:
+            try:
+                raw_value = qty * float(price_raw)
+            except (TypeError, ValueError):
+                raw_value = 0.0
+        value = float(raw_value or 0.0)
+        if qty is not None and qty < 0:
+            return -abs(value)
+        if side in {'short', 'sell_short', 'sellshort'}:
+            return -abs(value)
+        return value
 
     @staticmethod
     def _signed_order_value(quantity: int | float, price: float, side: str | None=None) -> float:
@@ -237,7 +259,7 @@ class RiskValidator:
         quantity_abs = abs(float(quantity))
         if normalized_side in {'sell_short', 'sellshort', 'short', 'sell-short', 'sell short', 'sell'}:
             return -quantity_abs * float(price)
-        if normalized_side in {'buy', 'buy_to_cover', 'cover'}:
+        if normalized_side in {'buy', 'buy_to_cover', 'buy-to-cover', 'buy to cover', 'buy_to_close', 'cover'}:
             return quantity_abs * float(price)
         return float(quantity) * float(price)
 

@@ -150,6 +150,19 @@ def test_execute_signal_orders_uses_alpaca_request_keyword() -> None:
     assert _request_snapshot(order_data) == ("AAPL", 1.0, "buy")
 
 
+def test_execute_signal_orders_blocks_legacy_live_mode(monkeypatch) -> None:
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.delenv("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", raising=False)
+    ctx = types.SimpleNamespace(
+        api=types.SimpleNamespace(
+            submit_order=lambda *, order_data: types.SimpleNamespace(status="accepted")
+        )
+    )
+
+    with pytest.raises(LegacyLiveExecutionBlockedError, match="execute_signal_orders"):
+        execute_signal_orders(ctx, pd.Series([1], index=["AAPL"]), logger=_DummyLogger())
+
+
 def test_ensure_portfolio_weights_requires_canonical_weights(monkeypatch) -> None:
     logger = _DummyLogger()
     monkeypatch.delattr(portfolio_mod, "compute_portfolio_weights", raising=False)
@@ -183,6 +196,52 @@ def test_reconcile_position_targets_prunes_stale_entries() -> None:
     assert "MSFT" not in ctx.take_profit_targets
     assert "AAPL" in ctx.stop_targets
     assert ctx._reconciliation_position_snapshots["AAPL"]["qty"] == 2.0
+
+
+def test_reconcile_position_targets_supports_raw_alpaca_get_all_positions() -> None:
+    ctx = types.SimpleNamespace(
+        api=types.SimpleNamespace(
+            get_all_positions=lambda: [types.SimpleNamespace(symbol="AAPL", qty="3")]
+        ),
+        stop_targets={"AAPL": 100.0, "MSFT": 50.0},
+        take_profit_targets={"AAPL": 120.0, "MSFT": 55.0},
+    )
+
+    warned = reconcile_position_targets(
+        ctx,
+        logger=_DummyLogger(),
+        targets_lock=threading.Lock(),
+        warned=False,
+    )
+
+    assert warned is False
+    assert "MSFT" not in ctx.stop_targets
+    assert "MSFT" not in ctx.take_profit_targets
+    assert "AAPL" in ctx.stop_targets
+    assert ctx._reconciliation_position_snapshots["AAPL"]["qty"] == 3.0
+
+
+def test_reconcile_position_targets_skips_missing_positions_capability() -> None:
+    logger = _DummyLogger()
+    ctx = types.SimpleNamespace(
+        api=types.SimpleNamespace(),
+        stop_targets={"AAPL": 100.0},
+        take_profit_targets={"AAPL": 120.0},
+    )
+
+    warned = reconcile_position_targets(
+        ctx,
+        logger=logger,
+        targets_lock=threading.Lock(),
+        warned=False,
+    )
+
+    assert warned is True
+    assert ctx.stop_targets == {"AAPL": 100.0}
+    assert ctx.take_profit_targets == {"AAPL": 120.0}
+    assert logger.messages == [
+        ("Skipping reconciliation: broker client missing positions method", (), {})
+    ]
 
 
 def test_reconcile_position_targets_surfaces_broker_errors() -> None:

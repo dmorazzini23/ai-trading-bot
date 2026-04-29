@@ -5,11 +5,15 @@ from datetime import datetime
 from typing import Any
 
 
+def _is_sell_side(side: str) -> bool:
+    side_norm = str(side).strip().lower().replace("-", "_").replace(" ", "_")
+    return side_norm in {"sell", "short", "sell_short", "sellshort", "entry_short", "open_short", "short_sell"}
+
+
 def arrival_slippage_bps(arrival_price: float, fill_price: float, side: str) -> float:
     if arrival_price <= 0:
         return 0.0
-    side_norm = str(side).lower()
-    if side_norm == "sell":
+    if _is_sell_side(side):
         return (arrival_price - fill_price) / arrival_price * 10000.0
     return (fill_price - arrival_price) / arrival_price * 10000.0
 
@@ -20,8 +24,7 @@ def spread_paid_bps(bid: float | None, ask: float | None, fill_price: float, sid
     mid = (bid + ask) / 2.0
     if mid <= 0:
         return 0.0
-    side_norm = str(side).lower()
-    if side_norm == "sell":
+    if _is_sell_side(side):
         return (mid - fill_price) / mid * 10000.0
     return (fill_price - mid) / mid * 10000.0
 
@@ -49,4 +52,3 @@ def compute_attribution_metrics(
         "spread_paid_bps": spread_paid_bps(bid, ask, fill_price, side),
         "fill_latency_ms": fill_latency_ms(order_ts, fill_ts),
     }
-

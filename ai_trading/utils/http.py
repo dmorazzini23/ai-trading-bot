@@ -394,7 +394,7 @@ def request_json(
     for attempt in range(1, retries + 1):
         try:
             resp = _fetch()
-            if resp.status_code in status_forcelist and attempt < retries:
+            if resp.status_code in status_forcelist:
                 raise RequestsRequestException(f"status {resp.status_code}")
             try:
                 payload = resp.json()

@@ -1,11 +1,13 @@
 from tests.optdeps import require
 
 require("numpy")
+import json
 import ai_trading.rl_trading.inference as inf
 import numpy as np
 import pytest
 import ai_trading.rl.module as rl_mod
 import ai_trading.rl_trading.train as train_mod
+import zipfile
 
 
 def test_rl_train_and_infer(monkeypatch, tmp_path):
@@ -122,3 +124,60 @@ def test_rl_agent_stub_mode_is_non_trading(monkeypatch, tmp_path):
     agent = rl.RLAgent(tmp_path / "missing.zip")
     with pytest.raises(ImportError):
         agent.load()
+
+
+def test_rl_agent_loads_algorithm_from_sidecar_metadata(monkeypatch, tmp_path):
+    import ai_trading.rl_trading as rl
+
+    loaded: list[str] = []
+
+    class DummyPPO:
+        @classmethod
+        def load(cls, path):
+            loaded.append("PPO")
+            return cls()
+
+    class DummyA2C:
+        @classmethod
+        def load(cls, path):
+            loaded.append("A2C")
+            return cls()
+
+    model_path = tmp_path / "model_a2c.zip"
+    model_path.write_bytes(b"not-a-real-sb3-zip")
+    (tmp_path / "meta.json").write_text(json.dumps({"algorithm": "A2C"}), encoding="utf-8")
+
+    monkeypatch.setattr(rl, "is_rl_available", lambda: True)
+    monkeypatch.setattr(rl, "PPO", DummyPPO)
+    monkeypatch.setattr(rl, "A2C", DummyA2C)
+
+    agent = rl.RLAgent(model_path)
+    agent.load()
+
+    assert loaded == ["A2C"]
+    assert isinstance(agent.model, DummyA2C)
+
+
+def test_rl_agent_loads_algorithm_from_model_zip_hint(monkeypatch, tmp_path):
+    import ai_trading.rl_trading as rl
+
+    loaded: list[str] = []
+
+    class DummyTD3:
+        @classmethod
+        def load(cls, path):
+            loaded.append("TD3")
+            return cls()
+
+    model_path = tmp_path / "model.zip"
+    with zipfile.ZipFile(model_path, mode="w") as model_zip:
+        model_zip.writestr("rl_model_metadata.json", json.dumps({"sb3_algorithm": "TD3"}))
+
+    monkeypatch.setattr(rl, "is_rl_available", lambda: True)
+    monkeypatch.setattr(rl, "TD3", DummyTD3)
+
+    agent = rl.RLAgent(model_path)
+    agent.load()
+
+    assert loaded == ["TD3"]
+    assert isinstance(agent.model, DummyTD3)

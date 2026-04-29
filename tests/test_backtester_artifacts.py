@@ -179,3 +179,39 @@ def test_backtest_engine_executes_generated_order_on_next_bar() -> None:
     first_trade = result.trades.iloc[0]
     assert first_trade["timestamp"] == index[7]
     assert first_trade["price"] == 40.0
+
+
+def test_backtest_latency_fill_prices_at_release_bar() -> None:
+    index = pd.date_range("2025-01-01", periods=3, freq="D")
+    frame = pd.DataFrame(
+        {
+            "open": [10.0, 20.0, 30.0],
+            "high": [11.0, 21.0, 31.0],
+            "low": [9.0, 19.0, 29.0],
+            "close": [10.0, 20.0, 30.0],
+            "volume": [1_000.0] * 3,
+        },
+        index=index,
+    )
+    engine = backtester.BacktestEngine(
+        {"AAPL": frame},
+        backtester.DefaultExecutionModel(latency=1),
+        initial_cash=1_000.0,
+    )
+    generated = False
+
+    def generate_once(symbol: str, close: float) -> list[backtester.Order]:
+        nonlocal generated
+        if generated:
+            return []
+        generated = True
+        return [backtester.Order(symbol=symbol, qty=1, side="buy", price=close)]
+
+    engine._generate_orders_for_bar = generate_once  # type: ignore[method-assign]
+
+    result = engine.run(["AAPL"])
+
+    assert not result.trades.empty
+    first_trade = result.trades.iloc[0]
+    assert first_trade["timestamp"] == index[2]
+    assert first_trade["price"] == 30.0

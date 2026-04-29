@@ -70,6 +70,54 @@ def test_calculate_action_details_handles_full_partial_reduce_and_stop() -> None
     ) == (20, 20.0, 99.8, None)
 
 
+def test_calculate_action_details_uses_absolute_qty_for_short_exits() -> None:
+    manager = _manager()
+    position = SimpleNamespace(qty=-100)
+    target = SimpleNamespace(quantity_pct=30.0)
+
+    assert manager._calculate_action_details(
+        PositionAction.FULL_SELL,
+        position,
+        100.0,
+        [],
+        {},
+    ) == (100, 100.0, 99.5, None)
+    assert manager._calculate_action_details(
+        PositionAction.PARTIAL_SELL,
+        position,
+        100.0,
+        [target],
+        {},
+    ) == (30, 30.0, 99.8, None)
+
+
+def test_exit_order_side_maps_short_exits_to_buy_to_cover() -> None:
+    manager = _manager()
+
+    assert manager._exit_order_side(PositionAction.FULL_SELL, SimpleNamespace(qty=-100)) == "buy_to_cover"
+    assert manager._exit_order_side(PositionAction.REDUCE_SIZE, SimpleNamespace(qty=100)) == "sell"
+    assert manager._exit_order_side(PositionAction.HOLD, SimpleNamespace(qty=-100)) is None
+
+
+def test_integrated_short_exit_recommendation_has_cover_side_and_absolute_qty() -> None:
+    manager = _manager()
+
+    recommendation = manager._generate_integrated_recommendation(
+        "SPY",
+        SimpleNamespace(qty=-100),
+        100.0,
+        {"regime": MarketRegime.RANGE_BOUND, "confidence": 0.5, "parameters": {}},
+        {},
+        {"triggered_targets": []},
+        {"is_triggered": True, "stop_level": None},
+        {"should_reduce": False, "correlation_factor": 1.0},
+    )
+
+    assert recommendation.action is PositionAction.FULL_SELL
+    assert recommendation.order_side == "buy_to_cover"
+    assert recommendation.quantity_to_sell == 100
+
+
 @pytest.mark.parametrize(
     ("action", "inputs", "expected"),
     [

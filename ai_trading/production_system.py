@@ -6,6 +6,7 @@ with comprehensive risk management, monitoring, and execution capabilities.
 """
 from datetime import UTC, datetime
 import inspect
+from collections.abc import Mapping
 from typing import Any
 from ai_trading.core.enums import OrderSide, OrderType, RiskLevel
 from ai_trading.exc import COMMON_EXC
@@ -82,6 +83,83 @@ class ProductionTradingSystem:
         if market_data:
             return float(market_data.get('current_price', 0) or 0)
         return 0.0
+
+    @staticmethod
+    def _first_payload_value(payload: Mapping[str, Any], *keys: str) -> Any:
+        for key in keys:
+            if key in payload and payload[key] not in (None, ''):
+                return payload[key]
+        return None
+
+    @classmethod
+    def _coerce_execution_result_payload(
+        cls,
+        raw_execution_result: Any,
+        *,
+        symbol: str,
+        quantity: int,
+        price: float | None,
+    ) -> dict[str, Any]:
+        to_dict = getattr(raw_execution_result, 'to_dict', None)
+        if callable(to_dict):
+            payload = dict(to_dict())
+        elif isinstance(raw_execution_result, Mapping):
+            payload = dict(raw_execution_result)
+        else:
+            payload = {
+                'status': str(getattr(raw_execution_result, 'status', 'unknown')).lower(),
+                'symbol': getattr(raw_execution_result, 'symbol', symbol),
+            }
+            raw_quantity = next(
+                (
+                    getattr(raw_execution_result, attr)
+                    for attr in ('quantity', 'filled_qty', 'filled_quantity', 'executed_qty')
+                    if getattr(raw_execution_result, attr, None) not in (None, '')
+                ),
+                quantity,
+            )
+            raw_fill_price = next(
+                (
+                    getattr(raw_execution_result, attr)
+                    for attr in (
+                        'fill_price',
+                        'filled_avg_price',
+                        'average_fill_price',
+                        'avg_fill_price',
+                        'filled_price',
+                    )
+                    if getattr(raw_execution_result, attr, None) not in (None, '')
+                ),
+                price,
+            )
+            payload['quantity'] = raw_quantity
+            payload['fill_price'] = raw_fill_price
+
+        payload.setdefault('symbol', symbol)
+        if 'status' in payload:
+            payload['status'] = str(payload.get('status', 'unknown')).lower()
+        else:
+            payload['status'] = 'unknown'
+        filled_quantity = cls._first_payload_value(
+            payload,
+            'filled_qty',
+            'filled_quantity',
+            'executed_qty',
+            'exec_quantity',
+        )
+        if 'quantity' not in payload or payload.get('quantity') in (None, ''):
+            payload['quantity'] = filled_quantity if filled_quantity is not None else quantity
+        fill_price = cls._first_payload_value(
+            payload,
+            'fill_price',
+            'filled_avg_price',
+            'average_fill_price',
+            'avg_fill_price',
+            'filled_price',
+        )
+        if 'fill_price' not in payload or payload.get('fill_price') in (None, ''):
+            payload['fill_price'] = fill_price if fill_price is not None else price
+        return payload
 
     def _share_halt_manager_with_execution_coordinator(self) -> None:
         coordinator = getattr(self, 'execution_coordinator', None)
@@ -203,16 +281,12 @@ class ProductionTradingSystem:
                 price,
                 'production_system',
             )
-            execution_result: dict[str, Any]
-            if isinstance(raw_execution_result, dict):
-                execution_result = dict(raw_execution_result)
-            else:
-                execution_result = {
-                    'status': str(getattr(raw_execution_result, 'status', 'unknown')).lower(),
-                    'symbol': symbol,
-                    'quantity': quantity,
-                    'fill_price': price,
-                }
+            execution_result = self._coerce_execution_result_payload(
+                raw_execution_result,
+                symbol=symbol,
+                quantity=quantity,
+                price=price,
+            )
             if str(execution_result.get('status', '')).lower() == 'success':
                 await self._update_performance_tracking(execution_result)
                 self.session_trades.append({'timestamp': datetime.now(UTC), 'symbol': symbol, 'side': side.value, 'quantity': execution_result.get('quantity', quantity), 'fill_price': execution_result.get('fill_price', price), 'execution_result': execution_result})

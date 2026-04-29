@@ -493,6 +493,15 @@ class BacktestEngine:
         self.trades.append(fill)
         self._emit_fill_lifecycle(fill, ts)
 
+    def _reprice_delayed_fill_for_bar(self, fill: Fill, ts: "pd.Timestamp") -> None:
+        df = self.data.get(fill.order.symbol)
+        close = self._close_at(df, ts) if df is not None else None
+        if close is None or close <= 0:
+            return
+        price_adjustment = float(fill.fill_price) - float(fill.order.price)
+        fill.order.price = close
+        fill.fill_price = close + price_adjustment
+
     @staticmethod
     def _close_at(df: "pd.DataFrame", ts: Any) -> float | None:
         if df is None or ts not in df.index or "close" not in df.columns:
@@ -582,6 +591,7 @@ class BacktestEngine:
                     self._apply_fill(fill, ts)
             pending_orders = carry_orders
             for fill in self.execution_model.on_bar(timestamp=ts):
+                self._reprice_delayed_fill_for_bar(fill, ts)
                 self._apply_fill(fill, ts)
 
             orders: list[Order] = []

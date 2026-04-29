@@ -177,7 +177,7 @@ def test_register_healthz_routes_returns_exception_payload() -> None:
 
     assert calls["route"] == "/healthz"
     assert calls["methods"] == ["GET"]
-    assert status == 200
+    assert status == 503
     assert payload["status"] == "degraded"
     assert payload["ok"] is False
     assert payload["error"] == "boom"
@@ -206,7 +206,7 @@ def test_register_health_routes_response_fallback_is_non_500() -> None:
 
     payload, status = calls["handler"]()
 
-    assert status == 200
+    assert status == 503
     assert payload["ok"] is False
     assert payload["status"] == "degraded"
     assert payload["error"] == "response busted"

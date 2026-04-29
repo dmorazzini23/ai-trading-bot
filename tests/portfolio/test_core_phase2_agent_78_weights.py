@@ -24,6 +24,35 @@ def test_compute_portfolio_weights_inverse_price_and_invalid(monkeypatch: pytest
     assert core.compute_portfolio_weights(SimpleNamespace(), []) == {}
 
 
+def test_execution_latest_price_prefers_minute_over_daily_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    minute = pd.DataFrame({"close": [101.5]})
+    daily = pd.DataFrame({"close": [88.0]})
+    data_fetcher = SimpleNamespace(
+        get_minute_df=lambda _ctx, _symbol: minute,
+        get_daily_df=lambda _ctx, _symbol: daily,
+    )
+    ctx = SimpleNamespace(data_fetcher=data_fetcher)
+    monkeypatch.setattr(core, "safe_get_stock_bars", lambda *_args, **_kwargs: pd.DataFrame())
+
+    assert core.get_execution_latest_price(ctx, "AAPL") == pytest.approx(101.5)
+
+
+def test_execution_latest_price_uses_daily_only_after_intraday_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    daily = pd.DataFrame({"close": [88.0]})
+    data_fetcher = SimpleNamespace(
+        get_minute_df=lambda _ctx, _symbol: pd.DataFrame(),
+        get_daily_df=lambda _ctx, _symbol: daily,
+    )
+    ctx = SimpleNamespace(data_fetcher=data_fetcher)
+    monkeypatch.setattr(core, "safe_get_stock_bars", lambda *_args, **_kwargs: pd.DataFrame())
+
+    assert core.get_execution_latest_price(ctx, "AAPL") == pytest.approx(88.0)
+
+
 def test_compute_portfolio_weights_inverse_vol_falls_back_when_needed(monkeypatch: pytest.MonkeyPatch) -> None:
     frames = {
         "LOW": pd.DataFrame({"close": [100, 101, 102, 103, 104, 105]}),

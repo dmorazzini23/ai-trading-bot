@@ -184,6 +184,25 @@ def test_signal_decision_pipeline_accepts_and_rejects_expected_cases(monkeypatch
     assert bad_data["reason"] == "REJECT_DATA_ERROR"
 
 
+def test_signal_decision_pipeline_requires_ensemble_agreement_in_intended_direction(
+    monkeypatch,
+):
+    frame = _market_frame(80)
+    pipeline = signals.SignalDecisionPipeline(
+        {"min_edge_threshold": 0.001, "ensemble_min_agree": 1, "regime_volatility_threshold": 10.0}
+    )
+    monkeypatch.setattr(
+        signals.SignalDecisionPipeline,
+        "_estimate_transaction_costs",
+        lambda self, symbol, price, quantity: {"total_cost_pct": 0.0001, "total_cost": 1.0},
+    )
+
+    decision = pipeline.evaluate_signal_with_costs("AAPL", frame, predicted_edge=-0.01)
+
+    assert decision["intended_side"] == "sell_short"
+    assert decision["reason"] == "REJECT_ENSEMBLE_DISAGREEMENT"
+
+
 def test_generate_cost_aware_signals_uses_model_and_skips_bad_symbols(monkeypatch):
     frame = _market_frame(80)
     monkeypatch.setattr(
@@ -213,7 +232,7 @@ def test_generate_cost_aware_signals_uses_model_and_skips_bad_symbols(monkeypatc
     assert all(decision["decision"] == "ACCEPT" for decision in decisions)
 
 
-def test_generate_cost_aware_signals_supports_proba_predict_and_bad_model(monkeypatch):
+def test_generate_cost_aware_signals_requires_calibrated_classifier_scale(monkeypatch):
     frame = _market_frame(80)
     monkeypatch.setattr(
         signals.SignalDecisionPipeline,
@@ -226,6 +245,12 @@ def test_generate_cost_aware_signals_supports_proba_predict_and_bad_model(monkey
             return frame.copy()
 
     class ProbaModel:
+        calibrated_edge_scale = 0.02
+
+        def predict_proba(self, features):
+            return np.tile(np.asarray([[0.4, 0.6]], dtype=float), (len(features), 1))
+
+    class UnscaledProbaModel:
         def predict_proba(self, features):
             return np.tile(np.asarray([[0.4, 0.6]], dtype=float), (len(features), 1))
 
@@ -243,7 +268,11 @@ def test_generate_cost_aware_signals_supports_proba_predict_and_bad_model(monkey
         SimpleNamespace(**base_ctx, model=ProbaModel()),
         ["AAPL", "MSFT"],
     )
-    predict_decisions = signals.generate_cost_aware_signals(
+    unscaled_proba_decisions = signals.generate_cost_aware_signals(
+        SimpleNamespace(**base_ctx, model=UnscaledProbaModel()),
+        ["AAPL", "MSFT"],
+    )
+    hard_label_decisions = signals.generate_cost_aware_signals(
         SimpleNamespace(**base_ctx, model=PredictModel()),
         ["AAPL", "MSFT"],
     )
@@ -253,6 +282,61 @@ def test_generate_cost_aware_signals_supports_proba_predict_and_bad_model(monkey
     )
 
     assert [decision["decision"] for decision in proba_decisions] == ["ACCEPT", "ACCEPT"]
-    assert [decision["decision"] for decision in predict_decisions] == ["ACCEPT", "ACCEPT"]
+    assert [decision["decision"] for decision in unscaled_proba_decisions] == ["REJECT", "REJECT"]
+    assert [decision["decision"] for decision in hard_label_decisions] == ["REJECT", "REJECT"]
     assert [decision["symbol"] for decision in unsupported_decisions] == ["AAPL", "MSFT"]
     assert [decision["decision"] for decision in unsupported_decisions] == ["REJECT", "REJECT"]
+
+
+def test_portfolio_filter_includes_sell_short_in_portfolio_and_cost_checks(monkeypatch):
+    from ai_trading.portfolio import PortfolioDecision
+
+    frame = _market_frame(80)
+    calls: dict[str, object] = {}
+
+    class Fetcher:
+        def get_daily_df(self, _ctx, _symbol):
+            return frame.copy()
+
+    class Optimizer:
+        improvement_threshold = 0.0
+        rebalance_drift_threshold = 0.0
+        max_correlation_penalty = 0.0
+
+        def make_portfolio_decision(self, symbol, proposed_position, current_positions, market_data):
+            calls["proposed_position"] = proposed_position
+            calls["current_positions"] = dict(current_positions)
+            calls["market_symbols"] = set(market_data["prices"])
+            return PortfolioDecision.APPROVE, "ok"
+
+    class Costs:
+        def validate_trade_profitability(self, symbol, trade_size, expected_profit, market_data, trade_type):
+            calls["cost_trade_size"] = trade_size
+            return SimpleNamespace(is_profitable=True, transaction_cost=0.01)
+
+    class Regime:
+        def detect_current_regime(self, _market_data):
+            return SimpleNamespace(value="balanced"), {}
+
+        def calculate_dynamic_thresholds(self, _regime, _metrics):
+            return SimpleNamespace(
+                minimum_improvement_threshold=0.0,
+                rebalance_drift_threshold=0.0,
+                correlation_penalty_adjustment=0.0,
+            )
+
+    monkeypatch.setattr(signals, "get_settings", lambda: SimpleNamespace(ENABLE_PORTFOLIO_FEATURES=True))
+    monkeypatch.setattr(signals, "_portfolio_optimizer", Optimizer())
+    monkeypatch.setattr(signals, "_transaction_cost_calculator", Costs())
+    monkeypatch.setattr(signals, "_regime_detector", Regime())
+
+    signal = SimpleNamespace(symbol="MSFT", side="short", quantity=7)
+    filtered = signals.filter_signals_with_portfolio_optimization(
+        [signal],
+        SimpleNamespace(data_fetcher=Fetcher()),
+        current_positions={"MSFT": 5.0},
+    )
+
+    assert filtered == [signal]
+    assert calls["proposed_position"] == -2.0
+    assert calls["cost_trade_size"] == 7.0

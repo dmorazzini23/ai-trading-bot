@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import UserDict
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -281,6 +282,47 @@ def test_execute_trade_normalizes_object_execution_result(monkeypatch):
     assert result["symbol"] == "MSFT"
     assert result["quantity"] == 3
     assert system.session_trades[-1]["side"] == OrderSide.SELL.value
+
+
+def test_execute_trade_preserves_to_dict_fill_fields(monkeypatch):
+    from ai_trading.execution.classes import ExecutionResult
+
+    system = _build_system(monkeypatch)
+    system.is_active = True
+    system.execution_coordinator.next_result = ExecutionResult(
+        status="SUCCESS",
+        order_id="fill-1",
+        symbol="MSFT",
+        quantity=2,
+        fill_price=49.25,
+    )
+
+    result = asyncio.run(system.execute_trade("MSFT", OrderSide.SELL, 9, price=50.0))
+
+    assert result["quantity"] == 2
+    assert result["fill_price"] == 49.25
+    assert system.session_trades[-1]["quantity"] == 2
+    assert system.session_trades[-1]["fill_price"] == 49.25
+    assert system.performance_dashboard.positions[-1] == ("MSFT", 2, 49.25, 49.25)
+
+
+def test_execute_trade_preserves_mapping_fill_aliases(monkeypatch):
+    system = _build_system(monkeypatch)
+    system.is_active = True
+    system.execution_coordinator.next_result = UserDict(
+        {
+            "status": "success",
+            "symbol": "AAPL",
+            "filled_qty": "4",
+            "filled_avg_price": "101.75",
+        }
+    )
+
+    result = asyncio.run(system.execute_trade("AAPL", OrderSide.BUY, 10, price=100.0))
+
+    assert result["quantity"] == "4"
+    assert result["fill_price"] == "101.75"
+    assert system.performance_dashboard.positions[-1] == ("AAPL", 4, 101.75, 101.75)
 
 
 def test_health_status_session_summary_and_system_status(monkeypatch):

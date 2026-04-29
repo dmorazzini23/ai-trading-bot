@@ -158,6 +158,15 @@ from ai_trading.position.intelligent_manager import (
 )
 
 
+def _normalize_signal_side(side: Any) -> str:
+    token = str(side or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if token in {"short", "sellshort", "entry_short", "open_short", "short_sell"}:
+        return "sell_short"
+    if token in {"buy", "sell", "sell_short"}:
+        return token
+    return token
+
+
 def load_module(name):
     if not isinstance(name, str):
         logger.warning("Skipping load_module on non-string: %s", type(name))
@@ -941,16 +950,18 @@ def filter_signals_with_portfolio_optimization(signals: list, ctx, current_posit
         for signal in signals:
             try:
                 symbol = getattr(signal, "symbol", "")
-                side = getattr(signal, "side", "")
+                side = _normalize_signal_side(getattr(signal, "side", ""))
                 quantity = getattr(signal, "quantity", 0)
                 if not symbol or not side:
                     filtered_signals.append(signal)
                     continue
                 current_position = current_positions.get(symbol, 0.0)
-                if side.lower() == "buy":
+                if side == "buy":
                     proposed_position = current_position + abs(quantity)
-                elif side.lower() == "sell":
+                elif side == "sell":
                     proposed_position = max(0.0, current_position - abs(quantity))
+                elif side == "sell_short":
+                    proposed_position = current_position - abs(quantity)
                 else:
                     filtered_signals.append(signal)
                     continue
@@ -1223,11 +1234,14 @@ class SignalDecisionPipeline:
             regime_info = self._analyze_market_regime(df)
             total_cost_pct = float(estimated_costs["total_cost_pct"])
             total_cost = total_cost_pct + self.transaction_cost_buffer
-            signal_score = predicted_edge - total_cost
+            edge_direction = -1 if predicted_edge < 0.0 else 1
+            edge_magnitude = abs(predicted_edge)
+            signal_score = edge_magnitude - total_cost
             decision = {
                 "symbol": symbol,
                 "timestamp": utcnow(),
                 "predicted_edge": predicted_edge,
+                "intended_side": "sell_short" if edge_direction < 0 else "buy",
                 "estimated_costs": estimated_costs,
                 "signal_score": signal_score,
                 "regime": regime_info,
@@ -1257,14 +1271,18 @@ class SignalDecisionPipeline:
             elif regime_info["is_high_volatility"] and signal_score < self.min_edge_threshold * 2:
                 decision["decision"] = "REJECT"
                 decision["reason"] = "REJECT_REGIME_HIGH_VOL"
-            elif not self._passes_ensemble_gating(df):
+            elif not self._passes_ensemble_gating(df, intended_direction=edge_direction):
                 decision["decision"] = "REJECT"
                 decision["reason"] = "REJECT_ENSEMBLE_DISAGREEMENT"
             else:
                 decision["decision"] = "ACCEPT"
                 decision["reason"] = "ACCEPT_OK"
-                decision["stop_loss"] = current_price - current_atr * self.atr_stop_multiplier
-                decision["take_profit"] = current_price + current_atr * self.atr_target_multiplier
+                if edge_direction < 0:
+                    decision["stop_loss"] = current_price + current_atr * self.atr_stop_multiplier
+                    decision["take_profit"] = current_price - current_atr * self.atr_target_multiplier
+                else:
+                    decision["stop_loss"] = current_price - current_atr * self.atr_stop_multiplier
+                    decision["take_profit"] = current_price + current_atr * self.atr_target_multiplier
             log_level = logging.INFO if decision["decision"] == "ACCEPT" else logging.DEBUG
             logger.log(
                 log_level,
@@ -1379,7 +1397,7 @@ class SignalDecisionPipeline:
                 "regime_type": "unknown",
             }
 
-    def _passes_ensemble_gating(self, df: PDDataFrame) -> bool:
+    def _passes_ensemble_gating(self, df: PDDataFrame, intended_direction: int = 1) -> bool:
         """Check if signal passes ensemble gating requirements."""
         pd = _get_pandas()
         if pd is None or not hasattr(pd, "DataFrame"):
@@ -1405,10 +1423,9 @@ class SignalDecisionPipeline:
                     signals.append(1)
                 else:
                     signals.append(0)
-            positive_signals = sum((1 for s in signals if s > 0))
-            negative_signals = sum((1 for s in signals if s < 0))
-            max_agreement = max(positive_signals, negative_signals)
-            return max_agreement >= self.ensemble_min_agree
+            direction = -1 if int(intended_direction) < 0 else 1
+            aligned_signals = sum((1 for s in signals if s * direction > 0))
+            return aligned_signals >= self.ensemble_min_agree
         except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
             logger.debug("ENSEMBLE_GATING_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return False
@@ -1506,12 +1523,51 @@ def _prediction_scalar(value: Any) -> float:
     return scalar
 
 
+def _prediction_calibrated_scale(model: Any, *names: str) -> float:
+    for name in names:
+        raw_value = getattr(model, name, None)
+        if raw_value is None:
+            continue
+        scale = float(raw_value)
+        if math.isfinite(scale) and scale > 0.0:
+            return scale
+    raise ValueError("Classifier predictions require a calibrated edge scale; use predict_edge for raw edge")
+
+
+def _prediction_probability_margin(value: Any) -> float:
+    np = _get_numpy()
+    if np is not None:
+        arr = np.asarray(value, dtype=float)
+        if arr.ndim >= 2 and arr.shape[1] >= 2:
+            margin = float(arr[-1, -1] - arr[-1, 0])
+        else:
+            raise ValueError("predict_proba output must include class probabilities")
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        last = value[-1]
+        if isinstance(last, Sequence) and not isinstance(last, (str, bytes)) and len(last) >= 2:
+            margin = float(last[-1]) - float(last[0])
+        else:
+            raise ValueError("predict_proba output must include class probabilities")
+    else:
+        raise ValueError("predict_proba output must include class probabilities")
+    if not math.isfinite(margin):
+        raise ValueError("Model probability margin is not finite")
+    return max(-1.0, min(1.0, margin))
+
+
 def _predict_cost_aware_edge(model: Any, features: Any) -> float:
     """Predict edge using the model methods supported by signal generation."""
     if hasattr(model, "predict_edge"):
         return _prediction_scalar(model.predict_edge(features))
     if hasattr(model, "predict_proba"):
-        return _prediction_scalar(model.predict_proba(features))
+        scale = _prediction_calibrated_scale(
+            model,
+            "calibrated_edge_scale",
+            "proba_edge_scale",
+            "probability_edge_scale",
+            "edge_scale",
+        )
+        return _prediction_probability_margin(model.predict_proba(features)) * scale
     if hasattr(model, "predict"):
-        return _prediction_scalar(model.predict(features))
+        raise ValueError("Hard-label predict output is not a calibrated edge; use predict_edge")
     raise AttributeError("Model has neither predict_edge, predict_proba, nor predict")

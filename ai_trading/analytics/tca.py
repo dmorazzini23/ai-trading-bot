@@ -69,6 +69,15 @@ def _collect_row_identifiers(row: Mapping[str, Any]) -> set[str]:
     return tokens
 
 
+def _normalize_order_side(side: Any) -> str:
+    token = str(side or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if token in {"short", "sellshort", "entry_short", "open_short", "short_sell"}:
+        return "sell_short"
+    if token in {"buy", "sell", "sell_short"}:
+        return token
+    return ""
+
+
 @dataclass
 class ExecutionBenchmark:
     arrival_price: float
@@ -384,11 +393,7 @@ def reconcile_pending_tca_with_fill(
         return False, "invalid_fill_payload"
 
     symbol_token = str(symbol or "").strip().upper()
-    side_token = str(side or "").strip().lower().replace("-", "_").replace(" ", "_")
-    if side_token in {"short", "sellshort"}:
-        side_token = "sell_short"
-    if side_token not in {"buy", "sell", "sell_short"}:
-        side_token = ""
+    side_token = _normalize_order_side(side)
     fallback_enabled = bool(allow_symbol_qty_fallback and symbol_token and side_token and fill_qty_value)
     if not identifiers and not fallback_enabled:
         return False, "missing_identifiers"
@@ -434,10 +439,7 @@ def reconcile_pending_tca_with_fill(
                 fallback_matched = False
                 if not id_matched and fallback_enabled:
                     row_symbol = str(row.get("symbol") or "").strip().upper()
-                    row_side = str(row.get("order_side") or row.get("side") or "").strip().lower()
-                    row_side = row_side.replace("-", "_").replace(" ", "_")
-                    if row_side in {"short", "sellshort"}:
-                        row_side = "sell_short"
+                    row_side = _normalize_order_side(row.get("order_side") or row.get("side"))
                     row_qty = _safe_float(row.get("qty"))
                     if (
                         row_symbol == symbol_token
@@ -647,8 +649,8 @@ def finalize_stale_pending_tca(
                 fill_events_considered += 1
                 fill_event_ids.update(_collect_row_identifiers(row))
                 sym = str(row.get("symbol") or "").strip().upper()
-                side = str(row.get("side") or "").strip().lower()
-                if not sym or side not in {"buy", "sell"}:
+                side = _normalize_order_side(row.get("side") or row.get("order_side"))
+                if not sym or side not in {"buy", "sell", "sell_short"}:
                     continue
                 fill_row_ts = _coerce_utc_datetime(row.get("entry_time") or row.get("ts"))
                 fill_event_fallback_rows.setdefault((sym, side), []).append(
@@ -729,11 +731,11 @@ def finalize_stale_pending_tca(
             skipped_not_stale += 1
             continue
         pending_symbol = str(pending_row.get("symbol") or "").strip().upper()
-        pending_side = str(pending_row.get("side") or "").strip().lower()
+        pending_side = _normalize_order_side(pending_row.get("side") or pending_row.get("order_side"))
         pending_qty = _safe_float(pending_row.get("qty"))
         if (
             pending_symbol
-            and pending_side in {"buy", "sell"}
+            and pending_side in {"buy", "sell", "sell_short"}
             and pending_qty is not None
             and pending_qty > 0.0
         ):

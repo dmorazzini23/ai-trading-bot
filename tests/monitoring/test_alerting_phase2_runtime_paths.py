@@ -130,6 +130,24 @@ def test_alert_manager_rate_limits_history_and_forced_alerts() -> None:
     assert forced.startswith("alert_")
     assert manager.alert_queue.qsize() == 2
     assert len(manager.alert_history) == 2
+    assert manager.get_alert_stats()["alerts_suppressed"] == 1
+
+
+def test_alert_manager_bounded_queue_counts_dropped_alerts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(alerting, "_resolve_alert_queue_maxsize", lambda: 1)
+    manager = alerting.AlertManager()
+
+    first = manager.send_alert("A", "queued", force=True)
+    dropped = manager.send_alert("B", "dropped", force=True)
+    stats = manager.get_alert_stats()
+
+    assert first.startswith("alert_")
+    assert dropped.startswith("alert_")
+    assert manager.alert_queue.qsize() == 1
+    assert stats["queue_maxsize"] == 1
+    assert stats["alerts_dropped"] == 1
+    assert stats["alert_backpressure_events"] == 1
+    assert len(manager.alert_history) == 1
 
 
 def test_alert_manager_processes_channels_and_custom_handler() -> None:
@@ -157,6 +175,32 @@ def test_alert_manager_processes_channels_and_custom_handler() -> None:
     assert delivered == [("slack", alerting.AlertSeverity.INFO)]
     assert handled == ["System started"]
     assert alert.channels_sent == [alerting.AlertChannel.SLACK]
+
+
+def test_alert_manager_task_done_and_unexpected_exit_on_processing_error() -> None:
+    manager = alerting.AlertManager()
+    alert = alerting.Alert("Broken", "queue", alerting.AlertSeverity.INFO)
+    manager.alert_queue.put(alert)
+    manager.is_running = True
+
+    def broken_send(_alert: alerting.Alert, _channel: alerting.AlertChannel) -> bool:
+        manager.is_running = False
+        raise RuntimeError("handler failed")
+
+    manager._send_to_channel = broken_send  # type: ignore[method-assign]
+
+    manager._process_alerts()
+
+    assert manager.alert_queue.unfinished_tasks == 0
+    assert manager.is_running is False
+
+    class BadBool:
+        def __bool__(self) -> bool:
+            raise RuntimeError("loop flag failed")
+
+    manager.is_running = BadBool()  # type: ignore[assignment]
+    manager._process_alerts()
+    assert manager.is_running is False
 
 
 def test_alert_manager_builds_typed_alert_messages_and_stats() -> None:

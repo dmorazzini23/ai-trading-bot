@@ -8,6 +8,14 @@ from typing import Any
 from ai_trading.contracts import position_snapshot_from_position
 
 
+def _broker_positions_reader(api: Any) -> Any | None:
+    for name in ("get_all_positions", "list_positions"):
+        reader = getattr(api, name, None)
+        if callable(reader):
+            return reader
+    return None
+
+
 class ReconciliationService:
     """Canonical reconciliation service facade over runtime cleanup and error gates."""
 
@@ -32,12 +40,20 @@ class ReconciliationService:
                 logger.warning("Skipping reconciliation: no broker client")
                 return True
             return warned
+        positions_reader = _broker_positions_reader(ctx.api)
+        if positions_reader is None:
+            if not warned:
+                logger.warning(
+                    "Skipping reconciliation: broker client missing positions method"
+                )
+                return True
+            return warned
         try:
             live_position_snapshots = {
                 snapshot.symbol: snapshot
                 for snapshot in (
                     position_snapshot_from_position(pos, provider="alpaca")
-                    for pos in ctx.api.list_positions()
+                    for pos in positions_reader()
                 )
                 if snapshot is not None
             }

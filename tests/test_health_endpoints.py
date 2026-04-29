@@ -6,8 +6,35 @@ import pytest
 import ai_trading.app as app_module
 import ai_trading.health_payload as health_payload_module
 from ai_trading.app import create_app
+from ai_trading.health_payload import register_health_routes
 from ai_trading.health import HealthCheck
 from ai_trading.telemetry import runtime_state
+
+
+def _call_healthz(app):
+    if hasattr(app, "test_client"):
+        response = app.test_client().get("/healthz")
+        return response.get_json(), response.status_code
+    handler = app._routes[("/healthz", "GET")]
+    result = handler()
+    if isinstance(result, tuple):
+        return result[0], result[1]
+    return result, 200
+
+
+class _RouteCaptureApp:
+    def __init__(self) -> None:
+        self._routes = {}
+
+    def route(self, path, *args, **kwargs):
+        methods = tuple(str(method).upper() for method in (kwargs.get("methods") or ("GET",)))
+
+        def decorator(func):
+            for method in methods:
+                self._routes[(path, method)] = func
+            return func
+
+        return decorator
 
 
 @pytest.fixture(autouse=True)
@@ -497,6 +524,50 @@ def test_health_payload_exposes_provider_reason_code(monkeypatch):
     assert response.status_code == 200
     assert payload["data_provider"]["reason_code"] == "timeout"
     assert payload["data_provider"]["reason_detail"] == "request_timeout"
+
+
+def test_health_route_builder_failure_returns_503_json():
+    app = _RouteCaptureApp()
+
+    def broken_builder():
+        raise RuntimeError("builder down")
+
+    register_health_routes(
+        app,
+        payload_builder=broken_builder,
+        response_builder=lambda payload, status: app_module.jsonify(payload) if status == 200 else (app_module.jsonify(payload), status),
+    )
+
+    payload, status = _call_healthz(app)
+
+    assert status == 503
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["error"] == "builder down"
+
+
+def test_health_route_response_failure_returns_503_json_tuple():
+    app = _RouteCaptureApp()
+    calls = {"count": 0}
+
+    def flaky_response(payload, status):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("response down")
+        return app_module.jsonify(payload), status
+
+    register_health_routes(
+        app,
+        payload_builder=lambda: {"ok": True, "status": "healthy"},
+        response_builder=flaky_response,
+    )
+
+    payload, status = _call_healthz(app)
+
+    assert status == 503
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["error"] == "response down"
 
 
 def test_runtime_health_payload_includes_database_snapshot(monkeypatch):

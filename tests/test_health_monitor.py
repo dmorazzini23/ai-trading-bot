@@ -210,11 +210,10 @@ def test_start_and_stop_monitoring_cancel_task(monkeypatch):
 
 def test_collect_system_metrics_uses_snapshot_when_psutil_unavailable(monkeypatch):
     monitor = hm.HealthMonitor()
-    monkeypatch.setattr(hm, "_HAS_PSUTIL", False)
     monkeypatch.setattr(
         hm,
         "snapshot_basic",
-        lambda: {"cpu_percent": 12.5, "mem_percent": 34.5},
+        lambda: {"has_psutil": False, "cpu_percent": 12.5, "mem_percent": 34.5},
     )
 
     metrics = monitor._collect_system_metrics()
@@ -226,13 +225,13 @@ def test_collect_system_metrics_uses_snapshot_when_psutil_unavailable(monkeypatc
 
 def test_collect_system_metrics_returns_default_on_psutil_oserror(monkeypatch):
     monitor = hm.HealthMonitor()
-    monkeypatch.setattr(hm, "_HAS_PSUTIL", True)
 
     class _BrokenPsutil:
         @staticmethod
         def cpu_percent(interval=None):
             raise OSError("kernel metrics unavailable")
 
+    monkeypatch.setattr(hm, "snapshot_basic", lambda: {"has_psutil": True})
     monkeypatch.setitem(__import__("sys").modules, "psutil", _BrokenPsutil)
 
     metrics = monitor._collect_system_metrics()
@@ -240,6 +239,22 @@ def test_collect_system_metrics_returns_default_on_psutil_oserror(monkeypatch):
     assert metrics.cpu_percent == 0
     assert metrics.memory_percent == 0
     assert monitor.system_metrics_history[-1] is metrics
+
+
+def test_health_monitor_uses_fresh_snapshot_basic_psutil_presence(monkeypatch):
+    monitor = hm.HealthMonitor()
+    snapshots = [
+        {"has_psutil": False, "cpu_percent": 9.0, "mem_percent": 11.0},
+        {"has_psutil": False, "cpu_percent": 17.0, "mem_percent": 19.0},
+    ]
+
+    def snapshot():
+        return snapshots.pop(0)
+
+    monkeypatch.setattr(hm, "snapshot_basic", snapshot)
+
+    assert monitor._collect_system_metrics().cpu_percent == 9.0
+    assert monitor._collect_system_metrics().cpu_percent == 17.0
 
 
 def test_process_alerts_emits_critical_failure_and_latency_alerts():

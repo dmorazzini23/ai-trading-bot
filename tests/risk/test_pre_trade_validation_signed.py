@@ -72,6 +72,56 @@ def test_position_risk_uses_side_for_short_additions(monkeypatch: pytest.MonkeyP
     assert result.status is ptv.ValidationStatus.REJECTED
 
 
+def test_position_risk_normalizes_short_market_value_before_cover_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        ptv,
+        "safe_settings",
+        lambda: SimpleNamespace(ENABLE_PORTFOLIO_FEATURES=False),
+    )
+    validator = ptv.RiskValidator()
+
+    result = validator.validate_position_risk(
+        "AAPL",
+        quantity=50,
+        price=100.0,
+        account_equity=100_000.0,
+        current_positions={"AAPL": {"qty": "-100", "market_value": "10000"}},
+        side="buy_to_cover",
+    )
+
+    assert result.details["current_symbol_value"] == pytest.approx(-10_000.0)
+    assert result.details["order_value"] == pytest.approx(5_000.0)
+    assert result.details["position_value"] == pytest.approx(-5_000.0)
+    assert result.details["position_percentage"] == pytest.approx(0.05)
+
+
+def test_position_risk_normalizes_short_market_value_before_short_addition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        ptv,
+        "safe_settings",
+        lambda: SimpleNamespace(ENABLE_PORTFOLIO_FEATURES=False),
+    )
+    validator = ptv.RiskValidator()
+
+    result = validator.validate_position_risk(
+        "AAPL",
+        quantity=50,
+        price=100.0,
+        account_equity=100_000.0,
+        current_positions={"AAPL": {"qty": "-100", "market_value": "10000"}},
+        side="sell_short",
+    )
+
+    assert result.details["current_symbol_value"] == pytest.approx(-10_000.0)
+    assert result.details["order_value"] == pytest.approx(-5_000.0)
+    assert result.details["position_value"] == pytest.approx(-15_000.0)
+    assert result.details["position_percentage"] == pytest.approx(0.15)
+
+
 def test_correlation_exposure_uses_projected_gross_for_short_book(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -985,12 +985,56 @@ _loggers: dict[str, SanitizingLoggerAdapter] = {}
 _log_queue: queue.Queue | None = None
 _listener: QueueListener | None = None
 _LOGGING_LISTENER: QueueListener | None = None
+_LOG_QUEUE_DROPPED = 0
+_LOG_QUEUE_BACKPRESSURE_EVENTS = 0
+_LOG_QUEUE_MAXSIZE = 10000
+_LOG_QUEUE_STATS_LOCK = threading.Lock()
 # Use a re-entrant lock so setup_logging can be safely invoked if it is
 # indirectly re-entered during module import (e.g. config -> logging).
 # A standard Lock would deadlock when setup_logging imports modules that in
 # turn call get_logger(), which also attempts to acquire this lock.
 _LOGGING_LOCK = threading.RLock()
 _LOGGING_CONFIGURED = False
+
+
+def _resolve_log_queue_maxsize() -> int:
+    raw = _runtime_env("AI_TRADING_LOG_QUEUE_MAXSIZE", str(_LOG_QUEUE_MAXSIZE))
+    try:
+        return max(1, int(raw if raw is not None else _LOG_QUEUE_MAXSIZE))
+    except (TypeError, ValueError):
+        return _LOG_QUEUE_MAXSIZE
+
+
+def _record_log_queue_drop() -> None:
+    global _LOG_QUEUE_DROPPED, _LOG_QUEUE_BACKPRESSURE_EVENTS
+    with _LOG_QUEUE_STATS_LOCK:
+        _LOG_QUEUE_DROPPED += 1
+        _LOG_QUEUE_BACKPRESSURE_EVENTS += 1
+
+
+class BoundedQueueHandler(QueueHandler):
+    """Queue handler that drops on backpressure and records counters."""
+
+    def enqueue(self, record: logging.LogRecord) -> None:
+        try:
+            self.queue.put_nowait(record)
+        except queue.Full:
+            _record_log_queue_drop()
+
+
+def get_logging_queue_stats() -> dict[str, Any]:
+    """Return logging queue depth and backpressure counters."""
+
+    with _LOG_QUEUE_STATS_LOCK:
+        dropped = _LOG_QUEUE_DROPPED
+        backpressure = _LOG_QUEUE_BACKPRESSURE_EVENTS
+    return {
+        "queue_size": _log_queue.qsize() if _log_queue is not None else 0,
+        "queue_maxsize": getattr(_log_queue, "maxsize", 0) if _log_queue is not None else 0,
+        "dropped": dropped,
+        "backpressure_events": backpressure,
+        "listener_active": bool(_listener or _LOGGING_LISTENER),
+    }
 
 
 def ensure_logging_configured(level: int | None = None) -> None:
@@ -1121,8 +1165,8 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
             _LOGGING_LISTENER = None
             _log_queue = None
         else:
-            _log_queue = queue.Queue(-1)
-            queue_handler = QueueHandler(_log_queue)
+            _log_queue = queue.Queue(_resolve_log_queue_maxsize())
+            queue_handler = BoundedQueueHandler(_log_queue)
             queue_handler.setLevel(level)
             queue_handler.addFilter(_PhaseFilter())
             queue_handler.addFilter(secret_filter)
@@ -1175,7 +1219,7 @@ def shutdown_queue_listener(timeout: float = 1.0) -> None:
         return
     try:
         listener.stop()
-    except COMMON_EXC:
+    except (*COMMON_EXC, queue.Full):
         pass
     thread = getattr(listener, "_thread", None)
     if thread is not None and hasattr(thread, "join"):
@@ -1892,6 +1936,7 @@ __all__ = [
     "log_throttled_event",
     "reset_rate_limit_tracker",
     "shutdown_queue_listener",
+    "get_logging_queue_stats",
     "LogDeduper",
     "EmitOnceLogger",
     "CompactJsonFormatter",

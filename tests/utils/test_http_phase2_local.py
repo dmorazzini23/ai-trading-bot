@@ -94,6 +94,19 @@ def test_request_and_request_json_retry_paths(monkeypatch: pytest.MonkeyPatch) -
     assert http.request_json("GET", "https://example.com", retries=1) == {"data": [1, 2]}
 
 
+def test_request_json_raises_on_terminal_retry_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    class JsonSession:
+        def request(self, *_args, **_kwargs):
+            return _Response(status_code=429, payload={"error": "rate limited"})
+
+    monkeypatch.setattr(http, "REQUESTS_AVAILABLE", True)
+    monkeypatch.setattr(http, "_get_session", lambda: JsonSession())
+    monkeypatch.setattr(http, "sleep", lambda _seconds: None)
+
+    with pytest.raises(http.RequestException, match="status 429"):
+        http.request_json("GET", "https://example.com", retries=1)
+
+
 def test_async_fallback_wrappers_and_map_get(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(http, "REQUESTS_AVAILABLE", True)
     monkeypatch.setattr(http, "request", lambda method, url, **_kwargs: _Response(content=f"{method}:{url}".encode()))

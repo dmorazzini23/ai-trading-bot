@@ -22,8 +22,16 @@ def _managed_env(name: str, default: str) -> str:
     return str(value)
 
 
+def _parse_timeout(value: str, default: float = 10.0) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
 # Prefer HTTP_TIMEOUT when present; fallback to AI_HTTP_TIMEOUT env.
-HTTP_TIMEOUT: Union[int, float] = float(
+HTTP_TIMEOUT: Union[int, float] = _parse_timeout(
     _managed_env("HTTP_TIMEOUT", "") or _managed_env("AI_HTTP_TIMEOUT", "") or "10"
 )  # AI-AGENT-REF: canonical timeout across runtime
 

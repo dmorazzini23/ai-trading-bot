@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
-from ai_trading.monitoring.system_health import _HAS_PSUTIL, snapshot_basic
+from ai_trading.monitoring.system_health import snapshot_basic
 from ai_trading.config import get_settings
 
 try:  # pragma: no cover - flask.testing is optional
@@ -33,11 +33,14 @@ except AI_TRADING_FALLBACK_EXCEPTIONS:  # ImportError, AttributeError, etc.
 
         pass
 
-if _HAS_PSUTIL:
-    import psutil
-else:
-    psutil = None
 logger = get_logger(__name__)
+
+
+def _safe_system_snapshot() -> dict[str, Any]:
+    try:
+        return dict(snapshot_basic())
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        return {"has_psutil": False}
 
 
 class HealthStatus(Enum):
@@ -321,8 +324,8 @@ class HealthMonitor:
 
     def _collect_system_metrics(self) -> SystemMetrics:
         """Collect current system metrics."""
-        if not _HAS_PSUTIL:
-            data = snapshot_basic()
+        data = _safe_system_snapshot()
+        if not bool(data.get("has_psutil", False)):
             metrics = SystemMetrics(
                 cpu_percent=float(data.get("cpu_percent", 0.0)),
                 memory_percent=float(data.get("mem_percent", 0.0)),
@@ -454,8 +457,8 @@ class HealthMonitor:
 
     def _check_cpu_usage(self) -> dict[str, Any]:
         """Check CPU usage."""
-        if not _HAS_PSUTIL:
-            data = snapshot_basic()
+        data = _safe_system_snapshot()
+        if not bool(data.get("has_psutil", False)):
             cpu_percent = float(data.get("cpu_percent", 0.0))
         else:
             import psutil
@@ -474,8 +477,8 @@ class HealthMonitor:
 
     def _check_memory_usage(self) -> dict[str, Any]:
         """Check memory usage."""
-        if not _HAS_PSUTIL:
-            data = snapshot_basic()
+        data = _safe_system_snapshot()
+        if not bool(data.get("has_psutil", False)):
             memory_percent = float(data.get("mem_percent", 0.0))
             return {
                 "status": HealthStatus.UNKNOWN.value,
@@ -506,7 +509,8 @@ class HealthMonitor:
 
     def _check_disk_usage(self) -> dict[str, Any]:
         """Check disk usage."""
-        if not _HAS_PSUTIL:
+        data = _safe_system_snapshot()
+        if not bool(data.get("has_psutil", False)):
             return {
                 "status": HealthStatus.UNKNOWN.value,
                 "message": "psutil unavailable",

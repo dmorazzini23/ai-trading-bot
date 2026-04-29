@@ -787,13 +787,21 @@ def _normalize_host_env_key(host: str) -> str:
     return host.replace("-", "_").replace(".", "_")
 
 
+def _parse_default_host_limit(raw: str | None, default: int = _DEFAULT_LIMIT) -> int:
+    try:
+        return max(1, int(raw)) if raw not in (None, "") else default
+    except (TypeError, ValueError):
+        logger.debug("HOST_LIMIT_ENV_PARSE_FAILED", extra={"raw": raw}, exc_info=True)
+        return default
+
+
 def get_host_limiter(host: str):
     normalized_host = _normalize_host(host)
     key = _normalize_host_env_key(normalized_host)
     with _HOST_LOCK:
         limiter = _HOST_LIMITERS.get(key)
         override = _resolve_host_override_limit(normalized_host)
-        default = max(1, int(_env_raw("AI_TRADING_HTTP_HOST_LIMIT", "3")))
+        default = _parse_default_host_limit(_env_raw("AI_TRADING_HTTP_HOST_LIMIT", "3"))
         limit_value = override if override is not None else default
         needs_refresh = False
         if limiter is None:

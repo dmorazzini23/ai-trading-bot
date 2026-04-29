@@ -25,7 +25,6 @@ def test_health_monitor_psutil_resource_branches(monkeypatch):
         NoSuchProcess=RuntimeError,
         AccessDenied=PermissionError,
     )
-    monkeypatch.setattr(hm, "_HAS_PSUTIL", True)
     monkeypatch.setitem(__import__("sys").modules, "psutil", fake_psutil)
     monkeypatch.setattr(hm.os, "getloadavg", lambda: (1.0, 2.0, 3.0))
 
@@ -57,12 +56,11 @@ def test_health_monitor_resource_fallbacks_and_global_wrappers(monkeypatch):
         NoSuchProcess=RuntimeError,
         AccessDenied=PermissionError,
     )
-    monkeypatch.setattr(hm, "_HAS_PSUTIL", True)
+    monkeypatch.setattr(hm, "snapshot_basic", lambda: {"has_psutil": True})
     monkeypatch.setitem(__import__("sys").modules, "psutil", fake_psutil)
     assert monitor._collect_system_metrics().cpu_percent == 0
 
-    monkeypatch.setattr(hm, "_HAS_PSUTIL", False)
-    monkeypatch.setattr(hm, "snapshot_basic", lambda: {"cpu_percent": 86.0, "mem_percent": 44.0})
+    monkeypatch.setattr(hm, "snapshot_basic", lambda: {"has_psutil": False, "cpu_percent": 86.0, "mem_percent": 44.0})
     assert monitor._check_cpu_usage()["status"] == "warning"
     assert monitor._check_memory_usage()["status"] == "unknown"
     assert monitor._check_disk_usage()["status"] == "unknown"

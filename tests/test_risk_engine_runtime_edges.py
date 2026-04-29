@@ -86,14 +86,14 @@ def test_refresh_positions_rebuilds_exposure_from_broker_positions() -> None:
         @staticmethod
         def list_positions() -> list[types.SimpleNamespace]:
             return [
-                types.SimpleNamespace(asset_class="equity", qty="10", avg_entry_price="100"),
-                types.SimpleNamespace(asset_class="crypto", qty="2", avg_entry_price="500"),
+                types.SimpleNamespace(asset_class="equity", qty="10", avg_entry_price="100", current_price="150"),
+                types.SimpleNamespace(asset_class="crypto", qty="2", avg_entry_price="500", market_value="1200"),
             ]
 
     engine.refresh_positions(_Api())
 
-    assert engine.exposure["equity"] == pytest.approx(0.10)
-    assert engine.exposure["crypto"] == pytest.approx(0.10)
+    assert engine.exposure["equity"] == pytest.approx(0.15)
+    assert engine.exposure["crypto"] == pytest.approx(0.12)
 
 
 def test_position_exists_handles_match_and_missing_api() -> None:
@@ -139,6 +139,16 @@ def test_can_trade_rejects_negative_weight_short_exposure_breach() -> None:
 
     assert engine.can_trade(_signal(side="sell_short", weight=-0.2)) is False
     assert engine.can_trade(_signal(side="short", weight=-0.05)) is True
+
+
+def test_can_trade_projects_strategy_exposure_with_pending_weight() -> None:
+    engine = _engine()
+    engine.asset_limits["equity"] = 1.0
+    engine.strategy_limits["runtime"] = 0.20
+    engine.strategy_exposure["runtime"] = 0.12
+
+    assert engine.can_trade(_signal(weight=0.05), pending=0.02) is True
+    assert engine.can_trade(_signal(weight=0.05), pending=0.04) is False
 
 
 def test_risk_engine_import_does_not_reseed_global_rngs() -> None:

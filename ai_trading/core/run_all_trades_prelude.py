@@ -63,6 +63,17 @@ def _warn_missing_api(
     log_loop_heartbeat_func(loop_id, loop_start)
 
 
+def _rollback_started_cycle_state(
+    *,
+    state: Any,
+    previous_last_run_at: datetime | None,
+    previous_strategies_loaded: bool,
+) -> None:
+    state.running = False
+    state.last_run_at = previous_last_run_at
+    state._strategies_loaded = previous_strategies_loaded
+
+
 def prepare_run_all_trades_cycle(
     *,
     state: Any,
@@ -328,21 +339,30 @@ def prepare_run_all_trades_cycle(
         state.minute_feed_cache = {}
     reset_cycle_cache_func()
     previous_last_run_at = state.last_run_at
-    state.running = True
-    state.last_run_at = now
-    intents = getattr(state, "cycle_order_intents", None)
-    if isinstance(intents, dict):
-        intents.clear()
-    else:
-        state.cycle_order_intents = {}
-    submit_compaction = getattr(state, "cycle_submit_compaction", None)
-    if isinstance(submit_compaction, set):
-        submit_compaction.clear()
-    else:
-        state.cycle_submit_compaction = set()
-    if not getattr(state, "_strategies_loaded", False):
-        runtime.strategies = get_strategies_func()
-        state._strategies_loaded = True
+    previous_strategies_loaded = bool(getattr(state, "_strategies_loaded", False))
+    try:
+        state.running = True
+        state.last_run_at = now
+        intents = getattr(state, "cycle_order_intents", None)
+        if isinstance(intents, dict):
+            intents.clear()
+        else:
+            state.cycle_order_intents = {}
+        submit_compaction = getattr(state, "cycle_submit_compaction", None)
+        if isinstance(submit_compaction, set):
+            submit_compaction.clear()
+        else:
+            state.cycle_submit_compaction = set()
+        if not getattr(state, "_strategies_loaded", False):
+            runtime.strategies = get_strategies_func()
+            state._strategies_loaded = True
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        _rollback_started_cycle_state(
+            state=state,
+            previous_last_run_at=previous_last_run_at,
+            previous_strategies_loaded=previous_strategies_loaded,
+        )
+        raise
 
     return RunAllTradesPreludeResult(
         ready=True,

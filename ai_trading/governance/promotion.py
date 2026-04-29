@@ -146,6 +146,30 @@ class ModelPromotion:
             )
             return None
 
+    def _snapshot_model_governance(self, model_id: str | None) -> dict[str, Any]:
+        if model_id in (None, ""):
+            return {}
+        info = self.registry.model_index.get(str(model_id))
+        if not isinstance(info, dict):
+            return {}
+        governance = info.get("governance")
+        return dict(governance) if isinstance(governance, dict) else {}
+
+    def _restore_model_governance(self, model_id: str | None, governance: dict[str, Any]) -> None:
+        if model_id in (None, ""):
+            return
+        info = self.registry.model_index.get(str(model_id))
+        if not isinstance(info, dict):
+            return
+        restored = dict(governance)
+        model_dir = Path(info.get("path", self.registry.models_dir / str(model_id)))
+        meta_payload = self.registry._read_metadata_file(model_dir) or {**info}
+        info["governance"] = restored
+        meta_payload["governance"] = restored
+        self.registry.model_index[str(model_id)] = info
+        self.registry._write_metadata_file(model_dir, meta_payload)
+        self.registry._save_index()
+
     def _read_jsonl_tail(self, *, filename: str, limit: int = 20) -> list[dict[str, Any]]:
         path = self._governance_event_path(filename)
         if not path.exists():
@@ -1513,10 +1537,14 @@ class ModelPromotion:
             promoted_at = datetime.now(UTC).isoformat()
             previous_model_id: str | None = None
             previous_model_lineage: dict[str, Any] = {}
+            governance_snapshots: dict[str, dict[str, Any]] = {
+                str(model_id): self._snapshot_model_governance(model_id)
+            }
             if current_production:
                 old_model_id, _ = current_production
                 previous_model_id = old_model_id
                 previous_model_lineage = self._extract_model_lineage(old_model_id)
+                governance_snapshots[str(old_model_id)] = self._snapshot_model_governance(old_model_id)
                 if old_model_id != model_id:
                     self.registry.update_governance_status(
                         old_model_id,
@@ -1526,7 +1554,6 @@ class ModelPromotion:
                             'replaced_by': model_id,
                         },
                     )
-                    self._remove_active_symlink(strategy)
                     self.logger.info(f'Demoted previous production model {old_model_id} for strategy {strategy}')
             self.registry.update_governance_status(
                 model_id,
@@ -1554,7 +1581,33 @@ class ModelPromotion:
                     ),
                 },
             )
-            self._create_active_symlink(strategy, model_id)
+            try:
+                self._create_active_symlink(strategy, model_id)
+            except OSError as exc:
+                for restore_model_id, governance in governance_snapshots.items():
+                    self._restore_model_governance(restore_model_id, governance)
+                self.logger.error(
+                    "PROMOTION_ACTIVE_SYMLINK_FAILED",
+                    extra={
+                        "strategy": str(strategy),
+                        "model_id": str(model_id),
+                        "error": str(exc),
+                    },
+                )
+                self._append_governance_audit_event(
+                    event_type="MODEL_PROMOTION_BLOCKED",
+                    payload={
+                        "ts": datetime.now(UTC).isoformat(),
+                        "strategy": str(strategy),
+                        "model_id": str(model_id),
+                        "force": bool(force),
+                        "reason": "active_symlink_failed",
+                        "error": str(exc),
+                    },
+                    primary_lineage=model_lineage,
+                    related_lineages={"previous_production": previous_model_lineage},
+                )
+                return False
             self._append_jsonl_event(
                 filename="promotion_events.jsonl",
                 payload={
@@ -2065,14 +2118,23 @@ class ModelPromotion:
 
     def _create_active_symlink(self, strategy: str, model_id: str) -> None:
         """Create symlink to active production model."""
+        tmp_path: Path | None = None
         try:
             model_info = self.registry.model_index[model_id]
             model_path = Path(model_info['path'])
             symlink_path = self.active_dir / f'{strategy}_active'
-            if symlink_path.exists() or symlink_path.is_symlink():
-                symlink_path.unlink()
-            symlink_path.symlink_to(model_path.absolute())
+            tmp_path = self.active_dir / f'.{strategy}_active.{uuid.uuid4().hex}.tmp'
+            tmp_path.symlink_to(model_path.absolute())
+            tmp_path.replace(symlink_path)
             self.logger.debug(f'Created active symlink for {strategy}: {symlink_path} -> {model_path}')
+        except OSError as e:
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self.logger.error(f'Error creating active symlink for {strategy}: {e}')
+            raise
         except (ValueError, TypeError) as e:
             self.logger.error(f'Error creating active symlink for {strategy}: {e}')
 
@@ -2083,7 +2145,7 @@ class ModelPromotion:
             if symlink_path.exists() or symlink_path.is_symlink():
                 symlink_path.unlink()
                 self.logger.debug(f'Removed active symlink for {strategy}')
-        except (ValueError, TypeError) as e:
+        except (OSError, ValueError, TypeError) as e:
             self.logger.error(f'Error removing active symlink for {strategy}: {e}')
 
     def get_active_model_path(self, strategy: str) -> str | None:

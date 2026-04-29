@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, cast
 
 from ai_trading.config import management as config
 from ai_trading.config.management import get_trading_config
+from ai_trading.exc import RequestException
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.logging import get_logger
 from ai_trading.utils.time import safe_utcnow
 from ai_trading.utils.timing import sleep as psleep
@@ -26,6 +28,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
     from ai_trading.config.runtime import TradingConfig
 
 CONFIG = cast('TradingConfig', get_trading_config())
+_ORDER_MONITOR_EXCEPTIONS = AI_TRADING_FALLBACK_EXCEPTIONS + (RequestException,)
 
 @dataclass
 class OrderInfo:
@@ -137,7 +140,7 @@ class OrderHealthMonitor:
                 with self._lock:
                     self._order_metrics.append(metrics)
                 psleep(self.cleanup_interval)
-            except (ValueError, TypeError) as e:
+            except _ORDER_MONITOR_EXCEPTIONS as e:
                 self.logger.error('Error in order monitoring loop: %s', e, exc_info=True)
                 psleep(10)
 
@@ -158,7 +161,7 @@ class OrderHealthMonitor:
                     success = self.execution_engine._cancel_stale_order(order_info.order_id)
                     if success:
                         self.logger.info('STALE_ORDER_CANCELED', extra={'order_id': order_info.order_id, 'symbol': order_info.symbol})
-                except (ValueError, TypeError) as e:
+                except _ORDER_MONITOR_EXCEPTIONS as e:
                     self.logger.error('Failed to cancel stale order %s: %s', order_info.order_id, e)
 
     def _update_partial_fill_tracking(self) -> None:

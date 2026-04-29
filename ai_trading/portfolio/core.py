@@ -58,35 +58,44 @@ def _fetch_minute_price_for_feed(ctx, symbol: str, *, feed: str, context: str) -
     return _last_close_from(frame)
 
 
+def _fetch_context_minute_price(ctx, symbol: str) -> float | None:
+    data_fetcher = getattr(ctx, "data_fetcher", None)
+    get_minute_df = getattr(data_fetcher, "get_minute_df", None)
+    if not callable(get_minute_df):
+        return None
+    frame = _ensure_df(get_minute_df(ctx, symbol))
+    return _last_close_from(frame)
+
+
 def get_execution_latest_price(ctx, symbol: str) -> float | None:
     """Return latest execution price using configured execution feed."""
     import pandas as pd
 
-    df_day = _ensure_df(ctx.data_fetcher.get_daily_df(ctx, symbol))
-    price = _last_close_from(df_day)
-    if price is not None:
-        return price
-    primary_feed = get_execution_feed()
-    fallback_feed = "sip" if primary_feed == "iex" else "iex"
     try:
-        price = _fetch_minute_price_for_feed(
-            ctx,
-            symbol,
-            feed=primary_feed,
-            context=f"PRICE_SNAPSHOT_{primary_feed.upper()}",
-        )
+        price = _fetch_context_minute_price(ctx, symbol)
         if price is not None:
             return price
-        if fallback_feed != primary_feed:
-            return _fetch_minute_price_for_feed(
+    except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, OSError, AttributeError):
+        pass
+    primary_feed = get_execution_feed()
+    fallback_feed = "sip" if primary_feed == "iex" else "iex"
+    for feed in (primary_feed, fallback_feed):
+        try:
+            price = _fetch_minute_price_for_feed(
                 ctx,
                 symbol,
-                feed=fallback_feed,
-                context=f"PRICE_SNAPSHOT_{fallback_feed.upper()}",
+                feed=feed,
+                context=f"PRICE_SNAPSHOT_{feed.upper()}",
             )
-    except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, OSError):
+        except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, OSError, AttributeError):
+            continue
+        if price is not None:
+            return price
+    try:
+        df_day = _ensure_df(ctx.data_fetcher.get_daily_df(ctx, symbol))
+    except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, OSError, AttributeError):
         return None
-    return None
+    return _last_close_from(df_day)
 
 
 def get_reference_latest_price(ctx, symbol: str) -> float | None:

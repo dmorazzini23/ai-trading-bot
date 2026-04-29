@@ -1713,7 +1713,7 @@ def register_health_routes(
                 except AI_TRADING_FALLBACK_EXCEPTIONS:
                     pass
             payload = build_health_exception_payload(exc, service_name=service_name)
-            status = 200
+            status = 503
         safe_payload = sanitize_health_payload(payload)
         try:
             return response_builder(safe_payload, status)
@@ -1727,9 +1727,9 @@ def register_health_routes(
                 build_health_exception_payload(exc, service_name=service_name),
             )
             try:
-                return response_builder(fallback_payload, 200)
+                return response_builder(fallback_payload, 503)
             except AI_TRADING_FALLBACK_EXCEPTIONS:
-                return fallback_payload, 200
+                return fallback_payload, 503
 
     if len(routes) == 1:
         route_name = routes[0].strip("/").replace("-", "_") or "health"
