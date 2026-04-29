@@ -264,6 +264,14 @@ def build_replay_dataset_from_bad_session(
     events = canonical_bad_session_events(log_path)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    for stale_csv in out_dir.glob("*.csv"):
+        try:
+            stale_csv.unlink()
+        except OSError as exc:
+            logger.warning(
+                "BAD_SESSION_STALE_CSV_REMOVE_FAILED",
+                extra={"path": str(stale_csv), "error": str(exc)},
+            )
     grouped: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         grouped.setdefault(str(event["symbol"]), []).append(event)

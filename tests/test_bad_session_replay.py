@@ -51,6 +51,9 @@ def test_bad_session_fingerprint_is_deterministic(tmp_path: Path) -> None:
 def test_build_replay_dataset_from_bad_session(tmp_path: Path) -> None:
     log_path = tmp_path / "bad_session.jsonl"
     _write_bad_session(log_path)
+    stale_csv = tmp_path / "replay_out" / "STALE.csv"
+    stale_csv.parent.mkdir(parents=True, exist_ok=True)
+    stale_csv.write_text("timestamp,open,high,low,close,volume\n", encoding="utf-8")
 
     report = build_replay_dataset_from_bad_session(
         log_path,
@@ -64,6 +67,7 @@ def test_build_replay_dataset_from_bad_session(tmp_path: Path) -> None:
     events = canonical_bad_session_events(log_path)
     assert len(events) == 3
     assert (tmp_path / "replay_out" / "AAPL.csv").exists()
+    assert not stale_csv.exists()
     assert (tmp_path / "replay_out" / "incident_decisions.jsonl").exists()
     assert (tmp_path / "replay_out" / "incident_intents.jsonl").exists()
     assert (tmp_path / "replay_out" / "incident_broker.jsonl").exists()

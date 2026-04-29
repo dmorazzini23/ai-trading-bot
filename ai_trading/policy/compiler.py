@@ -302,6 +302,20 @@ def _env_map(env: Mapping[str, str] | None = None) -> dict[str, str]:
     return {str(k): str(v) for k, v in env.items() if v is not None}
 
 
+def policy_env_source_hash(env: Mapping[str, str] | None = None) -> str:
+    """Hash active AI_TRADING_POLICY_* source values for runtime cache keys."""
+
+    env_values = _env_map(env)
+    source_pairs = sorted(
+        (key, value)
+        for key, value in env_values.items()
+        if key.startswith("AI_TRADING_POLICY_") and value not in (None, "")
+    )
+    return hashlib.sha256(
+        json.dumps(source_pairs, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
 def _read_env_file(path: str | None) -> dict[str, str]:
     """Best-effort dotenv parser for policy startup diff diagnostics."""
 

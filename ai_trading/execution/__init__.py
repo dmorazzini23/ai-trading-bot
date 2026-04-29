@@ -1,7 +1,6 @@
 """Execution Module - Institutional Grade Order Management with Enhanced Debugging."""
 
 from __future__ import annotations
-from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 from dataclasses import dataclass
@@ -17,6 +16,7 @@ from ai_trading.utils.env import (
 from .guards import can_execute
 
 _logger = get_logger(__name__)
+_OPTIONAL_IMPORT_EXCEPTIONS = (ImportError, OSError)
 
 
 # Core exports that should always be available
@@ -103,7 +103,7 @@ def _load_execution_settings() -> Tuple[Any, str | None]:
             PRICE_PROVIDER_ORDER as _PRICE_PROVIDER_ORDER,
             get_execution_settings as _get_execution_settings,
         )
-    except ModuleNotFoundError as exc:  # pragma: no cover - dependency missing
+    except ImportError as exc:  # pragma: no cover - dependency missing
         missing = getattr(exc, "name", "")
         if missing in {"pydantic", "pydantic_settings"}:
             _logger.warning(
@@ -112,12 +112,6 @@ def _load_execution_settings() -> Tuple[Any, str | None]:
             )
             return fallback, "config_dependency_missing"
         raise
-    except ImportError as exc:  # pragma: no cover - unexpected import failure
-        _logger.error(
-            "EXECUTION_SETTINGS_IMPORT_FAILED",
-            extra={"error": str(exc)},
-        )
-        return fallback, "config_import_failed"
 
     # Update fallback defaults with values exported from the config module when available.
     fallback = SimpleNamespace(
@@ -131,14 +125,7 @@ def _load_execution_settings() -> Tuple[Any, str | None]:
         reference_feed="delayed_sip",
     )
 
-    try:
-        settings = _get_execution_settings()
-    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - configuration load failure
-        _logger.error(
-            "EXECUTION_SETTINGS_LOAD_FAILED",
-            extra={"error": str(exc)},
-        )
-        return fallback, "config_load_failed"
+    settings = _get_execution_settings()
     return settings, None
 
 
@@ -186,7 +173,7 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
         missing_creds = _missing_creds() or None
         try:
             from .live_trading import ExecutionEngine as _LiveExecutionEngine
-        except ModuleNotFoundError as exc:  # pragma: no cover - dependency guard
+        except _OPTIONAL_IMPORT_EXCEPTIONS as exc:  # pragma: no cover - dependency guard
             reason = reason or "import_failed"
             missing_mod = getattr(exc, "name", None)
             if missing_mod and missing_mod not in missing_dependencies:
@@ -198,12 +185,6 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
                     "error": str(exc),
                     "missing_module": missing_mod,
                 },
-            )
-        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - runtime guard
-            reason = reason or "import_failed"
-            _logger.error(
-                "EXECUTION_ENGINE_IMPORT_FAILED",
-                extra={"mode": normalized_mode, "error": str(exc)},
             )
         else:
             engine_cls = _LiveExecutionEngine  # type: ignore[assignment]
@@ -291,7 +272,7 @@ SwingTradingMode: Any
 # Optional submodule: algorithms
 try:  # pragma: no cover - optional dependency
     from . import algorithms
-except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
+except _OPTIONAL_IMPORT_EXCEPTIONS:
     algorithms = None
 
 # Optional utilities guarded against missing dependencies
@@ -307,7 +288,7 @@ try:  # pragma: no cover - optional dependency
         log_position_change,
         log_signal_to_execution,
     )
-except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
+except _OPTIONAL_IMPORT_EXCEPTIONS:
     ExecutionPhase = OrderStatus = None
     enable_debug_mode = get_debug_tracker = None
     get_execution_statistics = None
@@ -321,7 +302,7 @@ try:  # pragma: no cover - optional dependency
         LiquidityManager,
         MarketHours,
     )
-except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
+except _OPTIONAL_IMPORT_EXCEPTIONS:
     LiquidityAnalyzer = LiquidityLevel = None
     LiquidityManager = MarketHours = None
 
@@ -338,7 +319,7 @@ try:  # pragma: no cover - optional dependency
         record_trade_pnl,
         update_position_for_pnl,
     )
-except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
+except _OPTIONAL_IMPORT_EXCEPTIONS:
     PnLEvent = PnLSource = None
     explain_recent_pnl_changes = get_pnl_attribution_stats = None
     get_pnl_attributor = get_portfolio_pnl_summary = None
@@ -357,7 +338,7 @@ try:  # pragma: no cover - optional dependency
         stop_position_monitoring,
         update_bot_position,
     )
-except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
+except _OPTIONAL_IMPORT_EXCEPTIONS:
     PositionDiscrepancy = None
     adjust_bot_position = force_position_reconciliation = None
     get_position_discrepancies = get_position_reconciler = None
@@ -366,17 +347,17 @@ except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional
 
 try:  # pragma: no cover - optional dependency
     from .transaction_costs import estimate_cost
-except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
+except _OPTIONAL_IMPORT_EXCEPTIONS:
     estimate_cost = None
 
 try:  # pragma: no cover - optional dependency
     from .production_engine import ProductionExecutionCoordinator
-except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
+except _OPTIONAL_IMPORT_EXCEPTIONS:
     ProductionExecutionCoordinator = None
 
 try:  # pragma: no cover - optional dependency
     from .swing_mode import SwingTradingMode, disable_swing_mode, enable_swing_mode, get_swing_mode
-except AI_TRADING_FALLBACK_EXCEPTIONS:  # noqa: BLE001 - broad to guard optional deps
+except _OPTIONAL_IMPORT_EXCEPTIONS:
     SwingTradingMode = None
     get_swing_mode = enable_swing_mode = disable_swing_mode = None
 

@@ -8891,22 +8891,36 @@ def _fetch_bars(
                 _start,
                 _end,
             )
-            _mark_fallback(
-                symbol,
-                _interval,
-                _start,
-                _end,
-                from_provider=f"alpaca_{_feed}" if _feed else "alpaca",
-                fallback_df=annotated_df,
-                resolved_provider="yahoo",
-                resolved_feed="yahoo",
-                reason=_state.get("fallback_reason") or "no_session_window",
-            )
-            _state["fallback_reason"] = None
             if frame_is_usable:
+                _mark_fallback(
+                    symbol,
+                    _interval,
+                    _start,
+                    _end,
+                    from_provider=f"alpaca_{_feed}" if _feed else "alpaca",
+                    fallback_df=annotated_df,
+                    resolved_provider="yahoo",
+                    resolved_feed="yahoo",
+                    reason=_state.get("fallback_reason") or "no_session_window",
+                )
+                _state["fallback_reason"] = None
                 _record_fallback_success_metric(tags)
                 _record_success_metric(tags, prefer_fallback=True)
-            return _finalize_frame(annotated_df)
+                return _finalize_frame(annotated_df)
+            _state["fallback_reason"] = None
+            logger.warning(
+                "BACKUP_DATA_REJECTED",
+                extra=_norm_extra(
+                    {
+                        "provider": "yahoo",
+                        "feed": "yahoo",
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "reason": "invalid_payload",
+                    },
+                ),
+            )
+            return _finalize_frame(None)
         window_has_session = False
         no_session_window = True
         _state["window_has_session"] = window_has_session

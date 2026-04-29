@@ -197,7 +197,7 @@ def test_execute_order_preserves_sell_short_lifecycle_side(engine_factory):
     )
 
     assert result is not None
-    assert captured["side"] == "sell"
+    assert captured["side"] == "sell_short"
     assert engine._pending_orders["short-open-1"]["side"] == "sell_short"
     assert any(
         intent_key[:2] == ("MSFT", "sell_short")

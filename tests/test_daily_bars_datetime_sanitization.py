@@ -259,7 +259,7 @@ def test_window_has_trading_session_handles_missing_holiday_session(monkeypatch)
         assert fetch_mod._window_has_trading_session(start, end) is False
 
 
-def test_session_info_uses_fallback_when_calendar_available(monkeypatch):
+def test_session_info_rejects_non_session_when_calendar_available(monkeypatch):
     mc = pytest.importorskip("ai_trading.utils.market_calendar")
 
     holiday = date(2024, 1, 1)
@@ -282,11 +282,33 @@ def test_session_info_uses_fallback_when_calendar_available(monkeypatch):
     monkeypatch.setattr(mc, "load_pandas_market_calendars", lambda: pmc)
     monkeypatch.setattr(mc, "load_pandas", lambda: pd)
 
-    session = mc.session_info(holiday)
+    with pytest.raises(ValueError, match="not_trading_session"):
+        mc.session_info(holiday)
 
-    assert session.start_utc == datetime(2024, 1, 1, 14, 30, tzinfo=UTC)
-    assert session.end_utc == datetime(2024, 1, 1, 21, 0, tzinfo=UTC)
+    session = mc.session_info(holiday, allow_previous_session=True)
+
+    assert session.start_utc == datetime(2023, 12, 29, 14, 30, tzinfo=UTC)
+    assert session.end_utc == datetime(2023, 12, 29, 21, 0, tzinfo=UTC)
     assert session.is_early_close is False
+
+
+def test_previous_trading_session_is_strictly_before_calendar_date(monkeypatch):
+    mc = pytest.importorskip("ai_trading.utils.market_calendar")
+
+    class DummyCalendar:
+        def valid_days(self, start_date, end_date):
+            return pd.date_range(start_date, end_date, freq="B", tz="UTC")
+
+        def schedule(self, start_date, end_date):  # pragma: no cover - unused here
+            return pd.DataFrame(columns=["market_open", "market_close"])
+
+    pmc = types.SimpleNamespace(get_calendar=lambda _: DummyCalendar())
+
+    monkeypatch.setattr(mc, "_CAL", None)
+    monkeypatch.setattr(mc, "load_pandas_market_calendars", lambda: pmc)
+
+    assert mc.previous_trading_session(date(2024, 1, 2)) == date(2024, 1, 1)
+    assert mc.previous_trading_session(date(2024, 1, 1)) == date(2023, 12, 29)
 
 
 def test_is_trading_day_falls_back_without_valid_days(monkeypatch):

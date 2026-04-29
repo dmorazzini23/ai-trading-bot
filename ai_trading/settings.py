@@ -128,6 +128,49 @@ def _propagate_default_feed(feed: str) -> None:
                 break
 
 
+def _runtime_settings_init_values() -> dict[str, str]:
+    """Return Settings init values sourced from config-management overrides."""
+
+    try:
+        management_module = sys.modules.get("ai_trading.config.management")
+        snapshot = (
+            getattr(management_module, "merged_env_snapshot", None)
+            if management_module is not None
+            else None
+        )
+        values = snapshot({}) if callable(snapshot) else {}
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        return {}
+    if not values:
+        return {}
+
+    init_values: dict[str, str] = {
+        str(key): str(value)
+        for key, value in values.items()
+        if value not in (None, "")
+    }
+    model_config = getattr(Settings, "model_config", {}) or {}
+    prefix = str(model_config.get("env_prefix", "") or "")
+    if not prefix:
+        return init_values
+
+    fields = getattr(Settings, "model_fields", None) or getattr(Settings, "__fields__", {})
+    normalized_values = {str(key).upper(): value for key, value in values.items()}
+    for field_name in fields:
+        env_key = f"{prefix}{field_name}".upper()
+        if field_name not in init_values and env_key in normalized_values:
+            init_values[str(field_name)] = normalized_values[env_key]
+    return init_values
+
+
+def _settings_factory() -> Settings:
+    settings_factory = cast(Any, Settings)
+    init_values = _runtime_settings_init_values()
+    if init_values:
+        return cast(Settings, settings_factory(**init_values))
+    return cast(Settings, settings_factory())
+
+
 _HAS_SETTINGS_CONFIG_DICT = _SettingsConfigDict is not None and hasattr(_BaseSettings, "model_config")
 
 
@@ -966,6 +1009,7 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
                 env_prefix="AI_TRADING_",
                 extra="ignore",
                 case_sensitive=False,
+                env_ignore_empty=True,
                 validate_assignment=True,
             )
         except (TypeError, ValueError) as exc:  # pragma: no cover - defensive fallback
@@ -981,20 +1025,21 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
                 env_prefix = "AI_TRADING_"
                 extra = "ignore"
                 case_sensitive = False
+                env_ignore_empty = True
                 validate_assignment = True
     else:  # pragma: no cover - compatibility with pydantic v1 BaseSettings
         class Config:  # type: ignore[override,unused-ignore,no-redef]
             env_prefix = "AI_TRADING_"
             extra = "ignore"
             case_sensitive = False
+            env_ignore_empty = True
             validate_assignment = True
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return module-level Settings singleton."""
-    settings_factory = cast(Any, Settings)
-    return cast(Settings, settings_factory())
+    return _settings_factory()
 
 
 def get_news_api_key() -> str | None:

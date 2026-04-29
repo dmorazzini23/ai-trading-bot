@@ -17,7 +17,7 @@ shifts and early-close handling.
 """
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -129,45 +129,34 @@ def is_trading_day(d: date) -> bool:
     return d.weekday() < 5
 
 
-def _pmc_session_info(d: date) -> Session:
+def _pmc_session_info(d: date, *, allow_previous_session: bool = False) -> Session:
     """Fetch accurate session times via pandas-market-calendars."""
     cal = _get_calendar()
     if cal is None:
         raise RuntimeError("pandas_market_calendars not available")
-    pd = load_pandas()
     sched = cal.schedule(start_date=d, end_date=d)
-    prev: date | None = None
     if sched.empty:
-        fallback = _FALLBACK_SESSIONS.get(d)
-        if fallback is not None:
-            return fallback
+        if not allow_previous_session:
+            raise ValueError(f"not_trading_session: {d.isoformat()}")
         prev = previous_trading_session(d)
-        prev_fallback = _FALLBACK_SESSIONS.get(prev)
-        if prev_fallback is not None:
-            return prev_fallback
         sched = cal.schedule(start_date=prev, end_date=prev)
     if sched.empty:
-        fallback = _FALLBACK_SESSIONS.get(d)
-        if fallback is not None:
-            return fallback
-        if prev is not None:
-            prev_fallback = _FALLBACK_SESSIONS.get(prev)
-            if prev_fallback is not None:
-                return prev_fallback
-        start_et = datetime(d.year, d.month, d.day, 9, 30, tzinfo=_ET)
-        end_et = datetime(d.year, d.month, d.day, 16, 0, tzinfo=_ET)
-        return Session(start_et.astimezone(UTC), end_et.astimezone(UTC), False)
+        raise ValueError(f"not_trading_session: {d.isoformat()}")
     open_et = sched.iloc[0]["market_open"].tz_convert(_ET).to_pydatetime()
     close_et = sched.iloc[0]["market_close"].tz_convert(_ET).to_pydatetime()
     early = close_et.hour < 16
     return Session(open_et.astimezone(UTC), close_et.astimezone(UTC), early)
 
 
-def session_info(d: date) -> Session:
+def session_info(d: date, *, allow_previous_session: bool = False) -> Session:
     """Return Session info for *d* with early-close metadata."""
     cal = _get_calendar()
     if cal is not None:
-        return _pmc_session_info(d)
+        return _pmc_session_info(d, allow_previous_session=allow_previous_session)
+    if not is_trading_day(d):
+        if allow_previous_session:
+            return session_info(previous_trading_session(d))
+        raise ValueError(f"not_trading_session: {d.isoformat()}")
     if d in _FALLBACK_SESSIONS:
         return _FALLBACK_SESSIONS[d]
     start_et = datetime(d.year, d.month, d.day, 9, 30, tzinfo=_ET)
@@ -175,9 +164,13 @@ def session_info(d: date) -> Session:
     return Session(start_et.astimezone(UTC), end_et.astimezone(UTC))
 
 
-def rth_session_utc(d: date) -> tuple[datetime, datetime]:
+def rth_session_utc(
+    d: date,
+    *,
+    allow_previous_session: bool = False,
+) -> tuple[datetime, datetime]:
     """Return the Regular Trading Hours window in UTC."""
-    s = session_info(d)
+    s = session_info(d, allow_previous_session=allow_previous_session)
     return (s.start_utc, s.end_utc)
 
 
@@ -188,16 +181,15 @@ def is_early_close(d: date) -> bool:
 
 def previous_trading_session(d: date) -> date:
     """Return the previous trading day for *d*."""
-    from datetime import timedelta
-
     cal = _get_calendar()
+    end_date = d - timedelta(days=1)
     if cal is not None:
         valid_days = getattr(cal, "valid_days", None)
         days: list[Any] = []
         if callable(valid_days):
-            days = list(valid_days(start_date=d.replace(day=1), end_date=d))
+            days = list(valid_days(start_date=end_date.replace(day=1), end_date=end_date))
         if len(days) == 0:
-            back = d.replace(day=1) - timedelta(days=1)
+            back = end_date.replace(day=1) - timedelta(days=1)
             if callable(valid_days):
                 days = list(valid_days(start_date=back.replace(day=1), end_date=back))
         if len(days) == 0:
@@ -208,14 +200,15 @@ def previous_trading_session(d: date) -> date:
                     return dd
         last_day = days[-1]
         if isinstance(last_day, datetime):
-            return last_day.date()
+            candidate = last_day.date()
+            return candidate if candidate < d else previous_trading_session(candidate)
         if hasattr(last_day, "date"):
             candidate_date = last_day.date()
             if isinstance(candidate_date, date):
-                return candidate_date
+                return candidate_date if candidate_date < d else previous_trading_session(candidate_date)
         if isinstance(last_day, date):
-            return last_day
-        return d
+            return last_day if last_day < d else previous_trading_session(last_day)
+        return end_date
     dd = d
     while True:
         dd = dd - timedelta(days=1)

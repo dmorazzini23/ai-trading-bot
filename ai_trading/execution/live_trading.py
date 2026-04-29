@@ -492,6 +492,7 @@ def _broker_kwargs_for_route(route: str, extra: Mapping[str, Any] | None) -> dic
         "close_position",
         "extended_hours",
         "notional",
+        "position_intent",
         "reduce_only",
         "time_in_force",
     }
@@ -1030,6 +1031,72 @@ def _positive_decimal(value: Any) -> Decimal | None:
     return parsed
 
 
+def _semantic_order_side(side: Any | None) -> str | None:
+    """Return execution semantic side before Alpaca side flattening."""
+
+    if side is None:
+        return None
+    try:
+        value_obj = getattr(side, "value", side)
+        value = str(value_obj).strip().lower()
+    except LIVE_TRADING_FALLBACK_EXC:
+        logger.debug("ORDER_SIDE_SEMANTIC_NORMALIZE_FAILED", extra={"side": side}, exc_info=True)
+        return None
+    if "." in value:
+        value = value.rsplit(".", 1)[-1]
+    if value in {"cover", "buy_to_cover", "buytocover", "buy-to-cover", "buy to cover"}:
+        return "cover"
+    if value in {"short", "sell_short", "sellshort", "sell-short", "sell short"}:
+        return "sell_short"
+    if value in {"buy", "long"}:
+        return "buy"
+    if value in {"sell", "exit"}:
+        return "sell"
+    return None
+
+
+def _position_flip_allowed(params: Mapping[str, Any] | None) -> bool:
+    """Return True only for explicit position-flip opt-in flags."""
+
+    if not isinstance(params, Mapping):
+        return False
+    for key in (
+        "allow_position_flip",
+        "allow_flip",
+        "allow_flip_to_long",
+        "allow_flip_to_short",
+    ):
+        if key in params and _safe_bool(params.get(key)):
+            return True
+    return False
+
+
+_UNSUPPORTED_STANDALONE_PROTECTIVE_ORDER_TYPES = {
+    "stop",
+    "stop_limit",
+    "trailing",
+    "trailing_stop",
+}
+
+
+def _canonical_order_type(order_type: Any, default: str = "limit") -> str:
+    token = str(order_type if order_type not in (None, "") else default).strip().lower()
+    token = token.replace("-", "_").replace(" ", "_")
+    if token == "stoploss":
+        token = "stop"
+    if token in {"trail", "trailingstop"}:
+        token = "trailing_stop"
+    return token or default
+
+
+def _unsupported_standalone_order_type_message(order_type: Any) -> str:
+    token = _canonical_order_type(order_type, default="").replace("_", "-")
+    return (
+        f"unsupported standalone order type: {token}; "
+        "use bracket stop_loss/take_profit legs or add an Alpaca request route"
+    )
+
+
 def _effective_closing_position(
     engine: "ExecutionEngine" | None,
     *,
@@ -1125,7 +1192,7 @@ def _short_sale_precheck(
 ) -> tuple[bool, dict[str, Any] | None, str | None]:
     """Validate short-sale prerequisites for Alpaca before submission."""
 
-    side_token = str(side).strip().lower() if side is not None else ""
+    side_token = _semantic_order_side(side) or (str(side).strip().lower() if side is not None else "")
     effective_closing_position = _effective_closing_position(
         engine,
         symbol=symbol,
@@ -1133,7 +1200,7 @@ def _short_sale_precheck(
         quantity=quantity,
         closing_position=closing_position,
     )
-    if effective_closing_position or side_token != "sell":
+    if effective_closing_position or side_token not in {"sell", "sell_short"}:
         return True, None, None
 
     asset = None
@@ -2210,6 +2277,7 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
 AlpacaREST: type[Any] | None
 OrderSide: Any | None
 TimeInForce: Any | None
+PositionIntent: Any | None
 LimitOrderRequest: type[Any] | None
 MarketOrderRequest: type[Any] | None
 _ALPACA_REQUEST_IMPORT_ERROR: BaseException | None = None
@@ -2217,6 +2285,7 @@ try:  # pragma: no cover - optional dependency
     from alpaca.trading.client import TradingClient as _ImportedAlpacaREST  # type: ignore
     from alpaca.trading.enums import (
         OrderSide as _ImportedOrderSide,
+        PositionIntent as _ImportedPositionIntent,
         TimeInForce as _ImportedTimeInForce,
     )
     from alpaca.trading.requests import (
@@ -2227,6 +2296,7 @@ except (ValueError, TypeError, ModuleNotFoundError, ImportError) as exc:
     AlpacaREST = None
     OrderSide = None
     TimeInForce = None
+    PositionIntent = None
     LimitOrderRequest = None
     MarketOrderRequest = None
     _ALPACA_REQUEST_IMPORT_ERROR = exc
@@ -2234,6 +2304,7 @@ else:
     AlpacaREST = _ImportedAlpacaREST
     OrderSide = _ImportedOrderSide
     TimeInForce = _ImportedTimeInForce
+    PositionIntent = _ImportedPositionIntent
     LimitOrderRequest = _ImportedLimitOrderRequest
     MarketOrderRequest = _ImportedMarketOrderRequest
 
@@ -2252,6 +2323,48 @@ def _ensure_request_models():
         raise RuntimeError(_ALPACA_PY_REQUIRED) from _ALPACA_REQUEST_IMPORT_ERROR
 
     return MarketOrderRequest, LimitOrderRequest, OrderSide, TimeInForce
+
+
+def _enum_member(enum_obj: Any | None, name: str) -> Any | None:
+    if enum_obj is None:
+        return None
+    candidate = getattr(enum_obj, name, None)
+    if candidate is not None:
+        return candidate
+    try:
+        return enum_obj[name]  # type: ignore[index]
+    except LIVE_TRADING_FALLBACK_EXC:
+        return None
+
+
+def _alpaca_side_member(side_enum: Any, semantic_side: str) -> Any:
+    if semantic_side in {"buy", "cover"}:
+        return side_enum.BUY
+    return side_enum.SELL
+
+
+def _alpaca_position_intent(order_data: Mapping[str, Any]) -> Any | None:
+    explicit_intent = order_data.get("position_intent")
+    if explicit_intent not in (None, ""):
+        return explicit_intent
+    semantic_side = _semantic_order_side(order_data.get("side"))
+    closing_position = bool(
+        order_data.get("closing_position")
+        or order_data.get("close_position")
+        or order_data.get("reduce_only")
+    )
+    intent_name: str | None = None
+    if semantic_side == "sell_short":
+        intent_name = "SELL_TO_CLOSE" if closing_position else "SELL_TO_OPEN"
+    elif semantic_side == "cover":
+        intent_name = "BUY_TO_CLOSE"
+    elif semantic_side == "buy" and closing_position:
+        intent_name = "BUY_TO_CLOSE"
+    elif semantic_side == "sell" and closing_position:
+        intent_name = "SELL_TO_CLOSE"
+    if intent_name is None:
+        return None
+    return _enum_member(PositionIntent, intent_name)
 
 
 def _req_str(name: str, v: str | None) -> str:
@@ -18114,18 +18227,21 @@ class ExecutionEngine:
             return None
         if self._broker_lock_suppressed(symbol=symbol, side=side_lower, order_type="market"):
             return None
-        closing_position = bool(
+        explicit_closing_requested = bool(
             kwargs.get("closing_position")
             or kwargs.get("close_position")
             or kwargs.get("reduce_only")
+            or _semantic_order_side(side_lower) == "cover"
         )
-        closing_position = _effective_closing_position(
-            self,
-            symbol=symbol,
-            side=side_lower,
-            quantity=quantity,
-            closing_position=closing_position,
-        )
+        closing_position = bool(explicit_closing_requested)
+        if not (_position_flip_allowed(kwargs) and not explicit_closing_requested):
+            closing_position = _effective_closing_position(
+                self,
+                symbol=symbol,
+                side=side_lower,
+                quantity=quantity,
+                closing_position=closing_position,
+            )
         kwargs.pop("closing_position", None)
         kwargs.pop("close_position", None)
         kwargs.pop("reduce_only", None)
@@ -18189,6 +18305,38 @@ class ExecutionEngine:
                     "insufficient_position_available",
                     clip_context or {},
                     extra=skip_payload | {"detail": "insufficient_position_available"},
+                )
+                return None
+            if adjusted_qty != int(quantity):
+                quantity = int(adjusted_qty)
+        if (
+            _semantic_order_side(side_lower) == "cover"
+            or (
+                side_lower == "buy"
+                and closing_position
+                and (explicit_closing_requested or not _position_flip_allowed(kwargs))
+            )
+        ):
+            adjusted_qty, clip_context = self._clip_cover_quantity_to_current_short(
+                symbol=symbol,
+                requested_qty=int(quantity),
+                order_type="market",
+                client_order_id=(
+                    None if client_order_id in (None, "") else str(client_order_id)
+                ),
+            )
+            if adjusted_qty <= 0:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                self._skip_submit(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason="insufficient_short_position_available",
+                    order_type="market",
+                    context=clip_context or {},
+                    submit_started_at=submit_started_at,
                 )
                 return None
             if adjusted_qty != int(quantity):
@@ -18895,18 +19043,21 @@ class ExecutionEngine:
             return None
         if self._broker_lock_suppressed(symbol=symbol, side=side_lower, order_type="limit"):
             return None
-        closing_position = bool(
+        explicit_closing_requested = bool(
             kwargs.get("closing_position")
             or kwargs.get("close_position")
             or kwargs.get("reduce_only")
+            or _semantic_order_side(side_lower) == "cover"
         )
-        closing_position = _effective_closing_position(
-            self,
-            symbol=symbol,
-            side=side_lower,
-            quantity=quantity,
-            closing_position=closing_position,
-        )
+        closing_position = bool(explicit_closing_requested)
+        if not (_position_flip_allowed(kwargs) and not explicit_closing_requested):
+            closing_position = _effective_closing_position(
+                self,
+                symbol=symbol,
+                side=side_lower,
+                quantity=quantity,
+                closing_position=closing_position,
+            )
         kwargs.pop("closing_position", None)
         kwargs.pop("close_position", None)
         kwargs.pop("reduce_only", None)
@@ -18969,6 +19120,38 @@ class ExecutionEngine:
                     "insufficient_position_available",
                     clip_context or {},
                     extra=skip_payload | {"detail": "insufficient_position_available"},
+                )
+                return None
+            if adjusted_qty != int(quantity):
+                quantity = int(adjusted_qty)
+        if (
+            _semantic_order_side(side_lower) == "cover"
+            or (
+                side_lower == "buy"
+                and closing_position
+                and (explicit_closing_requested or not _position_flip_allowed(kwargs))
+            )
+        ):
+            adjusted_qty, clip_context = self._clip_cover_quantity_to_current_short(
+                symbol=symbol,
+                requested_qty=int(quantity),
+                order_type="limit",
+                client_order_id=(
+                    None if client_order_id in (None, "") else str(client_order_id)
+                ),
+            )
+            if adjusted_qty <= 0:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                self._skip_submit(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason="insufficient_short_position_available",
+                    order_type="limit",
+                    context=clip_context or {},
+                    submit_started_at=submit_started_at,
                 )
                 return None
             if adjusted_qty != int(quantity):
@@ -19580,9 +19763,9 @@ class ExecutionEngine:
     def execute_order(
         self,
         symbol: str,
-        side: Literal["buy", "sell", "short", "cover"],
+        side: Literal["buy", "sell", "sell_short", "short", "cover"],
         qty: int,
-        order_type: Literal["market", "limit"] = "limit",
+        order_type: Literal["market", "limit", "stop", "stop_limit", "trailing_stop"] = "limit",
         limit_price: Optional[float] = None,
         *,
         asset_class: Optional[str] = None,
@@ -19603,11 +19786,14 @@ class ExecutionEngine:
         if not hasattr(self, "order_manager"):
             self.order_manager = OrderManager()
         pytest_mode = _pytest_mode_active()
-        closing_position = bool(
+        semantic_side_input = _semantic_order_side(side)
+        explicit_closing_requested = bool(
             kwargs.get("closing_position")
             or kwargs.get("close_position")
             or kwargs.get("reduce_only")
+            or semantic_side_input == "cover"
         )
+        closing_position = bool(explicit_closing_requested)
         annotations_raw = kwargs.pop("annotations", None)
         using_fallback_price_kwarg = kwargs.pop("using_fallback_price", None)
         price_hint_input = kwargs.pop("price_hint", None)
@@ -19637,7 +19823,10 @@ class ExecutionEngine:
             raise ValueError(f"invalid side: {side}")
         raw_notional = kwargs.get("notional")
         notional_decimal = _positive_decimal(raw_notional)
-        order_type_initial = str(order_type or "limit").lower()
+        order_type_initial = _canonical_order_type(order_type or "limit")
+        if order_type_initial in _UNSUPPORTED_STANDALONE_PROTECTIVE_ORDER_TYPES:
+            self._emit_validation_failure(symbol, side, qty, "unsupported_order_type")
+            raise ValueError(_unsupported_standalone_order_type_message(order_type_initial))
         notional_market_order = (
             notional_decimal is not None and order_type_initial == "market"
         )
@@ -19669,13 +19858,14 @@ class ExecutionEngine:
             quantity = qty
         if notional_market_order:
             quantity = 0
-        closing_position = _effective_closing_position(
-            self,
-            symbol=symbol,
-            side=mapped_side,
-            quantity=quantity,
-            closing_position=closing_position,
-        )
+        if not (_position_flip_allowed(kwargs) and not explicit_closing_requested):
+            closing_position = _effective_closing_position(
+                self,
+                symbol=symbol,
+                side=mapped_side,
+                quantity=quantity,
+                closing_position=closing_position,
+            )
         trading_client = getattr(self, "trading_client", None)
         account_snapshot: Any | None = None
         client = trading_client
@@ -23323,17 +23513,11 @@ class ExecutionEngine:
         return support
 
     def _map_core_side(self, core_side: Any) -> str:
-        """Map core OrderSide enum to Alpaca's side representation."""
+        """Map core OrderSide enum to the live execution semantic side."""
 
-        value = getattr(core_side, "value", None)
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-        else:
-            normalized = str(core_side).strip().lower()
-        if normalized in {"buy", "cover", "long"}:
-            return "buy"
-        if normalized in {"sell", "sell_short", "short", "exit"}:
-            return "sell"
+        semantic_side = _semantic_order_side(core_side)
+        if semantic_side is not None:
+            return semantic_side
         return "buy"
 
     @staticmethod
@@ -23548,6 +23732,22 @@ class ExecutionEngine:
         position_qty = int(self._position_quantity(symbol_token))
         # Opening short sells should not be clipped to long inventory.
         if position_qty <= 0:
+            if closing_position:
+                no_position_context = {
+                    "symbol": symbol_token,
+                    "requested_qty": int(requested_qty),
+                    "available_qty": 0,
+                    "position_qty": int(position_qty),
+                    "open_sell_qty": 0.0,
+                    "reserved_shares": 0,
+                    "closing_position": True,
+                    "client_order_id": client_order_id,
+                    "order_type": str(order_type),
+                    "adjusted_qty": 0,
+                    "reason": "no_long_position",
+                }
+                logger.warning("ORDER_QTY_CLIPPED_TO_AVAILABLE_POSITION", extra=no_position_context)
+                return 0, no_position_context
             return requested_qty, None
 
         _, open_sell_qty = self.open_order_totals(symbol_token)
@@ -23571,6 +23771,61 @@ class ExecutionEngine:
         adjusted_qty = int(max(available_qty, 0))
         context["adjusted_qty"] = adjusted_qty
         logger.warning("ORDER_QTY_CLIPPED_TO_AVAILABLE_POSITION", extra=context)
+        return adjusted_qty, context
+
+    def _clip_cover_quantity_to_current_short(
+        self,
+        *,
+        symbol: str,
+        requested_qty: int,
+        order_type: str,
+        client_order_id: str | None,
+    ) -> tuple[int, dict[str, Any] | None]:
+        """Clip buy-to-close quantity to currently available short shares."""
+
+        if requested_qty <= 0:
+            return 0, None
+        symbol_token = str(symbol or "").strip().upper()
+        if not symbol_token:
+            return requested_qty, None
+
+        position_qty = int(self._position_quantity(symbol_token))
+        if position_qty >= 0:
+            context = {
+                "symbol": symbol_token,
+                "requested_qty": int(requested_qty),
+                "available_qty": 0,
+                "position_qty": int(position_qty),
+                "open_buy_qty": 0.0,
+                "reserved_shares": 0,
+                "client_order_id": client_order_id,
+                "order_type": str(order_type),
+                "adjusted_qty": 0,
+                "reason": "no_short_position",
+            }
+            logger.warning("COVER_QTY_CLIPPED_TO_CURRENT_SHORT", extra=context)
+            return 0, context
+
+        open_buy_qty, _ = self.open_order_totals(symbol_token)
+        open_buy_qty_val = max(_safe_float(open_buy_qty) or 0.0, 0.0)
+        reserved_shares = int(math.ceil(open_buy_qty_val - 1e-9))
+        available_qty = max(abs(position_qty) - max(reserved_shares, 0), 0)
+        if requested_qty <= available_qty:
+            return requested_qty, None
+
+        context = {
+            "symbol": symbol_token,
+            "requested_qty": int(requested_qty),
+            "available_qty": int(available_qty),
+            "position_qty": int(position_qty),
+            "open_buy_qty": float(open_buy_qty_val),
+            "reserved_shares": int(max(reserved_shares, 0)),
+            "client_order_id": client_order_id,
+            "order_type": str(order_type),
+        }
+        adjusted_qty = int(max(available_qty, 0))
+        context["adjusted_qty"] = adjusted_qty
+        logger.warning("COVER_QTY_CLIPPED_TO_CURRENT_SHORT", extra=context)
         return adjusted_qty, context
 
     def _resolve_position_before(self, symbol: str) -> int | None:
@@ -23873,6 +24128,7 @@ class ExecutionEngine:
                 side=side_enum.BUY,
                 time_in_force=tif_enum.DAY,
                 client_order_id=_stable_order_id(symbol, "cover"),
+                position_intent=_enum_member(PositionIntent, "BUY_TO_CLOSE"),
             )
             client.submit_order(order_data=req)
         except LIVE_TRADING_FALLBACK_EXC as exc:
@@ -31075,7 +31331,14 @@ class ExecutionEngine:
             }
 
         # Normalize order payload before any broker submit path, including pytest hooks.
-        order_type = str(order_data.get("type", "limit")).lower()
+        order_type = _canonical_order_type(order_data.get("type", "limit"))
+        if order_type not in {"market", "limit"}:
+            raise NonRetryableBrokerError(
+                "unsupported_order_type",
+                code="unsupported_order_type",
+                symbol=str(order_data.get("symbol") or "").strip().upper() or None,
+                detail=_unsupported_standalone_order_type_message(order_type),
+            )
         tif_token = self._resolve_time_in_force(order_data.get("time_in_force"))
         order_data["time_in_force"] = tif_token
         symbol_token = str(order_data.get("symbol") or "").strip().upper()
@@ -31137,6 +31400,67 @@ class ExecutionEngine:
             raise RuntimeError("Alpaca TradingClient is not initialized")
 
         qty_payload = order_data.get("quantity")
+        semantic_side = _semantic_order_side(order_data.get("side"))
+        if (
+            qty_payload not in (None, "")
+            and (
+                semantic_side == "cover"
+                or (
+                    semantic_side == "buy"
+                    and closing_position
+                    and (
+                        bool(
+                            order_data.get("reduce_only")
+                            or order_data.get("close_position")
+                            or order_data.get("closing_position")
+                        )
+                        or not _position_flip_allowed(order_data)
+                    )
+                )
+            )
+        ):
+            requested_qty = _safe_int(qty_payload, 0)
+            if requested_qty > 0:
+                adjusted_qty, clip_context = self._clip_cover_quantity_to_current_short(
+                    symbol=symbol_token,
+                    requested_qty=requested_qty,
+                    order_type=order_type,
+                    client_order_id=client_order_id_text or None,
+                )
+                if adjusted_qty <= 0:
+                    raise NonRetryableBrokerError(
+                        "insufficient_short_position_available",
+                        code="insufficient_short_position_available",
+                        symbol=symbol_token or None,
+                        detail=str(clip_context or {}),
+                    )
+                if adjusted_qty != requested_qty:
+                    order_data["quantity"] = int(adjusted_qty)
+                    qty_payload = int(adjusted_qty)
+        if (
+            qty_payload not in (None, "")
+            and semantic_side == "sell"
+            and closing_position
+        ):
+            requested_qty = _safe_int(qty_payload, 0)
+            if requested_qty > 0:
+                adjusted_qty, clip_context = self._clip_sell_quantity_to_available_position(
+                    symbol=symbol_token,
+                    requested_qty=requested_qty,
+                    closing_position=True,
+                    order_type=order_type,
+                    client_order_id=client_order_id_text or None,
+                )
+                if adjusted_qty <= 0:
+                    raise NonRetryableBrokerError(
+                        "insufficient_position_available",
+                        code="insufficient_position_available",
+                        symbol=symbol_token or None,
+                        detail=str(clip_context or {}),
+                    )
+                if adjusted_qty != requested_qty:
+                    order_data["quantity"] = int(adjusted_qty)
+                    qty_payload = int(adjusted_qty)
         notional_decimal = _positive_decimal(order_data.get("notional"))
         if notional_decimal is not None and order_type != "market":
             raise NonRetryableBrokerError(
@@ -31177,11 +31501,8 @@ class ExecutionEngine:
         )
         try:
             if resp is None:
-                side = (
-                    side_enum.BUY
-                    if str(order_data["side"]).lower() == "buy"
-                    else side_enum.SELL
-                )
+                semantic_side = _semantic_order_side(order_data.get("side")) or "buy"
+                side = _alpaca_side_member(side_enum, semantic_side)
                 tif_member = tif_enum.DAY
                 tif_lookup = str(tif_token).strip().upper()
                 if tif_lookup:
@@ -31199,6 +31520,9 @@ class ExecutionEngine:
                     "time_in_force": tif_member,
                     "client_order_id": order_data.get("client_order_id"),
                 }
+                position_intent = _alpaca_position_intent(order_data)
+                if position_intent is not None:
+                    common_kwargs["position_intent"] = position_intent
                 if notional_decimal is not None:
                     common_kwargs["notional"] = str(notional_decimal)
                 else:

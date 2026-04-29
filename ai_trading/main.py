@@ -3086,6 +3086,18 @@ def _probe_local_api_health(port: int) -> bool:
     return bool(data) and data.get("service") == "ai-trading"
 
 
+def _preflight_bind_server_port(host: str, port: int) -> None:
+    """Raise when a startup server port cannot be bound."""
+
+    probe: socket.socket | None = None
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.bind((host, port))
+    finally:
+        if probe is not None:
+            probe.close()
+
+
 def start_api(ready_signal: threading.Event | None = None) -> None:
     """Spin up the Flask API server or raise if the port is unavailable."""
 
@@ -3108,12 +3120,21 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
 
         health_port = int(getattr(settings, "healthcheck_port", 8081) or 8081)
         if int(port) != int(health_port):
+            health_host = "0.0.0.0"
+            try:
+                _preflight_bind_server_port(health_host, health_port)
+            except OSError as exc:
+                logger.critical(
+                    "HEALTHCHECK_PORT_CONFLICT",
+                    extra={"host": health_host, "port": health_port, "error": str(exc)},
+                )
+                raise
             health_app = build_standalone_healthcheck_app(fail_fast_env=True)
             th = threading.Thread(
                 target=run_standalone_healthcheck_app,
                 kwargs={
                     "app": health_app,
-                    "host": "0.0.0.0",
+                    "host": health_host,
                     "port": health_port,
                     "logger": logger,
                 },
@@ -3124,6 +3145,8 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
             logger.info("HEALTH_SERVER_STARTED", extra={"port": health_port})
         else:
             logger.info("HEALTH_SERVER_PORT_SHARED", extra={"port": port})
+    except OSError:
+        raise
     except MAIN_FALLBACK_EXC as _exc:  # pragma: no cover - defensive
         logger.warning("HEALTH_SERVER_START_FAILED", extra={"error": str(_exc)})
 

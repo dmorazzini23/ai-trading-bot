@@ -68,6 +68,31 @@ def test_approval_gate_fails_on_stale_approval(tmp_path: Path) -> None:
     assert payload["reason"] == "approval_stale"
 
 
+def test_approval_gate_fails_on_future_dated_approval(tmp_path: Path) -> None:
+    future = datetime.now(UTC) + timedelta(minutes=10)
+    approvals_path = tmp_path / "promotion_approvals.jsonl"
+    _write_jsonl(
+        approvals_path,
+        [
+            {
+                "approval_id": "approval-1",
+                "ts": future.isoformat(),
+                "strategy": "momentum",
+                "model_id": "model-1",
+                "decision": "approved",
+            }
+        ],
+    )
+
+    payload = evaluate_promotion_approval_gate(
+        governance_path=str(tmp_path),
+        max_age_hours=24.0,
+    )
+
+    assert payload["ok"] is False
+    assert payload["reason"] == "approval_future_dated"
+
+
 def test_approval_gate_fails_when_latest_event_forced(tmp_path: Path) -> None:
     now = datetime.now(UTC)
     _write_jsonl(

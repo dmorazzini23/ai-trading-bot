@@ -33,6 +33,25 @@ def test_runtime_override_wins_in_merged_snapshot(monkeypatch):
     assert errors == []
 
 
+def test_runtime_override_reaches_settings(monkeypatch):
+    monkeypatch.delenv("AI_TRADING_CAPITAL_CAP", raising=False)
+    config.set_runtime_env_override("AI_TRADING_CAPITAL_CAP", "0.37")
+
+    settings = settings_mod.get_settings()
+
+    assert config.get_env("AI_TRADING_CAPITAL_CAP", cast=float) == pytest.approx(0.37)
+    assert float(settings.capital_cap) == pytest.approx(0.37)
+
+
+def test_settings_ignore_empty_process_env(monkeypatch):
+    monkeypatch.setenv("TESTING", "")
+    settings_mod.get_settings.cache_clear()
+
+    settings = settings_mod.get_settings()
+
+    assert settings.testing is False
+
+
 def test_get_settings_singleton():
     """Management and settings helpers share the same Settings instance."""
     assert config.get_settings() is settings_mod.get_settings()

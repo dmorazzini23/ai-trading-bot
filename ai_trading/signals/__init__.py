@@ -1437,15 +1437,15 @@ def generate_cost_aware_signals(ctx, symbols: list[str]) -> list[dict]:
                 try:
                     if hasattr(ctx, "model") and ctx.model:
                         features = ctx.feature_generator.generate_features(df)
-                        predicted_edge = ctx.model.predict_edge(features)
-                except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+                        predicted_edge = _predict_cost_aware_edge(ctx.model, features)
+                except (ValueError, KeyError, TypeError, ZeroDivisionError, AttributeError) as e:
                     logger.debug(
                         "MODEL_PREDICTION_FAILED",
                         extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
                     )
                 decision = decision_pipeline.evaluate_signal_with_costs(symbol, df, predicted_edge)
                 signal_decisions.append(decision)
-            except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+            except (ValueError, KeyError, TypeError, ZeroDivisionError, AttributeError) as e:
                 logger.warning(
                     "SIGNAL_PROCESSING_FAILED",
                     extra={
@@ -1466,7 +1466,7 @@ def generate_cost_aware_signals(ctx, symbols: list[str]) -> list[dict]:
             extra={"component": "signal_generation", "accepted": accepted, "rejected": rejected},
         )
         return signal_decisions
-    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+    except (ValueError, KeyError, TypeError, ZeroDivisionError, AttributeError) as e:
         logger.error(
             "SIGNAL_PROCESSING_FAILED",
             extra={
@@ -1477,3 +1477,41 @@ def generate_cost_aware_signals(ctx, symbols: list[str]) -> list[dict]:
             },
         )
         return []
+
+
+def _prediction_scalar(value: Any) -> float:
+    """Convert common model prediction outputs to a finite scalar edge."""
+    np = _get_numpy()
+    if np is not None:
+        arr = np.asarray(value, dtype=float)
+        if arr.ndim == 0:
+            scalar = float(arr)
+        elif arr.ndim >= 2 and arr.shape[1] >= 2:
+            scalar = float(arr[-1, -1] - arr[-1, 0])
+        else:
+            scalar = float(arr.ravel()[-1])
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        last = value[-1]
+        if isinstance(last, Sequence) and not isinstance(last, (str, bytes)):
+            if len(last) >= 2:
+                scalar = float(last[-1]) - float(last[0])
+            else:
+                scalar = float(last[-1])
+        else:
+            scalar = float(last)
+    else:
+        scalar = float(value)
+    if not math.isfinite(scalar):
+        raise ValueError("Model prediction is not finite")
+    return scalar
+
+
+def _predict_cost_aware_edge(model: Any, features: Any) -> float:
+    """Predict edge using the model methods supported by signal generation."""
+    if hasattr(model, "predict_edge"):
+        return _prediction_scalar(model.predict_edge(features))
+    if hasattr(model, "predict_proba"):
+        return _prediction_scalar(model.predict_proba(features))
+    if hasattr(model, "predict"):
+        return _prediction_scalar(model.predict(features))
+    raise AttributeError("Model has neither predict_edge, predict_proba, nor predict")

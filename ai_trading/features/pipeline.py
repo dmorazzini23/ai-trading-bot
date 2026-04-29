@@ -54,6 +54,7 @@ class BuildFeatures:
         self.regime_span = regime_span
         self.feature_params_: dict[str, Any] = {}
         self.is_fitted_ = False
+        self._lookback_tail_: Any | None = None
 
     def fit(self, X: pd.DataFrame, y: pd.Series | None=None) -> 'BuildFeatures':
         """
@@ -70,7 +71,9 @@ class BuildFeatures:
         try:
             if not isinstance(X, pd.DataFrame):
                 raise ValueError('BuildFeatures requires DataFrame input')
-            self.feature_params_ = {'lookback_window': self.lookback_window, 'vol_span': self.vol_span, 'regime_span': self.regime_span, 'columns': X.columns.tolist()}
+            lookback_rows = self._max_lookback_rows()
+            self.feature_params_ = {'lookback_window': self.lookback_window, 'vol_span': self.vol_span, 'regime_span': self.regime_span, 'columns': X.columns.tolist(), 'lookback_tail_rows': lookback_rows}
+            self._lookback_tail_ = X.tail(lookback_rows).copy()
             if 'close' in X.columns or 'price' in X.columns:
                 price_col = 'close' if 'close' in X.columns else 'price'
                 prices = X[price_col]
@@ -113,21 +116,22 @@ class BuildFeatures:
             if not isinstance(X, pd.DataFrame):
                 raise ValueError('Input must be DataFrame')
             self._validate_raw_price_columns(X)
-            raw_columns = set(X.columns)
-            features = X.copy()
-            if 'close' in X.columns:
+            source = self._with_lookback_tail(X)
+            raw_columns = set(source.columns)
+            features = source.copy()
+            if 'close' in source.columns:
                 price_col = 'close'
-            elif 'price' in X.columns:
+            elif 'price' in source.columns:
                 price_col = 'price'
             else:
-                price_col = X.columns[0]
-            prices = X[price_col]
+                price_col = source.columns[0]
+            prices = source[price_col]
             if self.include_returns:
                 features = self._add_return_features(features, prices)
             if self.include_volatility:
                 features = self._add_volatility_features(features, prices)
-            if self.include_volume and 'volume' in X.columns:
-                features = self._add_volume_features(features, X['volume'])
+            if self.include_volume and 'volume' in source.columns:
+                features = self._add_volume_features(features, source['volume'])
             if self.include_regime:
                 features = self._add_regime_features(features, prices)
             derived_columns = [col for col in features.columns if col not in raw_columns]
@@ -137,11 +141,41 @@ class BuildFeatures:
                     .replace([np.inf, -np.inf], np.nan)
                     .fillna(0.0)
                 )
+            if len(source) != len(X):
+                features = features.iloc[-len(X):].copy()
             logger.debug(f'Generated {features.shape[1]} features from {X.shape[1]} inputs')
             return features
         except (KeyError, ValueError, TypeError, pd.errors.EmptyDataError) as e:
             logger.error(f'Error transforming features: {e}')
             raise
+
+    def _max_lookback_rows(self) -> int:
+        """Return the raw row tail needed to keep rolling features stable."""
+        return max(
+            int(self.lookback_window),
+            int(self.vol_span),
+            int(self.regime_span),
+            50,
+        )
+
+    def _with_lookback_tail(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Prepend fitted training tail when transforming a later serving window."""
+        pd = load_pandas()
+        tail = self._lookback_tail_
+        if tail is None or len(tail) == 0 or len(X) == 0:
+            return X
+        if list(tail.columns) != list(X.columns):
+            return X
+        try:
+            if len(tail.index.intersection(X.index)) > 0:
+                return X
+            if not (tail.index.is_monotonic_increasing and X.index.is_monotonic_increasing):
+                return X
+            if not bool(X.index[0] > tail.index[-1]):
+                return X
+        except (TypeError, ValueError, AttributeError):
+            return X
+        return pd.concat([tail, X], axis=0)
 
     def _validate_raw_price_columns(self, X: pd.DataFrame) -> None:
         """Reject non-finite or non-positive raw price inputs before feature fill."""

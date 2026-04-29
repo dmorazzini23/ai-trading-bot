@@ -1,3 +1,4 @@
+import importlib
 from importlib import import_module
 
 EXPECTED = {
@@ -107,3 +108,33 @@ def test_exports_lists_are_stable():
         mod = import_module(module_name)
         assert hasattr(mod, '__all__')
         assert sorted(mod.__all__) == expected
+
+
+def test_package_import_does_not_patch_runtime_override_helpers():
+    import ai_trading
+    from ai_trading.config import management
+
+    original_clear = management.clear_runtime_env_overrides
+
+    importlib.reload(ai_trading)
+
+    assert management.clear_runtime_env_overrides is original_clear
+    assert not hasattr(management, "_test_override_guard_installed")
+
+
+def test_root_execution_engine_export_uses_runtime_selector(monkeypatch):
+    import ai_trading
+    import ai_trading.execution as execution_mod
+
+    class SelectedExecutionEngine:
+        pass
+
+    monkeypatch.setattr(
+        execution_mod,
+        "select_execution_engine",
+        lambda: SelectedExecutionEngine,
+    )
+    vars(ai_trading).pop("ExecutionEngine", None)
+
+    assert ai_trading.ExecutionEngine is SelectedExecutionEngine
+    assert "ExecutionEngine" not in vars(ai_trading)

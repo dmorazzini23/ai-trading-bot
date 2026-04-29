@@ -87,6 +87,17 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
             24.0 * 14.0,
         ),
     )
+    max_future_skew_seconds = max(
+        0.0,
+        _as_float(
+            get_env(
+                "AI_TRADING_REPLAY_LIVE_PARITY_MAX_FUTURE_SKEW_SECONDS",
+                300.0,
+                cast=float,
+            ),
+            300.0,
+        ),
+    )
     candidates = list(output_dir.glob("replay_hash_*.json"))
     if not candidates:
         return {
@@ -151,9 +162,18 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         except OSError:
             ts = None
     age_hours: float | None = None
+    future_skew_seconds = 0.0
+    future_dated = False
     if ts is not None:
-        age_hours = max((datetime.now(UTC) - ts).total_seconds(), 0.0) / 3600.0
-    fresh = bool(age_hours is not None and age_hours <= float(max_age_hours))
+        delta_seconds = (datetime.now(UTC) - ts).total_seconds()
+        future_skew_seconds = max(-delta_seconds, 0.0)
+        future_dated = bool(future_skew_seconds > float(max_future_skew_seconds))
+        age_hours = max(delta_seconds, 0.0) / 3600.0
+    fresh = bool(
+        age_hours is not None
+        and age_hours <= float(max_age_hours)
+        and not future_dated
+    )
     violations_raw = payload.get("violations")
     violations_count = (
         len(violations_raw)
@@ -166,7 +186,7 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         if isinstance(counterfactual_raw, Mapping)
         else {}
     )
-    counterfactual_passed = bool(counterfactual.get("passed", True))
+    counterfactual_passed = counterfactual.get("passed") is True
 
     return {
         "enabled": True,
@@ -176,6 +196,10 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         "ts": ts.isoformat() if ts is not None else None,
         "ts_source": "payload" if _parse_ts(payload.get("ts")) is not None else "mtime",
         "age_hours": float(age_hours) if age_hours is not None else None,
+        "future_dated": bool(future_dated),
+        "future_skew_seconds": float(future_skew_seconds),
+        "max_future_skew_seconds": float(max_future_skew_seconds),
+        "reason": "replay_governance_artifact_future_dated" if future_dated else None,
         "max_age_hours": float(max_age_hours),
         "rows": _as_int(payload.get("rows"), 0),
         "orders_submitted": _as_int(payload.get("orders_submitted"), 0),
@@ -254,13 +278,15 @@ def summarize_replay_live_parity_gate(
 
     replay_available = bool(replay_snapshot.get("available"))
     replay_fresh = bool(replay_snapshot.get("fresh"))
+    replay_future_dated = bool(replay_snapshot.get("future_dated", False))
     replay_violations_count = max(
         0,
         _as_int(replay_snapshot.get("violations_count"), 0),
     )
-    replay_counterfactual_passed = bool(
-        replay_snapshot.get("counterfactual_passed", True)
-    )
+    counterfactual_raw = replay_snapshot.get("counterfactual_passed")
+    if counterfactual_raw is None and isinstance(replay_snapshot.get("counterfactual"), Mapping):
+        counterfactual_raw = dict(replay_snapshot.get("counterfactual", {})).get("passed")
+    replay_counterfactual_passed = counterfactual_raw is True
 
     lifecycle_enabled = bool(
         lifecycle_snapshot.get("enabled", bool(lifecycle_snapshot))
@@ -283,7 +309,9 @@ def summarize_replay_live_parity_gate(
     )
 
     replay_available_ok = bool(replay_available)
-    replay_fresh_ok = bool(replay_fresh or (not require_fresh_replay))
+    replay_fresh_ok = bool(
+        (replay_fresh or (not require_fresh_replay)) and not replay_future_dated
+    )
     replay_violations_ok = bool(
         replay_violations_count <= int(max_replay_violations)
     )
@@ -335,6 +363,16 @@ def summarize_replay_live_parity_gate(
                     ),
                 )
             ),
+            "max_replay_future_skew_seconds": float(
+                replay_snapshot.get(
+                    "max_future_skew_seconds",
+                    get_env(
+                        "AI_TRADING_REPLAY_LIVE_PARITY_MAX_FUTURE_SKEW_SECONDS",
+                        300.0,
+                        cast=float,
+                    ),
+                )
+            ),
             "require_counterfactual_passed": bool(require_counterfactual_passed),
             "max_replay_violations": int(max_replay_violations),
             "require_oms_lifecycle_parity": bool(require_oms_lifecycle_parity),
@@ -346,6 +384,8 @@ def summarize_replay_live_parity_gate(
             "replay_available": bool(replay_available),
             "replay_fresh": bool(replay_fresh),
             "replay_age_hours": replay_snapshot.get("age_hours"),
+            "replay_future_dated": bool(replay_future_dated),
+            "replay_future_skew_seconds": replay_snapshot.get("future_skew_seconds"),
             "replay_violations_count": int(replay_violations_count),
             "replay_counterfactual_passed": bool(replay_counterfactual_passed),
             "oms_lifecycle_parity_enabled": bool(lifecycle_enabled),

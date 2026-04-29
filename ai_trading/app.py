@@ -1503,7 +1503,12 @@ def get_test_client():
     return flask_testing.FlaskClient(app)
 
 
-if __name__ == "__main__":
+def run_module_entrypoint() -> None:
+    """Run the module entrypoint after loading canonical dotenv files."""
+
+    from ai_trading.env import ensure_dotenv_loaded
+
+    ensure_dotenv_loaded()
     if _managed_env("RUN_HEALTHCHECK") == "1":
         from ai_trading.config.settings import get_settings
 
@@ -1518,3 +1523,7 @@ if __name__ == "__main__":
             logger=app.logger,
             raise_on_bind_error=True,
         )
+
+
+if __name__ == "__main__":
+    run_module_entrypoint()

@@ -85,7 +85,8 @@ def test_final_bar_market_open_wait_and_global_helpers(monkeypatch: pytest.Monke
     assert validation.is_final is True
 
     clock.calendar = None
-    assert clock.is_market_open("AAPL", datetime(2026, 4, 27, 10, 0, tzinfo=UTC)) is True
+    assert clock.is_market_open("AAPL", datetime(2026, 4, 27, 10, 0, tzinfo=UTC)) is False
+    assert clock.is_market_open("AAPL", datetime(2026, 4, 27, 15, 0, tzinfo=UTC)) is True
     assert clock.is_market_open("AAPL", datetime(2026, 4, 25, 10, 0, tzinfo=UTC)) is False
     clock.calendar = _Calendar(empty=True)
     assert clock.is_market_open("AAPL", datetime(2026, 4, 27, 15, 0, tzinfo=UTC)) is False

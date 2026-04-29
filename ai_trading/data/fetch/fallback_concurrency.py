@@ -47,13 +47,18 @@ def _resolve_limit_from_env() -> int:
     return _DEFAULT_LIMIT
 
 
-def _ensure_semaphore() -> None:
+def _ensure_semaphore_locked() -> threading.BoundedSemaphore:
     global _semaphore, _fallback_limit_value
-    if _semaphore is not None:
-        return
-    limit = _resolve_limit_from_env()
-    _semaphore = threading.BoundedSemaphore(limit)
-    _fallback_limit_value = limit
+    if _semaphore is None:
+        limit = _resolve_limit_from_env()
+        _semaphore = threading.BoundedSemaphore(limit)
+        _fallback_limit_value = limit
+    return _semaphore
+
+
+def _ensure_semaphore() -> threading.BoundedSemaphore:
+    with _counter_lock:
+        return _ensure_semaphore_locked()
 
 
 def _rebuild_semaphore(new_limit: int) -> None:
@@ -77,37 +82,42 @@ def reload_fallback_limit() -> int:
     return int(_fallback_limit_value or limit)
 
 
-def _acquire_slot() -> None:
-    _ensure_semaphore()
-    assert _semaphore is not None  # For type checkers
-    _semaphore.acquire()
+def _acquire_slot() -> threading.BoundedSemaphore:
+    semaphore = _ensure_semaphore()
+    semaphore.acquire()
     global _fallback_inflight, _fallback_peak
     with _counter_lock:
         _fallback_inflight += 1
         if _fallback_inflight > _fallback_peak:
             _fallback_peak = _fallback_inflight
+    return semaphore
 
 
-def _release_slot() -> None:
+def _release_slot(semaphore: threading.BoundedSemaphore) -> None:
     global _fallback_inflight
-    assert _semaphore is not None  # _ensure_semaphore guarantees initialization
     with _counter_lock:
         if _fallback_inflight > 0:
             _fallback_inflight -= 1
         else:  # Defensive clamp when release is called more than acquire.
             _fallback_inflight = 0
-    _semaphore.release()
+        replacement = _semaphore if _semaphore is not semaphore else None
+    semaphore.release()
+    if replacement is not None:
+        try:
+            replacement.release()
+        except ValueError:
+            pass
 
 
 @contextmanager
 def fallback_slot() -> Iterator[None]:
     """Context manager that limits concurrent fallback fetch attempts."""
 
-    _acquire_slot()
+    semaphore = _acquire_slot()
     try:
         yield
     finally:
-        _release_slot()
+        _release_slot(semaphore)
 
 
 def get_peak_concurrency() -> int:

@@ -82,6 +82,22 @@ def _resolve_max_age_hours(value: float | None) -> float:
     return max(1.0, min(parsed, 24.0 * 365.0))
 
 
+def _resolve_max_future_skew_seconds() -> float:
+    try:
+        parsed = float(
+            get_env(
+                "AI_TRADING_INSTITUTIONAL_PROMOTION_APPROVAL_MAX_FUTURE_SKEW_SECONDS",
+                get_env("AI_TRADING_PROMOTION_APPROVAL_MAX_FUTURE_SKEW_SECONDS", 300.0, cast=float),
+                cast=float,
+            )
+        )
+    except (TypeError, ValueError):
+        parsed = 300.0
+    if not (parsed == parsed):  # NaN
+        parsed = 300.0
+    return max(0.0, min(parsed, 24.0 * 3600.0))
+
+
 def evaluate_promotion_approval_gate(
     *,
     governance_path: str | None = None,
@@ -93,6 +109,7 @@ def evaluate_promotion_approval_gate(
     approvals = _read_jsonl(approvals_path)
     events = _read_jsonl(promotion_events_path)
     resolved_max_age = _resolve_max_age_hours(max_age_hours)
+    max_future_skew_seconds = _resolve_max_future_skew_seconds()
     now = datetime.now(UTC)
 
     if not approvals:
@@ -157,6 +174,16 @@ def evaluate_promotion_approval_gate(
             "approval": approval_to_check,
         }
     age_hours = max((now - approved_at).total_seconds() / 3600.0, 0.0)
+    future_skew_seconds = max((approved_at - now).total_seconds(), 0.0)
+    if future_skew_seconds > max_future_skew_seconds:
+        return {
+            "ok": False,
+            "reason": "approval_future_dated",
+            "governance_path": str(base),
+            "future_skew_seconds": future_skew_seconds,
+            "max_future_skew_seconds": max_future_skew_seconds,
+            "approval": approval_to_check,
+        }
     if age_hours > resolved_max_age:
         return {
             "ok": False,
@@ -173,6 +200,8 @@ def evaluate_promotion_approval_gate(
         "governance_path": str(base),
         "age_hours": age_hours,
         "max_age_hours": resolved_max_age,
+        "future_skew_seconds": future_skew_seconds,
+        "max_future_skew_seconds": max_future_skew_seconds,
         "approval": approval_to_check,
     }
 

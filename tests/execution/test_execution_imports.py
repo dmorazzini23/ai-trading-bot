@@ -5,6 +5,8 @@ from importlib import import_module
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 import ai_trading.env as env_mod
 import ai_trading.util.env_check as env_check
 
@@ -114,3 +116,37 @@ def test_execution_engine_real_when_dotenv_unresolved(monkeypatch):
     config_mod = importlib.reload(config_mod)
     execution_mod = importlib.reload(execution_mod)
     importlib.reload(bot_engine)
+
+
+def test_optional_export_programming_errors_are_not_swallowed(monkeypatch):
+    """Optional import guards should not hide runtime/programming failures."""
+
+    import ai_trading.execution as execution_mod
+
+    debug_tracker_stub = types.ModuleType("ai_trading.execution.debug_tracker")
+
+    def _raise_runtime_error(_name: str) -> Any:
+        raise RuntimeError("debug tracker import bug")
+
+    debug_tracker_stub.__getattr__ = _raise_runtime_error  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ai_trading.execution.debug_tracker", debug_tracker_stub)
+
+    try:
+        with pytest.raises(RuntimeError, match="debug tracker import bug"):
+            importlib.reload(execution_mod)
+    finally:
+        monkeypatch.delitem(sys.modules, "ai_trading.execution.debug_tracker", raising=False)
+        importlib.reload(execution_mod)
+
+
+def test_execution_settings_errors_are_not_swallowed(monkeypatch):
+    import ai_trading.config as config_mod
+    import ai_trading.execution as execution_mod
+
+    def _raise_config_error() -> Any:
+        raise RuntimeError("settings are invalid")
+
+    monkeypatch.setattr(config_mod, "get_execution_settings", _raise_config_error)
+
+    with pytest.raises(RuntimeError, match="settings are invalid"):
+        execution_mod._load_execution_settings()

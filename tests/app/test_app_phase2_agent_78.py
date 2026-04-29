@@ -65,6 +65,44 @@ def test_run_standalone_healthcheck_app_raises_for_standalone_bind_error() -> No
     ]
 
 
+def test_module_entrypoint_loads_dotenv_before_standalone_settings(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        app_module,
+        "_managed_env",
+        lambda name, default=None: "1" if name == "RUN_HEALTHCHECK" else default,
+    )
+
+    class _Settings:
+        api_port = 9001
+        healthcheck_port = 8081
+
+    def _ensure_dotenv_loaded() -> None:
+        calls.append("dotenv")
+
+    def _get_settings() -> _Settings:
+        calls.append("settings")
+        return _Settings()
+
+    monkeypatch.setattr("ai_trading.env.ensure_dotenv_loaded", _ensure_dotenv_loaded)
+    monkeypatch.setattr("ai_trading.config.settings.get_settings", _get_settings)
+    monkeypatch.setattr(
+        app_module,
+        "build_standalone_healthcheck_app",
+        lambda **_kwargs: types.SimpleNamespace(logger=types.SimpleNamespace(info=lambda *_a, **_k: None)),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "run_standalone_healthcheck_app",
+        lambda *_args, **_kwargs: calls.append("run"),
+    )
+
+    app_module.run_module_entrypoint()
+
+    assert calls == ["dotenv", "settings", "run"]
+
+
 def test_parse_operator_token_map_accepts_json_and_fallback(monkeypatch) -> None:
     monkeypatch.setattr(
         app_module,

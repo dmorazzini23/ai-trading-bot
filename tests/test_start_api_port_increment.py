@@ -7,9 +7,15 @@ from ai_trading import main
 
 
 class DummySettings:
-    def __init__(self, api_port: int, api_port_wait_seconds: float = 0.0):
+    def __init__(
+        self,
+        api_port: int,
+        api_port_wait_seconds: float = 0.0,
+        healthcheck_port: int | None = None,
+    ):
         self.api_port = api_port
         self.api_port_wait_seconds = api_port_wait_seconds
+        self.healthcheck_port = api_port if healthcheck_port is None else healthcheck_port
 
 
 def test_start_api_raises_when_port_busy(monkeypatch):
@@ -119,3 +125,33 @@ def test_start_api_aborts_when_existing_api_healthy(monkeypatch):
         blocker.close()
 
     assert excinfo.value.port == test_port
+
+
+def test_start_api_fails_before_logging_aux_health_started(monkeypatch, caplog):
+    api_probe = socket.socket()
+    api_probe.bind(("0.0.0.0", 0))
+    api_port = api_probe.getsockname()[1]
+    api_probe.close()
+
+    health_blocker = socket.socket()
+    health_blocker.bind(("0.0.0.0", 0))
+    health_port = health_blocker.getsockname()[1]
+    health_blocker.listen(1)
+
+    monkeypatch.setattr(
+        main,
+        "get_settings",
+        lambda: DummySettings(api_port, 0.0, healthcheck_port=health_port),
+    )
+    monkeypatch.setattr(main, "ensure_dotenv_loaded", lambda: None)
+    monkeypatch.setattr(main, "run_flask_app", lambda *_args, **_kwargs: None)
+
+    try:
+        with caplog.at_level("INFO"):
+            with pytest.raises(OSError):
+                main.start_api()
+    finally:
+        health_blocker.close()
+
+    assert "HEALTHCHECK_PORT_CONFLICT" in caplog.text
+    assert "HEALTH_SERVER_STARTED" not in caplog.text

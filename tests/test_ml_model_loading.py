@@ -167,7 +167,41 @@ def test_train_and_save_model_synthetic_fallback_is_test_only_and_not_persisted(
     assert hasattr(model, "predict")
     assert not model_path.exists()
     assert not default_manifest_path(model_path).exists()
+    assert list(model.feature_names_in_) == [
+        "ret1",
+        "mom5",
+        "mom10",
+        "vol20",
+        "skew20",
+        "kurt20",
+        "liq20",
+        "volchg5",
+        "trend",
+    ]
     assert set(model.predict(np.zeros((4, 9))).tolist()) <= {0, 1}
+
+
+def test_train_and_save_model_rejects_short_real_history_without_one_column_artifact(
+    tmp_path,
+    monkeypatch,
+):
+    pd = pytest.importorskip("pandas")
+    rows = 80
+    frame = pd.DataFrame(
+        {
+            "close": 100.0 + np.sin(np.arange(rows, dtype=float) / 3.0),
+            "volume": np.linspace(100_000.0, 120_000.0, rows),
+        },
+        index=pd.date_range("2025-01-01", periods=rows, freq="D", tz="UTC"),
+    )
+    monkeypatch.setattr("ai_trading.data.fetch.get_daily_df", lambda *_args, **_kwargs: frame)
+
+    with pytest.raises(RuntimeError, match="Insufficient labeled training rows"):
+        model_loader.train_and_save_model("SHORT", tmp_path)
+
+    model_path = tmp_path / "SHORT.pkl"
+    assert not model_path.exists()
+    assert not default_manifest_path(model_path).exists()
 
 
 def test_train_and_save_model_fails_closed_without_real_bars_in_runtime(tmp_path, monkeypatch):

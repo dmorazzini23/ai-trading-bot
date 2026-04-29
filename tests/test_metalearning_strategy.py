@@ -320,6 +320,27 @@ def test_predict_price_movement_maps_binary_proba_by_model_classes(monkeypatch):
     assert prediction["probability_distribution"]["sell"] == pytest.approx(0.1)
 
 
+def test_create_target_labels_does_not_fabricate_classes_from_one_class_returns():
+    from ai_trading.strategies.metalearning import MetaLearning
+
+    strategy = MetaLearning()
+    strategy.parameters["prediction_horizon"] = 1
+    strategy.parameters["min_data_points"] = 10
+    index = pd.date_range("2026-01-01", periods=30, freq="D", tz="UTC")
+    data = pd.DataFrame(
+        {"close": 100.0 * np.power(1.01, np.arange(len(index), dtype=float))},
+        index=index,
+    )
+
+    labels = strategy._create_target_labels(
+        data,
+        index[:-1],
+        thresholds=(-0.5, 0.5),
+    )
+
+    assert set(labels.unique()) == {1}
+
+
 if __name__ == '__main__':
     # Run a basic test to ensure the strategy works
 

@@ -9,7 +9,13 @@ from ai_trading.governance.replay_live_parity import (
 )
 
 
-def _write_replay_artifact(path: Path, *, ts: datetime, violations_count: int = 0, counterfactual_passed: bool = True) -> None:
+def _write_replay_artifact(
+    path: Path,
+    *,
+    ts: datetime,
+    violations_count: int = 0,
+    counterfactual_passed: bool | None = True,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "ts": ts.isoformat(),
@@ -18,8 +24,9 @@ def _write_replay_artifact(path: Path, *, ts: datetime, violations_count: int = 
         "fill_events": 7,
         "violations": [{} for _ in range(int(violations_count))],
         "violations_by_code": {"TEST": int(violations_count)} if violations_count else {},
-        "counterfactual": {"passed": bool(counterfactual_passed)},
     }
+    if counterfactual_passed is not None:
+        payload["counterfactual"] = {"passed": bool(counterfactual_passed)}
     path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
 
@@ -67,6 +74,59 @@ def test_replay_live_parity_gate_fails_on_stale_replay(monkeypatch, tmp_path: Pa
     assert payload["ok"] is False
     assert "replay_fresh" in payload["failed_checks"]
     assert payload["status"] == "fail"
+
+
+def test_replay_live_parity_gate_fails_on_future_dated_replay(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data-root"
+    future_ts = datetime.now(UTC) + timedelta(minutes=10)
+    artifact = data_root / "runtime" / "replay_outputs" / "replay_hash_future.json"
+    _write_replay_artifact(artifact, ts=future_ts, violations_count=0, counterfactual_passed=True)
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_root))
+    monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_MAX_FUTURE_SKEW_SECONDS", "60")
+    monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_REQUIRE_FRESH_REPLAY", "0")
+
+    payload = summarize_replay_live_parity_gate(
+        oms_lifecycle_parity={
+            "enabled": True,
+            "available": True,
+            "ok": True,
+            "total_violations": 0,
+        }
+    )
+
+    assert payload["ok"] is False
+    assert "replay_fresh" in payload["failed_checks"]
+    assert payload["observed"]["replay_future_dated"] is True
+
+
+def test_replay_live_parity_gate_requires_explicit_counterfactual_pass(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data-root"
+    now = datetime.now(UTC)
+    artifact = data_root / "runtime" / "replay_outputs" / "replay_hash_missing_cf.json"
+    _write_replay_artifact(artifact, ts=now, violations_count=0, counterfactual_passed=None)
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_root))
+    monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_REQUIRE_COUNTERFACTUAL_PASSED", "1")
+
+    payload = summarize_replay_live_parity_gate(
+        oms_lifecycle_parity={
+            "enabled": True,
+            "available": True,
+            "ok": True,
+            "total_violations": 0,
+        }
+    )
+
+    assert payload["ok"] is False
+    assert "replay_counterfactual" in payload["failed_checks"]
+    assert payload["observed"]["replay_counterfactual_passed"] is False
 
 
 def test_replay_live_parity_gate_selects_newest_payload_ts_over_lexical_name(

@@ -71,6 +71,27 @@ def test_build_features_transform_adds_full_feature_family() -> None:
     assert len(transformed) == len(frame)
 
 
+def test_build_features_serving_transform_preserves_training_lookback_tail() -> None:
+    train = _market_frame(90)
+    test = _market_frame(10)
+    test.index = pd.date_range(train.index[-1] + pd.Timedelta(days=1), periods=len(test), freq="D")
+    test["close"] = np.linspace(float(train["close"].iloc[-1]) + 1.0, float(train["close"].iloc[-1]) + 3.0, len(test))
+    test["open"] = test["close"] - 0.5
+    test["high"] = test["close"] + 1.0
+    test["low"] = test["close"] - 1.0
+
+    builder = pipe_mod.BuildFeatures(regime_span=20, vol_span=20).fit(train)
+    serving = builder.transform(test)
+    combined = builder.transform(pd.concat([train.tail(builder.feature_params_["lookback_tail_rows"]), test]))
+
+    pd.testing.assert_series_equal(
+        serving["ret_momentum"],
+        combined["ret_momentum"].tail(len(test)),
+        check_names=False,
+    )
+    assert serving["ret_momentum"].iloc[0] != 0.0
+
+
 def test_build_features_supports_price_column_without_volume_or_hilo() -> None:
     frame = pd.DataFrame({"price": np.linspace(10.0, 15.0, 40)})
     builder = pipe_mod.BuildFeatures(include_volume=True, regime_span=10).fit(frame)

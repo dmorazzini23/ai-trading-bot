@@ -292,7 +292,7 @@ class HealthMonitor:
                 self._process_alerts()
                 self._cleanup_history()
                 await asyncio.sleep(self.check_interval)
-            except (ValueError, TypeError) as e:
+            except AI_TRADING_FALLBACK_EXCEPTIONS as e:
                 self.logger.error(f"Error in monitoring loop: {e}")
                 await asyncio.sleep(10)
 
@@ -357,11 +357,11 @@ class HealthMonitor:
             try:
                 process = psutil.Process()
                 open_files = process.num_fds() if hasattr(process, "num_fds") else 0
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError, RuntimeError):
                 open_files = 0
             try:
                 network_connections = len(psutil.net_connections())
-            except (psutil.AccessDenied, psutil.NoSuchProcess):
+            except (psutil.AccessDenied, psutil.NoSuchProcess, OSError, RuntimeError):
                 network_connections = 0
             metrics = SystemMetrics(
                 cpu_percent=cpu_percent,
@@ -379,9 +379,9 @@ class HealthMonitor:
             )
             self.system_metrics_history.append(metrics)
             return metrics
-        except (ValueError, TypeError) as e:
+        except AI_TRADING_FALLBACK_EXCEPTIONS as e:
             self.logger.error(f"Error collecting system metrics: {e}")
-            return SystemMetrics(
+            metrics = SystemMetrics(
                 cpu_percent=0,
                 memory_percent=0,
                 disk_percent=0,
@@ -395,6 +395,8 @@ class HealthMonitor:
                 network_connections=0,
                 timestamp=datetime.now(UTC),
             )
+            self.system_metrics_history.append(metrics)
+            return metrics
 
     def _process_alerts(self) -> None:
         """Process alerts based on health check results."""

@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -104,3 +105,38 @@ def test_save_and_load_model(isolated_ml_model_dir):
     assert default_manifest_path(model_path).exists()
     loaded = ml_model.load_model(str(model_path))
     assert loaded == dummy_model
+
+
+def test_ensure_default_models_writes_manifest_for_downloaded_default_url(
+    monkeypatch,
+    tmp_path,
+):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def read(self):
+            return b"downloaded-model"
+
+    monkeypatch.setattr(ml_model.paths, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr(
+        "ai_trading.config.management.get_env",
+        lambda key, default="": "https://example.test/model.pkl" if key == "DEFAULT_MODEL_URL" else default,
+    )
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: Response())
+    train_calls: list[str] = []
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ai_trading.model_loader",
+        SimpleNamespace(train_and_save_model=lambda sym, _models_dir: train_calls.append(sym)),
+    )
+
+    ml_model.ensure_default_models(["DL"])
+
+    model_path = tmp_path / "DL.pkl"
+    assert model_path.read_bytes() == b"downloaded-model"
+    assert default_manifest_path(model_path).exists()
+    assert train_calls == []

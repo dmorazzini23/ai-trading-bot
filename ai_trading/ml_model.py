@@ -301,12 +301,24 @@ def ensure_default_models(symbols: Sequence[str] | None = None) -> None:
                 req = Request(url, headers={"User-Agent": "ai-trading-bot"})
                 with urlopen(req, timeout=10) as resp:
                     path.write_bytes(resp.read())
+                write_artifact_manifest(
+                    model_path=path,
+                    model_version=f"{sym}-downloaded",
+                    metadata={"source": "DEFAULT_MODEL_URL", "symbol": sym, "url": url},
+                )
                 downloaded = True
                 logger.info(
                     "MODEL_DOWNLOADED",
                     extra={"symbol": sym, "url": url, "path": str(path)},
                 )
             except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # noqa: BLE001 - network errors vary
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning(
+                        "MODEL_DOWNLOAD_CLEANUP_FAILED",
+                        extra={"symbol": sym, "path": str(path)},
+                    )
                 logger.warning(
                     "MODEL_DOWNLOAD_FAILED",
                     extra={"symbol": sym, "url": url, "error": str(exc)},

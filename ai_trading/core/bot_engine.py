@@ -171,6 +171,7 @@ from ai_trading.policy.compiler import (
     compute_expected_net_edge_bps,
     decompose_tca_components,
     evaluate_counterfactual_non_regression,
+    policy_env_source_hash,
     resolve_operational_safety_tier,
     startup_policy_diff,
 )
@@ -11331,6 +11332,7 @@ class BotState:
     halt_reason: str | None = None
     effective_policy_hash: str = ""
     effective_policy_config_hash: str = ""
+    effective_policy_source_hash: str = ""
     operational_safety_tier: str = SafetyTier.NORMAL.value
     operational_tier_last_change_ts: datetime | None = None
     operational_tier_candidate: str = SafetyTier.NORMAL.value
@@ -38808,18 +38810,33 @@ def _active_effective_policy(state: BotState, cfg: TradingConfig) -> EffectivePo
 
     cached = getattr(state, "_effective_policy", None)
     current_config_hash = str(config_snapshot_hash(cfg))
+    current_policy_source_hash = str(policy_env_source_hash())
     cached_config_hash = str(getattr(state, "effective_policy_config_hash", "") or "")
-    if isinstance(cached, EffectivePolicy) and cached_config_hash == current_config_hash:
+    cached_policy_source_hash = str(
+        getattr(state, "effective_policy_source_hash", "") or ""
+    )
+    if (
+        isinstance(cached, EffectivePolicy)
+        and cached_config_hash == current_config_hash
+        and cached_policy_source_hash == current_policy_source_hash
+    ):
         return cached
-    if isinstance(cached, EffectivePolicy) and cached_config_hash != current_config_hash:
+    if isinstance(cached, EffectivePolicy) and (
+        cached_config_hash != current_config_hash
+        or cached_policy_source_hash != current_policy_source_hash
+    ):
         logger.info(
             "EFFECTIVE_POLICY_RECOMPILE_REQUIRED",
             extra={
                 "previous_config_hash": cached_config_hash,
                 "current_config_hash": current_config_hash,
+                "previous_policy_source_hash": cached_policy_source_hash,
+                "current_policy_source_hash": current_policy_source_hash,
             },
         )
-    return _compile_effective_policy_runtime(cfg, state, config_hash=current_config_hash)
+    policy = _compile_effective_policy_runtime(cfg, state, config_hash=current_config_hash)
+    state.effective_policy_source_hash = current_policy_source_hash
+    return policy
 
 
 def _persist_effective_policy_snapshot(

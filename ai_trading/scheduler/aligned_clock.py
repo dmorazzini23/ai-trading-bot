@@ -12,10 +12,12 @@ from datetime import UTC, datetime, timedelta, tzinfo
 from types import ModuleType
 import importlib
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 mcal: ModuleType | None = None
 MARKET_CALENDAR_AVAILABLE = False
 logger = get_logger(__name__)
+_EASTERN_TZ = ZoneInfo("America/New_York")
 
 
 def _get_calendar(cal_name: str):
@@ -240,11 +242,12 @@ class AlignedClock:
         elif timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=tz or UTC)
         if not self.calendar:
-            if timestamp.weekday() >= 5:
+            exchange_timestamp = timestamp.astimezone(_EASTERN_TZ)
+            if exchange_timestamp.weekday() >= 5:
                 return False
-            market_open = timestamp.replace(hour=9, minute=30, second=0, microsecond=0)
-            market_close = timestamp.replace(hour=16, minute=0, second=0, microsecond=0)
-            return market_open <= timestamp <= market_close
+            market_open = exchange_timestamp.replace(hour=9, minute=30, second=0, microsecond=0)
+            market_close = exchange_timestamp.replace(hour=16, minute=0, second=0, microsecond=0)
+            return market_open <= exchange_timestamp <= market_close
         try:
             schedule = self.calendar.schedule(start_date=timestamp.date(), end_date=timestamp.date())
             if schedule.empty:

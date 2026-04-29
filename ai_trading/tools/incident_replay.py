@@ -78,7 +78,16 @@ def run_incident_replay(argv: list[str] | None = None) -> dict[str, Any]:
         "dataset": report,
     }
     if bool(args.run_offline_replay):
+        if int(report.get("events", 0) or 0) <= 0:
+            raise ValueError("incident replay requested but source log produced zero replay events")
         replay_args: list[str] = ["--data-dir", str(args.output_dir)]
+        symbols = [
+            str(symbol).strip().upper()
+            for symbol in report.get("symbols", [])
+            if str(symbol).strip()
+        ]
+        if symbols:
+            replay_args.extend(["--symbols", ",".join(symbols)])
         if args.offline_output_json is not None:
             replay_args.extend(["--output-json", str(args.offline_output_json)])
         replay_payload = run_replay(replay_args)

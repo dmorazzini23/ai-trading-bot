@@ -162,6 +162,27 @@ def test_monitoring_loop_runs_one_iteration_and_stops(monkeypatch):
     assert calls == ["checks", "metrics", "alerts", "cleanup", "sleep"]
 
 
+def test_monitoring_loop_survives_oserror(monkeypatch):
+    monitor = hm.HealthMonitor(check_interval=0.01)
+    calls: list[float | str] = []
+
+    async def run_all_checks():
+        calls.append("checks")
+        raise OSError("psutil disappeared")
+
+    async def sleep(seconds):
+        calls.append(seconds)
+        monitor.running = False
+
+    monkeypatch.setattr(monitor, "run_all_checks", run_all_checks)
+    monkeypatch.setattr(hm.asyncio, "sleep", sleep)
+
+    monitor.running = True
+    asyncio.run(monitor._monitoring_loop())
+
+    assert calls == ["checks", 10]
+
+
 def test_start_and_stop_monitoring_cancel_task(monkeypatch):
     async def run_monitor():
         monitor = hm.HealthMonitor(check_interval=0.01)
@@ -200,6 +221,24 @@ def test_collect_system_metrics_uses_snapshot_when_psutil_unavailable(monkeypatc
 
     assert metrics.cpu_percent == 12.5
     assert metrics.memory_percent == 34.5
+    assert monitor.system_metrics_history[-1] is metrics
+
+
+def test_collect_system_metrics_returns_default_on_psutil_oserror(monkeypatch):
+    monitor = hm.HealthMonitor()
+    monkeypatch.setattr(hm, "_HAS_PSUTIL", True)
+
+    class _BrokenPsutil:
+        @staticmethod
+        def cpu_percent(interval=None):
+            raise OSError("kernel metrics unavailable")
+
+    monkeypatch.setitem(__import__("sys").modules, "psutil", _BrokenPsutil)
+
+    metrics = monitor._collect_system_metrics()
+
+    assert metrics.cpu_percent == 0
+    assert metrics.memory_percent == 0
     assert monitor.system_metrics_history[-1] is metrics
 
 

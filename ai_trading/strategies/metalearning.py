@@ -498,16 +498,7 @@ class MetaLearning(BaseStrategy):
             class_counts = aligned_labels.value_counts()
             logger.debug(f'Label distribution: {dict(class_counts)} (unique classes: {len(unique_classes)})')
             if len(unique_classes) < 2:
-                logger.warning('Only 1 class detected after labeling - using fallback strategy')
-                n_samples = len(aligned_labels)
-                third = n_samples // 3
-                fallback_labels = pd.Series(1, index=aligned_labels.index)
-                sorted_indices = future_returns.reindex(aligned_labels.index).dropna().sort_values().index
-                if len(sorted_indices) >= 6:
-                    fallback_labels.loc[sorted_indices[:third]] = 0
-                    fallback_labels.loc[sorted_indices[-third:]] = 2
-                    logger.info(f'Applied fallback labeling: {dict(fallback_labels.value_counts())}')
-                    return fallback_labels
+                logger.warning('Only 1 class detected after labeling - skipping ML training')
             return aligned_labels
         except COMMON_EXC as e:
             logger.error(f'Error creating target labels: {e}')

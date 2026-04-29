@@ -153,30 +153,13 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
             return DummyClassifier(strategy="most_frequent")
         return LogisticRegression(max_iter=500)
 
-    if len(df) < 60:
-        # Not enough data; fit a trivial prior model
-        X = np.arange(len(df)).reshape(-1, 1)
-        y = df["y"].astype(int).values
-        model = _classifier_for(y)
-        model.fit(X, y)
-        if synthetic_data_used:
-            return model
-        try:
-            models_dir.mkdir(parents=True, exist_ok=True)
-            model_path = models_dir / f"{symbol}.pkl"
-            joblib.dump(model, model_path)
-            write_artifact_manifest(
-                model_path=model_path,
-                model_version=f"{symbol}-1.0",
-                metadata={"symbol": symbol, "model": type(model).__name__, "n_samples": int(len(df))},
-            )
-        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-            logger.warning("Failed saving model for %s: %s", symbol, exc)
-        return model
-
     feature_cols = [c for c in ("ret1", "mom5", "mom10", "vol20", "skew20", "kurt20", "liq20", "volchg5", "trend") if c in df.columns]
-    X = df[feature_cols].astype(float).values
+    X = df[feature_cols].astype(float)
     y = df["y"].astype(int).values
+    if len(X) < 60:
+        raise RuntimeError(
+            f"Insufficient labeled training rows for {symbol}: {len(X)} < 60"
+        )
 
     # Walk-forward OOS validation
     scores: list[float] = []
@@ -184,8 +167,8 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
         if len(test_idx) == 0 or len(train_idx) < 20:
             continue
         pipe = make_pipeline(StandardScaler(with_mean=True), _classifier_for(y[train_idx]))
-        pipe.fit(X[train_idx], y[train_idx])
-        yhat = pipe.predict(X[test_idx])
+        pipe.fit(X.iloc[train_idx], y[train_idx])
+        yhat = pipe.predict(X.iloc[test_idx])
         try:
             scores.append(accuracy_score(y[test_idx], yhat))
         except AI_TRADING_FALLBACK_EXCEPTIONS:
@@ -196,7 +179,7 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
     if cutoff <= 0:
         cutoff = len(X)
     final_pipe = make_pipeline(StandardScaler(with_mean=True), _classifier_for(y[:cutoff]))
-    final_pipe.fit(X[:cutoff], y[:cutoff])
+    final_pipe.fit(X.iloc[:cutoff], y[:cutoff])
 
     # Persist model and metadata
     if synthetic_data_used:

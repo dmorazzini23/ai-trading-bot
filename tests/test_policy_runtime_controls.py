@@ -37,6 +37,31 @@ def test_active_effective_policy_caches_until_config_changes(monkeypatch) -> Non
     assert calls["count"] == 2
 
 
+def test_active_effective_policy_cache_tracks_policy_env_changes(monkeypatch) -> None:
+    monkeypatch.setenv("AI_TRADING_POLICY_STRICT_CONFIG_GOVERNANCE", "0")
+    monkeypatch.setenv("AI_TRADING_POLICY_SAFE_ECE", "0.10")
+    cfg = TradingConfig.from_env(allow_missing_drawdown=True)
+    state = bot_engine.BotState()
+
+    calls = {"count": 0}
+    real_compile = bot_engine.compile_effective_policy
+
+    def _compile_counted(cfg_obj, env=None):
+        calls["count"] += 1
+        return real_compile(cfg_obj, env)
+
+    monkeypatch.setattr(bot_engine, "compile_effective_policy", _compile_counted)
+    monkeypatch.setattr(bot_engine, "startup_policy_diff", lambda *args, **kwargs: [])
+
+    first = bot_engine._active_effective_policy(state, cfg)
+    monkeypatch.setenv("AI_TRADING_POLICY_SAFE_ECE", "0.20")
+    second = bot_engine._active_effective_policy(state, cfg)
+
+    assert calls["count"] == 2
+    assert first.policy_hash != second.policy_hash
+    assert second.calibration.max_ece_normal == 0.20
+
+
 def test_operational_safety_hysteresis_applies_confirm_and_dwell(monkeypatch) -> None:
     monkeypatch.setenv("AI_TRADING_SAFETY_TIER_MIN_DWELL_SEC", "120")
     monkeypatch.setenv("AI_TRADING_SAFETY_TIER_SAFE_EXIT_CONFIRM_CYCLES", "2")

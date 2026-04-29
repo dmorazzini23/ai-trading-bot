@@ -211,3 +211,48 @@ def test_generate_cost_aware_signals_uses_model_and_skips_bad_symbols(monkeypatc
 
     assert [decision["symbol"] for decision in decisions] == ["AAPL", "MSFT"]
     assert all(decision["decision"] == "ACCEPT" for decision in decisions)
+
+
+def test_generate_cost_aware_signals_supports_proba_predict_and_bad_model(monkeypatch):
+    frame = _market_frame(80)
+    monkeypatch.setattr(
+        signals.SignalDecisionPipeline,
+        "_estimate_transaction_costs",
+        lambda self, symbol, price, quantity: {"total_cost_pct": 0.0001, "total_cost": 1.0},
+    )
+
+    class Fetcher:
+        def get_data(self, _symbol):
+            return frame.copy()
+
+    class ProbaModel:
+        def predict_proba(self, features):
+            return np.tile(np.asarray([[0.4, 0.6]], dtype=float), (len(features), 1))
+
+    class PredictModel:
+        def predict(self, features):
+            return np.full(len(features), 0.01)
+
+    base_ctx = {
+        "signal_pipeline_config": {"ensemble_min_agree": 1, "regime_volatility_threshold": 10.0},
+        "data_fetcher": Fetcher(),
+        "feature_generator": SimpleNamespace(generate_features=lambda df: df[["close"]].tail(1)),
+    }
+
+    proba_decisions = signals.generate_cost_aware_signals(
+        SimpleNamespace(**base_ctx, model=ProbaModel()),
+        ["AAPL", "MSFT"],
+    )
+    predict_decisions = signals.generate_cost_aware_signals(
+        SimpleNamespace(**base_ctx, model=PredictModel()),
+        ["AAPL", "MSFT"],
+    )
+    unsupported_decisions = signals.generate_cost_aware_signals(
+        SimpleNamespace(**base_ctx, model=object()),
+        ["AAPL", "MSFT"],
+    )
+
+    assert [decision["decision"] for decision in proba_decisions] == ["ACCEPT", "ACCEPT"]
+    assert [decision["decision"] for decision in predict_decisions] == ["ACCEPT", "ACCEPT"]
+    assert [decision["symbol"] for decision in unsupported_decisions] == ["AAPL", "MSFT"]
+    assert [decision["decision"] for decision in unsupported_decisions] == ["REJECT", "REJECT"]

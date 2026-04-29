@@ -183,6 +183,21 @@ def _merged_env_snapshot(env: Mapping[str, str] | None = None) -> dict[str, str]
     return snapshot
 
 
+def _invalidate_settings_caches() -> None:
+    cache_clear = getattr(get_settings, "cache_clear", None)
+    if callable(cache_clear):
+        cache_clear()
+    try:
+        import ai_trading.config as config_pkg
+
+        reset_cached = getattr(config_pkg, "_reset_cached_settings", None)
+        if callable(reset_cached):
+            reset_cached()
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        # Best-effort cache invalidation; runtime config reload still proceeds.
+        pass
+
+
 def is_test_runtime(*, include_pytest_module: bool = True) -> bool:
     """Return ``True`` when the current process is executing under tests."""
 
@@ -206,6 +221,7 @@ def set_runtime_env_override(key: str, value: Any) -> None:
         return
     with _RUNTIME_ENV_LOCK:
         _RUNTIME_ENV_OVERRIDES[env_key] = str(value)
+    _invalidate_settings_caches()
 
 
 def clear_runtime_env_override(key: str) -> None:
@@ -216,6 +232,7 @@ def clear_runtime_env_override(key: str) -> None:
         return
     with _RUNTIME_ENV_LOCK:
         _RUNTIME_ENV_OVERRIDES.pop(env_key, None)
+    _invalidate_settings_caches()
 
 
 def clear_runtime_env_overrides(keys: Iterable[str] | None = None) -> None:
@@ -224,11 +241,12 @@ def clear_runtime_env_overrides(keys: Iterable[str] | None = None) -> None:
     with _RUNTIME_ENV_LOCK:
         if keys is None:
             _RUNTIME_ENV_OVERRIDES.clear()
-            return
-        for key in keys:
-            env_key = _normalise_runtime_env_key(key)
-            if env_key:
-                _RUNTIME_ENV_OVERRIDES.pop(env_key, None)
+        else:
+            for key in keys:
+                env_key = _normalise_runtime_env_key(key)
+                if env_key:
+                    _RUNTIME_ENV_OVERRIDES.pop(env_key, None)
+    _invalidate_settings_caches()
 
 
 def _select_alpaca_base_url(
