@@ -37504,8 +37504,9 @@ def _load_replay_bars(
         if symbols and symbol not in symbols:
             continue
         timeframe = str(row.get("timeframe", "")).strip()
-        if timeframes and timeframe and timeframe not in timeframes:
-            continue
+        if timeframes:
+            if not timeframe or timeframe not in timeframes:
+                continue
         ts = _parse_iso_timestamp(row.get("ts") or row.get("timestamp"))
         if ts is None:
             continue

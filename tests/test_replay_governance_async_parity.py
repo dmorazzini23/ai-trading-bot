@@ -11,6 +11,43 @@ class _State:
     last_replay_run_date = None
 
 
+def test_load_replay_bars_requires_timeframe_when_filter_configured(tmp_path: Path) -> None:
+    data_path = tmp_path / "replay.jsonl"
+    rows = [
+        {
+            "symbol": "AAPL",
+            "ts": "2026-02-18T22:00:00+00:00",
+            "close": 189.5,
+            "timeframe": "5Min",
+        },
+        {
+            "symbol": "AAPL",
+            "ts": "2026-02-18T22:05:00+00:00",
+            "close": 190.0,
+        },
+        {
+            "symbol": "AAPL",
+            "ts": "2026-02-18T22:10:00+00:00",
+            "close": 190.5,
+            "timeframe": "1Min",
+        },
+    ]
+    data_path.write_text(
+        "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = bot_engine._load_replay_bars(
+        path=str(tmp_path),
+        symbols={"AAPL"},
+        timeframes={"5Min"},
+        start_date=None,
+        end_date=None,
+    )
+
+    assert [row["ts"] for row in loaded] == ["2026-02-18T22:00:00+00:00"]
+
+
 def test_replay_governance_uses_async_parity_path(
     monkeypatch,
     tmp_path: Path,
