@@ -154,7 +154,7 @@ PY
 
 run_phase2_execution_gate_check() {
   local require_phase2_gate
-  require_phase2_gate="${AI_TRADING_INSTITUTIONAL_REQUIRE_PHASE2_GATE:-0}"
+  require_phase2_gate="${AI_TRADING_INSTITUTIONAL_REQUIRE_PHASE2_GATE:-${INSTITUTIONAL_STRICT:-0}}"
   if [[ "${require_phase2_gate}" != "1" ]]; then
     log "Skipping Phase 2 execution-edge deploy gate (AI_TRADING_INSTITUTIONAL_REQUIRE_PHASE2_GATE!=1)"
     return
@@ -262,7 +262,7 @@ PY
 
 run_promotion_approval_gate_check() {
   local require_approval
-  require_approval="${AI_TRADING_PROMOTION_REQUIRE_APPROVAL:-0}"
+  require_approval="${AI_TRADING_PROMOTION_REQUIRE_APPROVAL:-${INSTITUTIONAL_STRICT:-0}}"
   if [[ "${require_approval}" != "1" ]]; then
     log "Skipping promotion approval freshness gate (AI_TRADING_PROMOTION_REQUIRE_APPROVAL!=1)"
     return

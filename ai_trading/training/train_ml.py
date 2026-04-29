@@ -150,6 +150,11 @@ class MLTrainer:
                 t1,
                 feature_pipeline=feature_pipeline,
             )
+            if (
+                int(self.cv_results.get("n_splits", 0) or 0) <= 0
+                or not np.isfinite(float(self.cv_results.get("mean_score", np.nan)))
+            ):
+                raise RuntimeError("CV evaluation produced no valid finite folds")
             self._fit_final_model(X, y, feature_pipeline=feature_pipeline)
             results = {
                 "model_type": self.model_type,
@@ -421,12 +426,23 @@ class MLTrainer:
                         "test_samples": len(test_idx),
                     }
                 )
+            if not scores:
+                return {
+                    "mean_score": 0.0,
+                    "std_score": 0.0,
+                    "fold_scores": [],
+                    "fold_details": fold_results,
+                    "n_splits": 0,
+                    "valid": False,
+                    "error": "no_valid_cv_folds",
+                }
             cv_results = {
                 "mean_score": np.mean(scores),
                 "std_score": np.std(scores),
                 "fold_scores": scores,
                 "fold_details": fold_results,
                 "n_splits": len(scores),
+                "valid": True,
             }
             return cv_results
         except (ValueError, TypeError) as e:

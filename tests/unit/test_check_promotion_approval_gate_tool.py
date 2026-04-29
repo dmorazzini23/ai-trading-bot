@@ -128,6 +128,53 @@ def test_approval_gate_fails_when_latest_event_forced(tmp_path: Path) -> None:
     assert payload["reason"] == "forced_promotion_disallowed"
 
 
+def test_approval_gate_scopes_to_requested_target(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    _write_jsonl(
+        tmp_path / "promotion_approvals.jsonl",
+        [
+            {
+                "approval_id": "approval-a",
+                "ts": now.isoformat(),
+                "strategy": "mean-reversion",
+                "model_id": "model-a",
+                "release_tag": "v1.0.0",
+                "target_commit": "aaa",
+                "decision": "approved",
+            },
+            {
+                "approval_id": "approval-b",
+                "ts": now.isoformat(),
+                "strategy": "momentum",
+                "model_id": "model-b",
+                "release_tag": "v1.0.1",
+                "target_commit": "bbb",
+                "decision": "approved",
+            },
+        ],
+    )
+
+    payload = evaluate_promotion_approval_gate(
+        governance_path=str(tmp_path),
+        max_age_hours=24.0,
+        strategy="momentum",
+        model_id="model-b",
+        release_tag="v1.0.1",
+        target_commit="bbb",
+    )
+    missing = evaluate_promotion_approval_gate(
+        governance_path=str(tmp_path),
+        max_age_hours=24.0,
+        strategy="momentum",
+        model_id="model-a",
+    )
+
+    assert payload["ok"] is True
+    assert payload["approval"]["approval_id"] == "approval-b"
+    assert missing["ok"] is False
+    assert missing["reason"] == "target_approval_records_missing"
+
+
 def test_approval_gate_cli_returns_nonzero_on_failure(tmp_path: Path) -> None:
     _write_jsonl(tmp_path / "promotion_approvals.jsonl", [])
     exit_code = main(

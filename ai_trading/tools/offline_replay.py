@@ -663,7 +663,7 @@ def _compute_model_signal(
         if name not in frame.columns:
             frame[name] = np.nan
     feature_frame = frame[feature_names].apply(pd.to_numeric, errors="coerce")
-    feature_frame = feature_frame.replace([np.inf, -np.inf], np.nan).ffill().bfill().fillna(0.0)
+    feature_frame = feature_frame.replace([np.inf, -np.inf], np.nan).ffill().fillna(0.0)
     probs: np.ndarray = np.full(len(frame), 0.5, dtype=float)
     try:
         arr = np.asarray(

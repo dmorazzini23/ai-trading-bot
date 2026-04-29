@@ -136,6 +136,35 @@ class TaxAwareRebalancer:
             f'TaxAwareRebalancer initialized with tax rates: short={tax_rate_short:.1%}, long={tax_rate_long:.1%}'
         )
 
+    def _coerce_datetime(self, value: Any) -> datetime | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+    def _within_wash_sale_window(self, value: Any) -> bool:
+        event_dt = self._coerce_datetime(value)
+        if event_dt is None:
+            return False
+        return (datetime.now(UTC) - event_dt).days < self.wash_sale_days
+
+    def _has_recent_loss_sale(self, position: dict[str, Any]) -> bool:
+        for key in ("last_loss_sale_date", "last_harvest_sale_date", "last_sale_date"):
+            if self._within_wash_sale_window(position.get(key)):
+                return True
+        return False
+
+    def _has_recent_replacement_purchase(self, position: dict[str, Any]) -> bool:
+        for key in ("replacement_purchase_date", "last_purchase_date", "last_buy_date"):
+            if self._within_wash_sale_window(position.get(key)):
+                return True
+        return False
+
     @property
     def portfolio_optimizer(self):
         if self._portfolio_optimizer is None:
@@ -203,10 +232,10 @@ class TaxAwareRebalancer:
                 if total_loss < 0:
                     last_sale_date = position.get('last_sale_date')
                     can_harvest = True
-                    if last_sale_date:
-                        days_since_sale = (datetime.now(UTC) - last_sale_date).days
-                        if days_since_sale < self.wash_sale_days:
-                            can_harvest = False
+                    if last_sale_date and self._within_wash_sale_window(last_sale_date):
+                        can_harvest = False
+                    if self._has_recent_replacement_purchase(position):
+                        can_harvest = False
                     if can_harvest:
                         tax_rate = tax_impact.get('applicable_tax_rate', 0)
                         tax_benefit = abs(total_loss) * tax_rate
@@ -260,20 +289,28 @@ class TaxAwareRebalancer:
                     trade_quantity = int(trade_value / current_price)
                     if trade_quantity != 0:
                         position = current_positions.get(symbol, {})
-                        current_quantity = _extract_position_quantity(position)
-                        order_side = _rebalance_order_side(current_quantity, trade_quantity)
-                        tax_impact = {'tax_liability': 0, 'is_optimal_timing': True}
-                        if trade_quantity < 0 and current_quantity > 0.0 and symbol in current_positions:
-                            sell_quantity = min(abs(trade_quantity), current_quantity)
-                            partial_position = position.copy() if isinstance(position, dict) else {
+                        if not isinstance(position, dict):
+                            position = {
                                 'entry_price': getattr(position, 'entry_price', getattr(position, 'purchase_price', 0.0)),
                                 'entry_date': getattr(position, 'entry_date', getattr(position, 'purchase_date', None)),
                             }
+                        current_quantity = _extract_position_quantity(position)
+                        order_side = _rebalance_order_side(current_quantity, trade_quantity)
+                        tax_impact = {'tax_liability': 0, 'is_optimal_timing': True}
+                        if trade_quantity > 0 and self._has_recent_loss_sale(position):
+                            logger.info('REBALANCE_BUY_SKIPPED_WASH_SALE', extra={'symbol': symbol})
+                            continue
+                        if trade_quantity < 0 and current_quantity > 0.0 and symbol in current_positions:
+                            sell_quantity = min(abs(trade_quantity), current_quantity)
+                            partial_position = position.copy()
                             partial_position['quantity'] = sell_quantity
                             tax_impact = self.calculate_tax_impact(partial_position, current_price)
                             total_tax_impact += tax_impact.get('tax_liability', 0)
                             holding_days = tax_impact.get('holding_days', 0)
                             total_gain_loss = tax_impact.get('total_gain_loss', 0)
+                            if total_gain_loss < 0 and self._has_recent_replacement_purchase(position):
+                                logger.info('REBALANCE_SELL_SKIPPED_WASH_SALE', extra={'symbol': symbol})
+                                continue
                             if holding_days > 300 and holding_days < 365 and (total_gain_loss > 0) and (not tax_impact.get('is_long_term', False)):
                                 tax_impact['is_optimal_timing'] = False
                                 tax_impact['delay_recommendation'] = 365 - holding_days

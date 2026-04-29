@@ -98,10 +98,53 @@ def _resolve_max_future_skew_seconds() -> float:
     return max(0.0, min(parsed, 24.0 * 3600.0))
 
 
+def _target_filters(
+    *,
+    strategy: str | None = None,
+    model_id: str | None = None,
+    release_tag: str | None = None,
+    target_commit: str | None = None,
+) -> dict[str, str]:
+    filters: dict[str, str] = {}
+    for key, value in {
+        "strategy": strategy,
+        "model_id": model_id,
+        "release_tag": release_tag,
+        "target_commit": target_commit,
+    }.items():
+        text = _lineage_text(value)
+        if text is not None:
+            filters[key] = text
+    return filters
+
+
+def _row_matches_targets(row: dict[str, Any], filters: dict[str, str]) -> bool:
+    aliases = {
+        "strategy": ("strategy", "strategy_id"),
+        "model_id": ("model_id", "model", "candidate_model_id"),
+        "release_tag": ("release_tag", "tag"),
+        "target_commit": ("target_commit", "commit", "sha", "target_sha"),
+    }
+    for key, expected in filters.items():
+        candidates = aliases[key]
+        actual = None
+        for candidate in candidates:
+            actual = _lineage_text(row.get(candidate))
+            if actual is not None:
+                break
+        if actual != expected:
+            return False
+    return True
+
+
 def evaluate_promotion_approval_gate(
     *,
     governance_path: str | None = None,
     max_age_hours: float | None = None,
+    strategy: str | None = None,
+    model_id: str | None = None,
+    release_tag: str | None = None,
+    target_commit: str | None = None,
 ) -> dict[str, Any]:
     base = _resolve_governance_path(governance_path)
     approvals_path = base / "promotion_approvals.jsonl"
@@ -111,6 +154,12 @@ def evaluate_promotion_approval_gate(
     resolved_max_age = _resolve_max_age_hours(max_age_hours)
     max_future_skew_seconds = _resolve_max_future_skew_seconds()
     now = datetime.now(UTC)
+    filters = _target_filters(
+        strategy=strategy,
+        model_id=model_id,
+        release_tag=release_tag,
+        target_commit=target_commit,
+    )
 
     if not approvals:
         return {
@@ -126,6 +175,17 @@ def evaluate_promotion_approval_gate(
         for row in approvals
         if _lineage_text(row.get("approval_id")) is not None
     }
+    if filters:
+        approvals = [row for row in approvals if _row_matches_targets(row, filters)]
+        events = [row for row in events if _row_matches_targets(row, filters)]
+        if not approvals:
+            return {
+                "ok": False,
+                "reason": "target_approval_records_missing",
+                "governance_path": str(base),
+                "target": filters,
+            }
+
     latest_approval = approvals[-1]
     approval_to_check = latest_approval
 
@@ -182,6 +242,7 @@ def evaluate_promotion_approval_gate(
             "governance_path": str(base),
             "future_skew_seconds": future_skew_seconds,
             "max_future_skew_seconds": max_future_skew_seconds,
+            "target": filters,
             "approval": approval_to_check,
         }
     if age_hours > resolved_max_age:
@@ -202,6 +263,7 @@ def evaluate_promotion_approval_gate(
         "max_age_hours": resolved_max_age,
         "future_skew_seconds": future_skew_seconds,
         "max_future_skew_seconds": max_future_skew_seconds,
+        "target": filters,
         "approval": approval_to_check,
     }
 
@@ -222,10 +284,18 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Maximum allowed approval age in hours.",
     )
+    parser.add_argument("--strategy", type=str, default=None, help="Required strategy id.")
+    parser.add_argument("--model-id", type=str, default=None, help="Required model id.")
+    parser.add_argument("--release-tag", type=str, default=None, help="Required release tag.")
+    parser.add_argument("--target-commit", type=str, default=None, help="Required target commit/SHA.")
     args = parser.parse_args(argv)
     payload = evaluate_promotion_approval_gate(
         governance_path=args.governance_path,
         max_age_hours=args.max_age_hours,
+        strategy=args.strategy,
+        model_id=args.model_id,
+        release_tag=args.release_tag,
+        target_commit=args.target_commit,
     )
     sys.stdout.write(json.dumps(payload, sort_keys=True) + "\n")
     return 0 if bool(payload.get("ok")) else 1

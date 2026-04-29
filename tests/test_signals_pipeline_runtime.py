@@ -342,7 +342,7 @@ def test_portfolio_filter_includes_sell_short_in_portfolio_and_cost_checks(monke
     assert calls["cost_trade_size"] == 7.0
 
 
-def test_portfolio_filter_normalizes_flat_sell_to_short_entry(monkeypatch):
+def test_portfolio_filter_keeps_flat_sell_exit_only(monkeypatch):
     from ai_trading.portfolio import PortfolioDecision
 
     frame = _market_frame(80)
@@ -390,9 +390,9 @@ def test_portfolio_filter_normalizes_flat_sell_to_short_entry(monkeypatch):
     )
 
     assert filtered == [signal]
-    assert signal.side == "sell_short"
-    assert calls["proposed_position"] == -7.0
-    assert calls["cost_trade_size"] == 7.0
+    assert signal.side == "sell"
+    assert calls["proposed_position"] == 0.0
+    assert calls["cost_trade_size"] == 0.0
 
 
 def test_portfolio_filter_derives_strategy_signal_size_from_weight(monkeypatch):

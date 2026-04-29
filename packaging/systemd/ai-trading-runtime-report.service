@@ -14,12 +14,13 @@ Environment=AI_TRADING_CACHE_DIR=/var/cache/ai-trading-bot
 Environment=AI_TRADING_LOG_DIR=/var/log/ai-trading-bot
 EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
 EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime
+ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh
 ExecStart=/bin/bash -lc 'bash /home/aiuser/ai-trading-bot/scripts/refresh_runtime_reports.sh'
 StandardOutput=journal
 StandardError=journal
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/ai-trading-bot /var/cache/ai-trading-bot /var/log/ai-trading-bot
+ReadWritePaths=/var/lib/ai-trading-bot /var/cache/ai-trading-bot /var/log/ai-trading-bot /home/aiuser/ai-trading-bot
 
 [Install]
 WantedBy=multi-user.target

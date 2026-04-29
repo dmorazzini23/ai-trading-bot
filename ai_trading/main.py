@@ -3885,6 +3885,11 @@ def main(argv: list[str] | None = None) -> None:
             )
         except MAIN_FALLBACK_EXC:
             logger.debug("SERVICE_STATUS_API_DEGRADED_UPDATE_FAILED", exc_info=True)
+        allow_headless_api = bool(
+            get_env("AI_TRADING_ALLOW_HEADLESS_API_DEGRADED", False, cast=bool)
+        )
+        if not _is_test_mode() and not allow_headless_api:
+            raise SystemExit("API startup failed; refusing to trade without health/API surface") from exc
     allow_after_hours = bool(get_env("ALLOW_AFTER_HOURS", "0", cast=bool))
     try:
         if not _is_market_open_base():

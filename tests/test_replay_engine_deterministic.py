@@ -44,8 +44,10 @@ def test_replay_engine_next_bar_fill_avoids_same_bar_leakage() -> None:
 
     result = ReplayEngine(config, pipeline=_pipeline).run(bars)
 
-    assert len(result["ledger_entries"]) == 1
-    assert result["ledger_entries"][0]["price"] == pytest.approx(101.25)
+    filled_entries = [row for row in result["ledger_entries"] if row.get("status", "filled") == "filled"]
+    assert len(filled_entries) == 1
+    assert any(row.get("status") == "canceled" for row in result["ledger_entries"])
+    assert filled_entries[0]["price"] == pytest.approx(101.25)
     tca = result["tca_records"][0]
     assert tca["decision_price"] == pytest.approx(100.0)
     assert tca["fill_price"] == pytest.approx(101.25)

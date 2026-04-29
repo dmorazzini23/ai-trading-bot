@@ -179,11 +179,77 @@ class ReplayEngine:
                 tca_records=tca_records,
             )
 
+        for pending in pending_orders:
+            self._append_unfilled(
+                pending=pending,
+                ledger_entries=ledger_entries,
+                tca_records=tca_records,
+            )
+
         return {
             "decision_records": decision_records,
             "ledger_entries": ledger_entries,
             "tca_records": tca_records,
         }
+
+    def _append_unfilled(
+        self,
+        *,
+        pending: dict[str, Any],
+        ledger_entries: list[dict[str, Any]],
+        tca_records: list[dict[str, Any]],
+    ) -> None:
+        symbol = str(pending["symbol"])
+        side = str(pending["side"])
+        price = float(pending["price"])
+        order = pending["order"]
+        decision = pending["decision"]
+        decision_bar = pending["decision_bar"]
+        client_order_id = str(pending["client_order_id"])
+        event_ts = _parse_event_ts(decision_bar.get("ts"))
+        benchmark = ExecutionBenchmark(
+            arrival_price=price,
+            mid_at_arrival=float(decision_bar.get("mid", price) or price),
+            bid_at_arrival=decision_bar.get("bid"),
+            ask_at_arrival=decision_bar.get("ask"),
+            bar_close_price=decision_bar.get("close"),
+            decision_ts=event_ts,
+            submit_ts=event_ts,
+            first_fill_ts=None,
+        )
+        fill = FillSummary(
+            fill_vwap=price,
+            total_qty=0.0,
+            fees=0.0,
+            status="canceled",
+            partial_fill=False,
+        )
+        tca_records.append(
+            build_tca_record(
+                client_order_id=client_order_id,
+                symbol=symbol,
+                side=side,
+                benchmark=benchmark,
+                fill=fill,
+                sleeve=decision.get("sleeve"),
+                regime_profile=decision.get("regime_profile"),
+                provider="replay",
+                order_type=str(order.get("order_type", "limit")),
+                quote_proxy=True,
+                generated_ts=event_ts,
+            )
+        )
+        ledger_entries.append(
+            {
+                "client_order_id": client_order_id,
+                "symbol": symbol,
+                "side": side,
+                "qty": 0.0,
+                "price": price,
+                "status": "canceled",
+                "replay": True,
+            }
+        )
 
     def _append_fill(
         self,

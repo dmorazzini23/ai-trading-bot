@@ -53,7 +53,7 @@ def test_purge_overlapping_defensive_paths() -> None:
         3,
     ]
     purged = splitter._purge_overlapping(train, np.array([3]), t1, np.arange(4))
-    assert purged.tolist() == [0]
+    assert purged.tolist() == []
 
 
 def test_walkforward_splits_support_rolling_expanding_and_bad_input() -> None:

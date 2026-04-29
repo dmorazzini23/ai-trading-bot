@@ -68,21 +68,6 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ai-trading.service
 ```
 
-Optional local debug API facade:
-
-```bash
-sudo cp packaging/systemd/ai-trading-api.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now ai-trading-api.service
-```
-
-The packaged debug Gunicorn service binds:
-
-```bash
-127.0.0.1:9002
-```
-
-Do not enable `ai-trading-api.service` for production ownership of the runtime.
 Institutional production deployment uses `ai-trading.service` as the single
 authoritative topology for trading, API, health, and metrics on `:9001`.
 

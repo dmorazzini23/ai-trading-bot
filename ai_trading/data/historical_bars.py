@@ -138,12 +138,17 @@ def filter_historical_bars_window(
     if (start is not None or end is not None) and not isinstance(frame.index, pd.DatetimeIndex):
         raise ValueError("date filters require timestamped historical bars; CSV did not provide a datetime index")
     start_ts = pd.to_datetime(str(start), errors="coerce", utc=True) if start is not None else pd.NaT
-    end_ts = pd.to_datetime(str(end), errors="coerce", utc=True) if end is not None else pd.NaT
+    end_text = str(end) if end is not None else ""
+    end_ts = pd.to_datetime(end_text, errors="coerce", utc=True) if end is not None else pd.NaT
+    end_is_date_only = bool(end_text) and len(end_text.strip()) == 10 and "T" not in end_text
     filtered = frame
     if not pd.isna(start_ts):
         filtered = filtered[filtered.index >= start_ts]
     if not pd.isna(end_ts):
-        filtered = filtered[filtered.index <= end_ts]
+        if end_is_date_only:
+            filtered = filtered[filtered.index < end_ts + pd.Timedelta(days=1)]
+        else:
+            filtered = filtered[filtered.index <= end_ts]
     return filtered
 
 

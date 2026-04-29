@@ -29384,6 +29384,11 @@ class ExecutionEngine:
         try:
             from ai_trading.tools import runtime_performance_report as performance_report
 
+            canonical_thresholds = performance_report.resolve_runtime_gonogo_thresholds()
+            if isinstance(canonical_thresholds, Mapping):
+                merged_thresholds = dict(canonical_thresholds)
+                merged_thresholds.update(thresholds)
+                thresholds = merged_thresholds
             report = performance_report.build_report(
                 trade_history_path=trade_history_path,
                 gate_summary_path=gate_summary_path,

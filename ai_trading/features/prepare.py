@@ -82,20 +82,21 @@ def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame
     for col in ['high', 'low', 'close', 'volume', 'open']:
         if col in df.columns:
             df[col] = df[col].astype(float)
-    if intraday and "timestamp" not in df.columns and isinstance(df.index, pd.DatetimeIndex):
+    if "timestamp" not in df.columns and isinstance(df.index, pd.DatetimeIndex):
         df["timestamp"] = df.index
-    idx_source = df["timestamp"] if intraday and "timestamp" in df.columns else df.index
+    has_timestamp_column = "timestamp" in df.columns
+    idx_source = df["timestamp"] if has_timestamp_column else df.index
     idx = safe_to_datetime(idx_source, context='retrain index')
     if idx.empty:
         raise ValueError('Invalid date values in dataframe')
-    if intraday and "timestamp" in df.columns:
+    if has_timestamp_column:
         df["timestamp"] = idx
         df = df.sort_values("timestamp")
         df.index = pd.DatetimeIndex(df["timestamp"])
         df.index.name = None
     else:
         df = df.sort_index()
-    idx_source = df["timestamp"] if intraday and "timestamp" in df.columns else df.index
+    idx_source = df["timestamp"] if has_timestamp_column else df.index
     idx = safe_to_datetime(idx_source, context='retrain index')
     df['vwap'] = ta.vwap(df['high'], df['low'], df['close'], df['volume']).astype(float)
     df.dropna(subset=['vwap'], inplace=True)

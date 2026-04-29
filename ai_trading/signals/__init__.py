@@ -168,9 +168,8 @@ def _normalize_signal_side(side: Any) -> str:
 
 
 def _contextual_signal_side(side: str, current_position: float) -> str:
-    """Resolve ambiguous sell signals against the signed current position."""
-    if side == "sell" and current_position <= 0.0:
-        return "sell_short"
+    """Keep ambiguous sells as exits; new shorts must be explicit."""
+    _ = current_position
     return side
 
 

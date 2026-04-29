@@ -137,7 +137,7 @@ class PurgedGroupTimeSeriesSplit:
                 try:
                     if idx < len(t1.index):
                         obs_end_time = t1.iloc[idx]
-                        if pd.isna(obs_end_time) or obs_end_time < test_start_time:
+                        if not pd.isna(obs_end_time) and obs_end_time < test_start_time:
                             purged_train.append(idx)
                     elif idx < test_start_idx - len(test_indices):
                         purged_train.append(idx)

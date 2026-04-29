@@ -1226,6 +1226,8 @@ def _http_submit(
         "type": type,
         "time_in_force": time_in_force,
     }
+    if idempotency_key:
+        payload["client_order_id"] = idempotency_key
     if limit_price is not None:
         payload["limit_price"] = str(limit_price)
     if stop_price is not None:

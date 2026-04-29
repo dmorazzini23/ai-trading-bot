@@ -79,7 +79,6 @@ Use these stable strings to anchor surgical edits:
 
 ## 7. Operational Notes
 - The checked-in `packaging/systemd/ai-trading.service` currently exposes `/healthz` on `:9001` because it sets `HEALTHCHECK_PORT=9001`.
-- The checked-in `packaging/systemd/ai-trading-api.service` is a local debug facade on `:9002`; the main runtime service remains `ai-trading.service` on `:9001`.
 - Validate the surface that matches the deployment mode:
   - packaged main service: `curl -sS http://127.0.0.1:9001/healthz`
   - standalone health app: `curl -sS http://127.0.0.1:${HEALTHCHECK_PORT}/healthz`

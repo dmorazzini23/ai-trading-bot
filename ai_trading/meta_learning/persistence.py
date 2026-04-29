@@ -24,20 +24,7 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:  # pragma: no cover - typing aid
     import pandas as pd
 
-_CANONICAL_PATH = Path(
-    Path.cwd()
-    / Path(
-        # Allow callers/tests to override through environment while keeping a
-        # stable default inside the repository workspace.
-        get_env(
-            "AI_TRADING_TRADE_HISTORY_PATH",
-            "artifacts/trade_history.parquet",
-            cast=str,
-            resolve_aliases=False,
-        )
-    )
-)
-
+_CANONICAL_PATH: Path | None = None
 _PANDAS_MISSING_LOGGED = False
 _READ_FAILURE_LOGGED: set[tuple[str, str, str]] = set()
 _WRITE_FALLBACK_LOGGED: set[str] = set()
@@ -46,6 +33,24 @@ META_LEARNING_PERSISTENCE_FALLBACK_EXCEPTIONS: tuple[type[Exception], ...] = (
     *AI_TRADING_FALLBACK_EXCEPTIONS,
     pickle.UnpicklingError,
 )
+
+
+def _canonical_path() -> Path:
+    if _CANONICAL_PATH is not None:
+        return Path(_CANONICAL_PATH)
+    raw = str(
+        get_env(
+            "AI_TRADING_TRADE_HISTORY_PATH",
+            "artifacts/trade_history.parquet",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or "artifacts/trade_history.parquet"
+    )
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return path
+    return Path.cwd() / path
 
 
 def _pytest_active() -> bool:
@@ -445,13 +450,14 @@ def record_trade_fill(record: Mapping[str, Any] | Any) -> None:
             logger.warning("TRADE_HISTORY_PANDAS_MISSING")
             _PANDAS_MISSING_LOGGED = True
         return
-    existing = _read_parquet(_CANONICAL_PATH)
+    canonical_path = _canonical_path()
+    existing = _read_parquet(canonical_path)
     new_frame = pd.DataFrame([data])
     if existing is not None and not existing.empty:
         combined = pd.concat([existing, new_frame], ignore_index=True)
     else:
         combined = new_frame
-    _write_parquet(_CANONICAL_PATH, combined)
+    _write_parquet(canonical_path, combined)
 
 
 def _extract_attr(obj: Any, *candidates: str) -> Any:
@@ -539,7 +545,8 @@ def load_trade_history(
 ) -> tuple["pd.DataFrame" | None, str | None]:
     """Load canonical history with optional broker reconciliation."""
 
-    frame = _read_parquet(_CANONICAL_PATH)
+    canonical_path = _canonical_path()
+    frame = _read_parquet(canonical_path)
     source: str | None = None
     if frame is not None and not frame.empty:
         source = "canonical"
@@ -570,7 +577,7 @@ def load_trade_history(
             else:
                 frame = broker_frame
                 source = "broker"
-            _write_parquet(_CANONICAL_PATH, frame)
+            _write_parquet(canonical_path, frame)
 
     return frame, source
 

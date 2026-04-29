@@ -98,8 +98,6 @@ Live mode now requires one authoritative durability path:
 ### Canonical Topology
 
 - Production ownership belongs to `ai-trading.service` only.
-- `ai-trading-api.service` is a localhost-only debug facade on `127.0.0.1:9002`,
-  not a second production API topology.
 
 ### Model Artifact Loading
 

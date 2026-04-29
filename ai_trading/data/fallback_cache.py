@@ -83,9 +83,4 @@ def resp_json(resp: Any) -> Any:
         logger.debug("RESPONSE_JSON_PARSE_FAILED", exc_info=True)
         return {}
 
-
-# Backwards compatible aliases for potential external consumers
-parse_resp = resp_json
-parse_json = resp_json
-
-__all__ = ["resp_json", "parse_resp", "parse_json"]
+__all__ = ["resp_json"]

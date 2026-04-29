@@ -84,5 +84,5 @@ def test_resp_json_defensive_failure_paths() -> None:
     assert fallback_cache.resp_json(_BadStr()) == {}
     assert fallback_cache.resp_json("") == {}
     assert fallback_cache.resp_json("not json") == {}
-    assert fallback_cache.parse_resp('{"alias": 1}') == {"alias": 1}
-    assert fallback_cache.parse_json('{"alias": 2}') == {"alias": 2}
+    assert fallback_cache.resp_json('{"alias": 1}') == {"alias": 1}
+    assert fallback_cache.resp_json('{"alias": 2}') == {"alias": 2}

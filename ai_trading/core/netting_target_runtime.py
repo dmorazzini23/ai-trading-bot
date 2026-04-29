@@ -529,6 +529,7 @@ def apply_target_construction_controls(
         corr_group_gross_cap=float(
             get_env_func("AI_TRADING_CORR_GROUP_GROSS_CAP", 0.35, cast=float)
         ),
+        configured_gross_cap=float(getattr(cfg, "global_max_gross_dollars", 0.0)),
     )
     for raw_symbol, raw_dollars in limits.scaled_targets.items():
         symbol = _normalize_symbol(raw_symbol)
@@ -552,6 +553,12 @@ def apply_target_construction_controls(
         for reason in limits.reasons:
             if reason not in targets[symbol].reasons:
                 targets[symbol].reasons.append(reason)
+    apply_global_caps_func(
+        targets,
+        float(getattr(cfg, "global_max_symbol_dollars", 0.0)),
+        float(getattr(cfg, "global_max_gross_dollars", 0.0)),
+        float(getattr(cfg, "global_max_net_dollars", 0.0)),
+    )
 
 
 __all__ = [

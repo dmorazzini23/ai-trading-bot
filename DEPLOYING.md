@@ -16,9 +16,6 @@ The timer schedules the bot around the market session. If the service starts
 outside market hours, the runtime waits for the next NYSE session unless
 `ALLOW_AFTER_HOURS=1` is set.
 
-`packaging/systemd/ai-trading-api.service` is not a second production topology.
-If you use it at all, treat it as a localhost-only debug facade on `127.0.0.1:9002`.
-
 ## Health Checks
 
 Packaged main service:

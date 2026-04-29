@@ -199,6 +199,8 @@ class TestCriticalFixes(unittest.TestCase):
         self.assertIn("/var/lib/ai-trading-bot", content)
         self.assertIn("/var/cache/ai-trading-bot", content)
         self.assertIn("/var/log/ai-trading-bot", content)
+        self.assertIn("RuntimeMaxSec=infinity", content)
+        self.assertNotIn("RuntimeMaxSec=0", content)
         self.assertIn("Restart=always", content, "Should restart on failure")
 
     def test_systemd_environment_precedence(self):
@@ -215,6 +217,7 @@ class TestCriticalFixes(unittest.TestCase):
         api_port_idx = main_content.index("Environment=API_PORT=9001")
         health_port_idx = main_content.index("Environment=HEALTHCHECK_PORT=9001")
         alembic_idx = main_content.index("ExecStartPre=/home/aiuser/ai-trading-bot/venv/bin/alembic upgrade head")
+        sync_idx = main_content.index("ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh")
         exec_start_idx = main_content.index("ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading")
         self.assertLess(paper_url_idx, env_file_idx)
         self.assertLess(env_file_idx, runtime_env_file_idx)
@@ -222,26 +225,31 @@ class TestCriticalFixes(unittest.TestCase):
         self.assertLess(runtime_env_file_idx, health_port_idx)
         self.assertLess(env_file_idx, api_port_idx)
         self.assertLess(env_file_idx, health_port_idx)
+        self.assertLess(sync_idx, alembic_idx)
         self.assertLess(alembic_idx, exec_start_idx)
 
-        debug_content = (systemd_dir / "ai-trading-api.service").read_text(encoding="utf-8")
-        debug_env_file_idx = debug_content.index(
-            "EnvironmentFile=-/home/aiuser/ai-trading-bot/.env",
-        )
-        debug_api_port_idx = debug_content.index("Environment=API_PORT=9002")
-        debug_health_port_idx = debug_content.index("Environment=HEALTHCHECK_PORT=9002")
-        self.assertLess(debug_env_file_idx, debug_api_port_idx)
-        self.assertLess(debug_env_file_idx, debug_health_port_idx)
+        self.assertFalse((systemd_dir / "ai-trading-api.service").exists())
+        self.assertFalse((systemd_dir / "ai-trading-metrics-forwarder.service").exists())
 
         for service_name in (
+            "ai-trading-connectors.service",
             "ai-trading-healthcheck.service",
             "ai-trading-runtime-report.service",
             "ai-trading-replay-governance.service",
+            "ai-trading-runtime-backup-sync.service",
+            "ai-trading-runtime-prune.service",
         ):
             content = (systemd_dir / service_name).read_text(encoding="utf-8")
             dotenv_idx = content.index("EnvironmentFile=-/home/aiuser/ai-trading-bot/.env")
             runtime_idx = content.index("EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime")
+            sync_idx = content.index("ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh")
+            exec_idx = content.index("ExecStart=")
             self.assertLess(dotenv_idx, runtime_idx, f"{service_name} should load .env.runtime last")
+            self.assertLess(sync_idx, exec_idx, f"{service_name} should sync .env.runtime before start")
+
+        timer_content = (systemd_dir / "ai-trading.timer").read_text(encoding="utf-8")
+        self.assertNotIn("Timezone=", timer_content)
+        self.assertIn("OnCalendar=Mon..Fri 09:30 America/New_York", timer_content)
 
     def test_runtime_backup_sync_waits_for_network_online(self):
         """Runtime backup sync should both order after and want network-online."""

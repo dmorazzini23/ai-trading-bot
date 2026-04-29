@@ -311,6 +311,7 @@ class RiskEngine:
         self.asset_limits: dict[str, float] = {}
         self.strategy_limits: dict[str, float] = {}
         self.exposure: dict[str, float] = {}
+        self.symbol_exposure: dict[str, float] = {}
         self.strategy_exposure: dict[str, float] = {}
         self._positions: dict[str, int] = {}
         self._atr_cache: dict[str, tuple[datetime, float]] = {}
@@ -975,8 +976,10 @@ class RiskEngine:
             acct = api.get_account()
             equity = float(getattr(acct, "equity", 0) or 0)
             exposure: dict[str, float] = {}
+            symbol_exposure: dict[str, float] = {}
             for p in positions:
                 asset = getattr(p, "asset_class", "equity")
+                symbol = str(getattr(p, "symbol", "") or "").strip().upper()
                 qty = float(getattr(p, "qty", 0) or 0)
                 market_value_raw = getattr(p, "market_value", None)
                 try:
@@ -991,7 +994,10 @@ class RiskEngine:
                     market_value = abs(qty * avg_entry_price)
                 weight = market_value / equity if equity > 0 else 0.0
                 exposure[asset] = exposure.get(asset, 0.0) + weight
+                if symbol:
+                    symbol_exposure[symbol] = symbol_exposure.get(symbol, 0.0) + weight
             self.exposure = exposure
+            self.symbol_exposure = symbol_exposure
         except (AttributeError, APIError) as exc:
             logger.warning("refresh_positions failed: %s", exc, extra={"cause": exc.__class__.__name__})
 
@@ -1363,12 +1369,14 @@ class RiskEngine:
                 raw_qty = risk_per_trade / stop_distance
             else:
                 weight = self._apply_weight_limits(signal)
-                raw_qty = total_equity * weight / price
+                direction = str(getattr(signal, "side", "") or "").strip().lower()
+                raw_qty = total_equity * (abs(weight) if direction == "sell_short" else weight) / price
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:
             logger.warning("ATR calculation failed for %s: %s", getattr(signal, "symbol", "UNKNOWN"), exc)
             try:
                 weight = self._apply_weight_limits(signal)
-                raw_qty = total_equity * weight / price
+                direction = str(getattr(signal, "side", "") or "").strip().lower()
+                raw_qty = total_equity * (abs(weight) if direction == "sell_short" else weight) / price
             except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError):
                 logger.warning("Failed to calculate position size, returning 0")
                 return 0
@@ -1566,7 +1574,12 @@ class RiskEngine:
             True if position is within limits, False if it would exceed limits.
         """
         try:
-            current_exposure = self.exposure.get(symbol, 0.0)
+            normalized_symbol = str(symbol or "").strip().upper()
+            symbol_exposure = getattr(self, "symbol_exposure", None)
+            if isinstance(symbol_exposure, dict):
+                current_exposure = symbol_exposure.get(normalized_symbol, 0.0)
+            else:
+                current_exposure = self.exposure.get(normalized_symbol, 0.0)
             new_exposure = current_exposure + abs(quantity) * 0.001
             max_symbol_exposure = getattr(self.config, "max_symbol_exposure", 0.1)
             if new_exposure > max_symbol_exposure:

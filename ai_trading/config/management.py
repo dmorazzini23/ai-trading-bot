@@ -500,7 +500,17 @@ def validate_required_env(
                 return value
         return None
 
-    raw_presence_required = {"DOLLAR_RISK_LIMIT"}
+    raw_presence_required = {
+        "ALPACA_TRADING_BASE_URL",
+        "DOLLAR_RISK_LIMIT",
+    }
+    if not is_test_runtime():
+        raw_presence_required.update(
+            {
+                "ALPACA_DATA_FEED",
+                "AI_TRADING_CAPITAL_CAP",
+            }
+        )
     raw_required_fields: dict[str, str | None] = {}
     for key in required_fields:
         if key in raw_presence_required:

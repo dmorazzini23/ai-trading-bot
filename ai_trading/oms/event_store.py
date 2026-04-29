@@ -87,6 +87,11 @@ if _SQLALCHEMY_AVAILABLE:
             "idempotency_key",
             name="uq_oms_events_source_idempotency",
         ),
+        UniqueConstraint(
+            "intent_id",
+            "sequence_no",
+            name="uq_oms_events_intent_sequence",
+        ),
     )
     _DECISION_EVENTS_TABLE = Table(
         "decision_events",
@@ -525,13 +530,25 @@ class EventStore:
                 extra={"path": str(self._jsonl_path), "error": str(exc)},
             )
 
-    def _next_sequence_no(self, intent_id: str | None) -> int:
+    def _next_sequence_no(self, intent_id: str | None, session: Any | None = None) -> int:
         if intent_id in (None, ""):
             return 0
         assert _OMS_EVENTS_TABLE is not None
         stmt = select(func.max(_OMS_EVENTS_TABLE.c.sequence_no)).where(
             _OMS_EVENTS_TABLE.c.intent_id == str(intent_id)
         )
+        if session is not None:
+            result = session.execute(stmt)
+            try:
+                current = result.scalar_one_or_none()
+            finally:
+                result.close()
+            if current is None:
+                return 1
+            try:
+                return int(current) + 1
+            except (TypeError, ValueError):
+                return 1
         with self._engine.connect() as conn:
             result = conn.execute(stmt)
             try:
@@ -551,11 +568,6 @@ class EventStore:
 
         assert _OMS_EVENTS_TABLE is not None
         normalized = event.normalized()
-        sequence_no = (
-            int(normalized.sequence_no)
-            if normalized.sequence_no is not None
-            else self._next_sequence_no(normalized.intent_id)
-        )
         created_at = self._utc_now_iso()
         payload_dict = {
             "event_uuid": normalized.event_uuid,
@@ -564,7 +576,7 @@ class EventStore:
             "event_ts": normalized.event_ts,
             "event_source": normalized.event_source,
             "idempotency_key": normalized.idempotency_key,
-            "sequence_no": max(0, int(sequence_no)),
+            "sequence_no": 0,
             "payload_json": json.dumps(normalized.payload, sort_keys=True),
             "policy_hash": normalized.policy_hash,
             "model_hash": normalized.model_hash,
@@ -577,6 +589,12 @@ class EventStore:
         with self._lock:
             try:
                 with self._session_factory.begin() as session:
+                    sequence_no = (
+                        int(normalized.sequence_no)
+                        if normalized.sequence_no is not None
+                        else self._next_sequence_no(normalized.intent_id, session=session)
+                    )
+                    payload_dict["sequence_no"] = max(0, int(sequence_no))
                     session.execute(insert(_OMS_EVENTS_TABLE).values(**payload_dict))
                 db_persisted = True
             except IntegrityError:
@@ -592,6 +610,7 @@ class EventStore:
                         "error": str(exc),
                     },
                 )
+                raise RuntimeError("OMS event DB write failed") from exc
         self._write_jsonl(
             {
                 "kind": "oms_event",
@@ -687,6 +706,7 @@ class EventStore:
                         "error": str(exc),
                     },
                 )
+                raise RuntimeError("Decision event DB write failed") from exc
         self._write_jsonl({"kind": "decision_event", "db_persisted": db_persisted, **payload_dict})
         return db_persisted
 
@@ -759,6 +779,7 @@ class EventStore:
                         "error": str(exc),
                     },
                 )
+                raise RuntimeError("Position snapshot DB write failed") from exc
         self._write_jsonl(
             {
                 "kind": "position_snapshot",
@@ -832,6 +853,7 @@ class EventStore:
                         "error": str(exc),
                     },
                 )
+                raise RuntimeError("Risk snapshot DB write failed") from exc
         self._write_jsonl(
             {
                 "kind": "risk_snapshot",

@@ -837,9 +837,10 @@ async def run_with_concurrency(
     """Execute ``worker`` for each symbol with bounded concurrency and robust progress."""
     debug_mode = bool(get_env("DEBUG_CONCURRENCY", False, cast=bool))
     _patch_monotonic_for_tests()
-    reset_tracking_state(reset_peak=False)
+    successful_symbols: set[str] = set()
+    failed_symbols: set[str] = set()
 
-    global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS
+    global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS, SUCCESSFUL_SYMBOLS, FAILED_SYMBOLS
     LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = 0
 
     loop = asyncio.get_running_loop()
@@ -1181,9 +1182,9 @@ async def run_with_concurrency(
                     raise
                 except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                     _log_worker_exception(symbol, exc)
-                    FAILED_SYMBOLS.add(symbol)
+                    failed_symbols.add(symbol)
                 else:
-                    SUCCESSFUL_SYMBOLS.add(symbol)
+                    successful_symbols.add(symbol)
                     results[symbol] = result
                 finally:
                     await _mark_worker_end(started)
@@ -1232,8 +1233,8 @@ async def run_with_concurrency(
                 symbol = task_to_symbol.get(task)
                 if symbol is None:
                     continue
-                FAILED_SYMBOLS.add(symbol)
-                SUCCESSFUL_SYMBOLS.discard(symbol)
+                failed_symbols.add(symbol)
+                successful_symbols.discard(symbol)
                 results[symbol] = None
             grace_timeout = max(0.05, min(float(effective_timeout) * 100.0, 0.25))
             pending_gather = asyncio.gather(*pending, return_exceptions=True)
@@ -1259,11 +1260,13 @@ async def run_with_concurrency(
             raise task_outcome
         if isinstance(task_outcome, AI_TRADING_FALLBACK_EXCEPTIONS):
             results.setdefault(symbol, None)
-            FAILED_SYMBOLS.add(symbol)
+            failed_symbols.add(symbol)
 
     _update_peak_counters(peak_this_run)
+    SUCCESSFUL_SYMBOLS = set(successful_symbols)
+    FAILED_SYMBOLS = set(failed_symbols)
 
-    return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
+    return results, set(successful_symbols), set(failed_symbols)
 
 
 __all__ = [

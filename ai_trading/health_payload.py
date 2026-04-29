@@ -760,12 +760,19 @@ def _runtime_performance_snapshot() -> dict[str, Any]:
         if isinstance(slippage_decomposition_raw, Mapping)
         else {}
     )
+    trade_history = payload.get("trade_history")
+    broker_open_position_snapshots = {}
+    if isinstance(trade_history, Mapping):
+        snapshots = trade_history.get("broker_open_position_snapshots")
+        if isinstance(snapshots, Mapping):
+            broker_open_position_snapshots = dict(snapshots)
     return {
         "available": bool(payload),
         "path": str(resolved),
         "go_no_go": go_no_go,
         "generated_at": payload.get("generated_at"),
         "source": payload.get("source"),
+        "broker_open_position_snapshots": broker_open_position_snapshots,
         "oms_event_tca": {
             "enabled": bool(oms_event_tca.get("enabled", bool(oms_event_tca))),
             "available": bool(

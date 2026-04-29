@@ -221,7 +221,23 @@ def _validate_startup_config() -> _StartupConfig:
         return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
 
     def _validate_live_intent_store_config() -> None:
-        execution_mode = _env_text("EXECUTION_MODE").strip().lower()
+        execution_mode = ""
+        for mode_key in (
+            "EXECUTION_MODE",
+            "AI_TRADING_EXECUTION_MODE",
+            "AI_TRADING_EXECUTION_IMPL",
+            "EXECUTION_IMPL",
+        ):
+            execution_mode = _env_text(mode_key).strip().lower()
+            if execution_mode:
+                break
+        if not execution_mode:
+            try:
+                execution_mode = str(
+                    get_env("EXECUTION_MODE", "", cast=str, resolve_aliases=True) or ""
+                ).strip().lower()
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
+                execution_mode = ""
         if execution_mode != "live":
             return
 

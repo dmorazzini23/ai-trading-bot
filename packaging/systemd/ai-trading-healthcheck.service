@@ -11,11 +11,13 @@ WorkingDirectory=/home/aiuser/ai-trading-bot
 Environment=PATH=/home/aiuser/ai-trading-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
 EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime
+ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh
 ExecStart=/bin/bash -lc 'bash /home/aiuser/ai-trading-bot/scripts/runtime_phase1_health_check_runner.sh'
 StandardOutput=journal
 StandardError=journal
 NoNewPrivileges=true
 ProtectSystem=strict
+ReadWritePaths=/home/aiuser/ai-trading-bot
 
 [Install]
 WantedBy=multi-user.target

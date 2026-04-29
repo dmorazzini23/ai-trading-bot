@@ -98,6 +98,7 @@ def test_resolve_runtime_artifact_path_prefers_existing_secondary_root_when_data
     data_dir = tmp_path / "preferred-data-root"
     secondary_root = tmp_path / "secondary-root"
     monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("AI_TRADING_ALLOW_REPO_RUNTIME_ARTIFACT_FALLBACK", "1")
     monkeypatch.setattr(runtime_artifacts, "is_test_runtime", lambda **_kwargs: False)
     monkeypatch.setattr(
         runtime_artifacts,

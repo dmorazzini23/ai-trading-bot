@@ -16012,18 +16012,48 @@ def validate_open_orders(ctx: Any) -> None:
 
         if age > 5 and getattr(od, "status", "").lower() in {"new", "accepted"}:
             try:
-                ctx.api.cancel_order(od.id)
+                order_id = str(getattr(od, "id", "") or "")
+                cancel_order_by_id = getattr(ctx.api, "cancel_order_by_id", None)
+                cancel_order = getattr(ctx.api, "cancel_order", None)
+                if callable(cancel_order_by_id):
+                    cancel_order_by_id(order_id)
+                elif callable(cancel_order):
+                    cancel_order(order_id)
+                else:
+                    raise AttributeError("Alpaca client missing cancel_order_by_id")
                 try:
                     qty = int(float(getattr(od, "qty", 0) or 0))
                 except (TypeError, ValueError):
                     qty = 0
+                get_order_by_id = getattr(ctx.api, "get_order_by_id", None)
+                get_order = getattr(ctx.api, "get_order", None)
+                refreshed = None
+                if order_id and callable(get_order_by_id):
+                    refreshed = get_order_by_id(order_id)
+                elif order_id and callable(get_order):
+                    refreshed = get_order(order_id)
+                filled_qty_raw = getattr(refreshed, "filled_qty", getattr(od, "filled_qty", 0))
+                try:
+                    filled_qty = int(float(filled_qty_raw or 0))
+                except (TypeError, ValueError):
+                    filled_qty = 0
+                qty = max(qty - filled_qty, 0)
                 side = getattr(od, "side", "")
+                side = str(getattr(side, "value", side)).lower()
                 if qty > 0 and side in {"buy", "sell"}:
+                    order_side = (
+                        OrderSide.BUY
+                        if side == "buy" and OrderSide is not None
+                        else OrderSide.SELL
+                        if side == "sell" and OrderSide is not None
+                        else side
+                    )
+                    time_in_force = TimeInForce.DAY if TimeInForce is not None else "day"
                     req = MarketOrderRequest(
                         symbol=od.symbol,
                         qty=qty,
-                        side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
-                        time_in_force=TimeInForce.DAY,
+                        side=order_side,
+                        time_in_force=time_in_force,
                     )
                     safe_submit_order(ctx.api, req)
             except (
@@ -16034,6 +16064,8 @@ def validate_open_orders(ctx: Any) -> None:
                 ValueError,
                 KeyError,
                 TypeError,
+                AttributeError,
+                APIError,
                 OSError,
             ) as exc:  # AI-AGENT-REF: narrow exception
                 logger.exception("bot.py unexpected", exc_info=exc)
@@ -18901,9 +18933,15 @@ def count_day_trades() -> int:
 def set_halt_flag(reason: str) -> None:
     """Persist a halt flag with the provided reason."""
     try:
-        with open(HALT_FLAG_PATH, "w") as f:
+        halt_flag_path = resolve_runtime_artifact_path(
+            HALT_FLAG_PATH,
+            default_relative="runtime/halt.flag",
+            for_write=True,
+        )
+        halt_flag_path.parent.mkdir(parents=True, exist_ok=True)
+        with halt_flag_path.open("w", encoding="utf-8") as f:
             f.write(f"{reason} " + dt_.now(UTC).isoformat())
-        logger.info(f"TRADING_HALTED set due to {reason}")
+        logger.info("TRADING_HALTED set due to %s", reason, extra={"halt_flag_path": str(halt_flag_path)})
     except (
         FileNotFoundError,
         PermissionError,
@@ -18925,26 +18963,32 @@ def check_halt_flag(runtime) -> bool:
       2) Config-defined halt file with truthy content
       3) runtime.halt boolean attribute
     """
-    import os
-
     # AI-AGENT-REF: thread runtime into halt checks and drop global ctx
     # 1) Environment override
     if str(get_env("AI_TRADING_HALT", "") or "").strip() in {"1", "true", "True"}:
         return True
 
     # 2) Config file flag (if provided)
-    halt_file = getattr(getattr(runtime, "cfg", None), "halt_file", None)
+    runtime_cfg = getattr(runtime, "cfg", None)
+    halt_file = getattr(runtime_cfg, "halt_flag_path", None)
+    if halt_file in (None, ""):
+        halt_file = HALT_FLAG_PATH
     if isinstance(halt_file, str) and halt_file:
         try:
-            if os.path.exists(halt_file):
-                with open(halt_file, encoding="utf-8", errors="ignore") as fh:
+            halt_path = resolve_runtime_artifact_path(
+                halt_file,
+                default_relative="runtime/halt.flag",
+                for_write=False,
+            )
+            if halt_path.exists():
+                with halt_path.open(encoding="utf-8", errors="ignore") as fh:
                     content = fh.read().strip()
                 if content and content not in {"0", "false", "False"}:
                     return True
         except OSError as e:
             # AI-AGENT-REF: log read issues without raising
             logger.info(
-                "HALT_FLAG_READ_ISSUE", extra={"halt_file": halt_file, "error": str(e)}
+                "HALT_FLAG_READ_ISSUE", extra={"halt_file": str(halt_file), "error": str(e)}
             )
 
     # 3) Runtime attribute

@@ -394,7 +394,14 @@ class RiskValidator:
                 if other_symbol == symbol:
                     continue
                 correlation_key = f'{symbol}_{other_symbol}'
-                correlation = correlations.get(correlation_key, 0.0)
+                reverse_key = f'{other_symbol}_{symbol}'
+                nested = correlations.get(symbol, {})
+                reverse_nested = correlations.get(other_symbol, {})
+                correlation = correlations.get(correlation_key, correlations.get(reverse_key, 0.0))
+                if isinstance(nested, dict):
+                    correlation = nested.get(other_symbol, correlation)
+                if isinstance(reverse_nested, dict):
+                    correlation = reverse_nested.get(symbol, correlation)
                 other_weight = abs(self._notional_value(position_info)) / total_portfolio_value
                 correlation_contribution = abs(correlation) * other_weight
                 correlation_exposure += correlation_contribution

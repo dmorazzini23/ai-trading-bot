@@ -124,7 +124,18 @@ def resolve_runtime_artifact_path(
         preferred_data_dir = str(get_env("AI_TRADING_DATA_DIR", "", cast=str) or "").strip()
         if preferred_data_dir:
             preferred_candidate = candidates[0]
-            if preferred_candidate.exists() or is_test_runtime():
+            allow_repo_fallback = _truthy(
+                str(
+                    get_env(
+                        "AI_TRADING_ALLOW_REPO_RUNTIME_ARTIFACT_FALLBACK",
+                        "",
+                        cast=str,
+                        resolve_aliases=False,
+                    )
+                    or ""
+                )
+            )
+            if preferred_candidate.exists() or is_test_runtime() or not allow_repo_fallback:
                 return preferred_candidate
         existing: list[Path] = [candidate for candidate in candidates if candidate.exists()]
         canonical_root = (Path("/var/lib") / _APP_NAME).resolve()
