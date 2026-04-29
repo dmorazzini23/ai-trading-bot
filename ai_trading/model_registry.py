@@ -25,6 +25,7 @@ from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 from ai_trading.models.artifacts import load_verified_joblib_artifact, verify_artifact
 from ai_trading.paths import MODELS_DIR
+from ai_trading.runtime.atomic_io import atomic_write_text
 
 logger = get_logger(__name__)
 
@@ -46,17 +47,22 @@ def _load_registry() -> dict[str, Any]:
 def _save_registry(reg: dict[str, Any]) -> None:
     try:
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        _REGISTRY_PATH.write_text(json.dumps(reg, indent=2))
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        logger.debug("MODEL_REGISTRY_SAVE_FAILED", exc_info=True)
+        atomic_write_text(_REGISTRY_PATH, json.dumps(reg, indent=2))
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        logger.error("MODEL_REGISTRY_SAVE_FAILED", exc_info=True)
+        raise RuntimeError(f"Failed to persist model registry at {_REGISTRY_PATH}: {exc}") from exc
 
 
 def register_model(symbol: str, version: str, path: Path, meta: dict[str, Any] | None = None, activate: bool = True) -> None:
     """Register a model version for a symbol and optionally activate it."""
     reg = _load_registry()
     entry = reg.get(symbol) or {"versions": {}, "active": None}
+    manifest_path = None
+    if isinstance(meta, Mapping):
+        manifest_path = meta.get("manifest_path") or meta.get("artifact_manifest_path")
     entry["versions"][version] = {
         "path": str(path),
+        "manifest_path": str(manifest_path) if manifest_path else None,
         "meta": meta or {},
         "registered_at": datetime.now(UTC).isoformat(),
     }
@@ -173,9 +179,10 @@ class ModelRegistry:
                     key=lambda item: item[1].get("registered_at", ""),
                 )
             }
-            self.index_path.write_text(json.dumps(serialisable, indent=2, sort_keys=True))
-        except OSError:
-            logger.debug("MODEL_REGISTRY_INDEX_WRITE_FAILED", exc_info=True)
+            atomic_write_text(self.index_path, json.dumps(serialisable, indent=2, sort_keys=True))
+        except OSError as exc:
+            logger.error("MODEL_REGISTRY_INDEX_WRITE_FAILED", exc_info=True)
+            raise RuntimeError(f"Failed to persist model registry index at {self.index_path}: {exc}") from exc
 
     @staticmethod
     def _slug(value: str) -> str:
@@ -310,9 +317,10 @@ class ModelRegistry:
     def _write_metadata_file(self, model_dir: Path, payload: Mapping[str, Any]) -> None:
         meta_path = model_dir / self._META_FILENAME
         try:
-            meta_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
-        except OSError:
-            logger.debug("MODEL_REGISTRY_META_WRITE_FAILED", exc_info=True)
+            atomic_write_text(meta_path, json.dumps(payload, indent=2, sort_keys=True))
+        except OSError as exc:
+            logger.error("MODEL_REGISTRY_META_WRITE_FAILED", exc_info=True)
+            raise RuntimeError(f"Failed to persist model metadata at {meta_path}: {exc}") from exc
 
     def _read_metadata_file(self, model_dir: Path) -> dict[str, Any] | None:
         meta_path = model_dir / self._META_FILENAME
@@ -333,21 +341,33 @@ class ModelRegistry:
         )
 
     @staticmethod
-    def _candidate_production_paths(info: Mapping[str, Any]) -> list[tuple[str, Path]]:
-        candidates: list[tuple[str, Path]] = []
+    def _candidate_production_paths(info: Mapping[str, Any]) -> list[tuple[str, Path, Path | None]]:
+        candidates: list[tuple[str, Path, Path | None]] = []
         governance = info.get("governance", {})
         if isinstance(governance, Mapping):
             runtime_promotion = governance.get("runtime_promotion", {})
             if isinstance(runtime_promotion, Mapping):
                 runtime_model_path = str(runtime_promotion.get("model_path", "") or "").strip()
                 if runtime_model_path:
-                    candidates.append(("runtime_promotion", Path(runtime_model_path)))
+                    runtime_manifest_path = str(
+                        runtime_promotion.get("manifest_path", "") or ""
+                    ).strip()
+                    candidates.append((
+                        "runtime_promotion",
+                        Path(runtime_model_path),
+                        Path(runtime_manifest_path) if runtime_manifest_path else None,
+                    ))
         artifact_path = str(info.get("artifact_path", "") or "").strip()
         if artifact_path:
-            candidates.append(("artifact", Path(artifact_path)))
+            manifest_path = str(info.get("manifest_path", "") or "").strip()
+            candidates.append((
+                "artifact",
+                Path(artifact_path),
+                Path(manifest_path) if manifest_path else None,
+            ))
         model_dir = str(info.get("path", "") or "").strip()
         if model_dir:
-            candidates.append(("model_dir", Path(model_dir) / ModelRegistry._ARTIFACT_FILENAME))
+            candidates.append(("model_dir", Path(model_dir) / ModelRegistry._ARTIFACT_FILENAME, None))
         return candidates
 
     def _production_candidates(self, strategy: str) -> list[tuple[str, dict[str, Any]]]:
@@ -574,7 +594,7 @@ class ModelRegistry:
 
     def get_viable_production_model(self, strategy: str) -> tuple[str, dict[str, Any]] | None:
         for model_id, info in self._production_candidates(strategy):
-            for source, candidate_path in self._candidate_production_paths(info):
+            for source, candidate_path, manifest_path in self._candidate_production_paths(info):
                 try:
                     resolved_path = candidate_path.expanduser()
                 except OSError:
@@ -584,6 +604,8 @@ class ModelRegistry:
                 info_with_path = dict(info)
                 info_with_path["production_path"] = str(resolved_path)
                 info_with_path["production_path_source"] = source
+                if manifest_path is not None:
+                    info_with_path["production_manifest_path"] = str(manifest_path.expanduser())
                 return model_id, info_with_path
         return None
 

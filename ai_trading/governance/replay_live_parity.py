@@ -180,6 +180,33 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         if isinstance(violations_raw, list)
         else _as_int(payload.get("violations_count"), 0)
     )
+    cap_adjustments_raw = payload.get("cap_adjustments")
+    cap_adjustments_count = (
+        len(cap_adjustments_raw)
+        if isinstance(cap_adjustments_raw, list)
+        else _as_int(payload.get("cap_adjustments_count"), 0)
+    )
+    violations_by_code = dict(payload.get("violations_by_code", {}) or {})
+    cap_adjustments_in_violations = (
+        sum(
+            1
+            for violation in violations_raw
+            if isinstance(violation, Mapping)
+            and str(violation.get("code") or "") == "cap_adjustment"
+        )
+        if isinstance(violations_raw, list)
+        else _as_int(violations_by_code.get("cap_adjustment"), 0)
+    )
+    uncounted_cap_adjustments = max(
+        0,
+        int(cap_adjustments_count) - int(cap_adjustments_in_violations),
+    )
+    violations_count = int(violations_count) + int(uncounted_cap_adjustments)
+    if cap_adjustments_count:
+        violations_by_code["cap_adjustment"] = max(
+            _as_int(violations_by_code.get("cap_adjustment"), 0),
+            int(cap_adjustments_count),
+        )
     counterfactual_raw = payload.get("counterfactual")
     counterfactual = (
         dict(counterfactual_raw)
@@ -205,7 +232,8 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         "orders_submitted": _as_int(payload.get("orders_submitted"), 0),
         "fill_events": _as_int(payload.get("fill_events"), 0),
         "violations_count": int(max(0, violations_count)),
-        "violations_by_code": dict(payload.get("violations_by_code", {}) or {}),
+        "violations_by_code": violations_by_code,
+        "cap_adjustments_count": int(max(0, cap_adjustments_count)),
         "counterfactual_passed": bool(counterfactual_passed),
         "counterfactual": counterfactual,
     }

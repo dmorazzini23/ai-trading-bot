@@ -109,7 +109,8 @@ def test_sentiment_cache_memory_leak_prevention():
         with patch.object(predict, '_sentiment_cache', {}):
             # Simulate filling cache beyond limit
             for i in range(1500):
-                with patch('predict._HTTP.get') as mock_get:
+                with patch.object(predict, "_get_predict_http_session") as mock_session:
+                    mock_get = mock_session.return_value.get
                     mock_response = Mock()
                     mock_response.json.return_value = {"articles": []}
                     mock_response.raise_for_status.return_value = None

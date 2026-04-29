@@ -198,6 +198,50 @@ def test_reconcile_position_targets_prunes_stale_entries() -> None:
     assert ctx._reconciliation_position_snapshots["AAPL"]["qty"] == 2.0
 
 
+def test_reconcile_position_targets_preserves_fractional_positions() -> None:
+    ctx = types.SimpleNamespace(
+        api=types.SimpleNamespace(
+            list_positions=lambda: [types.SimpleNamespace(symbol="AAPL", qty="0.5")]
+        ),
+        stop_targets={"AAPL": 100.0, "MSFT": 50.0},
+        take_profit_targets={"AAPL": 120.0, "MSFT": 55.0},
+    )
+
+    warned = reconcile_position_targets(
+        ctx,
+        logger=_DummyLogger(),
+        targets_lock=threading.Lock(),
+        warned=False,
+    )
+
+    assert warned is False
+    assert "AAPL" in ctx.stop_targets
+    assert "AAPL" in ctx.take_profit_targets
+    assert "MSFT" not in ctx.stop_targets
+    assert "MSFT" not in ctx.take_profit_targets
+    assert ctx._reconciliation_position_snapshots["AAPL"]["qty"] == 0.5
+
+
+def test_reconcile_position_targets_prunes_epsilon_flat_fraction() -> None:
+    ctx = types.SimpleNamespace(
+        api=types.SimpleNamespace(
+            list_positions=lambda: [types.SimpleNamespace(symbol="AAPL", qty="0.0000000001")]
+        ),
+        stop_targets={"AAPL": 100.0},
+        take_profit_targets={"AAPL": 120.0},
+    )
+
+    reconcile_position_targets(
+        ctx,
+        logger=_DummyLogger(),
+        targets_lock=threading.Lock(),
+        warned=False,
+    )
+
+    assert ctx.stop_targets == {}
+    assert ctx.take_profit_targets == {}
+
+
 def test_reconcile_position_targets_supports_raw_alpaca_get_all_positions() -> None:
     ctx = types.SimpleNamespace(
         api=types.SimpleNamespace(

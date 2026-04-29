@@ -14,8 +14,9 @@ logger = get_logger(__name__)
 
 
 def _side_normalized_slippage_bps(expected_price: float, actual_price: float, side: str) -> float:
-    side_token = str(side or "").strip().lower()
-    sign = -1.0 if side_token.startswith("sell") else 1.0
+    side_token = str(side or "").strip().lower().replace("-", "_").replace(" ", "_")
+    sell_side_tokens = {"sell", "sell_short", "sellshort", "short", "short_sell"}
+    sign = -1.0 if side_token in sell_side_tokens or side_token.startswith("sell") else 1.0
     return sign * ((float(actual_price) - float(expected_price)) / float(expected_price)) * 10000.0
 
 

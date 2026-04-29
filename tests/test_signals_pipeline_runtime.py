@@ -342,6 +342,59 @@ def test_portfolio_filter_includes_sell_short_in_portfolio_and_cost_checks(monke
     assert calls["cost_trade_size"] == 7.0
 
 
+def test_portfolio_filter_normalizes_flat_sell_to_short_entry(monkeypatch):
+    from ai_trading.portfolio import PortfolioDecision
+
+    frame = _market_frame(80)
+    calls: dict[str, object] = {}
+
+    class Fetcher:
+        def get_daily_df(self, _ctx, _symbol):
+            return frame.copy()
+
+    class Optimizer:
+        improvement_threshold = 0.0
+        rebalance_drift_threshold = 0.0
+        max_correlation_penalty = 0.0
+
+        def make_portfolio_decision(self, symbol, proposed_position, current_positions, market_data):
+            calls["proposed_position"] = proposed_position
+            return PortfolioDecision.APPROVE, "ok"
+
+    class Costs:
+        def validate_trade_profitability(self, symbol, trade_size, expected_profit, market_data, trade_type):
+            calls["cost_trade_size"] = trade_size
+            return SimpleNamespace(is_profitable=True, transaction_cost=0.01)
+
+    class Regime:
+        def detect_current_regime(self, _market_data):
+            return SimpleNamespace(value="balanced"), {}
+
+        def calculate_dynamic_thresholds(self, _regime, _metrics):
+            return SimpleNamespace(
+                minimum_improvement_threshold=0.0,
+                rebalance_drift_threshold=0.0,
+                correlation_penalty_adjustment=0.0,
+            )
+
+    monkeypatch.setattr(signals, "get_settings", lambda: SimpleNamespace(ENABLE_PORTFOLIO_FEATURES=True))
+    monkeypatch.setattr(signals, "_portfolio_optimizer", Optimizer())
+    monkeypatch.setattr(signals, "_transaction_cost_calculator", Costs())
+    monkeypatch.setattr(signals, "_regime_detector", Regime())
+
+    signal = SimpleNamespace(symbol="MSFT", side="sell", quantity=7)
+    filtered = signals.filter_signals_with_portfolio_optimization(
+        [signal],
+        SimpleNamespace(data_fetcher=Fetcher()),
+        current_positions={"MSFT": 0.0},
+    )
+
+    assert filtered == [signal]
+    assert signal.side == "sell_short"
+    assert calls["proposed_position"] == -7.0
+    assert calls["cost_trade_size"] == 7.0
+
+
 def test_portfolio_filter_derives_strategy_signal_size_from_weight(monkeypatch):
     from ai_trading.portfolio import PortfolioDecision
     from ai_trading.strategies.base import StrategySignal

@@ -2646,6 +2646,11 @@ def _fail_fast_env() -> None:
     )
     _TEST_ALPACA_CREDS_BACKFILLED = False
     test_mode = _is_test_mode()
+    allow_missing_alpaca = (
+        test_mode
+        or _is_truthy_env("RUN_HEALTHCHECK")
+        or _is_truthy_env("SHADOW_MODE")
+    )
     risk_default: str | None = None
     backfilled_alpaca: list[str] = []
     alpaca_backfilled_during_failfast = False
@@ -2686,6 +2691,12 @@ def _fail_fast_env() -> None:
         "AI_TRADING_CAPITAL_CAP",
         "DOLLAR_RISK_LIMIT",
     ]
+    if allow_missing_alpaca:
+        required = [
+            key
+            for key in required
+            if key not in {"ALPACA_API_KEY", "ALPACA_SECRET_KEY"}
+        ]
     loaded = reload_env(override=False)
     try:
         validate_no_deprecated_env()
@@ -2722,6 +2733,9 @@ def _fail_fast_env() -> None:
             raise SystemExit(1) from exc
         missing_alpaca = tuple(name for name in missing if name in alpaca_fields)
         if missing_alpaca:
+            if not allow_missing_alpaca:
+                logger.critical("ENV_VALIDATION_FAILED", extra={"error": message})
+                raise SystemExit(1) from exc
             logger.warning(
                 "ALPACA_CREDENTIALS_MISSING",
                 extra={"missing": missing_alpaca},

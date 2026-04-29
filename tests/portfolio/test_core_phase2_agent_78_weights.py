@@ -27,8 +27,9 @@ def test_compute_portfolio_weights_inverse_price_and_invalid(monkeypatch: pytest
 def test_execution_latest_price_prefers_minute_over_daily_close(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    minute = pd.DataFrame({"close": [101.5]})
-    daily = pd.DataFrame({"close": [88.0]})
+    now = pd.Timestamp.now(tz="UTC")
+    minute = pd.DataFrame({"close": [101.5]}, index=[now])
+    daily = pd.DataFrame({"close": [88.0]}, index=[now])
     data_fetcher = SimpleNamespace(
         get_minute_df=lambda _ctx, _symbol: minute,
         get_daily_df=lambda _ctx, _symbol: daily,
@@ -42,7 +43,7 @@ def test_execution_latest_price_prefers_minute_over_daily_close(
 def test_execution_latest_price_uses_daily_only_after_intraday_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    daily = pd.DataFrame({"close": [88.0]})
+    daily = pd.DataFrame({"close": [88.0]}, index=[pd.Timestamp.now(tz="UTC")])
     data_fetcher = SimpleNamespace(
         get_minute_df=lambda _ctx, _symbol: pd.DataFrame(),
         get_daily_df=lambda _ctx, _symbol: daily,

@@ -1012,11 +1012,15 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert hasattr(trained_model, "hard_negative_weighted_fit_")
     assert hasattr(trained_model, "edge_model_v2_bundle_")
     assert hasattr(trained_model, "edge_label_quality_")
+    assert getattr(trained_model, "required_bar_timeframe_") == "1Day"
     assert isinstance(getattr(trained_model, "edge_model_v2_bundle_"), dict)
 
     manifest_payload = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
     assert "metadata" in manifest_payload
     assert manifest_payload["metadata"]["strategy"] == "after_hours_ml_edge"
+    assert manifest_payload["metadata"]["required_bar_timeframe"] == "1Day"
+    assert manifest_payload["metadata"]["training_bar_timeframe"] == "1Day"
+    assert manifest_payload["metadata"]["feature_contract_version"] == "ml_feature_contract_v1"
     assert "segment_reweighting" in manifest_payload["metadata"]
     assert "sample_weighting" in manifest_payload["metadata"]
     assert "negative_symbol_penalties" in manifest_payload["metadata"]

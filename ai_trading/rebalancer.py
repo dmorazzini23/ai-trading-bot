@@ -233,22 +233,16 @@ class TaxAwareRebalancer:
         """
         try:
             current_weights: dict[str, float] = {}
-            total_portfolio_value = 0.0
+            if not (math.isfinite(float(account_equity)) and float(account_equity) > 0.0):
+                logger.warning('SIZING_SKIPPED', extra={'reason': 'invalid_account_equity'})
+                return {'error': 'invalid_account_equity', 'rebalance_trades': []}
             for symbol, position in current_positions.items():
                 current_price = float(current_prices.get(symbol, np.nan))
                 if not (math.isfinite(current_price) and current_price > 0.0):
                     logger.warning('SIZING_SKIPPED', extra={'reason': 'invalid_price', 'symbol': symbol})
                     continue
-                position_value = abs(_extract_position_quantity(position)) * current_price
-                total_portfolio_value += position_value
-            if total_portfolio_value > 0:
-                for symbol, position in current_positions.items():
-                    current_price = float(current_prices.get(symbol, np.nan))
-                    if not (math.isfinite(current_price) and current_price > 0.0):
-                        logger.warning('SIZING_SKIPPED', extra={'reason': 'invalid_price', 'symbol': symbol})
-                        continue
-                    position_value = _extract_position_quantity(position) * current_price
-                    current_weights[symbol] = position_value / total_portfolio_value
+                position_value = _extract_position_quantity(position) * current_price
+                current_weights[symbol] = position_value / float(account_equity)
             rebalance_trades: list[dict[str, Any]] = []
             total_tax_impact = 0.0
             for symbol in set(list(current_weights.keys()) + list(target_weights.keys())):

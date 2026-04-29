@@ -10,6 +10,7 @@ pytest.importorskip("sklearn")
 import ai_trading.core.bot_engine as bot_engine
 import ai_trading.model_loader as model_loader
 from ai_trading.models.artifacts import default_manifest_path, write_artifact_manifest
+from ai_trading.models.contracts import LIVE_ML_FEATURE_COLUMNS
 from sklearn.dummy import DummyClassifier
 import joblib
 
@@ -167,18 +168,8 @@ def test_train_and_save_model_synthetic_fallback_is_test_only_and_not_persisted(
     assert hasattr(model, "predict")
     assert not model_path.exists()
     assert not default_manifest_path(model_path).exists()
-    assert list(model.feature_names_in_) == [
-        "ret1",
-        "mom5",
-        "mom10",
-        "vol20",
-        "skew20",
-        "kurt20",
-        "liq20",
-        "volchg5",
-        "trend",
-    ]
-    assert set(model.predict(np.zeros((4, 9))).tolist()) <= {0, 1}
+    assert list(model.feature_names_in_) == list(LIVE_ML_FEATURE_COLUMNS)
+    assert set(model.predict(np.zeros((4, len(LIVE_ML_FEATURE_COLUMNS)))).tolist()) <= {0, 1}
 
 
 def test_train_and_save_model_rejects_short_real_history_without_one_column_artifact(
@@ -196,7 +187,7 @@ def test_train_and_save_model_rejects_short_real_history_without_one_column_arti
     )
     monkeypatch.setattr("ai_trading.data.fetch.get_daily_df", lambda *_args, **_kwargs: frame)
 
-    with pytest.raises(RuntimeError, match="Insufficient labeled training rows"):
+    with pytest.raises(RuntimeError, match="No labeled training rows|Insufficient labeled training rows"):
         model_loader.train_and_save_model("SHORT", tmp_path)
 
     model_path = tmp_path / "SHORT.pkl"
@@ -225,14 +216,14 @@ def test_train_and_save_model_fails_closed_without_real_bars_in_runtime(tmp_path
 
 def test_training_frame_trend_uses_past_only_for_future_tail_mutation():
     pd = pytest.importorskip("pandas")
-    rows = 90
+    rows = 260
     close = 100.0 + np.arange(rows, dtype=float) * 0.1 + np.sin(np.arange(rows) / 4.0)
     base = pd.DataFrame(
         {"close": close, "volume": np.linspace(100_000.0, 120_000.0, rows)},
         index=pd.date_range("2025-01-01", periods=rows, freq="D", tz="UTC"),
     )
     mutated = base.copy()
-    mutation_start = base.index[70]
+    mutation_start = base.index[230]
     mutated.loc[mutation_start:, "close"] = mutated.loc[mutation_start:, "close"] + 10_000.0
 
     base_features = model_loader._build_training_frame(base)
@@ -240,14 +231,14 @@ def test_training_frame_trend_uses_past_only_for_future_tail_mutation():
 
     past_index = base_features.index[base_features.index < mutation_start]
     pd.testing.assert_series_equal(
-        base_features.loc[past_index, "trend"],
-        mutated_features.loc[past_index, "trend"],
+        base_features.loc[past_index, "rsi"],
+        mutated_features.loc[past_index, "rsi"],
     )
 
 
 def test_training_frame_drops_final_missing_future_close_before_labeling():
     pd = pytest.importorskip("pandas")
-    rows = 40
+    rows = 240
     frame = pd.DataFrame(
         {"close": np.arange(100.0, 100.0 + rows), "volume": np.linspace(100.0, 200.0, rows)},
         index=pd.date_range("2025-01-01", periods=rows, freq="D", tz="UTC"),

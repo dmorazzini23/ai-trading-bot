@@ -7,7 +7,11 @@ from typing import Any, cast
 import pytest
 
 from ai_trading.execution import live_trading as lt
-from ai_trading.execution.live_trading import ExecutionEngine, CapacityCheck
+from ai_trading.execution.live_trading import (
+    CapacityCheck,
+    ExecutionEngine,
+    NonRetryableBrokerError,
+)
 
 
 class _StubClient:
@@ -203,6 +207,49 @@ def test_submit_order_to_alpaca_maps_explicit_short_to_sell_to_open(monkeypatch)
     assert req.side == "sell"
     assert req.position_intent == "sell_to_open"
     assert req.qty == 5
+
+
+def test_effective_closing_position_preserves_fractional_quantities() -> None:
+    engine = SimpleNamespace(_position_quantity=lambda _symbol: 0.5)
+
+    assert lt._effective_closing_position(
+        engine,
+        symbol="AAPL",
+        side="sell",
+        quantity=0.25,
+        closing_position=False,
+    )
+
+
+def test_effective_closing_position_treats_epsilon_position_as_flat() -> None:
+    engine = SimpleNamespace(_position_quantity=lambda _symbol: 0.0000000001)
+
+    assert not lt._effective_closing_position(
+        engine,
+        symbol="AAPL",
+        side="sell",
+        quantity=0.25,
+        closing_position=False,
+    )
+
+
+def test_submit_order_to_alpaca_rejects_sell_short_reduce_only(monkeypatch):
+    engine, client = _broker_submit_engine(monkeypatch)
+
+    with pytest.raises(NonRetryableBrokerError, match="sell_short_cannot_close_position"):
+        engine._submit_order_to_alpaca(
+            {
+                "symbol": "AAPL",
+                "side": "sell_short",
+                "quantity": 5,
+                "type": "market",
+                "time_in_force": "day",
+                "client_order_id": "cid-short-close",
+                "reduce_only": True,
+            }
+        )
+
+    assert client.calls == []
 
 
 def test_submit_order_to_alpaca_clips_cover_and_uses_buy_to_close(monkeypatch):

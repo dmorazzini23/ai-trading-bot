@@ -10,6 +10,7 @@ def _sentiment_setup(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
     monkeypatch.setenv("SENTIMENT_API_KEY", "test")
     monkeypatch.setattr(sentiment, "SENTIMENT_API_KEY", "test", raising=False)
+    sentiment.reset_sentiment_runtime_cache()
     sentiment._sentiment_cache.clear()
     sentiment._sentiment_circuit_breaker = {
         "failures": 0,
@@ -19,6 +20,7 @@ def _sentiment_setup(monkeypatch):
     }
     monkeypatch.setattr(sentiment, "get_device", lambda: "cpu")
     yield
+    sentiment.reset_sentiment_runtime_cache()
 
 
 def test_fetch_sentiment_weighting(monkeypatch):
@@ -46,7 +48,9 @@ def test_fetch_sentiment_weighting(monkeypatch):
         def raise_for_status(self):
             return None
 
-    monkeypatch.setattr(sentiment._http_session, "get", lambda *a, **kw: Resp())
+    sentiment._set_sentiment_http_session_for_tests(
+        SimpleNamespace(get=lambda *a, **kw: Resp())
+    )
 
     score = sentiment.fetch_sentiment(None, "AAPL")
     expected = (
@@ -92,7 +96,7 @@ def test_neutral_caching_after_failure(monkeypatch):
         calls["count"] += 1
         return Resp()
 
-    monkeypatch.setattr(sentiment._http_session, "get", fake_get)
+    sentiment._set_sentiment_http_session_for_tests(SimpleNamespace(get=fake_get))
     monkeypatch.setattr(sentiment.pytime, "time", lambda: 0)
 
     score1 = sentiment.fetch_sentiment(None, "MSFT")
@@ -172,7 +176,7 @@ def test_fetch_sentiment_resolves_fresh_key_over_import_constant(monkeypatch):
         captured["url"] = url
         return Resp()
 
-    monkeypatch.setattr(sentiment._http_session, "get", fake_get)
+    sentiment._set_sentiment_http_session_for_tests(SimpleNamespace(get=fake_get))
 
     sentiment.fetch_sentiment(None, "AAPL")
 
@@ -201,7 +205,9 @@ def test_circuit_breaker_recovers(monkeypatch):
         def raise_for_status(self):
             return None
 
-    monkeypatch.setattr(sentiment._http_session, "get", lambda *a, **k: Resp())
+    sentiment._set_sentiment_http_session_for_tests(
+        SimpleNamespace(get=lambda *a, **k: Resp())
+    )
 
     # Open circuit breaker and advance time beyond recovery timeout
     sentiment._sentiment_circuit_breaker = {

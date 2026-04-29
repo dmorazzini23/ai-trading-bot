@@ -933,6 +933,9 @@ _ACK_TRIGGER_STATUSES = frozenset(
     }
 )
 _SUBMITTED_STATUS_MIN_RANK = _ORDER_STATUS_RANK.get("accepted", 20)
+_ORDER_QTY_EPSILON = Decimal("0.000000001")
+
+
 def _normalize_status(value: Any) -> str | None:
     """Normalize broker status tokens to lowercase strings."""
 
@@ -1117,14 +1120,11 @@ def _effective_closing_position(
         side_token = "buy"
     if side_token not in {"buy", "sell"} or engine is None:
         return False
-    try:
-        requested_qty = max(int(quantity), 0)
-    except LIVE_TRADING_FALLBACK_EXC:
-        requested_qty = 0
-    if requested_qty <= 0:
+    requested_qty = _safe_decimal(quantity)
+    if requested_qty <= _ORDER_QTY_EPSILON:
         return False
     try:
-        position_qty = int(engine._position_quantity(symbol))
+        position_qty = _safe_decimal(engine._position_quantity(symbol))
     except LIVE_TRADING_FALLBACK_EXC:
         logger.debug(
             "EFFECTIVE_CLOSING_POSITION_LOOKUP_FAILED",
@@ -1133,8 +1133,8 @@ def _effective_closing_position(
         )
         return False
     if side_token == "sell":
-        return position_qty > 0
-    return position_qty < 0
+        return position_qty > _ORDER_QTY_EPSILON
+    return position_qty < -_ORDER_QTY_EPSILON
 
 
 def _extract_open_order_remaining_qty(order: Any) -> float:
@@ -2343,19 +2343,30 @@ def _alpaca_side_member(side_enum: Any, semantic_side: str) -> Any:
     return side_enum.SELL
 
 
+def _position_intent_token(value: Any) -> str:
+    raw = getattr(value, "value", value)
+    if raw is value:
+        raw = getattr(value, "name", value)
+    return str(raw or "").strip().replace("-", "_").replace(" ", "_").lower()
+
+
 def _alpaca_position_intent(order_data: Mapping[str, Any]) -> Any | None:
     explicit_intent = order_data.get("position_intent")
-    if explicit_intent not in (None, ""):
-        return explicit_intent
     semantic_side = _semantic_order_side(order_data.get("side"))
     closing_position = bool(
         order_data.get("closing_position")
         or order_data.get("close_position")
         or order_data.get("reduce_only")
     )
+    if semantic_side == "sell_short" and closing_position:
+        raise ValueError("sell_short cannot be used with closing_position or reduce_only")
+    if explicit_intent not in (None, ""):
+        if semantic_side == "sell_short" and _position_intent_token(explicit_intent) != "sell_to_open":
+            raise ValueError("sell_short requires position_intent SELL_TO_OPEN")
+        return explicit_intent
     intent_name: str | None = None
     if semantic_side == "sell_short":
-        intent_name = "SELL_TO_CLOSE" if closing_position else "SELL_TO_OPEN"
+        intent_name = "SELL_TO_OPEN"
     elif semantic_side == "cover":
         intent_name = "BUY_TO_CLOSE"
     elif semantic_side == "buy" and closing_position:
@@ -23740,7 +23751,7 @@ class ExecutionEngine:
         self,
         *,
         symbol: str,
-        requested_qty: int,
+        requested_qty: int | float,
         closing_position: bool,
         order_type: str,
         client_order_id: str | None,
@@ -23759,7 +23770,7 @@ class ExecutionEngine:
             if closing_position:
                 no_position_context = {
                     "symbol": symbol_token,
-                    "requested_qty": int(requested_qty),
+                    "requested_qty": float(requested_qty),
                     "available_qty": 0,
                     "position_qty": float(position_qty),
                     "open_sell_qty": 0.0,
@@ -23783,7 +23794,7 @@ class ExecutionEngine:
 
         context: dict[str, Any] = {
             "symbol": symbol_token,
-            "requested_qty": int(requested_qty),
+            "requested_qty": float(requested_qty),
             "available_qty": float(available_qty),
             "position_qty": float(position_qty),
             "open_sell_qty": float(open_sell_qty_val),
@@ -23801,7 +23812,7 @@ class ExecutionEngine:
         self,
         *,
         symbol: str,
-        requested_qty: int,
+        requested_qty: int | float,
         order_type: str,
         client_order_id: str | None,
     ) -> tuple[float, dict[str, Any] | None]:
@@ -23817,7 +23828,7 @@ class ExecutionEngine:
         if position_qty >= 0:
             context = {
                 "symbol": symbol_token,
-                "requested_qty": int(requested_qty),
+                "requested_qty": float(requested_qty),
                 "available_qty": 0,
                 "position_qty": float(position_qty),
                 "open_buy_qty": 0.0,
@@ -23839,7 +23850,7 @@ class ExecutionEngine:
 
         context = {
             "symbol": symbol_token,
-            "requested_qty": int(requested_qty),
+            "requested_qty": float(requested_qty),
             "available_qty": float(available_qty),
             "position_qty": float(position_qty),
             "open_buy_qty": float(open_buy_qty_val),
@@ -31135,6 +31146,44 @@ class ExecutionEngine:
             lookback_minutes = 30
         lookback_minutes = max(1, min(int(lookback_minutes), 240))
         after_dt = datetime.now(UTC) - timedelta(minutes=int(lookback_minutes))
+        symbol_filters = [str(symbol).strip().upper()] if str(symbol or "").strip() else None
+        get_orders = getattr(client, "get_orders", None)
+        if callable(get_orders):
+            for status in ("open", "all", "closed"):
+                try:
+                    orders_resp = list_alpaca_orders(
+                        client,
+                        status=status,
+                        symbols=symbol_filters,
+                    )
+                except LIVE_TRADING_FALLBACK_EXC:
+                    logger.debug(
+                        "ORDER_LOOKUP_RECENT_QUERY_FAILED",
+                        extra={
+                            "symbol": symbol,
+                            "client_order_id": token,
+                            "lookup_method": "get_orders",
+                            "query": {"status": status, "symbols": symbol_filters},
+                        },
+                        exc_info=True,
+                    )
+                    break
+                matched = self._find_order_in_broker_order_list_by_client_id(
+                    orders_resp or [],
+                    client_order_id=token,
+                )
+                if matched is not None:
+                    logger.info(
+                        "ORDER_LOOKUP_RECENT_QUERY_RECOVERED",
+                        extra={
+                            "symbol": symbol,
+                            "client_order_id": token,
+                            "lookup_method": "get_orders",
+                            "query": {"status": status, "symbols": symbol_filters},
+                        },
+                    )
+                    return matched
+
         query_variants: tuple[dict[str, Any], ...] = (
             {"status": "open"},
             {"status": "all", "limit": 200, "after": after_dt},
@@ -31143,10 +31192,8 @@ class ExecutionEngine:
             {"status": "closed", "limit": 200},
             {},
         )
-        for method_name in ("list_orders", "get_orders"):
-            method = getattr(client, method_name, None)
-            if not callable(method):
-                continue
+        method = getattr(client, "list_orders", None)
+        if callable(method):
             for query_kwargs in query_variants:
                 try:
                     orders_resp = method(**query_kwargs)  # type: ignore[misc]
@@ -31158,7 +31205,7 @@ class ExecutionEngine:
                         extra={
                             "symbol": symbol,
                             "client_order_id": token,
-                            "lookup_method": method_name,
+                            "lookup_method": "list_orders",
                             "query": dict(query_kwargs),
                         },
                         exc_info=True,
@@ -31174,7 +31221,7 @@ class ExecutionEngine:
                         extra={
                             "symbol": symbol,
                             "client_order_id": token,
-                            "lookup_method": method_name,
+                            "lookup_method": "list_orders",
                             "query": dict(query_kwargs),
                         },
                     )
@@ -31425,6 +31472,25 @@ class ExecutionEngine:
 
         qty_payload = order_data.get("quantity")
         semantic_side = _semantic_order_side(order_data.get("side"))
+        if semantic_side == "sell_short" and closing_position:
+            raise NonRetryableBrokerError(
+                "sell_short_cannot_close_position",
+                code="sell_short_cannot_close_position",
+                symbol=symbol_token or None,
+                detail="sell_short must open short; use sell with closing_position/reduce_only to close long shares",
+            )
+        explicit_position_intent = order_data.get("position_intent")
+        if (
+            semantic_side == "sell_short"
+            and explicit_position_intent not in (None, "")
+            and _position_intent_token(explicit_position_intent) != "sell_to_open"
+        ):
+            raise NonRetryableBrokerError(
+                "sell_short_requires_sell_to_open",
+                code="sell_short_requires_sell_to_open",
+                symbol=symbol_token or None,
+                detail="sell_short must use position_intent SELL_TO_OPEN",
+            )
         if (
             qty_payload not in (None, "")
             and (
@@ -31443,11 +31509,11 @@ class ExecutionEngine:
                 )
             )
         ):
-            requested_qty = _safe_int(qty_payload, 0)
-            if requested_qty > 0:
+            requested_qty = _positive_decimal(qty_payload)
+            if requested_qty is not None:
                 adjusted_qty, clip_context = self._clip_cover_quantity_to_current_short(
                     symbol=symbol_token,
-                    requested_qty=requested_qty,
+                    requested_qty=float(requested_qty),
                     order_type=order_type,
                     client_order_id=client_order_id_text or None,
                 )
@@ -31466,11 +31532,11 @@ class ExecutionEngine:
             and semantic_side == "sell"
             and closing_position
         ):
-            requested_qty = _safe_int(qty_payload, 0)
-            if requested_qty > 0:
+            requested_qty = _positive_decimal(qty_payload)
+            if requested_qty is not None:
                 adjusted_qty, clip_context = self._clip_sell_quantity_to_available_position(
                     symbol=symbol_token,
-                    requested_qty=requested_qty,
+                    requested_qty=float(requested_qty),
                     closing_position=True,
                     order_type=order_type,
                     client_order_id=client_order_id_text or None,

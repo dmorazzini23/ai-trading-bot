@@ -174,7 +174,8 @@ def test_metric_aggregation_covers_constant_predictions_and_no_trade_metrics(
     assert metrics["prediction_sortino"] == 0.0
     assert metrics["executed_total_return"] == 0.0
     assert metrics["net_sharpe"] == 0.0
-    assert metrics["turnover_annual"] == pytest.approx(126.0)
+    assert metrics["turnover_annual"] == 0.0
+    assert metrics["executed_trades_annual"] == 0.0
 
 
 def test_metric_aggregation_compounds_returns_and_sortino_branches(tmp_path: Path) -> None:

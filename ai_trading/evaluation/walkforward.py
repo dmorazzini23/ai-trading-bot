@@ -334,6 +334,15 @@ class WalkForwardEvaluator:
             annual_return = (self.equity_curve.iloc[-1] / self.equity_curve.iloc[0]) ** (252 / period_count) - 1
             calmar_ratio = annual_return / max_drawdown if max_drawdown > 0 else 0.0
             n_predictions = len(predictions)
+            executed_trade_count = sum(
+                (int(item.get('trade_count', 0)) for item in fold_trade_metrics if isinstance(item, dict))
+            )
+            executed_turnover_units = sum(
+                (float(item.get('turnover_units', 0.0)) for item in fold_trade_metrics if isinstance(item, dict))
+            )
+            executed_cost_return = sum(
+                (float(item.get('cost_return', 0.0)) for item in fold_trade_metrics if isinstance(item, dict))
+            )
             total_days = sum(
                 (
                     int(result.get("metrics", {}).get("period_days", 0) or 0)
@@ -341,8 +350,9 @@ class WalkForwardEvaluator:
                     if isinstance(result, dict) and isinstance(result.get("metrics"), dict)
                 )
             )
-            turnover = n_predictions / max(1, total_days) * 252
-            aggregate_metrics = {'net_sharpe': float(executed_sharpe), 'sortino_ratio': float(executed_sortino), 'calmar_ratio': float(calmar_ratio), 'max_drawdown': float(max_drawdown), 'turnover_annual': float(turnover), 'correlation': float(correlation) if not np.isnan(correlation) else 0.0, 'directional_accuracy': float(directional_accuracy), 'mse': float(mse), 'mae': float(mae), 'total_predictions': int(n_predictions), 'evaluation_period_days': int(total_days), 'executed_total_return': float(executed_total_return), 'prediction_sharpe': float(prediction_sharpe), 'prediction_sortino': float(prediction_sortino), 'executed_trade_count': int(sum((int(item.get('trade_count', 0)) for item in fold_trade_metrics if isinstance(item, dict)))), 'executed_turnover_units': float(sum((float(item.get('turnover_units', 0.0)) for item in fold_trade_metrics if isinstance(item, dict)))), 'executed_cost_return': float(sum((float(item.get('cost_return', 0.0)) for item in fold_trade_metrics if isinstance(item, dict))))}
+            turnover = executed_turnover_units / max(1, total_days) * 252
+            trades_annual = executed_trade_count / max(1, total_days) * 252
+            aggregate_metrics = {'net_sharpe': float(executed_sharpe), 'sortino_ratio': float(executed_sortino), 'calmar_ratio': float(calmar_ratio), 'max_drawdown': float(max_drawdown), 'turnover_annual': float(turnover), 'executed_trades_annual': float(trades_annual), 'correlation': float(correlation) if not np.isnan(correlation) else 0.0, 'directional_accuracy': float(directional_accuracy), 'mse': float(mse), 'mae': float(mae), 'total_predictions': int(n_predictions), 'evaluation_period_days': int(total_days), 'executed_total_return': float(executed_total_return), 'prediction_sharpe': float(prediction_sharpe), 'prediction_sortino': float(prediction_sortino), 'executed_trade_count': int(executed_trade_count), 'executed_turnover_units': float(executed_turnover_units), 'executed_cost_return': float(executed_cost_return)}
             return aggregate_metrics
         except (ValueError, TypeError) as e:
             logger.error(f'Error calculating aggregate metrics: {e}')

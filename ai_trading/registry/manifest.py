@@ -6,6 +6,8 @@ import math
 import re
 from typing import Any, Mapping
 
+from ai_trading.models.contracts import normalize_bar_timeframe
+
 
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -103,6 +105,19 @@ def validate_manifest_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
         source.get("cost_model_version"), field="cost_model_version"
     )
     feature_hash = _require_hash(source.get("feature_hash"), field="feature_hash")
+    feature_contract_hash = str(source.get("feature_contract_hash") or "").strip()
+    if feature_contract_hash:
+        feature_contract_hash = _require_hash(
+            feature_contract_hash,
+            field="feature_contract_hash",
+        )
+    feature_contract_version = str(source.get("feature_contract_version") or "").strip()
+    training_bar_timeframe = normalize_bar_timeframe(source.get("training_bar_timeframe"))
+    required_bar_timeframe = normalize_bar_timeframe(source.get("required_bar_timeframe"))
+    if not training_bar_timeframe:
+        raise ManifestValidationError("training_bar_timeframe must be non-empty")
+    if not required_bar_timeframe:
+        raise ManifestValidationError("required_bar_timeframe must be non-empty")
     dataset_fingerprint = _require_hash(
         source.get("dataset_fingerprint"), field="dataset_fingerprint"
     )
@@ -169,6 +184,10 @@ def validate_manifest_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
         "embargo_days": embargo_days,
         "feature_columns": feature_columns,
         "feature_hash": feature_hash,
+        "feature_contract_version": feature_contract_version,
+        "feature_contract_hash": feature_contract_hash,
+        "training_bar_timeframe": training_bar_timeframe,
+        "required_bar_timeframe": required_bar_timeframe,
         "default_threshold": default_threshold,
         "thresholds_by_regime": normalized_thresholds,
         "cost_floor_bps": cost_floor_bps,

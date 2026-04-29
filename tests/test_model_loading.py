@@ -1,4 +1,5 @@
 import importlib
+import json
 import logging
 import sys
 import time
@@ -162,6 +163,41 @@ def test_missing_model_file_uses_registry_production_fallback(monkeypatch, tmp_p
     assert mdl == {"approved": True}
 
 
+def test_registry_fallback_passes_manifest_to_verified_loader(monkeypatch, tmp_path):
+    configured = tmp_path / "missing.pkl"
+    fallback = tmp_path / "approved.pkl"
+    manifest = tmp_path / "approved.manifest.json"
+    fallback.write_bytes(b"model")
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(configured))
+    monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
+    be = reload_bot_engine()
+    calls = []
+    monkeypatch.setattr(
+        be,
+        "_resolve_registry_production_model_path",
+        lambda *_args, **_kwargs: (
+            str(fallback),
+            {
+                "model_id": "prod-123",
+                "strategy": "ml_edge",
+                "source": "runtime_promotion",
+                "manifest_path": str(manifest),
+            },
+        ),
+    )
+
+    def fake_load(path, *, manifest_path=None):
+        calls.append((str(path), str(manifest_path)))
+        return {"approved": True}
+
+    monkeypatch.setattr(be, "load_verified_joblib_artifact", fake_load)
+
+    mdl = be._load_required_model()
+
+    assert mdl == {"approved": True}
+    assert calls == [(str(fallback), str(manifest))]
+
+
 def test_missing_model_file_uses_runtime_promotion_registry_fallback(monkeypatch, tmp_path):
     from ai_trading.model_registry import ModelRegistry
 
@@ -279,3 +315,32 @@ def test_train_and_save_model_rejects_real_bars_without_labels(monkeypatch, tmp_
         model_loader.train_and_save_model("TINY", tmp_path)
 
     assert not (tmp_path / "TINY.pkl").exists()
+
+
+def test_train_and_save_model_writes_live_feature_contract(monkeypatch, tmp_path):
+    pytest.importorskip("sklearn")
+    pd = pytest.importorskip("pandas")
+    import ai_trading.data.fetch as data_fetch
+    import ai_trading.model_loader as model_loader
+
+    rows = 430
+    frame = pd.DataFrame(
+        {
+            "open": [100.0 + idx * 0.1 for idx in range(rows)],
+            "high": [101.0 + idx * 0.1 for idx in range(rows)],
+            "low": [99.0 + idx * 0.1 for idx in range(rows)],
+            "close": [100.5 + idx * 0.1 for idx in range(rows)],
+            "volume": [1_000.0 + idx for idx in range(rows)],
+        }
+    )
+    monkeypatch.setattr(data_fetch, "get_daily_df", lambda *_args, **_kwargs: frame)
+
+    model = model_loader.train_and_save_model("CONTRACT", tmp_path)
+
+    assert list(model.feature_names_in_) == ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+    assert getattr(model, "required_bar_timeframe_") == "1Day"
+    manifest_payload = json.loads(
+        (tmp_path / "CONTRACT.pkl.manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest_payload["metadata"]["feature_columns"] == list(model.feature_names_in_)
+    assert manifest_payload["metadata"]["required_bar_timeframe"] == "1Day"

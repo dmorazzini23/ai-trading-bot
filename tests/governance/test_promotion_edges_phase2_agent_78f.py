@@ -204,6 +204,8 @@ def test_live_kpi_pending_dry_run_demotion_and_successful_rollback_paths(
     )
     assert demoted["status"] == "demoted_no_rollback_target"
     assert demoted["triggered"] is True
+    assert demoted["active_pointer_removed"] is True
+    assert promotion.get_active_model_path("kpi_no_target") is None
     assert registry.model_index[no_target]["governance"]["status"] == "challenger"
 
 
@@ -237,6 +239,25 @@ def test_rollback_skip_branches_record_audit_statuses(
         "skipped_no_previous_model",
         "skipped_previous_model_missing",
     ]
+
+
+def test_active_pointer_reconciles_to_registry_production(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    promotion, registry = _promotion(tmp_path, monkeypatch)
+    strategy = "reconcile_active"
+    champion = _register_model(registry, strategy=strategy, marker="champion")
+    stale = _register_model(registry, strategy=strategy, marker="stale")
+    registry.update_governance_status(champion, "production")
+    registry.update_governance_status(stale, "challenger")
+    promotion._create_active_symlink(strategy, stale)
+
+    result = promotion.reconcile_active_production_pointer(strategy, repair=True)
+
+    assert result["consistent"] is True
+    assert result["reconciled"] is True
+    assert promotion._active_model_id_for_strategy(strategy) == champion
 
 
 def test_challenger_evaluation_scorecards_cover_returns_and_summary_metrics(

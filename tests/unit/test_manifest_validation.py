@@ -15,6 +15,10 @@ def _valid_payload() -> dict[str, object]:
         "embargo_days": 1,
         "feature_columns": ["rsi", "macd"],
         "feature_hash": "a" * 64,
+        "feature_contract_version": "ml_feature_contract_v1",
+        "feature_contract_hash": "c" * 64,
+        "training_bar_timeframe": "1Day",
+        "required_bar_timeframe": "1Day",
         "default_threshold": 0.52,
         "thresholds_by_regime": {"uptrend": 0.4, "downtrend": 0.45},
         "cost_floor_bps": 8.5,
@@ -35,6 +39,7 @@ def test_validate_manifest_metadata_accepts_valid_payload() -> None:
     validated = validate_manifest_metadata(payload)
     assert validated["strategy"] == "after_hours_ml_edge"
     assert validated["rows"] == 1000
+    assert validated["required_bar_timeframe"] == "1Day"
     assert validated["sensitivity_sweep"]["enabled"] is True
 
 

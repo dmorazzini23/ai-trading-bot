@@ -11,6 +11,7 @@ targets and to provide simple, testable behavior.
 import atexit
 import os
 from concurrent.futures import ThreadPoolExecutor
+from threading import RLock
 from typing import Optional
 
 from ai_trading.logging import get_logger
@@ -21,81 +22,86 @@ logger = get_logger(__name__)
 # Module-level executors
 executor: Optional[ThreadPoolExecutor] = None
 prediction_executor: Optional[ThreadPoolExecutor] = None
+_EXECUTOR_LOCK = RLock()
 
 
 def _ensure_executors() -> None:
     """Create thread pool executors on demand with clamped worker counts."""
     global executor, prediction_executor
-    if executor is not None and prediction_executor is not None:
-        return
-    from ai_trading.config.settings import get_settings
+    with _EXECUTOR_LOCK:
+        if executor is not None and prediction_executor is not None:
+            return
+        from ai_trading.config.settings import get_settings
 
-    cpu = os.cpu_count() or 2
-    s = get_settings()
-    exec_fn = getattr(s, "effective_executor_workers", None)
-    # Base default for 1 vCPU target machines is 1–2 workers to avoid oversubscription
-    default_workers = max(1, min(2, cpu))
-    # Allow env override for emergency tuning
-    env_exec = get_worker_env_override(
-        "AI_TRADING_EXEC_WORKERS", fallback_keys=("EXECUTOR_WORKERS",)
-    )
-    env_pred = get_worker_env_override(
-        "AI_TRADING_PRED_WORKERS", fallback_keys=("PREDICTION_WORKERS",)
-    )
-    exec_workers = exec_fn(cpu) if callable(exec_fn) else (env_exec or default_workers)
-    pred_fn = getattr(s, "effective_prediction_workers", None)
-    pred_workers = pred_fn(cpu) if callable(pred_fn) else (env_pred or default_workers)
-    # Clamp to [1, cpu] to respect resource guardrails
-    try:
-        exec_workers = max(1, min(int(exec_workers), max(1, cpu)))
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        exec_workers = default_workers
-    try:
-        pred_workers = max(1, min(int(pred_workers), max(1, cpu)))
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        pred_workers = default_workers
-    if executor is None:
-        executor = ThreadPoolExecutor(max_workers=exec_workers)
-    if prediction_executor is None:
-        prediction_executor = ThreadPoolExecutor(max_workers=pred_workers)
+        cpu = os.cpu_count() or 2
+        s = get_settings()
+        exec_fn = getattr(s, "effective_executor_workers", None)
+        # Base default for 1 vCPU target machines is 1-2 workers to avoid oversubscription
+        default_workers = max(1, min(2, cpu))
+        # Allow env override for emergency tuning
+        env_exec = get_worker_env_override(
+            "AI_TRADING_EXEC_WORKERS", fallback_keys=("EXECUTOR_WORKERS",)
+        )
+        env_pred = get_worker_env_override(
+            "AI_TRADING_PRED_WORKERS", fallback_keys=("PREDICTION_WORKERS",)
+        )
+        exec_workers = exec_fn(cpu) if callable(exec_fn) else (env_exec or default_workers)
+        pred_fn = getattr(s, "effective_prediction_workers", None)
+        pred_workers = pred_fn(cpu) if callable(pred_fn) else (env_pred or default_workers)
+        # Clamp to [1, cpu] to respect resource guardrails
+        try:
+            exec_workers = max(1, min(int(exec_workers), max(1, cpu)))
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            exec_workers = default_workers
+        try:
+            pred_workers = max(1, min(int(pred_workers), max(1, cpu)))
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            pred_workers = default_workers
+        if executor is None:
+            executor = ThreadPoolExecutor(max_workers=exec_workers)
+        if prediction_executor is None:
+            prediction_executor = ThreadPoolExecutor(max_workers=pred_workers)
 
 
 def get_executor() -> ThreadPoolExecutor:
     """Return the main executor, creating pools on first use."""
 
-    _ensure_executors()
-    if executor is None:  # pragma: no cover - defensive invariant guard
-        raise RuntimeError("executor unavailable after initialization")
-    return executor
+    with _EXECUTOR_LOCK:
+        _ensure_executors()
+        if executor is None:  # pragma: no cover - defensive invariant guard
+            raise RuntimeError("executor unavailable after initialization")
+        return executor
 
 
 def get_prediction_executor() -> ThreadPoolExecutor:
     """Return the prediction executor, creating pools on first use."""
 
-    _ensure_executors()
-    if prediction_executor is None:  # pragma: no cover - defensive invariant guard
-        raise RuntimeError("prediction executor unavailable after initialization")
-    return prediction_executor
+    with _EXECUTOR_LOCK:
+        _ensure_executors()
+        if prediction_executor is None:  # pragma: no cover - defensive invariant guard
+            raise RuntimeError("prediction executor unavailable after initialization")
+        return prediction_executor
 
 
 def cleanup_executors(*, wait: bool = True) -> None:
     """Cleanup ThreadPoolExecutor resources to prevent resource leaks."""
     global executor, prediction_executor
-    try:
-        if executor is not None:
-            executor.shutdown(wait=wait, cancel_futures=True)
-            logger.debug("Main executor shutdown successfully")
-            executor = None
-    except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # defensive: never raise in cleanup
-        logger.warning("Error shutting down main executor: %s", e)
+    with _EXECUTOR_LOCK:
+        try:
+            if executor is not None:
+                executor.shutdown(wait=wait, cancel_futures=True)
+                logger.debug("Main executor shutdown successfully")
+                executor = None
+        except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # defensive: never raise in cleanup
+            logger.warning("Error shutting down main executor: %s", e)
 
-    try:
-        if prediction_executor is not None:
-            prediction_executor.shutdown(wait=wait, cancel_futures=True)
-            logger.debug("Prediction executor shutdown successfully")
-            prediction_executor = None
-    except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # defensive: never raise in cleanup
-        logger.warning("Error shutting down prediction executor: %s", e)
+        try:
+            if prediction_executor is not None:
+                prediction_executor.shutdown(wait=wait, cancel_futures=True)
+                logger.debug("Prediction executor shutdown successfully")
+                prediction_executor = None
+        except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # defensive: never raise in cleanup
+            logger.warning("Error shutting down prediction executor: %s", e)
 
 
 atexit.register(cleanup_executors)

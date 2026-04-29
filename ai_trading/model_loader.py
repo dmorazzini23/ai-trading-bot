@@ -18,6 +18,12 @@ import json
 import joblib
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.models.artifacts import load_verified_joblib_artifact, write_artifact_manifest
+from ai_trading.models.contracts import (
+    AFTER_HOURS_ML_BAR_TIMEFRAME,
+    LIVE_ML_FEATURE_COLUMNS,
+    MODEL_FEATURE_CONTRACT_VERSION,
+    model_feature_contract_hash,
+)
 
 logger = get_logger(__name__)
 ML_MODELS: dict[str, object | None] = {}
@@ -26,51 +32,45 @@ ML_MODELS: dict[str, object | None] = {}
 INTERNAL_MODELS_DIR = Path(__file__).resolve().parent / "models"
 
 
-def _rolling_slope(values: Any) -> float:
-    import numpy as np
-
-    clean = np.asarray(values, dtype=float)
-    if clean.size < 2:
-        return 0.0
-    x = np.arange(clean.size, dtype=float)
-    try:
-        return float(np.polyfit(x, clean, 1)[0])
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        return 0.0
-
-
 def _build_training_frame(df: Any) -> Any:
     """Build past-only model features and labels from OHLCV history."""
     import numpy as np
 
-    df = df.copy()
-    df["ret1"] = df["close"].pct_change()
-    df["mom5"] = df["close"].pct_change(5)
-    df["mom10"] = df["close"].pct_change(10)
-    df["vol20"] = df["ret1"].rolling(20).std()
-    with np.errstate(invalid="ignore"):
-        try:
-            df["skew20"] = df["ret1"].rolling(20).skew()
-            df["kurt20"] = df["ret1"].rolling(20).kurt()
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
-            df["skew20"] = 0.0
-            df["kurt20"] = 0.0
-    if "volume" in df:
-        df["liq20"] = df["volume"].rolling(20).mean()
-        df["volchg5"] = df["volume"].pct_change(5)
-    else:
-        df["liq20"] = 0.0
-        df["volchg5"] = 0.0
-    try:
-        trend_source = df["ret1"].fillna(0.0).cumsum()
-        df["trend"] = trend_source.rolling(20, min_periods=2).apply(_rolling_slope, raw=True).fillna(0.0)
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        df["trend"] = 0.0
+    from ai_trading.features.indicators import compute_atr, compute_macd, compute_sma, compute_vwap
+    from ai_trading.indicators import rsi as rsi_indicator
 
-    future_close = df["close"].shift(-1)
+    df = df.copy()
+    df.columns = [str(column).lower() for column in df.columns]
+    if "close" not in df:
+        return df.iloc[0:0]
+    close = df["close"].astype(float)
+    if "open" not in df:
+        df["open"] = close.shift(1).fillna(close)
+    if "high" not in df:
+        df["high"] = close.rolling(3, min_periods=1).max()
+    if "low" not in df:
+        df["low"] = close.rolling(3, min_periods=1).min()
+    if "volume" not in df:
+        df["volume"] = 1.0
+
+    df = compute_macd(df)
+    df = compute_atr(df)
+    df = compute_vwap(df)
+    df = compute_sma(df, windows=(50, 200))
+    rsi_values = rsi_indicator(tuple(close), 14)
+    if len(rsi_values) == len(df):
+        df["rsi"] = np.asarray(rsi_values, dtype=float)
+    else:
+        df["rsi"] = np.nan
+        try:
+            df.loc[df.index[-len(rsi_values):], "rsi"] = np.asarray(rsi_values, dtype=float)
+        except (ValueError, TypeError):
+            df["rsi"] = np.nan
+
+    future_close = close.shift(-1)
     df = df.loc[future_close.notna()].copy()
     df["y"] = (future_close.loc[df.index] > df["close"]).astype(int)
-    return df.dropna()
+    return df.dropna(subset=list(LIVE_ML_FEATURE_COLUMNS) + ["y"])
 
 
 def _drop_next_bar_boundary_overlap(train_idx: Any, test_idx: Any) -> Any:
@@ -128,7 +128,7 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
     from ai_trading.data.fetch import get_daily_df
 
     end = datetime.now(UTC)
-    start = end - timedelta(days=240)
+    start = end - timedelta(days=420)
     try:
         df = get_daily_df(symbol, start, end)
     except (ValueError, TypeError) as exc:
@@ -139,9 +139,9 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
         if not _synthetic_training_allowed():
             raise RuntimeError(f"Real training bars unavailable for {symbol}")
         # Fallback synthetic series with both up and down labels for tests/smoke only.
-        steps = np.arange(240, dtype=float)
+        steps = np.arange(420, dtype=float)
         close = 100.0 + 0.02 * steps + np.sin(steps / 3.0)
-        df = pd.DataFrame({"close": close, "volume": np.linspace(1e5, 2e5, 240)})
+        df = pd.DataFrame({"close": close, "volume": np.linspace(1e5, 2e5, 420)})
         synthetic_data_used = True
 
     df = _build_training_frame(df)
@@ -153,7 +153,7 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
             return DummyClassifier(strategy="most_frequent")
         return LogisticRegression(max_iter=500)
 
-    feature_cols = [c for c in ("ret1", "mom5", "mom10", "vol20", "skew20", "kurt20", "liq20", "volchg5", "trend") if c in df.columns]
+    feature_cols = [c for c in LIVE_ML_FEATURE_COLUMNS if c in df.columns]
     X = df[feature_cols].astype(float)
     y = df["y"].astype(int).values
     if len(X) < 60:
@@ -180,6 +180,14 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
         cutoff = len(X)
     final_pipe = make_pipeline(StandardScaler(with_mean=True), _classifier_for(y[:cutoff]))
     final_pipe.fit(X.iloc[:cutoff], y[:cutoff])
+    contract_hash = model_feature_contract_hash(
+        feature_cols,
+        bar_timeframe=AFTER_HOURS_ML_BAR_TIMEFRAME,
+    )
+    setattr(final_pipe, "required_bar_timeframe_", AFTER_HOURS_ML_BAR_TIMEFRAME)
+    setattr(final_pipe, "training_bar_timeframe_", AFTER_HOURS_ML_BAR_TIMEFRAME)
+    setattr(final_pipe, "feature_contract_version_", MODEL_FEATURE_CONTRACT_VERSION)
+    setattr(final_pipe, "feature_contract_hash_", contract_hash)
 
     # Persist model and metadata
     if synthetic_data_used:
@@ -192,6 +200,11 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
             "version": "1.0",
             "model": "logreg",
             "features": feature_cols,
+            "feature_columns": feature_cols,
+            "feature_contract_version": MODEL_FEATURE_CONTRACT_VERSION,
+            "feature_contract_hash": contract_hash,
+            "training_bar_timeframe": AFTER_HOURS_ML_BAR_TIMEFRAME,
+            "required_bar_timeframe": AFTER_HOURS_ML_BAR_TIMEFRAME,
             "oos_accuracy_mean": float(sum(scores) / max(1, len(scores))),
             "n_samples": int(len(df)),
             "trained_at": datetime.now(UTC).isoformat(),

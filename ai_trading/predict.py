@@ -37,7 +37,21 @@ except ImportError:
     _CACHETOOLS_AVAILABLE = False
     _sentiment_cache = {}
 
-_HTTP: HTTPSession = get_http_session()
+_HTTP: HTTPSession | None = None
+
+
+def _get_predict_http_session() -> HTTPSession:
+    """Return the prediction HTTP session, creating it only when needed."""
+    global _HTTP
+    if _HTTP is None:
+        _HTTP = get_http_session()
+    return _HTTP
+
+
+def reset_predict_runtime_cache() -> None:
+    """Clear lazily initialized prediction runtime resources."""
+    global _HTTP
+    _HTTP = None
 
 @lru_cache(maxsize=1024)
 def predict(path: str):
@@ -71,7 +85,7 @@ def fetch_sentiment(symbol: str) -> float:
         return float(_sentiment_cache[symbol])
     score = 0.0
     try:
-        resp = _HTTP.get(
+        resp = _get_predict_http_session().get(
             f"https://example.com/{symbol}", timeout=clamp_request_timeout(10)
         )
         resp.raise_for_status()

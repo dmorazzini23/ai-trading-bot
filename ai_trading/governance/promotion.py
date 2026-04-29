@@ -170,6 +170,92 @@ class ModelPromotion:
         self.registry._write_metadata_file(model_dir, meta_payload)
         self.registry._save_index()
 
+    def _active_model_id_for_strategy(self, strategy: str) -> str | None:
+        active_path = self.get_active_model_path(strategy)
+        if not active_path:
+            return None
+        try:
+            resolved_active = Path(active_path).resolve()
+        except OSError:
+            return None
+        for model_id, info in self.registry.model_index.items():
+            if info.get("strategy") != strategy:
+                continue
+            try:
+                model_path = Path(info.get("path", "")).absolute().resolve()
+            except (OSError, TypeError, ValueError):
+                continue
+            if model_path == resolved_active:
+                return str(model_id)
+        return None
+
+    def reconcile_active_production_pointer(
+        self,
+        strategy: str,
+        *,
+        repair: bool = True,
+    ) -> dict[str, Any]:
+        """Ensure the active symlink follows the registry production model."""
+
+        production = self.registry.get_production_model(strategy)
+        active_path = self.get_active_model_path(strategy)
+        active_model_id = self._active_model_id_for_strategy(strategy)
+        if production is None:
+            if active_path and repair:
+                self._remove_active_symlink(strategy)
+                active_path = None
+                active_model_id = None
+            return {
+                "consistent": active_path is None,
+                "reconciled": bool(active_path is None),
+                "reason": "active_without_registry_production" if active_path else "no_production",
+                "production_model_id": None,
+                "active_model_id": active_model_id,
+                "active_path": active_path,
+            }
+
+        production_model_id, _production_meta = production
+        consistent = active_model_id == production_model_id
+        if consistent:
+            return {
+                "consistent": True,
+                "reconciled": False,
+                "reason": "ok",
+                "production_model_id": production_model_id,
+                "active_model_id": active_model_id,
+                "active_path": active_path,
+            }
+        if not repair:
+            return {
+                "consistent": False,
+                "reconciled": False,
+                "reason": "active_registry_mismatch",
+                "production_model_id": production_model_id,
+                "active_model_id": active_model_id,
+                "active_path": active_path,
+            }
+        try:
+            self._create_active_symlink(strategy, production_model_id)
+        except OSError as exc:
+            self._remove_active_symlink(strategy)
+            return {
+                "consistent": False,
+                "reconciled": False,
+                "reason": "active_reconcile_failed",
+                "error": str(exc),
+                "production_model_id": production_model_id,
+                "active_model_id": active_model_id,
+                "active_path": active_path,
+            }
+        return {
+            "consistent": True,
+            "reconciled": True,
+            "reason": "active_repointed_to_registry_production",
+            "production_model_id": production_model_id,
+            "active_model_id": production_model_id,
+            "active_path": self.get_active_model_path(strategy),
+        }
+
     def _read_jsonl_tail(self, *, filename: str, limit: int = 20) -> list[dict[str, Any]]:
         path = self._governance_event_path(filename)
         if not path.exists():
@@ -1644,6 +1730,55 @@ class ModelPromotion:
                         )
                         return False
             current_production = self.registry.get_production_model(strategy)
+            if current_production and current_production[0] == model_id:
+                consistency = self.reconcile_active_production_pointer(strategy, repair=True)
+                if not consistency.get("consistent"):
+                    self.logger.error(
+                        "PROMOTION_ACTIVE_RECONCILE_FAILED",
+                        extra={
+                            "strategy": str(strategy),
+                            "model_id": str(model_id),
+                            "consistency": consistency,
+                        },
+                    )
+                    self._append_governance_audit_event(
+                        event_type="MODEL_PROMOTION_BLOCKED",
+                        payload={
+                            "ts": datetime.now(UTC).isoformat(),
+                            "strategy": str(strategy),
+                            "model_id": str(model_id),
+                            "force": bool(force),
+                            "reason": "active_reconcile_failed",
+                            "consistency": consistency,
+                        },
+                        primary_lineage=model_lineage,
+                    )
+                    return False
+                return True
+            if self.get_active_model_path(strategy) is not None:
+                consistency = self.reconcile_active_production_pointer(strategy, repair=True)
+                if not consistency.get("consistent"):
+                    self.logger.error(
+                        "PROMOTION_ACTIVE_RECONCILE_FAILED",
+                        extra={
+                            "strategy": str(strategy),
+                            "model_id": str(model_id),
+                            "consistency": consistency,
+                        },
+                    )
+                    self._append_governance_audit_event(
+                        event_type="MODEL_PROMOTION_BLOCKED",
+                        payload={
+                            "ts": datetime.now(UTC).isoformat(),
+                            "strategy": str(strategy),
+                            "model_id": str(model_id),
+                            "force": bool(force),
+                            "reason": "active_reconcile_failed",
+                            "consistency": consistency,
+                        },
+                        primary_lineage=model_lineage,
+                    )
+                    return False
             promoted_at = datetime.now(UTC).isoformat()
             previous_model_id: str | None = None
             previous_model_lineage: dict[str, Any] = {}
@@ -1656,31 +1791,6 @@ class ModelPromotion:
                 previous_model_lineage = self._extract_model_lineage(old_model_id)
                 governance_snapshots[str(old_model_id)] = self._snapshot_model_governance(old_model_id)
             previous_active_path = self.get_active_model_path(strategy)
-            try:
-                self._create_active_symlink(strategy, model_id)
-            except OSError as exc:
-                self.logger.error(
-                    "PROMOTION_ACTIVE_SYMLINK_FAILED",
-                    extra={
-                        "strategy": str(strategy),
-                        "model_id": str(model_id),
-                        "error": str(exc),
-                    },
-                )
-                self._append_governance_audit_event(
-                    event_type="MODEL_PROMOTION_BLOCKED",
-                    payload={
-                        "ts": datetime.now(UTC).isoformat(),
-                        "strategy": str(strategy),
-                        "model_id": str(model_id),
-                        "force": bool(force),
-                        "reason": "active_symlink_failed",
-                        "error": str(exc),
-                    },
-                    primary_lineage=model_lineage,
-                    related_lineages={"previous_production": previous_model_lineage},
-                )
-                return False
             try:
                 if current_production:
                     old_model_id, _ = current_production
@@ -1723,7 +1833,6 @@ class ModelPromotion:
             except (OSError, ValueError, TypeError) as exc:
                 for restore_model_id, governance in governance_snapshots.items():
                     self._restore_model_governance(restore_model_id, governance)
-                self._restore_active_symlink(strategy, previous_active_path)
                 self.logger.error(
                     "PROMOTION_REGISTRY_STATUS_FAILED",
                     extra={
@@ -1740,6 +1849,34 @@ class ModelPromotion:
                         "model_id": str(model_id),
                         "force": bool(force),
                         "reason": "registry_status_failed",
+                        "error": str(exc),
+                    },
+                    primary_lineage=model_lineage,
+                    related_lineages={"previous_production": previous_model_lineage},
+                )
+                return False
+            try:
+                self._create_active_symlink(strategy, model_id)
+            except OSError as exc:
+                for restore_model_id, governance in governance_snapshots.items():
+                    self._restore_model_governance(restore_model_id, governance)
+                self._restore_active_symlink(strategy, previous_active_path)
+                self.logger.error(
+                    "PROMOTION_ACTIVE_SYMLINK_FAILED",
+                    extra={
+                        "strategy": str(strategy),
+                        "model_id": str(model_id),
+                        "error": str(exc),
+                    },
+                )
+                self._append_governance_audit_event(
+                    event_type="MODEL_PROMOTION_BLOCKED",
+                    payload={
+                        "ts": datetime.now(UTC).isoformat(),
+                        "strategy": str(strategy),
+                        "model_id": str(model_id),
+                        "force": bool(force),
+                        "reason": "active_symlink_failed",
                         "error": str(exc),
                     },
                     primary_lineage=model_lineage,
@@ -1968,6 +2105,15 @@ class ModelPromotion:
             )
             return False
 
+        target_governance_before = self._snapshot_model_governance(previous_model_id)
+        target_prior_model_id = str(
+            target_governance_before.get("previous_production_model_id")
+            or target_governance_before.get("previous_champion_model_id")
+            or ""
+        ).strip() or None
+        if target_prior_model_id == current_model_id:
+            target_prior_model_id = None
+
         promoted = self.promote_to_production(previous_model_id, force=force)
         if not promoted:
             self._record_rollback_audit(
@@ -1987,6 +2133,8 @@ class ModelPromotion:
                 "rollback_from_model_id": current_model_id,
                 "rollback_reason": reason,
                 "rollback_at": rolled_back_at,
+                "rollback_rejected_model_id": current_model_id,
+                "previous_production_model_id": target_prior_model_id,
             },
         )
         self.registry.update_governance_status(
@@ -1996,6 +2144,7 @@ class ModelPromotion:
                 "rolled_back_to_model_id": previous_model_id,
                 "rollback_reason": reason,
                 "rollback_at": rolled_back_at,
+                "rejected_as_rollback_target": True,
             },
         )
         self.logger.warning(
@@ -2057,6 +2206,24 @@ class ModelPromotion:
             "failed_kpis": sorted(str(key) for key in breaches),
             "triggered": False,
         }
+        consistency = self.reconcile_active_production_pointer(strategy, repair=True)
+        if not consistency.get("consistent"):
+            self._remove_active_symlink(strategy)
+            result.update(
+                {
+                    "triggered": True,
+                    "status": "halted_active_production_inconsistent",
+                    "active_production_consistency": consistency,
+                }
+            )
+            self._record_rollback_audit(
+                strategy=strategy,
+                status="halted_active_production_inconsistent",
+                reason="active_production_consistency_failed",
+                from_model_id=current_model_id,
+                extra={"consistency": consistency},
+            )
+            return result
         if not breaches:
             self._clear_live_kpi_breach_window(
                 strategy=strategy,
@@ -2154,8 +2321,10 @@ class ModelPromotion:
                     "live_kpi_failed_kpis": failed_kpis,
                 },
             )
+            self._remove_active_symlink(strategy)
             result["triggered"] = True
             result["status"] = "demoted_no_rollback_target"
+            result["active_pointer_removed"] = True
             self._mark_live_kpi_window_status(
                 strategy=strategy,
                 status="demoted_no_rollback_target",
@@ -2275,8 +2444,9 @@ class ModelPromotion:
                     pass
             self.logger.error(f'Error creating active symlink for {strategy}: {e}')
             raise
-        except (ValueError, TypeError) as e:
+        except (KeyError, ValueError, TypeError) as e:
             self.logger.error(f'Error creating active symlink for {strategy}: {e}')
+            raise OSError(str(e)) from e
 
     def _restore_active_symlink(self, strategy: str, previous_active_path: str | None) -> None:
         """Restore active symlink after a failed registry status commit."""

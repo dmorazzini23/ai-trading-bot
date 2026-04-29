@@ -37,6 +37,12 @@ from ai_trading.features.indicators import (
 from ai_trading.indicators import rsi as rsi_indicator
 from ai_trading.logging import get_logger
 from ai_trading.model_registry import ModelRegistry
+from ai_trading.models.contracts import (
+    AFTER_HOURS_ML_BAR_TIMEFRAME,
+    AFTER_HOURS_ML_FEATURE_COLUMNS,
+    MODEL_FEATURE_CONTRACT_VERSION,
+    model_feature_contract_hash,
+)
 from ai_trading.models.artifacts import load_verified_joblib_artifact, write_artifact_manifest
 from ai_trading.monitoring.model_liveness import note_after_hours_training_complete
 from ai_trading.registry.manifest import validate_manifest_metadata
@@ -45,15 +51,7 @@ from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 logger = get_logger(__name__)
 
-_BASE_FEATURE_COLUMNS: tuple[str, ...] = (
-    "rsi",
-    "macd",
-    "atr",
-    "vwap",
-    "sma_50",
-    "sma_200",
-    "signal",
-)
+_BASE_FEATURE_COLUMNS: tuple[str, ...] = AFTER_HOURS_ML_FEATURE_COLUMNS[:7]
 _DERIVED_FEATURE_COLUMNS: tuple[str, ...] = (
     "atr_pct",
     "vwap_distance",
@@ -61,7 +59,7 @@ _DERIVED_FEATURE_COLUMNS: tuple[str, ...] = (
     "macd_signal_gap",
     "rsi_centered",
 )
-FEATURE_COLUMNS: tuple[str, ...] = _BASE_FEATURE_COLUMNS + _DERIVED_FEATURE_COLUMNS
+FEATURE_COLUMNS: tuple[str, ...] = AFTER_HOURS_ML_FEATURE_COLUMNS
 _THRESHOLD_GRID: tuple[float, ...] = (0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7)
 _TCA_TIMESTAMP_KEYS: tuple[str, ...] = (
     "ts",
@@ -5310,6 +5308,10 @@ def _build_manifest_metadata(
     feature_hash = hashlib.sha256(
         json.dumps(list(FEATURE_COLUMNS), sort_keys=True).encode("utf-8")
     ).hexdigest()
+    contract_hash = model_feature_contract_hash(
+        FEATURE_COLUMNS,
+        bar_timeframe=AFTER_HOURS_ML_BAR_TIMEFRAME,
+    )
     manifest_metadata = {
         "strategy": "after_hours_ml_edge",
         "symbols": list(symbols),
@@ -5319,6 +5321,10 @@ def _build_manifest_metadata(
         "embargo_days": int(get_env("AI_TRADING_AFTER_HOURS_EMBARGO_DAYS", 1, cast=int)),
         "feature_columns": list(FEATURE_COLUMNS),
         "feature_hash": feature_hash,
+        "feature_contract_version": MODEL_FEATURE_CONTRACT_VERSION,
+        "feature_contract_hash": contract_hash,
+        "training_bar_timeframe": AFTER_HOURS_ML_BAR_TIMEFRAME,
+        "required_bar_timeframe": AFTER_HOURS_ML_BAR_TIMEFRAME,
         "default_threshold": float(default_threshold),
         "selected_threshold": (
             float(selected_threshold) if selected_threshold is not None else float(default_threshold)
@@ -6398,6 +6404,14 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     setattr(final_model, "edge_score_orientation_report_", dict(best.score_orientation_report))
     setattr(final_model, "edge_label_quality_", dict(label_quality))
     setattr(final_model, "edge_negative_symbol_penalties_", dict(negative_symbol_penalties))
+    setattr(final_model, "required_bar_timeframe_", AFTER_HOURS_ML_BAR_TIMEFRAME)
+    setattr(final_model, "training_bar_timeframe_", AFTER_HOURS_ML_BAR_TIMEFRAME)
+    setattr(final_model, "feature_contract_version_", MODEL_FEATURE_CONTRACT_VERSION)
+    setattr(
+        final_model,
+        "feature_contract_hash_",
+        str(manifest_metadata.get("feature_contract_hash", "")),
+    )
     manifest_metadata["hard_negative_mining"] = dict(hard_negative_report)
     manifest_metadata["segment_reweighting"] = dict(segment_reweight_report)
     manifest_metadata["sample_weighting"] = dict(sample_weighting_report)

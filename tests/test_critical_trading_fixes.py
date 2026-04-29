@@ -54,12 +54,13 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
         self.assertEqual(sentiment.SENTIMENT_MAX_RETRIES, 5)
         self.assertEqual(sentiment.SENTIMENT_BACKOFF_BASE, 5)
 
-    @patch('ai_trading.analysis.sentiment._http_session.get')
-    def test_enhanced_fallback_strategies(self, mock_get):
+    @patch('ai_trading.analysis.sentiment._get_sentiment_http_session')
+    def test_enhanced_fallback_strategies(self, mock_session):
         """Test that enhanced fallback strategies work when rate limited."""
         # Simulate rate limiting
         mock_response = Mock()
         mock_response.status_code = 429
+        mock_get = mock_session.return_value.get
         mock_get.return_value = mock_response
 
         # Mock context
@@ -71,9 +72,10 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
         # Should return neutral sentiment when all fallbacks fail
         self.assertEqual(result, 0.0)
 
-    @patch('ai_trading.analysis.sentiment._http_session.get')
-    def test_alternative_sentiment_sources(self, mock_get):
+    @patch('ai_trading.analysis.sentiment._get_sentiment_http_session')
+    def test_alternative_sentiment_sources(self, mock_session):
         """Test alternative sentiment source functionality."""
+        mock_get = mock_session.return_value.get
         # Mock environment variables for alternative source
         with patch.dict(os.environ, {
             'ALTERNATIVE_SENTIMENT_API_KEY': 'test_key',

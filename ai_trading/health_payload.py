@@ -1050,7 +1050,7 @@ def build_runtime_health_payload(
         and not broker_down
         and not broker_degraded
         and not service_degraded
-        and (broker_healthy or broker_unknown)
+        and broker_healthy
         and (
             service_phase_age_s is None
             or float(service_phase_age_s) <= float(warmup_fast_path_max_age_s)
@@ -1208,7 +1208,11 @@ def build_runtime_health_payload(
         payload["reason"] = "market_closed"
     elif readiness_failures:
         payload["reason"] = readiness_failures[0]
-    elif service_reason:
+    elif broker_unknown and service_phase_normalized == "warmup":
+        payload["reason"] = "broker_status_unknown"
+    elif service_reason and not (
+        broker_unknown and service_reason_normalized == "warmup_cycle"
+    ):
         payload.setdefault("reason", service_reason)
     degrade_reason = provider_payload.get("reason")
     if degraded and degrade_reason:

@@ -167,6 +167,23 @@ def _normalize_signal_side(side: Any) -> str:
     return token
 
 
+def _contextual_signal_side(side: str, current_position: float) -> str:
+    """Resolve ambiguous sell signals against the signed current position."""
+    if side == "sell" and current_position <= 0.0:
+        return "sell_short"
+    return side
+
+
+def _set_signal_side(signal: Any, side: str) -> None:
+    try:
+        setattr(signal, "side", side)
+    except (AttributeError, TypeError):
+        logger.debug(
+            "SIGNAL_SIDE_NORMALIZE_SKIPPED",
+            extra={"symbol": getattr(signal, "symbol", ""), "side": side},
+        )
+
+
 def _finite_float(value: Any) -> float | None:
     try:
         number = float(value)
@@ -1007,7 +1024,13 @@ def filter_signals_with_portfolio_optimization(signals: list, ctx, current_posit
                     filtered_signals.append(signal)
                     logger.debug("SIGNAL_PORTFOLIO_SIZE_UNAVAILABLE", extra={"symbol": symbol, "side": side})
                     continue
-                current_position = current_positions.get(symbol, 0.0)
+                current_position = _finite_float(current_positions.get(symbol, 0.0))
+                if current_position is None:
+                    current_position = 0.0
+                effective_side = _contextual_signal_side(side, current_position)
+                if effective_side != side:
+                    _set_signal_side(signal, effective_side)
+                    side = effective_side
                 if side == "buy":
                     proposed_position = current_position + abs(quantity)
                 elif side == "sell":

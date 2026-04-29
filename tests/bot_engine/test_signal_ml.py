@@ -115,6 +115,26 @@ def test_signal_ml_derives_after_hours_features_when_missing() -> None:
     assert label == "ml"
 
 
+def test_signal_ml_rejects_daily_bar_model_for_minute_serving(caplog) -> None:
+    class DailyModel:
+        feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+        required_bar_timeframe_ = "1Day"
+
+        def predict(self, _X):
+            return [1]
+
+        def predict_proba(self, _X):
+            return [[0.2, 0.8]]
+
+    manager = SignalManager()
+    caplog.set_level("ERROR")
+
+    result = manager.signal_ml(_minimal_df(), model=DailyModel(), symbol="AAPL")
+
+    assert result is None
+    assert "ML_SIGNAL_MODEL_TIMEFRAME_MISMATCH" in caplog.text
+
+
 def test_signal_ml_prediction_error_returns_none(caplog):
     class DummyModel:
         feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]

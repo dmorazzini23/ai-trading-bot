@@ -180,6 +180,24 @@ def test_alpaca_adapter_preserves_short_position_intent() -> None:
     assert client.submitted_request.position_intent.value == "buy_to_close"
 
 
+def test_alpaca_adapter_rejects_sell_short_reduce_only() -> None:
+    adapter = AlpacaBrokerAdapter(client=_DummyClient())
+
+    try:
+        adapter.submit_order(
+            {
+                "symbol": "MSFT",
+                "side": "sell_short",
+                "quantity": 2,
+                "reduce_only": True,
+            }
+        )
+    except ValueError as exc:
+        assert "sell_short cannot be used with closing_position or reduce_only" in str(exc)
+    else:  # pragma: no cover - assertion aid
+        raise AssertionError("sell_short reduce_only should fail closed")
+
+
 def test_alpaca_adapter_uses_native_get_orders_filter() -> None:
     client = _NativeGetOrdersClient()
     adapter = AlpacaBrokerAdapter(client=client)

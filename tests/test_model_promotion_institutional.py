@@ -72,6 +72,14 @@ def test_rollback_to_previous_production(tmp_path: Path) -> None:
         registry.model_index[challenger]["governance"]["rolled_back_to_model_id"]
         == champion
     )
+    assert (
+        registry.model_index[champion]["governance"].get("previous_production_model_id")
+        != challenger
+    )
+    assert promotion.rollback_to_previous_production(
+        strategy=strategy,
+        reason="repeat_degradation",
+    ) is False
 
 
 def test_record_challenger_evaluation_writes_jsonl(tmp_path: Path) -> None:

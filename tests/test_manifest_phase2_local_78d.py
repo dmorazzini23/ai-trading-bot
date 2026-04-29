@@ -19,6 +19,10 @@ def _valid_manifest() -> dict[str, object]:
         "embargo_days": 1,
         "feature_columns": ["close"],
         "feature_hash": "A" * 64,
+        "feature_contract_version": "ml_feature_contract_v1",
+        "feature_contract_hash": "C" * 64,
+        "training_bar_timeframe": "daily",
+        "required_bar_timeframe": "1d",
         "default_threshold": "0.5",
         "thresholds_by_regime": {"normal": "0.5"},
         "cost_floor_bps": 1,
@@ -38,6 +42,7 @@ def test_manifest_validation_error_branches() -> None:
     normalized = manifest.validate_manifest_metadata(_valid_manifest())
     assert normalized["strategy"] == "edge"
     assert normalized["feature_hash"] == "a" * 64
+    assert normalized["required_bar_timeframe"] == "1Day"
     assert normalized["sensitivity_sweep"]["enabled"] is True
     assert normalized["sensitivity_sweep"]["gate"] is False
 

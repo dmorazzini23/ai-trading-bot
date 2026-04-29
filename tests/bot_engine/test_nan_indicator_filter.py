@@ -80,3 +80,17 @@ def test_all_nan_indicators_return_no_data(monkeypatch):
     df["stochrsi"] = np.nan
     signal, conf, label = sm.evaluate(cast(Any, ctx), state, df, "TEST", None)
     assert (signal, conf, label) == (0.0, 0.0, "no_data")
+
+
+def test_prepare_indicators_does_not_backfill_warmup_rows(monkeypatch):
+    length = 40
+    df = _base_df(length)
+
+    rsi_values = [np.nan] * 14 + [45.0 + idx for idx in range(26)]
+    monkeypatch.setattr(bot_engine.ta, "rsi", lambda *_args, **_kwargs: pd.Series(rsi_values))
+
+    prepared = bot_engine.prepare_indicators(df)
+
+    warmup_rsi = prepared.loc[prepared.index < 14, "rsi"]
+    assert warmup_rsi.empty or warmup_rsi.isna().all()
+    assert prepared["rsi"].iloc[-1] == 70.0

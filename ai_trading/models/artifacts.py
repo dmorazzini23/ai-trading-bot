@@ -176,10 +176,29 @@ def load_verified_joblib_artifact(
         manifest_path=manifest_path,
     )
     try:
-        return joblib.load(resolved)
+        model = joblib.load(resolved)
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # noqa: BLE001 - joblib may surface multiple loader errors
         logger.error(
             "MODEL_ARTIFACT_LOAD_FAILED",
             extra={"model_path": str(resolved), "error": str(exc)},
         )
         raise RuntimeError(f"Failed to load model artifact '{resolved}': {exc}") from exc
+    manifest_file = Path(manifest_path).expanduser().resolve() if manifest_path else default_manifest_path(resolved)
+    try:
+        manifest = load_artifact_manifest(manifest_file)
+        metadata = dict(manifest.metadata or {})
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        metadata = {}
+    if metadata:
+        for attr, key in (
+            ("artifact_manifest_metadata_", None),
+            ("required_bar_timeframe_", "required_bar_timeframe"),
+            ("training_bar_timeframe_", "training_bar_timeframe"),
+            ("feature_contract_version_", "feature_contract_version"),
+            ("feature_contract_hash_", "feature_contract_hash"),
+        ):
+            try:
+                setattr(model, attr, metadata if key is None else metadata.get(key))
+            except (AttributeError, TypeError):
+                continue
+    return model

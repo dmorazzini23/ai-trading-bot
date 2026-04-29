@@ -417,6 +417,44 @@ def test_execute_order_recovers_submit_no_result_from_recent_orders_scan(monkeyp
     assert "submit_no_result" not in reasons
 
 
+def test_recent_order_scan_uses_adapter_for_native_get_orders(monkeypatch):
+    engine = _make_engine(monkeypatch, response={"status": "accepted"})
+    recovered_order = {
+        "id": "recovered-native-1",
+        "client_order_id": "recover-native-cid-1",
+        "status": "filled",
+        "symbol": "AAPL",
+        "side": "buy",
+        "qty": 1,
+    }
+    calls: list[tuple[object, str, list[str] | None]] = []
+
+    class _NativeOnlyClient:
+        def get_orders(self, *, filter):
+            raise AssertionError("native get_orders must be called through list_alpaca_orders")
+
+        def list_orders(self, **_kwargs):
+            raise AssertionError("list_orders fallback should not be needed")
+
+    def _fake_list_alpaca_orders(client, *, status="open", symbols=None):
+        calls.append((client, status, symbols))
+        return [recovered_order] if status == "all" else []
+
+    engine.trading_client = _NativeOnlyClient()
+    monkeypatch.setattr(live_trading, "list_alpaca_orders", _fake_list_alpaca_orders)
+
+    result = engine._lookup_order_in_open_recent_orders_by_client_order_id(
+        "recover-native-cid-1",
+        symbol="AAPL",
+    )
+
+    assert result == recovered_order
+    assert calls == [
+        (engine.trading_client, "open", ["AAPL"]),
+        (engine.trading_client, "all", ["AAPL"]),
+    ]
+
+
 def test_execute_order_submit_no_result_treats_alpaca_404_lookup_as_not_found(monkeypatch):
     engine = _make_engine(monkeypatch, response={"status": "accepted"})
     reasons: list[str] = []

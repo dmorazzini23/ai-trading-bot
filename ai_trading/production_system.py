@@ -179,21 +179,32 @@ class ProductionTradingSystem:
 
     async def start_system(self) -> dict[str, Any]:
         """Start the production trading system."""
+        alert_processing_started = False
         try:
             logger.info('Starting production trading system')
             self.alert_manager.start_processing()
+            alert_processing_started = True
             self.session_start_time = datetime.now(UTC)
-            self.is_active = True
             health_status = await self.perform_health_check()
             if not health_status['healthy']:
+                self.is_active = False
+                self.session_start_time = None
                 await self._send_system_alert('Trading System', 'Startup Health Check Failed', f"Issues: {', '.join(health_status['issues'])}", AlertSeverity.CRITICAL)
+                self.alert_manager.stop_processing()
                 return {'status': 'failed', 'reason': 'Health check failed'}
+            self.is_active = True
             await self._send_system_alert('Trading System', 'System Started', f'Production trading system started successfully with ${self.account_equity:,.2f} equity', AlertSeverity.INFO)
             logger.info('Production trading system started successfully')
             return {'status': 'success', 'session_start_time': self.session_start_time, 'account_equity': self.account_equity, 'risk_level': self.risk_level.value, 'health_status': health_status}
         except COMMON_EXC as e:
+            self.is_active = False
+            self.session_start_time = None
             logger.error(f'Error starting production trading system: {e}')
-            await self._send_system_alert('Trading System', 'Startup Failed', f'System startup error: {e}', AlertSeverity.EMERGENCY)
+            try:
+                await self._send_system_alert('Trading System', 'Startup Failed', f'System startup error: {e}', AlertSeverity.EMERGENCY)
+            finally:
+                if alert_processing_started:
+                    self.alert_manager.stop_processing()
             return {'status': 'error', 'message': str(e)}
 
     async def stop_system(self, reason: str='Manual shutdown') -> dict[str, Any]:

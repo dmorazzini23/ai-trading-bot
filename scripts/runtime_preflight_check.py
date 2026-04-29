@@ -328,10 +328,10 @@ def check_gonogo(repo_dir: Path) -> CheckResult:
             capture_output=True,
             timeout=60,
         )
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         return CheckResult(
             name="gonogo_status",
-            status="warn",
+            status="fail",
             summary="unable to run runtime_gonogo_status",
             details={"error": str(exc)},
         )
@@ -339,12 +339,28 @@ def check_gonogo(repo_dir: Path) -> CheckResult:
     if not payload:
         return CheckResult(
             name="gonogo_status",
-            status="warn",
+            status="fail",
             summary="no JSON payload parsed from runtime_gonogo_status output",
-            details={"exit_code": proc.returncode, "stdout_tail": proc.stdout[-500:]},
+            details={
+                "exit_code": proc.returncode,
+                "stdout_tail": proc.stdout[-500:],
+                "stderr_tail": proc.stderr[-500:],
+            },
+        )
+    if proc.returncode != 0:
+        return CheckResult(
+            name="gonogo_status",
+            status="fail",
+            summary="runtime_gonogo_status exited non-zero",
+            details={
+                "exit_code": proc.returncode,
+                "failed_checks": payload.get("failed_checks", []),
+                "observed": payload.get("observed", {}),
+                "stderr_tail": proc.stderr[-500:],
+            },
         )
     gate_passed = bool(payload.get("gate_passed"))
-    status = "pass" if gate_passed else "warn"
+    status = "pass" if gate_passed else "fail"
     summary = "go/no-go PASS" if gate_passed else "go/no-go FAIL"
     details = {
         "exit_code": proc.returncode,

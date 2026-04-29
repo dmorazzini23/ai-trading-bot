@@ -202,20 +202,31 @@ def _alpaca_bracket_leg(value: Any, *, scalar_field: str, request_cls: Any) -> A
     return request_cls(**{scalar_field: value}) if request_cls is not None else {scalar_field: value}
 
 
+def _position_intent_token(value: Any) -> str:
+    raw = getattr(value, "value", value)
+    if raw is value:
+        raw = getattr(value, "name", value)
+    return str(raw or "").strip().replace("-", "_").replace(" ", "_").lower()
+
+
 def _alpaca_position_intent(order_data: Mapping[str, Any], side_raw: str) -> Any | None:
     explicit_intent = order_data.get("position_intent")
-    if explicit_intent not in (None, ""):
-        return _alpaca_enum_value(PositionIntent, explicit_intent, default=explicit_intent)
-    if PositionIntent is None:
-        return None
     closing_position = bool(
         order_data.get("closing_position")
         or order_data.get("close_position")
         or order_data.get("reduce_only")
     )
+    if side_raw == "sell_short" and closing_position:
+        raise ValueError("sell_short cannot be used with closing_position or reduce_only")
+    if explicit_intent not in (None, ""):
+        if side_raw == "sell_short" and _position_intent_token(explicit_intent) != "sell_to_open":
+            raise ValueError("sell_short requires position_intent SELL_TO_OPEN")
+        return _alpaca_enum_value(PositionIntent, explicit_intent, default=explicit_intent)
+    if PositionIntent is None:
+        return None
     intent_name: str | None = None
     if side_raw == "sell_short":
-        intent_name = "SELL_TO_CLOSE" if closing_position else "SELL_TO_OPEN"
+        intent_name = "SELL_TO_OPEN"
     elif side_raw == "buy_to_cover":
         intent_name = "BUY_TO_CLOSE"
     elif side_raw == "buy" and closing_position:

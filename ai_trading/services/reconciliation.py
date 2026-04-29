@@ -2,10 +2,24 @@ from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections.abc import Mapping
+from decimal import Decimal, InvalidOperation
 from json import JSONDecodeError
 from typing import Any
 
 from ai_trading.contracts import position_snapshot_from_position
+
+_POSITION_QTY_EPSILON = Decimal("0.000000001")
+
+
+def _position_qty_decimal(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal("0")
+
+
+def _position_qty_is_flat(value: Decimal) -> bool:
+    return abs(value) <= _POSITION_QTY_EPSILON
 
 
 def _broker_positions_reader(api: Any) -> Any | None:
@@ -58,7 +72,7 @@ class ReconciliationService:
                 if snapshot is not None
             }
             live_positions = {
-                symbol: int(snapshot.qty)
+                symbol: _position_qty_decimal(snapshot.qty)
                 for symbol, snapshot in live_position_snapshots.items()
             }
             try:
@@ -77,7 +91,7 @@ class ReconciliationService:
                     getattr(ctx, "take_profit_targets", {}).keys()
                 )
                 for symbol in symbols_with_targets:
-                    if symbol not in live_positions or live_positions[symbol] == 0:
+                    if symbol not in live_positions or _position_qty_is_flat(live_positions[symbol]):
                         ctx.stop_targets.pop(symbol, None)
                         ctx.take_profit_targets.pop(symbol, None)
         except (

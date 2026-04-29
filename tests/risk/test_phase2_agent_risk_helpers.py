@@ -70,6 +70,40 @@ def test_calculate_position_size_normalizes_edge_quantities(raw_qty: float, expe
     assert risk_engine._calculate_position_size(engine, raw_qty, 100.0, signal) == expected
 
 
+def test_final_position_size_uses_buying_power_for_short_cash_cap() -> None:
+    engine = _bare_risk_engine()
+    signal = SimpleNamespace(symbol="MSFT", side="sell_short", asset_class="equity", strategy="momentum")
+
+    capped = risk_engine._cap_final_position_size(
+        engine,
+        qty=20,
+        price=100.0,
+        signal=signal,
+        cash=50.0,
+        total_equity=10_000.0,
+        buying_power=1_500.0,
+    )
+
+    assert capped == 15
+
+
+def test_final_position_size_skips_cash_cap_for_short_without_buying_power() -> None:
+    engine = _bare_risk_engine()
+    signal = SimpleNamespace(symbol="MSFT", side="sell_short", asset_class="equity", strategy="momentum")
+
+    capped = risk_engine._cap_final_position_size(
+        engine,
+        qty=20,
+        price=100.0,
+        signal=signal,
+        cash=50.0,
+        total_equity=10_000.0,
+        buying_power=None,
+    )
+
+    assert capped == 20
+
+
 def test_apply_weight_limits_clamps_to_most_constrained_capacity() -> None:
     engine = _bare_risk_engine()
     engine.global_limit = 0.50

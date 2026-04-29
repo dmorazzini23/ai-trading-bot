@@ -161,6 +161,11 @@ from ai_trading.models.artifacts import (
     load_verified_joblib_artifact,
     write_artifact_manifest,
 )
+from ai_trading.models.contracts import (
+    LIVE_ML_BAR_TIMEFRAME,
+    LIVE_ML_FEATURE_COLUMNS,
+    normalize_bar_timeframe,
+)
 from ai_trading.policy.compiler import (
     EffectivePolicy,
     ExecutionCandidate,
@@ -5352,6 +5357,23 @@ def default_trade_log_path() -> str:
     )
 
 
+def _default_trade_log_path_unchecked() -> str:
+    """Resolve the import-time trade log target without touching the filesystem."""
+
+    for candidate in (
+        get_env("TRADE_LOG_PATH"),
+        get_env("AI_TRADING_TRADE_LOG_PATH"),
+    ):
+        resolved = abspath_safe(candidate)
+        if resolved:
+            return resolved
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        cwd = Path(BASE_DIR)
+    return str(cwd / "logs" / "trades.jsonl")
+
+
 # Delayed import: not all environments have pandas-market-calendars
 def _load_mcal():  # AI-AGENT-REF: lazy calendar import
     try:
@@ -5593,7 +5615,7 @@ class _ModelPlaceholder:
 
     is_placeholder_model = True
     classes_ = (0, 1)
-    feature_names_in_ = ("rsi", "macd", "atr", "vwap", "sma_50", "sma_200")
+    feature_names_in_ = LIVE_ML_FEATURE_COLUMNS
 
     def __init__(self, reason: str) -> None:
         self.reason = reason
@@ -5795,19 +5817,23 @@ def _resolve_registry_production_model_path(
             model_id, info = production
             production_path = str(info.get("production_path") or "").strip()
             if production_path and os.path.isfile(production_path):
+                manifest_path = str(info.get("production_manifest_path") or "").strip()
                 return production_path, {
                     "model_id": model_id,
                     "strategy": strategy,
                     "registry_base": base_key,
                     "source": str(info.get("production_path_source") or "registry_production"),
+                    "manifest_path": manifest_path,
                 }
             artifact_path = str(info.get("artifact_path") or "").strip()
             if artifact_path and os.path.isfile(artifact_path):
+                manifest_path = str(info.get("manifest_path") or "").strip()
                 return artifact_path, {
                     "model_id": model_id,
                     "strategy": strategy,
                     "registry_base": base_key,
                     "source": "registry_production",
+                    "manifest_path": manifest_path,
                 }
     return None
 
@@ -5901,6 +5927,7 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
                 get_env("AI_TRADING_MODEL_MANIFEST_PATH", "") or ""
             ).strip() or None
         else:
+            manifest_override = str(registry_meta.get("manifest_path") or "").strip() or None
             logger.info(
                 "MODEL_ARTIFACT_VERIFIED_VIA_REGISTRY",
                 extra={
@@ -5940,7 +5967,11 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
                         **registry_meta,
                     },
                 )
-                mdl = load_verified_joblib_artifact(active_path)
+                manifest_override = str(registry_meta.get("manifest_path") or "").strip() or None
+                mdl = load_verified_joblib_artifact(
+                    active_path,
+                    manifest_path=manifest_override,
+                )
             elif strict_runtime and require_model:
                 logger.error(
                     "MODEL_VERIFICATION_FAILED",
@@ -6216,6 +6247,18 @@ def _predict_class_and_probability(model: Any, X: np.ndarray) -> tuple[Any, floa
     pred = 1 if p_edge >= 0.5 else 0
     confidence = p_edge if pred == 1 else (1.0 - p_edge)
     return pred, float(np.clip(confidence, 0.0, 1.0))
+
+
+def _model_timeframe_compatible_for_live_inference(model: Any) -> tuple[bool, str]:
+    required = normalize_bar_timeframe(getattr(model, "required_bar_timeframe_", ""))
+    if not required:
+        metadata = getattr(model, "artifact_manifest_metadata_", None)
+        if isinstance(metadata, Mapping):
+            required = normalize_bar_timeframe(metadata.get("required_bar_timeframe"))
+    if not required:
+        return True, ""
+    expected = normalize_bar_timeframe(LIVE_ML_BAR_TIMEFRAME)
+    return required == expected, required
 
 
 def _ml_shadow_log_path() -> Path:
@@ -10654,8 +10697,8 @@ def get_git_hash() -> str:
         return "unknown"
 
 
-# AI-AGENT-REF: use centralized trade log path
-TRADE_LOG_FILE = default_trade_log_path()
+# AI-AGENT-REF: use centralized trade log path without import-time filesystem writes
+TRADE_LOG_FILE = _default_trade_log_path_unchecked()
 SIGNAL_WEIGHTS_FILE = str(paths.DATA_DIR / "signal_weights.csv")
 EQUITY_FILE = str(paths.DATA_DIR / "last_equity.txt")
 PEAK_EQUITY_FILE = str(paths.DATA_DIR / "peak_equity.txt")
@@ -11765,7 +11808,7 @@ _BOT_ENGINE_RUNTIME_BOOTSTRAPPED = False
 def bootstrap_runtime_defaults(*, log_import_checks: bool = True) -> None:
     """Resolve expensive runtime globals only from explicit startup paths."""
     global _BOT_ENGINE_RUNTIME_BOOTSTRAPPED
-    global SEED, MODEL_RF_PATH, MODEL_XGB_PATH, MODEL_LGB_PATH
+    global SEED, MODEL_RF_PATH, MODEL_XGB_PATH, MODEL_LGB_PATH, TRADE_LOG_FILE
     global HALT_FLAG_PATH, TRADE_COOLDOWN
     global TRAILING_FACTOR, SCALING_FACTOR, LIMIT_ORDER_SLIPPAGE, POV_SLICE_PCT
     global DAILY_LOSS_LIMIT, KELLY_FRACTION, STOP_LOSS, TAKE_PROFIT
@@ -11776,6 +11819,8 @@ def bootstrap_runtime_defaults(*, log_import_checks: bool = True) -> None:
         return
 
     _reload_env()
+    TRADE_LOG_FILE = default_trade_log_path()
+    ensure_slippage_log_file()
     SEED = get_seed_int()
     random.seed(SEED)
     if hasattr(np, "random"):
@@ -12036,8 +12081,13 @@ _VOL_STATS: dict[str, float | date | None] = {
 _slippage_log: list[tuple[str, float, float, datetime]] = (
     []
 )  # (symbol, expected, actual, timestamp)
-# Ensure persistent slippage log file exists
-if not os.path.exists(SLIPPAGE_LOG_FILE):
+
+
+def ensure_slippage_log_file() -> None:
+    """Ensure the persistent slippage log file exists during runtime startup."""
+
+    if os.path.exists(SLIPPAGE_LOG_FILE):
+        return
     try:
         os.makedirs(os.path.dirname(SLIPPAGE_LOG_FILE) or ".", exist_ok=True)
         with open(SLIPPAGE_LOG_FILE, "w", newline="") as f:
@@ -16332,7 +16382,18 @@ class SignalManager:
             if hasattr(model, "feature_names_in_"):
                 feat = list(model.feature_names_in_)
             else:
-                feat = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+                feat = list(LIVE_ML_FEATURE_COLUMNS)
+            timeframe_ok, required_timeframe = _model_timeframe_compatible_for_live_inference(model)
+            if not timeframe_ok:
+                logger.error(
+                    "ML_SIGNAL_MODEL_TIMEFRAME_MISMATCH",
+                    extra={
+                        "symbol": symbol,
+                        "required_bar_timeframe": required_timeframe,
+                        "serving_bar_timeframe": LIVE_ML_BAR_TIMEFRAME,
+                    },
+                )
+                return None
             df = _augment_ml_inference_features(df, feat)
             missing = [column for column in feat if column not in df.columns]
             if missing:
@@ -17360,15 +17421,6 @@ from ai_trading.utils.imports import (
     resolve_strategy_allocator_cls,
 )
 logger = get_logger(__name__)
-
-if get_env("AI_TRADING_BOOTSTRAP_TRADE_LOG", "1") != "0":
-    try:
-        get_trade_logger()
-    except COMMON_EXC as exc:  # pragma: no cover - defensive bootstrap
-        logger.debug(
-            "TRADE_LOG_BOOTSTRAP_SKIPPED",
-            extra={"detail": str(exc)},
-        )
 
 
 class _DeferredRiskEngine:
@@ -22174,16 +22226,7 @@ def _augment_ml_inference_features(df: pd.DataFrame, feature_names: list[str]) -
 def _model_feature_names(model) -> list[str]:
     if hasattr(model, "feature_names_in_"):
         return list(model.feature_names_in_)
-    return [
-        "rsi",
-        "macd",
-        "atr",
-        "vwap",
-        "macds",
-        "ichimoku_conv",
-        "ichimoku_base",
-        "stochrsi",
-    ]
+    return list(LIVE_ML_FEATURE_COLUMNS)
 
 
 def _should_hold_position(df: pd.DataFrame) -> bool:
@@ -28434,6 +28477,8 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
         return manual_rsi.where(~neutral_mask, 50.0)
 
     # RSI calculation (vectorized fallback when pandas_ta is missing)
+    rsi_manual_fallback = False
+    rsi_flat_manual_fallback = False
     try:
         rsi = ta.rsi(close, length=14)
         if rsi is None:
@@ -28475,6 +28520,15 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
             raise ValueError
     except (AttributeError, TypeError, ValueError):
         rsi = _manual_rsi(close)
+        rsi_manual_fallback = True
+
+    if rsi_manual_fallback:
+        close_delta = close.diff().abs()
+        max_delta = float(close_delta.max(skipna=True))
+        tol = _numeric_eps()
+        if np.isfinite(max_delta) and abs(max_delta) <= tol:
+            rsi = rsi.fillna(50.0)
+            rsi_flat_manual_fallback = True
 
     frame["rsi"] = rsi
     frame["rsi_14"] = rsi
@@ -28495,6 +28549,8 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     eps = _numeric_eps()
     stoch_denominator = stoch_denominator.where(stoch_denominator != 0.0, eps)
     frame["stochrsi"] = (rsi - rsi_bounds["min"]) / stoch_denominator
+    if rsi_flat_manual_fallback:
+        frame["stochrsi"] = frame["stochrsi"].fillna(0.0)
 
     indicator_cols = [
         "rsi",
@@ -28507,7 +28563,7 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     active_subset = [col for col in subset if frame[col].notna().any()]
     cleaned = frame.copy()
     if active_subset:
-        cleaned[active_subset] = cleaned[active_subset].ffill().bfill()
+        cleaned[active_subset] = cleaned[active_subset].ffill()
         cleaned = cleaned.dropna(subset=active_subset, how="all")
     if cleaned.empty:
         logger.warning(

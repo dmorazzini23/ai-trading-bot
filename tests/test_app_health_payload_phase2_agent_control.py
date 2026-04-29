@@ -100,7 +100,7 @@ def test_warmup_market_closed_fast_path_reports_ready(monkeypatch) -> None:
     monkeypatch.setattr(
         health_payload.runtime_state,
         "observe_broker_status",
-        lambda: {"status": "unknown", "connected": None},
+        lambda: {"status": "connected", "connected": True},
     )
     monkeypatch.setattr(
         health_payload.runtime_state,

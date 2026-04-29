@@ -72,6 +72,8 @@ def test_aggregate_metrics_include_executed_trade_fields(tmp_path) -> None:
     assert aggregate["executed_total_return"] > 0.0
     assert aggregate["executed_trade_count"] == 3
     assert aggregate["executed_turnover_units"] == 2.5
+    assert aggregate["turnover_annual"] == 2.5 / 5 * 252
+    assert aggregate["executed_trades_annual"] == 3 / 5 * 252
 
 
 def test_walkforward_fold_sim_wrapper_matches_execution_sim(tmp_path) -> None:

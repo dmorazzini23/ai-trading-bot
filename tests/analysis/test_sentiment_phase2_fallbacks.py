@@ -49,6 +49,9 @@ def _reset_sentiment(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(sentiment.provider_monitor, "record_success", lambda *_args: None)
+    sentiment.reset_sentiment_runtime_cache()
+    yield
+    sentiment.reset_sentiment_runtime_cache()
 
 
 def test_circuit_breaker_blocks_delayed_retry_and_recovers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -148,7 +151,7 @@ def test_alternative_sentiment_sources_primary_and_alt(monkeypatch: pytest.Monke
     monkeypatch.setenv("ALTERNATIVE_SENTIMENT_API_URL", "https://alt.example/sent")
     monkeypatch.setenv("SENTIMENT_API_URL", "https://primary.example/sent")
     monkeypatch.setenv("SENTIMENT_API_KEY", "primary-key")
-    monkeypatch.setattr(sentiment._http_session, "get", fake_get)
+    sentiment._set_sentiment_http_session_for_tests(SimpleNamespace(get=fake_get))
     monkeypatch.setattr(sentiment.pytime, "sleep", lambda _seconds: None)
 
     assert sentiment._try_alternative_sentiment_sources("SPY") == 0.7
@@ -157,13 +160,13 @@ def test_alternative_sentiment_sources_primary_and_alt(monkeypatch: pytest.Monke
         "https://alt.example/sent?symbol=SPY&apikey=alt-key",
     ]
 
-    monkeypatch.setattr(
-        sentiment._http_session,
-        "get",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            status_code=200,
-            json=lambda: {"sentiment_score": -0.25},
-        ),
+    sentiment._set_sentiment_http_session_for_tests(
+        SimpleNamespace(
+            get=lambda *_args, **_kwargs: SimpleNamespace(
+                status_code=200,
+                json=lambda: {"sentiment_score": -0.25},
+            )
+        )
     )
     assert sentiment._try_alternative_sentiment_sources("SPY") == -0.25
 
@@ -268,7 +271,9 @@ def test_fetch_form4_filings_retries_and_parses_table(monkeypatch: pytest.Monkey
 
     responses = [Response(429), Response(200)]
     monkeypatch.setattr(sentiment, "_load_bs4", lambda _logger=None: Soup)
-    monkeypatch.setattr(sentiment._http_session, "get", lambda *_args, **_kwargs: responses.pop(0))
+    sentiment._set_sentiment_http_session_for_tests(
+        SimpleNamespace(get=lambda *_args, **_kwargs: responses.pop(0))
+    )
     monkeypatch.setattr(sentiment.pytime, "sleep", lambda _seconds: None)
 
     assert sentiment.fetch_form4_filings("SPY") == [

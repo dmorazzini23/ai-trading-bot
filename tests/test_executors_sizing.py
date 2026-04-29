@@ -1,8 +1,10 @@
 """Test auto-sizing logic and environment overrides for executors."""
 
 import os
+import threading
 import subprocess
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ai_trading.utils.exec import get_worker_env_override
@@ -159,6 +161,49 @@ assert executors.prediction_executor is None
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_executor_create_and_cleanup_are_synchronized(monkeypatch):
+    from ai_trading.core import executors
+
+    executors.cleanup_executors(wait=False)
+    created: list[object] = []
+
+    class DummyExecutor:
+        def __init__(self, max_workers):
+            self.max_workers = max_workers
+            self.shutdown_calls = 0
+            created.append(self)
+
+        def shutdown(self, *, wait=True, cancel_futures=True):
+            self.shutdown_calls += 1
+
+    monkeypatch.setattr(executors, "ThreadPoolExecutor", DummyExecutor)
+    monkeypatch.setattr(executors.os, "cpu_count", lambda: 2)
+    from ai_trading.config import settings as settings_module
+
+    monkeypatch.setattr(settings_module, "get_settings", lambda: SimpleNamespace())
+
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            for _ in range(20):
+                executors.get_executor()
+                executors.get_prediction_executor()
+                executors.cleanup_executors(wait=False)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert all(item.shutdown_calls <= 1 for item in created)
+    executors.cleanup_executors(wait=False)
 
 
 def teardown_module():

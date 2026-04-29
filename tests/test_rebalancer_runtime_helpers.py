@@ -182,6 +182,32 @@ def test_calculate_optimal_rebalance_preserves_short_direction(portfolio_setting
     assert trades["SHORT_MORE"]["side"] == "sell_short"
 
 
+def test_calculate_optimal_rebalance_weights_use_account_equity(portfolio_settings) -> None:
+    tax = _tax_rebalancer(portfolio_settings)
+
+    plan = tax.calculate_optimal_rebalance(
+        {
+            "LONG": {
+                "entry_price": 10.0,
+                "quantity": 10,
+                "entry_date": datetime.now(UTC) - timedelta(days=40),
+            },
+            "SHORT": {
+                "entry_price": 10.0,
+                "quantity": -5,
+                "entry_date": datetime.now(UTC) - timedelta(days=40),
+            },
+        },
+        {"LONG": 0.10, "SHORT": -0.05},
+        {"LONG": 10.0, "SHORT": 10.0},
+        account_equity=1_000.0,
+    )
+
+    assert plan["current_weights"]["LONG"] == pytest.approx(0.10)
+    assert plan["current_weights"]["SHORT"] == pytest.approx(-0.05)
+    assert plan["rebalance_trades"] == []
+
+
 def test_calculate_optimal_rebalance_accepts_qty_payloads(portfolio_settings) -> None:
     tax = _tax_rebalancer(portfolio_settings)
 

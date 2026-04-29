@@ -304,7 +304,7 @@ def test_health_market_closed_does_not_hide_unknown_broker(monkeypatch):
     assert payload["status"] == "degraded"
 
 
-def test_health_warmup_market_closed_fast_path_allows_unknown_broker(monkeypatch):
+def test_health_warmup_market_closed_fast_path_requires_known_broker(monkeypatch):
     provider_state = {
         "primary": "alpaca",
         "active": "alpaca",
@@ -317,6 +317,50 @@ def test_health_warmup_market_closed_fast_path_allows_unknown_broker(monkeypatch
         "status": "unknown",
         "connected": None,
         "latency_ms": None,
+        "last_error": None,
+    }
+    service_state = {
+        "status": "warming_up",
+        "reason": "warmup_cycle",
+        "phase": "warmup",
+        "phase_since": datetime.now(UTC).isoformat(),
+    }
+    quote_state = {"status": "unknown"}
+    monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
+    monkeypatch.setattr(runtime_state, "observe_service_status", lambda: service_state)
+    monkeypatch.setattr(runtime_state, "observe_quote_status", lambda: quote_state)
+    monkeypatch.setattr(
+        health_payload_module,
+        "_market_is_closed_now",
+        lambda: True,
+    )
+    monkeypatch.setattr(app_module, "_pytest_active", lambda: False)
+
+    app = create_app()
+    client = app.test_client()
+    response = client.get("/healthz")
+    payload = response.get_json()
+
+    assert response.status_code == 503
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["reason"] == "broker_status_unknown"
+
+
+def test_health_warmup_market_closed_fast_path_allows_connected_broker(monkeypatch):
+    provider_state = {
+        "primary": "alpaca",
+        "active": "alpaca",
+        "using_backup": False,
+        "status": "warming_up",
+        "data_status": "warming_up",
+        "reason": "startup_config_resolved",
+    }
+    broker_state = {
+        "status": "connected",
+        "connected": True,
+        "latency_ms": 12.0,
         "last_error": None,
     }
     service_state = {

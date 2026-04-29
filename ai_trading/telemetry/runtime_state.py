@@ -261,6 +261,25 @@ def update_data_provider_state(
             elif timeframe_key not in current:
                 current[timeframe_key] = False
             updates["timeframes"] = current
+        status_token = str(updates.get("status", _provider_state.get("status")) or "").strip().lower()
+        effective_using_backup = bool(
+            updates.get("using_backup", _provider_state.get("using_backup", False))
+        )
+        if status_token in {"healthy", "ready"} and not effective_using_backup:
+            clear_defaults: dict[str, Any] = {
+                "reason": None,
+                "reason_code": None,
+                "reason_detail": None,
+                "last_error_at": None,
+                "http_code": None,
+                "cooldown_sec": None,
+                "data_status": None,
+                "safe_mode": False,
+                "consecutive_failures": 0,
+            }
+            for key, value in clear_defaults.items():
+                if key not in updates:
+                    updates[key] = value
         _provider_state = _merge_state(_provider_state, updates)
 
 

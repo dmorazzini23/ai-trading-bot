@@ -164,6 +164,7 @@ def _cap_final_position_size(
     *,
     cash: float,
     total_equity: float,
+    buying_power: float | None = None,
 ) -> int:
     """Apply final cash and exposure caps after minimum floors/defaults."""
     if qty <= 0 or price <= 0:
@@ -173,11 +174,19 @@ def _cap_final_position_size(
 
     side = str(getattr(signal, "side", "buy")).strip().lower()
     if _opens_gross_exposure(side):
-        try:
-            cash_cap = int(max(float(cash), 0.0) / price)
-        except (TypeError, ValueError, ZeroDivisionError):
-            cash_cap = 0
-        caps.append(max(cash_cap, 0))
+        if _opens_short_exposure(side):
+            if buying_power is not None:
+                try:
+                    short_capacity_cap = int(max(float(buying_power), 0.0) / price)
+                except (TypeError, ValueError, ZeroDivisionError):
+                    short_capacity_cap = 0
+                caps.append(max(short_capacity_cap, 0))
+        else:
+            try:
+                cash_cap = int(max(float(cash), 0.0) / price)
+            except (TypeError, ValueError, ZeroDivisionError):
+                cash_cap = 0
+            caps.append(max(cash_cap, 0))
         asset_class = str(getattr(signal, "asset_class", "equity"))
         strategy = str(getattr(signal, "strategy", "default"))
         try:
@@ -262,6 +271,16 @@ _OPENING_EXPOSURE_SIDES = {
 
 def _opens_gross_exposure(side: Any) -> bool:
     return str(side or "").strip().lower() in _OPENING_EXPOSURE_SIDES
+
+
+def _opens_short_exposure(side: Any) -> bool:
+    return str(side or "").strip().lower() in {
+        "sell_short",
+        "sellshort",
+        "short",
+        "sell-short",
+        "sell short",
+    }
 
 
 class RiskEngine:
@@ -1311,13 +1330,20 @@ class RiskEngine:
         if price <= 0:
             logger.warning("Invalid price %s for %s", price, getattr(signal, "symbol", "UNKNOWN"))
             return 0
-        if cash <= 0:
+        side = str(getattr(signal, "side", "buy")).strip().lower()
+        if cash <= 0 and not _opens_short_exposure(side):
             logger.warning("Invalid cash amount %s for %s", cash, getattr(signal, "symbol", "UNKNOWN"))
             return 0
+        buying_power: float | None = None
         try:
             if api:
                 account = api.get_account()
                 total_equity = float(getattr(account, "equity", cash))
+                raw_buying_power = getattr(account, "shorting_buying_power", None)
+                if raw_buying_power is None:
+                    raw_buying_power = getattr(account, "buying_power", None)
+                if raw_buying_power is not None:
+                    buying_power = float(raw_buying_power)
             else:
                 total_equity = cash
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:
@@ -1359,6 +1385,7 @@ class RiskEngine:
                 signal,
                 cash=cash,
                 total_equity=total_equity,
+                buying_power=buying_power,
             )
             return max(qty, 0)
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:

@@ -203,7 +203,27 @@ def test_start_system_fails_when_health_check_reports_issue(monkeypatch):
     result = asyncio.run(system.start_system())
 
     assert result == {"status": "failed", "reason": "Health check failed"}
+    assert system.is_active is False
+    assert system.session_start_time is None
+    assert cast(Any, system.alert_manager).processing is False
     assert _system_alerts(system)[-1][1] == "Startup Health Check Failed"
+
+
+def test_start_system_exception_keeps_trading_inactive(monkeypatch):
+    system = _build_system(monkeypatch)
+
+    async def fail_health_check():
+        raise ValueError("health exploded")
+
+    system.perform_health_check = fail_health_check
+
+    result = asyncio.run(system.start_system())
+
+    assert result == {"status": "error", "message": "health exploded"}
+    assert system.is_active is False
+    assert system.session_start_time is None
+    assert cast(Any, system.alert_manager).processing is False
+    assert _system_alerts(system)[-1][1] == "Startup Failed"
 
 
 def test_analyze_trading_opportunity_halted_and_full_path(monkeypatch):

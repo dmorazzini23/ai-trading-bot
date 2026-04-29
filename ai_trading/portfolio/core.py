@@ -16,11 +16,21 @@ from ai_trading.data.bars import (
 )
 from ai_trading.data.feed_roles import get_execution_feed, get_reference_feed
 from ai_trading.analytics.feed_drift import fetch_reference_snapshot
+from ai_trading.config.management import get_env
 
 if TYPE_CHECKING:  # pragma: no cover - import only for typing
     import pandas as pd
 logger = get_logger(__name__)
 _portfolio_lock = threading.RLock()
+
+
+def minute_data_freshness_tolerance() -> int:
+    """Return the managed freshness tolerance for execution minute pricing."""
+    try:
+        value = int(get_env("MINUTE_DATA_FRESHNESS_TOLERANCE_SECONDS", 900, cast=int))
+    except (TypeError, ValueError):
+        return 900
+    return value if value > 0 else 900
 
 def _last_close_from(df: pd.DataFrame) -> float | None:
     """Extract last close value from DataFrame."""
@@ -33,6 +43,80 @@ def _last_close_from(df: pd.DataFrame) -> float | None:
     if 'close' in lower:
         return float(df[lower['close']].iloc[-1])
     return None
+
+
+def _last_timestamp_from(df: pd.DataFrame):
+    """Extract the timestamp associated with the last bar in a DataFrame."""
+    if df is None or df.empty:
+        return None
+    for col in ('timestamp', 'time', 't', 'datetime', 'date'):
+        if col in df.columns:
+            return df[col].iloc[-1]
+    index = getattr(df, "index", None)
+    if index is not None and len(index) > 0:
+        dtype_name = str(getattr(index, "dtype", ""))
+        if dtype_name.startswith("datetime") or hasattr(index, "tz"):
+            return index[-1]
+    return None
+
+
+def _coerce_utc_timestamp(value: Any):
+    import pandas as pd
+
+    if value is None:
+        return None
+    try:
+        ts = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(ts):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
+
+
+def _fresh_last_close_from(
+    df: pd.DataFrame,
+    *,
+    symbol: str,
+    context: str,
+    max_age_seconds: int | None = None,
+) -> float | None:
+    """Extract a positive last close only when its bar timestamp is fresh."""
+    import pandas as pd
+
+    price = _last_close_from(df)
+    try:
+        price_float = float(price)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(price_float) or price_float <= 0.0:
+        return None
+    ts = _coerce_utc_timestamp(_last_timestamp_from(df))
+    if ts is None:
+        logger.warning(
+            'EXECUTION_PRICE_STALE',
+            extra={'symbol': symbol, 'context': context, 'reason': 'timestamp_missing'},
+        )
+        return None
+    limit = max_age_seconds if max_age_seconds is not None else minute_data_freshness_tolerance()
+    age_seconds = (pd.Timestamp.now(tz="UTC") - ts).total_seconds()
+    if age_seconds < 0:
+        age_seconds = 0.0
+    if age_seconds > max(float(limit), 0.0):
+        logger.warning(
+            'EXECUTION_PRICE_STALE',
+            extra={
+                'symbol': symbol,
+                'context': context,
+                'age_seconds': age_seconds,
+                'max_age_seconds': limit,
+            },
+        )
+        return None
+    return price_float
+
 
 def _fetch_minute_price_for_feed(ctx, symbol: str, *, feed: str, context: str) -> float | None:
     import pandas as pd
@@ -55,7 +139,7 @@ def _fetch_minute_price_for_feed(ctx, symbol: str, *, feed: str, context: str) -
             context,
         )
     )
-    return _last_close_from(frame)
+    return _fresh_last_close_from(frame, symbol=symbol, context=context)
 
 
 def _fetch_context_minute_price(ctx, symbol: str) -> float | None:
@@ -64,7 +148,7 @@ def _fetch_context_minute_price(ctx, symbol: str) -> float | None:
     if not callable(get_minute_df):
         return None
     frame = _ensure_df(get_minute_df(ctx, symbol))
-    return _last_close_from(frame)
+    return _fresh_last_close_from(frame, symbol=symbol, context="PRICE_SNAPSHOT_CONTEXT")
 
 
 def get_execution_latest_price(ctx, symbol: str) -> float | None:
@@ -95,7 +179,7 @@ def get_execution_latest_price(ctx, symbol: str) -> float | None:
         df_day = _ensure_df(ctx.data_fetcher.get_daily_df(ctx, symbol))
     except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, OSError, AttributeError):
         return None
-    return _last_close_from(df_day)
+    return _fresh_last_close_from(df_day, symbol=symbol, context="PRICE_SNAPSHOT_DAILY")
 
 
 def get_reference_latest_price(ctx, symbol: str) -> float | None:
@@ -108,6 +192,30 @@ def get_reference_latest_price(ctx, symbol: str) -> float | None:
     except (TypeError, ValueError):
         return None
     return price if price > 0 else None
+
+
+def get_analytics_latest_price(ctx, symbol: str) -> float | None:
+    """Return analytics price, explicitly allowing stale daily close fallback."""
+
+    reference_price = get_reference_latest_price(ctx, symbol)
+    if reference_price is not None:
+        return reference_price
+    try:
+        df_day = _ensure_df(ctx.data_fetcher.get_daily_df(ctx, symbol))
+    except (KeyError, ValueError, TypeError, OSError, AttributeError):
+        return None
+    price = _last_close_from(df_day)
+    try:
+        price_float = float(price)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(price_float) or price_float <= 0.0:
+        return None
+    logger.info(
+        'ANALYTICS_STALE_PRICE_FALLBACK',
+        extra={'symbol': symbol, 'timestamp': str(_last_timestamp_from(df_day))},
+    )
+    return price_float
 
 
 def get_latest_price(ctx, symbol: str) -> float | None:

@@ -156,6 +156,14 @@ class ReplayEventLoop:
                 if adjustment is not None:
                     adjustment["ts"] = ts.isoformat()
                     cap_adjustments.append(adjustment)
+                    violations.append(
+                        ReplayInvariantViolation(
+                            code="cap_adjustment",
+                            message=f"Intent clipped to cap for {symbol}",
+                            ts=ts.isoformat(),
+                            details=dict(adjustment),
+                        )
+                    )
                 qty = clipped_qty
                 if qty <= 0:
                     continue

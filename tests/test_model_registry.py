@@ -246,5 +246,31 @@ class TestModelRegistry:
             assert prod_id == model_id
             assert info["production_path_source"] == "runtime_promotion"
             assert info["production_path"] == str(runtime_model_path)
+            assert info["production_manifest_path"] == str(runtime_model_path.with_suffix(".manifest.json"))
             runtime_promotion = refreshed.model_index[model_id]["governance"]["runtime_promotion"]
             assert runtime_promotion["model_path"] == str(runtime_model_path)
+
+    def test_registry_persistence_write_failures_raise(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = ModelRegistry(temp_dir)
+
+            def fail_write(*_args, **_kwargs):
+                raise OSError("disk full")
+
+            monkeypatch.setattr("ai_trading.model_registry.atomic_write_text", fail_write)
+
+            with pytest.raises(RuntimeError, match="model metadata"):
+                registry.register_model({"a": 1}, "ml_edge", "dict")
+
+    def test_registry_index_write_failures_raise(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = ModelRegistry(temp_dir)
+            monkeypatch.setattr(registry, "_write_metadata_file", lambda *_args, **_kwargs: None)
+
+            def fail_write(*_args, **_kwargs):
+                raise OSError("disk full")
+
+            monkeypatch.setattr("ai_trading.model_registry.atomic_write_text", fail_write)
+
+            with pytest.raises(RuntimeError, match="registry index"):
+                registry.register_model({"a": 1}, "ml_edge", "dict")

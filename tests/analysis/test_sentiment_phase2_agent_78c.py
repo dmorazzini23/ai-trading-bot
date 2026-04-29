@@ -51,6 +51,9 @@ def _sentiment_test_state(monkeypatch: pytest.MonkeyPatch) -> None:
     sentiment._SENTIMENT_STUB_LOGGED = False
     sentiment._bs4 = None
     sentiment._transformers_bundle = None
+    sentiment.reset_sentiment_runtime_cache()
+    yield
+    sentiment.reset_sentiment_runtime_cache()
 
 
 def test_fetch_sentiment_aggregates_news_and_form4(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -69,7 +72,9 @@ def test_fetch_sentiment_aggregates_news_and_form4(monkeypatch: pytest.MonkeyPat
             return {"available": True, "pos": 0.8, "neg": 0.2, "neu": 0.0}
         return {"available": True, "pos": 0.3, "neg": 0.5, "neu": 0.2}
 
-    monkeypatch.setattr(sentiment._http_session, "get", lambda *_a, **_k: _Response(payload=payload))
+    sentiment._set_sentiment_http_session_for_tests(
+        SimpleNamespace(get=lambda *_a, **_k: _Response(payload=payload))
+    )
     monkeypatch.setattr(sentiment, "analyze_text", fake_analyze)
     monkeypatch.setattr(
         sentiment,
@@ -95,10 +100,10 @@ def test_fetch_sentiment_bad_payload_falls_back_and_caches(
 ) -> None:
     failures: list[tuple[str, str | None]] = []
 
-    monkeypatch.setattr(
-        sentiment._http_session,
-        "get",
-        lambda *_a, **_k: _Response(payload={"articles": {"title": "not-a-list"}}),
+    sentiment._set_sentiment_http_session_for_tests(
+        SimpleNamespace(
+            get=lambda *_a, **_k: _Response(payload={"articles": {"title": "not-a-list"}})
+        )
     )
     monkeypatch.setattr(sentiment, "_record_sentiment_failure", lambda reason, error=None: failures.append((reason, error)))
     monkeypatch.setattr(sentiment.pytime, "time", lambda: 42.0)
@@ -117,7 +122,7 @@ def test_fetch_sentiment_provider_exception_uses_existing_cache(
     def fail_get(*_args: object, **_kwargs: object) -> object:
         raise sentiment.RequestException("provider offline")
 
-    monkeypatch.setattr(sentiment._http_session, "get", fail_get)
+    sentiment._set_sentiment_http_session_for_tests(SimpleNamespace(get=fail_get))
     monkeypatch.setattr(sentiment, "_record_sentiment_failure", lambda reason, error=None: failures.append((reason, error)))
     monkeypatch.setattr(sentiment.pytime, "time", lambda: 1000.0)
 
@@ -132,10 +137,14 @@ def test_fetch_sentiment_http_provider_fallback_paths(
     monkeypatch.setattr(sentiment, "_record_sentiment_failure", lambda reason, error=None: failures.append((reason, error)))
     monkeypatch.setattr(sentiment.pytime, "time", lambda: 10.0)
 
-    monkeypatch.setattr(sentiment._http_session, "get", lambda *_a, **_k: _Response(403))
+    sentiment._set_sentiment_http_session_for_tests(
+        SimpleNamespace(get=lambda *_a, **_k: _Response(403))
+    )
     assert sentiment.fetch_sentiment(None, "META") == 0.0
 
-    monkeypatch.setattr(sentiment._http_session, "get", lambda *_a, **_k: _Response(503))
+    sentiment._set_sentiment_http_session_for_tests(
+        SimpleNamespace(get=lambda *_a, **_k: _Response(503))
+    )
     assert sentiment.fetch_sentiment(None, "NVDA") == 0.0
 
     assert failures == [("forbidden", None), ("server_error", "503")]
@@ -146,7 +155,9 @@ def test_fetch_sentiment_rate_limit_delegates_to_enhanced_fallback(
 ) -> None:
     called: list[str] = []
 
-    monkeypatch.setattr(sentiment._http_session, "get", lambda *_a, **_k: _Response(429))
+    sentiment._set_sentiment_http_session_for_tests(
+        SimpleNamespace(get=lambda *_a, **_k: _Response(429))
+    )
     monkeypatch.setattr(
         sentiment,
         "_handle_rate_limit_with_enhanced_strategies",
@@ -165,7 +176,7 @@ def test_fetch_sentiment_preserves_special_ticker_cache_key(
     def fail_if_called(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("cached ticker should not call provider")
 
-    monkeypatch.setattr(sentiment._http_session, "get", fail_if_called)
+    sentiment._set_sentiment_http_session_for_tests(SimpleNamespace(get=fail_if_called))
     monkeypatch.setattr(sentiment.pytime, "time", lambda: 1000.0)
 
     assert sentiment.fetch_sentiment(None, "BRK.B") == 0.44

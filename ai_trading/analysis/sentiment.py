@@ -8,7 +8,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import time as pytime
 from datetime import datetime
 from threading import Lock
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
@@ -35,7 +35,7 @@ from ai_trading.metrics import get_counter, get_gauge
 from ai_trading.data.provider_monitor import provider_monitor
 
 SENTIMENT_API_KEY = ""
-_http_session: HTTPSession = get_http_session()
+_http_session: HTTPSession | None = None
 _device = None
 _sentiment_initialized = False
 
@@ -95,6 +95,25 @@ def _resolve_sentiment_api_key(settings: Any) -> str:
         or ""
     )
 
+
+def _get_sentiment_http_session() -> HTTPSession:
+    """Return the sentiment HTTP session, creating it only on first use."""
+    global _http_session
+    if _http_session is None:
+        _http_session = get_http_session()
+    return _http_session
+
+
+def _set_sentiment_http_session_for_tests(session: HTTPSession | None) -> None:
+    """Install or clear the cached sentiment HTTP session for focused tests."""
+    global _http_session
+    _http_session = session
+
+
+def reset_sentiment_runtime_cache() -> None:
+    """Clear lazily initialized sentiment runtime resources."""
+    _set_sentiment_http_session_for_tests(None)
+
 def _load_bs4(log=logger):
     global _bs4, _SENT_DEPS_LOGGED
     if _bs4 is not None:
@@ -133,18 +152,9 @@ SENTIMENT_TTL_SEC = 600
 SENTIMENT_RATE_LIMITED_TTL_SEC = 7200
 SENTIMENT_FAILURE_THRESHOLD = 15
 SENTIMENT_RECOVERY_TIMEOUT = 1800
-_settings = get_settings()
-SENTIMENT_MAX_RETRIES = sentiment_retry_max(_settings)
-SENTIMENT_BACKOFF_BASE = sentiment_backoff_base(_settings)
-SENTIMENT_BACKOFF_STRATEGY = sentiment_backoff_strategy(_settings)
-if SENTIMENT_BACKOFF_STRATEGY.lower() == 'fixed':
-    _SENTIMENT_WAIT = wait_random(SENTIMENT_BACKOFF_BASE, SENTIMENT_BACKOFF_BASE * 2)
-else:
-    _SENTIMENT_WAIT = wait_exponential(
-        multiplier=SENTIMENT_BACKOFF_BASE,
-        min=SENTIMENT_BACKOFF_BASE,
-        max=180,
-    ) + wait_random(0, SENTIMENT_BACKOFF_BASE)
+SENTIMENT_MAX_RETRIES = 5
+SENTIMENT_BACKOFF_BASE = 5.0
+SENTIMENT_BACKOFF_STRATEGY = "exponential"
 SENTIMENT_NEWS_WEIGHT = 0.8
 SENTIMENT_FORM4_WEIGHT = 0.2
 _sentiment_cache: dict[str, tuple[float, float]] = {}
@@ -178,6 +188,35 @@ __all__ = [
     'SENTIMENT_NEWS_WEIGHT',
     'SENTIMENT_FORM4_WEIGHT',
 ]
+
+
+def _current_sentiment_retry_policy() -> tuple[int, float, str]:
+    """Resolve sentiment retry policy from current settings at call time."""
+    settings = get_settings()
+    max_retries = max(1, int(sentiment_retry_max(settings)))
+    backoff_base = max(0.0, float(sentiment_backoff_base(settings)))
+    backoff_strategy = str(sentiment_backoff_strategy(settings) or "exponential")
+    return max_retries, backoff_base, backoff_strategy
+
+
+def _sentiment_retry_wait(backoff_base: float, backoff_strategy: str):
+    if backoff_strategy.lower() == 'fixed':
+        return wait_random(backoff_base, backoff_base * 2)
+    return wait_exponential(
+        multiplier=backoff_base,
+        min=backoff_base,
+        max=180,
+    ) + wait_random(0, backoff_base)
+
+
+def _sentiment_retry_decorator():
+    max_retries, backoff_base, backoff_strategy = _current_sentiment_retry_policy()
+    return retry(
+        stop=stop_after_attempt(max_retries),
+        wait=_sentiment_retry_wait(backoff_base, backoff_strategy),
+        retry=retry_if_exception_type((RequestException, HTTPError, ValueError, TypeError)),
+        reraise=True,
+    )
 
 
 def _init_metrics() -> None:
@@ -240,10 +279,8 @@ def _record_sentiment_failure(reason: str = 'error', error: str | None = None) -
     cb = _sentiment_circuit_breaker
     cb['failures'] += 1
     cb['last_failure'] = pytime.time()
-    delay = min(
-        SENTIMENT_BACKOFF_BASE * (2 ** (cb['failures'] - 1)),
-        SENTIMENT_RECOVERY_TIMEOUT,
-    )
+    _, backoff_base, _ = _current_sentiment_retry_policy()
+    delay = min(backoff_base * (2 ** (cb['failures'] - 1)), SENTIMENT_RECOVERY_TIMEOUT)
     cb['next_retry'] = cb['last_failure'] + delay
     if cb['failures'] >= SENTIMENT_FAILURE_THRESHOLD:
         cb['state'] = 'open'
@@ -258,13 +295,12 @@ def _record_sentiment_failure(reason: str = 'error', error: str | None = None) -
     sentiment_cb_state.set(state_val)
     provider_monitor.record_failure('sentiment', reason, error)
 
-@retry(
-    stop=stop_after_attempt(SENTIMENT_MAX_RETRIES),
-    wait=_SENTIMENT_WAIT,
-    retry=retry_if_exception_type((RequestException, HTTPError, ValueError, TypeError)),
-    reraise=True,
-)
 def fetch_sentiment(ctx, ticker: str) -> float:
+    """Fetch sentiment with the current retry policy resolved at call time."""
+    return cast(float, _sentiment_retry_decorator()(_fetch_sentiment_once)(ctx, ticker))
+
+
+def _fetch_sentiment_once(ctx, ticker: str) -> float:
     """
     Fetch sentiment via NewsAPI + FinBERT + Form 4 signal.
     Uses a simple in-memory TTL cache to avoid hitting NewsAPI too often.
@@ -318,7 +354,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
         return fallback_score
     try:
         url = f'{settings.sentiment_api_url}?q={ticker}&sortBy=publishedAt&language=en&pageSize=5&apiKey={api_key}'
-        resp = _http_session.get(url, timeout=clamp_request_timeout(HTTP_TIMEOUT))
+        resp = _get_sentiment_http_session().get(url, timeout=clamp_request_timeout(HTTP_TIMEOUT))
         if resp.status_code == 429:
             logger.warning(f'fetch_sentiment({ticker}) rate-limited (429) → using enhanced fallback strategies')
             return _handle_rate_limit_with_enhanced_strategies(ticker)
@@ -470,11 +506,12 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
     try:
         primary_url_full = f'{primary_url}?symbol={ticker}&apikey={primary_key}'
         timeout_v = HTTP_TIMEOUT
-        primary_resp = _http_session.get(primary_url_full, timeout=clamp_request_timeout(timeout_v))
+        session = _get_sentiment_http_session()
+        primary_resp = session.get(primary_url_full, timeout=clamp_request_timeout(timeout_v))
         if primary_resp.status_code in {429, 500, 502, 503, 504} and alt_api_key and alt_api_url:
             pytime.sleep(0.5)
             alt_url = f'{alt_api_url}?symbol={ticker}&apikey={alt_api_key}'
-            alt_resp = _http_session.get(alt_url, timeout=clamp_request_timeout(timeout_v))
+            alt_resp = session.get(alt_url, timeout=clamp_request_timeout(timeout_v))
             if alt_resp.status_code == 200:
                 data = alt_resp.json()
                 sentiment_score = float(data.get('sentiment_score', 0.0) or 0.0)
@@ -677,7 +714,7 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
         headers = {'User-Agent': 'AI Trading Bot'}
         backoff = 0.5
         for attempt in range(3):
-            r = _http_session.get(url, headers=headers, timeout=clamp_request_timeout(HTTP_TIMEOUT))
+            r = _get_sentiment_http_session().get(url, headers=headers, timeout=clamp_request_timeout(HTTP_TIMEOUT))
             if r.status_code in {429, 500, 502, 503, 504} and attempt < 2:
                 pytime.sleep(backoff)
                 backoff *= 2

@@ -6,7 +6,6 @@ import pytest
 pd = pytest.importorskip("pandas")
 from ai_trading.portfolio import core as portfolio_core
 from ai_trading.data import fetch as data_fetcher
-from ai_trading import utils as _utils  # type: ignore
 
 
 @pytest.fixture(autouse=True)
@@ -21,7 +20,7 @@ def test_price_snapshot_minute_fallback(monkeypatch):
     )
 
     def fake_safe_get_stock_bars(client, request, symbol, context=""):
-        ts = _utils.time.utcnow()  # AI-AGENT-REF: avoid datetime.utcnow
+        ts = pd.Timestamp.now(tz="UTC")
         return pd.DataFrame({"timestamp": [pd.Timestamp(ts)], "close": [123.0]})
 
     class DummyRequest:
@@ -35,6 +34,34 @@ def test_price_snapshot_minute_fallback(monkeypatch):
 
     price = portfolio_core.get_latest_price(ctx, "SPY")
     assert price == 123.0
+
+
+def test_execution_latest_price_rejects_stale_daily_close(monkeypatch):
+    stale_ts = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=2)
+    ctx = SimpleNamespace(
+        data_fetcher=SimpleNamespace(
+            get_daily_df=lambda ctx, s: pd.DataFrame({"timestamp": [stale_ts], "close": [321.0]}),
+        ),
+        data_client=object(),
+    )
+
+    monkeypatch.setattr(portfolio_core, "safe_get_stock_bars", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(portfolio_core, "minute_data_freshness_tolerance", lambda: 60)
+
+    assert portfolio_core.get_execution_latest_price(ctx, "SPY") is None
+
+
+def test_analytics_latest_price_allows_explicit_stale_daily_fallback(monkeypatch):
+    stale_ts = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=2)
+    ctx = SimpleNamespace(
+        data_fetcher=SimpleNamespace(
+            get_daily_df=lambda ctx, s: pd.DataFrame({"timestamp": [stale_ts], "close": [321.0]}),
+        ),
+    )
+
+    monkeypatch.setattr(portfolio_core, "fetch_reference_snapshot", lambda *a, **k: {})
+
+    assert portfolio_core.get_analytics_latest_price(ctx, "SPY") == 321.0
 
 
 def test_yahoo_minute_split_long_range(monkeypatch, caplog):
