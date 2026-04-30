@@ -275,6 +275,13 @@ def test_offline_replay_simulation_mode_is_deterministic(tmp_path: Path) -> None
     assert first["aggregate"]["replay_seed"] == 123
     assert second["aggregate"]["replay_seed"] == 123
     assert first["replay"]["events"] == second["replay"]["events"]
+    quality = first["aggregate"]["candidate_quality"]
+    assert quality["overall"]["candidates"] == first["aggregate"]["accepted_candidate_count"]
+    assert quality["by_side"]
+    assert quality["by_score_bucket"]
+    assert quality["by_confidence_bucket"]
+    assert quality["by_rank_bucket"]
+    assert "cap_adjustments" in quality
 
 
 def test_offline_replay_policy_sensitivity_reports_per_knob_contributions(

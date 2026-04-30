@@ -1191,6 +1191,9 @@ def _candidate_quality_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "candidates": int(len(rows)),
         "filled": int(filled_count),
         "markout_samples": int(sample_count),
+        "total_net_markout_bps": (
+            float(sum(net_markouts)) if net_markouts else None
+        ),
         "mean_markout_bps": (
             float(sum(markouts) / sample_count) if sample_count else None
         ),
@@ -1202,6 +1205,240 @@ def _candidate_quality_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             float(wrong_way_count / len(direction_correct))
             if direction_correct
             else None
+        ),
+    }
+
+
+def _finite_row_float(row: Mapping[str, Any], key: str) -> float | None:
+    try:
+        value = float(row.get(key))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _quantile_edges(values: list[float], buckets: int = 4) -> list[float]:
+    if not values:
+        return []
+    ordered = sorted(values)
+    edges: list[float] = []
+    for index in range(1, int(buckets)):
+        pos = int(round((len(ordered) - 1) * (index / float(buckets))))
+        edges.append(float(ordered[pos]))
+    return sorted(set(edges))
+
+
+def _bucket_label(value: float | None, edges: list[float]) -> str:
+    if value is None:
+        return "missing"
+    lower: float | None = None
+    for edge in edges:
+        if value <= edge:
+            return f"({lower if lower is not None else '-inf'}, {edge}]"
+        lower = edge
+    return f"({lower if lower is not None else '-inf'}, inf)"
+
+
+def _rank_bucket(row: Mapping[str, Any]) -> str:
+    rank = _finite_row_float(row, "rank_index")
+    if rank is None:
+        return "missing"
+    rank_int = int(rank)
+    if rank_int <= 0:
+        return "0"
+    if rank_int <= 2:
+        return "1-2"
+    if rank_int <= 5:
+        return "3-5"
+    if rank_int <= 10:
+        return "6-10"
+    return "11+"
+
+
+def _candidate_hour(row: Mapping[str, Any]) -> int | None:
+    raw_ts = row.get("ts")
+    if raw_ts in (None, ""):
+        return None
+    try:
+        parsed = pd.to_datetime(raw_ts, errors="coerce", utc=True)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(parsed):
+        return None
+    return int(parsed.hour)
+
+
+def _session_segment(row: Mapping[str, Any]) -> str:
+    hour = _candidate_hour(row)
+    if hour is None:
+        return "missing"
+    if hour < 13:
+        return "pre_regular"
+    if hour < 15:
+        return "open"
+    if hour < 18:
+        return "midday"
+    if hour < 20:
+        return "late"
+    return "post_regular"
+
+
+def _group_quality(
+    rows: list[dict[str, Any]],
+    *,
+    key_name: str,
+    key_func: Any,
+    min_candidates: int = 1,
+    sort_by: str = "mean_net_markout_bps",
+    reverse: bool = False,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        key = str(key_func(row))
+        grouped.setdefault(key, []).append(row)
+    out: list[dict[str, Any]] = []
+    for key, group_rows in grouped.items():
+        if len(group_rows) < int(min_candidates):
+            continue
+        summary = _candidate_quality_summary(group_rows)
+        summary[key_name] = key
+        out.append(summary)
+
+    def sort_value(item: Mapping[str, Any]) -> tuple[bool, float]:
+        raw = item.get(sort_by)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return (True, 0.0)
+        if not math.isfinite(value):
+            return (True, 0.0)
+        return (False, value)
+
+    out.sort(key=sort_value, reverse=reverse)
+    return out[:limit] if limit is not None else out
+
+
+def _summarize_cap_adjustments(
+    cap_adjustments: list[Mapping[str, Any]],
+    *,
+    candidate_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    candidate_count_by_symbol = Counter(
+        str(row.get("symbol") or "").strip().upper()
+        for row in candidate_rows
+        if str(row.get("symbol") or "").strip()
+    )
+    by_symbol: Counter[str] = Counter()
+    by_side: Counter[str] = Counter()
+    by_cap_kind: Counter[str] = Counter()
+    for adjustment in cap_adjustments:
+        symbol = str(adjustment.get("symbol") or "").strip().upper()
+        side = str(adjustment.get("side") or "").strip().lower()
+        cap_kind = str(adjustment.get("cap_kind") or "unknown").strip().lower()
+        if symbol:
+            by_symbol[symbol] += 1
+        if side:
+            by_side[side] += 1
+        by_cap_kind[cap_kind or "unknown"] += 1
+    by_symbol_rows: list[dict[str, Any]] = []
+    for symbol, count in by_symbol.most_common():
+        candidates = int(candidate_count_by_symbol.get(symbol, 0))
+        by_symbol_rows.append(
+            {
+                "symbol": symbol,
+                "adjustments": int(count),
+                "candidate_count": candidates,
+                "adjustments_per_candidate": (
+                    float(count / candidates) if candidates else None
+                ),
+            }
+        )
+    return {
+        "total": int(len(cap_adjustments)),
+        "by_cap_kind": dict(sorted(by_cap_kind.items())),
+        "by_side": dict(sorted(by_side.items())),
+        "top_symbols": by_symbol_rows[:20],
+    }
+
+
+def _summarize_candidate_quality(
+    rows: list[dict[str, Any]],
+    *,
+    cap_adjustments: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    score_edges = _quantile_edges(
+        [
+            value
+            for row in rows
+            if (value := _finite_row_float(row, "score")) is not None
+        ]
+    )
+    confidence_edges = _quantile_edges(
+        [
+            value
+            for row in rows
+            if (value := _finite_row_float(row, "confidence")) is not None
+        ]
+    )
+    return {
+        "overall": _candidate_quality_summary(rows),
+        "by_side": _group_quality(
+            rows,
+            key_name="side",
+            key_func=lambda row: str(row.get("side") or "missing").lower(),
+        ),
+        "worst_symbols": _group_quality(
+            rows,
+            key_name="symbol",
+            key_func=lambda row: str(row.get("symbol") or "missing").upper(),
+            min_candidates=20,
+            limit=20,
+        ),
+        "best_symbols": _group_quality(
+            rows,
+            key_name="symbol",
+            key_func=lambda row: str(row.get("symbol") or "missing").upper(),
+            min_candidates=20,
+            reverse=True,
+            limit=20,
+        ),
+        "by_score_bucket": _group_quality(
+            rows,
+            key_name="score_bucket",
+            key_func=lambda row: _bucket_label(
+                _finite_row_float(row, "score"),
+                score_edges,
+            ),
+        ),
+        "by_confidence_bucket": _group_quality(
+            rows,
+            key_name="confidence_bucket",
+            key_func=lambda row: _bucket_label(
+                _finite_row_float(row, "confidence"),
+                confidence_edges,
+            ),
+        ),
+        "by_rank_bucket": _group_quality(
+            rows,
+            key_name="rank_bucket",
+            key_func=_rank_bucket,
+        ),
+        "by_utc_hour": _group_quality(
+            rows,
+            key_name="utc_hour",
+            key_func=lambda row: (
+                str(hour) if (hour := _candidate_hour(row)) is not None else "missing"
+            ),
+        ),
+        "by_session_segment": _group_quality(
+            rows,
+            key_name="session_segment",
+            key_func=_session_segment,
+        ),
+        "cap_adjustments": _summarize_cap_adjustments(
+            cap_adjustments,
+            candidate_rows=rows,
         ),
     }
 
@@ -1623,6 +1860,10 @@ def _run_parity_simulation(
         for client_order_id, context in sorted(order_context_by_client_id.items())
     ]
     aggregate["accepted_candidate_count"] = int(len(accepted_candidate_rows))
+    aggregate["candidate_quality"] = _summarize_candidate_quality(
+        accepted_candidate_rows,
+        cap_adjustments=cast(list[Mapping[str, Any]], cap_adjustments),
+    )
     if markout_veto_config is not None:
         aggregate["markout_veto"]["shadow_quality"] = (
             _summarize_markout_veto_shadow_quality(accepted_candidate_rows)

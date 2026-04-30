@@ -6288,6 +6288,94 @@ def _record_shadow_prediction(payload: Mapping[str, Any]) -> None:
         )
 
 
+def _finite_float_or_none(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _latest_numeric_column(frame: pd.DataFrame, names: Sequence[str]) -> float | None:
+    for name in names:
+        if name not in frame.columns or frame.empty:
+            continue
+        value = _finite_float_or_none(frame[name].iloc[-1])
+        if value is not None:
+            return value
+    return None
+
+
+def _latest_timestamp_column(frame: pd.DataFrame, names: Sequence[str]) -> str | None:
+    for name in names:
+        if name not in frame.columns or frame.empty:
+            continue
+        value = frame[name].iloc[-1]
+        try:
+            parsed = pd.to_datetime(value, errors="coerce", utc=True)
+        except (TypeError, ValueError):
+            continue
+        if not pd.isna(parsed):
+            return str(parsed.isoformat())
+    if isinstance(frame.index, pd.DatetimeIndex) and len(frame.index) > 0:
+        latest = frame.index[-1]
+        if not pd.isna(latest):
+            return str(pd.Timestamp(latest).tz_convert(UTC).isoformat())
+    return None
+
+
+def _ml_shadow_market_snapshot(frame: pd.DataFrame) -> dict[str, Any]:
+    close = _latest_numeric_column(frame, ("close", "last_price", "price"))
+    bid = _latest_numeric_column(frame, ("bid", "bid_price", "quote_bid"))
+    ask = _latest_numeric_column(frame, ("ask", "ask_price", "quote_ask"))
+    spread_bps: float | None = None
+    if bid is not None and ask is not None and bid > 0.0 and ask >= bid:
+        mid = (bid + ask) / 2.0
+        if mid > 0.0:
+            spread_bps = float(((ask - bid) / mid) * 10000.0)
+    quote_ts = _latest_timestamp_column(frame, ("quote_ts", "quote_timestamp", "quote_time"))
+    quote_age_ms: float | None = None
+    if quote_ts:
+        try:
+            parsed_quote_ts = pd.to_datetime(quote_ts, errors="coerce", utc=True)
+            if not pd.isna(parsed_quote_ts):
+                quote_age_ms = max(
+                    0.0,
+                    float((datetime.now(UTC) - parsed_quote_ts.to_pydatetime()).total_seconds() * 1000.0),
+                )
+        except (TypeError, ValueError, OverflowError):
+            quote_age_ms = None
+    return {
+        "bar_timestamp": _latest_timestamp_column(frame, ("timestamp", "ts", "time")),
+        "entry_close": close,
+        "bid": bid,
+        "ask": ask,
+        "spread_bps": spread_bps,
+        "quote_timestamp": quote_ts,
+        "quote_age_ms": quote_age_ms,
+    }
+
+
+def _ml_shadow_feature_snapshot(
+    feature_names: Sequence[str],
+    feature_values: Sequence[Any],
+) -> dict[str, float | None]:
+    snapshot: dict[str, float | None] = {}
+    for name, value in zip(feature_names, feature_values):
+        snapshot[str(name)] = _finite_float_or_none(value)
+    return snapshot
+
+
+def _model_shadow_threshold(model: Any, *, min_confidence: float) -> dict[str, Any]:
+    threshold = max(0.0, float(min_confidence))
+    source = "min_confidence"
+    global_threshold = _finite_float_or_none(getattr(model, "edge_global_threshold_", None))
+    if global_threshold is not None:
+        threshold = max(threshold, float(global_threshold))
+        source = "global"
+    return {"effective_threshold": float(threshold), "threshold_source": source}
+
+
 def _evaluate_training_serving_skew(
     *,
     model: Any,
@@ -16456,6 +16544,9 @@ class SignalManager:
                 symbol=symbol,
             )
             shadow_payload: dict[str, Any] | None = None
+            shadow_model: Any | None = None
+            shadow_pred: Any | None = None
+            shadow_proba: float | None = None
             if bool(get_env("AI_TRADING_ML_SHADOW_ENABLED", False, cast=bool)):
                 shadow_model = _load_shadow_model()
                 if shadow_model is not None and hasattr(shadow_model, "predict") and hasattr(
@@ -16463,30 +16554,6 @@ class SignalManager:
                 ):
                     try:
                         shadow_pred, shadow_proba = _predict_class_and_probability(shadow_model, X)
-                        shadow_payload = {
-                            "ts": datetime.now(UTC).isoformat(),
-                            "symbol": symbol,
-                            "champion_prediction": str(pred),
-                            "champion_probability": float(proba),
-                            "challenger_prediction": str(shadow_pred),
-                            "challenger_probability": float(shadow_proba),
-                            "probability_delta": float(abs(float(shadow_proba) - float(proba))),
-                        }
-                        if isinstance(skew_payload, Mapping):
-                            shadow_payload["skew"] = dict(skew_payload)
-                        _record_shadow_prediction(shadow_payload)
-                        divergence_threshold = max(
-                            0.0,
-                            float(
-                                get_env(
-                                    "AI_TRADING_ML_SHADOW_DIVERGENCE_THRESHOLD",
-                                    0.20,
-                                    cast=float,
-                                )
-                            ),
-                        )
-                        if float(shadow_payload["probability_delta"]) >= divergence_threshold:
-                            logger.info("ML_SHADOW_DIVERGENCE", extra=shadow_payload)
                     except (
                         FileNotFoundError,
                         PermissionError,
@@ -16605,6 +16672,54 @@ class SignalManager:
                             "confidence_scale": float(confidence_scale),
                             "negative_share": float(entry.get("negative_share", 0.0) or 0.0),
                         }
+
+            if shadow_model is not None and shadow_pred is not None and shadow_proba is not None:
+                shadow_threshold = _model_shadow_threshold(
+                    shadow_model,
+                    min_confidence=min_confidence,
+                )
+                challenger_threshold = float(shadow_threshold["effective_threshold"])
+                champion_would_trade = bool(
+                    pred == 1 and (effective_threshold <= 0.0 or float(proba) >= effective_threshold)
+                )
+                challenger_would_trade = bool(
+                    shadow_pred == 1
+                    and (challenger_threshold <= 0.0 or float(shadow_proba) >= challenger_threshold)
+                )
+                shadow_payload = {
+                    "ts": datetime.now(UTC).isoformat(),
+                    "mode": "ml_signal_shadow",
+                    "symbol": symbol,
+                    "champion_prediction": str(pred),
+                    "champion_probability": float(proba),
+                    "champion_effective_threshold": float(effective_threshold),
+                    "champion_threshold_source": threshold_source,
+                    "champion_would_trade": champion_would_trade,
+                    "challenger_prediction": str(shadow_pred),
+                    "challenger_probability": float(shadow_proba),
+                    "challenger_effective_threshold": challenger_threshold,
+                    "challenger_threshold_source": str(shadow_threshold["threshold_source"]),
+                    "challenger_would_trade": challenger_would_trade,
+                    "agreement": bool(champion_would_trade == challenger_would_trade),
+                    "probability_delta": float(abs(float(shadow_proba) - float(proba))),
+                    "features": _ml_shadow_feature_snapshot(feat, X[0]),
+                    "market": _ml_shadow_market_snapshot(df),
+                }
+                if isinstance(skew_payload, Mapping):
+                    shadow_payload["skew"] = dict(skew_payload)
+                _record_shadow_prediction(shadow_payload)
+                divergence_threshold = max(
+                    0.0,
+                    float(
+                        get_env(
+                            "AI_TRADING_ML_SHADOW_DIVERGENCE_THRESHOLD",
+                            0.20,
+                            cast=float,
+                        )
+                    ),
+                )
+                if float(shadow_payload["probability_delta"]) >= divergence_threshold:
+                    logger.info("ML_SHADOW_DIVERGENCE", extra=shadow_payload)
 
             # Record that ML produced a decision payload even when filtered to no-trade.
             note_ml_signal()

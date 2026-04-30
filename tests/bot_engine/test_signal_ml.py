@@ -259,6 +259,7 @@ def test_signal_ml_shadow_logs_predictions(monkeypatch, tmp_path):
 
     class ChallengerModel:
         feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+        edge_global_threshold_ = 0.66
 
         def predict(self, _X):
             return [0]
@@ -277,8 +278,16 @@ def test_signal_ml_shadow_logs_predictions(monkeypatch, tmp_path):
     assert result is not None
     payload = json.loads(shadow_path.read_text(encoding="utf-8").strip().splitlines()[-1])
     assert payload["symbol"] == "AAPL"
+    assert payload["mode"] == "ml_signal_shadow"
     assert payload["champion_probability"] == pytest.approx(0.9, abs=1e-6)
+    assert payload["champion_effective_threshold"] == pytest.approx(0.0, abs=1e-6)
+    assert payload["champion_would_trade"] is True
     assert payload["challenger_probability"] == pytest.approx(0.7, abs=1e-6)
+    assert payload["challenger_effective_threshold"] == pytest.approx(0.66, abs=1e-6)
+    assert payload["challenger_would_trade"] is False
+    assert payload["agreement"] is False
+    assert payload["features"]["rsi"] == pytest.approx(30.0, abs=1e-6)
+    assert payload["market"]["entry_close"] == pytest.approx(1.0, abs=1e-6)
 
 
 def test_signal_ml_reports_training_serving_skew(monkeypatch, caplog):
