@@ -187,26 +187,6 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         else _as_int(payload.get("cap_adjustments_count"), 0)
     )
     violations_by_code = dict(payload.get("violations_by_code", {}) or {})
-    cap_adjustments_in_violations = (
-        sum(
-            1
-            for violation in violations_raw
-            if isinstance(violation, Mapping)
-            and str(violation.get("code") or "") == "cap_adjustment"
-        )
-        if isinstance(violations_raw, list)
-        else _as_int(violations_by_code.get("cap_adjustment"), 0)
-    )
-    uncounted_cap_adjustments = max(
-        0,
-        int(cap_adjustments_count) - int(cap_adjustments_in_violations),
-    )
-    violations_count = int(violations_count) + int(uncounted_cap_adjustments)
-    if cap_adjustments_count:
-        violations_by_code["cap_adjustment"] = max(
-            _as_int(violations_by_code.get("cap_adjustment"), 0),
-            int(cap_adjustments_count),
-        )
     counterfactual_raw = payload.get("counterfactual")
     counterfactual = (
         dict(counterfactual_raw)
@@ -415,6 +395,9 @@ def summarize_replay_live_parity_gate(
             "replay_future_dated": bool(replay_future_dated),
             "replay_future_skew_seconds": replay_snapshot.get("future_skew_seconds"),
             "replay_violations_count": int(replay_violations_count),
+            "replay_cap_adjustments_count": int(
+                max(0, _as_int(replay_snapshot.get("cap_adjustments_count"), 0))
+            ),
             "replay_counterfactual_passed": bool(replay_counterfactual_passed),
             "oms_lifecycle_parity_enabled": bool(lifecycle_enabled),
             "oms_lifecycle_parity_available": bool(lifecycle_available),

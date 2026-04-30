@@ -77,7 +77,7 @@ def test_replay_clips_symbol_cap_breaches_when_enabled() -> None:
     ).run(bars)
     codes = {item["code"] for item in result["violations"]}
     assert "position_cap_exceeded" not in codes
-    assert "cap_adjustment" in codes
+    assert "cap_adjustment" not in codes
     assert result["orders"] != []
     assert len(result["cap_adjustments"]) == 1
     adjustment = result["cap_adjustments"][0]
@@ -114,7 +114,7 @@ def test_replay_clips_gross_cap_breaches_when_enabled() -> None:
 
     codes = {item["code"] for item in result["violations"]}
     assert "position_cap_exceeded" not in codes
-    assert "cap_adjustment" in codes
+    assert "cap_adjustment" not in codes
     assert len(result["orders"]) == 1
     assert len(result["cap_adjustments"]) == 1
     adjustment = result["cap_adjustments"][0]

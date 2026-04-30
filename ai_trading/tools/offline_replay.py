@@ -699,7 +699,7 @@ def _compute_model_signal(
     probs: np.ndarray = np.full(len(frame), 0.5, dtype=float)
     try:
         arr = np.asarray(
-            model_context.model.predict_proba(feature_frame.to_numpy(dtype=float)),
+            model_context.model.predict_proba(feature_frame.astype(float)),
             dtype=float,
         )
         if arr.ndim == 1:
@@ -1159,6 +1159,80 @@ def _accepted_candidate_row(
     return row
 
 
+def _candidate_quality_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    markouts: list[float] = []
+    net_markouts: list[float] = []
+    direction_correct: list[bool] = []
+    filled_count = 0
+    for row in rows:
+        if bool(row.get("filled")):
+            filled_count += 1
+        raw_markout = row.get("markout_bps")
+        raw_net_markout = row.get("net_markout_bps")
+        try:
+            markout = float(raw_markout)
+        except (TypeError, ValueError):
+            markout = math.nan
+        try:
+            net_markout = float(raw_net_markout)
+        except (TypeError, ValueError):
+            net_markout = math.nan
+        if math.isfinite(markout):
+            markouts.append(markout)
+        if math.isfinite(net_markout):
+            net_markouts.append(net_markout)
+        raw_direction = row.get("direction_correct")
+        if isinstance(raw_direction, bool):
+            direction_correct.append(raw_direction)
+    sample_count = len(markouts)
+    positive_count = sum(1 for value in markouts if value > 0.0)
+    wrong_way_count = sum(1 for value in direction_correct if not value)
+    return {
+        "candidates": int(len(rows)),
+        "filled": int(filled_count),
+        "markout_samples": int(sample_count),
+        "mean_markout_bps": (
+            float(sum(markouts) / sample_count) if sample_count else None
+        ),
+        "mean_net_markout_bps": (
+            float(sum(net_markouts) / len(net_markouts)) if net_markouts else None
+        ),
+        "positive_rate": float(positive_count / sample_count) if sample_count else None,
+        "wrong_way_rate": (
+            float(wrong_way_count / len(direction_correct))
+            if direction_correct
+            else None
+        ),
+    }
+
+
+def _summarize_markout_veto_shadow_quality(
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    flagged = [
+        row for row in rows if str(row.get("veto_shadow_reason") or "").strip()
+    ]
+    unflagged = [
+        row for row in rows if not str(row.get("veto_shadow_reason") or "").strip()
+    ]
+    flagged_summary = _candidate_quality_summary(flagged)
+    unflagged_summary = _candidate_quality_summary(unflagged)
+    flagged_net = flagged_summary.get("mean_net_markout_bps")
+    unflagged_net = unflagged_summary.get("mean_net_markout_bps")
+    net_edge_vs_unflagged: float | None = None
+    enforcement_supported = False
+    if flagged_net is not None and unflagged_net is not None:
+        net_edge_vs_unflagged = float(flagged_net) - float(unflagged_net)
+        enforcement_supported = bool(net_edge_vs_unflagged < 0.0)
+    return {
+        "flagged": flagged_summary,
+        "unflagged": unflagged_summary,
+        "flagged_net_edge_bps_vs_unflagged": net_edge_vs_unflagged,
+        "enforcement_supported": bool(enforcement_supported),
+        "recommendation": "enforce_candidate" if enforcement_supported else "shadow_only",
+    }
+
+
 def _write_accepted_candidate_artifacts(
     *,
     args: argparse.Namespace,
@@ -1454,6 +1528,7 @@ def _run_parity_simulation(
         if str(event.get("symbol", "")).strip()
     )
     violations = list(replay.get("violations", []))
+    cap_adjustments = list(replay.get("cap_adjustments", []))
     violation_counts = Counter(
         str(item.get("code", "unknown"))
         for item in violations
@@ -1486,6 +1561,7 @@ def _run_parity_simulation(
         "orders_submitted": int(len(replay.get("orders", []))),
         "intents_created": int(len(replay.get("intents", []))),
         "fill_events": total_trades,
+        "cap_adjustments_count": int(len(cap_adjustments)),
         "markout_samples": int(markout_metrics.get("samples", 0)),
         "metrics_mode": "one_bar_markout",
         "markout_horizon_bars": 1,
@@ -1547,6 +1623,10 @@ def _run_parity_simulation(
         for client_order_id, context in sorted(order_context_by_client_id.items())
     ]
     aggregate["accepted_candidate_count"] = int(len(accepted_candidate_rows))
+    if markout_veto_config is not None:
+        aggregate["markout_veto"]["shadow_quality"] = (
+            _summarize_markout_veto_shadow_quality(accepted_candidate_rows)
+        )
     artifacts: dict[str, str] = {}
     if bool(getattr(args, "export_accepted_candidates", False)):
         artifacts.update(

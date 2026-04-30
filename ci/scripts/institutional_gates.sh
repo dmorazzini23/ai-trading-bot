@@ -390,6 +390,6 @@ log "Running promotion approval freshness gate check"
 run_promotion_approval_gate_check
 
 log "Running bytecode compile check"
-"${PYTHON_BIN}" -m py_compile $(git ls-files '*.py')
+git ls-files -z '*.py' | xargs -0 "${PYTHON_BIN}" -m py_compile
 
 log "Institutional gates passed"

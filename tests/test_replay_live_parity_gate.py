@@ -195,7 +195,7 @@ def test_replay_live_parity_gate_selects_newest_payload_ts_over_lexical_name(
     assert payload["replay_governance"]["ts_source"] == "payload"
 
 
-def test_replay_live_parity_gate_counts_cap_adjustments_as_violations(
+def test_replay_live_parity_gate_reports_cap_adjustments_without_failing(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -221,10 +221,12 @@ def test_replay_live_parity_gate_counts_cap_adjustments_as_violations(
         }
     )
 
-    assert payload["ok"] is False
-    assert "replay_violations" in payload["failed_checks"]
-    assert payload["observed"]["replay_violations_count"] == 2
-    assert payload["replay_governance"]["violations_by_code"]["cap_adjustment"] == 2
+    assert payload["ok"] is True
+    assert "replay_violations" not in payload["failed_checks"]
+    assert payload["observed"]["replay_violations_count"] == 0
+    assert payload["observed"]["replay_cap_adjustments_count"] == 2
+    assert payload["replay_governance"]["cap_adjustments_count"] == 2
+    assert "cap_adjustment" not in payload["replay_governance"]["violations_by_code"]
 
 
 def test_replay_live_parity_gate_requires_lifecycle_parity_by_default_outside_pytest(

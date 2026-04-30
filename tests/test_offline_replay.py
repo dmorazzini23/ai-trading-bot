@@ -726,6 +726,10 @@ def test_offline_replay_markout_veto_shadow_and_enforce(
     assert int(shadow["markout_veto"]["shadow_flagged"]) > 0
     assert int(enforced["markout_veto"]["rejected"]) > 0
     assert int(enforced["total_trades"]) < int(shadow["total_trades"])
+    shadow_quality = shadow["markout_veto"]["shadow_quality"]
+    assert shadow_quality["flagged"]["candidates"] > 0
+    assert shadow_quality["unflagged"]["candidates"] > 0
+    assert shadow_quality["recommendation"] in {"enforce_candidate", "shadow_only"}
 
 
 def test_markout_veto_config_preserves_zero_wrong_way_rate() -> None:
