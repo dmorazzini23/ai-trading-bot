@@ -2016,6 +2016,143 @@ def _record_prerank_shadow_snapshot(
     _record_shadow_prediction(payload)
 
 
+def _record_prerank_ml_signal_shadow(
+    *,
+    selected_symbols: Sequence[str],
+    runtime: Any | None,
+) -> None:
+    """Evaluate selected prerank symbols through the ML shadow path.
+
+    Some live execution flows use netting/prerank candidates without invoking the
+    legacy component signal aggregator. This keeps challenger telemetry aligned
+    with the actual candidate path while remaining strictly observational.
+    """
+
+    if runtime is None:
+        return
+    try:
+        shadow_enabled = bool(get_env("AI_TRADING_ML_SHADOW_ENABLED", False, cast=bool))
+    except BOT_ENGINE_FALLBACK_EXC:
+        shadow_enabled = False
+    if not shadow_enabled:
+        return
+    try:
+        enabled = bool(
+            get_env("AI_TRADING_ML_SHADOW_PRERANK_SIGNAL_ENABLED", True, cast=bool)
+        )
+    except BOT_ENGINE_FALLBACK_EXC:
+        enabled = True
+    if not enabled:
+        return
+    fetcher = getattr(runtime, "data_fetcher", None)
+    daily_getter = getattr(fetcher, "get_daily_df", None) if fetcher is not None else None
+    try:
+        limit = int(get_env("AI_TRADING_ML_SHADOW_PRERANK_SIGNAL_LIMIT", 10, cast=int))
+    except BOT_ENGINE_FALLBACK_EXC:
+        limit = 10
+    limit = max(1, min(limit, 50))
+    try:
+        model = _load_required_model()
+    except BOT_ENGINE_FALLBACK_EXC as exc:
+        logger.warning(
+            "ML_SHADOW_PRERANK_SIGNAL_MODEL_UNAVAILABLE",
+            extra={"error": str(exc)},
+        )
+        return
+    if model is None or not (hasattr(model, "predict") and hasattr(model, "predict_proba")):
+        return
+    feature_names = _model_feature_names(model)
+    manager = globals().get("signal_manager")
+    if not isinstance(manager, SignalManager):
+        manager = SignalManager()
+    for raw_symbol in list(selected_symbols)[:limit]:
+        symbol = str(raw_symbol).strip().upper()
+        if not symbol:
+            continue
+        frame: pd.DataFrame | None = None
+        try:
+            frame = fetch_minute_df_safe(symbol)
+        except BOT_ENGINE_FALLBACK_EXC as exc:
+            logger.debug(
+                "ML_SHADOW_PRERANK_SIGNAL_MINUTE_UNAVAILABLE",
+                extra={"symbol": symbol, "error": str(exc)},
+            )
+            frame = None
+        if (frame is None or getattr(frame, "empty", True)) and callable(daily_getter):
+            try:
+                try:
+                    frame = daily_getter(runtime, symbol)
+                except TypeError:
+                    frame = daily_getter(symbol)
+            except BOT_ENGINE_FALLBACK_EXC as exc:
+                logger.debug(
+                    "ML_SHADOW_PRERANK_SIGNAL_DAILY_UNAVAILABLE",
+                    extra={"symbol": symbol, "error": str(exc)},
+                )
+                frame = None
+        if frame is None or getattr(frame, "empty", True):
+            continue
+        try:
+            prepared_frame = _prepare_prerank_ml_shadow_frame(
+                frame,
+                feature_names=feature_names,
+                symbol=symbol,
+            )
+            manager.signal_ml(prepared_frame, model=model, symbol=symbol)
+        except BOT_ENGINE_FALLBACK_EXC as exc:
+            logger.warning(
+                "ML_SHADOW_PRERANK_SIGNAL_FAILED",
+                extra={"symbol": symbol, "error": str(exc)},
+            )
+
+
+def _prepare_prerank_ml_shadow_frame(
+    frame: pd.DataFrame,
+    *,
+    feature_names: Sequence[str],
+    symbol: str,
+) -> pd.DataFrame:
+    required = {str(name) for name in feature_names}
+    if required.issubset(set(frame.columns)):
+        return frame
+    work = frame.copy()
+    try:
+        work = compute_macd(work)
+        work = compute_macds(work)
+        work = compute_atr(work)
+        work = compute_vwap(work)
+        work = compute_sma(work, windows=(50, 200))
+        if "rsi" not in work.columns and "close" in work.columns:
+            close = pd.to_numeric(work["close"], errors="coerce")
+            delta = close.diff()
+            gain = delta.clip(lower=0.0)
+            loss = -delta.clip(upper=0.0)
+            avg_gain = gain.rolling(14, min_periods=1).mean()
+            avg_loss = loss.rolling(14, min_periods=1).mean()
+            rs = avg_gain / avg_loss.replace(0.0, np.nan)
+            rsi_values = 100.0 - (100.0 / (1.0 + rs))
+            neutral = (avg_gain == 0.0) & (avg_loss == 0.0)
+            work["rsi"] = rsi_values.where(~neutral, 50.0).fillna(50.0)
+        work = _augment_ml_inference_features(work, list(feature_names))
+        for column in feature_names:
+            name = str(column)
+            if name not in work.columns:
+                work[name] = 0.0
+            work[name] = (
+                pd.to_numeric(work[name], errors="coerce")
+                .replace([np.inf, -np.inf], np.nan)
+                .ffill()
+                .fillna(0.0)
+            )
+    except BOT_ENGINE_FALLBACK_EXC as exc:
+        logger.debug(
+            "ML_SHADOW_PRERANK_FEATURE_PREP_FAILED",
+            extra={"symbol": symbol, "error": str(exc)},
+        )
+        work = _augment_ml_inference_features(frame.copy(), list(feature_names))
+    return work
+
+
 def _pre_rank_execution_candidates(
     symbols: Sequence[str],
     *,
@@ -2339,6 +2476,10 @@ def _pre_rank_execution_candidates(
         selected_symbols=selected,
         rank_source=rank_source,
         top_n=top_n,
+        runtime=runtime,
+    )
+    _record_prerank_ml_signal_shadow(
+        selected_symbols=selected,
         runtime=runtime,
     )
     return selected

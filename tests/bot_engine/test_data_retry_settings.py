@@ -7,6 +7,8 @@ import pytest
 from ai_trading.core import bot_engine
 from ai_trading.core import netting_candidate_rank
 
+pd = pytest.importorskip("pandas")
+
 
 @pytest.fixture(autouse=True)
 def _disable_shadow_snapshot_by_default(monkeypatch):
@@ -268,6 +270,132 @@ def test_pre_rank_execution_candidates_records_shadow_snapshot_when_enabled(monk
     assert latest["selected"] == 2
     assert latest["top_n"] == 2
     assert [entry["symbol"] for entry in latest["ranked"]] == ["AAPL", "GOOG"]
+
+
+def test_prerank_ml_signal_shadow_scores_selected_symbols(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_PRERANK_SIGNAL_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_PRERANK_SIGNAL_LIMIT", "2")
+
+    class Model:
+        def predict(self, _frame):
+            return [1]
+
+        def predict_proba(self, _frame):
+            return [[0.2, 0.8]]
+
+    class Fetcher:
+        def get_daily_df(self, _runtime, _symbol):
+            return pd.DataFrame(
+                {
+                    "open": [100.0] * 20,
+                    "high": [101.0] * 20,
+                    "low": [99.0] * 20,
+                    "close": [100.0] * 20,
+                    "volume": [1000.0] * 20,
+                }
+            )
+
+    calls: list[tuple[str | None, object]] = []
+    manager = bot_engine.SignalManager()
+    monkeypatch.setattr(
+        manager,
+        "signal_ml",
+        lambda frame, model=None, symbol=None: calls.append((symbol, model)),
+    )
+    monkeypatch.setattr(bot_engine, "signal_manager", manager)
+    monkeypatch.setattr(bot_engine, "_load_required_model", lambda: Model())
+    monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", lambda symbol: None)
+
+    runtime = type("_Runtime", (), {"data_fetcher": Fetcher()})()
+
+    bot_engine._record_prerank_ml_signal_shadow(
+        selected_symbols=["AAPL", "MSFT", "GOOG"],
+        runtime=runtime,
+    )
+
+    assert [symbol for symbol, _model in calls] == ["AAPL", "MSFT"]
+    assert all(isinstance(model, Model) for _symbol, model in calls)
+
+
+def test_prerank_ml_signal_shadow_prefers_minute_frame(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_PRERANK_SIGNAL_ENABLED", "1")
+
+    class Model:
+        def predict(self, _frame):
+            return [1]
+
+        def predict_proba(self, _frame):
+            return [[0.2, 0.8]]
+
+    class Fetcher:
+        def get_daily_df(self, _runtime, _symbol):
+            raise AssertionError("daily fallback should not be used when minute frame exists")
+
+    minute_frame = pd.DataFrame(
+        {
+            "open": [100.0] * 20,
+            "high": [101.0] * 20,
+            "low": [99.0] * 20,
+            "close": [100.0] * 20,
+            "volume": [1000.0] * 20,
+        }
+    )
+    calls: list[object] = []
+    manager = bot_engine.SignalManager()
+    monkeypatch.setattr(
+        manager,
+        "signal_ml",
+        lambda frame, model=None, symbol=None: calls.append(frame),
+    )
+    monkeypatch.setattr(bot_engine, "signal_manager", manager)
+    monkeypatch.setattr(bot_engine, "_load_required_model", lambda: Model())
+    monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", lambda symbol: minute_frame)
+
+    runtime = type("_Runtime", (), {"data_fetcher": Fetcher()})()
+
+    bot_engine._record_prerank_ml_signal_shadow(
+        selected_symbols=["AAPL"],
+        runtime=runtime,
+    )
+
+    assert len(calls) == 1
+
+
+def test_prepare_prerank_ml_shadow_frame_builds_replay_features() -> None:
+    frame = pd.DataFrame(
+        {
+            "open": [100.0 + idx for idx in range(240)],
+            "high": [101.0 + idx for idx in range(240)],
+            "low": [99.0 + idx for idx in range(240)],
+            "close": [100.0 + idx for idx in range(240)],
+            "volume": [1000.0] * 240,
+        }
+    )
+    feature_names = [
+        "rsi",
+        "macd",
+        "atr",
+        "vwap",
+        "sma_50",
+        "sma_200",
+        "signal",
+        "atr_pct",
+        "vwap_distance",
+        "sma_spread",
+        "macd_signal_gap",
+        "rsi_centered",
+    ]
+
+    prepared = bot_engine._prepare_prerank_ml_shadow_frame(
+        frame,
+        feature_names=feature_names,
+        symbol="AAPL",
+    )
+
+    assert set(feature_names).issubset(prepared.columns)
+    assert prepared[feature_names].iloc[-1].notna().all()
 
 
 def test_pre_rank_execution_candidates_adaptive_top_n_from_submit_cap(monkeypatch):
