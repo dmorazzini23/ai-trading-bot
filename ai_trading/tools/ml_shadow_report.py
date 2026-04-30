@@ -44,6 +44,32 @@ def _load_shadow_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _bar_timestamp_text(row: Mapping[str, Any]) -> str:
+    market = row.get("market")
+    if isinstance(market, Mapping):
+        return str(market.get("bar_timestamp") or "")
+    return ""
+
+
+def _is_daily_frame_row(row: Mapping[str, Any]) -> bool:
+    return "T00:00:00" in _bar_timestamp_text(row)
+
+
+def _filter_shadow_rows(
+    rows: list[dict[str, Any]],
+    *,
+    frame_filter: str,
+) -> list[dict[str, Any]]:
+    normalized = str(frame_filter or "all").strip().lower()
+    if normalized == "all":
+        return rows
+    if normalized == "minute":
+        return [row for row in rows if not _is_daily_frame_row(row)]
+    if normalized == "daily":
+        return [row for row in rows if _is_daily_frame_row(row)]
+    raise ValueError(f"Unsupported frame filter: {frame_filter}")
+
+
 def _bool_value(row: Mapping[str, Any], key: str) -> bool:
     value = row.get(key)
     if isinstance(value, bool):
@@ -285,16 +311,26 @@ def _markout_summary(
 
 def build_shadow_report(args: argparse.Namespace) -> dict[str, Any]:
     input_path = Path(args.input_jsonl)
-    rows = _load_shadow_rows(input_path)
+    raw_rows = _load_shadow_rows(input_path)
+    frame_filter = str(getattr(args, "frame_filter", "all") or "all")
+    rows = _filter_shadow_rows(raw_rows, frame_filter=frame_filter)
     bars_by_symbol: dict[str, pd.DataFrame] = {}
     if args.data_dir:
         bars_by_symbol = _load_bars_by_symbol(Path(args.data_dir), str(args.timestamp_col))
     symbols = Counter(str(row.get("symbol") or "").strip().upper() for row in rows)
+    frame_counts = Counter(
+        "daily" if _is_daily_frame_row(row) else "minute"
+        for row in raw_rows
+    )
     report = {
         "schema_version": "1.0.0",
         "artifact_type": "ml_shadow_report",
         "generated_at": datetime.now(UTC).isoformat(),
         "input_jsonl": str(input_path),
+        "frame_filter": frame_filter,
+        "raw_rows": int(len(raw_rows)),
+        "filtered_rows": int(len(rows)),
+        "raw_frame_counts": dict(sorted(frame_counts.items())),
         "decision_summary": _decision_summary(rows),
         "markout_summary": _markout_summary(
             rows,
@@ -316,7 +352,12 @@ def build_shadow_report(args: argparse.Namespace) -> dict[str, Any]:
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     logger.info(
         "ML_SHADOW_REPORT_WRITTEN",
-        extra={"path": str(output_path), "rows": int(len(rows))},
+        extra={
+            "path": str(output_path),
+            "rows": int(len(rows)),
+            "raw_rows": int(len(raw_rows)),
+            "frame_filter": frame_filter,
+        },
     )
     return report
 
@@ -332,6 +373,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--horizon-bars", type=int, default=1)
     parser.add_argument("--fee-bps", type=float, default=1.0)
     parser.add_argument("--slippage-bps", type=float, default=2.0)
+    parser.add_argument(
+        "--frame-filter",
+        choices=("all", "minute", "daily"),
+        default="all",
+        help="Filter shadow rows by bar timestamp class before summarizing.",
+    )
     return parser
 
 

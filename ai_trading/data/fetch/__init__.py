@@ -9259,7 +9259,7 @@ def _fetch_bars(
                 f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=provider_disabled",
             )
     fallback_key = _fallback_key(symbol, _interval, _start, _end)
-    if fallback_key in _FALLBACK_WINDOWS:
+    if fallback_key in _FALLBACK_WINDOWS and not bypass_backup_skip:
         override_feed = _FEED_OVERRIDE_BY_TF.get((symbol, _interval))
         override_norm: str | None = None
         if override_feed is not None:
@@ -9285,7 +9285,7 @@ def _fetch_bars(
     except FETCH_FALLBACK_EXCEPTIONS:
         now_s = int(_time_now())
     until = _FALLBACK_UNTIL.get((symbol, _interval))
-    if until and now_s < until:
+    if until and now_s < until and not bypass_backup_skip:
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
@@ -13935,7 +13935,11 @@ def get_minute_df(
             extra={"source": source_label, "frequency": "1Min", "detail": str(exc)},
         )
         return None
-    if fallback_allowed_flag and _BACKUP_SKIP_UNTIL.get(tf_key) is None:
+    if (
+        fallback_allowed_flag
+        and _BACKUP_SKIP_UNTIL.get(tf_key) is None
+        and (used_backup or (fallback_frame is not None and not getattr(fallback_frame, "empty", True)))
+    ):
         _set_backup_skip(symbol, "1Min")
     return df
 

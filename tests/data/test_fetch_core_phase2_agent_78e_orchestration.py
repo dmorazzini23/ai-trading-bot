@@ -511,6 +511,52 @@ def test_get_minute_df_backup_skip_probe_forces_primary_with_bypass(fetch_env: d
     assert calls and calls[0]["kwargs"]["bypass_backup_skip"] is True
 
 
+def test_fetch_bars_recovery_probe_bypasses_fallback_ttl_and_exact_window(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    tf_key = ("AAPL", "1Min")
+    fetch._BACKUP_SKIP_UNTIL[tf_key] = datetime.now(tz=UTC) + timedelta(minutes=5)
+    fetch._SKIPPED_SYMBOLS.add(tf_key)
+    fetch._FALLBACK_UNTIL[tf_key] = int((datetime.now(tz=UTC) + timedelta(minutes=5)).timestamp())
+    fetch._FALLBACK_WINDOWS.add(fetch._fallback_key("AAPL", "1Min", BASE_START, BASE_END))
+    monkeypatch.setattr(fetch, "_session_get", _direct_session_get)
+    monkeypatch.setattr(
+        fetch,
+        "_HTTP_SESSION",
+        _Session(_Resp(200, {"bars": [_bar_payload(close=109.0)]})),
+    )
+    monkeypatch.setattr(
+        fetch,
+        "_safe_backup_get_bars",
+        lambda *_args, **_kwargs: pytest.fail("recovery probe should not route to backup"),
+    )
+    monkeypatch.setattr(
+        fetch,
+        "_backup_get_bars",
+        lambda *_args, **_kwargs: pytest.fail("recovery probe should not route to backup"),
+    )
+
+    result = fetch._fetch_bars(
+        "AAPL",
+        BASE_START,
+        BASE_END,
+        "1Min",
+        feed="iex",
+        bypass_backup_skip=True,
+    )
+
+    assert not result.empty
+    assert list(result["close"]) == [109.0]
+
+
+def test_get_minute_df_primary_success_does_not_schedule_backup_skip(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fetch, "_fetch_bars", lambda *_args, **_kwargs: _frame(provider="alpaca"))
+
+    result = fetch.get_minute_df("AAPL", BASE_START, BASE_END, feed="iex")
+
+    assert not result.empty
+    assert ("AAPL", "1Min") not in fetch._BACKUP_SKIP_UNTIL
+    assert ("AAPL", "1Min") not in fetch._SKIPPED_SYMBOLS
+
+
 def test_get_minute_df_empty_primary_switches_to_alt_feed_success(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
