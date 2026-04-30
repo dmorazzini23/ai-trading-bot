@@ -9,15 +9,19 @@ User=aiuser
 Group=aiuser
 WorkingDirectory=/home/aiuser/ai-trading-bot
 Environment=PATH=/home/aiuser/ai-trading-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
-EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
-EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime
+Environment=AI_TRADING_ENV_SRC=/etc/ai-trading-bot/ai-trading.env
+Environment=AI_TRADING_RUNTIME_ENV_DST=/run/ai-trading-bot/ai-trading-runtime.env
+Environment=AI_TRADING_RUNTIME_ENV_PATH=/run/ai-trading-bot/ai-trading-runtime.env
+EnvironmentFile=-/etc/ai-trading-bot/ai-trading.env
+EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env
 ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh
 ExecStart=/bin/bash -lc 'bash /home/aiuser/ai-trading-bot/scripts/runtime_phase1_health_check_runner.sh'
 StandardOutput=journal
 StandardError=journal
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/home/aiuser/ai-trading-bot
+RuntimeDirectory=ai-trading-bot
+ReadWritePaths=/run/ai-trading-bot
 
 [Install]
 WantedBy=multi-user.target

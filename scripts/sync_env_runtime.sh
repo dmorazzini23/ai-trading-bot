@@ -19,4 +19,11 @@ if ! "${PYTHON_BIN}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] 
   exit 1
 fi
 
-"${PYTHON_BIN}" scripts/runtime_env_sync.py --src .env --dst .env.runtime
+ENV_SRC="${AI_TRADING_ENV_SRC:-.env}"
+if [[ "${ENV_SRC}" == "/etc/ai-trading-bot/ai-trading.env" && ! -f "${ENV_SRC}" ]]; then
+  ENV_SRC=".env"
+fi
+RUNTIME_ENV_DST="${AI_TRADING_RUNTIME_ENV_DST:-.env.runtime}"
+mkdir -p "$(dirname "${RUNTIME_ENV_DST}")"
+
+"${PYTHON_BIN}" scripts/runtime_env_sync.py --src "${ENV_SRC}" --dst "${RUNTIME_ENV_DST}"

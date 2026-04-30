@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import ai_trading.app as app_mod
 from ai_trading.app import create_app
@@ -113,3 +114,24 @@ def test_control_plane_section_service_error_returns_503(monkeypatch) -> None:
     payload = response.get_json()
     assert payload["ok"] is False
     assert payload["error"] == "operator control-plane section unavailable"
+
+
+def test_metrics_endpoint_rejects_non_allowlisted_remote(monkeypatch) -> None:
+    monkeypatch.setattr(
+        app_mod,
+        "_managed_env",
+        lambda name, default=None: {
+            "AI_TRADING_METRICS_ALLOWED_REMOTE_ADDRS": "127.0.0.1,::1",
+        }.get(name, default),
+    )
+    monkeypatch.setattr(
+        app_mod,
+        "request",
+        SimpleNamespace(remote_addr="203.0.113.10", headers={}),
+    )
+
+    response = app_mod._metrics_access_error()
+
+    assert response is not None
+    assert response[1] == 403
+    assert "metrics access denied" in response[0]

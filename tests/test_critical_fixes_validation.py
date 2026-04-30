@@ -207,9 +207,9 @@ class TestCriticalFixes(unittest.TestCase):
         """Packaged units should keep managed runtime settings authoritative."""
         systemd_dir = Path(os.getcwd()) / "packaging" / "systemd"
         main_content = (systemd_dir / "ai-trading.service").read_text(encoding="utf-8")
-        env_file_idx = main_content.index("EnvironmentFile=-/home/aiuser/ai-trading-bot/.env")
+        env_file_idx = main_content.index("EnvironmentFile=-/etc/ai-trading-bot/ai-trading.env")
         runtime_env_file_idx = main_content.index(
-            "EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime"
+            "EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env"
         )
         paper_url_idx = main_content.index(
             "Environment=ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets"
@@ -240,8 +240,8 @@ class TestCriticalFixes(unittest.TestCase):
             "ai-trading-runtime-prune.service",
         ):
             content = (systemd_dir / service_name).read_text(encoding="utf-8")
-            dotenv_idx = content.index("EnvironmentFile=-/home/aiuser/ai-trading-bot/.env")
-            runtime_idx = content.index("EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime")
+            dotenv_idx = content.index("EnvironmentFile=-/etc/ai-trading-bot/ai-trading.env")
+            runtime_idx = content.index("EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env")
             sync_idx = content.index("ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh")
             exec_idx = content.index("ExecStart=")
             self.assertLess(dotenv_idx, runtime_idx, f"{service_name} should load .env.runtime last")

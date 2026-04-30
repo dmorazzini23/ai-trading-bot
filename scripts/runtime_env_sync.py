@@ -8,6 +8,7 @@ import json
 import os
 import pwd
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -46,6 +47,27 @@ _DEFAULT_MANAGED_KEYS = {
 
 _BACKEND_NONE = {"", "none", "off", "disabled"}
 _BACKEND_AWS = {"aws-secrets-manager", "aws_sm", "aws"}
+_AWS_ENV_ALLOWLIST = {
+    "AWS_ACCESS_KEY_ID",
+    "AWS_CA_BUNDLE",
+    "AWS_CONFIG_FILE",
+    "AWS_DEFAULT_REGION",
+    "AWS_EC2_METADATA_DISABLED",
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_ROLE_ARN",
+    "AWS_ROLE_SESSION_NAME",
+    "AWS_SDK_LOAD_CONFIG",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "HOME",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "PATH",
+}
 
 
 @dataclass(frozen=True)
@@ -160,7 +182,7 @@ def _resolve_setting(
 
 
 def _fetch_aws_secret_payload(secret_id: str, *, region: str, profile: str) -> dict[str, str]:
-    command: list[str] = ["aws"]
+    command: list[str] = [_resolve_aws_cli_path()]
     if profile:
         command.extend(["--profile", profile])
     if region:
@@ -208,6 +230,21 @@ def _fetch_aws_secret_payload(secret_id: str, *, region: str, profile: str) -> d
     return parsed
 
 
+def _resolve_aws_cli_path() -> str:
+    configured = str(os.getenv("AI_TRADING_AWS_CLI_PATH") or os.getenv("AWS_CLI_PATH") or "").strip()
+    if configured:
+        path = Path(configured).expanduser()
+        if not path.is_absolute():
+            raise RuntimeError("AI_TRADING_AWS_CLI_PATH must be an absolute path")
+        if not path.exists():
+            raise RuntimeError(f"configured aws CLI path does not exist: {path}")
+        return str(path)
+    resolved = shutil.which("aws")
+    if resolved:
+        return resolved
+    return "aws"
+
+
 def _parse_secret_string(raw: str) -> dict[str, str]:
     text = raw.strip()
     if not text:
@@ -228,7 +265,7 @@ def _parse_secret_string(raw: str) -> dict[str, str]:
 
 
 def _aws_cli_env() -> dict[str, str]:
-    env = dict(os.environ)
+    env = {key: value for key, value in os.environ.items() if key in _AWS_ENV_ALLOWLIST}
     candidate_homes: list[Path] = []
     home = str(env.get("HOME") or "").strip()
     if home:
@@ -331,6 +368,8 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
     out_entries: list[EnvEntry] = []
     seen: set[str] = set()
     manager_overrides_applied = 0
+    managed_keys_verified = 0
+    managed_secret_values_omitted = 0
     for entry in entries:
         key = entry.key
         if key in DEPRECATED_KEYS:
@@ -339,12 +378,14 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
         if key in managed_keys and backend not in _BACKEND_NONE:
             managed_value = manager_values.get(key)
             if managed_value not in (None, ""):
-                value = managed_value
-                manager_overrides_applied += 1
+                managed_keys_verified += 1
             elif require_managed:
                 raise RuntimeError(
                     f"managed secret key '{key}' missing in secrets backend payload"
                 )
+            managed_secret_values_omitted += 1
+            seen.add(key)
+            continue
         out_entries.append(EnvEntry(key=key, value=value))
         seen.add(key)
 
@@ -359,9 +400,9 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
                         f"managed secret key '{key}' missing in secrets backend payload"
                     )
                 continue
-            out_entries.append(EnvEntry(key=key, value=managed_value))
+            managed_keys_verified += 1
+            managed_secret_values_omitted += 1
             seen.add(key)
-            manager_overrides_applied += 1
 
     rendered = "\n".join(
         f"{entry.key}={_quote_env_value(entry.value)}"
@@ -377,6 +418,9 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
         "line_count": len(out_entries),
         "managed_key_count": len(managed_keys),
         "manager_overrides_applied": manager_overrides_applied,
+        "managed_keys_verified": managed_keys_verified,
+        "managed_secret_values_omitted": managed_secret_values_omitted,
+        "managed_secret_values_written": 0 if backend not in _BACKEND_NONE else manager_overrides_applied,
         "secrets_backend": backend or "none",
     }
 

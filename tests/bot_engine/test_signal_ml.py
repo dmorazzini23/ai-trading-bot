@@ -288,6 +288,10 @@ def test_signal_ml_shadow_logs_predictions(monkeypatch, tmp_path):
     assert payload["agreement"] is False
     assert payload["features"]["rsi"] == pytest.approx(30.0, abs=1e-6)
     assert payload["market"]["entry_close"] == pytest.approx(1.0, abs=1e-6)
+    assert "provider" in payload
+    assert "quote_status" in payload
+    assert payload["cost"]["phase"] == "decision"
+    assert payload["cost"]["expected_entry_price"] == pytest.approx(1.0, abs=1e-6)
 
 
 def test_signal_ml_reports_training_serving_skew(monkeypatch, caplog):

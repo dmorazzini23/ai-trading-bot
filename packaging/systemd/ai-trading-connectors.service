@@ -9,15 +9,19 @@ User=aiuser
 Group=aiuser
 WorkingDirectory=/home/aiuser/ai-trading-bot
 Environment=PATH=/home/aiuser/ai-trading-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
-EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
-EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime
+Environment=AI_TRADING_ENV_SRC=/etc/ai-trading-bot/ai-trading.env
+Environment=AI_TRADING_RUNTIME_ENV_DST=/run/ai-trading-bot/ai-trading-runtime.env
+Environment=AI_TRADING_RUNTIME_ENV_PATH=/run/ai-trading-bot/ai-trading-runtime.env
+EnvironmentFile=-/etc/ai-trading-bot/ai-trading.env
+EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env
 ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh
 ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python /home/aiuser/ai-trading-bot/scripts/connector_incident_dispatch.py
 StandardOutput=journal
 StandardError=journal
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/ai-trading-bot/runtime /home/aiuser/ai-trading-bot
+RuntimeDirectory=ai-trading-bot
+ReadWritePaths=/var/lib/ai-trading-bot/runtime /run/ai-trading-bot
 
 [Install]
 WantedBy=multi-user.target

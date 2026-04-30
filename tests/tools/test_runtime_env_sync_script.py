@@ -76,7 +76,9 @@ def test_render_runtime_env_quotes_values_for_envfile(tmp_path: Path) -> None:
     assert 'AI_TRADING_PROM_REMOTE_WRITE_PASSWORD="pa ss\'word;$(touch /tmp/nope)"' in rendered
 
 
-def test_render_runtime_env_applies_aws_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_render_runtime_env_verifies_aws_secrets_without_writing_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     src = tmp_path / ".env"
     dst = tmp_path / ".env.runtime"
     src.write_text(
@@ -106,11 +108,13 @@ def test_render_runtime_env_applies_aws_overrides(tmp_path: Path, monkeypatch: p
     summary = runtime_env_sync._render_runtime_env(src, dst)
     rendered = dst.read_text(encoding="utf-8")
 
-    assert "ALPACA_API_KEY=remote-key" in rendered
-    assert "ALPACA_SECRET_KEY=remote-secret" in rendered
+    assert "ALPACA_API_KEY" not in rendered
+    assert "ALPACA_SECRET_KEY" not in rendered
     assert "HEALTHCHECK_PORT=8081" in rendered
     assert summary["secrets_backend"] == "aws-secrets-manager"
-    assert summary["manager_overrides_applied"] == 2
+    assert summary["manager_overrides_applied"] == 0
+    assert summary["managed_keys_verified"] == 2
+    assert summary["managed_secret_values_written"] == 0
 
 
 def test_render_runtime_env_require_managed_fails_when_missing(
@@ -172,7 +176,20 @@ def test_render_runtime_env_excludes_selected_managed_keys(
     rendered = dst.read_text(encoding="utf-8")
     rendered_lines = rendered.splitlines()
 
-    assert "ALPACA_API_KEY=remote-key" in rendered
+    assert "ALPACA_API_KEY" not in rendered
     assert "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD=local-prom-password" in rendered_lines
     assert "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD=remote-prom-password" not in rendered
-    assert summary["manager_overrides_applied"] == 1
+    assert summary["manager_overrides_applied"] == 0
+    assert summary["managed_keys_verified"] == 1
+
+
+def test_aws_cli_env_drops_unrelated_application_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "local-secret")
+    monkeypatch.setenv("AI_TRADING_SLACK_WEBHOOK_URL", "https://hooks.slack.example/secret")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+
+    env = runtime_env_sync._aws_cli_env()
+
+    assert env["AWS_REGION"] == "us-east-1"
+    assert "ALPACA_SECRET_KEY" not in env
+    assert "AI_TRADING_SLACK_WEBHOOK_URL" not in env

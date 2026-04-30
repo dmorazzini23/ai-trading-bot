@@ -254,6 +254,39 @@ def test_operator_manual_overrides_requires_auth(monkeypatch, tmp_path):
     assert payload["ok"] is False
 
 
+def test_operator_manual_overrides_requires_allowlisted_bound_operator(monkeypatch, tmp_path):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
+    monkeypatch.setenv("AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH", str(tmp_path / "toggles.json"))
+    app = create_app()
+    client = app.test_client()
+
+    response = _post_json(
+        client,
+        "/operator/control-plane/manual-overrides",
+        {"disabled_slices": ["gate:max_loss"]},
+    )
+
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert payload["ok"] is False
+
+
+def test_operator_manual_overrides_rejects_malformed_body(monkeypatch, tmp_path):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
+    monkeypatch.setenv("AI_TRADING_OPERATOR_OVERRIDE_OPERATORS", "ops@example.com")
+    monkeypatch.setenv("AI_TRADING_POLICY_RUNTIME_TOGGLES_PATH", str(tmp_path / "toggles.json"))
+    app = create_app()
+    client = app.test_client()
+
+    response = _post_json(client, "/operator/control-plane/manual-overrides", {"diagnostics": {}})
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["ok"] is False
+
+
 def test_operator_read_endpoints_require_auth(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
     _configure_operator_auth(monkeypatch)

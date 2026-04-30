@@ -11,7 +11,7 @@ _RE_KEYS = re.compile(
     (
         r"(api[_-]?key|secret|token|password|pwd|passwd|connection[_-]?string|"
         r"database[_-]?url|dsn|authorization|bearer|credential|private[_-]?key|"
-        r"access[_-]?key|session[_-]?id|oauth|(^|[_-])key($|[_-]))"
+        r"access[_-]?key|session[_-]?id|oauth|webhook[_-]?url|(^|[_-])key($|[_-]))"
     ),
     re.IGNORECASE,
 )
@@ -31,6 +31,18 @@ _SENSITIVE_ENV = {
     f"{_LEGACY_ALPACA_PREFIX}API_KEY_ID",
     f"{_LEGACY_ALPACA_PREFIX}API_SECRET_KEY",
     "WEBHOOK_SECRET",
+    "AI_TRADING_SLACK_WEBHOOK_URL",
+    "SLACK_WEBHOOK_URL",
+    "AI_TRADING_OPENCLAW_RUNTIME_WEBHOOK_URL",
+    "OPENCLAW_RUNTIME_WEBHOOK_URL",
+    "AI_TRADING_OPENCLAW_HOOK_TOKEN",
+    "OPENCLAW_HOOK_TOKEN",
+    "AI_TRADING_JSM_OPS_API_KEY",
+    "AI_TRADING_JSM_OPS_API_TOKEN",
+    "AI_TRADING_JSM_OPS_BEARER_TOKEN",
+    "AI_TRADING_GRAFANA_API_TOKEN",
+    "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD",
+    "TRADIER_ACCESS_TOKEN",
     "NEWS_API_KEY",
     "FINNHUB_API_KEY",
     "SENTIMENT_API_KEY",

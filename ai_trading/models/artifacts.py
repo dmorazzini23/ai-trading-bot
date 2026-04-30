@@ -144,7 +144,14 @@ def enforce_artifact_verification(
 ) -> Path:
     resolved = Path(model_path).expanduser().resolve()
     verify_enabled = bool(get_env("AI_TRADING_MODEL_VERIFY_CHECKSUM", "1", cast=bool))
+    execution_mode = _execution_mode()
     if not verify_enabled:
+        if execution_mode in {"paper", "live"}:
+            logger.error(
+                "MODEL_VERIFICATION_DISABLED_BLOCKED",
+                extra={"model_path": str(resolved), "execution_mode": execution_mode},
+            )
+            raise RuntimeError("MODEL_VERIFICATION_DISABLED_BLOCKED")
         return resolved
 
     manifest_file = Path(manifest_path).expanduser().resolve() if manifest_path else default_manifest_path(resolved)
@@ -152,7 +159,6 @@ def enforce_artifact_verification(
     if ok:
         return resolved
 
-    execution_mode = _execution_mode()
     details = {
         "model_path": str(resolved),
         "manifest_path": str(manifest_file),

@@ -41,13 +41,15 @@ def _safe_float(value: Any) -> float | None:
     return float(parsed)
 
 
-def _canonical_intent_side(side: str) -> str:
+def _canonical_intent_side(side: str) -> str | None:
     normalized = str(side or "").strip().lower()
     if normalized in {"sell_short", "short"}:
         return "sell_short"
     if normalized in {"sell", "exit"}:
         return "sell"
-    return "buy"
+    if normalized in {"buy", "long", "buy_to_cover", "cover"}:
+        return "buy"
+    return None
 
 
 def _is_opening_trade(*, side: str, current_qty: int) -> bool:
@@ -264,6 +266,8 @@ def _resolve_execution_intent_context(
         str(exec_kwargs.get("decision_trace_id") or "").strip() or None
     )
     intent_side = _canonical_intent_side(side_norm)
+    if intent_side is None:
+        raise ValueError(f"invalid order side: {side_norm!r}")
     delta_shares = int(qty) if intent_side == "buy" else -int(qty)
     reference_price = float(submit_arrival_price) if submit_arrival_price is not None else float(price)
     spread_bps = _quote_spread_bps(
@@ -506,6 +510,20 @@ def submit_order_runtime(
             be.logger.warning("Liquidity checks failed open-loop: %s", exc)
 
     side_norm = str(side).lower().strip()
+    intent_side = _canonical_intent_side(side_norm)
+    if intent_side is None:
+        be.logger.warning(
+            "INVALID_ORDER_SIDE_BLOCK",
+            extra={"symbol": symbol, "qty": qty, "side": side},
+        )
+        _record_skip_submit(
+            be,
+            symbol=symbol,
+            side=side_norm or "unknown",
+            reason="INVALID_ORDER_SIDE_BLOCK",
+            detail=str(side),
+        )
+        return None
     if side_norm in ("sell_short", "short"):
         core_side = be.CoreOrderSide.SELL_SHORT
     elif side_norm in ("sell", "exit"):

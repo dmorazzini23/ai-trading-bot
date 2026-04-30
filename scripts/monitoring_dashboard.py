@@ -12,7 +12,9 @@ This module provides comprehensive real-time monitoring and analytics:
 AI-AGENT-REF: Production-grade monitoring dashboard system
 """
 from __future__ import annotations
-import logging
+import hmac
+import html
+import ipaddress
 import statistics
 import threading
 import time
@@ -21,7 +23,20 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
-from flask import Flask, jsonify, render_template_string, request
+try:
+    from flask import Flask, jsonify, render_template_string as flask_render_template_string, request
+except ImportError:
+    try:
+        from flask import Flask, jsonify, request
+    except ImportError:
+        from flask import Flask, jsonify
+
+        request = None  # type: ignore[assignment]
+
+    def flask_render_template_string(source: str, **context: Any) -> str:
+        return source
+from ai_trading.config.management import get_env
+from ai_trading.logging import get_logger
 
 @dataclass
 class TradingMetrics:
@@ -71,11 +86,40 @@ class RiskMetrics:
     leverage_ratio: float
     margin_utilization: float
 
+@dataclass
+class AlertRecord:
+    """Stored dashboard alert payload."""
+    timestamp: str
+    level: str
+    message: str
+    details: dict[str, Any]
+
+def _safe_text(value: Any, *, limit: int=512) -> str:
+    return html.escape(str(value or "")[:limit], quote=True)
+
+def _safe_details(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    sanitized: dict[str, Any] = {}
+    for raw_key, raw_value in list(value.items())[:50]:
+        key = _safe_text(raw_key, limit=128)
+        if isinstance(raw_value, int | float | bool) or raw_value is None:
+            sanitized[key] = raw_value
+        else:
+            sanitized[key] = _safe_text(raw_value, limit=512)
+    return sanitized
+
+def _remote_addr_is_local(remote_addr: str) -> bool:
+    try:
+        return ipaddress.ip_address(remote_addr).is_loopback
+    except ValueError:
+        return False
+
 class MonitoringDashboard:
     """Real-time monitoring dashboard system."""
 
     def __init__(self, port: int=5000):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.port = port
         self.trading_metrics: deque = deque(maxlen=1440)
         self.performance_kpis: deque = deque(maxlen=1440)
@@ -84,9 +128,14 @@ class MonitoringDashboard:
         self.active_orders: dict[str, Any] = {}
         self.alerts: deque = deque(maxlen=100)
         self.app = Flask(__name__)
+        app_config = getattr(self.app, "config", None)
+        if isinstance(app_config, dict):
+            app_config["MAX_CONTENT_LENGTH"] = int(
+                get_env("AI_TRADING_DASHBOARD_MAX_CONTENT_LENGTH", "65536", cast=int) or 65536
+            )
         self.setup_routes()
         self._monitoring_active = False
-        self._monitor_thread = None
+        self._monitor_thread: threading.Thread | None = None
         self.alert_callbacks: list[Callable] = []
         self.alert_thresholds = {'execution_latency_ms': 50.0, 'error_rate_percent': 5.0, 'drawdown_percent': 10.0, 'cpu_utilization': 80.0, 'memory_utilization': 85.0}
         self.trade_history: deque = deque(maxlen=10000)
@@ -96,10 +145,33 @@ class MonitoringDashboard:
     def setup_routes(self):
         """Setup Flask routes for web dashboard."""
 
+        before_request = getattr(self.app, "before_request", None)
+        if callable(before_request):
+            @before_request
+            def require_dashboard_access():
+                if request is None:
+                    return jsonify({"error": "request context unavailable"}), 503
+                remote_addr = str(request.remote_addr or "")
+                if _remote_addr_is_local(remote_addr):
+                    return None
+                expected_token = str(get_env("AI_TRADING_DASHBOARD_TOKEN", "") or "").strip()
+                if expected_token:
+                    authorization = str(request.headers.get("Authorization", "") or "")
+                    scheme, _, token = authorization.partition(" ")
+                    if scheme.lower() == "bearer" and hmac.compare_digest(
+                        token.strip(), expected_token
+                    ):
+                        return None
+                self.logger.warning(
+                    "DASHBOARD_ACCESS_REJECTED",
+                    extra={"remote_addr": remote_addr or "unknown"},
+                )
+                return jsonify({"error": "dashboard access denied"}), 403
+
         @self.app.route('/')
         def dashboard():
             """Main dashboard page."""
-            return render_template_string(DASHBOARD_HTML_TEMPLATE)
+            return flask_render_template_string(DASHBOARD_HTML_TEMPLATE)
 
         @self.app.route('/api/metrics')
         def get_metrics():
@@ -135,17 +207,25 @@ class MonitoringDashboard:
         def handle_alerts():
             """Handle alert operations."""
             if request.method == 'POST':
-                alert_data = request.json
+                if request is None:
+                    return jsonify({'error': 'request context unavailable'}), 503
+                alert_data = request.get_json(silent=True)
+                if not isinstance(alert_data, dict):
+                    return jsonify({'error': 'JSON object required'}), 400
                 self.add_alert(alert_data.get('level', 'INFO'), alert_data.get('message', ''), alert_data.get('details', {}))
                 return jsonify({'status': 'success'})
             else:
                 return jsonify([asdict(alert) for alert in list(self.alerts)])
 
-    def start_dashboard(self, debug: bool=False):
+    def start_dashboard(self, debug: bool=False, host: str | None=None):
         """Start the web dashboard."""
         try:
-            self.logger.info(f'Starting monitoring dashboard on port {self.port}')
-            self.app.run(host='0.0.0.0', port=self.port, debug=debug, threaded=True)
+            bind_host = host or str(get_env('AI_TRADING_DASHBOARD_HOST', '127.0.0.1') or '127.0.0.1')
+            self.logger.info(
+                'DASHBOARD_STARTING',
+                extra={'host': bind_host, 'port': self.port},
+            )
+            self.app.run(host=bind_host, port=self.port, debug=debug, threaded=True)
         except (ValueError, TypeError) as e:
             self.logger.error(f'Failed to start dashboard: {e}')
 
@@ -154,8 +234,9 @@ class MonitoringDashboard:
         if self._monitoring_active:
             return
         self._monitoring_active = True
-        self._monitor_thread = threading.Thread(target=self._monitoring_loop, args=(interval_seconds,), daemon=True)
-        self._monitor_thread.start()
+        thread = threading.Thread(target=self._monitoring_loop, args=(interval_seconds,), daemon=True)
+        self._monitor_thread = thread
+        thread.start()
         self.logger.info('Background monitoring started')
 
     def stop_monitoring(self):
@@ -251,19 +332,28 @@ class MonitoringDashboard:
 
     def add_alert(self, level: str, message: str, details: dict[str, Any]=None):
         """Add new alert."""
-        alert = {'timestamp': datetime.now(UTC).isoformat(), 'level': level, 'message': message, 'details': details or {}}
+        normalized_level = str(level or "INFO").strip().upper()
+        if normalized_level not in {"INFO", "WARNING", "CRITICAL"}:
+            normalized_level = "INFO"
+        alert = AlertRecord(
+            timestamp=datetime.now(UTC).isoformat(),
+            level=normalized_level,
+            message=_safe_text(message, limit=1000),
+            details=_safe_details(details),
+        )
         self.alerts.append(alert)
-        if level == 'CRITICAL':
-            self.logger.error(f'CRITICAL ALERT: {message}')
-        elif level == 'WARNING':
-            self.logger.warning(f'WARNING ALERT: {message}')
+        if normalized_level == 'CRITICAL':
+            self.logger.error('DASHBOARD_ALERT_CRITICAL', extra={'message': alert.message})
+        elif normalized_level == 'WARNING':
+            self.logger.warning('DASHBOARD_ALERT_WARNING', extra={'message': alert.message})
         else:
-            self.logger.info(f'INFO ALERT: {message}')
+            self.logger.info('DASHBOARD_ALERT_INFO', extra={'message': alert.message})
+        alert_payload = asdict(alert)
         for callback in self.alert_callbacks:
             try:
-                callback(alert)
+                callback(alert_payload)
             except (ValueError, TypeError) as e:
-                self.logger.error(f'Error in alert callback: {e}')
+                self.logger.error('DASHBOARD_ALERT_CALLBACK_FAILED', extra={'error': str(e)})
 
     def add_alert_callback(self, callback: Callable):
         """Add alert notification callback."""
@@ -271,7 +361,17 @@ class MonitoringDashboard:
 
     def record_trade(self, symbol: str, side: str, quantity: float, price: float, pnl: float, order_id: str=None):
         """Record a completed trade."""
-        trade_record = {'timestamp': time.time(), 'datetime': datetime.now(UTC).isoformat(), 'symbol': symbol, 'side': side, 'quantity': quantity, 'price': price, 'volume': quantity * price, 'pnl': pnl, 'order_id': order_id}
+        trade_record = {
+            'timestamp': time.time(),
+            'datetime': datetime.now(UTC).isoformat(),
+            'symbol': _safe_text(symbol, limit=32),
+            'side': _safe_text(side, limit=32),
+            'quantity': float(quantity),
+            'price': float(price),
+            'volume': float(quantity) * float(price),
+            'pnl': float(pnl),
+            'order_id': _safe_text(order_id, limit=128) if order_id is not None else None,
+        }
         self.trade_history.append(trade_record)
         if symbol in self.current_trades:
             self.current_trades[symbol].update(trade_record)
@@ -301,7 +401,7 @@ class MonitoringDashboard:
         if not self.trade_history:
             return {'error': 'No trade data available'}
         trades = list(self.trade_history)
-        daily_pnl = defaultdict(float)
+        daily_pnl: defaultdict[Any, float] = defaultdict(float)
         for trade in trades:
             trade_date = datetime.fromtimestamp(trade['timestamp']).date()
             daily_pnl[trade_date] += trade['pnl']
@@ -356,9 +456,9 @@ def initialize_monitoring_dashboard(port: int=5000) -> MonitoringDashboard:
 
 def start_dashboard_server(port: int=5000, debug: bool=False):
     """Start dashboard web server."""
-    dashboard = get_monitoring_dashboard()
+    dashboard = initialize_monitoring_dashboard(port)
     dashboard.start_dashboard(debug=debug)
 if __name__ == '__main__':
     dashboard = MonitoringDashboard()
     dashboard.start_monitoring()
-    dashboard.start_dashboard(debug=True)
+    dashboard.start_dashboard(debug=False)

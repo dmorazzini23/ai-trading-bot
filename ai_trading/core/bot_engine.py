@@ -2012,6 +2012,8 @@ def _record_prerank_shadow_snapshot(
         "selected": int(len(selected_symbols)),
         "top_n": int(top_n) if top_n is not None else None,
         "ranked": ranked_payload,
+        "provider": _ml_shadow_provider_snapshot(),
+        "quote_status": _ml_shadow_quote_snapshot(),
     }
     _record_shadow_prediction(payload)
 
@@ -6437,6 +6439,64 @@ def _finite_float_or_none(value: Any) -> float | None:
     return numeric if math.isfinite(numeric) else None
 
 
+def _ml_shadow_provider_snapshot() -> dict[str, Any]:
+    try:
+        provider = runtime_state.observe_data_provider_state()
+    except BOT_ENGINE_FALLBACK_EXC:
+        provider = {}
+    if not isinstance(provider, MappingABC):
+        return {}
+    active = str(provider.get("active") or "").strip()
+    primary = str(provider.get("primary") or "").strip()
+    status = str(provider.get("status") or "").strip().lower()
+    using_backup = bool(provider.get("using_backup"))
+    timeframes = provider.get("timeframes")
+    return {
+        "active": active or None,
+        "primary": primary or None,
+        "backup": provider.get("backup"),
+        "status": status or "unknown",
+        "data_status": provider.get("data_status"),
+        "reason": provider.get("reason"),
+        "reason_code": provider.get("reason_code"),
+        "using_backup": using_backup,
+        "safe_mode": bool(provider.get("safe_mode")),
+        "updated": provider.get("updated"),
+        "quote_fresh_ms": _finite_float_or_none(provider.get("quote_fresh_ms")),
+        "healthy_primary": bool(
+            active
+            and primary
+            and active.lower() == primary.lower()
+            and not using_backup
+            and status in {"healthy", "ok", "ready"}
+        ),
+        "minute_fallback_active": bool(_minute_fallback_active(provider)),
+        "timeframes": dict(timeframes) if isinstance(timeframes, MappingABC) else {},
+    }
+
+
+def _ml_shadow_quote_snapshot() -> dict[str, Any]:
+    try:
+        quote = runtime_state.observe_quote_status()
+    except BOT_ENGINE_FALLBACK_EXC:
+        quote = {}
+    if not isinstance(quote, MappingABC):
+        return {}
+    return {
+        "allowed": bool(quote.get("allowed")),
+        "status": quote.get("status"),
+        "reason": quote.get("reason"),
+        "source": quote.get("source"),
+        "synthetic": bool(quote.get("synthetic")),
+        "bid": _finite_float_or_none(quote.get("bid")),
+        "ask": _finite_float_or_none(quote.get("ask")),
+        "last_price": _finite_float_or_none(quote.get("last_price")),
+        "age_sec": _finite_float_or_none(quote.get("age_sec")),
+        "quote_age_ms": _finite_float_or_none(quote.get("quote_age_ms")),
+        "updated": quote.get("updated"),
+    }
+
+
 def _latest_numeric_column(frame: pd.DataFrame, names: Sequence[str]) -> float | None:
     for name in names:
         if name not in frame.columns or frame.empty:
@@ -6494,6 +6554,39 @@ def _ml_shadow_market_snapshot(frame: pd.DataFrame) -> dict[str, Any]:
         "spread_bps": spread_bps,
         "quote_timestamp": quote_ts,
         "quote_age_ms": quote_age_ms,
+    }
+
+
+def _ml_shadow_cost_snapshot(
+    market: Mapping[str, Any],
+    quote: Mapping[str, Any],
+) -> dict[str, Any]:
+    spread_bps = _finite_float_or_none(market.get("spread_bps"))
+    quote_age_ms = _finite_float_or_none(market.get("quote_age_ms"))
+    bid = _finite_float_or_none(market.get("bid"))
+    ask = _finite_float_or_none(market.get("ask"))
+    if bid is None:
+        bid = _finite_float_or_none(quote.get("bid"))
+    if ask is None:
+        ask = _finite_float_or_none(quote.get("ask"))
+    if spread_bps is None and bid is not None and ask is not None and bid > 0.0 and ask >= bid:
+        mid = (bid + ask) / 2.0
+        if mid > 0.0:
+            spread_bps = float(((ask - bid) / mid) * 10000.0)
+    if quote_age_ms is None:
+        quote_age_ms = _finite_float_or_none(quote.get("quote_age_ms"))
+    entry_close = _finite_float_or_none(market.get("entry_close"))
+    return {
+        "phase": "decision",
+        "spread_bps": spread_bps,
+        "quote_age_ms": quote_age_ms,
+        "expected_entry_price": entry_close,
+        "observed_bid": bid,
+        "observed_ask": ask,
+        "submitted_price": None,
+        "fill_price": None,
+        "slippage_bps": None,
+        "slippage_source": "pending_fill",
     }
 
 
@@ -16819,6 +16912,8 @@ class SignalManager:
                     shadow_model,
                     min_confidence=min_confidence,
                 )
+                market_snapshot = _ml_shadow_market_snapshot(df)
+                quote_snapshot = _ml_shadow_quote_snapshot()
                 challenger_threshold = float(shadow_threshold["effective_threshold"])
                 champion_would_trade = bool(
                     pred == 1 and (effective_threshold <= 0.0 or float(proba) >= effective_threshold)
@@ -16844,7 +16939,10 @@ class SignalManager:
                     "agreement": bool(champion_would_trade == challenger_would_trade),
                     "probability_delta": float(abs(float(shadow_proba) - float(proba))),
                     "features": _ml_shadow_feature_snapshot(feat, X[0]),
-                    "market": _ml_shadow_market_snapshot(df),
+                    "market": market_snapshot,
+                    "provider": _ml_shadow_provider_snapshot(),
+                    "quote_status": quote_snapshot,
+                    "cost": _ml_shadow_cost_snapshot(market_snapshot, quote_snapshot),
                 }
                 if isinstance(skew_payload, Mapping):
                     shadow_payload["skew"] = dict(skew_payload)

@@ -57,6 +57,20 @@ def test_enforce_artifact_verification_fails_closed_outside_tests(
         enforce_artifact_verification(model_path=model_path, manifest_path=manifest_path)
 
 
+def test_enforce_artifact_verification_cannot_be_disabled_in_paper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_path = tmp_path / "model.pkl"
+    model_path.write_bytes(b"model-payload-v1")
+
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.setenv("AI_TRADING_MODEL_VERIFY_CHECKSUM", "0")
+
+    with pytest.raises(RuntimeError, match="MODEL_VERIFICATION_DISABLED_BLOCKED"):
+        enforce_artifact_verification(model_path=model_path)
+
+
 def test_write_artifact_manifest_includes_metadata(tmp_path: Path) -> None:
     model_path = tmp_path / "model.pkl"
     model_path.write_bytes(b"model-payload-v1")

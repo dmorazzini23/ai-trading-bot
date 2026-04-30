@@ -3,6 +3,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import json
 import hmac
+import ipaddress
 import logging
 import sys
 from collections.abc import Mapping
@@ -40,6 +41,10 @@ def _managed_env(name: str, default: Any = None) -> Any:
         return _managed_get_env(name, default)
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         return default
+
+
+def _truthy_env(name: str) -> bool:
+    return str(_managed_env(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 _log = get_logger(__name__)
 
@@ -89,6 +94,9 @@ def _register_metrics_endpoint(app: Any, logger: Any) -> None:
     @app.route("/metrics")
     def metrics():
         """Expose Prometheus metrics if available."""
+        access_error = _metrics_access_error()
+        if access_error is not None:
+            return access_error
         if not _PROM_OK:
             return ("metrics unavailable", 501)
         try:
@@ -116,6 +124,59 @@ def _register_metrics_endpoint(app: Any, logger: Any) -> None:
                 503,
                 {"Content-Type": "text/plain; charset=utf-8"},
             )
+
+
+def _metrics_access_error() -> tuple[str, int, dict[str, str]] | None:
+    if _truthy_env("AI_TRADING_METRICS_ALLOW_UNAUTHENTICATED"):
+        return None
+    request_obj = globals().get("request")
+    remote_addr = str(getattr(request_obj, "remote_addr", "") or "").strip()
+    if not remote_addr:
+        return None
+    if _remote_addr_allowed(
+        remote_addr,
+        str(_managed_env("AI_TRADING_METRICS_ALLOWED_REMOTE_ADDRS", "127.0.0.1,::1") or ""),
+    ):
+        return None
+    expected_token = str(_managed_env("AI_TRADING_METRICS_BEARER_TOKEN", "") or "").strip()
+    if expected_token:
+        authorization = _request_header("Authorization")
+        scheme, _, token = authorization.partition(" ")
+        if str(scheme).strip().lower() == "bearer" and hmac.compare_digest(
+            str(token).strip(), expected_token
+        ):
+            return None
+    _log.warning(
+        "PROM_METRICS_ACCESS_REJECTED",
+        extra={"remote_addr": remote_addr or "unknown"},
+    )
+    return (
+        "metrics access denied\n",
+        403,
+        {"Content-Type": "text/plain; charset=utf-8"},
+    )
+
+
+def _remote_addr_allowed(remote_addr: str, allowed_raw: str) -> bool:
+    if not remote_addr or not allowed_raw:
+        return False
+    try:
+        remote_ip = ipaddress.ip_address(remote_addr)
+    except ValueError:
+        return False
+    for part in allowed_raw.split(","):
+        candidate = part.strip()
+        if not candidate:
+            continue
+        try:
+            if "/" in candidate:
+                if remote_ip in ipaddress.ip_network(candidate, strict=False):
+                    return True
+            elif remote_ip == ipaddress.ip_address(candidate):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _resolve_standalone_healthcheck_port(settings: Any) -> int:
@@ -454,11 +515,7 @@ def _authenticate_operator_request(
 ) -> tuple[str | None, dict[str, Any] | None, int]:
     configured_token = str(_managed_env("AI_TRADING_OPERATOR_API_TOKEN", "") or "").strip()
     token_map = _parse_operator_token_map()
-    allow_shared_token = bool(
-        _pytest_active()
-        or str(_managed_env("AI_TRADING_ALLOW_SHARED_OPERATOR_TOKEN", "") or "").strip().lower()
-        in {"1", "true", "yes", "on"}
-    )
+    allow_shared_token = _truthy_env("AI_TRADING_ALLOW_SHARED_OPERATOR_TOKEN")
     if not token_map and not configured_token:
         _log.error("OPERATOR_AUTH_MISCONFIGURED", extra={"scope": scope})
         return (
@@ -494,6 +551,7 @@ def _authenticate_operator_request(
         )
 
     expected_token = token_map.get(operator_id.lower())
+    used_shared_token = False
     if token_map:
         if not expected_token:
             _log.warning(
@@ -508,6 +566,7 @@ def _authenticate_operator_request(
         token_ok = hmac.compare_digest(token_value, expected_token)
     elif configured_token and allow_shared_token:
         token_ok = hmac.compare_digest(token_value, configured_token)
+        used_shared_token = True
     else:
         _log.error(
             "OPERATOR_AUTH_MISCONFIGURED",
@@ -540,6 +599,16 @@ def _authenticate_operator_request(
             return (
                 None,
                 {"ok": False, "error": "operator authorization is not configured"},
+                503,
+            )
+        if used_shared_token and (allowlist or require_allowlist):
+            _log.error(
+                "OPERATOR_AUTHZ_MISCONFIGURED",
+                extra={"scope": scope, "allowlist_env": allowlist_env, "reason": "token_binding_required"},
+            )
+            return (
+                None,
+                {"ok": False, "error": "operator identity binding is not configured"},
                 503,
             )
         if allowlist and operator_id.lower() not in allowlist:
@@ -1191,7 +1260,7 @@ def create_app(
         operator_id, auth_error_payload, auth_status = _authenticate_operator_request(
             scope="manual_overrides_write",
             allowlist_env="AI_TRADING_OPERATOR_OVERRIDE_OPERATORS",
-            require_allowlist=False,
+            require_allowlist=True,
         )
         if auth_error_payload is not None:
             return _safe_response(auth_error_payload, status=auth_status)
@@ -1201,10 +1270,18 @@ def create_app(
                 {"ok": False, "error": "request context unavailable"},
                 status=503,
             )
-        body = request_obj.get_json(silent=True) or {}
+        body = request_obj.get_json(silent=True)
         if not isinstance(body, dict):
-            body = {}
+            return _safe_response(
+                {"ok": False, "error": "manual overrides JSON object required"},
+                status=400,
+            )
         disabled_slices_raw = body.get("disabled_slices")
+        if not isinstance(disabled_slices_raw, list):
+            return _safe_response(
+                {"ok": False, "error": "disabled_slices list required"},
+                status=400,
+            )
         disabled_slices = (
             list(disabled_slices_raw)
             if isinstance(disabled_slices_raw, list)
@@ -1235,7 +1312,7 @@ def create_app(
         operator_id, auth_error_payload, auth_status = _authenticate_operator_request(
             scope="manual_overrides_clear",
             allowlist_env="AI_TRADING_OPERATOR_OVERRIDE_OPERATORS",
-            require_allowlist=False,
+            require_allowlist=True,
         )
         if auth_error_payload is not None:
             return _safe_response(auth_error_payload, status=auth_status)

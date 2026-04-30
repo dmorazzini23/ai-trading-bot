@@ -39,6 +39,8 @@ def test_redact_env_masks_common_secret_aliases() -> None:
         "APCA_API_SECRET_KEY": "secret-key",
         "ALPACA_API_SECRET_KEY": "alias-secret",
         "AI_TRADING_OPENCLAW_HOOK_TOKEN": "hook-token",
+        "AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.example/services/T/B/C",
+        "AI_TRADING_OPENCLAW_RUNTIME_WEBHOOK_URL": "https://hooks.example/runtime",
         "PLAIN_FLAG": "1",
     }
 
@@ -48,4 +50,6 @@ def test_redact_env_masks_common_secret_aliases() -> None:
     assert out["APCA_API_SECRET_KEY"] == _ENV_MASK
     assert out["ALPACA_API_SECRET_KEY"] == _ENV_MASK
     assert out["AI_TRADING_OPENCLAW_HOOK_TOKEN"] == _ENV_MASK
+    assert out["AI_TRADING_SLACK_WEBHOOK_URL"] == _ENV_MASK
+    assert out["AI_TRADING_OPENCLAW_RUNTIME_WEBHOOK_URL"] == _ENV_MASK
     assert out["PLAIN_FLAG"] == "1"
