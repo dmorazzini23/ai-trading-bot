@@ -2,7 +2,8 @@ from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import argparse
-from collections import Counter
+import csv
+from collections import Counter, deque
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 import hashlib
@@ -74,6 +75,15 @@ class ReplayModelContext:
     positive_class_index: int
     orientation_inverse: bool
     symbol_penalties: dict[str, dict[str, float]]
+
+
+@dataclass(frozen=True)
+class MarkoutVetoConfig:
+    mode: str
+    lookback: int
+    min_samples: int
+    min_mean_bps: float
+    max_wrong_way_rate: float
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -608,6 +618,28 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional explicit model artifact path for replay model scoring.",
     )
+    parser.add_argument(
+        "--export-accepted-candidates",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Write accepted replay candidate component rows as CSV and JSONL.",
+    )
+    parser.add_argument(
+        "--accepted-candidates-dir",
+        type=Path,
+        default=None,
+        help="Directory for accepted_candidates.csv/jsonl; defaults beside --output-json.",
+    )
+    parser.add_argument(
+        "--markout-veto-mode",
+        choices=("off", "shadow", "enforce"),
+        default="off",
+        help="Replay-only markout veto mode. Shadow records reasons; enforce rejects candidates.",
+    )
+    parser.add_argument("--markout-veto-lookback", type=int, default=20)
+    parser.add_argument("--markout-veto-min-samples", type=int, default=5)
+    parser.add_argument("--markout-veto-min-mean-bps", type=float, default=0.0)
+    parser.add_argument("--markout-veto-max-wrong-way-rate", type=float, default=0.60)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument(
         "--env-file",
@@ -1006,6 +1038,186 @@ def _normalize_bar_ts(value: Any, fallback_index: int) -> str:
     return str(ts.isoformat())
 
 
+def _resolve_markout_veto_config(args: argparse.Namespace) -> MarkoutVetoConfig | None:
+    mode = str(getattr(args, "markout_veto_mode", "off") or "off").strip().lower()
+    if mode in {"", "off", "none", "disabled"}:
+        return None
+    if mode not in {"shadow", "enforce"}:
+        raise ValueError("--markout-veto-mode must be off, shadow, or enforce")
+    lookback = max(1, int(getattr(args, "markout_veto_lookback", 20) or 20))
+    min_samples = max(1, int(getattr(args, "markout_veto_min_samples", 5) or 5))
+    min_mean_raw = getattr(args, "markout_veto_min_mean_bps", 0.0)
+    wrong_way_raw = getattr(args, "markout_veto_max_wrong_way_rate", 0.60)
+    min_mean_bps = 0.0 if min_mean_raw is None else float(min_mean_raw)
+    max_wrong_way_rate = 0.60 if wrong_way_raw is None else float(wrong_way_raw)
+    return MarkoutVetoConfig(
+        mode=mode,
+        lookback=lookback,
+        min_samples=min(min_samples, lookback),
+        min_mean_bps=min_mean_bps,
+        max_wrong_way_rate=_clamp(
+            max_wrong_way_rate,
+            0.0,
+            1.0,
+        ),
+    )
+
+
+def _candidate_markout_bps(
+    *,
+    side: str,
+    submit_price: float,
+    markout_price: float | None,
+) -> float | None:
+    if markout_price is None or submit_price <= 0.0 or markout_price <= 0.0:
+        return None
+    side_sign = 1.0 if str(side).strip().lower() == "buy" else -1.0
+    return float(((float(markout_price) / float(submit_price)) - 1.0) * 10000.0 * side_sign)
+
+
+def _markout_veto_reason(
+    history: deque[float],
+    *,
+    config: MarkoutVetoConfig,
+) -> str | None:
+    samples = [float(value) for value in history if math.isfinite(float(value))]
+    if len(samples) < int(config.min_samples):
+        return None
+    mean_bps = float(sum(samples) / len(samples))
+    wrong_way_rate = float(sum(1 for value in samples if value <= 0.0) / len(samples))
+    reasons: list[str] = []
+    if mean_bps < float(config.min_mean_bps):
+        reasons.append("mean_markout_below_floor")
+    if wrong_way_rate > float(config.max_wrong_way_rate):
+        reasons.append("wrong_way_rate_above_limit")
+    return ";".join(reasons) if reasons else None
+
+
+def _accepted_candidate_row(
+    *,
+    context: Mapping[str, Any],
+    fill_event: Mapping[str, Any] | None,
+    cfg: ReplayConfig,
+) -> dict[str, Any]:
+    side = str(context.get("side", "")).strip().lower()
+    submit_price = float(context.get("submit_price", 0.0) or 0.0)
+    markout_raw = context.get("markout_price")
+    markout_price: float | None = None
+    if markout_raw not in (None, ""):
+        try:
+            parsed = float(markout_raw)
+        except (TypeError, ValueError):
+            parsed = 0.0
+        if parsed > 0.0 and math.isfinite(parsed):
+            markout_price = float(parsed)
+    gross_markout_bps = _candidate_markout_bps(
+        side=side,
+        submit_price=submit_price,
+        markout_price=markout_price,
+    )
+    net_markout_bps = (
+        float(gross_markout_bps) - (2.0 * max(0.0, float(cfg.fee_bps)))
+        if gross_markout_bps is not None
+        else None
+    )
+    row = {
+        "ts": context.get("submit_ts"),
+        "symbol": context.get("symbol"),
+        "side": side,
+        "score": context.get("score"),
+        "confidence": context.get("confidence"),
+        "entry_score_threshold": context.get("entry_score_threshold"),
+        "confidence_threshold": context.get("confidence_threshold"),
+        "score_source": context.get("score_source"),
+        "expected_capture_bps": context.get("policy_expected_capture_proxy_bps"),
+        "expected_capture_adjusted_bps": context.get("policy_expected_capture_adjusted_bps"),
+        "fill_probability": context.get("policy_fill_prob_proxy"),
+        "replay_adjustment_bps": context.get("policy_replay_adjustment_bps"),
+        "bandit_adjustment_bps": context.get("policy_bandit_adjustment_bps"),
+        "rank_score_baseline": context.get("rank_score_baseline"),
+        "rank_score_post_adjustments": context.get("rank_score_post_adjustments"),
+        "rank_index": context.get("policy_rank_index"),
+        "group_size": context.get("policy_group_size"),
+        "submit_price": submit_price,
+        "markout_price": markout_price,
+        "markout_bps": gross_markout_bps,
+        "net_markout_bps": net_markout_bps,
+        "direction_correct": (
+            None if gross_markout_bps is None else bool(gross_markout_bps > 0.0)
+        ),
+        "accepted_reason": context.get("accepted_reason", "accepted"),
+        "veto_shadow_reason": context.get("veto_shadow_reason"),
+        "veto_bucket": context.get("veto_bucket"),
+        "filled": bool(fill_event is not None),
+        "fill_price": None,
+        "fill_qty": None,
+        "client_order_id": context.get("client_order_id"),
+    }
+    if fill_event is not None:
+        row["fill_price"] = fill_event.get("fill_price")
+        row["fill_qty"] = fill_event.get("fill_qty")
+    return row
+
+
+def _write_accepted_candidate_artifacts(
+    *,
+    args: argparse.Namespace,
+    rows: list[dict[str, Any]],
+) -> dict[str, str]:
+    base_dir_raw = getattr(args, "accepted_candidates_dir", None)
+    if base_dir_raw is not None:
+        base_dir = Path(base_dir_raw)
+    elif getattr(args, "output_json", None) is not None:
+        base_dir = Path(args.output_json).parent
+    else:
+        base_dir = Path("artifacts") / "offline_replay_accepted_candidates"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = base_dir / "accepted_candidates.csv"
+    jsonl_path = base_dir / "accepted_candidates.jsonl"
+    fieldnames = [
+        "ts",
+        "symbol",
+        "side",
+        "score",
+        "confidence",
+        "entry_score_threshold",
+        "confidence_threshold",
+        "score_source",
+        "expected_capture_bps",
+        "expected_capture_adjusted_bps",
+        "fill_probability",
+        "replay_adjustment_bps",
+        "bandit_adjustment_bps",
+        "rank_score_baseline",
+        "rank_score_post_adjustments",
+        "rank_index",
+        "group_size",
+        "submit_price",
+        "markout_price",
+        "markout_bps",
+        "net_markout_bps",
+        "direction_correct",
+        "accepted_reason",
+        "veto_shadow_reason",
+        "veto_bucket",
+        "filled",
+        "fill_price",
+        "fill_qty",
+        "client_order_id",
+    ]
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    with jsonl_path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+    return {
+        "accepted_candidates_csv": str(csv_path),
+        "accepted_candidates_jsonl": str(jsonl_path),
+    }
+
+
 def _run_parity_simulation(
     *,
     args: argparse.Namespace,
@@ -1022,6 +1234,9 @@ def _run_parity_simulation(
     load_reports: dict[str, HistoricalBarLoadReport] = {}
     order_context_by_client_id: dict[str, dict[str, Any]] = {}
     policy_counters: Counter[str] = Counter()
+    markout_veto_counters: Counter[str] = Counter()
+    markout_veto_config = _resolve_markout_veto_config(args)
+    markout_veto_history: dict[str, deque[float]] = {}
     synthetic_index = 0
     for symbol, csv_path in symbol_paths.items():
         frame, load_report = load_historical_bars(csv_path, timestamp_col=args.timestamp_col)
@@ -1096,6 +1311,16 @@ def _run_parity_simulation(
         replay_adjustment = 0.0
         bandit_adjustment = 0.0
 
+        next_close_raw = bar.get("next_close")
+        next_close = None
+        if next_close_raw not in (None, ""):
+            try:
+                parsed_next = float(next_close_raw)
+            except (TypeError, ValueError):
+                parsed_next = None
+            if parsed_next is not None and np.isfinite(parsed_next) and parsed_next > 0.0:
+                next_close = float(parsed_next)
+
         if policy_profile is not None:
             policy_counters["candidates"] += 1
             keep_count = _policy_keep_count(
@@ -1139,25 +1364,52 @@ def _run_parity_simulation(
             if adjusted_capture < policy_profile.expected_capture_floor_bps:
                 policy_counters["reject_expected_capture_floor"] += 1
                 return None
+
+        veto_bucket = f"{symbol}:{side}"
+        veto_shadow_reason = None
+        if markout_veto_config is not None:
+            markout_veto_counters["candidates"] += 1
+            history = markout_veto_history.setdefault(
+                veto_bucket,
+                deque(maxlen=int(markout_veto_config.lookback)),
+            )
+            veto_shadow_reason = _markout_veto_reason(
+                history,
+                config=markout_veto_config,
+            )
+            if veto_shadow_reason:
+                markout_veto_counters["shadow_flagged"] += 1
+                if markout_veto_config.mode == "enforce":
+                    markout_veto_counters["rejected"] += 1
+                    markout_veto_counters[f"reject_{veto_shadow_reason}"] += 1
+                    return None
+        if policy_profile is not None:
             policy_counters["accepted"] += 1
 
         bar_seq = int(bar.get("seq", 0) or 0)
         intent_key = f"{symbol}|{ts_iso}|{side}|{bar_seq}"
-        next_close_raw = bar.get("next_close")
-        next_close = None
-        if next_close_raw not in (None, ""):
-            try:
-                parsed_next = float(next_close_raw)
-            except (TypeError, ValueError):
-                parsed_next = None
-            if parsed_next is not None and np.isfinite(parsed_next) and parsed_next > 0.0:
-                next_close = float(parsed_next)
+        candidate_markout = _candidate_markout_bps(
+            side=side,
+            submit_price=float(price),
+            markout_price=next_close,
+        )
+        if markout_veto_config is not None and candidate_markout is not None:
+            markout_veto_history.setdefault(
+                veto_bucket,
+                deque(maxlen=int(markout_veto_config.lookback)),
+            ).append(float(candidate_markout))
         order_context_by_client_id[intent_key] = {
+            "client_order_id": intent_key,
             "symbol": symbol,
             "side": side,
             "submit_ts": ts_iso,
             "submit_price": float(price),
             "markout_price": next_close,
+            "score": float(score),
+            "confidence": float(confidence),
+            "score_source": score_source,
+            "entry_score_threshold": float(cfg.entry_score_threshold),
+            "confidence_threshold": float(cfg.confidence_threshold),
             "policy_fill_prob_proxy": float(fill_prob_proxy),
             "policy_expected_capture_proxy_bps": float(expected_capture_proxy),
             "policy_expected_capture_adjusted_bps": float(adjusted_capture),
@@ -1165,6 +1417,11 @@ def _run_parity_simulation(
             "policy_bandit_adjustment_bps": float(bandit_adjustment),
             "policy_rank_index": int(rank_index),
             "policy_group_size": int(group_size),
+            "rank_score_baseline": float(expected_capture_proxy),
+            "rank_score_post_adjustments": float(adjusted_capture),
+            "accepted_reason": "policy_controls" if policy_profile is not None else "thresholds",
+            "veto_shadow_reason": veto_shadow_reason,
+            "veto_bucket": veto_bucket,
         }
         return {
             "symbol": symbol,
@@ -1186,6 +1443,11 @@ def _run_parity_simulation(
 
     events = list(replay.get("events", []))
     fill_events = [event for event in events if event.get("event_type") == "fill"]
+    fill_event_by_client_id = {
+        str(event.get("client_order_id", "")).strip(): event
+        for event in fill_events
+        if str(event.get("client_order_id", "")).strip()
+    }
     fill_count_by_symbol = Counter(
         str(event.get("symbol", "")).strip().upper()
         for event in fill_events
@@ -1255,6 +1517,44 @@ def _run_parity_simulation(
             policy_counters,
             profile=policy_profile,
         )
+    if markout_veto_config is not None:
+        rejected_by_reason = {
+            key.replace("reject_", ""): int(value)
+            for key, value in sorted(markout_veto_counters.items())
+            if key.startswith("reject_")
+        }
+        aggregate["markout_veto"] = {
+            "enabled": True,
+            "mode": markout_veto_config.mode,
+            "lookback": int(markout_veto_config.lookback),
+            "min_samples": int(markout_veto_config.min_samples),
+            "min_mean_bps": float(markout_veto_config.min_mean_bps),
+            "max_wrong_way_rate": float(markout_veto_config.max_wrong_way_rate),
+            "candidates": int(markout_veto_counters.get("candidates", 0)),
+            "shadow_flagged": int(markout_veto_counters.get("shadow_flagged", 0)),
+            "rejected": int(markout_veto_counters.get("rejected", 0)),
+            "rejected_by_reason": rejected_by_reason,
+        }
+    else:
+        aggregate["markout_veto"] = {"enabled": False, "mode": "off"}
+
+    accepted_candidate_rows = [
+        _accepted_candidate_row(
+            context=context,
+            fill_event=fill_event_by_client_id.get(str(client_order_id)),
+            cfg=cfg,
+        )
+        for client_order_id, context in sorted(order_context_by_client_id.items())
+    ]
+    aggregate["accepted_candidate_count"] = int(len(accepted_candidate_rows))
+    artifacts: dict[str, str] = {}
+    if bool(getattr(args, "export_accepted_candidates", False)):
+        artifacts.update(
+            _write_accepted_candidate_artifacts(
+                args=args,
+                rows=accepted_candidate_rows,
+            )
+        )
     for item in per_symbol:
         symbol = str(item.get("symbol", "")).strip().upper()
         if not symbol:
@@ -1268,6 +1568,7 @@ def _run_parity_simulation(
         "inputs": {"symbols": _input_report_payload(load_reports)},
         "symbols": per_symbol,
         "replay": replay,
+        "artifacts": artifacts,
     }
 
 

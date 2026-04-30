@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import logging
 from pathlib import Path
@@ -11,7 +12,11 @@ import pandas as pd
 import pytest
 
 from ai_trading.models.artifacts import write_artifact_manifest
-from ai_trading.tools.offline_replay import main
+from ai_trading.tools.offline_replay import (
+    _accepted_candidate_row,
+    _resolve_markout_veto_config,
+    main,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -113,6 +118,26 @@ def _write_trending_bars(csv_path: Path, periods: int = 120) -> None:
     open_ = close - 0.2
     high = close + 0.25
     low = open_ - 0.25
+    volume = np.full(periods, 9_000.0)
+    frame = pd.DataFrame(
+        {
+            "timestamp": idx,
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+        }
+    )
+    frame.to_csv(csv_path, index=False)
+
+
+def _write_downtrending_bars(csv_path: Path, periods: int = 120) -> None:
+    idx = pd.date_range("2026-01-02 14:30:00+00:00", periods=periods, freq="min")
+    close = np.linspace(220.0, 100.0, periods)
+    open_ = close + 0.2
+    high = open_ + 0.25
+    low = close - 0.25
     volume = np.full(periods, 9_000.0)
     frame = pd.DataFrame(
         {
@@ -603,6 +628,138 @@ def test_offline_replay_apply_policy_controls_changes_simulation_outcome(
         int(rejected.get("expected_capture_floor", 0))
         + int(rejected.get("fill_prob_floor", 0))
     ) > 0
+
+
+def test_offline_replay_exports_accepted_candidate_components(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    csv_path = tmp_path / "EXPORT.csv"
+    out_path = tmp_path / "export.json"
+    _write_trending_bars(csv_path, periods=80)
+
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MIN_DELAY_MS", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MAX_DELAY_MS", "0")
+
+    rc = main(
+        [
+            "--csv",
+            str(csv_path),
+            "--simulation-mode",
+            "--export-accepted-candidates",
+            "--confidence-threshold",
+            "0.0",
+            "--entry-score-threshold",
+            "0.0",
+            "--no-allow-shorts",
+            "--output-json",
+            str(out_path),
+        ]
+    )
+    assert rc == 0
+    payload = _load_json(out_path)
+    artifacts = cast(dict[str, Any], payload.get("artifacts", {}))
+    csv_artifact = Path(str(artifacts["accepted_candidates_csv"]))
+    jsonl_artifact = Path(str(artifacts["accepted_candidates_jsonl"]))
+    assert csv_artifact.exists()
+    assert jsonl_artifact.exists()
+
+    rows = list(csv.DictReader(csv_artifact.open("r", encoding="utf-8")))
+    assert rows
+    first = rows[0]
+    assert first["symbol"] == "EXPORT"
+    assert first["side"] == "buy"
+    assert first["score"] != ""
+    assert first["confidence"] != ""
+    assert first["markout_bps"] != ""
+    assert first["direction_correct"] in {"True", "False"}
+    assert int(payload["aggregate"]["accepted_candidate_count"]) == len(rows)
+    assert jsonl_artifact.read_text(encoding="utf-8").strip()
+
+
+def test_offline_replay_markout_veto_shadow_and_enforce(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    csv_path = tmp_path / "VETO.csv"
+    model_path = tmp_path / "veto_model.joblib"
+    shadow_out = tmp_path / "shadow.json"
+    enforce_out = tmp_path / "enforce.json"
+    _write_downtrending_bars(csv_path, periods=80)
+    _write_model(model_path, p_edge=0.9, orientation="direct")
+
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MIN_DELAY_MS", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MAX_DELAY_MS", "0")
+
+    base_args = [
+        "--csv",
+        str(csv_path),
+        "--simulation-mode",
+        "--use-model-score",
+        "--model-path",
+        str(model_path),
+        "--confidence-threshold",
+        "0.0",
+        "--entry-score-threshold",
+        "0.0",
+        "--no-allow-shorts",
+        "--markout-veto-lookback",
+        "6",
+        "--markout-veto-min-samples",
+        "3",
+        "--markout-veto-min-mean-bps",
+        "0.0",
+        "--markout-veto-max-wrong-way-rate",
+        "0.50",
+    ]
+    assert main(base_args + ["--markout-veto-mode", "shadow", "--output-json", str(shadow_out)]) == 0
+    assert main(base_args + ["--markout-veto-mode", "enforce", "--output-json", str(enforce_out)]) == 0
+
+    shadow = _load_json(shadow_out)["aggregate"]
+    enforced = _load_json(enforce_out)["aggregate"]
+    assert shadow["markout_veto"]["mode"] == "shadow"
+    assert enforced["markout_veto"]["mode"] == "enforce"
+    assert int(shadow["markout_veto"]["shadow_flagged"]) > 0
+    assert int(enforced["markout_veto"]["rejected"]) > 0
+    assert int(enforced["total_trades"]) < int(shadow["total_trades"])
+
+
+def test_markout_veto_config_preserves_zero_wrong_way_rate() -> None:
+    args = type(
+        "Args",
+        (),
+        {
+            "markout_veto_mode": "enforce",
+            "markout_veto_lookback": 20,
+            "markout_veto_min_samples": 5,
+            "markout_veto_min_mean_bps": 0.0,
+            "markout_veto_max_wrong_way_rate": 0.0,
+        },
+    )()
+
+    cfg = _resolve_markout_veto_config(args)
+
+    assert cfg is not None
+    assert cfg.max_wrong_way_rate == 0.0
+
+
+def test_accepted_candidate_row_keeps_unknown_direction_blank() -> None:
+    row = _accepted_candidate_row(
+        context={
+            "side": "buy",
+            "submit_price": 100.0,
+            "markout_price": None,
+        },
+        fill_event=None,
+        cfg=cast(Any, type("Cfg", (), {"fee_bps": 0.0})()),
+    )
+
+    assert row["markout_bps"] is None
+    assert row["direction_correct"] is None
 
 
 def test_offline_replay_apply_policy_controls_requires_simulation_mode(tmp_path: Path) -> None:
