@@ -8,6 +8,15 @@ alpaca-py==0.42.1
 # Lint & format
 ruff==0.5.6
 black==24.8.0
+pre-commit==3.8.0
+cfgv==3.5.0
+identify==2.6.19
+nodeenv==1.10.0
+virtualenv==20.36.1
+distlib==0.4.0
+
+# Secret scanning
+detect-secrets==1.5.0
 
 # Typing
 mypy==1.11.1

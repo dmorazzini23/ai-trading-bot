@@ -12,6 +12,7 @@ import random
 import socket
 import sys
 import unittest.mock as _mock
+import warnings
 from datetime import datetime, timezone
 import pathlib
 import types
@@ -42,6 +43,12 @@ if "dotenv" not in sys.modules:
 import pytest
 
 # NOTE: Avoid importing `ai_trading` modules at collection time; lazy import in helpers.
+try:
+    from urllib3.exceptions import SystemTimeWarning
+except Exception:  # pragma: no cover - optional dependency shape
+    SystemTimeWarning = None  # type: ignore[assignment]
+else:
+    warnings.filterwarnings("ignore", category=SystemTimeWarning)
 
 
 @pytest.fixture(autouse=True)
@@ -299,7 +306,13 @@ def _event_loop_policy():
 
 @pytest.fixture(autouse=True)
 def _freeze_clock():
-    with freeze_time("2024-01-02 15:04:05", tz_offset=0):
+    if SystemTimeWarning is not None:
+        warnings.simplefilter("ignore", SystemTimeWarning, append=False)
+    with freeze_time(
+        "2024-01-02 15:04:05",
+        tz_offset=0,
+        ignore=["transformers", "urllib3"],
+    ):
         yield
 
 

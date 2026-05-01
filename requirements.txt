@@ -15,7 +15,7 @@ beautifulsoup4>=4.12,<5
 lxml>=6.1,<7
 aiohttp>=3.13.4,<4
 msgpack==1.0.3  # AI-AGENT-REF: used by Alpaca SDK and transport layers
-pyyaml==6.0.1
+pyyaml==6.0.3
 urllib3==2.6.3  # AI-AGENT-REF: networking baseline across providers
 websockets==10.4  # AI-AGENT-REF: keep compatible with yfinance pin
 # Explicit Pydantic v2 + settings
@@ -41,12 +41,12 @@ pandas==2.2.2
 pyarrow==17.0.0  # enable parquet runtime persistence (trade_history.parquet)
 # Pin yfinance before it introduced a hard dependency on websockets>=13.
 yfinance==0.2.58  # AI-AGENT-REF: Yahoo Finance data fetch (pre-websockets 13)
-pybreaker==1.4.0
+pybreaker==1.4.1
 numba>=0.57  # AI-AGENT-REF: enable JIT-optimized indicators
-statsmodels==0.14.5
+statsmodels==0.14.6
 cryptography>=46.0.7
-torch==2.3.1
-transformers==4.55.4
+torch==2.8.0
+transformers==5.7.0
 hmmlearn==0.3.2
 SQLAlchemy>=2.0,<3
 psycopg[binary]>=3.2,<4
