@@ -101,7 +101,8 @@ markers_all.csv
 summary.csv
 patch_full_cleanup.patch
 
-# local env & data
+# Local env files are intentionally ignored because they may contain secrets.
+# Do not delete .env.runtime during cleanup; it is a critical local runtime file.
 .env*
 *.csv
 
