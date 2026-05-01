@@ -335,8 +335,6 @@ class RiskEngine:
         self._volatility_alerted = False
         self.data_client = None
         try:
-            if _offline_tests_enabled() and _is_alpaca_sdk_class(StockHistoricalDataClient):
-                raise ImportError("external network blocked in tests")
             cfg_key, cfg_secret, _ = _resolve_alpaca_env()
 
             def _pick_credential(*values: Any) -> str | None:
@@ -361,6 +359,9 @@ class RiskEngine:
 
             if oauth and (api_key or secret_key):
                 raise RuntimeError("Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both")
+
+            if _offline_tests_enabled() and _is_alpaca_sdk_class(StockHistoricalDataClient):
+                raise ImportError("external network blocked in tests")
 
             if api_key or secret_key:
                 if not (api_key and secret_key):
