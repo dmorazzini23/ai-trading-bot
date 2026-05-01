@@ -268,12 +268,15 @@ def test_signal_ml_shadow_logs_predictions(monkeypatch, tmp_path):
             return [[0.7, 0.3]]
 
     shadow_path = tmp_path / "ml_shadow.jsonl"
+    bot_engine.runtime_state.reset_quote_status()
     monkeypatch.setenv("AI_TRADING_ML_SHADOW_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_ML_SHADOW_LOG_PATH", str(shadow_path))
     monkeypatch.setattr(bot_engine, "_load_shadow_model", lambda: ChallengerModel())
     manager = SignalManager()
+    frame = _minimal_df()
+    frame.index = pd.date_range("2026-05-01T14:11:00Z", periods=len(frame), freq="min")
 
-    result = manager.signal_ml(_minimal_df(), model=ChampionModel(), symbol="AAPL")
+    result = manager.signal_ml(frame, model=ChampionModel(), symbol="AAPL")
 
     assert result is not None
     payload = json.loads(shadow_path.read_text(encoding="utf-8").strip().splitlines()[-1])
@@ -288,10 +291,66 @@ def test_signal_ml_shadow_logs_predictions(monkeypatch, tmp_path):
     assert payload["agreement"] is False
     assert payload["features"]["rsi"] == pytest.approx(30.0, abs=1e-6)
     assert payload["market"]["entry_close"] == pytest.approx(1.0, abs=1e-6)
+    assert payload["market"]["bar_timestamp"] == "2026-05-01T14:30:00+00:00"
+    assert payload["market"]["quote_age_ms"] is None
+    assert payload["market"]["quote_timestamp"] is None
     assert "provider" in payload
     assert "quote_status" in payload
     assert payload["cost"]["phase"] == "decision"
     assert payload["cost"]["expected_entry_price"] == pytest.approx(1.0, abs=1e-6)
+    assert payload["cost"]["quote_age_ms"] is None
+    bot_engine.runtime_state.reset_quote_status()
+
+
+def test_signal_ml_shadow_uses_symbol_quote_snapshot(monkeypatch, tmp_path):
+    class ChampionModel:
+        feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+
+        def predict(self, _X):
+            return [1]
+
+        def predict_proba(self, _X):
+            return [[0.1, 0.9]]
+
+    class ChallengerModel:
+        feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+        edge_global_threshold_ = 0.66
+
+        def predict(self, _X):
+            return [1]
+
+        def predict_proba(self, _X):
+            return [[0.1, 0.72]]
+
+    bot_engine.runtime_state.reset_quote_status()
+    bot_engine.runtime_state.update_quote_status(
+        allowed=True,
+        symbol="AAPL",
+        status="ready",
+        source="broker_nbbo",
+        bid=100.0,
+        ask=100.05,
+        quote_age_ms=125.0,
+        quote_timestamp="2026-05-01T14:30:01+00:00",
+    )
+    shadow_path = tmp_path / "ml_shadow.jsonl"
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_LOG_PATH", str(shadow_path))
+    monkeypatch.setattr(bot_engine, "_load_shadow_model", lambda: ChallengerModel())
+
+    result = SignalManager().signal_ml(_minimal_df(), model=ChampionModel(), symbol="AAPL")
+
+    assert result is not None
+    payload = json.loads(shadow_path.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert payload["market"]["bid"] == pytest.approx(100.0)
+    assert payload["market"]["ask"] == pytest.approx(100.05)
+    assert payload["market"]["spread_bps"] == pytest.approx(4.998750312421895)
+    assert payload["market"]["quote_age_ms"] == pytest.approx(125.0)
+    assert payload["market"]["quote_timestamp"] == "2026-05-01T14:30:01+00:00"
+    assert payload["quote_status"]["symbol"] == "AAPL"
+    assert payload["cost"]["spread_bps"] == pytest.approx(4.998750312421895)
+    assert payload["cost"]["quote_age_ms"] == pytest.approx(125.0)
+    bot_engine.runtime_state.reset_quote_status()
 
 
 def test_signal_ml_reports_training_serving_skew(monkeypatch, caplog):

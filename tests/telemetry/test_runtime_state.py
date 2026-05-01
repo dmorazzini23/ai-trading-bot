@@ -35,3 +35,39 @@ def test_observe_data_provider_state_returns_deep_copy() -> None:
 
     latest = runtime_state.observe_data_provider_state()
     assert latest["timeframes"]["1Min"] is True
+
+
+def test_quote_status_tracks_symbol_snapshots_independently() -> None:
+    runtime_state.reset_all_states()
+
+    runtime_state.update_quote_status(
+        allowed=True,
+        symbol="AAPL",
+        status="ready",
+        source="broker_nbbo",
+        bid=100.0,
+        ask=100.02,
+        quote_age_ms=250.0,
+        quote_timestamp="2026-05-01T14:30:00+00:00",
+    )
+    runtime_state.update_quote_status(
+        allowed=False,
+        symbol="MSFT",
+        status="blocked",
+        bid=410.0,
+        ask=410.08,
+        quote_age_ms=3500.0,
+    )
+
+    latest = runtime_state.observe_quote_status()
+    aapl = runtime_state.observe_symbol_quote_status("aapl")
+    msft = runtime_state.observe_symbol_quote_status("MSFT")
+
+    assert latest["symbol"] == "MSFT"
+    assert aapl["symbol"] == "AAPL"
+    assert aapl["bid"] == 100.0
+    assert aapl["ask"] == 100.02
+    assert aapl["quote_age_ms"] == 250.0
+    assert aapl["quote_timestamp"] == "2026-05-01T14:30:00+00:00"
+    assert msft["symbol"] == "MSFT"
+    assert msft["allowed"] is False

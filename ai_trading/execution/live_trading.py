@@ -21011,6 +21011,7 @@ class ExecutionEngine:
                 )
                 runtime_state.update_quote_status(
                     allowed=allowed,
+                    symbol=symbol,
                     reason=quote_reason,
                     age_sec=None if quote_age_ms_value is None else quote_age_ms_value / 1000.0,
                     synthetic=bool(synthetic_quote or using_fallback_price),
@@ -21020,6 +21021,7 @@ class ExecutionEngine:
                     source=active_provider,
                     last_price=None if basis_price is None else float(basis_price),
                     quote_age_ms=quote_age_ms_value,
+                    quote_timestamp=quote_ts.isoformat() if hasattr(quote_ts, "isoformat") else None,
                 )
                 runtime_state.update_data_provider_state(
                     primary="alpaca",

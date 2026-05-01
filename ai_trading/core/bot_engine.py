@@ -2018,6 +2018,49 @@ def _record_prerank_shadow_snapshot(
     _record_shadow_prediction(payload)
 
 
+def _prefetch_ml_shadow_quote(runtime: Any | None, symbol: str) -> None:
+    """Warm per-symbol quote telemetry before writing ML shadow predictions."""
+
+    normalized_symbol = str(symbol or "").strip().upper()
+    if not normalized_symbol:
+        return
+    try:
+        enabled = bool(
+            get_env("AI_TRADING_ML_SHADOW_QUOTE_PREFETCH_ENABLED", True, cast=bool)
+        )
+    except BOT_ENGINE_FALLBACK_EXC:
+        enabled = True
+    if not enabled:
+        return
+    try:
+        quote = _fetch_quote(runtime, normalized_symbol)
+        bid, ask = _extract_quote_bid_ask(quote)
+        if bid is None and ask is None:
+            return
+        quote_age_sec = _quote_age_seconds(quote)
+        quote_age_ms: float | None = None
+        if math.isfinite(quote_age_sec):
+            quote_age_ms = quote_age_sec * 1000.0
+        quote_ts = _extract_quote_timestamp(quote)
+        runtime_state.update_quote_status(
+            allowed=bid is not None and ask is not None,
+            symbol=normalized_symbol,
+            status="ready" if bid is not None and ask is not None else "partial",
+            source="latest_quote",
+            synthetic=False,
+            bid=bid,
+            ask=ask,
+            age_sec=quote_age_sec if math.isfinite(quote_age_sec) else None,
+            quote_age_ms=quote_age_ms,
+            quote_timestamp=quote_ts.isoformat() if quote_ts is not None else None,
+        )
+    except BOT_ENGINE_FALLBACK_EXC as exc:
+        logger.debug(
+            "ML_SHADOW_QUOTE_PREFETCH_FAILED",
+            extra={"symbol": normalized_symbol, "error": str(exc)},
+        )
+
+
 def _record_prerank_ml_signal_shadow(
     *,
     selected_symbols: Sequence[str],
@@ -2095,6 +2138,7 @@ def _record_prerank_ml_signal_shadow(
         if frame is None or getattr(frame, "empty", True):
             continue
         try:
+            _prefetch_ml_shadow_quote(runtime, symbol)
             prepared_frame = _prepare_prerank_ml_shadow_frame(
                 frame,
                 feature_names=feature_names,
@@ -6475,9 +6519,12 @@ def _ml_shadow_provider_snapshot() -> dict[str, Any]:
     }
 
 
-def _ml_shadow_quote_snapshot() -> dict[str, Any]:
+def _ml_shadow_quote_snapshot(symbol: str | None = None) -> dict[str, Any]:
     try:
-        quote = runtime_state.observe_quote_status()
+        if symbol:
+            quote = runtime_state.observe_symbol_quote_status(str(symbol))
+        else:
+            quote = runtime_state.observe_quote_status()
     except BOT_ENGINE_FALLBACK_EXC:
         quote = {}
     if not isinstance(quote, MappingABC):
@@ -6493,6 +6540,8 @@ def _ml_shadow_quote_snapshot() -> dict[str, Any]:
         "last_price": _finite_float_or_none(quote.get("last_price")),
         "age_sec": _finite_float_or_none(quote.get("age_sec")),
         "quote_age_ms": _finite_float_or_none(quote.get("quote_age_ms")),
+        "quote_timestamp": quote.get("quote_timestamp"),
+        "symbol": quote.get("symbol"),
         "updated": quote.get("updated"),
     }
 
@@ -6507,7 +6556,12 @@ def _latest_numeric_column(frame: pd.DataFrame, names: Sequence[str]) -> float |
     return None
 
 
-def _latest_timestamp_column(frame: pd.DataFrame, names: Sequence[str]) -> str | None:
+def _latest_timestamp_column(
+    frame: pd.DataFrame,
+    names: Sequence[str],
+    *,
+    allow_index: bool = True,
+) -> str | None:
     for name in names:
         if name not in frame.columns or frame.empty:
             continue
@@ -6518,25 +6572,39 @@ def _latest_timestamp_column(frame: pd.DataFrame, names: Sequence[str]) -> str |
             continue
         if not pd.isna(parsed):
             return str(parsed.isoformat())
-    if isinstance(frame.index, pd.DatetimeIndex) and len(frame.index) > 0:
+    if allow_index and isinstance(frame.index, pd.DatetimeIndex) and len(frame.index) > 0:
         latest = frame.index[-1]
         if not pd.isna(latest):
             return str(pd.Timestamp(latest).tz_convert(UTC).isoformat())
     return None
 
 
-def _ml_shadow_market_snapshot(frame: pd.DataFrame) -> dict[str, Any]:
+def _ml_shadow_market_snapshot(
+    frame: pd.DataFrame,
+    quote: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     close = _latest_numeric_column(frame, ("close", "last_price", "price"))
     bid = _latest_numeric_column(frame, ("bid", "bid_price", "quote_bid"))
     ask = _latest_numeric_column(frame, ("ask", "ask_price", "quote_ask"))
+    if isinstance(quote, Mapping):
+        bid = _finite_float_or_none(quote.get("bid")) or bid
+        ask = _finite_float_or_none(quote.get("ask")) or ask
     spread_bps: float | None = None
     if bid is not None and ask is not None and bid > 0.0 and ask >= bid:
         mid = (bid + ask) / 2.0
         if mid > 0.0:
             spread_bps = float(((ask - bid) / mid) * 10000.0)
-    quote_ts = _latest_timestamp_column(frame, ("quote_ts", "quote_timestamp", "quote_time"))
+    quote_ts = _latest_timestamp_column(
+        frame,
+        ("quote_ts", "quote_timestamp", "quote_time"),
+        allow_index=False,
+    )
+    if isinstance(quote, Mapping):
+        quote_ts = str(quote.get("quote_timestamp") or "") or quote_ts
     quote_age_ms: float | None = None
-    if quote_ts:
+    if isinstance(quote, Mapping):
+        quote_age_ms = _finite_float_or_none(quote.get("quote_age_ms"))
+    if quote_age_ms is None and quote_ts and (bid is not None or ask is not None):
         try:
             parsed_quote_ts = pd.to_datetime(quote_ts, errors="coerce", utc=True)
             if not pd.isna(parsed_quote_ts):
@@ -16912,8 +16980,8 @@ class SignalManager:
                     shadow_model,
                     min_confidence=min_confidence,
                 )
-                market_snapshot = _ml_shadow_market_snapshot(df)
-                quote_snapshot = _ml_shadow_quote_snapshot()
+                quote_snapshot = _ml_shadow_quote_snapshot(symbol=symbol)
+                market_snapshot = _ml_shadow_market_snapshot(df, quote=quote_snapshot)
                 challenger_threshold = float(shadow_threshold["effective_threshold"])
                 champion_would_trade = bool(
                     pred == 1 and (effective_threshold <= 0.0 or float(proba) >= effective_threshold)
@@ -31745,6 +31813,7 @@ def _ensure_executable_quote(
         if execution_mode == "live" and (require_bid_ask or require_realtime_nbbo):
             runtime_state.update_quote_status(
                 allowed=False,
+                symbol=symbol,
                 reason="quote_support_unavailable",
                 age_sec=None,
                 synthetic=False,
@@ -31786,6 +31855,7 @@ def _ensure_executable_quote(
         payload = dict(details or {})
         runtime_state.update_quote_status(
             allowed=allowed,
+            symbol=symbol,
             reason=reason_text,
             age_sec=payload.get("age_sec"),
             synthetic=synthetic,

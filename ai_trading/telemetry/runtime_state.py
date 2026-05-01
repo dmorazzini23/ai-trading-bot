@@ -16,6 +16,7 @@ __all__ = [
     "reset_data_provider_state",
     "update_quote_status",
     "observe_quote_status",
+    "observe_symbol_quote_status",
     "reset_quote_status",
     "update_broker_status",
     "observe_broker_status",
@@ -63,6 +64,8 @@ _DEFAULT_QUOTE_STATE: dict[str, Any] = {
     "source": None,
     "last_price": None,
     "quote_age_ms": None,
+    "quote_timestamp": None,
+    "symbol": None,
 }
 _DEFAULT_BROKER_STATE: dict[str, Any] = {
     "connected": False,
@@ -108,6 +111,7 @@ def _fresh_service_status() -> dict[str, Any]:
 
 _provider_state: dict[str, Any] = _fresh_provider_state()
 _quote_status: dict[str, Any] = _fresh_quote_state()
+_quote_status_by_symbol: dict[str, dict[str, Any]] = {}
 _broker_status: dict[str, Any] = _fresh_broker_state()
 _service_status: dict[str, Any] = _fresh_service_status()
 
@@ -340,6 +344,7 @@ def reset_service_status() -> None:
 def update_quote_status(
     *,
     allowed: bool,
+    symbol: str | None = None,
     reason: str | None = None,
     age_sec: float | None = None,
     synthetic: bool | None = None,
@@ -349,12 +354,16 @@ def update_quote_status(
     source: str | None = None,
     last_price: float | None = None,
     quote_age_ms: float | None = None,
+    quote_timestamp: str | None = None,
 ) -> None:
     """Update snapshot of the most recent quote gate decision."""
 
     updates: dict[str, Any] = {
         "allowed": bool(allowed),
     }
+    normalized_symbol = str(symbol or "").strip().upper()
+    if normalized_symbol:
+        updates["symbol"] = normalized_symbol
     if status is not None:
         updates["status"] = status
     if reason is not None:
@@ -379,9 +388,14 @@ def update_quote_status(
             updates["quote_age_ms"] = max(0.0, float(quote_age_ms))
         except (TypeError, ValueError):
             pass
+    if quote_timestamp is not None:
+        updates["quote_timestamp"] = str(quote_timestamp)
     with _LOCK:
-        global _quote_status
+        global _quote_status, _quote_status_by_symbol
         _quote_status = _merge_state(_quote_status, updates)
+        if normalized_symbol:
+            current = _quote_status_by_symbol.get(normalized_symbol, _fresh_quote_state())
+            _quote_status_by_symbol[normalized_symbol] = _merge_state(current, updates)
 
 
 def observe_quote_status() -> dict[str, Any]:
@@ -389,12 +403,21 @@ def observe_quote_status() -> dict[str, Any]:
         return _clone_state(_quote_status)
 
 
+def observe_symbol_quote_status(symbol: str) -> dict[str, Any]:
+    normalized_symbol = str(symbol or "").strip().upper()
+    with _LOCK:
+        if not normalized_symbol:
+            return _clone_state(_quote_status)
+        return _clone_state(_quote_status_by_symbol.get(normalized_symbol, _fresh_quote_state()))
+
+
 def reset_quote_status() -> None:
     """Reset quote telemetry to defaults."""
 
     with _LOCK:
-        global _quote_status
+        global _quote_status, _quote_status_by_symbol
         _quote_status = _fresh_quote_state()
+        _quote_status_by_symbol = {}
 
 
 def update_broker_status(
@@ -464,8 +487,9 @@ def reset_all_states() -> None:
     """Reset all runtime telemetry snapshots."""
 
     with _LOCK:
-        global _provider_state, _quote_status, _broker_status, _service_status
+        global _provider_state, _quote_status, _quote_status_by_symbol, _broker_status, _service_status
         _provider_state = _fresh_provider_state()
         _quote_status = _fresh_quote_state()
+        _quote_status_by_symbol = {}
         _broker_status = _fresh_broker_state()
         _service_status = _fresh_service_status()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -318,6 +319,69 @@ def test_prerank_ml_signal_shadow_scores_selected_symbols(monkeypatch):
 
     assert [symbol for symbol, _model in calls] == ["AAPL", "MSFT"]
     assert all(isinstance(model, Model) for _symbol, model in calls)
+
+
+def test_prerank_ml_signal_shadow_prefetches_symbol_quote(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_PRERANK_SIGNAL_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_PRERANK_SIGNAL_LIMIT", "1")
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_QUOTE_PREFETCH_ENABLED", "1")
+
+    class Model:
+        def predict(self, _frame):
+            return [1]
+
+        def predict_proba(self, _frame):
+            return [[0.2, 0.8]]
+
+    class Fetcher:
+        def get_daily_df(self, _runtime, _symbol):
+            return pd.DataFrame(
+                {
+                    "open": [100.0] * 20,
+                    "high": [101.0] * 20,
+                    "low": [99.0] * 20,
+                    "close": [100.0] * 20,
+                    "volume": [1000.0] * 20,
+                }
+            )
+
+    class Quote:
+        bid_price = 100.0
+        ask_price = 100.04
+        timestamp = datetime.now(UTC) - timedelta(seconds=2)
+
+    seen_snapshots: list[dict[str, object]] = []
+    manager = bot_engine.SignalManager()
+
+    def _record_signal(_frame, model=None, symbol=None):
+        seen_snapshots.append(bot_engine.runtime_state.observe_symbol_quote_status(symbol))
+
+    monkeypatch.setattr(manager, "signal_ml", _record_signal)
+    monkeypatch.setattr(bot_engine, "signal_manager", manager)
+    monkeypatch.setattr(bot_engine, "_load_required_model", lambda: Model())
+    monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", lambda symbol: None)
+    monkeypatch.setattr(bot_engine, "_fetch_quote", lambda runtime, symbol: Quote())
+
+    runtime = type("_Runtime", (), {"data_fetcher": Fetcher()})()
+
+    bot_engine.runtime_state.reset_quote_status()
+    try:
+        bot_engine._record_prerank_ml_signal_shadow(
+            selected_symbols=["AAPL"],
+            runtime=runtime,
+        )
+    finally:
+        bot_engine.runtime_state.reset_quote_status()
+
+    assert len(seen_snapshots) == 1
+    snapshot = seen_snapshots[0]
+    assert snapshot["symbol"] == "AAPL"
+    assert snapshot["bid"] == pytest.approx(100.0)
+    assert snapshot["ask"] == pytest.approx(100.04)
+    assert snapshot["quote_age_ms"] == pytest.approx(2000.0, abs=500.0)
+    assert snapshot["source"] == "latest_quote"
+    assert snapshot["status"] == "ready"
 
 
 def test_prerank_ml_signal_shadow_prefers_minute_frame(monkeypatch):
