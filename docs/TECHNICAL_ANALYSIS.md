@@ -294,5 +294,5 @@ vwap = talib.VWAP(high_prices, low_prices, close_prices, volume_data)
 
 - [ta library documentation](https://technical-analysis-library-in-python.readthedocs.io/)
 - [Trading strategy examples](../strategies/)
-- [Performance optimization guide](PERFORMANCE_OPTIMIZATION.md)
+- [Peak performance guide](peak_performance.md)
 - [Risk management integration](../ai_trading/risk/)

@@ -125,6 +125,12 @@ patch_full_cleanup.patch
 
 # Local OpenClaw workspace state
 .openclaw/
+.codex-private/
+
+# Local-only test/runtime scratch files
+.pytest_trade_history.parquet.pkl
+m.pkl
+sitecustomize.py
 
 # Tracked source and governance fixtures intentionally kept despite broad local ignores.
 !.env.example
