@@ -162,6 +162,14 @@ def _managed_env(
     return default
 
 
+def _offline_tests_enabled() -> bool:
+    raw = str(
+        _managed_env("AI_TRADING_OFFLINE_TESTS", "", cast=str, resolve_aliases=False)
+        or ""
+    ).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def is_shadow_mode() -> bool:
     from ai_trading.config import management as config_management
 
@@ -617,6 +625,9 @@ def _get_rest(*, bars: bool = False) -> Any:
         When ``True`` return a :class:`StockHistoricalDataClient`; otherwise a
         :class:`TradingClient`.
     """
+
+    if bars and _offline_tests_enabled():
+        raise RuntimeError("external network blocked in tests")
 
     # Resolve credentials using the shared resolver (single source of truth).
     from ai_trading.broker.alpaca_credentials import resolve_alpaca_credentials_with_base
