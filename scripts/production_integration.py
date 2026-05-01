@@ -32,7 +32,7 @@ try:
 except ImportError:
     SECURITY_MANAGER_AVAILABLE = False
 try:
-    from monitoring_dashboard import get_monitoring_dashboard, initialize_monitoring_dashboard
+    from monitoring_dashboard import initialize_monitoring_dashboard
     DASHBOARD_AVAILABLE = True
 except ImportError:
     DASHBOARD_AVAILABLE = False
