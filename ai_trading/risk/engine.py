@@ -34,6 +34,7 @@ try:
     TradingClient = get_trading_client_cls()
 except (ImportError, RuntimeError, OSError, AttributeError):
     TradingClient = None
+
 from ai_trading.config.management import (
     TradingConfig,
     get_env,
@@ -46,6 +47,15 @@ from ai_trading.settings import (
     POSITION_SIZE_MIN_USD_DEFAULT,
     get_position_size_min_usd,
 )
+
+
+def _offline_tests_enabled() -> bool:
+    raw = str(
+        get_env("AI_TRADING_OFFLINE_TESTS", "", cast=str, resolve_aliases=False)
+        or ""
+    ).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
 
 if not hasattr(np, "NaN"):
     setattr(np, "NaN", np.nan)
@@ -319,6 +329,8 @@ class RiskEngine:
         self._volatility_alerted = False
         self.data_client = None
         try:
+            if _offline_tests_enabled():
+                raise ImportError("external network blocked in tests")
             cfg_key, cfg_secret, _ = _resolve_alpaca_env()
 
             def _pick_credential(*values: Any) -> str | None:
@@ -477,6 +489,8 @@ class RiskEngine:
                 ts, val = self._atr_cache[symbol]
                 if datetime.now(UTC) - ts < timedelta(minutes=30):
                     return val
+            if _offline_tests_enabled():
+                return None
             ctx = getattr(self, "ctx", None)
             client = getattr(ctx, "data_client", None) or self._init_data_client()
 
