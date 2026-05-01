@@ -11,7 +11,7 @@
 
 AI Trading Bot is a Python 3.12 algorithmic trading runtime for Alpaca Markets.
 It combines market-data ingestion, technical indicators, machine-learning
-signals, guarded order execution, risk controls, Prometheus metrics, and
+signals, guarded order execution, risk controls, Prometheus-compatible metrics, and
 operator health endpoints.
 
 This project is for research and operator-supervised paper/live trading. It
@@ -172,7 +172,7 @@ Install only the extras you need for the workflow you are running.
 Suggested GitHub About description:
 
 > Python 3.12 Alpaca trading runtime with ML signals, risk controls, systemd
-> deployment, health endpoints, and Prometheus metrics.
+> deployment, health endpoints, and Prometheus-compatible metrics.
 
 Suggested topics:
 

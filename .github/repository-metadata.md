@@ -5,7 +5,7 @@ Use these values for the GitHub repository About panel.
 ## Description
 
 Python 3.12 Alpaca trading runtime with ML signals, risk controls, systemd
-deployment, health endpoints, and Prometheus metrics.
+deployment, health endpoints, and Prometheus-compatible metrics.
 
 ## Topics
 

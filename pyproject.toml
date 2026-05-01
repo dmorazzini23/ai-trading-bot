@@ -1,7 +1,7 @@
 [project]
 name = "ai-trading-bot"
 version = "0.0.0"
-description = "Python 3.12 Alpaca trading runtime with ML signals, risk controls, health endpoints, and Prometheus metrics"
+description = "Python 3.12 Alpaca trading runtime with ML signals, risk controls, health endpoints, and Prometheus-compatible metrics"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [

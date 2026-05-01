@@ -98,7 +98,7 @@ Notes:
 
 ### `GET /metrics`
 
-Prometheus metrics from the active runtime registry.
+Prometheus-compatible metrics from the active runtime registry.
 
 Example:
 
