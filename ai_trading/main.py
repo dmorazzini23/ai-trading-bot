@@ -2699,6 +2699,13 @@ def _fail_fast_env() -> None:
         ]
     loaded = reload_env(override=False)
     try:
+        from ai_trading.config.managed_secrets import hydrate_managed_secrets
+
+        hydrate_managed_secrets(required_keys=required)
+    except RuntimeError as exc:
+        logger.critical("MANAGED_SECRETS_HYDRATION_FAILED", extra={"error": str(exc)})
+        raise SystemExit(1) from exc
+    try:
         validate_no_deprecated_env()
     except RuntimeError as exc:
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(exc)})
