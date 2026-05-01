@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
@@ -100,7 +101,11 @@ def parse_secret_string(raw: str) -> dict[str, str]:
 
 
 def resolve_aws_cli_path() -> str:
-    configured = str(os.getenv("AI_TRADING_AWS_CLI_PATH") or os.getenv("AWS_CLI_PATH") or "").strip()
+    configured = str(
+        get_env("AI_TRADING_AWS_CLI_PATH", "", cast=str, resolve_aliases=False)
+        or get_env("AWS_CLI_PATH", "", cast=str, resolve_aliases=False)
+        or ""
+    ).strip()
     if configured:
         path = Path(configured).expanduser()
         if not path.is_absolute():
@@ -112,7 +117,11 @@ def resolve_aws_cli_path() -> str:
 
 
 def aws_cli_env() -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if key in _AWS_ENV_ALLOWLIST}
+    env = {
+        key: str(value)
+        for key in _AWS_ENV_ALLOWLIST
+        if (value := get_env(key, None, cast=str, resolve_aliases=False)) is not None
+    }
     candidate_homes: list[Path] = []
     home = str(env.get("HOME") or "").strip()
     if home:
@@ -192,7 +201,7 @@ def fetch_aws_secret_payload(secret_id: str, *, region: str, profile: str) -> di
 def hydrate_managed_secrets(*, required_keys: Iterable[str] = ()) -> dict[str, Any]:
     """Load managed secrets into process-local config overrides without writing files."""
 
-    from ai_trading.config.management import get_env, set_runtime_env_override
+    from ai_trading.config.management import set_runtime_env_override
 
     backend = str(get_env("AI_TRADING_SECRETS_BACKEND", "none", resolve_aliases=False) or "none").lower()
     if backend in BACKEND_NONE:
