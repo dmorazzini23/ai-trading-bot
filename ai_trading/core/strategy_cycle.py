@@ -1,4 +1,4 @@
-"""Legacy strategy-cycle orchestration extracted from ``bot_engine.py``."""
+"""Strategy-cycle orchestration used by the runtime bot engine."""
 
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
@@ -10,7 +10,7 @@ from typing import Any
 
 
 def run_multi_strategy_cycle(ctx: Any) -> None:
-    """Execute modular strategies, allocation, and legacy execution flow."""
+    """Execute modular strategies, allocation, and non-netting execution flow."""
 
     be = importlib.import_module("ai_trading.core.bot_engine")
     logger = be.logger
@@ -802,7 +802,7 @@ def process_symbols_cycle(
     close_shorts: bool = False,
     skip_duplicates: bool = False,
 ) -> tuple[list[str], dict[str, int], int]:
-    """Screen, fetch, and execute legacy symbols for the current cycle."""
+    """Screen, fetch, and execute symbols for the current cycle."""
 
     be = importlib.import_module("ai_trading.core.bot_engine")
     logger = be.logger
@@ -934,7 +934,7 @@ def process_symbols_cycle(
         price_df: Any = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
-        recorder = getattr(state, "_legacy_decision_recorder", None)
+        recorder = getattr(state, "_decision_journal_recorder", None)
         if recorder is None or not hasattr(recorder, "record"):
             return
         market_bar = bar_from_frame(
@@ -1082,7 +1082,7 @@ def process_symbols_cycle(
                     symbol,
                     gates=["DEGRADED_FEED_SKIP_SYMBOL"],
                     reasons=[str(degrade_reason)],
-                    event="legacy_process_symbols_degraded_feed_skip",
+                    event="process_symbols_degraded_feed_skip",
                 )
                 continue
             if degraded_mode in {"block", "hard_block"} and pos >= 0:
@@ -1098,7 +1098,7 @@ def process_symbols_cycle(
                     symbol,
                     gates=["DEGRADED_FEED_SKIP_SYMBOL"],
                     reasons=[str(degrade_reason), str(degraded_mode)],
-                    event="legacy_process_symbols_degraded_feed_skip",
+                    event="process_symbols_degraded_feed_skip",
                 )
                 continue
         now = datetime.now(UTC)
@@ -1114,7 +1114,7 @@ def process_symbols_cycle(
                 symbol,
                 gates=["SKIP_PARTIAL_BAR"],
                 reasons=["1min"],
-                event="legacy_process_symbols_partial_bar_skip",
+                event="process_symbols_partial_bar_skip",
             )
             continue
         if processed_symbols >= max_symbols_per_cycle:
@@ -1149,7 +1149,7 @@ def process_symbols_cycle(
                     symbol,
                     gates=["SHORT_CLOSE_QUEUED"],
                     reasons=["close_shorts"],
-                    event="legacy_process_symbols_short_close_queued",
+                    event="process_symbols_short_close_queued",
                     metadata={"qty": int(abs(pos))},
                 )
                 continue
@@ -1160,7 +1160,7 @@ def process_symbols_cycle(
                     symbol,
                     gates=["SKIP_DUPLICATE_POSITION"],
                     reasons=["duplicate"],
-                    event="legacy_process_symbols_duplicate_skip",
+                    event="process_symbols_duplicate_skip",
                     metadata={"current_qty": int(pos)},
                 )
                 continue
@@ -1171,7 +1171,7 @@ def process_symbols_cycle(
                     symbol,
                     gates=["SKIP_HELD_POSITION"],
                     reasons=["already_long"],
-                    event="legacy_process_symbols_held_position_skip",
+                    event="process_symbols_held_position_skip",
                     metadata={"current_qty": int(pos)},
                 )
                 continue
@@ -1196,7 +1196,7 @@ def process_symbols_cycle(
                     symbol,
                     gates=["SHORT_CLOSE_QUEUED"],
                     reasons=["existing_short_position"],
-                    event="legacy_process_symbols_short_close_queued",
+                    event="process_symbols_short_close_queued",
                     metadata={"current_qty": int(pos)},
                 )
                 continue
@@ -1208,7 +1208,7 @@ def process_symbols_cycle(
                 _record_symbol_skip(
                     symbol,
                     gates=["TRADE_COOLDOWN_ACTIVE"],
-                    event="legacy_process_symbols_cooldown_skip",
+                    event="process_symbols_cooldown_skip",
                 )
                 continue
         filtered.append(symbol)
@@ -1356,7 +1356,7 @@ def process_symbols_cycle(
                 _record_symbol_skip(
                     symbol,
                     gates=["MARKET_CLOSED_SKIP_SYMBOL"],
-                    event="legacy_process_symbols_market_closed_skip",
+                    event="process_symbols_market_closed_skip",
                 )
                 return
             if not warmup_data_only and _trade_limit_reached(state, datetime.now(UTC)):
@@ -1364,7 +1364,7 @@ def process_symbols_cycle(
                 _record_symbol_skip(
                     symbol,
                     gates=["TRADE_QUOTA_EXHAUSTED_SKIP"],
-                    event="legacy_process_symbols_quota_skip",
+                    event="process_symbols_quota_skip",
                 )
                 return
 
@@ -1397,7 +1397,7 @@ def process_symbols_cycle(
                     symbol,
                     gates=["PROCESS_SYMBOL_EMPTY_BARS"],
                     reasons=[str(exc)],
-                    event="legacy_process_symbols_empty_bars",
+                    event="process_symbols_empty_bars",
                 )
                 with data_stats_lock:
                     data_stats["failed"] += 1
@@ -1416,7 +1416,7 @@ def process_symbols_cycle(
                     symbol,
                     gates=["DATA_FETCH_UNAVAILABLE"],
                     reasons=[str(reason or exc)],
-                    event="legacy_process_symbols_data_fetch_failed",
+                    event="process_symbols_data_fetch_failed",
                 )
                 with data_stats_lock:
                     data_stats["failed"] += 1
@@ -1428,7 +1428,7 @@ def process_symbols_cycle(
                 _record_symbol_skip(
                     symbol,
                     gates=["EMPTY_FRAME"],
-                    event="legacy_process_symbols_empty_frame",
+                    event="process_symbols_empty_frame",
                     price_df=price_df if isinstance(price_df, pd.DataFrame) else None,
                 )
                 with data_stats_lock:
@@ -1448,7 +1448,7 @@ def process_symbols_cycle(
                     _record_symbol_skip(
                         symbol,
                         gates=["EMPTY_FRAME"],
-                        event="legacy_process_symbols_empty_frame",
+                        event="process_symbols_empty_frame",
                         price_df=(
                             price_df if isinstance(price_df, pd.DataFrame) else None
                         ),
@@ -1460,7 +1460,7 @@ def process_symbols_cycle(
                 _record_symbol_skip(
                     symbol,
                     gates=["SKIP_POSITION_CACHE_PRESENT"],
-                    event="legacy_process_symbols_position_cache_skip",
+                    event="process_symbols_position_cache_skip",
                     price_df=price_df if isinstance(price_df, pd.DataFrame) else None,
                 )
                 return
@@ -1472,7 +1472,7 @@ def process_symbols_cycle(
                 _record_symbol_skip(
                     symbol,
                     gates=["WARMUP_DATA_ONLY"],
-                    event="legacy_process_symbols_warmup_skip",
+                    event="process_symbols_warmup_skip",
                     price_df=price_df if isinstance(price_df, pd.DataFrame) else None,
                 )
                 local_success = True

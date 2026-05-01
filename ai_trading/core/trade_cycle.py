@@ -1,4 +1,4 @@
-"""Legacy trade decision flow extracted from ``bot_engine.py``."""
+"""Non-netting trade decision flow used by the runtime service facade."""
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
@@ -9,7 +9,7 @@ from typing import Any, Callable, Mapping, Sequence
 from ai_trading.contracts import Bar, bar_from_frame
 
 
-def execute_legacy_trade_logic(
+def execute_trade_logic(
     ctx: Any,
     state: Any,
     symbol: str,
@@ -20,7 +20,7 @@ def execute_legacy_trade_logic(
     price_df: Any = None,
     now_provider: Callable[[], datetime] | None = None,
 ) -> bool:
-    """Run the legacy non-netting per-symbol trade flow."""
+    """Run the non-netting per-symbol trade flow."""
 
     be = importlib.import_module("ai_trading.core.bot_engine")
     feat_df: Any = None
@@ -37,7 +37,7 @@ def execute_legacy_trade_logic(
                 return bar
         return None
 
-    def _record_legacy_decision(
+    def _record_decision(
         *,
         accepted: bool,
         gates: Sequence[str],
@@ -46,7 +46,7 @@ def execute_legacy_trade_logic(
         signal_side: str = "hold",
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
-        recorder = getattr(state, "_legacy_decision_recorder", None)
+        recorder = getattr(state, "_decision_journal_recorder", None)
         if recorder is None or not hasattr(recorder, "record"):
             return
         market_bar = _decision_bar()
@@ -77,10 +77,10 @@ def execute_legacy_trade_logic(
 
     if not be.pre_trade_checks(ctx, state, symbol, balance, regime_ok):
         be.logger.debug("SKIP_PRE_TRADE_CHECKS", extra={"symbol": symbol})
-        _record_legacy_decision(
+        _record_decision(
             accepted=False,
             gates=["PRE_TRADE_CHECKS_FAILED"],
-            event="legacy_pretrade_block",
+            event="pretrade_block",
         )
         return False
 
@@ -117,11 +117,11 @@ def execute_legacy_trade_logic(
                     "block_reason": "provider_disabled",
                 },
             )
-            _record_legacy_decision(
+            _record_decision(
                 accepted=False,
                 gates=["SAFE_MODE_BLOCK"],
                 reasons=[reason],
-                event="legacy_safe_mode_block",
+                event="safe_mode_block",
             )
             return False
         setattr(state, "prefer_backup_quotes", True)
@@ -144,10 +144,10 @@ def execute_legacy_trade_logic(
         )
         return False
     if feat_df is None:
-        _record_legacy_decision(
+        _record_decision(
             accepted=False,
             gates=["FEATURE_DATA_UNAVAILABLE" if skip_flag else "DATA_FETCH_UNAVAILABLE"],
-            event="legacy_feature_block",
+            event="feature_block",
         )
         return bool(skip_flag) if skip_flag is not None else False
 
@@ -174,11 +174,11 @@ def execute_legacy_trade_logic(
             f"Feature snapshot for {symbol}: macd={feat_df['macd'].iloc[-1]}, atr={feat_df['atr'].iloc[-1]}, vwap={feat_df['vwap'].iloc[-1]}, macds={feat_df['macds'].iloc[-1]}, sma_50={feat_df['sma_50'].iloc[-1]}, sma_200={feat_df['sma_200'].iloc[-1]}"
         )
         be.logger.info("SKIP_MISSING_FEATURES | symbol=%s  missing=%s", symbol, missing)
-        _record_legacy_decision(
+        _record_decision(
             accepted=False,
             gates=["MISSING_FEATURES"],
             reasons=missing,
-            event="legacy_missing_features",
+            event="missing_features",
         )
         return True
 
@@ -191,19 +191,19 @@ def execute_legacy_trade_logic(
             "SKIP_SIGNAL_INVALID",
             extra={"symbol": symbol, "reason": str(exc)},
         )
-        _record_legacy_decision(
+        _record_decision(
             accepted=False,
             gates=["SIGNAL_INVALID"],
             reasons=[str(exc)],
-            event="legacy_signal_invalid",
+            event="signal_invalid",
         )
         return True
     if be.pd.isna(final_score) or be.pd.isna(conf):
         be.logger.warning(f"Skipping {symbol}: model returned NaN prediction")
-        _record_legacy_decision(
+        _record_decision(
             accepted=False,
             gates=["SIGNAL_NAN"],
-            event="legacy_signal_nan",
+            event="signal_nan",
         )
         return True
 
@@ -221,11 +221,11 @@ def execute_legacy_trade_logic(
     if be._exit_positions_if_needed(
         ctx, state, symbol, feat_df, final_score, conf, current_qty
     ):
-        _record_legacy_decision(
+        _record_decision(
             accepted=False,
             gates=["POSITION_EXIT_MANAGED"],
             reasons=["position_exit_managed"],
-            event="legacy_position_exit",
+            event="position_exit",
             signal_side=signal,
             metadata={
                 "final_score": float(final_score),
@@ -242,10 +242,10 @@ def execute_legacy_trade_logic(
             (prev == "buy" and signal == "sell") or (prev == "sell" and signal == "buy")
         ):
             be.logger.info("SKIP_REVERSED_SIGNAL", extra={"symbol": symbol})
-            _record_legacy_decision(
+            _record_decision(
                 accepted=False,
                 gates=["REVERSED_SIGNAL_COOLDOWN"],
-                event="legacy_reversed_signal_block",
+                event="reversed_signal_block",
                 signal_side=signal,
                 metadata={
                     "final_score": float(final_score),
@@ -254,10 +254,10 @@ def execute_legacy_trade_logic(
             )
             return True
         be.logger.debug("SKIP_COOLDOWN", extra={"symbol": symbol})
-        _record_legacy_decision(
+        _record_decision(
             accepted=False,
             gates=["TRADE_COOLDOWN_ACTIVE"],
-            event="legacy_trade_cooldown",
+            event="trade_cooldown",
             signal_side=signal,
             metadata={
                 "final_score": float(final_score),
@@ -268,10 +268,10 @@ def execute_legacy_trade_logic(
 
     if be._check_trade_frequency_limits(state, symbol, now):
         be.logger.info("SKIP_FREQUENCY_LIMIT", extra={"symbol": symbol})
-        _record_legacy_decision(
+        _record_decision(
             accepted=False,
             gates=["TRADE_FREQUENCY_LIMIT"],
-            event="legacy_frequency_limit",
+            event="frequency_limit",
             signal_side=signal,
             metadata={
                 "final_score": float(final_score),
@@ -293,10 +293,10 @@ def execute_legacy_trade_logic(
                     "max_trades_window": alpha_decay_guard.get("max_trades_window", 0),
                 },
             )
-            _record_legacy_decision(
+            _record_decision(
                 accepted=False,
                 gates=["ENTRY_BLOCKED_ALPHA_DECAY"],
-                event="legacy_alpha_decay_block",
+                event="alpha_decay_block",
                 signal_side=signal,
                 metadata={
                     "final_score": float(final_score),
@@ -394,10 +394,10 @@ def execute_legacy_trade_logic(
             },
         )
         be._reset_entry_flip_signal_streak(state, symbol)
-        _record_legacy_decision(
+        _record_decision(
             accepted=False,
             gates=["ENTRY_BLOCKED_FEED_RELIABILITY"],
-            event="legacy_feed_reliability_block",
+            event="feed_reliability_block",
             signal_side=signal,
             metadata={
                 "final_score": float(final_score),
@@ -443,10 +443,10 @@ def execute_legacy_trade_logic(
                     **degraded_extra,
                 },
             )
-            _record_legacy_decision(
+            _record_decision(
                 accepted=False,
                 gates=["ENTRY_BLOCKED_DEGRADED_MINUTE_DATA"],
-                event="legacy_degraded_data_block",
+                event="degraded_data_block",
                 signal_side="buy",
                 metadata={
                     "final_score": float(final_score),
@@ -459,10 +459,10 @@ def execute_legacy_trade_logic(
             be.logger.info(
                 f"Skipping BUY for {symbol} — position already LONG {held} shares"
             )
-            _record_legacy_decision(
+            _record_decision(
                 accepted=False,
                 gates=["POSITION_ALREADY_LONG"],
-                event="legacy_position_already_held",
+                event="position_already_held",
                 signal_side="buy",
                 metadata={"held_qty": held},
             )
@@ -508,10 +508,10 @@ def execute_legacy_trade_logic(
                     **degraded_extra,
                 },
             )
-            _record_legacy_decision(
+            _record_decision(
                 accepted=False,
                 gates=["ENTRY_BLOCKED_DEGRADED_MINUTE_DATA"],
-                event="legacy_degraded_data_block",
+                event="degraded_data_block",
                 signal_side="sell",
                 metadata={
                     "final_score": float(final_score),
@@ -524,10 +524,10 @@ def execute_legacy_trade_logic(
             be.logger.info(
                 f"Skipping SELL for {symbol} — position already SHORT {held} shares"
             )
-            _record_legacy_decision(
+            _record_decision(
                 accepted=False,
                 gates=["POSITION_ALREADY_SHORT"],
-                event="legacy_position_already_held",
+                event="position_already_held",
                 signal_side="sell",
                 metadata={"held_qty": held},
             )
@@ -538,10 +538,10 @@ def execute_legacy_trade_logic(
 
     if current_qty != 0:
         atr = feat_df["atr"].iloc[-1]
-        _record_legacy_decision(
+        _record_decision(
             accepted=False,
             gates=["MANAGE_EXISTING_POSITION"],
-            event="legacy_manage_existing_position",
+            event="manage_existing_position",
             signal_side=signal,
             metadata={
                 "final_score": float(final_score),
@@ -560,10 +560,10 @@ def execute_legacy_trade_logic(
         f"SKIP_LOW_OR_NO_SIGNAL | symbol={symbol}  "
         f"final_score={final_score:.4f}  confidence={conf:.4f}  threshold={local_threshold:.4f}"
     )
-    _record_legacy_decision(
+    _record_decision(
         accepted=False,
         gates=["LOW_OR_NO_SIGNAL"],
-        event="legacy_low_signal_hold",
+        event="low_signal_hold",
         signal_side=signal,
         metadata={
             "final_score": float(final_score),
@@ -574,4 +574,4 @@ def execute_legacy_trade_logic(
     return True
 
 
-__all__ = ["execute_legacy_trade_logic"]
+__all__ = ["execute_trade_logic"]

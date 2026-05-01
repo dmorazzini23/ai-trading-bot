@@ -8,8 +8,8 @@ from ai_trading.config.management import get_env, is_test_runtime
 _NON_ACCEPTED_ORDER_STATUSES = {"rejected", "canceled", "cancelled", "expired", "done_for_day"}
 
 
-class LegacyLiveExecutionBlockedError(RuntimeError):
-    """Raised when legacy non-netting execution is attempted in live mode."""
+class NonNettingLiveExecutionBlockedError(RuntimeError):
+    """Raised when non-netting execution is attempted in live mode."""
 
 
 def _order_status_token(order: Any) -> str:
@@ -25,10 +25,10 @@ def _execution_mode(ctx: Any) -> str:
     return str(get_env("EXECUTION_MODE", "paper") or "paper").strip().lower()
 
 
-def _legacy_live_execution_allowed() -> bool:
+def _non_netting_live_execution_allowed() -> bool:
     return bool(
         is_test_runtime()
-        and get_env("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", False, cast=bool)
+        and get_env("AI_TRADING_ENABLE_NON_NETTING_LIVE_EXECUTION", False, cast=bool)
     )
 
 
@@ -57,16 +57,16 @@ class ExecutionService:
 
     boundary_type = "facade"
     canonical_runtime_owner = (
-        "ai_trading.core.legacy_submit_runtime.submit_order_runtime",
-        "ai_trading.core.legacy_trade_cycle.execute_legacy_trade_logic",
+        "ai_trading.core.submit_runtime.submit_order_runtime",
+        "ai_trading.core.trade_cycle.execute_trade_logic",
     )
 
     @staticmethod
     def _require_supported_mode(*, ctx: Any, operation: str) -> None:
         mode = _execution_mode(ctx)
-        if mode == "live" and not _legacy_live_execution_allowed():
-            raise LegacyLiveExecutionBlockedError(
-                f"{operation} is blocked for live legacy execution. "
+        if mode == "live" and not _non_netting_live_execution_allowed():
+            raise NonNettingLiveExecutionBlockedError(
+                f"{operation} is blocked for live non-netting execution. "
                 "Use the canonical OMS/netting live path instead."
             )
 
@@ -83,7 +83,7 @@ class ExecutionService:
         """Submit through the shared non-netting runtime only outside blocked live mode."""
 
         self._require_supported_mode(ctx=ctx, operation="submit_order")
-        from ai_trading.core.legacy_submit_runtime import submit_order_runtime
+        from ai_trading.core.submit_runtime import submit_order_runtime
 
         return submit_order_runtime(
             ctx,
@@ -109,10 +109,10 @@ class ExecutionService:
         """Run the shared non-netting trade cycle only outside blocked live mode."""
 
         self._require_supported_mode(ctx=ctx, operation="trade_logic")
-        from ai_trading.core.legacy_trade_cycle import execute_legacy_trade_logic
+        from ai_trading.core.trade_cycle import execute_trade_logic
 
         return bool(
-            execute_legacy_trade_logic(
+            execute_trade_logic(
                 ctx,
                 state,
                 symbol,
@@ -228,7 +228,7 @@ def execute_signal_orders(
 
 __all__ = [
     "ExecutionService",
-    "LegacyLiveExecutionBlockedError",
+    "NonNettingLiveExecutionBlockedError",
     "execute_signal_orders",
     "execute_trade_cycle",
     "submit_order",

@@ -27,6 +27,10 @@ forbidden_paths=(
   ai_trading/market/calendar_wrapper.py
   ai_trading/timeframe.py
   ai_trading/utils/retry_mode.py
+  ai_trading/core/legacy_submit_runtime.py
+  ai_trading/core/legacy_trade_cycle.py
+  ai_trading/core/legacy_strategy_cycle.py
+  ai_trading/core/legacy_decision_journal.py
 )
 
 existing_forbidden_paths=()
@@ -73,7 +77,7 @@ if [ -n "$shim_files" ]; then
 fi
 
 removed_import_refs=$(git grep -nE \
-    'ai_trading\.(timeframe|config\.aliases|analysis\.indicator_manager|utils\.retry_mode|data\.market_calendar|market\.calendar_wrapper)|scripts/(algorithm_optimizer|logger_rotator|ml_model|predict)|logger_rotator' \
+    'ai_trading\.(timeframe|config\.aliases|analysis\.indicator_manager|utils\.retry_mode|data\.market_calendar|market\.calendar_wrapper)|ai_trading\.core\.(legacy_submit_runtime|legacy_trade_cycle|legacy_strategy_cycle|legacy_decision_journal)|scripts/(algorithm_optimizer|logger_rotator|ml_model|predict)|logger_rotator' \
     -- . ':(exclude)tools/ci/guard_shims.sh' ':(exclude)venv' ':(exclude).venv' ':(exclude)htmlcov' || true)
 if [ -n "$removed_import_refs" ]; then
     echo "Found references to removed shim/compatibility entrypoints:"

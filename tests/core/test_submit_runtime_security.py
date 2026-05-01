@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ai_trading.core.legacy_submit_runtime import _canonical_intent_side
+from ai_trading.core.submit_runtime import _canonical_intent_side
 
 
 def test_canonical_intent_side_rejects_unknown_values() -> None:

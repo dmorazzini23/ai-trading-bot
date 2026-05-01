@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from ai_trading.config.management import get_env
-from ai_trading.core.legacy_decision_journal import LegacyDecisionJournalRecorder
+from ai_trading.core.decision_journal import DecisionJournalRecorder
 
 _REPLAY_LIVE_PARITY_GATE_CACHE: dict[str, Any] = {
     "updated_mono": 0.0,
@@ -169,11 +169,11 @@ def execute_run_all_trades_cycle(
     ):
         return
 
-    legacy_recorder = LegacyDecisionJournalRecorder(
+    decision_recorder = DecisionJournalRecorder(
         path=str(be._decision_log_runtime_path()),
         write_impl=be._write_decision_record,
     )
-    setattr(state, "_legacy_decision_recorder", legacy_recorder)
+    setattr(state, "_decision_journal_recorder", decision_recorder)
     try:
         can_list_orders = (
             hasattr(api, "list_orders") and callable(getattr(api, "list_orders", None))
@@ -858,8 +858,8 @@ def execute_run_all_trades_cycle(
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )
     finally:
-        if getattr(state, "_legacy_decision_recorder", None) is legacy_recorder:
-            delattr(state, "_legacy_decision_recorder")
+        if getattr(state, "_decision_journal_recorder", None) is decision_recorder:
+            delattr(state, "_decision_journal_recorder")
 
 
 __all__ = ["execute_run_all_trades_cycle"]

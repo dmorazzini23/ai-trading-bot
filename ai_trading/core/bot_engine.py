@@ -25253,7 +25253,7 @@ def _enter_long(
     conf: float,
     strat: str,
 ) -> bool:
-    legacy_recorder = getattr(state, "_legacy_decision_recorder", None)
+    decision_recorder = getattr(state, "_decision_journal_recorder", None)
     bar_ts_value: datetime | None = None
     testing_mode = False
     price_source = ""
@@ -25267,7 +25267,7 @@ def _enter_long(
                 raw_bar_ts if raw_bar_ts.tzinfo is not None else raw_bar_ts.replace(tzinfo=UTC)
             )
 
-    def _record_legacy_order(
+    def _record_order_journal(
         *,
         accepted: bool,
         gates: Sequence[str],
@@ -25281,13 +25281,13 @@ def _enter_long(
         price: float | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
-        if legacy_recorder is None or not hasattr(legacy_recorder, "record"):
+        if decision_recorder is None or not hasattr(decision_recorder, "record"):
             return
         freshness: float | None = None
         if isinstance(bar_ts_value, datetime):
             freshness = max((datetime.now(UTC) - bar_ts_value).total_seconds(), 0.0)
         try:
-            legacy_recorder.record(
+            decision_recorder.record(
                 symbol=symbol,
                 bar_ts=bar_ts_value,
                 signal_side="buy",
@@ -25311,7 +25311,7 @@ def _enter_long(
                 metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
             )
         except BOT_ENGINE_FALLBACK_EXC:
-            logger.debug("LEGACY_ORDER_DECISION_RECORD_FAILED", exc_info=True)
+            logger.debug("ORDER_DECISION_RECORD_FAILED", exc_info=True)
 
     prefer_backup_quote = bool(getattr(state, "prefer_backup_quotes", False))
     account_obj: Any | None = None
@@ -25364,10 +25364,10 @@ def _enter_long(
                     "block_reason": "provider_disabled",
                 },
             )
-            _record_legacy_order(
+            _record_order_journal(
                 accepted=False,
                 gates=["SAFE_MODE_BLOCK"],
-                event="legacy_order_safe_mode_block",
+                event="order_safe_mode_block",
                 reasons=[reason],
             )
             return True
@@ -25382,10 +25382,10 @@ def _enter_long(
     logger.debug(f"Computed price for {symbol}: {current_price}")
     if current_price <= 0 or pd.isna(current_price):
         logger.critical(f"Invalid price computed for {symbol}: {current_price}")
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["INVALID_PRICE"],
-            event="legacy_invalid_price_block",
+            event="invalid_price_block",
             price=_safe_float(current_price),
         )
         return True
@@ -25444,10 +25444,10 @@ def _enter_long(
                 "side": "buy",
             },
         )
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["LAST_CLOSE_ONLY_BLOCK"],
-            event="legacy_last_close_only_block",
+            event="last_close_only_block",
         )
         return True
 
@@ -25478,10 +25478,10 @@ def _enter_long(
                 },
             )
             guard_mark_symbol_stale()
-            _record_legacy_order(
+            _record_order_journal(
                 accepted=False,
                 gates=["DEGRADED_QUOTE_BLOCK"],
-                event="legacy_degraded_quote_block",
+                event="degraded_quote_block",
             )
             return True
         fallback_price = current_price if np.isfinite(current_price) and current_price > 0 else None
@@ -25506,10 +25506,10 @@ def _enter_long(
                     "quote": quote_price,
                 },
             )
-            _record_legacy_order(
+            _record_order_journal(
                 accepted=False,
                 gates=["INVALID_QUOTE_BLOCK"],
-                event="legacy_invalid_quote_block",
+                event="invalid_quote_block",
             )
             return True
 
@@ -25524,10 +25524,10 @@ def _enter_long(
             "SKIP_ORDER_PRICE_SOURCE",
             extra={"symbol": symbol, "price_source": price_source},
         )
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["PRICE_SOURCE_BLOCK"],
-            event="legacy_price_source_block",
+            event="price_source_block",
         )
         return True
     gate = _evaluate_data_gating(
@@ -25636,10 +25636,10 @@ def _enter_long(
         reason_label = ";".join(gate.reasons) if gate.reasons else "unreliable_price"
         _log_unreliable(reason_label, reasons=gate.reasons)
         guard_mark_symbol_stale()
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["UNRELIABLE_PRICE_BLOCK"],
-            event="legacy_unreliable_price_block",
+            event="unreliable_price_block",
             reasons=gate.reasons,
         )
         return True
@@ -25740,10 +25740,10 @@ def _enter_long(
         reason_label = "gap_ratio>limit" if gap_exceeds else (skip_reasons[0] if skip_reasons else "unreliable_price")
         _log_unreliable(reason_label, reasons=skip_reasons or gate.reasons)
         guard_mark_symbol_stale()
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["NBBO_MISSING_BLOCK"],
-            event="legacy_nbbo_block",
+            event="nbbo_block",
             reasons=skip_reasons or gate.reasons,
         )
         return True
@@ -25767,10 +25767,10 @@ def _enter_long(
             extra={"skip_reason": skip_reason},
         )
         guard_mark_symbol_stale()
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["NBBO_TERMINAL_FALLBACK_BLOCK"],
-            event="legacy_nbbo_block",
+            event="nbbo_block",
             reasons=skip_reasons or gate.reasons,
         )
         return True
@@ -25903,10 +25903,10 @@ def _enter_long(
                     symbol,
                 )
                 guard_mark_symbol_stale()
-                _record_legacy_order(
+                _record_order_journal(
                     accepted=False,
                     gates=["STALE_QUOTE_BLOCK"],
-                    event="legacy_stale_quote_block",
+                    event="stale_quote_block",
                 )
                 return True
         return True
@@ -25937,15 +25937,15 @@ def _enter_long(
                 "min_score": _safe_float(feed_reliability.get("min_score")),
             },
         )
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["FEED_RELIABILITY_BLOCK"],
-            event="legacy_feed_reliability_block",
+            event="feed_reliability_block",
         )
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["FEED_RELIABILITY_BLOCK"],
-            event="legacy_feed_reliability_block",
+            event="feed_reliability_block",
         )
         return True
 
@@ -26094,10 +26094,10 @@ def _enter_long(
                 "stage": "precheck",
             },
         )
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["INSUFFICIENT_BUYING_POWER"],
-            event="legacy_buying_power_block",
+            event="buying_power_block",
         )
         return True
     if raw_qty < prescale_requested_qty:
@@ -26127,10 +26127,10 @@ def _enter_long(
                 "available_buying_power": None if available_bp is None else round(available_bp, 2),
             },
         )
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["INSUFFICIENT_BUYING_POWER"],
-            event="legacy_buying_power_block",
+            event="buying_power_block",
         )
         return True
     if adj_qty < requested_qty:
@@ -26192,10 +26192,10 @@ def _enter_long(
     )
     if order_id is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["ORDER_SUBMIT_SKIPPED"],
-            event="legacy_order_submit_skipped",
+            event="order_submit_skipped",
             qty=float(adj_qty),
             price=float(current_price),
         )
@@ -26207,10 +26207,10 @@ def _enter_long(
         logger.debug(
             f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={broker_order_id}"
         )
-        _record_legacy_order(
+        _record_order_journal(
             accepted=True,
             gates=["OK_TRADE"],
-            event="legacy_order_submitted",
+            event="order_submitted",
             submitted=True,
             qty=float(adj_qty),
             client_order_id=client_order_id,
@@ -26280,7 +26280,7 @@ def _enter_short(
     conf: float,
     strat: str,
 ) -> bool:
-    legacy_recorder = getattr(state, "_legacy_decision_recorder", None)
+    decision_recorder = getattr(state, "_decision_journal_recorder", None)
     bar_ts_value: datetime | None = None
     testing_mode = False
     price_source = ""
@@ -26294,7 +26294,7 @@ def _enter_short(
                 raw_bar_ts if raw_bar_ts.tzinfo is not None else raw_bar_ts.replace(tzinfo=UTC)
             )
 
-    def _record_legacy_order(
+    def _record_order_journal(
         *,
         accepted: bool,
         gates: Sequence[str],
@@ -26308,13 +26308,13 @@ def _enter_short(
         price: float | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
-        if legacy_recorder is None or not hasattr(legacy_recorder, "record"):
+        if decision_recorder is None or not hasattr(decision_recorder, "record"):
             return
         freshness: float | None = None
         if isinstance(bar_ts_value, datetime):
             freshness = max((datetime.now(UTC) - bar_ts_value).total_seconds(), 0.0)
         try:
-            legacy_recorder.record(
+            decision_recorder.record(
                 symbol=symbol,
                 bar_ts=bar_ts_value,
                 signal_side="sell",
@@ -26338,7 +26338,7 @@ def _enter_short(
                 metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
             )
         except BOT_ENGINE_FALLBACK_EXC:
-            logger.debug("LEGACY_ORDER_DECISION_RECORD_FAILED", exc_info=True)
+            logger.debug("ORDER_DECISION_RECORD_FAILED", exc_info=True)
 
     prefer_backup_quote = bool(getattr(state, "prefer_backup_quotes", False))
     feed_reliability = _get_symbol_feed_reliability(symbol)
@@ -26363,10 +26363,10 @@ def _enter_short(
                     "shorting_enabled": shorting_enabled,
                 },
             )
-            _record_legacy_order(
+            _record_order_journal(
                 accepted=False,
                 gates=["SHORTING_UNAVAILABLE"],
-                event="legacy_shorting_unavailable_block",
+                event="shorting_unavailable_block",
             )
             return True
 
@@ -26410,10 +26410,10 @@ def _enter_short(
                     "block_reason": "provider_disabled",
                 },
             )
-            _record_legacy_order(
+            _record_order_journal(
                 accepted=False,
                 gates=["SAFE_MODE_BLOCK"],
-                event="legacy_order_safe_mode_block",
+                event="order_safe_mode_block",
                 reasons=[reason],
             )
             return True
@@ -26428,10 +26428,10 @@ def _enter_short(
     logger.debug(f"Computed price for {symbol}: {current_price}")
     if current_price <= 0 or pd.isna(current_price):
         logger.critical(f"Invalid price computed for {symbol}: {current_price}")
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["INVALID_PRICE"],
-            event="legacy_invalid_price_block",
+            event="invalid_price_block",
             price=_safe_float(current_price),
         )
         return True
@@ -26491,10 +26491,10 @@ def _enter_short(
                 "side": "sell",
             },
         )
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["LAST_CLOSE_ONLY_BLOCK"],
-            event="legacy_last_close_only_block",
+            event="last_close_only_block",
         )
         return True
     nbbo_available = _is_primary_price_source(price_source)
@@ -26927,19 +26927,19 @@ def _enter_short(
         # Basic shortable flag
         if _attr_disabled(asset, ("shortable",)):
             logger.info(f"SKIP_NOT_SHORTABLE | symbol={symbol}")
-            _record_legacy_order(
+            _record_order_journal(
                 accepted=False,
                 gates=["NOT_SHORTABLE"],
-                event="legacy_shorting_unavailable_block",
+                event="shorting_unavailable_block",
             )
             return True
         # Easy-to-borrow requirement
         if _attr_disabled(asset, ("easy_to_borrow", "easy_to_borrow_flag")):
             logger.info("SKIP_NOT_EASY_TO_BORROW", extra={"symbol": symbol})
-            _record_legacy_order(
+            _record_order_journal(
                 accepted=False,
                 gates=["NOT_EASY_TO_BORROW"],
-                event="legacy_shorting_unavailable_block",
+                event="shorting_unavailable_block",
             )
             return True
         # Marginable requirement
@@ -26977,10 +26977,10 @@ def _enter_short(
             if _attr_disabled(acct, ("shorting_enabled", "shorting")):
                 # Preserve legacy log key used in tests
                 logger.info("SKIP_SHORTING_UNAVAILABLE", extra={"symbol": symbol})
-                _record_legacy_order(
+                _record_order_journal(
                     accepted=False,
                     gates=["SHORTING_UNAVAILABLE"],
-                    event="legacy_shorting_unavailable_block",
+                    event="shorting_unavailable_block",
                 )
                 return True
             if _attr_disabled(acct, ("margin_enabled", "marginable")):
@@ -27013,10 +27013,10 @@ def _enter_short(
         raise
     if qty is None or not np.isfinite(qty) or qty <= 0:
         logger.warning(f"Skipping {symbol}: computed qty <= 0")
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["INVALID_QTY"],
-            event="legacy_invalid_qty_block",
+            event="invalid_qty_block",
         )
         return True
     qty = _apply_feed_reliability_size_adjustment(
@@ -27045,10 +27045,10 @@ def _enter_short(
                 "stage": "precheck",
             },
         )
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["INSUFFICIENT_BUYING_POWER"],
-            event="legacy_buying_power_block",
+            event="buying_power_block",
         )
         return True
     if qty < prescale_requested_qty:
@@ -27078,10 +27078,10 @@ def _enter_short(
                 "available_short_capacity": None if available_bp is None else round(available_bp, 2),
             },
         )
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["INSUFFICIENT_BUYING_POWER"],
-            event="legacy_buying_power_block",
+            event="buying_power_block",
         )
         return True
     if adj_qty < requested_qty:
@@ -27150,10 +27150,10 @@ def _enter_short(
     )
     if not intent_decision_short:
         _log_order_intent_blocked(intent_decision_short)
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["ORDER_INTENT_BLOCKED"],
-            event="legacy_order_intent_blocked",
+            event="order_intent_blocked",
         )
         return True
 
@@ -27169,10 +27169,10 @@ def _enter_short(
     )  # AI-AGENT-REF: Use sell_short for short signals
     if order_id is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
-        _record_legacy_order(
+        _record_order_journal(
             accepted=False,
             gates=["ORDER_SUBMIT_SKIPPED"],
-            event="legacy_order_submit_skipped",
+            event="order_submit_skipped",
             qty=float(adj_qty),
             price=float(current_price),
         )
@@ -27184,10 +27184,10 @@ def _enter_short(
         logger.debug(
             f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={broker_order_id}"
         )
-        _record_legacy_order(
+        _record_order_journal(
             accepted=True,
             gates=["OK_TRADE"],
-            event="legacy_order_submitted",
+            event="order_submitted",
             submitted=True,
             qty=float(adj_qty),
             client_order_id=client_order_id,
@@ -32476,7 +32476,7 @@ def _increment_counter_safe(counter: Any, amount: float = 1.0) -> None:
 
 
 def run_multi_strategy(ctx) -> None:
-    from ai_trading.core.legacy_strategy_cycle import run_multi_strategy_cycle
+    from ai_trading.core.strategy_cycle import run_multi_strategy_cycle
 
     run_multi_strategy_cycle(ctx)
 
@@ -33066,7 +33066,7 @@ def _process_symbols(
     close_shorts: bool = False,
     skip_duplicates: bool = False,
 ) -> tuple[list[str], dict[str, int], int]:
-    from ai_trading.core.legacy_strategy_cycle import process_symbols_cycle
+    from ai_trading.core.strategy_cycle import process_symbols_cycle
 
     return process_symbols_cycle(
         symbols,

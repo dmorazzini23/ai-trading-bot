@@ -14,7 +14,7 @@ import pytest
 import ai_trading.portfolio as portfolio_mod
 
 from ai_trading.services.execution import (
-    LegacyLiveExecutionBlockedError,
+    NonNettingLiveExecutionBlockedError,
     execute_signal_orders,
     execute_trade_cycle,
     submit_order,
@@ -150,16 +150,16 @@ def test_execute_signal_orders_uses_alpaca_request_keyword() -> None:
     assert _request_snapshot(order_data) == ("AAPL", 1.0, "buy")
 
 
-def test_execute_signal_orders_blocks_legacy_live_mode(monkeypatch) -> None:
+def test_execute_signal_orders_blocks_non_netting_live_mode(monkeypatch) -> None:
     monkeypatch.setenv("EXECUTION_MODE", "live")
-    monkeypatch.delenv("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", raising=False)
+    monkeypatch.delenv("AI_TRADING_ENABLE_NON_NETTING_LIVE_EXECUTION", raising=False)
     ctx = types.SimpleNamespace(
         api=types.SimpleNamespace(
             submit_order=lambda *, order_data: types.SimpleNamespace(status="accepted")
         )
     )
 
-    with pytest.raises(LegacyLiveExecutionBlockedError, match="execute_signal_orders"):
+    with pytest.raises(NonNettingLiveExecutionBlockedError, match="execute_signal_orders"):
         execute_signal_orders(ctx, pd.Series([1], index=["AAPL"]), logger=_DummyLogger())
 
 
@@ -309,19 +309,19 @@ def test_reconcile_position_targets_surfaces_broker_errors() -> None:
     assert ctx._reconciliation_error == "broker unavailable"
 
 
-def test_execution_service_blocks_legacy_live_submit(monkeypatch) -> None:
+def test_execution_service_blocks_non_netting_live_submit(monkeypatch) -> None:
     monkeypatch.setenv("EXECUTION_MODE", "live")
-    monkeypatch.delenv("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", raising=False)
+    monkeypatch.delenv("AI_TRADING_ENABLE_NON_NETTING_LIVE_EXECUTION", raising=False)
 
-    with pytest.raises(LegacyLiveExecutionBlockedError, match="blocked for live legacy execution"):
+    with pytest.raises(NonNettingLiveExecutionBlockedError, match="blocked for live non-netting execution"):
         submit_order(types.SimpleNamespace(), "AAPL", 1, "buy", price=100.0)
 
 
-def test_execution_service_blocks_legacy_live_trade_cycle(monkeypatch) -> None:
+def test_execution_service_blocks_non_netting_live_trade_cycle(monkeypatch) -> None:
     monkeypatch.setenv("EXECUTION_MODE", "live")
-    monkeypatch.delenv("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", raising=False)
+    monkeypatch.delenv("AI_TRADING_ENABLE_NON_NETTING_LIVE_EXECUTION", raising=False)
 
-    with pytest.raises(LegacyLiveExecutionBlockedError, match="blocked for live legacy execution"):
+    with pytest.raises(NonNettingLiveExecutionBlockedError, match="blocked for live non-netting execution"):
         execute_trade_cycle(
             types.SimpleNamespace(),
             types.SimpleNamespace(),
@@ -332,12 +332,12 @@ def test_execution_service_blocks_legacy_live_trade_cycle(monkeypatch) -> None:
         )
 
 
-def test_execution_service_legacy_live_escape_hatch_is_test_only(monkeypatch) -> None:
+def test_execution_service_non_netting_live_escape_hatch_is_test_only(monkeypatch) -> None:
     monkeypatch.setenv("EXECUTION_MODE", "live")
-    monkeypatch.setenv("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", "1")
+    monkeypatch.setenv("AI_TRADING_ENABLE_NON_NETTING_LIVE_EXECUTION", "1")
     monkeypatch.setattr("ai_trading.services.execution.is_test_runtime", lambda: False)
 
-    with pytest.raises(LegacyLiveExecutionBlockedError, match="blocked for live legacy execution"):
+    with pytest.raises(NonNettingLiveExecutionBlockedError, match="blocked for live non-netting execution"):
         submit_order(types.SimpleNamespace(), "AAPL", 1, "buy", price=100.0)
 
 

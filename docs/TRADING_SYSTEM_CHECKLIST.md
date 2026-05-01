@@ -94,10 +94,10 @@ execution, persistence, and operator recovery.
   - model governance
   as first-class operational concerns.
 - Live opening orders now fail closed unless they have an approved real-time
-  broker NBBO quote source, even on the legacy non-netting escape hatch.
+  broker NBBO quote source, even on the non-netting execution path.
 - Runtime symbol-model loading and regime-model initialization now both use the
   shared manifest/checksum verification gate before deserialization.
-- Legacy non-netting live execution is blocked outside test runtimes.
+- Non-netting live execution is blocked outside test runtimes.
 
 ## 2. Partially Implemented / Mixed
 
@@ -183,14 +183,14 @@ execution, persistence, and operator recovery.
   - [ai_trading/core/run_all_trades_worker.py](../ai_trading/core/run_all_trades_worker.py)
   instead of keeping the remaining cycle shell and teardown path inline in
   `bot_engine.py`.
-- The legacy non-netting symbol decision flow now also lives outside the main
+- The non-netting symbol decision flow now also lives outside the main
   engine file in:
-  - [ai_trading/core/legacy_trade_cycle.py](../ai_trading/core/legacy_trade_cycle.py)
+  - [ai_trading/core/trade_cycle.py](../ai_trading/core/trade_cycle.py)
   instead of keeping the older `trade_logic(...)` state machine fully expanded
   inline in `bot_engine.py`.
-- The legacy/non-netting submit runtime now also lives outside the main engine
+- The non-netting submit runtime now also lives outside the main engine
   file in:
-  - [ai_trading/core/legacy_submit_runtime.py](../ai_trading/core/legacy_submit_runtime.py)
+  - [ai_trading/core/submit_runtime.py](../ai_trading/core/submit_runtime.py)
   and now reuses the shared execution-intent and OMS pretrade boundary instead
   of keeping submit-time gates as an inline special case in `bot_engine.py`.
 - The remaining legacy runtime health and reconciliation helpers now also live
@@ -220,9 +220,9 @@ execution, persistence, and operator recovery.
   application now also lives outside the main engine file in:
   - [ai_trading/core/netting_target_runtime.py](../ai_trading/core/netting_target_runtime.py)
   instead of keeping that target-construction glue inline in `bot_engine.py`.
-- The remaining legacy multi-strategy allocation/execution loop and symbol
+- The remaining multi-strategy allocation/execution loop and symbol
   screening cycle now also live outside the engine file in:
-  - [ai_trading/core/legacy_strategy_cycle.py](../ai_trading/core/legacy_strategy_cycle.py)
+  - [ai_trading/core/strategy_cycle.py](../ai_trading/core/strategy_cycle.py)
   instead of keeping `run_multi_strategy(...)` and `_process_symbols(...)`
   expanded inline in `bot_engine.py`.
 
@@ -290,12 +290,12 @@ Verdict:
   - `client_order_id`
   - `broker_result`
   - `reasons`
-- Legacy non-netting trade decisions now also emit the canonical journal shape
+- Non-netting trade decisions now also emit the canonical journal shape
   through:
-  - [ai_trading/core/legacy_decision_journal.py](../ai_trading/core/legacy_decision_journal.py)
-  instead of leaving the older trade path outside the decision-record contract.
-- That legacy path now records canonical market-bar snapshots in the journal
-  metadata as well, so the old execution flow no longer loses bar context while
+- [ai_trading/core/decision_journal.py](../ai_trading/core/decision_journal.py)
+  instead of leaving the non-netting trade path outside the decision-record contract.
+- That path now records canonical market-bar snapshots in the journal
+  metadata as well, so the non-netting execution flow no longer loses bar context while
   using the shared explainability record.
 
 Verdict:

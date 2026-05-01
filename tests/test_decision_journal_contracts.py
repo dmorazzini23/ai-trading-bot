@@ -341,14 +341,14 @@ def test_decision_journal_uses_explicit_event_and_freshness_metrics() -> None:
         ),
         gates=["LOW_OR_NO_SIGNAL"],
         metrics={
-            "event": "legacy_low_signal_hold",
+            "event": "low_signal_hold",
             "data_freshness_sec": 17.5,
         },
     )
 
     journal = record.to_dict()["decision_journal"]
 
-    assert journal["event"] == "legacy_low_signal_hold"
+    assert journal["event"] == "low_signal_hold"
     assert journal["data_freshness_sec"] == 17.5
 
 

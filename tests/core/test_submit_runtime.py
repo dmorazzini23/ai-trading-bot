@@ -64,7 +64,7 @@ def _base_cfg(**overrides: object) -> SimpleNamespace:
     return SimpleNamespace(**payload)
 
 
-def test_submit_order_legacy_path_uses_shared_pretrade_block(monkeypatch) -> None:
+def test_submit_order_non_netting_path_uses_shared_pretrade_block(monkeypatch) -> None:
     engine = _DummyExecEngine()
     ctx = SimpleNamespace(market_data=None, api=SimpleNamespace(list_positions=lambda: []))
     stale_quote_ts = datetime.now(UTC) - timedelta(seconds=30)
@@ -245,7 +245,7 @@ def test_submit_order_propagates_generated_identity_to_execution_engine(monkeypa
         2,
         "buy",
         price=100.0,
-        annotations={"strategy_label": "legacy-phase2"},
+        annotations={"strategy_label": "non-netting-phase2"},
     )
 
     assert order is not None
@@ -257,7 +257,7 @@ def test_submit_order_propagates_generated_identity_to_execution_engine(monkeypa
     assert isinstance(kwargs.get("decision_trace_id"), str)
     assert kwargs["decision_trace_id"]
     assert kwargs["metadata"]["decision_trace_id"] == kwargs["decision_trace_id"]
-    assert kwargs["annotations"]["strategy_label"] == "legacy-phase2"
+    assert kwargs["annotations"]["strategy_label"] == "non-netting-phase2"
     assert getattr(order, "client_order_id", None) == kwargs["client_order_id"]
 
 
@@ -305,7 +305,7 @@ def test_submit_order_defaults_opening_nbbo_requirement_when_cfg_missing(monkeyp
 
     _reset_submit_state(monkeypatch)
     monkeypatch.setenv("EXECUTION_MODE", "live")
-    monkeypatch.setenv("AI_TRADING_ENABLE_LEGACY_LIVE_EXECUTION", "1")
+    monkeypatch.setenv("AI_TRADING_ENABLE_NON_NETTING_LIVE_EXECUTION", "1")
     monkeypatch.setattr(bot_engine, "_exec_engine", engine)
     monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
     monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda _cfg: (False, None))

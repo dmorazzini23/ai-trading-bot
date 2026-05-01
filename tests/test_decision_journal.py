@@ -3,17 +3,17 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from ai_trading.contracts import Bar
-from ai_trading.core.legacy_decision_journal import LegacyDecisionJournalRecorder
+from ai_trading.core.decision_journal import DecisionJournalRecorder
 
 
-def test_legacy_decision_journal_recorder_emits_canonical_journal() -> None:
+def test_decision_journal_recorder_emits_canonical_journal() -> None:
     captured: dict[str, object] = {}
 
     def _write(record, path):
         captured["path"] = path
         captured["payload"] = record.to_dict()
 
-    recorder = LegacyDecisionJournalRecorder(
+    recorder = DecisionJournalRecorder(
         path="runtime/decision_records.jsonl",
         write_impl=_write,
     )
@@ -37,14 +37,14 @@ def test_legacy_decision_journal_recorder_emits_canonical_journal() -> None:
         provider="alpaca",
         feed="iex",
         reference_price=100.0,
-        event="legacy_order_submitted",
+        event="order_submitted",
         data_freshness_sec=12.5,
     )
 
     payload = captured["payload"]
     assert isinstance(payload, dict)
     journal = payload["decision_journal"]
-    assert journal["event"] == "legacy_order_submitted"
+    assert journal["event"] == "order_submitted"
     assert journal["provider"] == "alpaca"
     assert journal["feed"] == "iex"
     assert journal["data_freshness_sec"] == 12.5
@@ -55,10 +55,10 @@ def test_legacy_decision_journal_recorder_emits_canonical_journal() -> None:
     assert journal["broker_result"]["accepted"] is True
 
 
-def test_legacy_decision_journal_recorder_emits_block_without_order() -> None:
+def test_decision_journal_recorder_emits_block_without_order() -> None:
     captured: dict[str, object] = {}
 
-    recorder = LegacyDecisionJournalRecorder(
+    recorder = DecisionJournalRecorder(
         path=None,
         write_impl=lambda record, path: captured.setdefault("payload", record.to_dict()),
     )
@@ -74,14 +74,14 @@ def test_legacy_decision_journal_recorder_emits_block_without_order() -> None:
         accepted=False,
         gates=["LOW_OR_NO_SIGNAL"],
         reasons=["LOW_OR_NO_SIGNAL"],
-        event="legacy_low_signal_hold",
+        event="low_signal_hold",
         data_freshness_sec=3.0,
     )
 
     payload = captured["payload"]
     assert isinstance(payload, dict)
     journal = payload["decision_journal"]
-    assert journal["event"] == "legacy_low_signal_hold"
+    assert journal["event"] == "low_signal_hold"
     assert journal["accepted"] is False
     assert journal["submitted"] is False
     assert journal["order_intent"] is None
@@ -89,7 +89,7 @@ def test_legacy_decision_journal_recorder_emits_block_without_order() -> None:
     assert journal["reasons"] == ["LOW_OR_NO_SIGNAL"]
 
 
-def test_legacy_decision_journal_uses_market_bar_contract_defaults() -> None:
+def test_decision_journal_uses_market_bar_contract_defaults() -> None:
     captured: dict[str, object] = {}
     ts = datetime(2026, 4, 19, 15, 50, tzinfo=UTC)
     market_bar = Bar(
@@ -105,7 +105,7 @@ def test_legacy_decision_journal_uses_market_bar_contract_defaults() -> None:
         feed="sip",
     )
 
-    recorder = LegacyDecisionJournalRecorder(
+    recorder = DecisionJournalRecorder(
         path=None,
         write_impl=lambda record, path: captured.setdefault("payload", record.to_dict()),
     )
@@ -117,11 +117,11 @@ def test_legacy_decision_journal_uses_market_bar_contract_defaults() -> None:
         signal_side="buy",
         final_score=0.5,
         confidence=0.7,
-        strategy_id="legacy",
+        strategy_id="non_netting",
         accepted=False,
         gates=["ENTRY_BLOCKED_FEED_RELIABILITY"],
         reasons=["ENTRY_BLOCKED_FEED_RELIABILITY"],
-        event="legacy_feed_reliability_block",
+        event="feed_reliability_block",
         data_freshness_sec=4.0,
     )
 

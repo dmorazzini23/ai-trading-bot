@@ -15,7 +15,7 @@ except ImportError:
 
 pytestmark = pytest.mark.slow
 
-def test_retrain_meta_learner_success(monkeypatch):
+def test_retrain_meta_learner_success(monkeypatch, tmp_path):
     df = pd.DataFrame({
         "entry_price": [1, 2, 3, 4],
         "exit_price": [2, 3, 4, 5],
@@ -38,20 +38,30 @@ def test_retrain_meta_learner_success(monkeypatch):
             return [0] * len(X)
 
     monkeypatch.setattr(sklearn_pkg.linear_model, "Ridge", lambda *a, **k: DummyModel())
-    ok = meta_learning.retrain_meta_learner("trades.csv", "m.joblib", "hist.json", min_samples=1)
+    ok = meta_learning.retrain_meta_learner(
+        "trades.csv",
+        str(tmp_path / "m.joblib"),
+        str(tmp_path / "history.json"),
+        min_samples=1,
+    )
     assert ok
 
 
-def test_retrain_meta_insufficient(monkeypatch):
+def test_retrain_meta_insufficient(monkeypatch, tmp_path):
     df = pd.DataFrame({"entry_price": [1], "exit_price": [2], "signal_tags": ["a"], "side": ["buy"]})
     monkeypatch.setattr(meta_learning.Path, "exists", lambda self: True)
     monkeypatch.setattr(pd, "read_csv", lambda p: df)
     monkeypatch.setattr(meta_learning_core, "save_model_checkpoint", lambda *a, **k: None)
     monkeypatch.setattr(meta_learning, "open", lambda *a, **k: io.BytesIO())
-    assert not meta_learning.retrain_meta_learner("trades.csv", "m.joblib", "hist.json", min_samples=5)
+    assert not meta_learning.retrain_meta_learner(
+        "trades.csv",
+        str(tmp_path / "m.joblib"),
+        str(tmp_path / "history.json"),
+        min_samples=5,
+    )
 
 
-def test_retrain_meta_training_fail(monkeypatch):
+def test_retrain_meta_training_fail(monkeypatch, tmp_path):
     df = pd.DataFrame({
         "entry_price": [1, 2],
         "exit_price": [2, 3],
@@ -71,10 +81,15 @@ def test_retrain_meta_training_fail(monkeypatch):
             return [0] * len(X)
 
     monkeypatch.setattr(sklearn_pkg.linear_model, "Ridge", lambda *a, **k: Bad())
-    assert not meta_learning.retrain_meta_learner("trades.csv", "m.joblib", "hist.json", min_samples=1)
+    assert not meta_learning.retrain_meta_learner(
+        "trades.csv",
+        str(tmp_path / "m.joblib"),
+        str(tmp_path / "history.json"),
+        min_samples=1,
+    )
 
 
-def test_retrain_meta_load_history(monkeypatch):
+def test_retrain_meta_load_history(monkeypatch, tmp_path):
     df = pd.DataFrame({
         "entry_price": [1, 2],
         "exit_price": [2, 3],
@@ -95,5 +110,10 @@ def test_retrain_meta_load_history(monkeypatch):
             predict=lambda X: [0] * len(X),
         ),
     )
-    ok = meta_learning.retrain_meta_learner("trades.csv", "m.joblib", "hist.json", min_samples=1)
+    ok = meta_learning.retrain_meta_learner(
+        "trades.csv",
+        str(tmp_path / "m.joblib"),
+        str(tmp_path / "history.json"),
+        min_samples=1,
+    )
     assert ok

@@ -7,18 +7,18 @@ import pytest
 
 from ai_trading.core.enums import RiskLevel
 from ai_trading.oms.event_store import EventStore
-from ai_trading.strategies.backtest import BacktestEngine as LegacyBacktestEngine
+from ai_trading.strategies.backtest import BacktestEngine
 from ai_trading.strategies.base import BaseStrategy, StrategySignal
 
 
 pytest.importorskip("sqlalchemy")
 
 
-class _AlwaysBuyLegacyStrategy(BaseStrategy):
+class _AlwaysBuyStrategy(BaseStrategy):
     def __init__(self) -> None:
         super().__init__(
-            strategy_id="legacy-oms-events",
-            name="legacy-oms-events",
+            strategy_id="backtest-oms-events",
+            name="backtest-oms-events",
             risk_level=RiskLevel.MODERATE,
         )
         self.symbols = ["AAPL"]
@@ -46,11 +46,11 @@ class _AlwaysBuyLegacyStrategy(BaseStrategy):
         return 1
 
 
-def test_legacy_backtest_emits_oms_events(
+def test_backtest_emits_oms_events(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    db_path = tmp_path / "legacy_backtest_oms_events.db"
+    db_path = tmp_path / "backtest_oms_events.db"
     monkeypatch.setenv("AI_TRADING_BACKTEST_OMS_EVENTS_ENABLED", "1")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_PATH", str(db_path))
@@ -70,8 +70,8 @@ def test_legacy_backtest_emits_oms_events(
             for offset in range(6)
         ]
     }
-    strategy = _AlwaysBuyLegacyStrategy()
-    engine = LegacyBacktestEngine(
+    strategy = _AlwaysBuyStrategy()
+    engine = BacktestEngine(
         initial_capital=10_000.0,
         commission_bps=0.0,
         commission_flat=0.0,
@@ -102,7 +102,7 @@ def test_legacy_backtest_emits_oms_events(
     assert "INTENT_CLOSED" in event_types
 
 
-def test_legacy_backtest_executes_signal_on_next_bar_open() -> None:
+def test_backtest_executes_signal_on_next_bar_open() -> None:
     start = datetime(2025, 1, 1, tzinfo=UTC)
     historical_data = {
         "AAPL": [
@@ -119,8 +119,8 @@ def test_legacy_backtest_executes_signal_on_next_bar_open() -> None:
     }
     historical_data["AAPL"][2]["open"] = 123.0
 
-    strategy = _AlwaysBuyLegacyStrategy()
-    engine = LegacyBacktestEngine(
+    strategy = _AlwaysBuyStrategy()
+    engine = BacktestEngine(
         initial_capital=10_000.0,
         commission_bps=0.0,
         commission_flat=0.0,
@@ -142,7 +142,7 @@ def test_legacy_backtest_executes_signal_on_next_bar_open() -> None:
     assert first_trade["execution_price"] == 123.0
 
 
-def test_legacy_backtest_marks_pnl_to_execution_bar_close() -> None:
+def test_backtest_marks_pnl_to_execution_bar_close() -> None:
     start = datetime(2025, 1, 1, tzinfo=UTC)
     historical_data = {
         "AAPL": [
@@ -160,8 +160,8 @@ def test_legacy_backtest_marks_pnl_to_execution_bar_close() -> None:
     historical_data["AAPL"][2]["open"] = 120.0
     historical_data["AAPL"][2]["close"] = 132.0
 
-    strategy = _AlwaysBuyLegacyStrategy()
-    engine = LegacyBacktestEngine(
+    strategy = _AlwaysBuyStrategy()
+    engine = BacktestEngine(
         initial_capital=10_000.0,
         commission_bps=0.0,
         commission_flat=0.0,

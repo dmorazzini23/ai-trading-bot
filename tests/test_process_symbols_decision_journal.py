@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from ai_trading.core import bot_engine
-from ai_trading.core.legacy_decision_journal import LegacyDecisionJournalRecorder
+from ai_trading.core.decision_journal import DecisionJournalRecorder
 
 
 class _ImmediateExecutor:
@@ -18,8 +18,8 @@ def test_process_symbols_records_market_closed_skip(monkeypatch) -> None:
     state.position_cache = {}
     setattr(
         state,
-        "_legacy_decision_recorder",
-        LegacyDecisionJournalRecorder(
+        "_decision_journal_recorder",
+        DecisionJournalRecorder(
             path=None,
             write_impl=lambda record, path: captured.append(record.to_dict()),
         ),
@@ -44,5 +44,5 @@ def test_process_symbols_records_market_closed_skip(monkeypatch) -> None:
     assert fetch_attempts == 0
     assert captured
     journal = captured[-1]["decision_journal"]
-    assert journal["event"] == "legacy_process_symbols_market_closed_skip"
+    assert journal["event"] == "process_symbols_market_closed_skip"
     assert journal["reasons"] == ["MARKET_CLOSED_SKIP_SYMBOL"]

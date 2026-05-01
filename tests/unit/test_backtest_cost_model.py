@@ -12,8 +12,8 @@ from ai_trading.strategies.base import BaseStrategy, StrategySignal
 class _AlwaysBuyStrategy(BaseStrategy):
     def __init__(self) -> None:
         super().__init__(
-            strategy_id="legacy-cost-model",
-            name="legacy-cost-model",
+            strategy_id="backtest-cost-model",
+            name="backtest-cost-model",
             risk_level=RiskLevel.MODERATE,
         )
         self.symbols = ["AAPL"]

@@ -52,7 +52,7 @@ jobs:
             # on the current pin until the NLP stack is validated.
             --ignore-vuln CVE-2026-1839
           )
-          pip-audit --local "${AUDIT_IGNORES[@]}" --format json --output pip-audit-report.json
+          pip-audit --local --format json --output pip-audit-report.json "${AUDIT_IGNORES[@]}"
       - name: Upload audit report
         if: always()
         uses: actions/upload-artifact@v4

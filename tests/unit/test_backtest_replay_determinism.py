@@ -8,7 +8,7 @@ import pytest
 
 from ai_trading.core.enums import RiskLevel
 from ai_trading.oms.event_store import EventStore
-from ai_trading.strategies.backtest import BacktestEngine as LegacyBacktestEngine
+from ai_trading.strategies.backtest import BacktestEngine as OmsBacktestEngine
 from ai_trading.strategies.backtester import BacktestEngine, DefaultExecutionModel
 from ai_trading.strategies.base import BaseStrategy, StrategySignal
 
@@ -150,7 +150,7 @@ def test_modern_backtester_replay_is_deterministic(
     assert _normalized_oms_rows(first_db) == _normalized_oms_rows(second_db)
 
 
-def test_legacy_backtest_replay_is_deterministic_without_input_timestamps(
+def test_backtest_replay_is_deterministic_without_input_timestamps(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -172,12 +172,12 @@ def test_legacy_backtest_replay_is_deterministic_without_input_timestamps(
         ]
     }
     strategy = _AlwaysBuyStrategy()
-    first_db = tmp_path / "legacy_replay_first.db"
-    second_db = tmp_path / "legacy_replay_second.db"
+    first_db = tmp_path / "backtest_replay_first.db"
+    second_db = tmp_path / "backtest_replay_second.db"
 
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{first_db}")
     monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_PATH", str(first_db))
-    first_engine = LegacyBacktestEngine(
+    first_engine = OmsBacktestEngine(
         initial_capital=10_000.0,
         commission_bps=1.0,
         commission_flat=0.25,
@@ -193,7 +193,7 @@ def test_legacy_backtest_replay_is_deterministic_without_input_timestamps(
 
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{second_db}")
     monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_PATH", str(second_db))
-    second_engine = LegacyBacktestEngine(
+    second_engine = OmsBacktestEngine(
         initial_capital=10_000.0,
         commission_bps=1.0,
         commission_flat=0.25,

@@ -1,4 +1,4 @@
-"""Legacy/non-netting submit runtime extracted from ``bot_engine.py``."""
+"""Non-netting submit runtime used by the execution service facade."""
 
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
@@ -92,7 +92,7 @@ def _resolve_execution_lineage(exec_kwargs: Mapping[str, Any]) -> tuple[dict[str
     return execution_model_lineage, config_snapshot
 
 
-def _resolve_legacy_ledger(be: Any, cfg: Any) -> Any:
+def _resolve_order_ledger(be: Any, cfg: Any) -> Any:
     execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
     if execution_mode == "live":
         if getattr(be.state, "_oms_ledger", None) is not None:
@@ -144,7 +144,7 @@ def _record_skip_submit(
             context=dict(context or {}),
         )
     except AI_TRADING_FALLBACK_EXCEPTIONS:
-        be.logger.debug("LEGACY_SUBMIT_SKIP_HANDLER_FAILED", exc_info=True)
+        be.logger.debug("SUBMIT_SKIP_HANDLER_FAILED", exc_info=True)
 
 
 def _resolved_submit_runtime(be: Any, ctx: Any) -> Any:
@@ -175,7 +175,7 @@ def _order_field(order: Any, name: str) -> Any:
     return getattr(order, name, None)
 
 
-def _record_legacy_ledger_submission(
+def _record_order_ledger_submission(
     ledger: Any,
     *,
     intent_context: ExecutionIntentContext,
@@ -211,7 +211,7 @@ def _record_legacy_ledger_submission(
         )
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         be_logger = importlib.import_module("ai_trading.core.bot_engine").logger
-        be_logger.debug("LEGACY_LEDGER_RECORD_FAILED", exc_info=True)
+        be_logger.debug("ORDER_LEDGER_RECORD_FAILED", exc_info=True)
 
 
 def _resolve_execution_intent_context(
@@ -375,7 +375,7 @@ def submit_order_runtime(
     price: float | None = None,
     **exec_kwargs: Any,
 ) -> Any | None:
-    """Submit a legacy/non-netting order through shared runtime controls."""
+    """Submit a non-netting order through shared runtime controls."""
 
     be = importlib.import_module("ai_trading.core.bot_engine")
     exec_kwargs = dict(exec_kwargs)
@@ -586,7 +586,7 @@ def submit_order_runtime(
         price=float(price),
         exec_kwargs=exec_kwargs,
     )
-    ledger = _resolve_legacy_ledger(be, cfg)
+    ledger = _resolve_order_ledger(be, cfg)
     rate_limiter = be._pretrade_rate_limiter(be.state)
     pretrade_cfg, _, _ = build_pretrade_validation_cfg(cfg, thin_liquidity=False)
     allowed, pretrade_reason, pretrade_details = safe_validate_pretrade(
@@ -689,7 +689,7 @@ def submit_order_runtime(
         return None
 
     _attach_order_identity(order, client_order_id=intent_context.client_order_id)
-    _record_legacy_ledger_submission(
+    _record_order_ledger_submission(
         ledger,
         intent_context=intent_context,
         order=order,
@@ -699,7 +699,7 @@ def submit_order_runtime(
     broker_ready_reason = broker_snapshot.get("broker_ready_reason")
     if broker_ready_reason not in (None, ""):
         be.logger.info(
-            "LEGACY_SUBMIT_BROKER_READY_CONTEXT",
+            "SUBMIT_BROKER_READY_CONTEXT",
             extra={
                 "symbol": symbol,
                 "side": side_norm,

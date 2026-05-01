@@ -127,7 +127,7 @@ def test_operator_control_plane_services_endpoint(monkeypatch):
     assert payload["section"] == "services"
     assert payload["data"]["risk_approval"]["owner"] == "ai_trading.services.risk_approval"
     assert payload["data"]["execution"]["boundary_type"] == "facade"
-    assert "legacy_submit_runtime" in payload["data"]["execution"]["canonical_runtime_owner"][0]
+    assert "submit_runtime" in payload["data"]["execution"]["canonical_runtime_owner"][0]
     assert payload["data"]["portfolio"]["boundary_type"] == "facade"
     assert payload["data"]["reconciliation"]["boundary_type"] == "facade"
 

@@ -1,4 +1,4 @@
-"""Canonical decision-journal helpers for legacy trade execution paths."""
+"""Canonical decision-journal helpers for non-netting trade execution paths."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -55,7 +55,7 @@ def _normalize_reasons(raw: Sequence[Any] | None) -> list[str]:
 
 
 @dataclass(slots=True)
-class LegacyDecisionJournalRecorder:
+class DecisionJournalRecorder:
     path: str | None
     write_impl: Callable[[Any, str | None], Any]
 
@@ -86,7 +86,7 @@ class LegacyDecisionJournalRecorder:
         fill_price: float | None = None,
         realized_slippage_bps: float | None = None,
         fees: float | None = None,
-        event: str = "legacy_trade_decision",
+        event: str = "trade_decision",
         data_freshness_sec: float | None = None,
         config_snapshot: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -102,7 +102,7 @@ class LegacyDecisionJournalRecorder:
         if accepted and "OK_TRADE" not in gates_list:
             gates_list = ["OK_TRADE", *gates_list]
         if not accepted and not gates_list:
-            gates_list = ["LEGACY_DECISION_BLOCKED"]
+            gates_list = ["DECISION_BLOCKED"]
         provider_text = _safe_text(provider) or (
             market_bar.provider if isinstance(market_bar, Bar) else None
         )
@@ -116,9 +116,9 @@ class LegacyDecisionJournalRecorder:
             strength=float(abs(final_score)),
             confidence=float(confidence),
             strategy_id=_safe_text(strategy_id),
-            signal_type="legacy_trade_signal",
+            signal_type="trade_signal",
             reasons=list(reasons_list),
-            metadata={"legacy": True},
+            metadata={"runtime": "non_netting"},
         )
         risk_decision = RiskDecision(
             symbol=normalized_symbol,
@@ -127,7 +127,7 @@ class LegacyDecisionJournalRecorder:
             gates=list(gates_list),
             reasons=list(reasons_list),
             veto_gate=(next((gate for gate in gates_list if gate != "OK_TRADE"), None)),
-            metadata={"legacy": True},
+            metadata={"runtime": "non_netting"},
         )
 
         price_value = _safe_float(reference_price)
@@ -164,7 +164,7 @@ class LegacyDecisionJournalRecorder:
                 client_order_id=_safe_text(client_order_id),
                 status=_safe_text(broker_status),
                 strategy_id=_safe_text(strategy_id),
-                metadata={"legacy": True},
+                metadata={"runtime": "non_netting"},
             )
 
         order_payload: dict[str, Any] | None = None
@@ -198,7 +198,7 @@ class LegacyDecisionJournalRecorder:
             snapshot["primary_data_provider"] = provider_text
 
         metrics = dict(metadata) if isinstance(metadata, Mapping) else {}
-        metrics["event"] = str(event or "legacy_trade_decision")
+        metrics["event"] = str(event or "trade_decision")
         if data_freshness_sec is not None:
             metrics["data_freshness_sec"] = float(data_freshness_sec)
         if reference_price is not None:
@@ -231,4 +231,4 @@ class LegacyDecisionJournalRecorder:
         return record
 
 
-__all__ = ["LegacyDecisionJournalRecorder"]
+__all__ = ["DecisionJournalRecorder"]
