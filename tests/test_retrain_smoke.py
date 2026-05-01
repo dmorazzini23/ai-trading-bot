@@ -70,9 +70,9 @@ def _import_retrain(monkeypatch):
     _set_module_attr(skl_pre, "StandardScaler", lambda *a, **k: None)
     monkeypatch.setitem(sys.modules, "sklearn.preprocessing", skl_pre)
     monkeypatch.setitem(sys.modules, "requests", types.ModuleType("requests"))
-    if "retrain" in sys.modules:
-        del sys.modules["retrain"]
-    return importlib.import_module("retrain")
+    if "ai_trading.retrain" in sys.modules:
+        del sys.modules["ai_trading.retrain"]
+    return importlib.import_module("ai_trading.retrain")
 
 
 def force_coverage(mod):
@@ -96,6 +96,8 @@ def test_retrain_detect_regime_and_dump(tmp_path, monkeypatch):
     df = df.assign(timestamp=pd.date_range("2024-01-01", periods=210, freq="min"))
     regime = retrain.detect_regime(df)
     assert regime in {"bull", "bear", "chop"}
-    monkeypatch.setattr(retrain.joblib, "dump", lambda obj, path: None)
+    from ai_trading.core import bot_engine
+
+    monkeypatch.setattr(bot_engine, "atomic_joblib_dump", lambda obj, path: None)
     retrain.atomic_joblib_dump({}, tmp_path / "m.pkl")
     force_coverage(retrain)
