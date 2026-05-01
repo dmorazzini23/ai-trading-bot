@@ -58,6 +58,11 @@ def _offline_tests_enabled() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _is_alpaca_sdk_class(cls: Any) -> bool:
+    module_name = str(getattr(cls, "__module__", ""))
+    return module_name == "alpaca" or module_name.startswith("alpaca.")
+
+
 if not hasattr(np, "NaN"):
     setattr(np, "NaN", np.nan)
 
@@ -330,7 +335,7 @@ class RiskEngine:
         self._volatility_alerted = False
         self.data_client = None
         try:
-            if _offline_tests_enabled():
+            if _offline_tests_enabled() and _is_alpaca_sdk_class(StockHistoricalDataClient):
                 raise ImportError("external network blocked in tests")
             cfg_key, cfg_secret, _ = _resolve_alpaca_env()
 
