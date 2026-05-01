@@ -5,7 +5,6 @@
 [![Dependency Audit](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/dependency-audit.yml/badge.svg)](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/dependency-audit.yml)
 [![SBOM](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/sbom.yml/badge.svg)](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/sbom.yml)
 [![Scorecard](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/scorecard.yml/badge.svg)](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/scorecard.yml)
-[![codecov](https://codecov.io/gh/dmorazzini23/ai-trading-bot/branch/main/graph/badge.svg)](https://codecov.io/gh/dmorazzini23/ai-trading-bot)
 [![Python 3.12.3](https://img.shields.io/badge/python-3.12.3-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 

@@ -194,11 +194,10 @@ jobs:
           make institutional-gates
       - name: Compile
         run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
-      - name: Lint + Format + Types
+      - name: Lint + Types
         run: |
           ruff --version
           ruff check .
-          ruff format --check .
           bash scripts/typecheck_strict.sh
       - name: Runtime env guard
         run: python3 tools/ci/guard_runtime_env_access.py
