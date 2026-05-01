@@ -110,7 +110,7 @@ def _short_intraday_defaults(monkeypatch):
     except Exception:
         pass
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.data.provider_monitor import ProviderMonitor
     from ai_trading.utils import base as base_utils
 
@@ -358,7 +358,7 @@ def test_fetch_minute_df_safe_multi_session_window(monkeypatch):
                 return base_now.replace(tzinfo=None)
             return base_now.astimezone(tz)
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.utils import base as base_utils
 
     session_map = {
@@ -541,7 +541,7 @@ def test_fetch_minute_df_safe_recovers_from_single_stale(monkeypatch, caplog):
     monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
     monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
     monkeypatch.setattr(staleness, "_ensure_data_fresh", fake_ensure)
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
 
     monkeypatch.setattr(
         market_calendar,
@@ -662,7 +662,7 @@ def test_fetch_minute_df_safe_after_hours_uses_session_close(monkeypatch):
         captured["now"] = now
         return None
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
 
     from ai_trading.utils import base as base_utils
 
@@ -740,7 +740,7 @@ def test_fetch_minute_df_safe_sparse_minute_data_triggers_sip_fallback(
             index=idx,
         )
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.data.provider_monitor import ProviderMonitor
     from ai_trading.utils import base as base_utils
 
@@ -820,7 +820,7 @@ def test_fetch_minute_df_safe_aborts_when_fallback_remains_sparse(monkeypatch, c
             index=idx,
         )
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.data.provider_monitor import ProviderMonitor
     from ai_trading.utils import base as base_utils
 
@@ -900,7 +900,7 @@ def test_fetch_minute_df_safe_allows_iex_gap_tolerance(monkeypatch, caplog):
             index=idx,
         )
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.data.provider_monitor import ProviderMonitor
     from ai_trading.utils import base as base_utils
 
@@ -978,7 +978,7 @@ def test_fetch_minute_df_safe_sip_gap_still_aborts(monkeypatch, caplog):
             index=idx,
         )
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.data.provider_monitor import ProviderMonitor
     from ai_trading.utils import base as base_utils
 
@@ -1076,7 +1076,7 @@ def test_fetch_minute_df_safe_early_session_sparse_data_triggers_sip_fallback(
             index=idx,
         )
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.data.provider_monitor import ProviderMonitor
     from ai_trading.utils import base as base_utils
 
@@ -1175,7 +1175,7 @@ def test_fetch_minute_df_safe_reuses_cached_fallback_feed_within_cycle(
         minute_gap_backfill=None,
     )
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.data.provider_monitor import ProviderMonitor
     from ai_trading.utils import base as base_utils
 
@@ -1272,7 +1272,7 @@ def test_fetch_minute_df_safe_attempts_sip_before_yahoo_when_authorized(monkeypa
         minute_gap_backfill=None,
     )
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.utils import base as base_utils
 
     monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
@@ -1355,7 +1355,7 @@ def test_fetch_minute_df_safe_sip_success_skips_yahoo_and_caches_feed(monkeypatc
         minute_gap_backfill=None,
     )
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.utils import base as base_utils
 
     monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
@@ -1442,7 +1442,7 @@ def test_fetch_minute_df_safe_sip_and_yahoo_sparse_abort(monkeypatch):
         minute_gap_backfill=None,
     )
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.utils import base as base_utils
 
     monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
@@ -1550,7 +1550,7 @@ def test_fetch_minute_df_safe_logs_backup_provider_when_sip_unauthorized(
             }
         )
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.utils import base as base_utils
 
     bot_engine.data_fetcher_module._FALLBACK_WINDOWS.clear()
@@ -1664,7 +1664,7 @@ def test_fetch_minute_df_safe_yahoo_sparse_intraday_window(monkeypatch, caplog):
         frame.attrs["fallback_feed"] = feed_name
         return frame
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.utils import base as base_utils
 
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "0")
@@ -1765,7 +1765,7 @@ def test_fetch_minute_df_safe_extends_window_for_long_indicators(monkeypatch):
         alpaca_feed_failover=(),
     )
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
     from ai_trading.utils import base as base_utils
 
     current_session_date = session_start.date()
@@ -2224,7 +2224,7 @@ def test_fetch_minute_df_safe_market_cache_hit(monkeypatch, tmp_path):
 
     monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
 
-    from ai_trading.data import market_calendar
+    from ai_trading.utils import market_calendar
 
     monkeypatch.setattr(
         market_calendar,

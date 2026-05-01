@@ -1,8 +1,7 @@
 from ai_trading.utils.retry import RetryError, retry
-from ai_trading.utils.retry_mode import retry_mode
 
 
-def test_retry_mode_fixed_and_linear():
+def test_retry_fixed_and_linear_modes():
     calls = {"fixed": 0, "linear": 0}
 
     @retry(retries=2, delay=0.001, backoff=1.0, mode="fixed")
@@ -25,10 +24,10 @@ def test_retry_mode_fixed_and_linear():
     assert calls["linear"] == 3
 
 
-def test_retry_mode_returns_fallback_without_retryerror():
+def test_retry_returns_fallback_without_retryerror():
     calls = {"fail": 0}
 
-    @retry_mode(retries=2, delay=0.001, fallback="ok", exceptions=(RuntimeError,))
+    @retry(retries=2, delay=0.001, fallback="ok", exceptions=(RuntimeError,))
     def always_fail():
         calls["fail"] += 1
         raise RuntimeError
@@ -40,4 +39,3 @@ def test_retry_mode_returns_fallback_without_retryerror():
 
     assert result == "ok"
     assert calls["fail"] == 2
-

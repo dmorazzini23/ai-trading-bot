@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 import ai_trading.data.fetch as fetch_module
-from ai_trading.data.market_calendar import rth_session_utc
+from ai_trading.utils.market_calendar import rth_session_utc
 
 
 def _build_base_frame(start_local: datetime, end_local: datetime, missing: set[pd.Timestamp]) -> pd.DataFrame:

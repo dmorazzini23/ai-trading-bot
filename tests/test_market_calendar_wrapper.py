@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-# Tests for NYSE market calendar wrapper.  # AI-AGENT-REF
+# Tests for NYSE market calendar helpers.  # AI-AGENT-REF
 from datetime import date
 
 import pytest
 from tests.optdeps import require
-import ai_trading.market.calendar_wrapper as cw
-from ai_trading.market.calendar_wrapper import (
+import ai_trading.utils.market_calendar as cw
+from ai_trading.utils.market_calendar import (
     is_trading_day,
     rth_session_utc,
     rth_dst_summer_standard_times,
@@ -61,6 +61,7 @@ def test_dst_transition_sessions() -> None:
 
 def test_fallback_calendar_handles_2026_holidays(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cw, "_CAL", None)
+    monkeypatch.setattr(cw, "load_pandas_market_calendars", lambda: None)
 
     assert is_trading_day(date(2026, 1, 1)) is False
     assert is_trading_day(date(2026, 1, 19)) is False
@@ -71,6 +72,7 @@ def test_fallback_calendar_handles_2026_holidays(monkeypatch: pytest.MonkeyPatch
 
 def test_fallback_calendar_computes_future_early_closes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cw, "_CAL", None)
+    monkeypatch.setattr(cw, "load_pandas_market_calendars", lambda: None)
 
     assert cw.is_early_close(date(2026, 11, 27)) is True
     assert cw.rth_session_utc(date(2026, 11, 27))[1].hour == 18

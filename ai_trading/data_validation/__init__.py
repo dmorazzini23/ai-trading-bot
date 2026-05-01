@@ -1,8 +1,7 @@
 """Data validation utilities.
 
-This package provides a lightweight stub that re-exports the
-public validation helpers used throughout the project. The actual
-implementations live in :mod:`ai_trading.data_validation.core`.
+This package defines the public validation helper exports used throughout
+the project. Implementations live in :mod:`ai_trading.data_validation.core`.
 """
 
 from .core import (

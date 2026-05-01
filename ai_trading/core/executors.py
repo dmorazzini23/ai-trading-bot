@@ -90,7 +90,6 @@ def cleanup_executors(*, wait: bool = True) -> None:
         try:
             if executor is not None:
                 executor.shutdown(wait=wait, cancel_futures=True)
-                logger.debug("Main executor shutdown successfully")
                 executor = None
         except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # defensive: never raise in cleanup
             logger.warning("Error shutting down main executor: %s", e)
@@ -98,7 +97,6 @@ def cleanup_executors(*, wait: bool = True) -> None:
         try:
             if prediction_executor is not None:
                 prediction_executor.shutdown(wait=wait, cancel_futures=True)
-                logger.debug("Prediction executor shutdown successfully")
                 prediction_executor = None
         except AI_TRADING_FALLBACK_EXCEPTIONS as e:  # defensive: never raise in cleanup
             logger.warning("Error shutting down prediction executor: %s", e)

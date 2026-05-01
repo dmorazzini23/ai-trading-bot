@@ -6,15 +6,20 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import pwd
 import re
-import shutil
 import stat
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
+
+from ai_trading.config.managed_secrets import (
+    BACKEND_AWS,
+    BACKEND_NONE,
+    aws_cli_env as _aws_cli_env,
+    fetch_aws_secret_payload as _fetch_aws_secret_payload,
+    parse_secret_string as _parse_secret_string,
+)
 
 try:
     from dotenv import dotenv_values
@@ -45,29 +50,8 @@ _DEFAULT_MANAGED_KEYS = {
     "FRED_API_KEY",
 }
 
-_BACKEND_NONE = {"", "none", "off", "disabled"}
-_BACKEND_AWS = {"aws-secrets-manager", "aws_sm", "aws"}
-_AWS_ENV_ALLOWLIST = {
-    "AWS_ACCESS_KEY_ID",
-    "AWS_CA_BUNDLE",
-    "AWS_CONFIG_FILE",
-    "AWS_DEFAULT_REGION",
-    "AWS_EC2_METADATA_DISABLED",
-    "AWS_PROFILE",
-    "AWS_REGION",
-    "AWS_ROLE_ARN",
-    "AWS_ROLE_SESSION_NAME",
-    "AWS_SDK_LOAD_CONFIG",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_SESSION_TOKEN",
-    "AWS_SHARED_CREDENTIALS_FILE",
-    "AWS_WEB_IDENTITY_TOKEN_FILE",
-    "HOME",
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "NO_PROXY",
-    "PATH",
-}
+_BACKEND_NONE = BACKEND_NONE
+_BACKEND_AWS = BACKEND_AWS
 
 
 @dataclass(frozen=True)
@@ -179,121 +163,6 @@ def _resolve_setting(
     if direct is not None and direct.strip():
         return direct.strip()
     return str(env_map.get(name, default) or "").strip()
-
-
-def _fetch_aws_secret_payload(secret_id: str, *, region: str, profile: str) -> dict[str, str]:
-    command: list[str] = [_resolve_aws_cli_path()]
-    if profile:
-        command.extend(["--profile", profile])
-    if region:
-        command.extend(["--region", region])
-    command.extend(
-        [
-            "secretsmanager",
-            "get-secret-value",
-            "--secret-id",
-            secret_id,
-            "--output",
-            "json",
-        ]
-    )
-    aws_env = _aws_cli_env()
-    try:
-        proc = subprocess.run(
-            command,
-            check=False,
-            text=True,
-            capture_output=True,
-            env=aws_env,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            "aws CLI not found. Install AWS CLI v2 and ensure `aws` is on PATH."
-        ) from exc
-    if proc.returncode != 0:
-        message = proc.stderr.strip() or proc.stdout.strip() or "aws secretsmanager failed"
-        raise RuntimeError(f"failed fetching AWS secret '{secret_id}': {message}")
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("AWS secret response was not valid JSON") from exc
-    secret_string = str(payload.get("SecretString") or "").strip()
-    if not secret_string:
-        raise RuntimeError(
-            f"AWS secret '{secret_id}' did not include SecretString; SecretBinary is not supported"
-        )
-    parsed = _parse_secret_string(secret_string)
-    if not parsed:
-        raise RuntimeError(
-            f"AWS secret '{secret_id}' did not contain key/value entries (expected JSON object or dotenv text)"
-        )
-    return parsed
-
-
-def _resolve_aws_cli_path() -> str:
-    configured = str(os.getenv("AI_TRADING_AWS_CLI_PATH") or os.getenv("AWS_CLI_PATH") or "").strip()
-    if configured:
-        path = Path(configured).expanduser()
-        if not path.is_absolute():
-            raise RuntimeError("AI_TRADING_AWS_CLI_PATH must be an absolute path")
-        if not path.exists():
-            raise RuntimeError(f"configured aws CLI path does not exist: {path}")
-        return str(path)
-    resolved = shutil.which("aws")
-    if resolved:
-        return resolved
-    return "aws"
-
-
-def _parse_secret_string(raw: str) -> dict[str, str]:
-    text = raw.strip()
-    if not text:
-        return {}
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        parsed = None
-    if isinstance(parsed, dict):
-        return {
-            str(key).strip().upper(): str(value)
-            for key, value in parsed.items()
-            if _ENV_KEY_RE.match(str(key).strip().upper()) and value is not None
-        }
-    entries = _parse_env_entries(text)
-    parsed_map = _entries_to_map(entries)
-    return {key.upper(): value for key, value in parsed_map.items()}
-
-
-def _aws_cli_env() -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if key in _AWS_ENV_ALLOWLIST}
-    candidate_homes: list[Path] = []
-    home = str(env.get("HOME") or "").strip()
-    if home:
-        candidate_homes.append(Path(home))
-    try:
-        passwd_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-    except Exception:
-        passwd_home = None
-    if passwd_home is not None and passwd_home not in candidate_homes:
-        candidate_homes.append(passwd_home)
-    if not home and candidate_homes:
-        env["HOME"] = str(candidate_homes[0])
-
-    creds_already = str(env.get("AWS_SHARED_CREDENTIALS_FILE") or "").strip()
-    config_already = str(env.get("AWS_CONFIG_FILE") or "").strip()
-    for base in candidate_homes:
-        aws_dir = base / ".aws"
-        creds_file = aws_dir / "credentials"
-        config_file = aws_dir / "config"
-        if not creds_already and creds_file.exists():
-            env["AWS_SHARED_CREDENTIALS_FILE"] = str(creds_file)
-            creds_already = env["AWS_SHARED_CREDENTIALS_FILE"]
-        if not config_already and config_file.exists():
-            env["AWS_CONFIG_FILE"] = str(config_file)
-            config_already = env["AWS_CONFIG_FILE"]
-        if creds_already and config_already:
-            break
-    return env
 
 
 def _write_runtime_env_atomic(dst: Path, rendered: str) -> None:

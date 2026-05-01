@@ -1,7 +1,7 @@
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
-"""Lightweight NYSE calendar helpers with 2024-2025 overrides.
+"""Lightweight NYSE calendar helpers with deterministic fallback rules.
 
 This module provides small trading-session utilities without requiring
 :mod:`pandas_market_calendars`. When the optional package is available,
@@ -10,6 +10,7 @@ of known sessions is used as a fallback.
 
 The fallback table intentionally covers:
 * Black Friday early closes for 2024-2025
+* Rule-computed future early closes
 * DST transition Mondays for 2024-2025
 
 These are sufficient for unit tests to validate daylight-saving time
@@ -156,8 +157,30 @@ def _computed_nyse_holidays(year: int) -> set[date]:
     }
 
 
+def _computed_nyse_early_closes(year: int) -> set[date]:
+    """Return rule-computed NYSE early closes for fallback mode."""
+
+    candidates = {
+        _nth_weekday(year, 11, 3, 4) + timedelta(days=1),  # Black Friday
+        date(year, 12, 24),  # Christmas Eve when it is a trading day
+        date(year, 7, 3),  # Day before Independence Day when it is a trading day
+    }
+    holidays = _computed_nyse_holidays(year)
+    return {
+        candidate
+        for candidate in candidates
+        if candidate.weekday() < 5 and candidate not in holidays
+    }
+
+
 def _is_fallback_holiday(d: date) -> bool:
     return any(d in _computed_nyse_holidays(year) for year in (d.year - 1, d.year, d.year + 1))
+
+
+def _is_fallback_early_close(d: date) -> bool:
+    if d in _FALLBACK_SESSIONS:
+        return _FALLBACK_SESSIONS[d].is_early_close
+    return d in _computed_nyse_early_closes(d.year)
 
 
 def is_trading_day(d: date) -> bool:
@@ -217,6 +240,9 @@ def session_info(d: date, *, allow_previous_session: bool = False) -> Session:
     if d in _FALLBACK_SESSIONS:
         return _FALLBACK_SESSIONS[d]
     start_et = datetime(d.year, d.month, d.day, 9, 30, tzinfo=_ET)
+    if _is_fallback_early_close(d):
+        end_et = datetime(d.year, d.month, d.day, 13, 0, tzinfo=_ET)
+        return Session(start_et.astimezone(UTC), end_et.astimezone(UTC), True)
     end_et = datetime(d.year, d.month, d.day, 16, 0, tzinfo=_ET)
     return Session(start_et.astimezone(UTC), end_et.astimezone(UTC))
 
@@ -234,6 +260,20 @@ def rth_session_utc(
 def is_early_close(d: date) -> bool:
     """Return ``True`` if *d* is a scheduled early-close day."""
     return session_info(d).is_early_close
+
+
+def rth_dst_summer_standard_times() -> tuple[tuple[datetime, datetime], tuple[datetime, datetime]]:
+    """Return representative DST and standard-time RTH windows in UTC."""
+
+    summer = date(2025, 3, 10)
+    winter = date(2025, 11, 3)
+    return rth_session_utc(summer), rth_session_utc(winter)
+
+
+def get_rth_session(d: date) -> tuple[datetime, datetime]:
+    """Return the RTH session open/close in UTC."""
+
+    return rth_session_utc(d)
 
 
 def previous_trading_session(d: date) -> date:
@@ -277,6 +317,8 @@ __all__ = [
     "Session",
     "is_trading_day",
     "rth_session_utc",
+    "rth_dst_summer_standard_times",
+    "get_rth_session",
     "session_info",
     "is_early_close",
     "previous_trading_session",

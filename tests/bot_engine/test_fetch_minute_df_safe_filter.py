@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from ai_trading.utils.lazy_imports import load_pandas
 
 from ai_trading.core import bot_engine
-from ai_trading.data import market_calendar
+from ai_trading.utils import market_calendar
 from ai_trading.guards import staleness
 from ai_trading.utils import base as base_utils
 
@@ -195,4 +195,3 @@ def test_fetch_minute_df_safe_drops_string_nan_rows(monkeypatch):
     slow_ema = result["close"].ewm(span=26, min_periods=1, adjust=False).mean()
     assert not fast_ema.dropna().empty
     assert not slow_ema.dropna().empty
-

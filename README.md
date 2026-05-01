@@ -1286,8 +1286,7 @@ echo "0 2 * * * /opt/ai-trading-bot/venv/bin/python3 -m retrain --trade-log /var
 #!/bin/bash
 # daily_maintenance.sh
 
-# Rotate logs
-python3 scripts/logger_rotator.py
+# Log rotation is handled by the configured RotatingFileHandler
 
 # Cleanup old data
 find data/ -name "*.csv" -mtime +30 -delete

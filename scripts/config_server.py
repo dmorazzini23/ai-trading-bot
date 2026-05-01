@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hmac
-import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -16,6 +15,7 @@ except ImportError:
 
 from ai_trading.config import management as config
 from ai_trading.config.management import get_env
+from ai_trading.config.operator_auth import parse_operator_token_map
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
@@ -29,34 +29,7 @@ if isinstance(app_config, dict):
 
 def _parse_operator_token_map() -> dict[str, str]:
     raw = str(get_env("AI_TRADING_OPERATOR_TOKEN_MAP", "") or "").strip()
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        parsed = None
-    if isinstance(parsed, Mapping):
-        return {
-            str(operator_id).strip().lower(): str(token).strip()
-            for operator_id, token in parsed.items()
-            if str(operator_id).strip() and str(token).strip()
-        }
-    result: dict[str, str] = {}
-    for item in raw.split(","):
-        token = item.strip()
-        if not token:
-            continue
-        if "=" in token:
-            operator_id, secret = token.split("=", 1)
-        elif ":" in token:
-            operator_id, secret = token.split(":", 1)
-        else:
-            continue
-        operator_key = operator_id.strip().lower()
-        secret_value = secret.strip()
-        if operator_key and secret_value:
-            result[operator_key] = secret_value
-    return result
+    return parse_operator_token_map(raw)
 
 
 def _require_operator_auth() -> tuple[dict[str, Any] | None, int]:

@@ -25,7 +25,6 @@ def test_missing_sdk_does_not_install_timeframe_fallbacks(monkeypatch, request):
         request.addfinalizer(lambda: sys.modules.pop("ai_trading.alpaca_api", None))
 
     _clear_module(monkeypatch, "alpaca")
-    monkeypatch.delitem(sys.modules, "ai_trading.timeframe", raising=False)
     real_import = builtins.__import__
 
     def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -109,6 +108,5 @@ def test_missing_sdk_does_not_install_timeframe_fallbacks(monkeypatch, request):
     with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
         alpaca_api.get_timeframe_cls()
 
-    timeframe = importlib.import_module("ai_trading.timeframe")
     with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
-        timeframe.TimeFrame()
+        alpaca_api.canonicalize_timeframe("1Day")

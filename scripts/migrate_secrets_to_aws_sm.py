@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import pwd
 import shutil
 import stat
 import subprocess
@@ -15,18 +14,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+from ai_trading.config.managed_secrets import (
+    aws_cli_env as _aws_cli_env,
+    parse_secret_string as _parse_secret_string,
+    resolve_aws_cli_path as _resolve_aws_cli_path,
+)
+
 try:
     from scripts.runtime_env_sync import _entries_to_map
     from scripts.runtime_env_sync import _infer_secret_key_names
     from scripts.runtime_env_sync import _load_env_entries
     from scripts.runtime_env_sync import _parse_csv_keys
-    from scripts.runtime_env_sync import _parse_secret_string
 except ModuleNotFoundError:  # pragma: no cover - direct script execution path
-    from runtime_env_sync import _entries_to_map
-    from runtime_env_sync import _infer_secret_key_names
-    from runtime_env_sync import _load_env_entries
-    from runtime_env_sync import _parse_csv_keys
-    from runtime_env_sync import _parse_secret_string
+    from runtime_env_sync import _entries_to_map  # type: ignore[no-redef]
+    from runtime_env_sync import _infer_secret_key_names  # type: ignore[no-redef]
+    from runtime_env_sync import _load_env_entries  # type: ignore[no-redef]
+    from runtime_env_sync import _parse_csv_keys  # type: ignore[no-redef]
 
 
 def _upsert_env_line(lines: list[str], key: str, value: str) -> list[str]:
@@ -45,7 +48,7 @@ def _upsert_env_line(lines: list[str], key: str, value: str) -> list[str]:
 
 
 def _aws_cli_base(*, region: str, profile: str) -> list[str]:
-    command: list[str] = ["aws"]
+    command: list[str] = [_resolve_aws_cli_path()]
     if profile:
         command.extend(["--profile", profile])
     if region:
@@ -236,38 +239,6 @@ def _write_secret(secret_id: str, payload: dict[str, str], *, region: str, profi
             temp_path.unlink()
         except FileNotFoundError:
             pass
-
-
-def _aws_cli_env() -> dict[str, str]:
-    env = dict(os.environ)
-    candidate_homes: list[Path] = []
-    home = str(env.get("HOME") or "").strip()
-    if home:
-        candidate_homes.append(Path(home))
-    try:
-        passwd_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-    except Exception:
-        passwd_home = None
-    if passwd_home is not None and passwd_home not in candidate_homes:
-        candidate_homes.append(passwd_home)
-    if not home and candidate_homes:
-        env["HOME"] = str(candidate_homes[0])
-
-    creds_already = str(env.get("AWS_SHARED_CREDENTIALS_FILE") or "").strip()
-    config_already = str(env.get("AWS_CONFIG_FILE") or "").strip()
-    for base in candidate_homes:
-        aws_dir = base / ".aws"
-        creds_file = aws_dir / "credentials"
-        config_file = aws_dir / "config"
-        if not creds_already and creds_file.exists():
-            env["AWS_SHARED_CREDENTIALS_FILE"] = str(creds_file)
-            creds_already = env["AWS_SHARED_CREDENTIALS_FILE"]
-        if not config_already and config_file.exists():
-            env["AWS_CONFIG_FILE"] = str(config_file)
-            config_already = env["AWS_CONFIG_FILE"]
-        if creds_already and config_already:
-            break
-    return env
 
 
 def main(argv: list[str] | None = None) -> int:

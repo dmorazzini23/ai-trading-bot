@@ -78,7 +78,7 @@ from ai_trading.config.management import (
     get_env,
     set_runtime_env_override,
 )
-from ai_trading.data.market_calendar import is_trading_day, rth_session_utc
+from ai_trading.utils.market_calendar import is_trading_day, rth_session_utc
 from ai_trading.data.timeutils import ensure_utc_datetime
 from ai_trading.logging import (
     get_logger,
@@ -101,7 +101,7 @@ from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.settings import get_backup_data_provider
 from ai_trading.telemetry import runtime_state
-from ai_trading.timeframe import TimeFrame
+from ai_trading.data.models import TimeFrame
 
 class _APIErrorUnavailable(RuntimeError):
     """Placeholder used when Alpaca imports are intentionally unavailable."""
@@ -7535,7 +7535,7 @@ def should_skip_symbol(
 
     if expected_count == 0:
         try:
-            from ai_trading.data import market_calendar as market_calendar_module
+            from ai_trading.utils import market_calendar as market_calendar_module
 
             expected_local = _build_trading_minute_index(
                 pd_local,

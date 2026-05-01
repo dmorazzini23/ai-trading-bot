@@ -22,7 +22,7 @@ try:
 except (ImportError, ValueError):
     sklearn_available = False
 from ai_trading.logging import logger
-from ai_trading.market.calendar_wrapper import previous_trading_session
+from ai_trading.utils.market_calendar import previous_trading_session
 _ET = ZoneInfo("America/New_York")
 
 if TYPE_CHECKING:  # pragma: no cover - typing only

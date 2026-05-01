@@ -271,11 +271,12 @@ def test_dependency_injection():
 
 def test_performance_optimizations():
     """Test indicator factory creates working indicators."""
-    from ai_trading.analysis.indicator_manager import create_indicator
+    from ai_trading.indicators.manager import IndicatorManager
 
     # Create indicators via the factory helper
-    sma = create_indicator("incremental_sma", window=5, name="TEST_SMA")
-    ema = create_indicator("incremental_ema", window=5, name="TEST_EMA")
+    indicator_manager = IndicatorManager()
+    sma = indicator_manager.create_indicator("incremental_sma", window=5, name="TEST_SMA")
+    ema = indicator_manager.create_indicator("incremental_ema", window=5, name="TEST_EMA")
 
     # Update with sample data
     test_values = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0]

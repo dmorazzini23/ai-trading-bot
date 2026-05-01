@@ -15,12 +15,12 @@ from typing import Any, cast
 
 from ai_trading.alpaca_api import (
     _data_classes,
+    canonicalize_timeframe,
     get_stock_bars_request_cls,
     get_timeframe_cls,
     get_timeframe_unit_cls,
 )
 from ai_trading.logging import get_logger
-from ai_trading.timeframe import canonicalize_timeframe
 
 logger = get_logger(__name__)
 

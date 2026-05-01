@@ -313,35 +313,114 @@ def get_stock_bars_request_cls():
 
 
 def get_timeframe_cls():
-    """Return the package-level :class:`TimeFrame` wrapper.
-
-    The wrapper guarantees that ``TimeFrame()`` defaults to ``1 Day`` and that
-    ``amount`` and ``unit`` attributes are always present.
-    """
-    if TimeFrame is None and not ALPACA_AVAILABLE:
-        raise _alpaca_sdk_required_error("TimeFrame unavailable")
+    """Return the active Alpaca data :class:`TimeFrame` class."""
+    if TimeFrame is not None:
+        return TimeFrame
     try:
-        from .timeframe import TimeFrame as _TimeFrame
+        _, timeframe_cls, _ = _data_classes()
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         raise _alpaca_sdk_required_error("TimeFrame unavailable") from exc
-    return _TimeFrame
+    return timeframe_cls
 
 
 def get_timeframe_unit_cls():
-    """Return the package-level ``TimeFrameUnit`` enum."""
-    if TimeFrameUnit is None and not ALPACA_AVAILABLE:
-        raise _alpaca_sdk_required_error("TimeFrameUnit unavailable")
+    """Return the active Alpaca data ``TimeFrameUnit`` enum."""
+    if TimeFrameUnit is not None:
+        return TimeFrameUnit
     try:
-        from .timeframe import TimeFrameUnit as _TimeFrameUnit
+        _, _, timeframe_unit_cls = _data_classes()
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         raise _alpaca_sdk_required_error("TimeFrameUnit unavailable") from exc
-    return _TimeFrameUnit
+    return timeframe_unit_cls
+
+
+def _safe_setattr(obj: object, name: str, value: object) -> None:
+    """Best-effort setattr that tolerates read-only SDK descriptors."""
+
+    try:
+        object.__setattr__(obj, name, value)
+    except (AttributeError, TypeError):
+        return
+
+
+def _resolve_timeframe_unit_cls() -> Any:
+    """Return a unit enum/object exposing Minute/Hour/Day/Week/Month."""
+
+    unit_cls = get_timeframe_unit_cls()
+    if all(hasattr(unit_cls, name) for name in ("Minute", "Hour", "Day", "Week", "Month")):
+        return unit_cls
+    raise RuntimeError("alpaca-py TimeFrameUnit is missing required units")
+
+
+def _build_timeframe(amount: int, unit: Any) -> Any:
+    """Construct an Alpaca timeframe and preserve common attributes when possible."""
+
+    timeframe_cls = get_timeframe_cls()
+    instance = timeframe_cls(amount, unit)
+    if getattr(instance, "amount", None) is None:
+        _safe_setattr(instance, "amount", amount)
+    if getattr(instance, "unit", None) is None:
+        _safe_setattr(instance, "unit", unit)
+    return instance
+
+
+def canonicalize_timeframe(tf: Any) -> Any:
+    """Return ``tf`` as a normalized Alpaca ``TimeFrame`` instance."""
+
+    timeframe_cls = get_timeframe_cls()
+    if isinstance(timeframe_cls, type) and isinstance(tf, timeframe_cls):
+        return tf
+
+    unit_cls = _resolve_timeframe_unit_cls()
+
+    if isinstance(tf, (int, float)):
+        return _build_timeframe(int(tf) or 1, unit_cls.Day)
+
+    amount = getattr(tf, "amount", None)
+    unit = getattr(tf, "unit", None)
+    if amount is not None:
+        try:
+            if unit is None:
+                unit = unit_cls.Day
+            if not isinstance(unit, unit_cls):
+                name = getattr(unit, "name", str(unit)).capitalize()
+                unit = getattr(unit_cls, name, unit_cls.Day)
+            return _build_timeframe(int(amount), unit)
+        except (TypeError, ValueError, AttributeError):
+            _log.debug("TIMEFRAME_ATTR_COERCE_FAILED", exc_info=True)
+
+    try:
+        s = str(tf).strip()
+        if s:
+            import re
+
+            m = re.match(r"(\d+)?\s*(\w+)", s)
+            if m:
+                amt = int(m.group(1) or 1)
+                unit_name = m.group(2).capitalize()
+                unit_name = {
+                    "M": "Minute",
+                    "Min": "Minute",
+                    "Minute": "Minute",
+                    "H": "Hour",
+                    "Hr": "Hour",
+                    "Hour": "Hour",
+                    "D": "Day",
+                    "Day": "Day",
+                    "W": "Week",
+                    "Week": "Week",
+                    "Mo": "Month",
+                    "Month": "Month",
+                }.get(unit_name, unit_name)
+                return _build_timeframe(amt, getattr(unit_cls, unit_name, unit_cls.Day))
+    except (TypeError, ValueError, AttributeError):
+        _log.debug("TIMEFRAME_STRING_PARSE_FAILED", extra={"value": tf}, exc_info=True)
+
+    return _build_timeframe(1, unit_cls.Day)
 
 
 def _normalize_timeframe_for_tradeapi(tf_raw):
     """Return (canonical_string, TimeFrame) for ``tf_raw`` input."""
-    from ai_trading.timeframe import canonicalize_timeframe
-
     tf_obj = canonicalize_timeframe(tf_raw)
     unit = getattr(tf_obj.unit, "name", str(tf_obj.unit)).title()
     return f"{tf_obj.amount}{unit}", tf_obj
@@ -388,8 +467,6 @@ def _coerce_timeframe_for_request(
 
     if not unit_token:
         try:
-            from ai_trading.timeframe import canonicalize_timeframe
-
             fallback_tf = canonicalize_timeframe(tf_norm)
             amount = int(getattr(fallback_tf, "amount", amount) or amount)
             fallback_unit = getattr(fallback_tf, "unit", None)

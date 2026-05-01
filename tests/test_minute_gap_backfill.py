@@ -7,7 +7,7 @@ import pytest
 pd = pytest.importorskip("pandas")
 
 from ai_trading.core import bot_engine
-from ai_trading.data import market_calendar
+from ai_trading.utils import market_calendar
 from ai_trading.data.fetch import _verify_minute_continuity
 from ai_trading.guards import staleness
 from ai_trading.utils import base as base_utils

@@ -15,7 +15,7 @@ from ai_trading.data.fetch import get_bars, get_minute_df
 from ai_trading.data.fetch import get_bars as _raw_http_get_bars
 from ai_trading.data import fetch as data_fetcher
 from ai_trading.data.fetch.normalize import normalize_ohlcv_df, REQUIRED as _OHLCV_REQUIRED
-from ai_trading.data.market_calendar import previous_trading_session, rth_session_utc
+from ai_trading.utils.market_calendar import previous_trading_session, rth_session_utc
 from ai_trading.logging import get_logger
 from ai_trading.logging.empty_policy import classify as _empty_classify
 from ai_trading.logging.empty_policy import record as _empty_record

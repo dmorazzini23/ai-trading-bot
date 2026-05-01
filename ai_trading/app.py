@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from importlib import import_module
 from typing import Any, cast
 
+from ai_trading.config.operator_auth import parse_operator_token_map
 from ai_trading.logging import get_logger
 from ai_trading.health_payload import (
     build_api_health_payload,
@@ -475,36 +476,7 @@ def _parse_operator_allowlist(name: str) -> set[str]:
 
 def _parse_operator_token_map() -> dict[str, str]:
     raw = str(_managed_env("AI_TRADING_OPERATOR_TOKEN_MAP", "") or "").strip()
-    if not raw:
-        return {}
-    try:
-        parsed_payload = json.loads(raw)
-    except json.JSONDecodeError:
-        parsed_payload = None
-    if isinstance(parsed_payload, Mapping):
-        parsed: dict[str, str] = {}
-        for key, value in parsed_payload.items():
-            operator_id = str(key or "").strip().lower()
-            token = str(value or "").strip()
-            if operator_id and token:
-                parsed[operator_id] = token
-        return parsed
-    parsed_fallback: dict[str, str] = {}
-    for item in raw.split(","):
-        token = str(item or "").strip()
-        if not token:
-            continue
-        if "=" in token:
-            operator_id, secret = token.split("=", 1)
-        elif ":" in token:
-            operator_id, secret = token.split(":", 1)
-        else:
-            continue
-        operator_key = str(operator_id or "").strip().lower()
-        secret_value = str(secret or "").strip()
-        if operator_key and secret_value:
-            parsed_fallback[operator_key] = secret_value
-    return parsed_fallback
+    return parse_operator_token_map(raw)
 
 
 def _authenticate_operator_request(

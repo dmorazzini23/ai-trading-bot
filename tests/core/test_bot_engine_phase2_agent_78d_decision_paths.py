@@ -1012,7 +1012,7 @@ def _minute_frame(end: datetime, rows: int, *, provider: str = "alpaca_iex", fee
 def test_fetch_minute_df_safe_uncached_recovers_low_coverage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import ai_trading.data.market_calendar as calendar_mod
+    import ai_trading.utils.market_calendar as calendar_mod
     import ai_trading.utils.base as base_mod
 
     now = datetime.now(UTC)

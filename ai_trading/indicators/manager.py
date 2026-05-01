@@ -31,11 +31,11 @@ class IndicatorManager:
         "incremental_rsi": IncrementalRSI,
     }
 
-    def create_indicator(self, name: str, **params) -> Indicator:
+    def create_indicator(self, indicator_name: str, **params) -> Indicator:
         """Instantiate an indicator by name.
 
         Args:
-            name: Identifier of the indicator (case-insensitive).
+            indicator_name: Identifier of the indicator (case-insensitive).
             **params: Parameters passed to the indicator's constructor.
 
         Returns:
@@ -44,9 +44,9 @@ class IndicatorManager:
         Raises:
             ValueError: If the indicator name is unknown.
         """
-        cls = self._INDICATORS.get(name.lower())
+        cls = self._INDICATORS.get(indicator_name.lower())
         if cls is None:
-            raise ValueError(f"Unknown indicator: {name}")
+            raise ValueError(f"Unknown indicator: {indicator_name}")
         return cls(**params)
 
 

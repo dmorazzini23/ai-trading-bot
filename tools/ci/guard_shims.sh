@@ -12,6 +12,35 @@ ALPACA_RUNTIME_PATHS=(
 
 echo "Checking for shim patterns in ai_trading/..."
 
+forbidden_paths=(
+  data_validation/__init__.py
+  retrain/__init__.py
+  retrain/__main__.py
+  logger_rotator.py
+  scripts/algorithm_optimizer.py
+  scripts/logger_rotator.py
+  scripts/ml_model.py
+  scripts/predict.py
+  ai_trading/analysis/indicator_manager.py
+  ai_trading/config/aliases.py
+  ai_trading/data/market_calendar.py
+  ai_trading/market/calendar_wrapper.py
+  ai_trading/timeframe.py
+  ai_trading/utils/retry_mode.py
+)
+
+existing_forbidden_paths=()
+for path in "${forbidden_paths[@]}"; do
+  if [ -e "$path" ]; then
+    existing_forbidden_paths+=("$path")
+  fi
+done
+if [ "${#existing_forbidden_paths[@]}" -gt 0 ]; then
+    echo "Found forbidden shim/compatibility entrypoints:"
+    printf '%s\n' "${existing_forbidden_paths[@]}"
+    fail=1
+fi
+
 # 1) Alpaca runtime compatibility surfaces
 echo "1. Checking Alpaca runtime compatibility surfaces..."
 runtime_shim_markers=$(git grep -nE '(_HTTPShim|TradingClientAdapter|CompatTradingClient|compatibility layer|shim)' -- "${ALPACA_RUNTIME_PATHS[@]}" || true)
@@ -40,6 +69,15 @@ shim_files=$(find ai_trading -type f \( -iname '*shim*.py' -o -iname '*compat*.p
 if [ -n "$shim_files" ]; then
     echo "Found runtime shim/compat files:"
     echo "$shim_files"
+    fail=1
+fi
+
+removed_import_refs=$(git grep -nE \
+    'ai_trading\.(timeframe|config\.aliases|analysis\.indicator_manager|utils\.retry_mode|data\.market_calendar|market\.calendar_wrapper)|scripts/(algorithm_optimizer|logger_rotator|ml_model|predict)|logger_rotator' \
+    -- . ':(exclude)tools/ci/guard_shims.sh' ':(exclude)venv' ':(exclude).venv' ':(exclude)htmlcov' || true)
+if [ -n "$removed_import_refs" ]; then
+    echo "Found references to removed shim/compatibility entrypoints:"
+    echo "$removed_import_refs"
     fail=1
 fi
 

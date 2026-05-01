@@ -23,6 +23,10 @@ This document is the authoritative playbook for Codex-style editing in this repo
   - Avoid `alpaca-trade-api` in runtime paths.
 - **Logging:** Structured logger only; no raw `print` in runtime or tests unless asserting stdout.
 - **Shims:** **No shims.** Fix root causes directly; do not add compatibility layers or wrapper modules.
+- **Compatibility entrypoints:** Existing legacy entrypoints may remain only when
+  they are tested or documented operator surfaces. They must stay thin,
+  import-only/CLI-only delegations to canonical `ai_trading.*` modules and must
+  not gain business logic.
 
 ---
 
@@ -105,6 +109,8 @@ Use these stable strings to anchor surgical edits:
 
 ## 8. Anti-Patterns to Avoid
 - Reintroducing shims, optional import helpers, or dynamic SDK swaps.
+- Adding behavior to legacy compatibility entrypoints instead of the canonical
+  package module.
 - Adding new direct `os.getenv` / `os.environ` runtime access outside `ai_trading.config.management`, except for tightly justified non-runtime validation code.
 - Adding raw `print` statements or silent exception handling.
 - Migrating runtime off pinned `alpaca-py` without explicit approval.

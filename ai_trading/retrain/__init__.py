@@ -1,9 +1,8 @@
 """Retraining CLI helpers exposed for public use.
 
-This module provides a thin, documented surface for retraining related
-utilities.  It intentionally delegates to the implementations that live in
-``ai_trading.core`` and ``ai_trading.meta_learning`` so that the behaviour is
-consistent with the running bot while keeping import time minimal.
+This module is the canonical retraining CLI and public API for retraining
+related utilities. Heavy runtime dependencies are imported lazily so command
+line help and package imports stay lightweight.
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Return an argument parser for the retraining CLI."""
 
     parser = argparse.ArgumentParser(
-        prog="python -m retrain",
+        prog="python -m ai_trading.retrain",
         description=(
             "Retrain the meta-learning ensemble from historical trade logs. "
             "All arguments are optional; defaults match in-package settings."
@@ -77,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Entry point used by ``python -m retrain``."""
+    """Entry point used by ``python -m ai_trading.retrain``."""
 
     parser = build_parser()
     args = parser.parse_args(argv)

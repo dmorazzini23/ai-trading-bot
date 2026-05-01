@@ -68,7 +68,7 @@ def test_fetch_minute_df_nan_closes_triggers_guard(monkeypatch, caplog):
     session_start = now_utc - timedelta(hours=6)
     session_end = now_utc
     monkeypatch.setattr(
-        "ai_trading.data.market_calendar.rth_session_utc",
+        "ai_trading.utils.market_calendar.rth_session_utc",
         lambda _date: (session_start, session_end),
     )
     monkeypatch.setattr(

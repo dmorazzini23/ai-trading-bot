@@ -148,7 +148,7 @@ def test_data_class_and_timeframe_helpers(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(api, "ALPACA_AVAILABLE", False)
     with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
         api.get_stock_bars_request_cls()
-    assert api.get_timeframe_unit_cls().__name__ in {"TimeFrameUnit", "_TFUnit"}
+    assert api.get_timeframe_unit_cls().__name__ == "object"
 
     naive = dt.datetime(2024, 1, 2, 3, 4, 5, 999)
     aware = dt.datetime(2024, 1, 2, 3, 4, 5, tzinfo=dt.timezone(dt.timedelta(hours=2)))
@@ -245,9 +245,7 @@ def test_coerce_timeframe_edge_branches(monkeypatch: pytest.MonkeyPatch) -> None
     )
     assert zero_amount.amount == 1
 
-    import ai_trading.timeframe as timeframe_mod
-
-    monkeypatch.setattr(timeframe_mod, "canonicalize_timeframe", lambda _tf: (_ for _ in ()).throw(RuntimeError("bad tf")))
+    monkeypatch.setattr(api, "canonicalize_timeframe", lambda _tf: (_ for _ in ()).throw(RuntimeError("bad tf")))
     canonicalize_fallback = api._coerce_timeframe_for_request(
         types.SimpleNamespace(amount=1, unit=None),
         "broken",

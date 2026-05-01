@@ -477,15 +477,6 @@ def _reset_loaded_singletons() -> None:
         logging_mod_ref = importlib.import_module("ai_trading.logging")
     except Exception:
         logging_mod_ref = None
-    try:
-        aliases_mod = importlib.import_module("ai_trading.config.aliases")
-    except Exception:
-        aliases_mod = None
-    try:
-        retry_mode_mod = importlib.import_module("ai_trading.utils.retry_mode")
-    except Exception:
-        retry_mode_mod = None
-
     # Some collection-time tests replace ``pybreaker.CircuitBreaker`` with a
     # Mock at module import. Restore a deterministic no-op implementation so
     # bot_engine decorators are always real callables between tests.
@@ -519,15 +510,6 @@ def _reset_loaded_singletons() -> None:
         bot_engine_canonical = importlib.import_module("ai_trading.core.bot_engine")
     except Exception:
         bot_engine_canonical = None
-
-    if isinstance(retry_mode_mod, types.ModuleType):
-        tenacity_retry = getattr(retry_mode_mod, "_tenacity_retry", None)
-        retry_mode_fn = getattr(retry_mode_mod, "retry_mode", None)
-        if _is_mock_like(tenacity_retry) or _is_mock_like(retry_mode_fn):
-            try:
-                retry_mode_mod = importlib.reload(retry_mode_mod)
-            except Exception:
-                pass
 
     if isinstance(bot_engine_canonical, types.ModuleType):
         safe_get_account = getattr(bot_engine_canonical, "safe_alpaca_get_account", None)
@@ -768,7 +750,7 @@ def _reset_loaded_singletons() -> None:
                 except Exception:
                     pass
         try:
-            from ai_trading.data import market_calendar as _market_calendar_mod
+            from ai_trading.utils import market_calendar as _market_calendar_mod
         except Exception:
             _market_calendar_mod = None
         for fn_name in (
@@ -933,20 +915,6 @@ def _reset_loaded_singletons() -> None:
                     setattr(live_trading_mod, attr_name, attr_value)
                 except Exception:
                     pass
-
-    if isinstance(aliases_mod, types.ModuleType) and isinstance(logging_mod_ref, types.ModuleType):
-        logger_once_obj = getattr(logging_mod_ref, "logger_once", None)
-        if logger_once_obj is not None and not _is_mock_like(logger_once_obj):
-            try:
-                setattr(aliases_mod, "logger_once", logger_once_obj)
-            except Exception:
-                pass
-        resolve_fn = getattr(aliases_mod, "resolve_trading_mode", None)
-        if _is_mock_like(resolve_fn):
-            try:
-                aliases_mod = importlib.reload(aliases_mod)
-            except Exception:
-                pass
 
     for alpaca_api_mod in _iter_live_modules("ai_trading.alpaca_api"):
         for attr_name, attr_value in (

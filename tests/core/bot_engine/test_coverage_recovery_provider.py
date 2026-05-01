@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 import ai_trading.core.bot_engine as bot_engine
-import ai_trading.data.market_calendar as market_calendar
+import ai_trading.utils.market_calendar as market_calendar
 from ai_trading.utils import base as base_utils
 
 pd = pytest.importorskip("pandas")

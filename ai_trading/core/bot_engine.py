@@ -74,7 +74,7 @@ except (ImportError, AttributeError):
         _ = runtime, equity
         return 1.0
 from ai_trading.utils.datetime import ensure_datetime
-import ai_trading.data.market_calendar as market_calendar
+import ai_trading.utils.market_calendar as market_calendar
 from ai_trading.data.timeutils import (
     ensure_utc_datetime as _ensure_utc_dt,  # AI-AGENT-REF: callable-aware UTC coercion
     previous_business_day as _prev_bus_day,  # AI-AGENT-REF: default previous session
@@ -923,7 +923,7 @@ class _DataClientAdapter:
 def _parse_timeframe(tf: Any) -> Any:
     """Map configuration values to :class:`bars.TimeFrame` enums."""
 
-    from ai_trading.timeframe import canonicalize_timeframe
+    from ai_trading.alpaca_api import canonicalize_timeframe
 
     timeframe_enum = getattr(bars, "TimeFrame", None)
     if (timeframe_enum is None or timeframe_enum is object) or not (
@@ -8929,7 +8929,7 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
     """
     global _GLOBAL_INTRADAY_FALLBACK_FEED
     from ai_trading.utils.base import is_market_open, EASTERN_TZ
-    from ai_trading.data.market_calendar import rth_session_utc, previous_trading_session
+    from ai_trading.utils.market_calendar import rth_session_utc, previous_trading_session
 
     max_age_seconds = _minute_data_freshness_limit()
 

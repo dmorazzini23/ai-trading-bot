@@ -10,6 +10,7 @@ from typing import Any, TypeVar, cast
 
 T = TypeVar("T")
 RetryPredicate = Callable[[BaseException], bool]
+_NO_FALLBACK = object()
 
 
 class _FallbackRetryError(Exception):
@@ -145,6 +146,7 @@ def retry(
     stop: Any | None = None,
     wait: Any | None = None,
     retry: Any | None = None,
+    fallback: Any = _NO_FALLBACK,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Lightweight retry decorator built on Tenacity when available.
 
@@ -162,6 +164,8 @@ def retry(
     - exceptions: tuple of exception types to catch
     - reraise: when True, propagate the last exception instead of raising RetryError.
       Forwarded to Tenacity's ``retry`` decorator when available.
+    - fallback: optional value returned after retry budget exhaustion. When set,
+      ``reraise`` is ignored and exhausted retries return this value.
     """
 
     attempts = max(0, int(retries))
@@ -197,7 +201,10 @@ def retry(
             retry=cast(Any, _retry),
             stop=cast(Any, _stop),
             wait=cast(Any, _wait),
-            reraise=reraise,
+            reraise=False if fallback is not _NO_FALLBACK else reraise,
+            retry_error_callback=(
+                (lambda _state: fallback) if fallback is not _NO_FALLBACK else None
+            ),
         )
 
         def tenacity_policy_decorator(fn: Callable[..., T]) -> Callable[..., T]:
@@ -224,7 +231,10 @@ def retry(
             retry=cast(Any, predicate),
             stop=cast(Any, _stop),
             wait=cast(Any, _wait),
-            reraise=reraise,
+            reraise=False if fallback is not _NO_FALLBACK else reraise,
+            retry_error_callback=(
+                (lambda _state: fallback) if fallback is not _NO_FALLBACK else None
+            ),
         )
 
         def tenacity_decorator(fn: Callable[..., T]) -> Callable[..., T]:
@@ -282,6 +292,8 @@ def retry(
                         raise
                     attempt += 1
                     if attempt >= attempts:
+                        if fallback is not _NO_FALLBACK:
+                            return cast(T, fallback)
                         if reraise:
                             raise
                         raise _FallbackRetryError() from exc

@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from ai_trading.broker.alpaca_credentials import alpaca_auth_headers
 from ai_trading.config.management import get_env
 from ai_trading.logging import logger
-from ai_trading.market.calendar_wrapper import is_trading_day, previous_trading_session
+from ai_trading.utils.market_calendar import is_trading_day, previous_trading_session
 from ai_trading.utils.env import get_alpaca_data_base_url
 from ai_trading.utils.http import clamp_request_timeout, get as http_get
 

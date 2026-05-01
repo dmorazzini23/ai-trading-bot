@@ -18,8 +18,8 @@ logger = get_logger(__name__)
 
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SECRET_KEY_HINT_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|WEBHOOK_URL$|API_KEY$)")
-_BACKEND_NONE = {"", "none", "off", "disabled"}
-_BACKEND_AWS = {"aws-secrets-manager", "aws_sm", "aws"}
+BACKEND_NONE = {"", "none", "off", "disabled"}
+BACKEND_AWS = {"aws-secrets-manager", "aws_sm", "aws"}
 _AWS_ENV_ALLOWLIST = {
     "AWS_ACCESS_KEY_ID",
     "AWS_CA_BUNDLE",
@@ -73,7 +73,7 @@ def _secret_like_keys(keys: Iterable[str]) -> set[str]:
     }
 
 
-def _parse_secret_string(raw: str) -> dict[str, str]:
+def parse_secret_string(raw: str) -> dict[str, str]:
     text = raw.strip()
     if not text:
         return {}
@@ -99,7 +99,7 @@ def _parse_secret_string(raw: str) -> dict[str, str]:
     return result
 
 
-def _resolve_aws_cli_path() -> str:
+def resolve_aws_cli_path() -> str:
     configured = str(os.getenv("AI_TRADING_AWS_CLI_PATH") or os.getenv("AWS_CLI_PATH") or "").strip()
     if configured:
         path = Path(configured).expanduser()
@@ -111,7 +111,7 @@ def _resolve_aws_cli_path() -> str:
     return shutil.which("aws") or "aws"
 
 
-def _aws_cli_env() -> dict[str, str]:
+def aws_cli_env() -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if key in _AWS_ENV_ALLOWLIST}
     candidate_homes: list[Path] = []
     home = str(env.get("HOME") or "").strip()
@@ -143,8 +143,8 @@ def _aws_cli_env() -> dict[str, str]:
     return env
 
 
-def _fetch_aws_secret_payload(secret_id: str, *, region: str, profile: str) -> dict[str, str]:
-    command: list[str] = [_resolve_aws_cli_path()]
+def fetch_aws_secret_payload(secret_id: str, *, region: str, profile: str) -> dict[str, str]:
+    command: list[str] = [resolve_aws_cli_path()]
     if profile:
         command.extend(["--profile", profile])
     if region:
@@ -165,7 +165,7 @@ def _fetch_aws_secret_payload(secret_id: str, *, region: str, profile: str) -> d
             check=False,
             text=True,
             capture_output=True,
-            env=_aws_cli_env(),
+            env=aws_cli_env(),
         )
     except FileNotFoundError as exc:
         raise RuntimeError("aws CLI not found. Install AWS CLI v2 and ensure `aws` is on PATH.") from exc
@@ -181,7 +181,7 @@ def _fetch_aws_secret_payload(secret_id: str, *, region: str, profile: str) -> d
         raise RuntimeError(
             f"AWS secret '{secret_id}' did not include SecretString; SecretBinary is not supported"
         )
-    parsed = _parse_secret_string(secret_string)
+    parsed = parse_secret_string(secret_string)
     if not parsed:
         raise RuntimeError(
             f"AWS secret '{secret_id}' did not contain key/value entries"
@@ -195,9 +195,9 @@ def hydrate_managed_secrets(*, required_keys: Iterable[str] = ()) -> dict[str, A
     from ai_trading.config.management import get_env, set_runtime_env_override
 
     backend = str(get_env("AI_TRADING_SECRETS_BACKEND", "none", resolve_aliases=False) or "none").lower()
-    if backend in _BACKEND_NONE:
+    if backend in BACKEND_NONE:
         return {"secrets_backend": backend or "none", "hydrated_count": 0}
-    if backend not in _BACKEND_AWS:
+    if backend not in BACKEND_AWS:
         raise RuntimeError(
             f"unsupported AI_TRADING_SECRETS_BACKEND '{backend}' "
             "(supported: none, aws-secrets-manager)"
@@ -254,4 +254,20 @@ def hydrate_managed_secrets(*, required_keys: Iterable[str] = ()) -> dict[str, A
     }
 
 
-__all__ = ["hydrate_managed_secrets"]
+_BACKEND_NONE = BACKEND_NONE
+_BACKEND_AWS = BACKEND_AWS
+_parse_secret_string = parse_secret_string
+_resolve_aws_cli_path = resolve_aws_cli_path
+_aws_cli_env = aws_cli_env
+_fetch_aws_secret_payload = fetch_aws_secret_payload
+
+
+__all__ = [
+    "BACKEND_AWS",
+    "BACKEND_NONE",
+    "aws_cli_env",
+    "fetch_aws_secret_payload",
+    "hydrate_managed_secrets",
+    "parse_secret_string",
+    "resolve_aws_cli_path",
+]
