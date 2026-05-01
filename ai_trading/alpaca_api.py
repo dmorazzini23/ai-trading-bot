@@ -389,7 +389,7 @@ def canonicalize_timeframe(tf: Any) -> Any:
     if amount is not None:
         try:
             if unit is None:
-                unit = unit_cls.Day
+                return _build_timeframe(1, unit_cls.Day)
             if not isinstance(unit, unit_cls):
                 name = getattr(unit, "name", str(unit)).capitalize()
                 unit = getattr(unit_cls, name, unit_cls.Day)
