@@ -50,10 +50,11 @@ from ai_trading.settings import (
 
 
 def _offline_tests_enabled() -> bool:
-    raw = str(
-        get_env("AI_TRADING_OFFLINE_TESTS", "", cast=str, resolve_aliases=False)
-        or ""
-    ).strip().lower()
+    try:
+        value = get_env("AI_TRADING_OFFLINE_TESTS", "", cast=str, resolve_aliases=False)
+    except TypeError:
+        value = get_env("AI_TRADING_OFFLINE_TESTS", "", cast=str)
+    raw = str(value or "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
 
 
