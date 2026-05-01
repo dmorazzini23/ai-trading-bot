@@ -60,6 +60,16 @@ coverage.json
 .coverage.*
 .ruff_cache/
 
+# Repository-root reports and local run artifacts that should not be published
+*_SUMMARY.md
+*_REPORT.md
+*_FIX_*.md
+*_REMOVAL_*.md
+rl_agent.zip
+hist.json
+hist.pkl
+test_trades.csv
+
 # Benchmark results
 .benchmarks/
 
