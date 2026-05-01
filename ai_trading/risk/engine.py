@@ -490,8 +490,6 @@ class RiskEngine:
                 ts, val = self._atr_cache[symbol]
                 if datetime.now(UTC) - ts < timedelta(minutes=30):
                     return val
-            if _offline_tests_enabled():
-                return None
             ctx = getattr(self, "ctx", None)
             client = getattr(ctx, "data_client", None) or self._init_data_client()
 
