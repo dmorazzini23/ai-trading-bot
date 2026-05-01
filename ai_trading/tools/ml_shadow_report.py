@@ -504,6 +504,261 @@ def _cost_observation_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _cost_fields(row: Mapping[str, Any]) -> tuple[float | None, float | None]:
+    spread: float | None = None
+    quote_age: float | None = None
+    market = row.get("market")
+    cost = row.get("cost")
+    if isinstance(cost, Mapping):
+        spread = _finite_float(cost.get("spread_bps"))
+        quote_age = _finite_float(cost.get("quote_age_ms"))
+    if isinstance(market, Mapping):
+        spread = spread if spread is not None else _finite_float(market.get("spread_bps"))
+        quote_age = quote_age if quote_age is not None else _finite_float(market.get("quote_age_ms"))
+    return spread, quote_age
+
+
+def _decision_type(row: Mapping[str, Any]) -> str:
+    champion = _bool_value(row, "champion_would_trade")
+    challenger = _bool_value(row, "challenger_would_trade")
+    if champion and challenger:
+        return "both_trade"
+    if champion:
+        return "champion_only"
+    if challenger:
+        return "challenger_only"
+    return "neither_trade"
+
+
+def _row_side(row: Mapping[str, Any]) -> str:
+    for source in (row, row.get("market"), row.get("cost")):
+        if not isinstance(source, Mapping):
+            continue
+        raw_side = source.get("side") or source.get("order_side") or source.get("signal_side")
+        if raw_side not in (None, ""):
+            return str(raw_side).strip().lower() or "unknown"
+    return "unknown"
+
+
+def _row_provider(row: Mapping[str, Any]) -> str:
+    provider = row.get("provider")
+    if not isinstance(provider, Mapping):
+        return "unknown"
+    active = str(provider.get("active") or "").strip().lower()
+    status = str(provider.get("status") or "").strip().lower()
+    if active and status:
+        return f"{active}:{status}"
+    return active or status or "unknown"
+
+
+def _quantile(values: list[float], quantile: float) -> float | None:
+    if not values:
+        return None
+    return float(np.quantile(values, min(max(float(quantile), 0.0), 1.0)))
+
+
+def _cost_group_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    spreads: list[float] = []
+    quote_ages: list[float] = []
+    missing_spread = 0
+    missing_quote_age = 0
+    for row in rows:
+        spread, quote_age = _cost_fields(row)
+        if spread is None:
+            missing_spread += 1
+        else:
+            spreads.append(spread)
+        if quote_age is None:
+            missing_quote_age += 1
+        else:
+            quote_ages.append(quote_age)
+    return {
+        "rows": int(len(rows)),
+        "mean_spread_bps": _mean(spreads),
+        "p50_spread_bps": _quantile(spreads, 0.50),
+        "p90_spread_bps": _quantile(spreads, 0.90),
+        "max_spread_bps": max(spreads) if spreads else None,
+        "mean_quote_age_ms": _mean(quote_ages),
+        "p50_quote_age_ms": _quantile(quote_ages, 0.50),
+        "p90_quote_age_ms": _quantile(quote_ages, 0.90),
+        "max_quote_age_ms": max(quote_ages) if quote_ages else None,
+        "missing_spread_rows": int(missing_spread),
+        "missing_quote_age_rows": int(missing_quote_age),
+    }
+
+
+def _grouped_cost_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    def _build_group(key_func: Any) -> list[dict[str, Any]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            key = str(key_func(row) or "unknown")
+            grouped.setdefault(key, []).append(row)
+        records = [
+            {"key": key, **_cost_group_summary(group_rows)}
+            for key, group_rows in grouped.items()
+        ]
+        records.sort(key=lambda item: (-int(item["rows"]), str(item["key"])))
+        return records
+
+    return {
+        "by_symbol": _build_group(
+            lambda row: str(row.get("symbol") or "").strip().upper() or "UNKNOWN"
+        ),
+        "by_hour": _build_group(lambda row: _hour_bucket(row) or "unknown"),
+        "by_provider": _build_group(_row_provider),
+        "by_side": _build_group(_row_side),
+        "by_decision_type": _build_group(_decision_type),
+    }
+
+
+def _microstructure_reasons(
+    row: Mapping[str, Any],
+    *,
+    max_spread_bps: float,
+    max_quote_age_ms: float,
+    reject_missing: bool,
+) -> list[str]:
+    spread, quote_age = _cost_fields(row)
+    reasons: list[str] = []
+    if spread is None:
+        if reject_missing:
+            reasons.append("missing_spread")
+    elif spread > max_spread_bps:
+        reasons.append("wide_spread")
+    if quote_age is None:
+        if reject_missing:
+            reasons.append("missing_quote_age")
+    elif quote_age > max_quote_age_ms:
+        reasons.append("stale_quote")
+    return reasons
+
+
+def _microstructure_shadow_gate_summary(
+    rows: list[dict[str, Any]],
+    *,
+    max_spread_bps: float,
+    max_quote_age_ms: float,
+    reject_missing: bool,
+) -> dict[str, Any]:
+    reason_counts: Counter[str] = Counter()
+    decision_counts: Counter[str] = Counter()
+    decision_reject_counts: Counter[str] = Counter()
+    symbol_reject_counts: Counter[str] = Counter()
+    examples: list[dict[str, Any]] = []
+    would_reject = 0
+    for row in rows:
+        decision = _decision_type(row)
+        decision_counts[decision] += 1
+        reasons = _microstructure_reasons(
+            row,
+            max_spread_bps=max_spread_bps,
+            max_quote_age_ms=max_quote_age_ms,
+            reject_missing=reject_missing,
+        )
+        if not reasons:
+            continue
+        would_reject += 1
+        decision_reject_counts[decision] += 1
+        symbol = str(row.get("symbol") or "").strip().upper() or "UNKNOWN"
+        symbol_reject_counts[symbol] += 1
+        reason_counts.update(reasons)
+        if len(examples) < 20:
+            spread, quote_age = _cost_fields(row)
+            examples.append(
+                {
+                    "ts": row.get("ts"),
+                    "symbol": symbol,
+                    "decision_type": decision,
+                    "spread_bps": spread,
+                    "quote_age_ms": quote_age,
+                    "reasons": reasons,
+                }
+            )
+    total = len(rows)
+    champion_only_rows = decision_counts.get("champion_only", 0)
+    champion_only_rejects = decision_reject_counts.get("champion_only", 0)
+    return {
+        "rows": int(total),
+        "mode": "shadow_only",
+        "max_spread_bps": float(max_spread_bps),
+        "max_quote_age_ms": float(max_quote_age_ms),
+        "reject_missing": bool(reject_missing),
+        "would_reject_count": int(would_reject),
+        "would_reject_rate": _rate(would_reject, total),
+        "reason_counts": dict(sorted(reason_counts.items())),
+        "decision_counts": dict(sorted(decision_counts.items())),
+        "decision_reject_counts": dict(sorted(decision_reject_counts.items())),
+        "champion_only_would_reject_count": int(champion_only_rejects),
+        "champion_only_would_reject_rate": _rate(champion_only_rejects, champion_only_rows),
+        "top_symbols_by_rejects": [
+            {"symbol": symbol, "rejects": int(count)}
+            for symbol, count in symbol_reject_counts.most_common(20)
+        ],
+        "examples": examples,
+    }
+
+
+def _microstructure_alert_summary(
+    rows: list[dict[str, Any]],
+    *,
+    max_spread_bps: float,
+    max_quote_age_ms: float,
+    max_missing_rate: float,
+    max_stale_rate: float,
+    max_wide_spread_rate: float,
+) -> dict[str, Any]:
+    total = len(rows)
+    missing_quote = 0
+    missing_spread = 0
+    stale = 0
+    wide = 0
+    for row in rows:
+        spread, quote_age = _cost_fields(row)
+        if spread is None:
+            missing_spread += 1
+        elif spread > max_spread_bps:
+            wide += 1
+        if quote_age is None:
+            missing_quote += 1
+        elif quote_age > max_quote_age_ms:
+            stale += 1
+    missing_any = sum(
+        1
+        for row in rows
+        if (lambda values: values[0] is None or values[1] is None)(_cost_fields(row))
+    )
+    missing_rate = _rate(missing_any, total) or 0.0
+    stale_rate = _rate(stale, total) or 0.0
+    wide_rate = _rate(wide, total) or 0.0
+    breaches = {
+        "missing_quote_telemetry": bool(missing_rate > max_missing_rate),
+        "stale_quotes": bool(stale_rate > max_stale_rate),
+        "wide_spreads": bool(wide_rate > max_wide_spread_rate),
+    }
+    return {
+        "rows": int(total),
+        "breached": any(breaches.values()),
+        "breaches": breaches,
+        "thresholds": {
+            "max_spread_bps": float(max_spread_bps),
+            "max_quote_age_ms": float(max_quote_age_ms),
+            "max_missing_rate": float(max_missing_rate),
+            "max_stale_rate": float(max_stale_rate),
+            "max_wide_spread_rate": float(max_wide_spread_rate),
+        },
+        "observed": {
+            "missing_any_rows": int(missing_any),
+            "missing_any_rate": missing_rate,
+            "missing_spread_rows": int(missing_spread),
+            "missing_quote_age_rows": int(missing_quote),
+            "stale_quote_rows": int(stale),
+            "stale_quote_rate": stale_rate,
+            "wide_spread_rows": int(wide),
+            "wide_spread_rate": wide_rate,
+        },
+    }
+
+
 def build_shadow_report(args: argparse.Namespace) -> dict[str, Any]:
     input_path = Path(args.input_jsonl)
     raw_rows = _load_shadow_rows(input_path)
@@ -559,6 +814,21 @@ def build_shadow_report(args: argparse.Namespace) -> dict[str, Any]:
         "decision_summary": _decision_summary(rows),
         "provider_summary": _provider_summary(rows),
         "cost_observation_summary": _cost_observation_summary(rows),
+        "cost_breakdowns": _grouped_cost_report(rows),
+        "microstructure_shadow_gate": _microstructure_shadow_gate_summary(
+            rows,
+            max_spread_bps=float(getattr(args, "microstructure_max_spread_bps", 35.0)),
+            max_quote_age_ms=float(getattr(args, "microstructure_max_quote_age_ms", 5000.0)),
+            reject_missing=bool(getattr(args, "microstructure_reject_missing", True)),
+        ),
+        "microstructure_alerts": _microstructure_alert_summary(
+            rows,
+            max_spread_bps=float(getattr(args, "microstructure_max_spread_bps", 35.0)),
+            max_quote_age_ms=float(getattr(args, "microstructure_max_quote_age_ms", 5000.0)),
+            max_missing_rate=float(getattr(args, "alert_max_missing_rate", 0.01)),
+            max_stale_rate=float(getattr(args, "alert_max_stale_rate", 0.05)),
+            max_wide_spread_rate=float(getattr(args, "alert_max_wide_spread_rate", 0.10)),
+        ),
         "markout_summary": (
             markout_summaries.get(str(primary_horizon))
             if markout_summaries is not None
@@ -617,6 +887,42 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--min-informational-rows", type=int, default=100)
     parser.add_argument("--min-review-rows", type=int, default=500)
+    parser.add_argument(
+        "--microstructure-max-spread-bps",
+        type=float,
+        default=35.0,
+        help="Shadow-only gate threshold for wide-spread rows.",
+    )
+    parser.add_argument(
+        "--microstructure-max-quote-age-ms",
+        type=float,
+        default=5000.0,
+        help="Shadow-only gate threshold for stale quote rows.",
+    )
+    parser.add_argument(
+        "--microstructure-reject-missing",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Count missing quote telemetry as a shadow-only gate rejection.",
+    )
+    parser.add_argument(
+        "--alert-max-missing-rate",
+        type=float,
+        default=0.01,
+        help="Alert when missing spread or quote-age telemetry exceeds this row rate.",
+    )
+    parser.add_argument(
+        "--alert-max-stale-rate",
+        type=float,
+        default=0.05,
+        help="Alert when stale quote rows exceed this row rate.",
+    )
+    parser.add_argument(
+        "--alert-max-wide-spread-rate",
+        type=float,
+        default=0.10,
+        help="Alert when wide-spread rows exceed this row rate.",
+    )
     parser.add_argument(
         "--frame-filter",
         choices=("all", "minute", "daily"),

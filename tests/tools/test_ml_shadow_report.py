@@ -129,6 +129,12 @@ def test_build_shadow_report_summarizes_decisions_and_markout(tmp_path: Path) ->
             since="",
             min_informational_rows=2,
             min_review_rows=3,
+            microstructure_max_spread_bps=4.5,
+            microstructure_max_quote_age_ms=250.0,
+            microstructure_reject_missing=True,
+            alert_max_missing_rate=0.01,
+            alert_max_stale_rate=0.10,
+            alert_max_wide_spread_rate=0.10,
         )
     )
 
@@ -149,6 +155,21 @@ def test_build_shadow_report_summarizes_decisions_and_markout(tmp_path: Path) ->
     assert decisions["mean_probability_delta"] == 0.13
     assert decisions["mean_spread_bps"] == pytest.approx(5.666666666666667)
     assert decisions["skew_breach_count"] == 1
+    assert report["cost_breakdowns"]["by_symbol"][0]["key"] == "AAPL"
+    assert report["cost_breakdowns"]["by_decision_type"][0]["key"] in {
+        "both_trade",
+        "champion_only",
+        "challenger_only",
+    }
+    gate = report["microstructure_shadow_gate"]
+    assert gate["mode"] == "shadow_only"
+    assert gate["would_reject_count"] == 2
+    assert gate["reason_counts"] == {"stale_quote": 2, "wide_spread": 2}
+    assert gate["champion_only_would_reject_count"] == 1
+    alerts = report["microstructure_alerts"]
+    assert alerts["breached"] is True
+    assert alerts["breaches"]["stale_quotes"] is True
+    assert alerts["breaches"]["wide_spreads"] is True
     markout = report["markout_summary"]
     assert markout["challenger_samples"] == 2
     assert markout["shadow_only_samples"] == 1
