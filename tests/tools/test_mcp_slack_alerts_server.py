@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +86,81 @@ def test_evaluate_incident_triggers_suppresses_gonogo_when_openings_not_blocked(
         "broker_status": "connected",
     }
     triggers = slack_srv._evaluate_incident_triggers(snapshot, {"min_capture_ratio": 0.08})
+    assert "go_no_go_failed" not in triggers
+    assert "go_no_go_failed_checks" not in triggers
+
+
+def test_evaluate_incident_triggers_suppresses_gonogo_when_market_closed() -> None:
+    snapshot = {
+        "runtime_gonogo_block_openings_enabled": True,
+        "go_no_go_gate_passed": False,
+        "go_no_go_failed_checks": ["win_rate", "acceptance_rate", "live_samples_sufficient"],
+        "execution_capture_ratio": 0.2,
+        "slippage_drag_bps": 7.0,
+        "health_ok": True,
+        "health_status": "healthy",
+        "health_reason": "market_closed",
+        "provider_status": "warming_up",
+        "provider_active": "alpaca",
+        "provider_reason": "market_closed",
+        "using_backup": False,
+        "broker_status": "connected",
+    }
+    triggers = slack_srv._evaluate_incident_triggers(snapshot, {"min_capture_ratio": 0.08})
+    assert "go_no_go_failed" not in triggers
+    assert "go_no_go_failed_checks" not in triggers
+
+
+def test_evaluate_incident_triggers_can_disable_market_closed_gonogo_suppression() -> None:
+    snapshot = {
+        "runtime_gonogo_block_openings_enabled": True,
+        "go_no_go_gate_passed": False,
+        "go_no_go_failed_checks": ["win_rate", "acceptance_rate", "live_samples_sufficient"],
+        "execution_capture_ratio": 0.2,
+        "slippage_drag_bps": 7.0,
+        "health_ok": True,
+        "health_status": "healthy",
+        "health_reason": "market_closed",
+        "provider_status": "warming_up",
+        "provider_active": "alpaca",
+        "provider_reason": "market_closed",
+        "using_backup": False,
+        "broker_status": "connected",
+    }
+    triggers = slack_srv._evaluate_incident_triggers(
+        snapshot,
+        {
+            "min_capture_ratio": 0.08,
+            "suppress_market_closed_gonogo_alerts": False,
+        },
+    )
+    assert "go_no_go_failed" in triggers
+    assert "go_no_go_failed_checks" in triggers
+
+
+def test_evaluate_incident_triggers_suppresses_gonogo_during_startup_grace() -> None:
+    now = datetime.now(UTC)
+    snapshot = {
+        "runtime_gonogo_block_openings_enabled": True,
+        "go_no_go_gate_passed": False,
+        "go_no_go_failed_checks": ["win_rate", "acceptance_rate"],
+        "execution_capture_ratio": 0.2,
+        "slippage_drag_bps": 7.0,
+        "health_ok": True,
+        "health_status": "healthy",
+        "health_reason": "runtime_health_ok",
+        "provider_status": "healthy",
+        "provider_active": "alpaca",
+        "provider_reason": "data_available_netting",
+        "using_backup": False,
+        "broker_status": "connected",
+        "service_phase_since": (now - timedelta(seconds=60)).isoformat(),
+        "timestamp": now.isoformat(),
+    }
+    triggers = slack_srv._evaluate_incident_triggers(
+        snapshot,
+        {"min_capture_ratio": 0.08, "startup_grace_seconds": 300},
+    )
     assert "go_no_go_failed" not in triggers
     assert "go_no_go_failed_checks" not in triggers
 
@@ -328,6 +403,56 @@ def test_evaluate_incident_triggers_can_disable_startup_warmup_suppression() -> 
             "min_capture_ratio": 0.08,
             "suppress_startup_warmup_health_alerts": False,
         },
+    )
+    assert "health_degraded" in triggers
+
+
+def test_evaluate_incident_triggers_suppresses_transient_startup_health_with_grace() -> None:
+    now = datetime.now(UTC)
+    snapshot = {
+        "go_no_go_gate_passed": None,
+        "go_no_go_failed_checks": [],
+        "execution_capture_ratio": None,
+        "slippage_drag_bps": None,
+        "health_ok": False,
+        "health_status": "degraded",
+        "health_reason": "broker_status_unknown",
+        "provider_status": "warming_up",
+        "provider_active": "alpaca",
+        "provider_reason": "startup_config_resolved",
+        "using_backup": False,
+        "broker_status": "unknown",
+        "service_phase_since": (now - timedelta(seconds=60)).isoformat(),
+        "timestamp": now.isoformat(),
+    }
+    triggers = slack_srv._evaluate_incident_triggers(
+        snapshot,
+        {"min_capture_ratio": 0.08, "startup_grace_seconds": 300},
+    )
+    assert "health_degraded" not in triggers
+
+
+def test_evaluate_incident_triggers_allows_degraded_health_after_startup_grace() -> None:
+    now = datetime.now(UTC)
+    snapshot = {
+        "go_no_go_gate_passed": None,
+        "go_no_go_failed_checks": [],
+        "execution_capture_ratio": None,
+        "slippage_drag_bps": None,
+        "health_ok": False,
+        "health_status": "degraded",
+        "health_reason": "broker_status_unknown",
+        "provider_status": "warming_up",
+        "provider_active": "alpaca",
+        "provider_reason": "startup_config_resolved",
+        "using_backup": False,
+        "broker_status": "unknown",
+        "service_phase_since": (now - timedelta(seconds=600)).isoformat(),
+        "timestamp": now.isoformat(),
+    }
+    triggers = slack_srv._evaluate_incident_triggers(
+        snapshot,
+        {"min_capture_ratio": 0.08, "startup_grace_seconds": 300},
     )
     assert "health_degraded" in triggers
 

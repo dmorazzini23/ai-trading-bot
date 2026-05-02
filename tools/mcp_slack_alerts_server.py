@@ -517,6 +517,7 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     health = _safe_health_payload(port=port, timeout_s=timeout_s)
     data_provider = health.get("data_provider") or {}
     broker = health.get("broker") or {}
+    service_state = health.get("service_state") or {}
     execution_window = _collect_execution_window_snapshot(args)
     gate_window = _collect_gate_window_snapshot(args)
 
@@ -609,6 +610,11 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         "provider_reason": str(data_provider.get("reason") or "unknown"),
         "using_backup": bool(data_provider.get("using_backup", False)),
         "broker_status": str(broker.get("status") or "unknown"),
+        "service_status": str(service_state.get("status") or "unknown"),
+        "service_phase": str(service_state.get("phase") or "unknown"),
+        "service_reason": str(service_state.get("reason") or "unknown"),
+        "service_phase_since": str(service_state.get("phase_since") or ""),
+        "service_updated": str(service_state.get("updated") or ""),
         "timestamp": str(health.get("timestamp") or utc_now_iso()),
     }
 
@@ -890,22 +896,78 @@ def _should_suppress_startup_warmup_health_alert(
         return False
 
     health_reason = str(snapshot.get("health_reason") or "").strip().lower()
-    if health_reason not in _STARTUP_WARMUP_HEALTH_REASONS:
-        return False
-
     provider_reason = str(snapshot.get("provider_reason") or "").strip().lower()
     provider_status = str(snapshot.get("provider_status") or "").strip().lower()
+    if health_reason in _STARTUP_WARMUP_HEALTH_REASONS and provider_status == "warming_up":
+        return True
+    if health_reason in _STARTUP_WARMUP_HEALTH_REASONS:
+        return provider_reason in {"", "unknown", "market_closed", "warmup_cycle", "startup"}
+
+    if not _within_incident_startup_grace(snapshot, args):
+        return False
     if provider_status == "warming_up":
         return True
-    return provider_reason in {"", "unknown", "market_closed", "warmup_cycle", "startup"}
+    return health_reason in {
+        "broker_status_unknown",
+        "startup_config_resolved",
+    } or provider_reason in {
+        "startup_config_resolved",
+        "warmup_cycle",
+        "startup",
+    }
+
+
+def _incident_startup_grace_seconds(args: dict[str, Any]) -> int:
+    raw = args.get("startup_grace_seconds")
+    if raw in (None, ""):
+        raw = os.getenv("AI_TRADING_SLACK_INCIDENT_STARTUP_GRACE_SECONDS")
+    return max(0, _int_arg(raw, default=300))
+
+
+def _snapshot_service_age_seconds(snapshot: dict[str, Any]) -> float | None:
+    phase_since = _parse_iso_ts(snapshot.get("service_phase_since"))
+    if phase_since is None:
+        return None
+    observed_at = _parse_iso_ts(snapshot.get("timestamp")) or datetime.now(UTC)
+    return max(0.0, (observed_at - phase_since).total_seconds())
+
+
+def _within_incident_startup_grace(
+    snapshot: dict[str, Any], args: dict[str, Any]
+) -> bool:
+    grace_seconds = _incident_startup_grace_seconds(args)
+    if grace_seconds <= 0:
+        return False
+    service_age_seconds = _snapshot_service_age_seconds(snapshot)
+    return service_age_seconds is not None and service_age_seconds <= float(grace_seconds)
+
+
+def _market_closed_snapshot(snapshot: dict[str, Any]) -> bool:
+    health_reason = str(snapshot.get("health_reason") or "").strip().lower()
+    provider_reason = str(snapshot.get("provider_reason") or "").strip().lower()
+    return health_reason == "market_closed" or provider_reason == "market_closed"
+
+
+def _should_suppress_gonogo_incident(
+    snapshot: dict[str, Any], args: dict[str, Any]
+) -> bool:
+    if _within_incident_startup_grace(snapshot, args):
+        return True
+    enabled = _bool_arg(
+        args.get("suppress_market_closed_gonogo_alerts"),
+        default=_bool_arg(
+            os.getenv("AI_TRADING_SLACK_SUPPRESS_MARKET_CLOSED_GONOGO_ALERTS"),
+            default=True,
+        ),
+    )
+    return bool(enabled and _market_closed_snapshot(snapshot))
 
 
 def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) -> list[str]:
     triggers: list[str] = []
     health_reason = str(snapshot.get("health_reason") or "").strip().lower()
-    provider_reason = str(snapshot.get("provider_reason") or "").strip().lower()
     startup_or_warmup = health_reason in _STARTUP_WARMUP_HEALTH_REASONS
-    market_closed = health_reason == "market_closed" or provider_reason == "market_closed"
+    market_closed = _market_closed_snapshot(snapshot)
 
     runtime_gonogo_block_openings_enabled = _bool_arg(
         snapshot.get("runtime_gonogo_block_openings_enabled"),
@@ -926,7 +988,10 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
         for check in failed_checks
         if str(check) not in availability_only_checks
     ]
-    if runtime_gonogo_block_openings_enabled:
+    if (
+        runtime_gonogo_block_openings_enabled
+        and not _should_suppress_gonogo_incident(snapshot, args)
+    ):
         if gate_passed is False and (not failed_checks or bool(material_failed_checks)):
             triggers.append("go_no_go_failed")
         if material_failed_checks:
