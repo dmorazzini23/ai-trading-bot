@@ -239,6 +239,7 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
     manager_overrides_applied = 0
     managed_keys_verified = 0
     managed_secret_values_omitted = 0
+    managed_secret_values_written = 0
     for entry in entries:
         key = entry.key
         if key in DEPRECATED_KEYS:
@@ -248,11 +249,15 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
             managed_value = manager_values.get(key)
             if managed_value not in (None, ""):
                 managed_keys_verified += 1
+                manager_overrides_applied += 1
+                managed_secret_values_written += 1
+                out_entries.append(EnvEntry(key=key, value=managed_value))
             elif require_managed:
                 raise RuntimeError(
                     f"managed secret key '{key}' missing in secrets backend payload"
                 )
-            managed_secret_values_omitted += 1
+            else:
+                managed_secret_values_omitted += 1
             seen.add(key)
             continue
         out_entries.append(EnvEntry(key=key, value=value))
@@ -268,9 +273,11 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
                     raise RuntimeError(
                         f"managed secret key '{key}' missing in secrets backend payload"
                     )
+                managed_secret_values_omitted += 1
                 continue
             managed_keys_verified += 1
-            managed_secret_values_omitted += 1
+            managed_secret_values_written += 1
+            out_entries.append(EnvEntry(key=key, value=managed_value))
             seen.add(key)
 
     rendered = "\n".join(
@@ -289,7 +296,7 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
         "manager_overrides_applied": manager_overrides_applied,
         "managed_keys_verified": managed_keys_verified,
         "managed_secret_values_omitted": managed_secret_values_omitted,
-        "managed_secret_values_written": 0 if backend not in _BACKEND_NONE else manager_overrides_applied,
+        "managed_secret_values_written": managed_secret_values_written,
         "secrets_backend": backend or "none",
     }
 
