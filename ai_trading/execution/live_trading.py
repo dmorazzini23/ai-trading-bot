@@ -29652,6 +29652,7 @@ class ExecutionEngine:
                     "slippage_drag_bps",
                     "execution_capture_ratio",
                     "closed_trades",
+                    "live_samples_sufficient",
                     "gate_used_days",
                     "trade_used_days",
                 }
