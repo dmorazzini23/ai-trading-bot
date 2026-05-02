@@ -10,7 +10,7 @@ def run_backtest_smoke_test():
     Run smoke test to verify net < gross due to all costs.
     """
     try:
-        repo_root = Path(__file__).parent
+        repo_root = Path(__file__).resolve().parents[1]
         sys.path.insert(0, str(repo_root / 'ai_trading' / 'math'))
         from money import Money
         entry_price = Money('100.00')

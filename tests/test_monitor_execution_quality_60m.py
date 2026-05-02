@@ -86,3 +86,27 @@ def test_resolve_report_payload_falls_back_to_mtime_when_ts_missing(
     payload, selected = monitor._resolve_report_payload(state={}, reports_dir=reports_dir)
     assert selected == newer
     assert payload.get("model", {}).get("name") == "newer"
+
+
+def test_training_summary_handles_null_model_payload(tmp_path: Path) -> None:
+    monitor = _load_monitor_module()
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    report_path = reports_dir / "after_hours_training_20260411_230000.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "ts": "2026-04-11T23:00:00+00:00",
+                "model": None,
+                "promotion": {"combined_gates": {"expectancy": False}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    state_path = tmp_path / "after_hours_training_state.json"
+    state_path.write_text(json.dumps({"model_id": "state-model-id"}), encoding="utf-8")
+
+    summary = monitor._training_summary(state_path=state_path, reports_dir=reports_dir)
+    assert summary["model_name"] is None
+    assert summary["model_id"] == "state-model-id"
+    assert summary["gate_blockers"] == ["expectancy"]

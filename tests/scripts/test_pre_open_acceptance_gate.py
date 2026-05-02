@@ -36,6 +36,29 @@ def _pass_step(module: ModuleType, name: str):
     return module.Step(name=name, status="pass", summary=f"{name} ok", details={})
 
 
+def test_canonical_env_map_normalizes_runtime_quotes(tmp_path: Path) -> None:
+    module = _load_gate_module()
+    env_path = tmp_path / ".env.runtime"
+    env_path.write_text(
+        "\n".join(
+            [
+                'EMPTY_VALUE=""',
+                'SYMBOLS="*"',
+                'BUCKETS="tight=1,normal=2"',
+                'JSONISH={"AAPL":{"buy":{"12":30.0}}}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module._canonical_env_map(env_path) == {
+        "EMPTY_VALUE": "",
+        "SYMBOLS": "*",
+        "BUCKETS": "tight=1,normal=2",
+        "JSONISH": '{"AAPL":{"buy":{"12":30.0}}}',
+    }
+
+
 def test_health_port_prefers_healthcheck_env(tmp_path: Path, monkeypatch) -> None:
     module = _load_gate_module()
     monkeypatch.setenv("HEALTHCHECK_PORT", "18081")

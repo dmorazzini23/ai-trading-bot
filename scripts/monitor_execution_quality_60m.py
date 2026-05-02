@@ -123,7 +123,8 @@ def _training_summary(state_path: Path, reports_dir: Path) -> dict[str, Any]:
     if isinstance(combined_gates, dict):
         blockers = sorted(key for key, passed in combined_gates.items() if not bool(passed))
 
-    model_info = report.get("model") if isinstance(report, dict) else {}
+    model_info_raw = report.get("model") if isinstance(report, dict) else {}
+    model_info = model_info_raw if isinstance(model_info_raw, dict) else {}
     sensitivity = report.get("sensitivity_sweep") if isinstance(report, dict) else {}
     sensitivity_summary = (
         sensitivity.get("summary") if isinstance(sensitivity, dict) else {}

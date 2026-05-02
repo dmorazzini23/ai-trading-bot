@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -70,6 +71,19 @@ def _canonical_env_lines(path: Path) -> list[str]:
     return lines
 
 
+def _normalize_env_value(raw: str) -> str:
+    text = str(raw).strip()
+    if text.startswith(("{", "[")):
+        return text
+    try:
+        parsed = shlex.split(text, posix=True)
+    except ValueError:
+        return text
+    if len(parsed) == 1:
+        return parsed[0]
+    return text
+
+
 def _canonical_env_map(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not path.exists():
@@ -82,7 +96,7 @@ def _canonical_env_map(path: Path) -> dict[str, str]:
         key = key.strip()
         if not key or key in DEPRECATED_ENV_KEYS:
             continue
-        values[key] = value
+        values[key] = _normalize_env_value(value)
     return values
 
 
