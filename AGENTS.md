@@ -52,14 +52,45 @@ This document is the authoritative playbook for Codex-style editing in this repo
 - Root-level `*_SUMMARY.md`, `*_FIX_*`, `*_REPORT.md`, `*_REMOVAL_*`, and similar implementation-snapshot documents are archival unless explicitly refreshed. Do not treat them as the sole source of truth for ports, env vars, entrypoints, or deployment behavior.
 
 ## 4. Validation Requirements
-Agents must run and report these checks when changing runtime or library code. During market hours, use targeted tests plus live runtime validation unless a broad test run is explicitly approved. Docs-only changes may explain why checks were skipped.
+Agents must run and report validation when changing runtime or library code.
+The default post-patch command is:
+
+- `bash scripts/agent_validate_changed.sh`
+
+This script runs changed-file lint/type/compile checks, maps changed files to
+likely regression tests, scans for forbidden runtime patterns, and performs
+runtime smoke checks for runtime/ops surfaces.
+
+During market hours, use targeted tests plus live runtime validation unless a
+broad test run is explicitly approved. Use:
+
+- `bash scripts/agent_validate_changed.sh --market-hours`
+
+For explicit full validation outside market hours, use:
+
+- `bash scripts/agent_validate_changed.sh --full`
+
+For explicit full validation during market hours, use only after the user
+approves broad validation:
+
+- `bash scripts/agent_validate_changed.sh --full --market-hours --force-broad`
+
+Docs-only changes may run:
+
+- `bash scripts/agent_validate_changed.sh --docs-only`
+
+Full validation remains:
 - `./venv/bin/pytest -q`
-- `./venv/bin/ruff check` (limit to changed paths when possible)
-- `./venv/bin/mypy` (at least on changed files/modules)
+- `./venv/bin/ruff check`
+- `./venv/bin/mypy`
 - `bash scripts/typecheck_strict.sh`
 - `./venv/bin/python -m py_compile $(git ls-files '*.py')`
 
 Always add or update unit tests when fixing bugs or adding behavior.
+If a regression test is impossible or inappropriate, explain why in the final
+answer. Runtime changes require a health smoke check. Alerting/ops changes
+require a non-sending incident snapshot check. Trading decision changes require
+targeted replay/backtest or a clear reason they were deferred.
 
 ---
 
@@ -67,8 +98,17 @@ Always add or update unit tests when fixing bugs or adding behavior.
 Every agent-authored PR must include:
 - **WORKLOG** — summary of intent, root cause, and scope.
 - **PATCHSET** — list of `apply_patch` diffs (no file dumps or editors).
-- **VALIDATION** — commands executed (`./venv/bin/pytest -q`, `./venv/bin/ruff check`, `./venv/bin/mypy`, `./venv/bin/python -m py_compile $(git ls-files '*.py')`) with outcomes.
+- **REGRESSION COVERAGE** — tests added or updated, or why none were appropriate.
+- **VALIDATION** — commands executed (`bash scripts/agent_validate_changed.sh`, targeted checks, or full validation) with outcomes.
+- **RUNTIME CHECK** — health/alert/replay smoke checks for runtime-sensitive changes, or why skipped.
 - **RISK & ROLLBACK** — risk assessment and how to revert.
+
+Agent final responses for code changes should include:
+- **Changed** — files or behavior changed.
+- **Regression Coverage** — tests added or updated.
+- **Validation** — commands run and outcomes.
+- **Runtime Check** — live or non-sending smoke checks when relevant.
+- **Residual Risk** — remaining risk, skipped checks, or follow-up validation.
 
 ---
 

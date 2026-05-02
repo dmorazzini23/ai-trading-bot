@@ -620,6 +620,17 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extract_report_date(report: dict[str, Any]) -> str:
+    candidates: list[str] = []
+
+    def _append_date(value: Any) -> None:
+        day = str(value or "").strip()
+        if len(day) == 10:
+            try:
+                datetime.fromisoformat(day)
+            except ValueError:
+                return
+            candidates.append(day)
+
     go_no_go = report.get("go_no_go")
     if isinstance(go_no_go, dict):
         observed = go_no_go.get("observed")
@@ -627,20 +638,16 @@ def _extract_report_date(report: dict[str, Any]) -> str:
             for scope_key in ("trade_metric_scope", "gate_metric_scope"):
                 scope = observed.get(scope_key)
                 if isinstance(scope, dict):
-                    end_date = str(scope.get("end_date") or "").strip()
-                    if end_date:
-                        return end_date
+                    _append_date(scope.get("end_date"))
 
     execution = report.get("execution_vs_alpha")
     if isinstance(execution, dict):
         daily = execution.get("daily")
         if isinstance(daily, list):
-            for row in reversed(daily):
+            for row in daily:
                 if not isinstance(row, dict):
                     continue
-                day = str(row.get("date") or "").strip()
-                if day:
-                    return day
+                _append_date(row.get("date"))
 
     trade_history = report.get("trade_history")
     if isinstance(trade_history, dict):
@@ -648,14 +655,12 @@ def _extract_report_date(report: dict[str, Any]) -> str:
             rows = trade_history.get(key)
             if not isinstance(rows, list):
                 continue
-            for row in reversed(rows):
+            for row in rows:
                 if not isinstance(row, dict):
                     continue
-                day = str(row.get("date") or "").strip()
-                if day:
-                    return day
+                _append_date(row.get("date"))
 
-    return ""
+    return max(candidates) if candidates else ""
 
 
 def _daily_trade_row_for_report_date(
@@ -670,6 +675,7 @@ def _daily_trade_row_for_report_date(
                 continue
             if str(row.get("date") or "").strip() == report_date:
                 return row
+        return {}
     for row in reversed(rows):
         if isinstance(row, dict):
             return row
@@ -744,6 +750,16 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     go_no_go_obj = go_no_go if isinstance(go_no_go, dict) else {}
     observed = go_no_go_obj.get("observed")
     observed_obj = observed if isinstance(observed, dict) else {}
+    trade_metric_scope = observed_obj.get("trade_metric_scope")
+    trade_metric_scope_obj = trade_metric_scope if isinstance(trade_metric_scope, dict) else {}
+    trade_metric_scope_end_date = str(
+        trade_metric_scope_obj.get("end_date") or ""
+    ).strip()
+    observed_trade_kpis_current = (
+        not report_date
+        or not trade_metric_scope_end_date
+        or trade_metric_scope_end_date == report_date
+    )
     execution = report.get("execution_vs_alpha")
     execution_obj = execution if isinstance(execution, dict) else {}
     trade_history = report.get("trade_history")
@@ -787,16 +803,16 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
 
     daily_trade_row = _daily_trade_row_for_report_date(trade_history_obj, report_date)
     net_pnl = _float_or_none(daily_trade_row.get("net_pnl"))
-    if net_pnl is None:
+    if net_pnl is None and observed_trade_kpis_current:
         net_pnl = _float_or_none(observed_obj.get("net_pnl"))
     profit_factor = _float_or_none(daily_trade_row.get("profit_factor"))
-    if profit_factor is None:
+    if profit_factor is None and observed_trade_kpis_current:
         profit_factor = _float_or_none(observed_obj.get("profit_factor"))
     win_rate = _float_or_none(daily_trade_row.get("win_rate"))
-    if win_rate is None:
+    if win_rate is None and observed_trade_kpis_current:
         win_rate = _float_or_none(observed_obj.get("win_rate"))
     closed_trades = daily_trade_row.get("trades")
-    if closed_trades is None:
+    if closed_trades is None and observed_trade_kpis_current:
         closed_trades = observed_obj.get("closed_trades")
 
     snapshot = {
@@ -1391,6 +1407,13 @@ def _fmt_currency(value: Any, *, digits: int = 2) -> str:
     return f"${number:,.{digits}f}"
 
 
+def _fmt_count(value: Any) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return "n/a"
+    return str(int(number))
+
+
 def _fmt_duration_s(value: Any, *, digits: int = 1) -> str:
     number = _float_or_none(value)
     if number is None:
@@ -1438,7 +1461,7 @@ def _eod_message_text(snapshot: dict[str, Any]) -> str:
             f"- Net PnL: {_fmt_currency(snapshot.get('net_pnl'))}",
             f"- Profit factor: {_fmt_num(snapshot.get('profit_factor'), digits=3)}",
             f"- Win rate: {_fmt_pct(snapshot.get('win_rate'), digits=1, assume_ratio=True)}",
-            f"- Closed trades: {snapshot.get('closed_trades')}",
+            f"- Closed trades: {_fmt_count(snapshot.get('closed_trades'))}",
             "",
             "⚙️ Execution quality:",
             f"- Capture ratio: {_fmt_num(snapshot.get('execution_capture_ratio'), digits=3)}",

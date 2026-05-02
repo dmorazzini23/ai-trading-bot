@@ -1262,6 +1262,21 @@ def test_notify_eod_summary_allows_send_when_training_marker_matches(
     assert len(posts) == 1
 
 
+def test_extract_report_date_uses_freshest_available_scope() -> None:
+    report = {
+        "go_no_go": {
+            "observed": {
+                "trade_metric_scope": {"end_date": "2026-04-24"},
+                "gate_metric_scope": {"end_date": "2026-05-01"},
+            }
+        },
+        "execution_vs_alpha": {"daily": [{"date": "2026-04-30"}]},
+        "trade_history": {"daily_trade_stats": [{"date": "2026-04-24"}]},
+    }
+
+    assert slack_srv._extract_report_date(report) == "2026-05-01"
+
+
 def test_collect_eod_summary_uses_runtime_file_fallback(monkeypatch) -> None:
     def _fake_runtime_report() -> dict[str, Any]:
         return {
@@ -1305,6 +1320,65 @@ def test_collect_eod_summary_uses_runtime_file_fallback(monkeypatch) -> None:
     assert snapshot["report_date"] == "2026-03-27"
     assert snapshot["go_no_go_gate_passed"] is True
     assert snapshot["execution_capture_ratio"] == 0.2
+
+
+def test_collect_eod_summary_does_not_reuse_stale_trade_row_for_fresh_report_date(
+    monkeypatch,
+) -> None:
+    def _fake_runtime_report() -> dict[str, Any]:
+        return {
+            "go_no_go": {
+                "gate_passed": False,
+                "failed_checks": ["win_rate"],
+                "observed": {
+                    "trade_metric_scope": {"end_date": "2026-04-24"},
+                    "gate_metric_scope": {"end_date": "2026-05-01"},
+                    "net_pnl": -999.0,
+                    "profit_factor": 0.1,
+                    "win_rate": 0.2,
+                    "closed_trades": 99,
+                },
+            },
+            "execution_vs_alpha": {
+                "execution_capture_ratio": 0.2,
+                "slippage_drag_bps": 5.0,
+                "daily": [{"date": "2026-05-01"}],
+            },
+            "trade_history": {
+                "daily_trade_stats": [
+                    {
+                        "date": "2026-04-24",
+                        "net_pnl": -12.5,
+                        "profit_factor": 0.8,
+                        "win_rate": 0.4,
+                        "trades": 11,
+                    }
+                ]
+            },
+        }
+
+    def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
+        assert port == 9001
+        assert timeout_s == 2.0
+        return {
+            "status": "healthy",
+            "reason": "market_closed",
+            "data_provider": {"status": "healthy", "active": "alpaca", "using_backup": False},
+            "broker": {"status": "connected"},
+            "model_liveness": {},
+            "timestamp": "2026-05-02T01:00:00Z",
+        }
+
+    monkeypatch.setattr(slack_srv, "_runtime_report_payload", _fake_runtime_report)
+    monkeypatch.setattr(slack_srv, "_health_payload", _fake_health_payload)
+
+    snapshot = slack_srv._collect_eod_summary_snapshot({})
+    assert snapshot["report_date"] == "2026-05-01"
+    assert snapshot["net_pnl"] is None
+    assert snapshot["profit_factor"] is None
+    assert snapshot["win_rate"] is None
+    assert snapshot["closed_trades"] is None
+    assert "- Closed trades: n/a" in slack_srv._eod_message_text(snapshot)
 
 
 def test_collect_eod_summary_prefers_daily_trade_stats_for_daily_kpis(monkeypatch) -> None:
