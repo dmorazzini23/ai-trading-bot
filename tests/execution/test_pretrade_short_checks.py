@@ -157,7 +157,7 @@ def test_existing_long_sell_is_not_blocked_by_long_only_short_guard(monkeypatch,
     engine = DummyLiveEngine()
     engine.trading_client = SimpleNamespace(
         get_asset=lambda _symbol: _asset_payload(),
-        get_position=lambda symbol: SimpleNamespace(
+        get_open_position=lambda symbol: SimpleNamespace(
             symbol=symbol,
             qty="2",
             side="long",

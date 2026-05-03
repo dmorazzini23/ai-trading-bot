@@ -12,7 +12,7 @@ class SequencedClient:
     def __init__(self, statuses: list[str]) -> None:
         self._statuses = list(statuses)
 
-    def get_order_by_client_order_id(self, client_order_id: str) -> SimpleNamespace:
+    def get_order_by_client_id(self, client_order_id: str) -> SimpleNamespace:
         status = self._statuses.pop(0) if self._statuses else "rejected"
         return SimpleNamespace(
             status=status,

@@ -196,6 +196,18 @@ if _AlpacaAPIError is not None and issubclass(_AlpacaAPIError, Exception):
     )
 
 
+def _required_trading_client_method(client: Any, method_name: str) -> Any:
+    """Return a required alpaca-py TradingClient method or fail fast."""
+
+    method = getattr(client, method_name, None)
+    if not callable(method):
+        client_type = type(client).__name__ if client is not None else "None"
+        raise AttributeError(
+            f"Alpaca TradingClient {client_type} missing required method {method_name}"
+        )
+    return method
+
+
 _BROKER_UNAUTHORIZED_BACKOFF_SECONDS = 120.0
 
 
@@ -22686,7 +22698,7 @@ class ExecutionEngine:
                         if callable(get_by_id) and order_id_hint:
                             refreshed = get_by_id(str(order_id_hint))
                         else:
-                            get_by_client = getattr(client, "get_order_by_client_order_id", None)
+                            get_by_client = getattr(client, "get_order_by_client_id", None)
                             if callable(get_by_client) and client_order_id_hint:
                                 refreshed = get_by_client(str(client_order_id_hint))
                     except LIVE_TRADING_FALLBACK_EXC:
@@ -23689,23 +23701,18 @@ class ExecutionEngine:
         client = getattr(self, "trading_client", None)
         if client is None:
             return 0
-        get_position = getattr(client, "get_position", None)
+        get_open_position = getattr(client, "get_open_position", None)
         position_obj: Any | None = None
-        if callable(get_position):
+        if callable(get_open_position):
             try:
-                position_obj = get_position(symbol)
+                position_obj = get_open_position(symbol)
             except LIVE_TRADING_FALLBACK_EXC:
                 position_obj = None
         if position_obj is None:
             get_all_positions = getattr(client, "get_all_positions", None)
-            list_positions = getattr(client, "list_positions", None)
-            if callable(get_all_positions) or callable(list_positions):
+            if callable(get_all_positions):
                 try:
-                    positions = (
-                        get_all_positions()
-                        if callable(get_all_positions)
-                        else list_positions()
-                    )
+                    positions = get_all_positions()
                     for pos in positions:
                         if str(_extract_value(pos, "symbol") or "").upper() == symbol.upper():
                             position_obj = pos
@@ -26575,12 +26582,10 @@ class ExecutionEngine:
 
         if not positions:
             client = getattr(self, "trading_client", None)
-            list_positions = getattr(client, "get_all_positions", None)
-            if not callable(list_positions):
-                list_positions = getattr(client, "list_positions", None)
-            if callable(list_positions):
+            get_all_positions = getattr(client, "get_all_positions", None)
+            if callable(get_all_positions):
                 try:
-                    positions = list(list_positions() or [])
+                    positions = list(get_all_positions() or [])
                 except LIVE_TRADING_FALLBACK_EXC:
                     logger.debug("PREOPEN_FLAT_START_POSITIONS_FETCH_FAILED", exc_info=True)
                     positions = []
@@ -31059,9 +31064,7 @@ class ExecutionEngine:
         client = getattr(self, "trading_client", None)
         if client is None:
             return None
-        get_by_client = getattr(client, "get_order_by_client_order_id", None)
-        if not callable(get_by_client):
-            get_by_client = getattr(client, "get_order_by_client_id", None)
+        get_by_client = getattr(client, "get_order_by_client_id", None)
         if not callable(get_by_client):
             return None
 
@@ -31158,11 +31161,14 @@ class ExecutionEngine:
         get_orders = getattr(client, "get_orders", None)
         if callable(get_orders):
             for status in ("open", "all", "closed"):
+                query_after = None if status == "open" else after_dt
                 try:
                     orders_resp = list_alpaca_orders(
                         client,
                         status=status,
                         symbols=symbol_filters,
+                        after=query_after,
+                        limit=200,
                     )
                 except LIVE_TRADING_FALLBACK_EXC:
                     logger.debug(
@@ -31171,7 +31177,12 @@ class ExecutionEngine:
                             "symbol": symbol,
                             "client_order_id": token,
                             "lookup_method": "get_orders",
-                            "query": {"status": status, "symbols": symbol_filters},
+                            "query": {
+                                "status": status,
+                                "symbols": symbol_filters,
+                                "after": query_after.isoformat() if query_after else None,
+                                "limit": 200,
+                            },
                         },
                         exc_info=True,
                     )
@@ -31187,53 +31198,16 @@ class ExecutionEngine:
                             "symbol": symbol,
                             "client_order_id": token,
                             "lookup_method": "get_orders",
-                            "query": {"status": status, "symbols": symbol_filters},
+                            "query": {
+                                "status": status,
+                                "symbols": symbol_filters,
+                                "after": query_after.isoformat() if query_after else None,
+                                "limit": 200,
+                            },
                         },
                     )
                     return matched
 
-        query_variants: tuple[dict[str, Any], ...] = (
-            {"status": "open"},
-            {"status": "all", "limit": 200, "after": after_dt},
-            {"status": "all", "limit": 200},
-            {"status": "closed", "limit": 200, "after": after_dt},
-            {"status": "closed", "limit": 200},
-            {},
-        )
-        method = getattr(client, "list_orders", None)
-        if callable(method):
-            for query_kwargs in query_variants:
-                try:
-                    orders_resp = method(**query_kwargs)  # type: ignore[misc]
-                except TypeError:
-                    continue
-                except LIVE_TRADING_FALLBACK_EXC:
-                    logger.debug(
-                        "ORDER_LOOKUP_RECENT_QUERY_FAILED",
-                        extra={
-                            "symbol": symbol,
-                            "client_order_id": token,
-                            "lookup_method": "list_orders",
-                            "query": dict(query_kwargs),
-                        },
-                        exc_info=True,
-                    )
-                    break
-                matched = self._find_order_in_broker_order_list_by_client_id(
-                    orders_resp or [],
-                    client_order_id=token,
-                )
-                if matched is not None:
-                    logger.info(
-                        "ORDER_LOOKUP_RECENT_QUERY_RECOVERED",
-                        extra={
-                            "symbol": symbol,
-                            "client_order_id": token,
-                            "lookup_method": "list_orders",
-                            "query": dict(query_kwargs),
-                        },
-                    )
-                    return matched
         return None
 
     def _recover_order_after_submit_no_result(
@@ -32075,11 +32049,11 @@ class ExecutionEngine:
             return True
         else:
             try:
-                cancel_by_id = getattr(self.trading_client, "cancel_order_by_id", None)
-                if callable(cancel_by_id):
-                    cancel_by_id(order_id)
-                else:
-                    self.trading_client.cancel_order(order_id)
+                cancel_by_id = _required_trading_client_method(
+                    self.trading_client,
+                    "cancel_order_by_id",
+                )
+                cancel_by_id(order_id)
             except (APIError, TimeoutError, ConnectionError) as e:
                 logger.error(
                     "ORDER_API_FAILED",
@@ -32095,11 +32069,11 @@ class ExecutionEngine:
         if _runtime_env("PYTEST_RUNNING"):
             return {"id": order_id, "status": "filled", "filled_qty": "100"}
         else:
-            get_by_id = getattr(self.trading_client, "get_order_by_id", None)
-            if callable(get_by_id):
-                order = get_by_id(order_id)
-            else:
-                order = self.trading_client.get_order(order_id)
+            get_by_id = _required_trading_client_method(
+                self.trading_client,
+                "get_order_by_id",
+            )
+            order = get_by_id(order_id)
             return {
                 "id": order.id,
                 "status": order.status,
@@ -32128,11 +32102,11 @@ class ExecutionEngine:
         if _runtime_env("PYTEST_RUNNING"):
             return []
         else:
-            get_all_positions = getattr(self.trading_client, "get_all_positions", None)
-            if callable(get_all_positions):
-                positions = get_all_positions()
-            else:
-                positions = self.trading_client.list_positions()
+            get_all_positions = _required_trading_client_method(
+                self.trading_client,
+                "get_all_positions",
+            )
+            positions = get_all_positions()
             return [
                 {
                     "symbol": pos.symbol,
@@ -32252,16 +32226,15 @@ class ExecutionEngine:
             kwargs["broker_orders"] = open_orders
         else:
             client = getattr(self, "trading_client", None)
-            list_orders = getattr(client, "list_orders", None)
-            if not callable(list_orders):
-                list_orders = getattr(client, "get_orders", None)
-            if callable(list_orders):
-                kwargs["list_orders_fn"] = list_orders
+            get_orders = getattr(client, "get_orders", None)
+            if callable(get_orders):
+                def list_open_orders(**_kwargs: Any) -> list[Any]:
+                    return list_alpaca_orders(client, status="open")
+
+                kwargs["list_orders_fn"] = list_open_orders
         client = getattr(self, "trading_client", None)
         if client is not None:
             get_by_id = getattr(client, "get_order_by_id", None)
-            if not callable(get_by_id):
-                get_by_id = getattr(client, "get_order", None)
             if callable(get_by_id):
                 def lookup_order_by_id(order_id: str) -> Any | None:
                     try:
@@ -32273,9 +32246,7 @@ class ExecutionEngine:
 
                 kwargs["get_order_by_id_fn"] = lookup_order_by_id
 
-            get_by_client = getattr(client, "get_order_by_client_order_id", None)
-            if not callable(get_by_client):
-                get_by_client = getattr(client, "get_order_by_client_id", None)
+            get_by_client = getattr(client, "get_order_by_client_id", None)
             if callable(get_by_client):
                 def lookup_order_by_client_order_id(client_order_id: str) -> Any | None:
                     try:
@@ -32491,11 +32462,7 @@ class ExecutionEngine:
             )
             return
         get_by_id = getattr(client, "get_order_by_id", None)
-        if not callable(get_by_id):
-            get_by_id = getattr(client, "get_order", None)
-        get_by_client = getattr(client, "get_order_by_client_order_id", None)
-        if not callable(get_by_client):
-            get_by_client = getattr(client, "get_order_by_client_id", None)
+        get_by_client = getattr(client, "get_order_by_client_id", None)
         if not callable(get_by_id) and not callable(get_by_client):
             logger.info(
                 "PENDING_ORDER_RECONCILE_SKIPPED_NO_LOOKUP_METHOD",
@@ -33105,10 +33072,6 @@ class LiveTradingExecutionEngine(ExecutionEngine):
             get_all_positions = getattr(client, "get_all_positions", None)
             if callable(get_all_positions):
                 positions_resp = get_all_positions()
-            else:
-                list_positions = getattr(client, "list_positions", None)
-                if callable(list_positions):
-                    positions_resp = list_positions()
             if positions_resp is not None:
                 positions_list = list(positions_resp)
         except LIVE_TRADING_FALLBACK_EXC:

@@ -30,7 +30,7 @@ class _LookupTradingClient(_DummyTradingClient):
             raise self.duplicate_error
         return self._response
 
-    def get_order_by_client_order_id(self, client_order_id):
+    def get_order_by_client_id(self, client_order_id):
         if self.lookup_order is None:
             raise RuntimeError("order not found")
         if client_order_id != self.last_client_order_id:
@@ -335,7 +335,7 @@ def test_execute_order_recovers_submit_no_result_from_client_lookup(monkeypatch)
     }
 
     class _RecoverClient:
-        def get_order_by_client_order_id(self, client_order_id):
+        def get_order_by_client_id(self, client_order_id):
             assert client_order_id == "recover-cid-exec-1"
             return recovered_order
 
@@ -380,12 +380,12 @@ def test_execute_order_recovers_submit_no_result_from_recent_orders_scan(monkeyp
     }
 
     class _RecentScanClient:
-        def get_order_by_client_order_id(self, _client_order_id):
+        def get_order_by_client_id(self, _client_order_id):
             raise RuntimeError("order not found")
 
-        def list_orders(self, **kwargs):
-            status = str(kwargs.get("status") or "").strip().lower()
-            if status == "open":
+        def get_orders(self, filter=None):
+            status = str(getattr(filter, "status", "") or "").strip().lower()
+            if "open" in status:
                 return []
             return [recovered_order]
 
@@ -436,7 +436,14 @@ def test_recent_order_scan_uses_adapter_for_native_get_orders(monkeypatch):
         def list_orders(self, **_kwargs):
             raise AssertionError("list_orders fallback should not be needed")
 
-    def _fake_list_alpaca_orders(client, *, status="open", symbols=None):
+    def _fake_list_alpaca_orders(
+        client,
+        *,
+        status="open",
+        symbols=None,
+        after=None,
+        limit=None,
+    ):
         calls.append((client, status, symbols))
         return [recovered_order] if status == "all" else []
 
@@ -473,14 +480,14 @@ def test_execute_order_submit_no_result_treats_alpaca_404_lookup_as_not_found(mo
         pass
 
     class _Lookup404Client:
-        def get_order_by_client_order_id(self, _client_order_id):
+        def get_order_by_client_id(self, _client_order_id):
             raise _ImportedLookupAPIError(
                 '{"code":40410000,"message":"order not found"}',
                 status_code=404,
                 code=40410000,
             )
 
-        def list_orders(self, **_kwargs):
+        def get_orders(self, filter=None):
             return []
 
     engine.trading_client = _Lookup404Client()
@@ -523,7 +530,7 @@ def test_execute_order_submit_no_result_records_client_order_id(monkeypatch):
     captured: list[dict[str, object]] = []
 
     class _NoResultClient:
-        def get_order_by_client_order_id(self, _client_order_id):
+        def get_order_by_client_id(self, _client_order_id):
             raise RuntimeError("order not found")
 
         def list_orders(self, **_kwargs):

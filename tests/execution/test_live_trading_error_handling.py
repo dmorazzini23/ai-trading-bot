@@ -327,7 +327,7 @@ def test_execute_order_sell_existing_long_uses_sell_capacity_side(engine_factory
         return lt.CapacityCheck(True, int(quantity))
 
     trading_client = SimpleNamespace(
-        get_position=lambda symbol: SimpleNamespace(symbol=symbol, qty="2", side="long")
+        get_open_position=lambda symbol: SimpleNamespace(symbol=symbol, qty="2", side="long")
     )
     monkeypatch.setattr(lt, "_call_preflight_capacity", _capacity_stub)
     engine = engine_factory(

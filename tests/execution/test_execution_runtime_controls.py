@@ -212,6 +212,35 @@ def test_pending_order_reconcile_defers_fresh_lookup_failure(monkeypatch, caplog
     assert "ord-fresh" in engine._pending_orders
 
 
+def test_alpaca_helpers_require_native_sdk_methods(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+
+    engine.trading_client = SimpleNamespace(cancel_order=lambda _order_id: None)
+    with pytest.raises(AttributeError, match="cancel_order_by_id"):
+        engine._cancel_order_alpaca("ord-1")
+
+    engine.trading_client = SimpleNamespace(get_order=lambda _order_id: SimpleNamespace())
+    with pytest.raises(AttributeError, match="get_order_by_id"):
+        engine._get_order_status_alpaca("ord-1")
+
+    engine.trading_client = SimpleNamespace(list_positions=lambda: [])
+    with pytest.raises(AttributeError, match="get_all_positions"):
+        engine._get_positions_alpaca()
+
+
+def test_client_order_lookup_uses_alpaca_py_client_id_method():
+    engine = _engine_stub()
+    expected = SimpleNamespace(id="ord-1", client_order_id="cid-1")
+    engine.trading_client = SimpleNamespace(
+        get_order_by_client_id=lambda client_order_id: expected
+        if client_order_id == "cid-1"
+        else None
+    )
+
+    assert engine._lookup_order_by_client_order_id("cid-1") is expected
+
+
 def test_pending_order_reconcile_terminalizes_stale_lookup_failure(monkeypatch, caplog):
     engine = _engine_stub()
     old_ts = (datetime.now(UTC) - timedelta(hours=8)).isoformat()
@@ -4416,7 +4445,7 @@ def test_live_side_normalizer_preserves_short_open_vocabulary():
     assert engine._normalized_order_side("exit") == "sell"
 
     engine.trading_client = SimpleNamespace(
-        get_position=lambda _symbol: SimpleNamespace(qty="7", side="sell_short")
+        get_open_position=lambda _symbol: SimpleNamespace(qty="7", side="sell_short")
     )
 
     assert engine._position_quantity("MSFT") == -7

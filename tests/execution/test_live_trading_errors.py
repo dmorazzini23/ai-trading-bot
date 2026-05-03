@@ -210,7 +210,7 @@ def test_normalize_order_payload_preserves_fractional_requested_qty():
 def test_close_cover_clipping_preserves_fractional_broker_positions() -> None:
     engine: Any = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
     engine.trading_client = SimpleNamespace(
-        get_position=lambda symbol: SimpleNamespace(symbol=symbol, qty="0.5", side="long")
+        get_open_position=lambda symbol: SimpleNamespace(symbol=symbol, qty="0.5", side="long")
     )
     engine.open_order_totals = lambda _symbol: (0.0, 0.0)
 
@@ -229,7 +229,7 @@ def test_close_cover_clipping_preserves_fractional_broker_positions() -> None:
     assert context["available_qty"] == pytest.approx(0.5)
 
     engine.trading_client = SimpleNamespace(
-        get_position=lambda symbol: SimpleNamespace(symbol=symbol, qty="0.25", side="short")
+        get_open_position=lambda symbol: SimpleNamespace(symbol=symbol, qty="0.25", side="short")
     )
 
     adjusted, context = engine._clip_cover_quantity_to_current_short(

@@ -289,7 +289,7 @@ def test_live_engine_reconciles_terminal_broker_lookup_for_missing_open_intent(
     assert intent.intent_id not in open_intent_ids
 
 
-def test_live_engine_reconciles_terminal_broker_lookup_by_client_order_id_fallback(
+def test_live_engine_reconciles_terminal_broker_lookup_by_client_id(
     tmp_path,
 ) -> None:
     """Live broker sync should close by client_order_id when broker_order_id is absent."""
@@ -309,7 +309,7 @@ def test_live_engine_reconciles_terminal_broker_lookup_by_client_order_id_fallba
     assert created is True
     assert intent.broker_order_id is None
 
-    class _ClientOrderIdFallbackTradingClient:
+    class _ClientOrderIdTradingClient:
         def get_orders(self, status: str = "open"):
             assert status == "open"
             return []
@@ -317,7 +317,7 @@ def test_live_engine_reconciles_terminal_broker_lookup_by_client_order_id_fallba
         def get_all_positions(self):
             return []
 
-        def get_order_by_client_order_id(self, client_order_id: str):
+        def get_order_by_client_id(self, client_order_id: str):
             assert client_order_id == intent.intent_id
             return SimpleNamespace(
                 id="broker-order-client-fallback",
@@ -328,7 +328,7 @@ def test_live_engine_reconciles_terminal_broker_lookup_by_client_order_id_fallba
                 qty=5,
             )
 
-    engine.trading_client = _ClientOrderIdFallbackTradingClient()
+    engine.trading_client = _ClientOrderIdTradingClient()
 
     snapshot = engine.synchronize_broker_state()
 

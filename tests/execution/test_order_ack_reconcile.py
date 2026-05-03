@@ -24,7 +24,7 @@ class _AckStubClient:
             return {"id": order_id, "status": "filled", "filled_qty": "5"}
         return {"id": order_id, "status": "accepted", "filled_qty": "0"}
 
-    def get_order_by_client_order_id(self, client_order_id: str):
+    def get_order_by_client_id(self, client_order_id: str):
         return self.get_order_by_id(client_order_id)
 
     def get_orders(self, status: str = "open"):
@@ -80,7 +80,7 @@ class _NoFillStubClient(_AckStubClient):
         self._polls += 1
         return {"id": order_id, "status": "accepted", "filled_qty": "0"}
 
-    def get_order_by_client_order_id(self, client_order_id: str):
+    def get_order_by_client_id(self, client_order_id: str):
         return self.get_order_by_id(client_order_id)
 
     def get_all_positions(self):
@@ -101,7 +101,7 @@ class _AcceptedNoPollClient(_AckStubClient):
     def get_order_by_id(self, order_id: str):
         raise ConnectionError("status endpoint unavailable")
 
-    def get_order_by_client_order_id(self, client_order_id: str):
+    def get_order_by_client_id(self, client_order_id: str):
         raise ConnectionError("status endpoint unavailable")
 
 
@@ -114,9 +114,9 @@ class _AckFirstProbeClient(_AckStubClient):
         self.poll_calls += 1
         return super().get_order_by_id(order_id)
 
-    def get_order_by_client_order_id(self, client_order_id: str):
+    def get_order_by_client_id(self, client_order_id: str):
         self.poll_calls += 1
-        return super().get_order_by_client_order_id(client_order_id)
+        return super().get_order_by_client_id(client_order_id)
 
 
 class _EnumStatusClient(_AckStubClient):
@@ -130,7 +130,7 @@ class _EnumStatusClient(_AckStubClient):
             return {"id": order_id, "status": "OrderStatus.FILLED", "filled_qty": "5"}
         return {"id": order_id, "status": "OrderStatus.PENDING_NEW", "filled_qty": "0"}
 
-    def get_order_by_client_order_id(self, client_order_id: str):
+    def get_order_by_client_id(self, client_order_id: str):
         return self.get_order_by_id(client_order_id)
 
 
@@ -321,7 +321,7 @@ def test_submitted_status_counts_as_ack(monkeypatch, caplog):
         def get_order_by_id(self, order_id: str):
             raise ConnectionError("polling disabled")
 
-        def get_order_by_client_order_id(self, client_order_id: str):
+        def get_order_by_client_id(self, client_order_id: str):
             raise ConnectionError("polling disabled")
 
     engine = _build_engine(_SubmittedClient())
@@ -888,12 +888,12 @@ def test_pending_bootstrap_ignores_older_pending_when_latest_terminal(monkeypatc
     assert "order-terminal" not in candidates
 
 
-def test_synchronize_broker_state_reconciles_pending_with_get_order_lookup(monkeypatch, tmp_path):
+def test_synchronize_broker_state_reconciles_pending_with_get_order_by_id_lookup(monkeypatch, tmp_path):
     class _BrokerGetOrderClient:
         def get_orders(self, status: str = "open"):
             return []
 
-        def get_order(self, order_id: str):
+        def get_order_by_id(self, order_id: str):
             return {
                 "id": order_id,
                 "client_order_id": "client-get-order",

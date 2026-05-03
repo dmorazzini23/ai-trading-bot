@@ -144,6 +144,8 @@ def list_alpaca_orders(
     *,
     status: str = "open",
     symbols: Sequence[str] | None = None,
+    after: datetime | None = None,
+    limit: int | None = None,
 ) -> list[Any]:
     """List orders using the native alpaca-py request model when available."""
 
@@ -152,6 +154,10 @@ def list_alpaca_orders(
         request_kwargs: dict[str, Any] = {"status": _alpaca_order_status(status)}
         if symbols:
             request_kwargs["symbols"] = [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
+        if after is not None:
+            request_kwargs["after"] = after
+        if limit is not None:
+            request_kwargs["limit"] = int(limit)
         request = GetOrdersRequest(**request_kwargs)
         try:
             orders = getter(filter=request)
@@ -161,6 +167,10 @@ def list_alpaca_orders(
             legacy_kwargs: dict[str, Any] = {"status": status}
             if symbols and _callable_accepts_keyword(getter, "symbols"):
                 legacy_kwargs["symbols"] = list(symbols)
+            if after is not None and _callable_accepts_keyword(getter, "after"):
+                legacy_kwargs["after"] = after
+            if limit is not None and _callable_accepts_keyword(getter, "limit"):
+                legacy_kwargs["limit"] = int(limit)
             orders = getter(**legacy_kwargs)
         return list(orders or [])
 
@@ -170,6 +180,10 @@ def list_alpaca_orders(
     list_kwargs: dict[str, Any] = {"status": status}
     if symbols and _callable_accepts_keyword(lister, "symbols"):
         list_kwargs["symbols"] = list(symbols)
+    if after is not None and _callable_accepts_keyword(lister, "after"):
+        list_kwargs["after"] = after
+    if limit is not None and _callable_accepts_keyword(lister, "limit"):
+        list_kwargs["limit"] = int(limit)
     try:
         orders = lister(**list_kwargs)
     except TypeError:
