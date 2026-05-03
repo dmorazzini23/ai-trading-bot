@@ -885,7 +885,7 @@ def _normalize_live_cost_side(side: str) -> str:
     token = str(side or "").strip().lower()
     if token in {"long", "buy", "cover", "buy_to_cover"}:
         return "buy"
-    if token in {"short", "sell_short"}:
+    if token in {"short", "sell_short", "sellshort"}:
         return "sell_short"
     if token in {"sell", "sell_long"}:
         return "sell"
@@ -2368,6 +2368,10 @@ def _run_parity_simulation(
             "regime_thresholds": _regime_threshold_config_payload(cfg.regime_thresholds),
         },
     }
+    if cfg.live_cost_model is not None:
+        aggregate["config"]["live_cost_model"] = _live_cost_model_config_payload(
+            cfg.live_cost_model
+        )
     if model_context is not None:
         aggregate["model_score"] = {
             "enabled": True,
@@ -2840,7 +2844,7 @@ def _persist_replay_to_oms(
 
 
 def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
-    live_cost_model = None if bool(args.simulation_mode) else _load_live_cost_replay_model(args)
+    live_cost_model = _load_live_cost_replay_model(args)
     regime_thresholds = _load_regime_threshold_model(args)
     cfg = ReplayConfig(
         confidence_threshold=float(args.confidence_threshold),
@@ -2944,8 +2948,6 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
         "median_hold_bars": float(np.median(holds)) if holds.size else 0.0,
         "churn_trades_per_100_bars": float((trade_count / max(total_bars, 1)) * 100.0),
         "exposure_ratio": float(total_position_bars / max(total_bars, 1)),
-        "avg_size_multiplier": float(size_multipliers.mean()) if size_multipliers.size else 1.0,
-        "max_size_multiplier": float(size_multipliers.max()) if size_multipliers.size else 1.0,
         "config": {
             "confidence_threshold": cfg.confidence_threshold,
             "entry_score_threshold": cfg.entry_score_threshold,
@@ -2957,15 +2959,28 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
             "trailing_stop_bps": cfg.trailing_stop_bps,
             "fee_bps": cfg.fee_bps,
             "slippage_bps": cfg.slippage_bps,
-            "live_cost_model": _live_cost_model_config_payload(cfg.live_cost_model),
-            "regime_thresholds": _regime_threshold_config_payload(cfg.regime_thresholds),
-            "sizing_policy": cfg.sizing_policy,
-            "sizing_min_scale": cfg.sizing_min_scale,
-            "sizing_max_scale": cfg.sizing_max_scale,
-            "sizing_cost_penalty_bps": cfg.sizing_cost_penalty_bps,
         },
-        "by_session_regime": _summarize_trades_by_regime(all_trades),
     }
+    if cfg.live_cost_model is not None:
+        aggregate["config"]["live_cost_model"] = _live_cost_model_config_payload(
+            cfg.live_cost_model
+        )
+    if cfg.regime_thresholds is not None:
+        aggregate["config"]["regime_thresholds"] = _regime_threshold_config_payload(
+            cfg.regime_thresholds
+        )
+        aggregate["by_session_regime"] = _summarize_trades_by_regime(all_trades)
+    if str(cfg.sizing_policy or "flat").strip().lower() != "flat":
+        aggregate["avg_size_multiplier"] = (
+            float(size_multipliers.mean()) if size_multipliers.size else 1.0
+        )
+        aggregate["max_size_multiplier"] = (
+            float(size_multipliers.max()) if size_multipliers.size else 1.0
+        )
+        aggregate["config"]["sizing_policy"] = cfg.sizing_policy
+        aggregate["config"]["sizing_min_scale"] = cfg.sizing_min_scale
+        aggregate["config"]["sizing_max_scale"] = cfg.sizing_max_scale
+        aggregate["config"]["sizing_cost_penalty_bps"] = cfg.sizing_cost_penalty_bps
     return {
         "schema_version": OFFLINE_REPLAY_SCHEMA_VERSION,
         "artifact_type": "offline_replay_summary",

@@ -6,7 +6,7 @@ import argparse
 import json
 import math
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -89,6 +89,45 @@ def _text_metric(row: Mapping[str, Any], *keys: str, default: str = "") -> str:
     return _first_text(*values, default=default)
 
 
+def _normalize_order_type(value: Any) -> str:
+    token = str(value or "").strip().lower().replace("-", "_")
+    if token in {"market", "limit", "stop", "stop_limit", "trailing_stop"}:
+        return token
+    if token in {"marketable_limit", "marketablelimit"}:
+        return "marketable_limit"
+    return token or "unknown"
+
+
+def _normalize_side(value: Any) -> str:
+    token = str(value or "").strip().lower().replace("-", "_")
+    if token in {"buy", "long", "cover", "buy_to_cover", "buytocover"}:
+        return "buy"
+    if token in {"sell", "sell_long", "selllong"}:
+        return "sell"
+    if token in {"short", "sell_short", "sellshort"}:
+        return "sell_short"
+    return token or "unknown"
+
+
+def _normalize_volatility_bucket(row: Mapping[str, Any], spread_bps: float | None) -> str:
+    explicit = _text_metric(
+        row,
+        "volatility_bucket",
+        "vol_bucket",
+        "liquidity_bucket",
+        default="",
+    ).lower()
+    if explicit:
+        return explicit
+    if spread_bps is None:
+        return "unknown"
+    if spread_bps <= 5.0:
+        return "tight_spread"
+    if spread_bps <= 20.0:
+        return "normal_spread"
+    return "wide_spread"
+
+
 def _percentile(values: Iterable[float], q: float) -> float | None:
     clean = sorted(float(value) for value in values if math.isfinite(float(value)))
     if not clean:
@@ -131,6 +170,41 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
             if isinstance(parsed, dict):
                 rows.append(parsed)
     return rows
+
+
+def _read_jsonl_with_diagnostics(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    stats: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+        "rows_read": 0,
+        "valid_rows": 0,
+        "invalid_rows": 0,
+    }
+    if not path.exists():
+        return [], stats
+    rows: list[dict[str, Any]] = []
+    try:
+        handle = path.open("r", encoding="utf-8")
+    except OSError:
+        stats["read_error"] = True
+        return [], stats
+    with handle:
+        for line in handle:
+            text = line.strip()
+            if not text:
+                continue
+            stats["rows_read"] = int(stats["rows_read"]) + 1
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                stats["invalid_rows"] = int(stats["invalid_rows"]) + 1
+                continue
+            if isinstance(parsed, dict):
+                rows.append(parsed)
+                stats["valid_rows"] = int(stats["valid_rows"]) + 1
+            else:
+                stats["invalid_rows"] = int(stats["invalid_rows"]) + 1
+    return rows, stats
 
 
 def _session_regime(row: Mapping[str, Any], ts: datetime | None) -> str:
@@ -177,21 +251,53 @@ def _timestamp(row: Mapping[str, Any]) -> datetime | None:
     return None
 
 
+_NON_EXECUTED_STATUSES = {
+    "blocked",
+    "canceled",
+    "cancelled",
+    "expired",
+    "failed",
+    "rejected",
+    "skipped",
+}
+
+
+def _is_non_executed_terminal(row: Mapping[str, Any], *, source: str) -> bool:
+    status = _text_metric(
+        row,
+        "status",
+        "order_status",
+        "event_status",
+        "outcome",
+        default="",
+    ).lower()
+    if status in _NON_EXECUTED_STATUSES:
+        return True
+    event_type = _text_metric(row, "event_type", "event", "type", default="").lower()
+    if source == "fill_events" and event_type and "fill" not in event_type:
+        return True
+    return False
+
+
 def _observation_from_row(
     row: Mapping[str, Any],
     *,
     source: str,
     cutoff: datetime,
+    generated_at: datetime,
+    max_future_skew_seconds: float,
 ) -> dict[str, Any] | None:
     ts = _timestamp(row)
     if ts is None or ts < cutoff:
         return None
+    if ts > generated_at + timedelta(seconds=max(0.0, float(max_future_skew_seconds))):
+        return None
+    if _is_non_executed_terminal(row, source=source):
+        return None
     symbol = _text_metric(row, "symbol", "asset_symbol", default="").upper()
     if not symbol:
         return None
-    side = _text_metric(row, "side", "order_side", default="unknown").lower()
-    if side in {"", "unknown"}:
-        side = "unknown"
+    side = _normalize_side(_text_metric(row, "side", "order_side", default="unknown"))
     session_regime = _session_regime(row, ts)
     spread_bps = _metric(
         row,
@@ -242,6 +348,10 @@ def _observation_from_row(
         "symbol": symbol,
         "side": side,
         "session_regime": session_regime,
+        "order_type": _normalize_order_type(
+            _text_metric(row, "order_type", "type", "order_class", default="")
+        ),
+        "volatility_bucket": _normalize_volatility_bucket(row, spread_bps),
         "spread_bps": spread_bps,
         "quote_age_ms": quote_age_ms,
         "slippage_bps": slippage_bps,
@@ -254,11 +364,11 @@ def _observation_from_row(
 
 def _summary_row(
     *,
-    key: tuple[str, str, str],
+    key: tuple[str, ...],
     observations: list[dict[str, Any]],
     min_samples: int,
 ) -> dict[str, Any]:
-    symbol, side, session_regime = key
+    symbol, side, session_regime = key[:3]
     spread_values = [
         float(value)
         for obs in observations
@@ -284,17 +394,27 @@ def _summary_row(
         for obs in observations
         if (value := _to_float(obs.get("modeled_total_cost_bps"))) is not None
     ]
+    half_spread_values = [
+        float(value)
+        for obs in observations
+        if (value := _to_float(obs.get("half_spread_bps"))) is not None
+    ]
     last_observed_at = max(obs["ts"] for obs in observations if isinstance(obs.get("ts"), datetime))
     sample_count = len(total_cost_values)
-    return {
+    row: dict[str, Any] = {
         "symbol": symbol,
         "side": side,
         "session_regime": session_regime,
         "event_count": int(len(observations)),
         "sample_count": int(sample_count),
         "sufficient_samples": bool(sample_count >= int(min_samples)),
+        "sources": dict(
+            sorted(Counter(str(obs.get("source") or "unknown") for obs in observations).items())
+        ),
         "mean_spread_bps": _mean(spread_values),
         "p90_spread_bps": _percentile(spread_values, 0.90),
+        "mean_half_spread_bps": _mean(half_spread_values),
+        "p90_half_spread_bps": _percentile(half_spread_values, 0.90),
         "mean_quote_age_ms": _mean(quote_age_values),
         "p90_quote_age_ms": _percentile(quote_age_values, 0.90),
         "mean_slippage_bps": _mean(slippage_values),
@@ -303,6 +423,38 @@ def _summary_row(
         "p90_total_cost_bps": _percentile(total_cost_values, 0.90),
         "last_observed_at": last_observed_at.isoformat().replace("+00:00", "Z"),
     }
+    if len(key) > 3:
+        row["order_type"] = key[3]
+    if len(key) > 4:
+        row["volatility_bucket"] = key[4]
+    return row
+
+
+def _cost_breaches(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    max_p90_total_cost_bps: float | None,
+) -> list[dict[str, Any]]:
+    if max_p90_total_cost_bps is None or max_p90_total_cost_bps <= 0.0:
+        return []
+    breaches: list[dict[str, Any]] = []
+    for row in rows:
+        observed = _to_float(row.get("p90_total_cost_bps"))
+        if observed is None or observed <= max_p90_total_cost_bps:
+            continue
+        breaches.append(
+            {
+                "symbol": str(row.get("symbol") or ""),
+                "side": str(row.get("side") or ""),
+                "session_regime": str(row.get("session_regime") or ""),
+                "sample_count": int(_to_float(row.get("sample_count")) or 0.0),
+                "p90_total_cost_bps": float(observed),
+                "threshold_bps": float(max_p90_total_cost_bps),
+                "reason": "p90_total_cost_bps_exceeds_threshold",
+            }
+        )
+    breaches.sort(key=lambda item: float(item["p90_total_cost_bps"]), reverse=True)
+    return breaches
 
 
 def build_live_cost_model(
@@ -312,6 +464,8 @@ def build_live_cost_model(
     tca_path: Path | None = None,
     window_minutes: int = 390,
     min_samples: int = 5,
+    max_p90_total_cost_bps: float | None = None,
+    max_future_skew_seconds: float = 300.0,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return a rolling cost-model artifact from recent live execution rows."""
@@ -324,15 +478,28 @@ def build_live_cost_model(
         "fill_events": fill_events_path,
         "tca_records": tca_path,
     }
+    source_diagnostics: dict[str, dict[str, Any]] = {}
     for source, path in sources.items():
         if path is None:
             continue
-        for row in _read_jsonl(path):
-            observation = _observation_from_row(row, source=source, cutoff=cutoff)
+        rows, stats = _read_jsonl_with_diagnostics(path)
+        rows_used = 0
+        for row in rows:
+            observation = _observation_from_row(
+                row,
+                source=source,
+                cutoff=cutoff,
+                generated_at=generated_at,
+                max_future_skew_seconds=max_future_skew_seconds,
+            )
             if observation is not None:
                 observations.append(observation)
+                rows_used += 1
+        stats["rows_used"] = rows_used
+        source_diagnostics[source] = stats
 
     buckets: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    detailed_buckets: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for obs in observations:
         key = (
             str(obs["symbol"]),
@@ -340,9 +507,23 @@ def build_live_cost_model(
             str(obs["session_regime"]),
         )
         buckets[key].append(obs)
+        detailed_buckets[
+            (
+                str(obs["symbol"]),
+                str(obs["side"]),
+                str(obs["session_regime"]),
+                str(obs.get("order_type") or "unknown"),
+                str(obs.get("volatility_bucket") or "unknown"),
+            )
+        ].append(obs)
     by_symbol_side_session = [
         _summary_row(key=key, observations=rows, min_samples=max(1, int(min_samples)))
         for key, rows in sorted(buckets.items())
+        if rows
+    ]
+    by_symbol_side_session_order_type_volatility = [
+        _summary_row(key=key, observations=rows, min_samples=max(1, int(min_samples)))
+        for key, rows in sorted(detailed_buckets.items())
         if rows
     ]
     total_costs = [
@@ -355,6 +536,10 @@ def build_live_cost_model(
     ]
     available = bool(total_costs)
     status = "ready" if sufficient_rows else ("warming_up" if available else "unavailable")
+    breaches = _cost_breaches(
+        sufficient_rows,
+        max_p90_total_cost_bps=max_p90_total_cost_bps,
+    )
     return {
         "schema_version": "1.0.0",
         "artifact_type": "live_cost_model",
@@ -366,13 +551,17 @@ def build_live_cost_model(
             "event_count": int(len(observations)),
             "sample_count": int(len(total_costs)),
             "bucket_count": int(len(by_symbol_side_session)),
+            "detailed_bucket_count": int(len(by_symbol_side_session_order_type_volatility)),
             "sufficient_bucket_count": int(len(sufficient_rows)),
             "min_samples": int(max(1, min_samples)),
+            "max_future_skew_seconds": float(max(0.0, max_future_skew_seconds)),
         },
+        "sources": source_diagnostics,
         "status": {
             "available": available,
             "status": status,
             "mode": "observe",
+            "breach_count": int(len(breaches)),
             "reason": (
                 "ok"
                 if status == "ready"
@@ -383,7 +572,18 @@ def build_live_cost_model(
             "mean_total_cost_bps": _mean(total_costs),
             "p90_total_cost_bps": _percentile(total_costs, 0.90),
         },
+        "alerts": {
+            "cost_threshold_breaches": breaches,
+            "max_p90_total_cost_bps": (
+                float(max_p90_total_cost_bps)
+                if max_p90_total_cost_bps is not None and max_p90_total_cost_bps > 0.0
+                else None
+            ),
+        },
         "by_symbol_side_session": by_symbol_side_session,
+        "by_symbol_side_session_order_type_volatility": (
+            by_symbol_side_session_order_type_volatility
+        ),
         "paths": {
             "execution_quality_events": str(events_path),
             "fill_events": str(fill_events_path) if fill_events_path is not None else None,
@@ -412,6 +612,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-json", default="", help="Output live cost model JSON path.")
     parser.add_argument("--window-minutes", type=int, default=390)
     parser.add_argument("--min-samples", type=int, default=5)
+    parser.add_argument(
+        "--max-p90-total-cost-bps",
+        type=float,
+        default=None,
+        help="Optional alert threshold for sufficient buckets.",
+    )
     args = parser.parse_args(argv)
 
     events_path = (
@@ -446,6 +652,17 @@ def main(argv: list[str] | None = None) -> int:
         tca_path=tca_path,
         window_minutes=max(1, int(args.window_minutes)),
         min_samples=max(1, int(args.min_samples)),
+        max_p90_total_cost_bps=(
+            float(args.max_p90_total_cost_bps)
+            if args.max_p90_total_cost_bps is not None
+            else _to_float(
+                get_env(
+                    "AI_TRADING_LIVE_COST_MODEL_MAX_P90_TOTAL_COST_BPS",
+                    "",
+                    cast=str,
+                )
+            )
+        ),
     )
     report["paths"]["report"] = str(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

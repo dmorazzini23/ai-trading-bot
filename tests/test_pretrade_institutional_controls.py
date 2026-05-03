@@ -725,6 +725,54 @@ def test_pretrade_explicit_slippage_wins_over_live_cost_model(
     assert reason == "OK"
 
 
+def test_pretrade_runtime_decay_blocks_opening_but_allows_reduction(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "runtime_decay_controls_latest.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "artifact_type": "runtime_decay_controls",
+                "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "status": {"available": True, "status": "ready"},
+                "actions": {
+                    "max_action": "disable_new_entries",
+                    "entries_allowed": False,
+                    "size_scale": 0.0,
+                    "reasons": ["execution_quality_pause"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_RUNTIME_DECAY_CONTROLS_PATH", str(artifact))
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(
+        _intent(symbol="MSFT", side="buy", qty=1, price=100.0),
+        cfg=cfg,
+        ledger=_ExposureLedger(),
+        rate_limiter=limiter,
+    )
+
+    assert allowed is False
+    assert reason == "RUNTIME_DECAY_CONTROL_BLOCK"
+    assert details["action"] == "disable_new_entries"
+    assert details["reasons"] == ["execution_quality_pause"]
+
+    allowed, reason, _details = validate_pretrade(
+        _intent(symbol="MSFT", side="sell", qty=1, price=100.0),
+        cfg=cfg,
+        ledger=_ExposureLedger(symbol_qty={"MSFT": 2.0}),
+        rate_limiter=limiter,
+    )
+
+    assert allowed is True
+    assert reason == "OK"
+
+
 def test_pretrade_symbol_universe_gate_blocks_opening_but_allows_reduction(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -84,12 +84,17 @@ def test_live_cost_model_snapshot_reads_symbol_session_artifact(
                 "status": {"available": True, "status": "ready", "mode": "observe"},
                 "observed": {"p90_total_cost_bps": 8.5},
                 "window": {"minutes": 390, "sample_count": 12},
+                "sources": {
+                    "execution_quality_events": {"rows_read": 12, "rows_used": 12}
+                },
+                "alerts": {"cost_threshold_breaches": []},
                 "by_symbol_side_session": [
                     {
                         "symbol": "AAPL",
                         "side": "buy",
                         "session_regime": "midday",
                         "mean_total_cost_bps": 4.0,
+                        "last_observed_at": "2026-05-01T14:58:00Z",
                     }
                 ],
             }
@@ -105,6 +110,10 @@ def test_live_cost_model_snapshot_reads_symbol_session_artifact(
     assert snapshot["status"]["status"] == "ready"
     assert snapshot["observed"]["p90_total_cost_bps"] == 8.5
     assert snapshot["window"]["sample_count"] == 12
+    assert snapshot["sources"]["execution_quality_events"]["rows_used"] == 12
+    assert snapshot["alerts"]["cost_threshold_breaches"] == []
+    assert snapshot["last_observed_at"] == "2026-05-01T14:58:00Z"
+    assert snapshot["last_sample_age_seconds"] is not None
     assert snapshot["by_symbol_side_session"][0]["symbol"] == "AAPL"
 
 
@@ -150,6 +159,43 @@ def test_symbol_universe_scorecard_snapshot_reads_policy_artifact(
     assert snapshot["policy"]["disabled_symbols"] == ["MSFT"]
     assert snapshot["top_symbols"][0]["symbol"] == "AAPL"
     assert snapshot["bottom_symbols"][0]["symbol"] == "MSFT"
+
+
+def test_runtime_decay_controls_snapshot_reads_actions(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "runtime_decay_controls_latest.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0.0",
+                "artifact_type": "runtime_decay_controls",
+                "generated_at": "2026-05-01T15:00:00Z",
+                "status": {"available": True, "status": "ready", "mode": "enforce"},
+                "observed": {"live_cost_breach_count": 1},
+                "actions": {
+                    "max_action": "disable_new_entries",
+                    "entries_allowed": False,
+                    "size_scale": 0.0,
+                    "reasons": ["live_cost_breach"],
+                },
+                "recovery": {"reversible": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_RUNTIME_DECAY_CONTROLS_PATH", str(artifact))
+
+    snapshot = health_payload._runtime_decay_controls_snapshot()
+
+    assert snapshot["available"] is True
+    assert snapshot["path"] == str(artifact)
+    assert snapshot["actions"]["entries_allowed"] is False
+    assert snapshot["actions"]["max_action"] == "disable_new_entries"
+    assert snapshot["observed"]["live_cost_breach_count"] == 1
+    assert snapshot["recovery"]["reversible"] is True
+    assert snapshot["age_seconds"] is not None
 
 
 def test_build_runtime_health_payload_marks_required_database_failure(monkeypatch) -> None:

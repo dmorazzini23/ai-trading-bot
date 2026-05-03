@@ -30,8 +30,11 @@ from ai_trading.features.indicators import (
 from ai_trading.logging import get_logger
 from ai_trading.models.artifacts import write_artifact_manifest
 from ai_trading.tools.offline_replay import (
+    LiveCostReplayModel,
     _augment_model_features,
+    _load_live_cost_replay_model,
     _replay_session_regime,
+    _replay_slippage_bps,
     _safe_rsi,
     _sanitize_model_feature_index,
 )
@@ -65,6 +68,7 @@ class ReplayAlignedTrainingConfig:
     train_fraction: float
     model_type: str
     edge_global_threshold: float | None
+    live_cost_model_path: str | None = None
 
 
 def _resolve_symbol_paths(data_dir: Path, symbols: str) -> dict[str, Path]:
@@ -106,6 +110,7 @@ def _build_symbol_dataset(
     fee_bps: float,
     slippage_bps: float,
     min_net_edge_bps: float,
+    live_cost_model: LiveCostReplayModel | None = None,
 ) -> pd.DataFrame:
     frame, _report = load_historical_bars(csv_path, timestamp_col=timestamp_col)
     if frame.empty:
@@ -114,15 +119,53 @@ def _build_symbol_dataset(
     close = pd.to_numeric(frame["close"], errors="coerce").astype(float)
     future_close = close.shift(-int(horizon_bars))
     gross_long_bps = ((future_close / close.replace(0.0, np.nan)) - 1.0) * 10000.0
-    round_trip_cost_bps = (2.0 * max(0.0, float(fee_bps))) + (
-        2.0 * max(0.0, float(slippage_bps))
+    cost_cfg = cast(
+        Any,
+        argparse.Namespace(
+            live_cost_model=live_cost_model,
+            slippage_bps=max(0.0, float(slippage_bps)),
+        ),
     )
+    entry_slippage = pd.Series(
+        [
+            _replay_slippage_bps(
+                cost_cfg,
+                symbol=symbol,
+                side="buy",
+                ts=ts,
+            )
+            if live_cost_model is not None
+            else max(0.0, float(slippage_bps))
+            for ts in frame.index
+        ],
+        index=frame.index,
+        dtype=float,
+    )
+    exit_slippage = pd.Series(
+        [
+            _replay_slippage_bps(
+                cost_cfg,
+                symbol=symbol,
+                side="sell",
+                ts=ts,
+            )
+            if live_cost_model is not None
+            else max(0.0, float(slippage_bps))
+            for ts in frame.index
+        ],
+        index=frame.index,
+        dtype=float,
+    )
+    round_trip_cost_bps = (2.0 * max(0.0, float(fee_bps))) + entry_slippage + exit_slippage
     net_long_bps = gross_long_bps - round_trip_cost_bps
     out = features.copy()
     out["symbol"] = symbol
     out["timestamp"] = frame.index
     out["session_regime"] = [_replay_session_regime(ts) for ts in frame.index]
     out["gross_long_bps"] = gross_long_bps.to_numpy(dtype=float)
+    out["entry_slippage_bps"] = entry_slippage.to_numpy(dtype=float)
+    out["exit_slippage_bps"] = exit_slippage.to_numpy(dtype=float)
+    out["round_trip_cost_bps"] = round_trip_cost_bps.to_numpy(dtype=float)
     out["net_long_bps"] = net_long_bps.to_numpy(dtype=float)
     out["target"] = (out["net_long_bps"] > float(min_net_edge_bps)).astype(int)
     out = out.replace([np.inf, -np.inf], np.nan).dropna(
@@ -140,6 +183,7 @@ def build_training_dataset(
     fee_bps: float = 1.0,
     slippage_bps: float = 2.0,
     min_net_edge_bps: float = 0.0,
+    live_cost_model: LiveCostReplayModel | None = None,
 ) -> pd.DataFrame:
     rows: list[pd.DataFrame] = []
     for symbol, csv_path in _resolve_symbol_paths(data_dir, symbols).items():
@@ -151,6 +195,7 @@ def build_training_dataset(
             fee_bps=fee_bps,
             slippage_bps=slippage_bps,
             min_net_edge_bps=min_net_edge_bps,
+            live_cost_model=live_cost_model,
         )
         if not symbol_rows.empty:
             rows.append(symbol_rows)
@@ -354,6 +399,12 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
     data_dir = Path(args.data_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    live_cost_model = _load_live_cost_replay_model(
+        argparse.Namespace(
+            live_cost_model_json=getattr(args, "live_cost_model_json", None),
+            use_live_cost_model=getattr(args, "use_live_cost_model", None),
+        )
+    )
     dataset = build_training_dataset(
         data_dir=data_dir,
         symbols=str(args.symbols or ""),
@@ -362,6 +413,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         fee_bps=float(args.fee_bps),
         slippage_bps=float(args.slippage_bps),
         min_net_edge_bps=float(args.min_net_edge_bps),
+        live_cost_model=live_cost_model,
     )
     if dataset.empty:
         raise RuntimeError("Replay-aligned training dataset is empty")
@@ -407,6 +459,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         train_fraction=float(args.train_fraction),
         model_type=str(args.model_type),
         edge_global_threshold=edge_global_threshold,
+        live_cost_model_path=live_cost_model.path if live_cost_model is not None else None,
     )
     manifest_path = write_artifact_manifest(
         model_path=model_path,
@@ -421,6 +474,13 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "objective": "one_bar_net_markout_binary",
             "config": asdict(config),
             "thresholds_by_regime": edge_thresholds_by_regime,
+            "live_cost_model": {
+                "enabled": live_cost_model is not None,
+                "path": live_cost_model.path if live_cost_model is not None else None,
+                "bucket_count": (
+                    live_cost_model.bucket_count if live_cost_model is not None else 0
+                ),
+            },
         },
     )
     report = {
@@ -438,6 +498,16 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "positive_rate": float(dataset["target"].mean()),
             "train_positive_rate": float(train["target"].mean()),
             "validation_positive_rate": float(validation["target"].mean()),
+            "mean_round_trip_cost_bps": float(dataset["round_trip_cost_bps"].mean()),
+            "mean_entry_slippage_bps": float(dataset["entry_slippage_bps"].mean()),
+            "mean_exit_slippage_bps": float(dataset["exit_slippage_bps"].mean()),
+        },
+        "live_cost_model": {
+            "enabled": live_cost_model is not None,
+            "path": live_cost_model.path if live_cost_model is not None else None,
+            "bucket_count": live_cost_model.bucket_count if live_cost_model is not None else 0,
+            "generated_at": live_cost_model.generated_at if live_cost_model is not None else None,
+            "status": live_cost_model.status if live_cost_model is not None else None,
         },
         "validation": validation_report,
         "threshold_sweep": threshold_report,
@@ -477,6 +547,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--horizon-bars", type=int, default=1)
     parser.add_argument("--fee-bps", type=float, default=1.0)
     parser.add_argument("--slippage-bps", type=float, default=2.0)
+    parser.add_argument(
+        "--live-cost-model-json",
+        type=Path,
+        default=None,
+        help="Optional live cost model artifact for replay-aligned training labels.",
+    )
+    parser.add_argument(
+        "--use-live-cost-model",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Use AI_TRADING_LIVE_COST_MODEL_PATH for training labels when no explicit artifact is provided.",
+    )
     parser.add_argument("--min-net-edge-bps", type=float, default=0.0)
     parser.add_argument("--train-fraction", type=float, default=0.70)
     parser.add_argument(

@@ -108,6 +108,27 @@ Live mode now requires one authoritative durability path:
 - Runtime joblib model loads now pass through the shared manifest/checksum gate,
   including symbol-model loading and regime-model initialization in live mode.
 
+### Model Promotion Gate
+
+Before promoting a challenger model, generate a promotion report:
+
+```bash
+./venv/bin/python -m ai_trading.tools.promotion_pipeline \
+  --model-path /path/to/candidate.joblib \
+  --manifest-path /path/to/candidate.joblib.manifest.json \
+  --full-replay-json artifacts/replay/full.json \
+  --tail-replay-json artifacts/replay/tail.json \
+  --recent-replay-json artifacts/replay/recent.json \
+  --shadow-report-json artifacts/ml_shadow/latest.json \
+  --output-json artifacts/promotion/promotion_report_latest.json
+```
+
+The report does not mutate runtime paths. It verifies the checksum manifest and
+requires positive full/tail/recent replay, zero replay violations, acceptable
+shadow telemetry, live-cost health, and runtime decay controls before reporting
+`promotion_ready=true`. Keep the current champion model path available and use
+the report rollback command if live behavior regresses.
+
 ### Health and Control-Plane Signals
 
 When investigating a degraded runtime, check:

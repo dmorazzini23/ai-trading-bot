@@ -860,22 +860,34 @@ def _live_cost_model_snapshot() -> dict[str, Any]:
     status_raw = payload.get("status") if isinstance(payload, Mapping) else {}
     observed_raw = payload.get("observed") if isinstance(payload, Mapping) else {}
     window_raw = payload.get("window") if isinstance(payload, Mapping) else {}
+    alerts_raw = payload.get("alerts") if isinstance(payload, Mapping) else {}
+    sources_raw = payload.get("sources") if isinstance(payload, Mapping) else {}
     rows_raw = (
         payload.get("by_symbol_side_session") if isinstance(payload, Mapping) else []
     )
+    rows = (
+        [dict(row) for row in rows_raw if isinstance(row, Mapping)]
+        if isinstance(rows_raw, list)
+        else []
+    )
+    last_observed_values = [
+        row.get("last_observed_at") for row in rows if row.get("last_observed_at")
+    ]
+    latest_observed = max((str(value) for value in last_observed_values), default=None)
     return {
         "available": bool(payload),
         "path": str(resolved),
         "schema_version": payload.get("schema_version"),
         "generated_at": payload.get("generated_at"),
+        "age_seconds": _timestamp_age_seconds(payload.get("generated_at")),
+        "last_observed_at": latest_observed,
+        "last_sample_age_seconds": _timestamp_age_seconds(latest_observed),
         "status": dict(status_raw) if isinstance(status_raw, Mapping) else {},
         "observed": dict(observed_raw) if isinstance(observed_raw, Mapping) else {},
         "window": dict(window_raw) if isinstance(window_raw, Mapping) else {},
-        "by_symbol_side_session": (
-            [dict(row) for row in rows_raw if isinstance(row, Mapping)][:8]
-            if isinstance(rows_raw, list)
-            else []
-        ),
+        "sources": dict(sources_raw) if isinstance(sources_raw, Mapping) else {},
+        "alerts": dict(alerts_raw) if isinstance(alerts_raw, Mapping) else {},
+        "by_symbol_side_session": rows[:8],
     }
 
 
@@ -935,6 +947,40 @@ def _symbol_universe_scorecard_snapshot() -> dict[str, Any]:
         "policy": dict(policy_raw) if isinstance(policy_raw, Mapping) else {},
         "top_symbols": top_symbols,
         "bottom_symbols": bottom_symbols,
+    }
+
+
+def _runtime_decay_controls_snapshot() -> dict[str, Any]:
+    try:
+        latest_path = str(
+            get_env(
+                "AI_TRADING_RUNTIME_DECAY_CONTROLS_PATH",
+                "runtime/runtime_decay_controls_latest.json",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or "runtime/runtime_decay_controls_latest.json"
+        ).strip()
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        latest_path = "runtime/runtime_decay_controls_latest.json"
+    payload, resolved = _read_json_mapping_artifact(
+        configured_path=latest_path,
+        default_relative="runtime/runtime_decay_controls_latest.json",
+    )
+    status_raw = payload.get("status") if isinstance(payload, Mapping) else {}
+    observed_raw = payload.get("observed") if isinstance(payload, Mapping) else {}
+    actions_raw = payload.get("actions") if isinstance(payload, Mapping) else {}
+    recovery_raw = payload.get("recovery") if isinstance(payload, Mapping) else {}
+    return {
+        "available": bool(payload),
+        "path": str(resolved),
+        "schema_version": payload.get("schema_version"),
+        "generated_at": payload.get("generated_at"),
+        "age_seconds": _timestamp_age_seconds(payload.get("generated_at")),
+        "status": dict(status_raw) if isinstance(status_raw, Mapping) else {},
+        "observed": dict(observed_raw) if isinstance(observed_raw, Mapping) else {},
+        "actions": dict(actions_raw) if isinstance(actions_raw, Mapping) else {},
+        "recovery": dict(recovery_raw) if isinstance(recovery_raw, Mapping) else {},
     }
 
 
@@ -1429,6 +1475,7 @@ def build_control_plane_snapshot(
     execution_quality_governor = _execution_quality_governor_snapshot()
     live_cost_model = _live_cost_model_snapshot()
     symbol_universe_scorecard = _symbol_universe_scorecard_snapshot()
+    runtime_decay_controls = _runtime_decay_controls_snapshot()
     manual_overrides = _manual_override_snapshot()
     governance = _governance_snapshot()
 
@@ -1537,6 +1584,7 @@ def build_control_plane_snapshot(
             "governor": execution_quality_governor,
             "live_cost_model": live_cost_model,
             "symbol_universe_scorecard": symbol_universe_scorecard,
+            "runtime_decay_controls": runtime_decay_controls,
             "submit_reject_rate_pct": runtime_oms_event_tca.get(
                 "submit_reject_rate_pct"
             ),

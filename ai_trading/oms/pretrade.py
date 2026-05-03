@@ -732,6 +732,9 @@ def _live_cost_model_payload() -> Mapping[str, Any] | None:
 _SYMBOL_UNIVERSE_SCORECARD_LOCK = RLock()
 _SYMBOL_UNIVERSE_SCORECARD_CACHE: dict[str, Any] = {}
 
+_RUNTIME_DECAY_CONTROLS_LOCK = RLock()
+_RUNTIME_DECAY_CONTROLS_CACHE: dict[str, Any] = {}
+
 
 def _symbol_universe_scorecard_payload() -> Mapping[str, Any] | None:
     if not bool(get_env("AI_TRADING_PRETRADE_SYMBOL_UNIVERSE_GATE_ENABLED", False, cast=bool)):
@@ -835,6 +838,87 @@ def _symbol_universe_pretrade_gate(
                 row.get("persistence_count") if isinstance(row, Mapping) else None
             ),
             "reasons": row.get("reasons") if isinstance(row, Mapping) else None,
+        },
+    )
+
+
+def _runtime_decay_controls_payload() -> Mapping[str, Any] | None:
+    if not bool(get_env("AI_TRADING_PRETRADE_RUNTIME_DECAY_GATE_ENABLED", True, cast=bool)):
+        return None
+    configured_path = str(
+        get_env(
+            "AI_TRADING_RUNTIME_DECAY_CONTROLS_PATH",
+            "runtime/runtime_decay_controls_latest.json",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or "runtime/runtime_decay_controls_latest.json"
+    ).strip()
+    path = resolve_runtime_artifact_path(
+        configured_path,
+        default_relative="runtime/runtime_decay_controls_latest.json",
+    )
+    try:
+        stat_result = path.stat()
+    except OSError:
+        return None
+    with _RUNTIME_DECAY_CONTROLS_LOCK:
+        if (
+            _RUNTIME_DECAY_CONTROLS_CACHE.get("path") == str(path)
+            and _RUNTIME_DECAY_CONTROLS_CACHE.get("mtime_ns") == stat_result.st_mtime_ns
+        ):
+            cached = _RUNTIME_DECAY_CONTROLS_CACHE.get("payload")
+            return cached if isinstance(cached, Mapping) else None
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            parsed = None
+        payload = parsed if isinstance(parsed, Mapping) else None
+        _RUNTIME_DECAY_CONTROLS_CACHE.update(
+            {"path": str(path), "mtime_ns": stat_result.st_mtime_ns, "payload": payload}
+        )
+    return payload
+
+
+def _runtime_decay_controls_usable(payload: Mapping[str, Any]) -> bool:
+    if str(payload.get("artifact_type") or "") != "runtime_decay_controls":
+        return False
+    generated_at = _parse_utc_datetime_text(payload.get("generated_at"))
+    if generated_at is None:
+        return False
+    max_age_minutes = _finite_float(
+        get_env("AI_TRADING_RUNTIME_DECAY_CONTROLS_MAX_AGE_MINUTES", 1440.0, cast=float)
+    )
+    if max_age_minutes is not None and max_age_minutes > 0.0:
+        if (datetime.now(UTC) - generated_at).total_seconds() > max_age_minutes * 60.0:
+            return False
+    status = payload.get("status")
+    return isinstance(status, Mapping) and bool(status.get("available", True))
+
+
+def _runtime_decay_pretrade_gate(
+    intent: OrderIntent,
+    *,
+    ledger: Any,
+) -> tuple[bool, str, dict[str, Any]] | None:
+    if _intent_reduces_position(intent, ledger):
+        return None
+    payload = _runtime_decay_controls_payload()
+    if payload is None or not _runtime_decay_controls_usable(payload):
+        return None
+    actions = payload.get("actions")
+    if not isinstance(actions, Mapping) or bool(actions.get("entries_allowed", True)):
+        return None
+    reasons_raw = actions.get("reasons")
+    reasons = list(reasons_raw) if isinstance(reasons_raw, list) else []
+    return (
+        False,
+        "RUNTIME_DECAY_CONTROL_BLOCK",
+        {
+            "action": str(actions.get("max_action") or "disable_new_entries"),
+            "size_scale": _finite_float(actions.get("size_scale")),
+            "reasons": reasons,
+            "generated_at": payload.get("generated_at"),
         },
     )
 
@@ -1632,6 +1716,10 @@ def validate_pretrade(
                 3,
             )
         return False, str(intent.broker_ready_reason or "BROKER_NOT_READY_BLOCK"), details
+
+    runtime_decay_decision = _runtime_decay_pretrade_gate(intent, ledger=ledger)
+    if runtime_decay_decision is not None:
+        return runtime_decay_decision
 
     symbol_universe_decision = _symbol_universe_pretrade_gate(intent, ledger=ledger)
     if symbol_universe_decision is not None:

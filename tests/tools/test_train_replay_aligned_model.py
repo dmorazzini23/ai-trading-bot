@@ -63,6 +63,54 @@ def test_build_training_dataset_uses_future_net_markout_target(tmp_path: Path) -
     assert bool((dataset["target"] == (dataset["net_long_bps"] > 0.0).astype(int)).all())
 
 
+def test_build_training_dataset_can_use_live_cost_model_labels(tmp_path: Path) -> None:
+    _write_cycle_bars(tmp_path / "AAPL.csv", periods=120)
+    live_cost_model = {
+        "artifact_type": "live_cost_model",
+        "generated_at": "2026-01-02T21:00:00Z",
+        "status": {"available": True, "status": "ready"},
+        "by_symbol_side_session": [
+            {
+                "symbol": "AAPL",
+                "side": side,
+                "session_regime": regime,
+                "sample_count": 10,
+                "sufficient_samples": True,
+                "p90_adverse_slippage_bps": 25.0,
+            }
+            for side in ("buy", "sell")
+            for regime in ("opening", "midday", "closing")
+        ],
+    }
+    live_cost_path = tmp_path / "live_cost_model_latest.json"
+    live_cost_path.write_text(json.dumps(live_cost_model), encoding="utf-8")
+
+    static_dataset = build_training_dataset(
+        data_dir=tmp_path,
+        horizon_bars=1,
+        fee_bps=0.0,
+        slippage_bps=0.0,
+        min_net_edge_bps=0.0,
+    )
+    from ai_trading.tools.offline_replay import _load_live_cost_replay_model
+
+    cost_model = _load_live_cost_replay_model(
+        argparse.Namespace(live_cost_model_json=live_cost_path, use_live_cost_model=False)
+    )
+    cost_dataset = build_training_dataset(
+        data_dir=tmp_path,
+        horizon_bars=1,
+        fee_bps=0.0,
+        slippage_bps=0.0,
+        min_net_edge_bps=0.0,
+        live_cost_model=cost_model,
+    )
+
+    assert cost_model is not None
+    assert cost_dataset["round_trip_cost_bps"].mean() == 50.0
+    assert cost_dataset["net_long_bps"].mean() < static_dataset["net_long_bps"].mean()
+
+
 def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     output_dir = tmp_path / "out"

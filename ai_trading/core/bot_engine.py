@@ -37679,6 +37679,23 @@ def _run_tca_cost_calibration(
                         )
                     ),
                 ),
+                max_p90_total_cost_bps=_safe_float(
+                    get_env(
+                        "AI_TRADING_LIVE_COST_MODEL_MAX_P90_TOTAL_COST_BPS",
+                        "",
+                        cast=str,
+                    )
+                ),
+                max_future_skew_seconds=max(
+                    0.0,
+                    float(
+                        get_env(
+                            "AI_TRADING_LIVE_COST_MODEL_MAX_FUTURE_SKEW_SECONDS",
+                            300.0,
+                            cast=float,
+                        )
+                    ),
+                ),
                 now=now,
             )
             live_cost_model["paths"]["report"] = str(live_cost_model_path)
@@ -37809,6 +37826,55 @@ def _run_tca_cost_calibration(
                         "shadow_only": int(summary_map.get("shadow_only_count", 0) or 0),
                     },
                 )
+                try:
+                    from ai_trading.tools.runtime_decay_controls import (
+                        build_runtime_decay_controls,
+                    )
+
+                    decay_path = resolve_runtime_artifact_path(
+                        str(
+                            get_env(
+                                "AI_TRADING_RUNTIME_DECAY_CONTROLS_PATH",
+                                "runtime/runtime_decay_controls_latest.json",
+                            )
+                        ),
+                        default_relative="runtime/runtime_decay_controls_latest.json",
+                    )
+                    decay_artifact = build_runtime_decay_controls(
+                        live_cost_model=live_cost_model,
+                        execution_quality_governor=_read_json_mapping(governor_path),
+                        symbol_universe_scorecard=symbol_scorecard,
+                        generated_at=now,
+                    )
+                    decay_artifact["paths"] = {
+                        "live_cost_model": str(live_cost_model_path),
+                        "execution_quality_governor": str(governor_path),
+                        "symbol_universe_scorecard": str(scorecard_path),
+                        "report": str(decay_path),
+                    }
+                    decay_path.parent.mkdir(parents=True, exist_ok=True)
+                    decay_path.write_text(
+                        json.dumps(decay_artifact, sort_keys=True, default=str),
+                        encoding="utf-8",
+                    )
+                    decay_actions = decay_artifact.get("actions")
+                    decay_actions_map = (
+                        decay_actions if isinstance(decay_actions, Mapping) else {}
+                    )
+                    logger.info(
+                        "RUNTIME_DECAY_CONTROLS_UPDATED",
+                        extra={
+                            "path": str(decay_path),
+                            "action": decay_actions_map.get("max_action"),
+                            "entries_allowed": decay_actions_map.get("entries_allowed"),
+                            "size_scale": decay_actions_map.get("size_scale"),
+                        },
+                    )
+                except BOT_ENGINE_FALLBACK_EXC as exc:
+                    logger.warning(
+                        "RUNTIME_DECAY_CONTROLS_UPDATE_FAILED",
+                        extra={"error": str(exc)},
+                    )
             except BOT_ENGINE_FALLBACK_EXC as exc:
                 logger.warning(
                     "SYMBOL_UNIVERSE_SCORECARD_UPDATE_FAILED",
