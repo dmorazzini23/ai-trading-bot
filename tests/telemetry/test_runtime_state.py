@@ -49,6 +49,10 @@ def test_quote_status_tracks_symbol_snapshots_independently() -> None:
         ask=100.02,
         quote_age_ms=250.0,
         quote_timestamp="2026-05-01T14:30:00+00:00",
+        spread_bps=2.0,
+        max_spread_bps=10.0,
+        max_quote_age_ms=1000.0,
+        gate_reason="ok",
     )
     runtime_state.update_quote_status(
         allowed=False,
@@ -69,5 +73,9 @@ def test_quote_status_tracks_symbol_snapshots_independently() -> None:
     assert aapl["ask"] == 100.02
     assert aapl["quote_age_ms"] == 250.0
     assert aapl["quote_timestamp"] == "2026-05-01T14:30:00+00:00"
+    assert aapl["spread_bps"] == 2.0
+    assert aapl["max_spread_bps"] == 10.0
+    assert aapl["max_quote_age_ms"] == 1000.0
+    assert aapl["gate_reason"] == "ok"
     assert msft["symbol"] == "MSFT"
     assert msft["allowed"] is False

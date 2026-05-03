@@ -114,7 +114,7 @@ class CostModel:
                 cost = abs(float(raw_cost))
             except (TypeError, ValueError):
                 continue
-            if not math.isfinite(cost) or cost <= 0:
+            if not math.isfinite(cost) or cost < 0:
                 continue
             if cost > float(outlier_bps):
                 continue
@@ -223,4 +223,3 @@ class CostModel:
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("w", encoding="utf-8") as handle:
             json.dump(self.to_dict(), handle, sort_keys=True, indent=2)
-

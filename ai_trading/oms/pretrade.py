@@ -9,10 +9,11 @@ import json
 from pathlib import Path
 import sqlite3
 from threading import RLock
-from typing import Any, cast
+from typing import Any, Mapping, cast
 from zoneinfo import ZoneInfo
 
 from ai_trading.config.management import get_env
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.utils.market_calendar import is_trading_day, session_info
 
 
@@ -62,6 +63,14 @@ class OrderIntent:
         from ai_trading.contracts import OrderIntent as CanonicalOrderIntent
 
         return CanonicalOrderIntent.from_pretrade(self)
+
+
+_LIVE_COST_MODEL_CACHE: dict[str, Any] = {
+    "path": None,
+    "mtime_ns": None,
+    "payload": None,
+}
+_LIVE_COST_MODEL_LOCK = RLock()
 
 
 class SlidingWindowRateLimiter:
@@ -661,6 +670,248 @@ def _json_env_dict(name: str, default: dict[str, float]) -> dict[str, float]:
     return out
 
 
+def _parse_utc_datetime_text(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _live_cost_model_payload() -> Mapping[str, Any] | None:
+    if not bool(get_env("AI_TRADING_PRETRADE_LIVE_COST_MODEL_GATE_ENABLED", True, cast=bool)):
+        return None
+    configured_path = str(
+        get_env(
+            "AI_TRADING_LIVE_COST_MODEL_PATH",
+            "runtime/live_cost_model_latest.json",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or "runtime/live_cost_model_latest.json"
+    ).strip()
+    path = resolve_runtime_artifact_path(
+        configured_path,
+        default_relative="runtime/live_cost_model_latest.json",
+    )
+    try:
+        stat_result = path.stat()
+    except OSError:
+        return None
+    with _LIVE_COST_MODEL_LOCK:
+        if (
+            _LIVE_COST_MODEL_CACHE.get("path") == str(path)
+            and _LIVE_COST_MODEL_CACHE.get("mtime_ns") == stat_result.st_mtime_ns
+        ):
+            cached = _LIVE_COST_MODEL_CACHE.get("payload")
+            return cached if isinstance(cached, Mapping) else None
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            parsed = None
+        payload = parsed if isinstance(parsed, Mapping) else None
+        _LIVE_COST_MODEL_CACHE.update(
+            {
+                "path": str(path),
+                "mtime_ns": stat_result.st_mtime_ns,
+                "payload": payload,
+            }
+        )
+    return payload
+
+
+def _live_cost_model_usable(payload: Mapping[str, Any]) -> bool:
+    if str(payload.get("artifact_type") or "") != "live_cost_model":
+        return False
+    max_age_minutes = _finite_float(
+        get_env(
+            "AI_TRADING_PRETRADE_LIVE_COST_MODEL_MAX_AGE_MINUTES",
+            1440.0,
+            cast=float,
+        )
+    )
+    generated_at = _parse_utc_datetime_text(payload.get("generated_at"))
+    if generated_at is None:
+        return False
+    if max_age_minutes is not None and max_age_minutes > 0.0:
+        age_seconds = (datetime.now(UTC) - generated_at).total_seconds()
+        if age_seconds > max_age_minutes * 60.0:
+            return False
+    status = payload.get("status")
+    if not isinstance(status, Mapping):
+        return False
+    require_ready = bool(
+        get_env(
+            "AI_TRADING_PRETRADE_LIVE_COST_MODEL_REQUIRE_READY",
+            True,
+            cast=bool,
+        )
+    )
+    if require_ready and str(status.get("status") or "").lower() != "ready":
+        return False
+    return bool(status.get("available"))
+
+
+def _normalized_live_cost_side(side: str | None) -> str:
+    token = str(side or "").strip().lower()
+    if token in {"short", "sell_short", "sellshort"}:
+        return "sell_short"
+    if token in {"cover", "buy_to_cover", "buytocover"}:
+        return "buy"
+    if token in {"sell_long", "sell"}:
+        return "sell"
+    return token or "unknown"
+
+
+def _live_cost_model_bucket(
+    payload: Mapping[str, Any],
+    *,
+    symbol: str,
+    side: str,
+    session_regime: str,
+    min_samples: int,
+) -> tuple[Mapping[str, Any] | None, str | None]:
+    rows = payload.get("by_symbol_side_session")
+    if not isinstance(rows, list):
+        return None, None
+    symbol_token = str(symbol or "").strip().upper()
+    side_token = _normalized_live_cost_side(side)
+    session_token = str(session_regime or "").strip().lower()
+    side_candidates = [side_token]
+    if side_token == "sell_short":
+        side_candidates.append("sell")
+    elif side_token == "sell":
+        side_candidates.append("sell_short")
+    candidates: list[tuple[Mapping[str, Any], str]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        if str(row.get("symbol") or "").strip().upper() != symbol_token:
+            continue
+        row_session = str(row.get("session_regime") or "").strip().lower()
+        if row_session != session_token:
+            continue
+        sample_count = _finite_float(row.get("sample_count")) or 0.0
+        if sample_count < max(1, int(min_samples)):
+            continue
+        if not bool(row.get("sufficient_samples")):
+            continue
+        row_side = _normalized_live_cost_side(str(row.get("side") or ""))
+        if row_side == side_token:
+            return row, f"LIVE_COST_MODEL:{symbol_token}:{row_side}:{session_token}"
+        if row_side in side_candidates:
+            candidates.append(
+                (row, f"LIVE_COST_MODEL:{symbol_token}:{row_side}:{session_token}")
+            )
+        else:
+            candidates.append(
+                (row, f"LIVE_COST_MODEL:{symbol_token}:ANY:{session_token}")
+            )
+    if candidates:
+        return candidates[0]
+    return None, None
+
+
+def _live_cost_model_thresholds(
+    intent: OrderIntent,
+    *,
+    symbol_token: str,
+    session_regime: str,
+) -> dict[str, Any]:
+    payload = _live_cost_model_payload()
+    if payload is None or not _live_cost_model_usable(payload):
+        return {}
+    min_samples = int(
+        max(
+            1,
+            float(
+                get_env(
+                    "AI_TRADING_PRETRADE_LIVE_COST_MODEL_MIN_SAMPLES",
+                    5,
+                    cast=float,
+                )
+            ),
+        )
+    )
+    row, source = _live_cost_model_bucket(
+        payload,
+        symbol=symbol_token,
+        side=intent.side,
+        session_regime=session_regime,
+        min_samples=min_samples,
+    )
+    if row is None:
+        return {}
+    spread_multiplier = max(
+        1.0,
+        float(
+            get_env(
+                "AI_TRADING_PRETRADE_LIVE_COST_MODEL_SPREAD_MULTIPLIER",
+                1.25,
+                cast=float,
+            )
+        ),
+    )
+    quote_age_multiplier = max(
+        1.0,
+        float(
+            get_env(
+                "AI_TRADING_PRETRADE_LIVE_COST_MODEL_QUOTE_AGE_MULTIPLIER",
+                1.25,
+                cast=float,
+            )
+        ),
+    )
+    max_total_cost_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_PRETRADE_LIVE_COST_MODEL_MAX_TOTAL_COST_BPS",
+                25.0,
+                cast=float,
+            )
+        ),
+    )
+    spread_basis = _finite_float(row.get("p90_spread_bps"))
+    if spread_basis is None:
+        spread_basis = _finite_float(row.get("mean_spread_bps"))
+    quote_age_basis = _finite_float(row.get("p90_quote_age_ms"))
+    if quote_age_basis is None:
+        quote_age_basis = _finite_float(row.get("mean_quote_age_ms"))
+    p90_total_cost_bps = _finite_float(row.get("p90_total_cost_bps"))
+    mean_total_cost_bps = _finite_float(row.get("mean_total_cost_bps"))
+    return {
+        "source": source,
+        "sample_count": int(_finite_float(row.get("sample_count")) or 0.0),
+        "max_spread_bps": (
+            float(spread_basis) * spread_multiplier
+            if spread_basis is not None and spread_basis >= 0.0
+            else None
+        ),
+        "spread_basis_bps": spread_basis,
+        "max_quote_age_ms": (
+            float(quote_age_basis) * quote_age_multiplier
+            if quote_age_basis is not None and quote_age_basis >= 0.0
+            else None
+        ),
+        "quote_age_basis_ms": quote_age_basis,
+        "p90_adverse_slippage_bps": _finite_float(row.get("p90_adverse_slippage_bps")),
+        "mean_slippage_bps": _finite_float(row.get("mean_slippage_bps")),
+        "p90_total_cost_bps": p90_total_cost_bps,
+        "mean_total_cost_bps": mean_total_cost_bps,
+        "max_total_cost_bps": max_total_cost_bps,
+    }
+
+
 def _parse_hhmm(token: str) -> dt_time | None:
     parts = token.strip().split(":")
     if len(parts) != 2:
@@ -757,6 +1008,21 @@ def _effective_expected_slippage_bps(intent: OrderIntent) -> tuple[float | None,
             return float(intent.expected_slippage_bps), "explicit"
         except (TypeError, ValueError):
             return None, None
+    symbol_token = str(intent.symbol or "").strip().upper()
+    if symbol_token:
+        live_thresholds = _live_cost_model_thresholds(
+            intent,
+            symbol_token=symbol_token,
+            session_regime=_intent_session_regime(intent),
+        )
+        live_slippage = _finite_float(live_thresholds.get("p90_adverse_slippage_bps"))
+        live_slippage_source = "p90_adverse_slippage_bps"
+        if live_slippage is None:
+            live_slippage = _finite_float(live_thresholds.get("mean_slippage_bps"))
+            live_slippage_source = "mean_slippage_bps"
+        if live_slippage is not None and live_slippage >= 0.0:
+            source = str(live_thresholds.get("source") or "LIVE_COST_MODEL")
+            return float(live_slippage), f"{source}:{live_slippage_source}"
     reference = None
     if intent.mid is not None:
         try:
@@ -779,6 +1045,255 @@ def _effective_expected_slippage_bps(intent: OrderIntent) -> tuple[float | None,
             return None, None
         return spread_bps, "derived_from_spread"
     return None, None
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed != parsed or parsed in (float("inf"), float("-inf")):
+        return None
+    return parsed
+
+
+def _intent_reference_price(intent: OrderIntent) -> float | None:
+    for value in (intent.mid, intent.last_price, intent.limit_price):
+        parsed = _finite_float(value)
+        if parsed is not None and parsed > 0.0:
+            return parsed
+    bid = _finite_float(intent.bid)
+    ask = _finite_float(intent.ask)
+    if bid is not None and ask is not None and bid > 0.0 and ask > 0.0:
+        return (bid + ask) / 2.0
+    return None
+
+
+def _intent_spread_bps(intent: OrderIntent) -> tuple[float | None, str | None]:
+    reference = _intent_reference_price(intent)
+    bid = _finite_float(intent.bid)
+    ask = _finite_float(intent.ask)
+    if bid is not None and ask is not None and bid > 0.0 and ask >= bid:
+        mid = (bid + ask) / 2.0
+        if mid > 0.0:
+            return ((ask - bid) / mid) * 10_000.0, "bid_ask"
+    spread = _finite_float(intent.spread)
+    if spread is not None and spread >= 0.0 and reference is not None and reference > 0.0:
+        return (spread / reference) * 10_000.0, "spread"
+    return None, None
+
+
+def _intent_reduces_position(intent: OrderIntent, ledger: Any) -> bool:
+    current_qty = _ledger_position_qty(ledger, intent.symbol)
+    if current_qty is None:
+        return False
+    side = str(intent.side or "").strip().lower()
+    order_qty = abs(int(intent.qty))
+    if order_qty <= 0:
+        return False
+    if current_qty > 0.0 and side in {"sell", "sell_long"}:
+        return order_qty <= abs(current_qty)
+    if current_qty < 0.0 and side in {"buy", "cover", "buy_to_cover"}:
+        return order_qty <= abs(current_qty)
+    return False
+
+
+def _lookup_threshold(
+    values: dict[str, float],
+    *,
+    symbol: str,
+    session_regime: str,
+    liquidity_bucket: str,
+) -> tuple[float | None, str | None]:
+    keys = (
+        f"{symbol}:{session_regime.upper()}",
+        f"{symbol}:{session_regime.lower()}",
+        symbol,
+        f"BUCKET:{liquidity_bucket}",
+        liquidity_bucket,
+    )
+    for key in keys:
+        value = values.get(str(key).upper())
+        if value is not None and value > 0.0:
+            return float(value), str(key).upper()
+    return None, None
+
+
+def _execution_quality_gate(
+    intent: OrderIntent,
+    *,
+    cfg: Any,
+    ledger: Any,
+    effective_quote_age_ms: float | None,
+    quote_max_age_ms: int,
+) -> tuple[bool, str, dict[str, Any]] | None:
+    enabled = get_env(
+        "AI_TRADING_PRETRADE_EXECUTION_QUALITY_GATE_ENABLED",
+        True,
+        cast=bool,
+    )
+    if not bool(enabled) or _intent_reduces_position(intent, ledger):
+        return None
+
+    symbol_token = str(intent.symbol or "").strip().upper()
+    session_regime = _intent_session_regime(intent).upper()
+    liquidity_bucket = str(intent.liquidity_bucket or "UNKNOWN").strip().upper() or "UNKNOWN"
+    live_cost_thresholds = _live_cost_model_thresholds(
+        intent,
+        symbol_token=symbol_token,
+        session_regime=session_regime,
+    )
+    live_total_cost_bps = _finite_float(live_cost_thresholds.get("p90_total_cost_bps"))
+    if live_total_cost_bps is None:
+        live_total_cost_bps = _finite_float(live_cost_thresholds.get("mean_total_cost_bps"))
+    live_max_total_cost_bps = _finite_float(
+        live_cost_thresholds.get("max_total_cost_bps")
+    )
+    if (
+        live_total_cost_bps is not None
+        and live_max_total_cost_bps is not None
+        and live_max_total_cost_bps > 0.0
+        and live_total_cost_bps > live_max_total_cost_bps
+    ):
+        return (
+            False,
+            "EXECUTION_QUALITY_LIVE_COST_BLOCK",
+            {
+                "symbol": symbol_token,
+                "session_regime": session_regime.lower(),
+                "liquidity_bucket": liquidity_bucket,
+                "p90_total_cost_bps": (
+                    _finite_float(live_cost_thresholds.get("p90_total_cost_bps"))
+                ),
+                "mean_total_cost_bps": (
+                    _finite_float(live_cost_thresholds.get("mean_total_cost_bps"))
+                ),
+                "max_total_cost_bps": float(live_max_total_cost_bps),
+                "threshold_source": live_cost_thresholds.get("source"),
+                "sample_count": live_cost_thresholds.get("sample_count"),
+                "action": "block",
+                "block_reason": "live_cost_too_high",
+            },
+        )
+
+    global_max_spread_bps = _finite_float(
+        _cfg_value(
+            cfg,
+            field="execution_max_spread_bps",
+            env_keys=("AI_TRADING_EXEC_MAX_SPREAD_BPS", "AI_TRADING_POLICY_EXEC_MAX_SPREAD_BPS"),
+            default=0.0,
+            cast=float,
+        )
+    )
+    spread_thresholds = _json_env_dict(
+        "AI_TRADING_EXEC_MAX_SPREAD_BPS_BY_SYMBOL",
+        {},
+    )
+    spread_thresholds.update(
+        _json_env_dict("AI_TRADING_EXEC_MAX_SPREAD_BPS_BY_SYMBOL_SESSION", {})
+    )
+    spread_thresholds.update(
+        _json_env_dict("AI_TRADING_EXEC_MAX_SPREAD_BPS_BY_BUCKET", {})
+    )
+    max_spread_bps, spread_threshold_source = _lookup_threshold(
+        spread_thresholds,
+        symbol=symbol_token,
+        session_regime=session_regime,
+        liquidity_bucket=liquidity_bucket,
+    )
+    if max_spread_bps is None and global_max_spread_bps is not None and global_max_spread_bps > 0.0:
+        max_spread_bps = float(global_max_spread_bps)
+        spread_threshold_source = "GLOBAL"
+    live_max_spread_bps = _finite_float(live_cost_thresholds.get("max_spread_bps"))
+    if live_max_spread_bps is not None and live_max_spread_bps > 0.0:
+        if max_spread_bps is None or live_max_spread_bps < max_spread_bps:
+            max_spread_bps = float(live_max_spread_bps)
+            spread_threshold_source = str(live_cost_thresholds.get("source") or "LIVE_COST_MODEL")
+
+    spread_bps, spread_source = _intent_spread_bps(intent)
+    if (
+        spread_bps is not None
+        and max_spread_bps is not None
+        and spread_bps > max_spread_bps
+    ):
+        return (
+            False,
+            "EXECUTION_QUALITY_SPREAD_BLOCK",
+            {
+                "symbol": symbol_token,
+                "session_regime": session_regime.lower(),
+                "liquidity_bucket": liquidity_bucket,
+                "spread_bps": round(float(spread_bps), 6),
+                "spread_source": spread_source,
+                "max_spread_bps": float(max_spread_bps),
+                "live_spread_basis_bps": live_cost_thresholds.get("spread_basis_bps"),
+                "live_cost_sample_count": live_cost_thresholds.get("sample_count"),
+                "threshold_source": spread_threshold_source,
+                "bid": intent.bid,
+                "ask": intent.ask,
+                "quote_source": intent.submit_quote_source,
+                "action": "block",
+                "block_reason": "spread_bps_too_wide",
+            },
+        )
+
+    quote_age_thresholds = _json_env_dict(
+        "AI_TRADING_EXEC_MAX_QUOTE_AGE_MS_BY_SYMBOL",
+        {},
+    )
+    quote_age_thresholds.update(
+        _json_env_dict("AI_TRADING_EXEC_MAX_QUOTE_AGE_MS_BY_SYMBOL_SESSION", {})
+    )
+    quote_age_thresholds.update(
+        _json_env_dict("AI_TRADING_EXEC_MAX_QUOTE_AGE_MS_BY_BUCKET", {})
+    )
+    max_quote_age_ms, quote_age_threshold_source = _lookup_threshold(
+        quote_age_thresholds,
+        symbol=symbol_token,
+        session_regime=session_regime,
+        liquidity_bucket=liquidity_bucket,
+    )
+    if max_quote_age_ms is None and quote_max_age_ms > 0:
+        max_quote_age_ms = float(quote_max_age_ms)
+        quote_age_threshold_source = "GLOBAL"
+    live_max_quote_age_ms = _finite_float(
+        live_cost_thresholds.get("max_quote_age_ms")
+    )
+    if live_max_quote_age_ms is not None and live_max_quote_age_ms > 0.0:
+        if max_quote_age_ms is None or live_max_quote_age_ms < max_quote_age_ms:
+            max_quote_age_ms = float(live_max_quote_age_ms)
+            quote_age_threshold_source = str(
+                live_cost_thresholds.get("source") or "LIVE_COST_MODEL"
+            )
+    if (
+        effective_quote_age_ms is not None
+        and max_quote_age_ms is not None
+        and max_quote_age_ms > 0.0
+        and effective_quote_age_ms > max_quote_age_ms
+    ):
+        return (
+            False,
+            "EXECUTION_QUALITY_STALE_QUOTE_BLOCK",
+            {
+                "symbol": symbol_token,
+                "session_regime": session_regime.lower(),
+                "liquidity_bucket": liquidity_bucket,
+                "quote_age_ms": round(float(effective_quote_age_ms), 3),
+                "max_quote_age_ms": float(max_quote_age_ms),
+                "live_quote_age_basis_ms": live_cost_thresholds.get("quote_age_basis_ms"),
+                "live_cost_sample_count": live_cost_thresholds.get("sample_count"),
+                "threshold_source": quote_age_threshold_source,
+                "quote_source": intent.submit_quote_source,
+                "quote_ts": (
+                    _coerce_utc_datetime(intent.quote_ts).isoformat()
+                    if _coerce_utc_datetime(intent.quote_ts) is not None
+                    else None
+                ),
+                "action": "block",
+                "block_reason": "quote_age_too_stale",
+            },
+        )
+    return None
 
 
 def _ledger_sector_notional(ledger: Any, sector: str | None) -> float | None:
@@ -1054,6 +1569,16 @@ def validate_pretrade(
                     ),
                 },
             )
+
+    execution_quality_decision = _execution_quality_gate(
+        intent,
+        cfg=cfg,
+        ledger=ledger,
+        effective_quote_age_ms=effective_quote_age_ms,
+        quote_max_age_ms=quote_max_age_ms,
+    )
+    if execution_quality_decision is not None:
+        return execution_quality_decision
 
     require_realtime_nbbo = bool(intent.require_realtime_nbbo)
     if (

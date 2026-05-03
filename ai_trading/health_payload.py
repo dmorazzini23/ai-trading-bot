@@ -801,6 +801,84 @@ def _runtime_performance_snapshot() -> dict[str, Any]:
     }
 
 
+def _execution_quality_governor_snapshot() -> dict[str, Any]:
+    try:
+        latest_path = str(
+            get_env(
+                "AI_TRADING_EXECUTION_QUALITY_GOVERNOR_REPORT_PATH",
+                "runtime/execution_quality_governor_latest.json",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or "runtime/execution_quality_governor_latest.json"
+        ).strip()
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        latest_path = "runtime/execution_quality_governor_latest.json"
+    payload, resolved = _read_json_mapping_artifact(
+        configured_path=latest_path,
+        default_relative="runtime/execution_quality_governor_latest.json",
+    )
+    status_raw = payload.get("status") if isinstance(payload, Mapping) else {}
+    observed_raw = payload.get("observed") if isinstance(payload, Mapping) else {}
+    actions_raw = payload.get("actions") if isinstance(payload, Mapping) else {}
+    window_raw = payload.get("window") if isinstance(payload, Mapping) else {}
+    by_symbol_raw = payload.get("by_symbol") if isinstance(payload, Mapping) else []
+    return {
+        "available": bool(payload),
+        "path": str(resolved),
+        "schema_version": payload.get("schema_version"),
+        "generated_at": payload.get("generated_at"),
+        "status": dict(status_raw) if isinstance(status_raw, Mapping) else {},
+        "observed": dict(observed_raw) if isinstance(observed_raw, Mapping) else {},
+        "actions": dict(actions_raw) if isinstance(actions_raw, Mapping) else {},
+        "window": dict(window_raw) if isinstance(window_raw, Mapping) else {},
+        "by_symbol": (
+            [dict(row) for row in by_symbol_raw if isinstance(row, Mapping)][:5]
+            if isinstance(by_symbol_raw, list)
+            else []
+        ),
+    }
+
+
+def _live_cost_model_snapshot() -> dict[str, Any]:
+    try:
+        latest_path = str(
+            get_env(
+                "AI_TRADING_LIVE_COST_MODEL_PATH",
+                "runtime/live_cost_model_latest.json",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or "runtime/live_cost_model_latest.json"
+        ).strip()
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        latest_path = "runtime/live_cost_model_latest.json"
+    payload, resolved = _read_json_mapping_artifact(
+        configured_path=latest_path,
+        default_relative="runtime/live_cost_model_latest.json",
+    )
+    status_raw = payload.get("status") if isinstance(payload, Mapping) else {}
+    observed_raw = payload.get("observed") if isinstance(payload, Mapping) else {}
+    window_raw = payload.get("window") if isinstance(payload, Mapping) else {}
+    rows_raw = (
+        payload.get("by_symbol_side_session") if isinstance(payload, Mapping) else []
+    )
+    return {
+        "available": bool(payload),
+        "path": str(resolved),
+        "schema_version": payload.get("schema_version"),
+        "generated_at": payload.get("generated_at"),
+        "status": dict(status_raw) if isinstance(status_raw, Mapping) else {},
+        "observed": dict(observed_raw) if isinstance(observed_raw, Mapping) else {},
+        "window": dict(window_raw) if isinstance(window_raw, Mapping) else {},
+        "by_symbol_side_session": (
+            [dict(row) for row in rows_raw if isinstance(row, Mapping)][:8]
+            if isinstance(rows_raw, list)
+            else []
+        ),
+    }
+
+
 def _manual_override_snapshot() -> dict[str, Any]:
     try:
         from ai_trading.config.management import get_env
@@ -1289,6 +1367,8 @@ def build_control_plane_snapshot(
         oms_lifecycle_parity=oms_lifecycle_parity,
     )
     runtime_performance = _runtime_performance_snapshot()
+    execution_quality_governor = _execution_quality_governor_snapshot()
+    live_cost_model = _live_cost_model_snapshot()
     manual_overrides = _manual_override_snapshot()
     governance = _governance_snapshot()
 
@@ -1394,6 +1474,8 @@ def build_control_plane_snapshot(
         },
         "execution_quality": {
             "oms_event_tca_available": runtime_oms_event_tca.get("available"),
+            "governor": execution_quality_governor,
+            "live_cost_model": live_cost_model,
             "submit_reject_rate_pct": runtime_oms_event_tca.get(
                 "submit_reject_rate_pct"
             ),

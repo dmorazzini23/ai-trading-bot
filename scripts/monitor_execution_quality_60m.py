@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from collections import Counter
 from datetime import UTC, datetime, timedelta
@@ -33,9 +34,53 @@ def _to_float(value: Any) -> float | None:
     if value is None:
         return None
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _first_float(*values: Any) -> float | None:
+    for value in values:
+        parsed = _to_float(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _nested_float(row: dict[str, Any], *keys: str) -> float | None:
+    context = row.get("context") if isinstance(row.get("context"), dict) else {}
+    market = row.get("market") if isinstance(row.get("market"), dict) else {}
+    cost = row.get("cost") if isinstance(row.get("cost"), dict) else {}
+    for key in keys:
+        parsed = _first_float(row.get(key), cost.get(key), market.get(key), context.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _percentile(values: list[float], q: float) -> float | None:
+    clean = sorted(float(value) for value in values if math.isfinite(float(value)))
+    if not clean:
+        return None
+    quantile = max(0.0, min(float(q), 1.0))
+    if len(clean) == 1:
+        return float(clean[0])
+    raw = quantile * (len(clean) - 1)
+    lo = int(math.floor(raw))
+    hi = int(math.ceil(raw))
+    if lo == hi:
+        return float(clean[lo])
+    return float(clean[lo] + (clean[hi] - clean[lo]) * (raw - lo))
+
+
+def _mean(values: list[float]) -> float | None:
+    clean = [float(value) for value in values if math.isfinite(float(value))]
+    if not clean:
+        return None
+    return float(sum(clean) / len(clean))
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -159,11 +204,21 @@ def _window_metrics(events_path: Path, window_minutes: int, top_n: int) -> dict[
     passive_low_skips = 0
     realized_sum = 0.0
     realized_samples = 0
+    event_count = 0
+    filled_count = 0
+    blocked_count = 0
+    derisked_count = 0
+    spread_samples: list[float] = []
+    quote_age_samples: list[float] = []
 
     by_symbol: Counter[str] = Counter()
+    events_by_symbol: Counter[str] = Counter()
+    spread_by_symbol: dict[str, list[float]] = {}
+    quote_age_by_symbol: dict[str, list[float]] = {}
     by_code: Counter[str] = Counter()
     by_phase: Counter[str] = Counter()
     by_trace: Counter[str] = Counter()
+    reason_counts: Counter[str] = Counter()
     missing_phase = 0
     missing_trace = 0
 
@@ -178,11 +233,34 @@ def _window_metrics(events_path: Path, window_minutes: int, top_n: int) -> dict[
                 if ts is None or ts < cutoff:
                     continue
 
+                event_count += 1
                 event = row.get("event")
                 reason = row.get("reason")
+                reason_token = str(reason or "unknown")
+                symbol = str(row.get("symbol") or "UNKNOWN").upper()
+                events_by_symbol[symbol] += 1
+                reason_counts[reason_token] += 1
+                spread_bps = _nested_float(
+                    row,
+                    "spread_bps",
+                    "quoted_spread_bps",
+                    "bid_ask_spread_bps",
+                )
+                quote_age_ms = _nested_float(
+                    row,
+                    "quote_age_ms",
+                    "quote_staleness_ms",
+                    "quote_age",
+                )
+                if spread_bps is not None:
+                    spread_samples.append(float(spread_bps))
+                    spread_by_symbol.setdefault(symbol, []).append(float(spread_bps))
+                if quote_age_ms is not None:
+                    quote_age_samples.append(float(quote_age_ms))
+                    quote_age_by_symbol.setdefault(symbol, []).append(float(quote_age_ms))
+
                 if event == "submit_failed" and reason == "submit_no_result":
                     submit_no_result += 1
-                    symbol = str(row.get("symbol") or "UNKNOWN")
                     phase = row.get("phase")
                     trace = row.get("trace_id") or row.get("client_order_id") or row.get("order_id")
                     code = row.get("error_code") or row.get("status_code") or row.get("error") or "none"
@@ -203,27 +281,74 @@ def _window_metrics(events_path: Path, window_minutes: int, top_n: int) -> dict[
                     skipped_total += 1
                     if reason == "passive_fill_probability_low":
                         passive_low_skips += 1
+                    if reason_token in {
+                        "EXECUTION_QUALITY_SPREAD_BLOCK",
+                        "EXECUTION_QUALITY_STALE_QUOTE_BLOCK",
+                        "spread_bps_too_wide",
+                        "quote_age_too_stale",
+                    }:
+                        blocked_count += 1
 
                 if event == "submit_outcome":
-                    realized = (
-                        _to_float(row.get("sum_realized_bps"))
-                        or _to_float(row.get("realized_bps"))
-                        or _to_float(row.get("realized_net_edge_bps"))
+                    status = str(row.get("status") or "").strip().lower()
+                    if status in {"filled", "partially_filled"}:
+                        filled_count += 1
+                    realized = _first_float(
+                        row.get("sum_realized_bps"),
+                        row.get("realized_bps"),
+                        row.get("realized_net_edge_bps"),
                     )
                     if realized is not None:
                         realized_sum += realized
                         realized_samples += 1
+                action = str(row.get("action") or row.get("status") or "").strip().lower()
+                context = row.get("context") if isinstance(row.get("context"), dict) else {}
+                if action in {"derisk", "size_down", "throttle"}:
+                    derisked_count += 1
+                else:
+                    quantity_after = _first_float(context.get("quantity_after"))
+                    quantity_before = _first_float(context.get("quantity_before"))
+                    if (
+                        quantity_after is not None
+                        and quantity_before is not None
+                        and quantity_after < quantity_before
+                    ):
+                        derisked_count += 1
 
     share = float(passive_low_skips) / float(skipped_total) if skipped_total else 0.0
+    by_symbol_rows: list[dict[str, Any]] = []
+    for symbol, count in events_by_symbol.most_common(top_n):
+        symbol_spreads = spread_by_symbol.get(symbol, [])
+        symbol_ages = quote_age_by_symbol.get(symbol, [])
+        by_symbol_rows.append(
+            {
+                "symbol": symbol,
+                "events": int(count),
+                "mean_spread_bps": _mean(symbol_spreads),
+                "p90_spread_bps": _percentile(symbol_spreads, 0.90),
+                "mean_quote_age_ms": _mean(symbol_ages),
+                "p90_quote_age_ms": _percentile(symbol_ages, 0.90),
+            }
+        )
     return {
         "now": now,
         "window_minutes": window_minutes,
+        "event_count": event_count,
+        "filled_count": filled_count,
         "submit_no_result": submit_no_result,
         "passive_low_skip_share": share,
         "passive_low_skips": passive_low_skips,
         "skipped_total": skipped_total,
         "rolling_sum_realized_bps": realized_sum,
         "realized_samples": realized_samples,
+        "mean_spread_bps": _mean(spread_samples),
+        "p90_spread_bps": _percentile(spread_samples, 0.90),
+        "mean_quote_age_ms": _mean(quote_age_samples),
+        "p90_quote_age_ms": _percentile(quote_age_samples, 0.90),
+        "blocked_count": blocked_count,
+        "derisked_count": derisked_count,
+        "reason_counts": dict(reason_counts.most_common(top_n)),
+        "by_symbol": by_symbol_rows,
         "top_symbols": by_symbol.most_common(top_n),
         "top_error_codes": by_code.most_common(top_n),
         "top_phases": by_phase.most_common(top_n),
@@ -232,6 +357,67 @@ def _window_metrics(events_path: Path, window_minutes: int, top_n: int) -> dict[
         "missing_phase": missing_phase,
         "missing_trace": missing_trace,
     }
+
+
+def _governor_report(
+    *,
+    metrics: dict[str, Any],
+    events_path: Path,
+    output_path: Path | None,
+) -> dict[str, Any]:
+    submit_no_result = int(metrics.get("submit_no_result") or 0)
+    blocked_count = int(metrics.get("blocked_count") or 0)
+    failed_checks: list[str] = []
+    if submit_no_result > 0:
+        failed_checks.append("submit_no_result")
+    status = "pass"
+    mode = "observe"
+    if submit_no_result > 0:
+        status = "fail"
+        mode = "block"
+    elif blocked_count > 0:
+        status = "degraded"
+        mode = "derisk"
+    report = {
+        "schema_version": "1.0.0",
+        "artifact_type": "execution_quality_governor_report",
+        "generated_at": metrics["now"].isoformat().replace("+00:00", "Z"),
+        "source": "execution_quality_events",
+        "window": {
+            "minutes": int(metrics["window_minutes"]),
+            "event_count": int(metrics.get("event_count") or 0),
+            "filled_count": int(metrics.get("filled_count") or 0),
+        },
+        "status": {
+            "gate_passed": status != "fail",
+            "status": status,
+            "mode": mode,
+            "failed_checks": failed_checks,
+            "attention_flags": ["execution_quality_blocks_present"] if blocked_count else [],
+        },
+        "observed": {
+            "mean_spread_bps": metrics.get("mean_spread_bps"),
+            "p90_spread_bps": metrics.get("p90_spread_bps"),
+            "mean_quote_age_ms": metrics.get("mean_quote_age_ms"),
+            "p90_quote_age_ms": metrics.get("p90_quote_age_ms"),
+            "submit_no_result": submit_no_result,
+            "passive_fill_probability_low_skip_share": metrics.get("passive_low_skip_share"),
+            "rolling_sum_realized_bps": metrics.get("rolling_sum_realized_bps"),
+            "realized_samples": metrics.get("realized_samples"),
+        },
+        "actions": {
+            "blocked_count": blocked_count,
+            "derisked_count": int(metrics.get("derisked_count") or 0),
+            "passive_low_skips": int(metrics.get("passive_low_skips") or 0),
+            "reason_counts": metrics.get("reason_counts") or {},
+        },
+        "by_symbol": metrics.get("by_symbol") or [],
+        "paths": {
+            "events": str(events_path),
+            "report": str(output_path) if output_path is not None else None,
+        },
+    }
+    return report
 
 
 def _print_snapshot(metrics: dict[str, Any], training: dict[str, Any]) -> None:
@@ -328,11 +514,17 @@ def main() -> int:
         action="store_true",
         help="Print one snapshot and exit.",
     )
+    parser.add_argument(
+        "--output-json",
+        default="",
+        help="Optional path for execution-quality governor rollup JSON.",
+    )
     args = parser.parse_args()
 
     events_path = Path(args.events_path)
     state_path = Path(args.state_path)
     reports_dir = Path(args.reports_dir)
+    output_path = Path(args.output_json).expanduser() if str(args.output_json or "").strip() else None
     end_at = datetime.now(UTC) + timedelta(minutes=max(1, args.duration_minutes))
 
     while True:
@@ -342,6 +534,17 @@ def main() -> int:
             top_n=max(1, args.top_n),
         )
         training = _training_summary(state_path=state_path, reports_dir=reports_dir)
+        if output_path is not None:
+            report = _governor_report(
+                metrics=metrics,
+                events_path=events_path,
+                output_path=output_path,
+            )
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps(report, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
         _print_snapshot(metrics=metrics, training=training)
 
         if args.once or datetime.now(UTC) >= end_at:

@@ -21021,6 +21021,16 @@ class ExecutionEngine:
                 provider_status = (
                     "healthy" if allowed and not using_backup_provider and not degrade_active else "degraded"
                 )
+                quote_spread_bps_value: float | None = None
+                if (
+                    bid_val is not None
+                    and ask_val is not None
+                    and bid_val > 0.0
+                    and ask_val >= bid_val
+                ):
+                    quote_mid = (bid_val + ask_val) / 2.0
+                    if quote_mid > 0.0:
+                        quote_spread_bps_value = ((ask_val - bid_val) / quote_mid) * 10000.0
                 runtime_state.update_quote_status(
                     allowed=allowed,
                     symbol=symbol,
@@ -21034,6 +21044,8 @@ class ExecutionEngine:
                     last_price=None if basis_price is None else float(basis_price),
                     quote_age_ms=quote_age_ms_value,
                     quote_timestamp=quote_ts.isoformat() if hasattr(quote_ts, "isoformat") else None,
+                    spread_bps=quote_spread_bps_value,
+                    gate_reason=quote_reason,
                 )
                 runtime_state.update_data_provider_state(
                     primary="alpaca",

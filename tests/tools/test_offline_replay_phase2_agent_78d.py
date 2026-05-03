@@ -49,6 +49,10 @@ def _args(**overrides: Any) -> argparse.Namespace:
         "trailing_stop_bps": 10.0,
         "fee_bps": 0.0,
         "slippage_bps": 0.0,
+        "sizing_policy": "flat",
+        "sizing_min_scale": 1.0,
+        "sizing_max_scale": 1.0,
+        "sizing_cost_penalty_bps": 25.0,
         "simulation_mode": False,
         "replay_seed": 1,
         "max_symbol_notional": None,
@@ -326,6 +330,7 @@ def test_parity_simulation_strategy_and_payload_edge_paths(
                 }
             )
             assert order is not None
+            assert order["qty"] == pytest.approx(1.0)
             return {
                 "events": [],
                 "orders": [order],
@@ -354,6 +359,61 @@ def test_parity_simulation_strategy_and_payload_edge_paths(
     assert payload["aggregate"]["orders_submitted"] == 1
     assert payload["aggregate"]["violations_by_code"] == {"cap": 1}
     assert payload["symbols"][0]["symbol"] == ""
+
+
+def test_parity_simulation_strategy_applies_opt_in_sizing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeReplayEventLoop:
+        def __init__(self, *, strategy: Any, **kwargs: Any) -> None:
+            self.strategy = strategy
+
+        def run(self, bars: list[dict[str, Any]]) -> dict[str, Any]:
+            order = self.strategy(
+                {
+                    "symbol": "GOOD",
+                    "ts": "2026-01-02T14:30:00Z",
+                    "score": 1.0,
+                    "confidence": 1.0,
+                    "close": 100.0,
+                    "seq": 5,
+                    "next_close": 101.0,
+                }
+            )
+            assert order is not None
+            assert order["qty"] == pytest.approx(2.0)
+            return {
+                "events": [],
+                "orders": [order],
+                "intents": [order],
+                "violations": [],
+            }
+
+    monkeypatch.setattr(replay, "ReplayEventLoop", _FakeReplayEventLoop)
+    monkeypatch.setattr(
+        replay,
+        "_summarize_markout_fill_metrics",
+        lambda **kwargs: {"samples": 0, "per_symbol_samples": []},
+    )
+    monkeypatch.setattr(
+        replay,
+        "load_historical_bars",
+        lambda path, timestamp_col: (_frame([100.0]), _Report()),
+    )
+
+    payload = replay._run_parity_simulation(
+        args=_args(replay_seed=3),
+        cfg=_cfg(
+            sizing_policy="confidence",
+            sizing_min_scale=0.5,
+            sizing_max_scale=2.0,
+        ),
+        symbol_paths={"GOOD": tmp_path / "good.csv"},
+    )
+
+    order = payload["replay"]["orders"][0]
+    assert order["qty"] == pytest.approx(2.0)
 
 
 def test_persist_replay_to_oms_handles_skips_and_unfilled(

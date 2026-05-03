@@ -46,3 +46,14 @@ def test_cost_model_round_trip_persistence(tmp_path) -> None:
     loaded = CostModel.load(target)
     assert loaded.params.version == model.params.version
     assert loaded.params.base_cost_bps == model.params.base_cost_bps
+
+
+def test_cost_model_calibration_counts_zero_cost_samples() -> None:
+    model = CostModel()
+    updated = model.calibrate(
+        [{"is_bps": 0.0, "spread_paid_bps": 0.0} for _ in range(8)],
+        min_samples=8,
+    )
+
+    assert updated.sample_count == 8
+    assert updated.version.startswith("calibrated-")

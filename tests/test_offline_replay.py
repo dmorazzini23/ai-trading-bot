@@ -171,6 +171,34 @@ def _write_duplicate_timestamp_bars(csv_path: Path) -> None:
     frame.to_csv(csv_path, index=False)
 
 
+def _write_live_cost_replay_artifact(path: Path, *, slippage_bps: float) -> None:
+    rows: list[dict[str, object]] = []
+    for session_regime in ("opening", "midday", "closing"):
+        for side in ("buy", "sell", "sell_short"):
+            rows.append(
+                {
+                    "symbol": "AAPL",
+                    "side": side,
+                    "session_regime": session_regime,
+                    "sample_count": 10,
+                    "sufficient_samples": True,
+                    "p90_adverse_slippage_bps": float(slippage_bps),
+                    "mean_slippage_bps": float(slippage_bps) / 2.0,
+                }
+            )
+    path.write_text(
+        json.dumps(
+            {
+                "artifact_type": "live_cost_model",
+                "generated_at": "2026-01-02T21:00:00Z",
+                "status": {"available": True, "status": "ready"},
+                "by_symbol_side_session": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_offline_replay_writes_summary_json(tmp_path: Path) -> None:
     csv_path = tmp_path / "AAPL.csv"
     out_path = tmp_path / "summary.json"
@@ -207,6 +235,124 @@ def test_offline_replay_writes_summary_json(tmp_path: Path) -> None:
     assert payload["artifacts"]["output_json"] == str(out_path)
     assert payload["inputs"]["symbols"]["AAPL"]["rows_after_cleanup"] == 360
     assert "total_trades" in payload["aggregate"]
+
+
+def test_offline_replay_live_cost_model_updates_slippage_assumptions(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "AAPL.csv"
+    base_out = tmp_path / "base.json"
+    live_cost_out = tmp_path / "live_cost.json"
+    live_cost_model = tmp_path / "live_cost_model_latest.json"
+    _write_synthetic_bars(csv_path)
+    _write_live_cost_replay_artifact(live_cost_model, slippage_bps=25.0)
+
+    base_args = [
+        "--csv",
+        str(csv_path),
+        "--confidence-threshold",
+        "0.10",
+        "--entry-score-threshold",
+        "0.05",
+        "--min-hold-bars",
+        "3",
+        "--max-hold-bars",
+        "40",
+        "--take-profit-bps",
+        "30",
+        "--stop-loss-bps",
+        "30",
+        "--trailing-stop-bps",
+        "20",
+        "--fee-bps",
+        "0",
+        "--slippage-bps",
+        "0",
+    ]
+
+    assert main([*base_args, "--output-json", str(base_out)]) == 0
+    assert (
+        main(
+            [
+                *base_args,
+                "--live-cost-model-json",
+                str(live_cost_model),
+                "--output-json",
+                str(live_cost_out),
+            ]
+        )
+        == 0
+    )
+
+    base_payload = _load_json(base_out)
+    live_cost_payload = _load_json(live_cost_out)
+    assert base_payload["aggregate"]["total_trades"] > 0
+    assert live_cost_payload["aggregate"]["total_trades"] > 0
+    assert (
+        live_cost_payload["aggregate"]["net_pnl_bps"]
+        < base_payload["aggregate"]["net_pnl_bps"]
+    )
+    config = live_cost_payload["aggregate"]["config"]["live_cost_model"]
+    assert config["enabled"] is True
+    assert config["path"] == str(live_cost_model)
+    assert config["bucket_count"] == 9
+
+
+def test_offline_replay_confidence_sizing_policy_records_scaled_trades(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "AAPL.csv"
+    flat_out = tmp_path / "flat.json"
+    sized_out = tmp_path / "sized.json"
+    _write_synthetic_bars(csv_path)
+    base_args = [
+        "--csv",
+        str(csv_path),
+        "--confidence-threshold",
+        "0.10",
+        "--entry-score-threshold",
+        "0.05",
+        "--min-hold-bars",
+        "3",
+        "--max-hold-bars",
+        "40",
+        "--take-profit-bps",
+        "30",
+        "--stop-loss-bps",
+        "30",
+        "--trailing-stop-bps",
+        "20",
+    ]
+
+    assert main([*base_args, "--output-json", str(flat_out)]) == 0
+    assert (
+        main(
+            [
+                *base_args,
+                "--sizing-policy",
+                "confidence",
+                "--sizing-min-scale",
+                "0.50",
+                "--sizing-max-scale",
+                "2.0",
+                "--output-json",
+                str(sized_out),
+            ]
+        )
+        == 0
+    )
+
+    flat_payload = _load_json(flat_out)
+    sized_payload = _load_json(sized_out)
+    assert sized_payload["aggregate"]["config"]["sizing_policy"] == "confidence"
+    assert sized_payload["aggregate"]["avg_size_multiplier"] != pytest.approx(1.0)
+    assert sized_payload["aggregate"]["net_pnl_bps"] != pytest.approx(
+        flat_payload["aggregate"]["net_pnl_bps"]
+    )
+    first_trade = sized_payload["symbols"][0]["trades_detail"][0]
+    assert first_trade["size_multiplier"] > 0.0
+    assert first_trade["sizing"]["policy"] == "confidence"
+    assert "raw_pnl_bps" in first_trade
 
 
 def test_offline_replay_higher_min_hold_reduces_churn(tmp_path: Path) -> None:

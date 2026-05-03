@@ -1141,6 +1141,87 @@ def test_calculate_entry_size_guards_and_low_liquidity_minimum(
     assert bot_engine.calculate_entry_size(ctx, "AAPL", 100.0, 2.0, 0.7) == 10
 
 
+def test_confidence_cost_aware_size_adjustment_disabled_preserves_qty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_get_env(
+        monkeypatch,
+        {"AI_TRADING_CONFIDENCE_COST_AWARE_SIZING_ENABLED": False},
+    )
+    annotations: dict[str, Any] = {}
+
+    qty = bot_engine._apply_confidence_cost_aware_size_adjustment(
+        symbol="AAPL",
+        side="buy",
+        qty=10,
+        confidence=0.2,
+        expected_edge_bps=10.0,
+        expected_net_edge_bps=1.0,
+        cost_components={"total_cost_bps": 9.0},
+        annotations=annotations,
+    )
+
+    assert qty == 10
+    assert annotations == {}
+
+
+def test_confidence_cost_aware_size_adjustment_downscales_weak_net_edge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_get_env(
+        monkeypatch,
+        {
+            "AI_TRADING_CONFIDENCE_COST_AWARE_SIZING_ENABLED": True,
+            "AI_TRADING_CONFIDENCE_COST_AWARE_SIZING_MIN_SCALE": 0.25,
+        },
+    )
+    annotations: dict[str, Any] = {}
+
+    qty = bot_engine._apply_confidence_cost_aware_size_adjustment(
+        symbol="MSFT",
+        side="sell_short",
+        qty=20,
+        confidence=0.6,
+        expected_edge_bps=20.0,
+        expected_net_edge_bps=4.0,
+        cost_components={"total_cost_bps": 16.0},
+        annotations=annotations,
+    )
+
+    assert qty == 5
+    assert annotations["confidence_cost_size_before"] == 20
+    assert annotations["confidence_cost_size_after"] == 5
+    assert annotations["confidence_cost_total_bps"] == 16.0
+    assert annotations["confidence_cost_size_scale"] == pytest.approx(0.25)
+
+
+def test_confidence_cost_aware_size_adjustment_never_increases_strong_edge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_get_env(
+        monkeypatch,
+        {
+            "AI_TRADING_CONFIDENCE_COST_AWARE_SIZING_ENABLED": True,
+            "AI_TRADING_CONFIDENCE_COST_AWARE_SIZING_MIN_SCALE": 0.25,
+        },
+    )
+    annotations: dict[str, Any] = {}
+
+    qty = bot_engine._apply_confidence_cost_aware_size_adjustment(
+        symbol="AAPL",
+        side="buy",
+        qty=10,
+        confidence=1.0,
+        expected_edge_bps=20.0,
+        expected_net_edge_bps=25.0,
+        cost_components={"total_cost_bps": 0.0},
+        annotations=annotations,
+    )
+
+    assert qty == 10
+    assert annotations == {}
+
+
 def test_safe_trade_realtime_position_short_circuits(monkeypatch: pytest.MonkeyPatch) -> None:
     state = SimpleNamespace(auth_skipped_symbols=set())
     ctx = SimpleNamespace(api=SimpleNamespace(list_positions=lambda: [SimpleNamespace(symbol="AAPL", qty="3")]))

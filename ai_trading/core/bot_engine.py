@@ -25311,6 +25311,80 @@ def _entry_expected_edge_gate(
     return False
 
 
+def _apply_confidence_cost_aware_size_adjustment(
+    *,
+    symbol: str,
+    side: str,
+    qty: int,
+    confidence: float,
+    expected_edge_bps: float,
+    expected_net_edge_bps: float,
+    cost_components: MappingABC[str, Any] | None,
+    annotations: dict[str, Any],
+) -> int:
+    """Optionally downscale entry size when confidence/cost quality is weak."""
+
+    if not bool(
+        get_env("AI_TRADING_CONFIDENCE_COST_AWARE_SIZING_ENABLED", False, cast=bool)
+    ):
+        return int(qty)
+    if int(qty) <= 1:
+        return int(qty)
+    confidence_value = _safe_float(confidence)
+    expected_edge_value = _safe_float(expected_edge_bps)
+    expected_net_edge_value = _safe_float(expected_net_edge_bps)
+    if (
+        confidence_value is None
+        or expected_edge_value is None
+        or expected_net_edge_value is None
+        or not math.isfinite(float(confidence_value))
+        or not math.isfinite(float(expected_edge_value))
+        or not math.isfinite(float(expected_net_edge_value))
+        or float(expected_edge_value) <= 0.0
+    ):
+        return int(qty)
+    floor = _safe_float(
+        get_env("AI_TRADING_CONFIDENCE_COST_AWARE_SIZING_MIN_SCALE", 0.25, cast=float)
+    )
+    if floor is None or not math.isfinite(float(floor)):
+        floor = 0.25
+    floor = max(0.05, min(float(floor), 1.0))
+    confidence_scale = floor + ((1.0 - floor) * max(0.0, min(float(confidence_value), 1.0)))
+    edge_capture_scale = max(
+        floor,
+        min(float(expected_net_edge_value) / max(float(expected_edge_value), 1e-9), 1.0),
+    )
+    scale = max(floor, min(float(confidence_scale), float(edge_capture_scale), 1.0))
+    adjusted_qty = max(1, int(math.floor(float(qty) * scale)))
+    if adjusted_qty >= int(qty):
+        return int(qty)
+    total_cost_bps = None
+    if isinstance(cost_components, MappingABC):
+        total_cost_bps = _safe_float(cost_components.get("total_cost_bps"))
+    annotations["confidence_cost_size_scale"] = float(scale)
+    annotations["confidence_cost_size_before"] = int(qty)
+    annotations["confidence_cost_size_after"] = int(adjusted_qty)
+    annotations["confidence_cost_expected_edge_bps"] = float(expected_edge_value)
+    annotations["confidence_cost_expected_net_edge_bps"] = float(expected_net_edge_value)
+    if total_cost_bps is not None:
+        annotations["confidence_cost_total_bps"] = float(total_cost_bps)
+    logger.info(
+        "CONFIDENCE_COST_SIZE_ADJUSTED",
+        extra={
+            "symbol": symbol,
+            "side": side,
+            "base_qty": int(qty),
+            "adjusted_qty": int(adjusted_qty),
+            "size_scale": float(scale),
+            "confidence": float(confidence_value),
+            "expected_edge_bps": float(expected_edge_value),
+            "expected_net_edge_bps": float(expected_net_edge_value),
+            "total_cost_bps": total_cost_bps,
+        },
+    )
+    return int(adjusted_qty)
+
+
 def _enter_long(
     ctx: BotContext,
     state: BotState,
@@ -26234,6 +26308,16 @@ def _enter_long(
     order_annotations["expected_edge_bps"] = float(expected_edge_bps)
     order_annotations["expected_net_edge_bps"] = float(expected_net_edge_bps)
     _annotate_feed_reliability(order_annotations, feed_reliability)
+    adj_qty = _apply_confidence_cost_aware_size_adjustment(
+        symbol=symbol,
+        side="buy",
+        qty=int(adj_qty),
+        confidence=float(conf),
+        expected_edge_bps=float(expected_edge_bps),
+        expected_net_edge_bps=float(expected_net_edge_bps),
+        cost_components=entry_cost_components,
+        annotations=order_annotations,
+    )
 
     quote_source_for_log = str(quote_metadata.get("source", price_source))
     normalized_quote_source = quote_source_for_log.lower()
@@ -27185,6 +27269,16 @@ def _enter_short(
     order_annotations["expected_edge_bps"] = float(expected_edge_bps)
     order_annotations["expected_net_edge_bps"] = float(expected_net_edge_bps)
     _annotate_feed_reliability(order_annotations, feed_reliability)
+    adj_qty = _apply_confidence_cost_aware_size_adjustment(
+        symbol=symbol,
+        side="sell_short",
+        qty=int(adj_qty),
+        confidence=float(conf),
+        expected_edge_bps=float(expected_edge_bps),
+        expected_net_edge_bps=float(expected_net_edge_bps),
+        cost_components=entry_cost_components,
+        annotations=order_annotations,
+    )
 
     quote_source_for_log = str(quote_metadata.get("source", price_source))
     normalized_quote_source = quote_source_for_log.lower()
@@ -37536,6 +37630,81 @@ def _run_tca_cost_calibration(
                 "hour_penalty_count": int(len(hour_penalties)),
             },
         )
+        try:
+            from ai_trading.tools.live_cost_model import build_live_cost_model
+
+            live_cost_model_path = resolve_runtime_artifact_path(
+                str(
+                    get_env(
+                        "AI_TRADING_LIVE_COST_MODEL_PATH",
+                        "runtime/live_cost_model_latest.json",
+                    )
+                ),
+                default_relative="runtime/live_cost_model_latest.json",
+            )
+            execution_quality_events_path = resolve_runtime_artifact_path(
+                str(
+                    get_env(
+                        "AI_TRADING_EXEC_QUALITY_EVENTS_PATH",
+                        "runtime/execution_quality_events.jsonl",
+                    )
+                ),
+                default_relative="runtime/execution_quality_events.jsonl",
+            )
+            fill_events_path = resolve_runtime_artifact_path(
+                str(get_env("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")),
+                default_relative="runtime/fill_events.jsonl",
+            )
+            live_cost_model = build_live_cost_model(
+                events_path=execution_quality_events_path,
+                fill_events_path=fill_events_path,
+                tca_path=_resolved_tca_path(),
+                window_minutes=max(
+                    1,
+                    int(
+                        get_env(
+                            "AI_TRADING_LIVE_COST_MODEL_WINDOW_MINUTES",
+                            390,
+                            cast=int,
+                        )
+                    ),
+                ),
+                min_samples=max(
+                    1,
+                    int(
+                        get_env(
+                            "AI_TRADING_LIVE_COST_MODEL_MIN_SAMPLES",
+                            5,
+                            cast=int,
+                        )
+                    ),
+                ),
+                now=now,
+            )
+            live_cost_model["paths"]["report"] = str(live_cost_model_path)
+            live_cost_model_path.parent.mkdir(parents=True, exist_ok=True)
+            live_cost_model_path.write_text(
+                json.dumps(live_cost_model, sort_keys=True, default=str),
+                encoding="utf-8",
+            )
+            status_payload = live_cost_model.get("status")
+            status_map = status_payload if isinstance(status_payload, Mapping) else {}
+            window_payload = live_cost_model.get("window")
+            window_map = window_payload if isinstance(window_payload, Mapping) else {}
+            logger.info(
+                "LIVE_COST_MODEL_UPDATED",
+                extra={
+                    "path": str(live_cost_model_path),
+                    "status": status_map.get("status"),
+                    "samples": int(window_map.get("sample_count", 0) or 0),
+                    "buckets": int(window_map.get("bucket_count", 0) or 0),
+                },
+            )
+        except BOT_ENGINE_FALLBACK_EXC as exc:
+            logger.warning(
+                "LIVE_COST_MODEL_UPDATE_FAILED",
+                extra={"error": str(exc)},
+            )
     finally:
         state.last_tca_cost_calibration_date = now.date()
 

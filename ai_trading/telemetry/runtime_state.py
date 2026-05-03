@@ -66,6 +66,10 @@ _DEFAULT_QUOTE_STATE: dict[str, Any] = {
     "quote_age_ms": None,
     "quote_timestamp": None,
     "symbol": None,
+    "spread_bps": None,
+    "max_spread_bps": None,
+    "max_quote_age_ms": None,
+    "gate_reason": None,
 }
 _DEFAULT_BROKER_STATE: dict[str, Any] = {
     "connected": False,
@@ -355,6 +359,10 @@ def update_quote_status(
     last_price: float | None = None,
     quote_age_ms: float | None = None,
     quote_timestamp: str | None = None,
+    spread_bps: float | None = None,
+    max_spread_bps: float | None = None,
+    max_quote_age_ms: float | None = None,
+    gate_reason: str | None = None,
 ) -> None:
     """Update snapshot of the most recent quote gate decision."""
 
@@ -390,6 +398,23 @@ def update_quote_status(
             pass
     if quote_timestamp is not None:
         updates["quote_timestamp"] = str(quote_timestamp)
+    if spread_bps is not None:
+        try:
+            updates["spread_bps"] = max(0.0, float(spread_bps))
+        except (TypeError, ValueError):
+            pass
+    if max_spread_bps is not None:
+        try:
+            updates["max_spread_bps"] = max(0.0, float(max_spread_bps))
+        except (TypeError, ValueError):
+            pass
+    if max_quote_age_ms is not None:
+        try:
+            updates["max_quote_age_ms"] = max(0.0, float(max_quote_age_ms))
+        except (TypeError, ValueError):
+            pass
+    if gate_reason is not None:
+        updates["gate_reason"] = str(gate_reason)
     with _LOCK:
         global _quote_status, _quote_status_by_symbol
         _quote_status = _merge_state(_quote_status, updates)

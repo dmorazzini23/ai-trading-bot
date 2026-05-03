@@ -12,6 +12,7 @@ import math
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Mapping, cast
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -29,6 +30,7 @@ from ai_trading.indicators import rsi as rsi_indicator
 from ai_trading.logging import get_logger
 from ai_trading.models.artifacts import load_verified_joblib_artifact
 from ai_trading.replay.event_loop import ReplayEventLoop
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 logger = get_logger(__name__)
 
@@ -47,6 +49,30 @@ class ReplayConfig:
     trailing_stop_bps: float
     fee_bps: float
     slippage_bps: float
+    live_cost_model: LiveCostReplayModel | None = None
+    sizing_policy: str = "flat"
+    sizing_min_scale: float = 1.0
+    sizing_max_scale: float = 1.0
+    sizing_cost_penalty_bps: float = 25.0
+
+
+@dataclass(frozen=True)
+class LiveCostReplayBucket:
+    symbol: str
+    side: str
+    session_regime: str
+    slippage_bps: float
+    sample_count: int
+    source_metric: str
+
+
+@dataclass(frozen=True)
+class LiveCostReplayModel:
+    path: str
+    generated_at: str | None
+    status: str
+    bucket_count: int
+    buckets: dict[tuple[str, str, str], LiveCostReplayBucket]
 
 
 @dataclass(frozen=True)
@@ -550,6 +576,38 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fee-bps", type=float, default=1.0)
     parser.add_argument("--slippage-bps", type=float, default=2.0)
     parser.add_argument(
+        "--sizing-policy",
+        choices=("flat", "confidence", "confidence-cost"),
+        default="flat",
+        help="Replay position sizing policy. Defaults to flat sizing.",
+    )
+    parser.add_argument("--sizing-min-scale", type=float, default=1.0)
+    parser.add_argument("--sizing-max-scale", type=float, default=1.0)
+    parser.add_argument(
+        "--sizing-cost-penalty-bps",
+        type=float,
+        default=25.0,
+        help="Cost level where confidence-cost sizing reaches minimum scale.",
+    )
+    parser.add_argument(
+        "--live-cost-model-json",
+        type=Path,
+        default=None,
+        help=(
+            "Optional live cost model artifact to use for non-simulation replay "
+            "slippage assumptions."
+        ),
+    )
+    parser.add_argument(
+        "--use-live-cost-model",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Use AI_TRADING_LIVE_COST_MODEL_PATH for non-simulation replay when "
+            "--live-cost-model-json is omitted."
+        ),
+    )
+    parser.add_argument(
         "--simulation-mode",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -750,6 +808,239 @@ def _compute_model_signal(
     )
 
 
+def _finite_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return float(parsed)
+
+
+def _parse_utc_datetime_text(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _replay_session_regime(ts: Any) -> str:
+    if isinstance(ts, pd.Timestamp):
+        dt = ts.to_pydatetime()
+    elif isinstance(ts, datetime):
+        dt = ts
+    else:
+        dt = _parse_utc_datetime_text(str(ts))
+        if dt is None:
+            return "unknown"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    ts_et = dt.astimezone(ZoneInfo("America/New_York"))
+    minute = (ts_et.hour * 60) + ts_et.minute
+    if ts_et.weekday() >= 5 or minute < (9 * 60 + 30) or minute >= (16 * 60):
+        return "offhours"
+    if minute < (10 * 60 + 15):
+        return "opening"
+    if minute >= (15 * 60 + 15):
+        return "closing"
+    return "midday"
+
+
+def _normalize_live_cost_side(side: str) -> str:
+    token = str(side or "").strip().lower()
+    if token in {"long", "buy", "cover", "buy_to_cover"}:
+        return "buy"
+    if token in {"short", "sell_short"}:
+        return "sell_short"
+    if token in {"sell", "sell_long"}:
+        return "sell"
+    return token or "unknown"
+
+
+def _live_cost_slippage_from_row(row: Mapping[str, Any]) -> tuple[float | None, str | None]:
+    for key in ("p90_adverse_slippage_bps", "mean_slippage_bps"):
+        value = _finite_float(row.get(key))
+        if value is not None and value >= 0.0:
+            return float(value), key
+    return None, None
+
+
+def _load_live_cost_replay_model(args: argparse.Namespace) -> LiveCostReplayModel | None:
+    explicit_path = getattr(args, "live_cost_model_json", None)
+    use_live_cost_model = getattr(args, "use_live_cost_model", None)
+    if explicit_path is None and use_live_cost_model is None:
+        use_live_cost_model = bool(
+            get_env("AI_TRADING_OFFLINE_REPLAY_USE_LIVE_COST_MODEL", False, cast=bool)
+        )
+    if explicit_path is None and not bool(use_live_cost_model):
+        return None
+    path = (
+        Path(explicit_path).expanduser()
+        if explicit_path is not None
+        else resolve_runtime_artifact_path(
+            str(
+                get_env(
+                    "AI_TRADING_LIVE_COST_MODEL_PATH",
+                    "runtime/live_cost_model_latest.json",
+                    cast=str,
+                    resolve_aliases=False,
+                )
+                or "runtime/live_cost_model_latest.json"
+            ),
+            default_relative="runtime/live_cost_model_latest.json",
+        )
+    )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, Mapping) or payload.get("artifact_type") != "live_cost_model":
+        return None
+    status = payload.get("status")
+    if not isinstance(status, Mapping) or not bool(status.get("available")):
+        return None
+    if str(status.get("status") or "").lower() != "ready":
+        return None
+    rows = payload.get("by_symbol_side_session")
+    if not isinstance(rows, list):
+        return None
+    buckets: dict[tuple[str, str, str], LiveCostReplayBucket] = {}
+    for row in rows:
+        if not isinstance(row, Mapping) or not bool(row.get("sufficient_samples")):
+            continue
+        slippage_bps, source_metric = _live_cost_slippage_from_row(row)
+        if slippage_bps is None or source_metric is None:
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side = _normalize_live_cost_side(str(row.get("side") or ""))
+        session_regime = str(row.get("session_regime") or "").strip().lower()
+        if not symbol or not side or not session_regime:
+            continue
+        sample_count = int(_finite_float(row.get("sample_count")) or 0.0)
+        buckets[(symbol, side, session_regime)] = LiveCostReplayBucket(
+            symbol=symbol,
+            side=side,
+            session_regime=session_regime,
+            slippage_bps=float(slippage_bps),
+            sample_count=sample_count,
+            source_metric=source_metric,
+        )
+    if not buckets:
+        return None
+    return LiveCostReplayModel(
+        path=str(path),
+        generated_at=(
+            str(payload.get("generated_at")) if payload.get("generated_at") else None
+        ),
+        status=str(status.get("status") or "ready"),
+        bucket_count=len(buckets),
+        buckets=buckets,
+    )
+
+
+def _replay_slippage_bps(
+    cfg: ReplayConfig,
+    *,
+    symbol: str,
+    side: str,
+    ts: Any,
+) -> float:
+    model = cfg.live_cost_model
+    if model is None:
+        return float(cfg.slippage_bps)
+    symbol_token = str(symbol or "").strip().upper()
+    side_token = _normalize_live_cost_side(side)
+    session_regime = _replay_session_regime(ts)
+    candidates = [
+        (symbol_token, side_token, session_regime),
+    ]
+    if side_token == "sell_short":
+        candidates.append((symbol_token, "sell", session_regime))
+    elif side_token == "sell":
+        candidates.append((symbol_token, "sell_short", session_regime))
+    for key in candidates:
+        bucket = model.buckets.get(key)
+        if bucket is not None:
+            return float(bucket.slippage_bps)
+    return float(cfg.slippage_bps)
+
+
+def _sizing_multiplier(
+    cfg: ReplayConfig,
+    *,
+    confidence: float,
+    score: float,
+    slippage_bps: float,
+) -> tuple[float, dict[str, Any]]:
+    policy = str(cfg.sizing_policy or "flat").strip().lower()
+    min_scale = _clamp(float(cfg.sizing_min_scale), 0.0, 10.0)
+    max_scale = _clamp(float(cfg.sizing_max_scale), 0.0, 10.0)
+    if max_scale < min_scale:
+        max_scale = min_scale
+    context: dict[str, Any] = {
+        "policy": policy,
+        "confidence": float(confidence),
+        "score": float(score),
+        "min_scale": float(min_scale),
+        "max_scale": float(max_scale),
+    }
+    if policy == "flat":
+        context["reason"] = "flat"
+        return 1.0, context
+
+    threshold = _clamp(float(cfg.confidence_threshold), 0.0, 0.999999)
+    confidence_edge = _clamp(
+        (float(confidence) - threshold) / max(1.0 - threshold, 1e-9),
+        0.0,
+        1.0,
+    )
+    score_edge = _clamp(abs(float(score)), 0.0, 1.0)
+    edge_scale = max(confidence_edge, score_edge)
+    multiplier = min_scale + ((max_scale - min_scale) * edge_scale)
+    context["confidence_edge"] = float(confidence_edge)
+    context["score_edge"] = float(score_edge)
+
+    if policy == "confidence-cost":
+        penalty_bps = max(0.0, float(cfg.sizing_cost_penalty_bps))
+        cost_ratio = (
+            _clamp(float(slippage_bps) / penalty_bps, 0.0, 1.0)
+            if penalty_bps > 0.0
+            else 0.0
+        )
+        cost_multiplier = 1.0 - cost_ratio
+        multiplier = min_scale + ((multiplier - min_scale) * cost_multiplier)
+        context["slippage_bps"] = float(slippage_bps)
+        context["cost_penalty_bps"] = float(penalty_bps)
+        context["cost_multiplier"] = float(cost_multiplier)
+
+    bounded = _clamp(multiplier, min_scale, max_scale)
+    context["multiplier"] = float(bounded)
+    return float(bounded), context
+
+
+def _live_cost_model_config_payload(model: LiveCostReplayModel | None) -> dict[str, Any]:
+    if model is None:
+        return {"enabled": False}
+    return {
+        "enabled": True,
+        "path": model.path,
+        "generated_at": model.generated_at,
+        "status": model.status,
+        "bucket_count": model.bucket_count,
+    }
+
+
 def _entry_price(close: float, side: int, slippage_bps: float) -> float:
     slip = slippage_bps / 10000.0
     if side > 0:
@@ -876,6 +1167,8 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
     entry_bar = -1
     entry_ts: str | None = None
     best_price = 0.0
+    entry_size_multiplier = 1.0
+    entry_sizing_context: dict[str, Any] = {"policy": "flat", "reason": "flat"}
     position_bars = 0
     equity = 1.0
     equity_curve: list[float] = [equity]
@@ -918,9 +1211,17 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
                     exit_reason = "signal_flip"
 
             if exit_reason is not None:
-                fill_exit = _exit_price(close, side, cfg.slippage_bps)
-                pnl_bps = ((fill_exit / entry_price) - 1.0) * 10000.0 * side
-                pnl_bps -= 2.0 * cfg.fee_bps
+                exit_side = "sell" if side > 0 else "buy"
+                exit_slippage_bps = _replay_slippage_bps(
+                    cfg,
+                    symbol=symbol,
+                    side=exit_side,
+                    ts=ts,
+                )
+                fill_exit = _exit_price(close, side, exit_slippage_bps)
+                raw_pnl_bps = ((fill_exit / entry_price) - 1.0) * 10000.0 * side
+                raw_pnl_bps -= 2.0 * cfg.fee_bps
+                pnl_bps = raw_pnl_bps * float(entry_size_multiplier)
                 equity *= 1.0 + (pnl_bps / 10000.0)
                 trades.append(
                     {
@@ -930,6 +1231,9 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
                         "side": "long" if side > 0 else "short",
                         "hold_bars": hold_bars,
                         "pnl_bps": float(pnl_bps),
+                        "raw_pnl_bps": float(raw_pnl_bps),
+                        "size_multiplier": float(entry_size_multiplier),
+                        "sizing": dict(entry_sizing_context),
                         "exit_reason": exit_reason,
                     }
                 )
@@ -938,6 +1242,8 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
                 entry_bar = -1
                 entry_ts = None
                 best_price = 0.0
+                entry_size_multiplier = 1.0
+                entry_sizing_context = {"policy": "flat", "reason": "flat"}
 
         if side == 0:
             open_long = conf >= cfg.confidence_threshold and s >= cfg.entry_score_threshold
@@ -952,7 +1258,20 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
                 side = -1
 
             if side != 0:
-                entry_price = _entry_price(close, side, cfg.slippage_bps)
+                entry_side = "buy" if side > 0 else "sell_short"
+                entry_slippage_bps = _replay_slippage_bps(
+                    cfg,
+                    symbol=symbol,
+                    side=entry_side,
+                    ts=ts,
+                )
+                entry_size_multiplier, entry_sizing_context = _sizing_multiplier(
+                    cfg,
+                    confidence=conf,
+                    score=s,
+                    slippage_bps=entry_slippage_bps,
+                )
+                entry_price = _entry_price(close, side, entry_slippage_bps)
                 entry_bar = i
                 entry_ts = str(ts)
                 best_price = close
@@ -961,9 +1280,20 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
 
     if side != 0 and entry_bar >= 0:
         close = float(df["close"].iloc[-1])
-        fill_exit = _exit_price(close, side, cfg.slippage_bps)
-        pnl_bps = ((fill_exit / entry_price) - 1.0) * 10000.0 * side
-        pnl_bps -= 2.0 * cfg.fee_bps
+        exit_side = "sell" if side > 0 else "buy"
+        fill_exit = _exit_price(
+            close,
+            side,
+            _replay_slippage_bps(
+                cfg,
+                symbol=symbol,
+                side=exit_side,
+                ts=df.index[-1],
+            ),
+        )
+        raw_pnl_bps = ((fill_exit / entry_price) - 1.0) * 10000.0 * side
+        raw_pnl_bps -= 2.0 * cfg.fee_bps
+        pnl_bps = raw_pnl_bps * float(entry_size_multiplier)
         hold_bars = max(0, len(df) - 1 - entry_bar)
         equity *= 1.0 + (pnl_bps / 10000.0)
         trades.append(
@@ -974,6 +1304,9 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
                 "side": "long" if side > 0 else "short",
                 "hold_bars": hold_bars,
                 "pnl_bps": float(pnl_bps),
+                "raw_pnl_bps": float(raw_pnl_bps),
+                "size_multiplier": float(entry_size_multiplier),
+                "sizing": dict(entry_sizing_context),
                 "exit_reason": "end_of_data",
             }
         )
@@ -1152,6 +1485,12 @@ def _accepted_candidate_row(
         "fill_price": None,
         "fill_qty": None,
         "client_order_id": context.get("client_order_id"),
+        "size_multiplier": context.get("size_multiplier"),
+        "sizing_policy": (
+            context.get("sizing", {}).get("policy")
+            if isinstance(context.get("sizing"), Mapping)
+            else None
+        ),
     }
     if fill_event is not None:
         row["fill_price"] = fill_event.get("fill_price")
@@ -1515,6 +1854,8 @@ def _write_accepted_candidate_artifacts(
         "fill_price",
         "fill_qty",
         "client_order_id",
+        "size_multiplier",
+        "sizing_policy",
     ]
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
@@ -1697,6 +2038,19 @@ def _run_parity_simulation(
         if policy_profile is not None:
             policy_counters["accepted"] += 1
 
+        entry_side = side if side == "buy" else "sell_short"
+        entry_slippage_bps = _replay_slippage_bps(
+            cfg,
+            symbol=symbol,
+            side=entry_side,
+            ts=ts_iso,
+        )
+        size_multiplier, sizing_context = _sizing_multiplier(
+            cfg,
+            confidence=confidence,
+            score=score,
+            slippage_bps=entry_slippage_bps,
+        )
         bar_seq = int(bar.get("seq", 0) or 0)
         intent_key = f"{symbol}|{ts_iso}|{side}|{bar_seq}"
         candidate_markout = _candidate_markout_bps(
@@ -1733,11 +2087,13 @@ def _run_parity_simulation(
             "accepted_reason": "policy_controls" if policy_profile is not None else "thresholds",
             "veto_shadow_reason": veto_shadow_reason,
             "veto_bucket": veto_bucket,
+            "size_multiplier": float(size_multiplier),
+            "sizing": dict(sizing_context),
         }
         return {
             "symbol": symbol,
             "side": side,
-            "qty": 1.0,
+            "qty": float(size_multiplier),
             "type": "limit",
             "price": price,
             "limit_price": price,
@@ -2286,6 +2642,7 @@ def _persist_replay_to_oms(
 
 
 def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
+    live_cost_model = None if bool(args.simulation_mode) else _load_live_cost_replay_model(args)
     cfg = ReplayConfig(
         confidence_threshold=float(args.confidence_threshold),
         entry_score_threshold=float(args.entry_score_threshold),
@@ -2297,6 +2654,11 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
         trailing_stop_bps=max(1.0, float(args.trailing_stop_bps)),
         fee_bps=max(0.0, float(args.fee_bps)),
         slippage_bps=max(0.0, float(args.slippage_bps)),
+        live_cost_model=live_cost_model,
+        sizing_policy=str(args.sizing_policy or "flat").strip().lower() or "flat",
+        sizing_min_scale=max(0.0, float(args.sizing_min_scale)),
+        sizing_max_scale=max(0.0, float(args.sizing_max_scale)),
+        sizing_cost_penalty_bps=max(0.0, float(args.sizing_cost_penalty_bps)),
     )
     if cfg.max_hold_bars < cfg.min_hold_bars:
         raise ValueError("max-hold-bars must be >= min-hold-bars")
@@ -2365,6 +2727,10 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
     wins = pnl[pnl > 0.0]
     losses = pnl[pnl < 0.0]
     trade_count = int(pnl.size)
+    size_multipliers = np.asarray(
+        [float(t.get("size_multiplier", 1.0) or 1.0) for t in all_trades],
+        dtype=float,
+    )
     aggregate: dict[str, Any] = {
         "symbols": len(per_symbol),
         "total_bars": total_bars,
@@ -2378,6 +2744,8 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
         "median_hold_bars": float(np.median(holds)) if holds.size else 0.0,
         "churn_trades_per_100_bars": float((trade_count / max(total_bars, 1)) * 100.0),
         "exposure_ratio": float(total_position_bars / max(total_bars, 1)),
+        "avg_size_multiplier": float(size_multipliers.mean()) if size_multipliers.size else 1.0,
+        "max_size_multiplier": float(size_multipliers.max()) if size_multipliers.size else 1.0,
         "config": {
             "confidence_threshold": cfg.confidence_threshold,
             "entry_score_threshold": cfg.entry_score_threshold,
@@ -2389,6 +2757,11 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
             "trailing_stop_bps": cfg.trailing_stop_bps,
             "fee_bps": cfg.fee_bps,
             "slippage_bps": cfg.slippage_bps,
+            "live_cost_model": _live_cost_model_config_payload(cfg.live_cost_model),
+            "sizing_policy": cfg.sizing_policy,
+            "sizing_min_scale": cfg.sizing_min_scale,
+            "sizing_max_scale": cfg.sizing_max_scale,
+            "sizing_cost_penalty_bps": cfg.sizing_cost_penalty_bps,
         },
     }
     return {

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import ai_trading.health_payload as health_payload
 
@@ -33,6 +35,77 @@ def test_runtime_attention_flags_deduplicate_optional_contract_failures() -> Non
         "oms_invariants_failed",
         "oms_lifecycle_parity_failed",
     ]
+
+
+def test_execution_quality_governor_snapshot_reads_compact_artifact(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "execution_quality_governor_latest.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-01T15:00:00Z",
+                "status": {"gate_passed": True, "mode": "derisk"},
+                "observed": {"p90_spread_bps": 9.5},
+                "actions": {"blocked_count": 1},
+                "window": {"minutes": 60, "event_count": 10},
+                "by_symbol": [{"symbol": "MSFT", "p90_spread_bps": 55.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_QUALITY_GOVERNOR_REPORT_PATH",
+        str(artifact),
+    )
+
+    snapshot = health_payload._execution_quality_governor_snapshot()
+
+    assert snapshot["available"] is True
+    assert snapshot["path"] == str(artifact)
+    assert snapshot["status"]["mode"] == "derisk"
+    assert snapshot["observed"]["p90_spread_bps"] == 9.5
+    assert snapshot["actions"]["blocked_count"] == 1
+    assert snapshot["by_symbol"][0]["symbol"] == "MSFT"
+
+
+def test_live_cost_model_snapshot_reads_symbol_session_artifact(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "live_cost_model_latest.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-01T15:00:00Z",
+                "status": {"available": True, "status": "ready", "mode": "observe"},
+                "observed": {"p90_total_cost_bps": 8.5},
+                "window": {"minutes": 390, "sample_count": 12},
+                "by_symbol_side_session": [
+                    {
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "session_regime": "midday",
+                        "mean_total_cost_bps": 4.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_LIVE_COST_MODEL_PATH", str(artifact))
+
+    snapshot = health_payload._live_cost_model_snapshot()
+
+    assert snapshot["available"] is True
+    assert snapshot["path"] == str(artifact)
+    assert snapshot["status"]["status"] == "ready"
+    assert snapshot["observed"]["p90_total_cost_bps"] == 8.5
+    assert snapshot["window"]["sample_count"] == 12
+    assert snapshot["by_symbol_side_session"][0]["symbol"] == "AAPL"
 
 
 def test_build_runtime_health_payload_marks_required_database_failure(monkeypatch) -> None:

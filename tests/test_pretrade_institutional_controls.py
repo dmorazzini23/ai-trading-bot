@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -99,6 +101,20 @@ def _intent(
         last_price=price,
         mid=price,
         **kwargs,
+    )
+
+
+def _write_live_cost_artifact(path: Path, rows: list[dict[str, object]]) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "artifact_type": "live_cost_model",
+                "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "status": {"available": True, "status": "ready"},
+                "by_symbol_side_session": rows,
+            }
+        ),
+        encoding="utf-8",
     )
 
 
@@ -432,6 +448,282 @@ def test_pretrade_blocks_stale_quote_at_final_boundary() -> None:
     assert allowed is False
     assert reason == "STALE_QUOTE_BLOCK"
     assert details["max_quote_age_ms"] == 500
+
+
+def test_pretrade_blocks_symbol_specific_wide_spread(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_TRADING_PRETRADE_EXECUTION_QUALITY_GATE_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXEC_MAX_SPREAD_BPS_BY_SYMBOL",
+        json.dumps({"MSFT": 12.0}),
+    )
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    ledger = _ExposureLedger()
+    intent = _intent(
+        symbol="MSFT",
+        side="buy",
+        qty=1,
+        price=100.0,
+        bar_ts=datetime(2026, 4, 20, 14, 0, tzinfo=UTC),
+        bid=99.90,
+        ask=100.10,
+        submit_quote_source="broker_nbbo",
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "EXECUTION_QUALITY_SPREAD_BLOCK"
+    assert details["block_reason"] == "spread_bps_too_wide"
+    assert details["symbol"] == "MSFT"
+    assert details["spread_bps"] == pytest.approx(20.0)
+    assert details["max_spread_bps"] == 12.0
+
+
+def test_pretrade_execution_quality_gate_allows_reducing_existing_position(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PRETRADE_EXECUTION_QUALITY_GATE_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXEC_MAX_SPREAD_BPS_BY_SYMBOL",
+        json.dumps({"AAPL": 1.0}),
+    )
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    ledger = _ExposureLedger(symbol_qty={"AAPL": 5.0})
+    intent = _intent(
+        symbol="AAPL",
+        side="sell",
+        qty=2,
+        price=100.0,
+        bar_ts=datetime(2026, 4, 20, 14, 0, tzinfo=UTC),
+        bid=99.90,
+        ask=100.10,
+        submit_quote_source="broker_nbbo",
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is True
+    assert reason == "OK"
+    assert details == {}
+
+
+def test_pretrade_blocks_symbol_session_quote_age(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PRETRADE_EXECUTION_QUALITY_GATE_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXEC_MAX_QUOTE_AGE_MS_BY_SYMBOL_SESSION",
+        json.dumps({"MSFT:OPENING": 450.0}),
+    )
+    cfg = SimpleNamespace(
+        max_order_dollars=0.0,
+        max_order_shares=0,
+        price_collar_pct=0.10,
+        quote_max_age_ms=2000,
+    )
+    ledger = _ExposureLedger()
+    intent = _intent(
+        symbol="MSFT",
+        side="buy",
+        qty=1,
+        price=100.0,
+        bar_ts=datetime(2026, 4, 20, 14, 0, tzinfo=UTC),
+        quote_age_ms=600.0,
+        submit_quote_source="broker_nbbo",
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "EXECUTION_QUALITY_STALE_QUOTE_BLOCK"
+    assert details["block_reason"] == "quote_age_too_stale"
+    assert details["threshold_source"] == "MSFT:OPENING"
+    assert details["quote_age_ms"] == 600.0
+    assert details["max_quote_age_ms"] == 450.0
+
+
+def test_pretrade_live_cost_model_blocks_above_adaptive_spread(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "live_cost_model_latest.json"
+    _write_live_cost_artifact(
+        artifact,
+        [
+            {
+                "symbol": "MSFT",
+                "side": "buy",
+                "session_regime": "opening",
+                "sample_count": 8,
+                "sufficient_samples": True,
+                "p90_spread_bps": 10.0,
+                "p90_total_cost_bps": 5.0,
+            }
+        ],
+    )
+    monkeypatch.setenv("AI_TRADING_LIVE_COST_MODEL_PATH", str(artifact))
+    monkeypatch.setenv("AI_TRADING_PRETRADE_LIVE_COST_MODEL_SPREAD_MULTIPLIER", "1.0")
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    ledger = _ExposureLedger()
+    intent = _intent(
+        symbol="MSFT",
+        side="buy",
+        qty=1,
+        price=100.0,
+        bar_ts=datetime(2026, 4, 20, 14, 0, tzinfo=UTC),
+        bid=99.925,
+        ask=100.075,
+        submit_quote_source="broker_nbbo",
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "EXECUTION_QUALITY_SPREAD_BLOCK"
+    assert details["block_reason"] == "spread_bps_too_wide"
+    assert details["threshold_source"] == "LIVE_COST_MODEL:MSFT:buy:opening"
+    assert details["max_spread_bps"] == 10.0
+    assert details["live_cost_sample_count"] == 8
+
+
+def test_pretrade_live_cost_model_blocks_expensive_symbol_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "live_cost_model_latest.json"
+    _write_live_cost_artifact(
+        artifact,
+        [
+            {
+                "symbol": "MSFT",
+                "side": "buy",
+                "session_regime": "opening",
+                "sample_count": 12,
+                "sufficient_samples": True,
+                "mean_spread_bps": 2.0,
+                "p90_total_cost_bps": 31.0,
+                "mean_total_cost_bps": 28.0,
+            }
+        ],
+    )
+    monkeypatch.setenv("AI_TRADING_LIVE_COST_MODEL_PATH", str(artifact))
+    monkeypatch.setenv("AI_TRADING_PRETRADE_LIVE_COST_MODEL_MAX_TOTAL_COST_BPS", "25")
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    ledger = _ExposureLedger()
+    intent = _intent(
+        symbol="MSFT",
+        side="buy",
+        qty=1,
+        price=100.0,
+        bar_ts=datetime(2026, 4, 20, 14, 0, tzinfo=UTC),
+        bid=99.99,
+        ask=100.01,
+        submit_quote_source="broker_nbbo",
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "EXECUTION_QUALITY_LIVE_COST_BLOCK"
+    assert details["block_reason"] == "live_cost_too_high"
+    assert details["p90_total_cost_bps"] == 31.0
+    assert details["max_total_cost_bps"] == 25.0
+    assert details["sample_count"] == 12
+
+
+def test_pretrade_live_cost_model_feeds_slippage_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "live_cost_model_latest.json"
+    _write_live_cost_artifact(
+        artifact,
+        [
+            {
+                "symbol": "AAPL",
+                "side": "buy",
+                "session_regime": "midday",
+                "sample_count": 9,
+                "sufficient_samples": True,
+                "p90_adverse_slippage_bps": 15.0,
+                "p90_total_cost_bps": 5.0,
+            }
+        ],
+    )
+    monkeypatch.setenv("AI_TRADING_LIVE_COST_MODEL_PATH", str(artifact))
+    monkeypatch.setenv(
+        "AI_TRADING_EXEC_SLIPPAGE_CEILING_BPS_BY_BUCKET",
+        json.dumps({"NORMAL": 10.0}),
+    )
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    ledger = _ExposureLedger()
+    intent = _intent(
+        symbol="AAPL",
+        side="buy",
+        qty=1,
+        price=100.0,
+        bar_ts=datetime(2026, 4, 20, 16, 0, tzinfo=UTC),
+        liquidity_bucket="NORMAL",
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "SLIPPAGE_CEILING_BLOCK"
+    assert details["expected_slippage_bps"] == 15.0
+    assert details["expected_slippage_source"] == (
+        "LIVE_COST_MODEL:AAPL:buy:midday:p90_adverse_slippage_bps"
+    )
+
+
+def test_pretrade_explicit_slippage_wins_over_live_cost_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "live_cost_model_latest.json"
+    _write_live_cost_artifact(
+        artifact,
+        [
+            {
+                "symbol": "AAPL",
+                "side": "buy",
+                "session_regime": "midday",
+                "sample_count": 9,
+                "sufficient_samples": True,
+                "p90_adverse_slippage_bps": 50.0,
+                "p90_total_cost_bps": 5.0,
+            }
+        ],
+    )
+    monkeypatch.setenv("AI_TRADING_LIVE_COST_MODEL_PATH", str(artifact))
+    monkeypatch.setenv(
+        "AI_TRADING_EXEC_SLIPPAGE_CEILING_BPS_BY_BUCKET",
+        json.dumps({"NORMAL": 10.0}),
+    )
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    ledger = _ExposureLedger()
+    intent = _intent(
+        symbol="AAPL",
+        side="buy",
+        qty=1,
+        price=100.0,
+        bar_ts=datetime(2026, 4, 20, 16, 0, tzinfo=UTC),
+        liquidity_bucket="NORMAL",
+        expected_slippage_bps=5.0,
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is True
+    assert reason == "OK"
+    assert details == {}
 
 
 def test_pretrade_blocks_opening_without_realtime_nbbo() -> None:
