@@ -31,6 +31,7 @@ from ai_trading.logging import get_logger
 from ai_trading.models.artifacts import write_artifact_manifest
 from ai_trading.tools.offline_replay import (
     _augment_model_features,
+    _replay_session_regime,
     _safe_rsi,
     _sanitize_model_feature_index,
 )
@@ -120,6 +121,7 @@ def _build_symbol_dataset(
     out = features.copy()
     out["symbol"] = symbol
     out["timestamp"] = frame.index
+    out["session_regime"] = [_replay_session_regime(ts) for ts in frame.index]
     out["gross_long_bps"] = gross_long_bps.to_numpy(dtype=float)
     out["net_long_bps"] = net_long_bps.to_numpy(dtype=float)
     out["target"] = (out["net_long_bps"] > float(min_net_edge_bps)).astype(int)
@@ -261,6 +263,41 @@ def _threshold_report(dataset: pd.DataFrame, probabilities: np.ndarray) -> list[
     return rows
 
 
+def _threshold_report_by_regime(
+    dataset: pd.DataFrame,
+    probabilities: np.ndarray,
+    *,
+    min_samples: int = 25,
+) -> dict[str, list[dict[str, Any]]]:
+    if "session_regime" not in dataset.columns:
+        return {}
+    reports: dict[str, list[dict[str, Any]]] = {}
+    regimes = dataset["session_regime"].astype(str).str.lower()
+    for regime in sorted(regime for regime in regimes.unique().tolist() if regime):
+        mask = regimes == regime
+        if int(mask.sum()) < int(min_samples):
+            continue
+        reports[regime] = _threshold_report(dataset.loc[mask].copy(), probabilities[mask.to_numpy()])
+    return reports
+
+
+def _best_thresholds_by_regime(
+    reports: Mapping[str, list[dict[str, Any]]],
+) -> dict[str, float]:
+    thresholds: dict[str, float] = {}
+    for regime, rows in reports.items():
+        if not rows:
+            continue
+        best = rows[0]
+        value = best.get("confidence_threshold")
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        thresholds[str(regime)] = float(np.clip(parsed, 0.0, 0.99))
+    return thresholds
+
+
 def _optional_threshold(value: Any) -> float | None:
     if value in (None, ""):
         return None
@@ -270,7 +307,12 @@ def _optional_threshold(value: Any) -> float | None:
     return float(np.clip(threshold, 0.0, 0.99))
 
 
-def _attach_model_metadata(model: Any, *, edge_global_threshold: float | None) -> None:
+def _attach_model_metadata(
+    model: Any,
+    *,
+    edge_global_threshold: float | None,
+    edge_thresholds_by_regime: Mapping[str, float] | None = None,
+) -> None:
     for name, value in (
         ("edge_score_orientation_", "direct"),
         ("replay_aligned_objective_", "one_bar_net_markout"),
@@ -293,6 +335,18 @@ def _attach_model_metadata(model: Any, *, edge_global_threshold: float | None) -
             logger.debug(
                 "REPLAY_ALIGNED_MODEL_METADATA_READONLY",
                 extra={"attribute": "edge_global_threshold_", "model_type": type(model).__name__},
+            )
+    if edge_thresholds_by_regime:
+        try:
+            setattr(
+                model,
+                "edge_thresholds_by_regime_",
+                {str(key): float(value) for key, value in edge_thresholds_by_regime.items()},
+            )
+        except AttributeError:
+            logger.debug(
+                "REPLAY_ALIGNED_MODEL_METADATA_READONLY",
+                extra={"attribute": "edge_thresholds_by_regime_", "model_type": type(model).__name__},
             )
 
 
@@ -330,7 +384,15 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
     probabilities = np.asarray(model.predict_proba(X_validation), dtype=float)[:, positive_index]
 
     edge_global_threshold = _optional_threshold(getattr(args, "edge_global_threshold", None))
-    _attach_model_metadata(model, edge_global_threshold=edge_global_threshold)
+    validation_report = _evaluate_probabilities(y_validation, probabilities)
+    threshold_report = _threshold_report(validation, probabilities)
+    threshold_report_by_regime = _threshold_report_by_regime(validation, probabilities)
+    edge_thresholds_by_regime = _best_thresholds_by_regime(threshold_report_by_regime)
+    _attach_model_metadata(
+        model,
+        edge_global_threshold=edge_global_threshold,
+        edge_thresholds_by_regime=edge_thresholds_by_regime,
+    )
 
     model_name = str(args.model_name or f"replay_aligned_{args.model_type}").strip()
     model_path = output_dir / f"{model_name}.joblib"
@@ -358,10 +420,9 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "feature_columns": list(REPLAY_ALIGNED_FEATURE_COLUMNS),
             "objective": "one_bar_net_markout_binary",
             "config": asdict(config),
+            "thresholds_by_regime": edge_thresholds_by_regime,
         },
     )
-    validation_report = _evaluate_probabilities(y_validation, probabilities)
-    threshold_report = _threshold_report(validation, probabilities)
     report = {
         "schema_version": "1.0.0",
         "artifact_type": "replay_aligned_training_report",
@@ -380,6 +441,8 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         },
         "validation": validation_report,
         "threshold_sweep": threshold_report,
+        "threshold_sweep_by_regime": threshold_report_by_regime,
+        "thresholds_by_regime": edge_thresholds_by_regime,
         "recommendation": "evaluate_candidate_with_offline_replay_before_promotion",
     }
     report_path = output_dir / f"{model_name}_training_report.json"

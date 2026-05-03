@@ -50,6 +50,7 @@ class ReplayConfig:
     fee_bps: float
     slippage_bps: float
     live_cost_model: LiveCostReplayModel | None = None
+    regime_thresholds: RegimeThresholdModel | None = None
     sizing_policy: str = "flat"
     sizing_min_scale: float = 1.0
     sizing_max_scale: float = 1.0
@@ -73,6 +74,23 @@ class LiveCostReplayModel:
     status: str
     bucket_count: int
     buckets: dict[tuple[str, str, str], LiveCostReplayBucket]
+
+
+@dataclass(frozen=True)
+class RegimeThreshold:
+    regime: str
+    confidence_threshold: float
+    entry_score_threshold: float
+    source: str
+    sample_count: int = 0
+
+
+@dataclass(frozen=True)
+class RegimeThresholdModel:
+    path: str
+    generated_at: str | None
+    status: str
+    regimes: dict[str, RegimeThreshold]
 
 
 @dataclass(frozen=True)
@@ -608,6 +626,12 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--regime-thresholds-json",
+        type=Path,
+        default=None,
+        help="Optional regime threshold artifact for replay entry gates.",
+    )
+    parser.add_argument(
         "--simulation-mode",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -949,6 +973,89 @@ def _load_live_cost_replay_model(args: argparse.Namespace) -> LiveCostReplayMode
     )
 
 
+def _threshold_rows_from_payload(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    rows = payload.get("regimes")
+    if isinstance(rows, list):
+        return [row for row in rows if isinstance(row, Mapping)]
+    mapping = payload.get("thresholds_by_regime")
+    if isinstance(mapping, Mapping):
+        out: list[Mapping[str, Any]] = []
+        for regime, row in mapping.items():
+            if isinstance(row, Mapping):
+                item = dict(row)
+                item.setdefault("regime", regime)
+                out.append(item)
+        return out
+    return []
+
+
+def _load_regime_threshold_model(args: argparse.Namespace) -> RegimeThresholdModel | None:
+    explicit_path = str(getattr(args, "regime_thresholds_json", "") or "").strip()
+    if not explicit_path:
+        return None
+    path = Path(explicit_path).expanduser()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    status_raw = payload.get("status")
+    status = status_raw if isinstance(status_raw, Mapping) else {}
+    if status and not bool(status.get("available", True)):
+        return None
+    regimes: dict[str, RegimeThreshold] = {}
+    for row in _threshold_rows_from_payload(payload):
+        regime = str(
+            row.get("regime") or row.get("session_regime") or row.get("bucket") or ""
+        ).strip().lower()
+        if not regime:
+            continue
+        confidence_threshold = _finite_float(row.get("confidence_threshold"))
+        entry_score_threshold = _finite_float(row.get("entry_score_threshold"))
+        if confidence_threshold is None or entry_score_threshold is None:
+            continue
+        regimes[regime] = RegimeThreshold(
+            regime=regime,
+            confidence_threshold=float(_clamp(confidence_threshold, 0.0, 0.999999)),
+            entry_score_threshold=float(_clamp(entry_score_threshold, 0.0, 0.999999)),
+            source=str(row.get("source") or f"regime_threshold:{regime}"),
+            sample_count=int(_finite_float(row.get("sample_count")) or 0.0),
+        )
+    if not regimes:
+        return None
+    return RegimeThresholdModel(
+        path=str(path),
+        generated_at=str(payload.get("generated_at")) if payload.get("generated_at") else None,
+        status=str(status.get("status") or payload.get("status") or "ready"),
+        regimes=regimes,
+    )
+
+
+def _thresholds_for_regime(
+    cfg: ReplayConfig,
+    *,
+    ts: Any,
+) -> tuple[float, float, str, str]:
+    regime = _replay_session_regime(ts)
+    model = cfg.regime_thresholds
+    if model is not None:
+        threshold = model.regimes.get(regime) or model.regimes.get("default")
+        if threshold is not None:
+            return (
+                float(threshold.confidence_threshold),
+                float(threshold.entry_score_threshold),
+                regime,
+                threshold.source,
+            )
+    return (
+        float(cfg.confidence_threshold),
+        float(cfg.entry_score_threshold),
+        regime,
+        "global",
+    )
+
+
 def _replay_slippage_bps(
     cfg: ReplayConfig,
     *,
@@ -1041,6 +1148,27 @@ def _live_cost_model_config_payload(model: LiveCostReplayModel | None) -> dict[s
     }
 
 
+def _regime_threshold_config_payload(model: RegimeThresholdModel | None) -> dict[str, Any]:
+    if model is None:
+        return {"enabled": False}
+    return {
+        "enabled": True,
+        "path": model.path,
+        "generated_at": model.generated_at,
+        "status": model.status,
+        "regime_count": int(len(model.regimes)),
+        "regimes": {
+            key: {
+                "confidence_threshold": value.confidence_threshold,
+                "entry_score_threshold": value.entry_score_threshold,
+                "source": value.source,
+                "sample_count": value.sample_count,
+            }
+            for key, value in sorted(model.regimes.items())
+        },
+    }
+
+
 def _entry_price(close: float, side: int, slippage_bps: float) -> float:
     slip = slippage_bps / 10000.0
     if side > 0:
@@ -1071,6 +1199,33 @@ def _max_drawdown_bps(equity_curve: list[float]) -> float:
     with np.errstate(divide="ignore", invalid="ignore"):
         drawdowns = np.where(peaks > 0.0, values / peaks - 1.0, 0.0)
     return float(abs(drawdowns.min()) * 10000.0)
+
+
+def _summarize_trades_by_regime(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[float]] = {}
+    for trade in trades:
+        regime = str(trade.get("session_regime") or "unknown").strip().lower() or "unknown"
+        pnl_value = _finite_float(trade.get("pnl_bps"))
+        if pnl_value is None:
+            continue
+        grouped.setdefault(regime, []).append(float(pnl_value))
+    rows: list[dict[str, Any]] = []
+    for regime, values in sorted(grouped.items()):
+        pnl = np.asarray(values, dtype=float)
+        wins = pnl[pnl > 0.0]
+        losses = pnl[pnl < 0.0]
+        rows.append(
+            {
+                "session_regime": regime,
+                "trades": int(pnl.size),
+                "win_rate": float((wins.size / pnl.size) if pnl.size else 0.0),
+                "expectancy_bps": float(pnl.mean()) if pnl.size else 0.0,
+                "net_pnl_bps": float(pnl.sum()) if pnl.size else 0.0,
+                "profit_factor": _profit_factor(wins, losses),
+            }
+        )
+    rows.sort(key=lambda row: float(row.get("expectancy_bps") or 0.0), reverse=True)
+    return rows
 
 
 def _summarize_markout_fill_metrics(
@@ -1169,6 +1324,10 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
     best_price = 0.0
     entry_size_multiplier = 1.0
     entry_sizing_context: dict[str, Any] = {"policy": "flat", "reason": "flat"}
+    entry_session_regime = "unknown"
+    entry_threshold_source = "global"
+    entry_confidence_threshold = float(cfg.confidence_threshold)
+    entry_entry_score_threshold = float(cfg.entry_score_threshold)
     position_bars = 0
     equity = 1.0
     equity_curve: list[float] = [equity]
@@ -1179,6 +1338,9 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
             continue
         s = float(score.iloc[i])
         conf = float(confidence.iloc[i])
+        effective_confidence_threshold, effective_entry_threshold, session_regime, threshold_source = (
+            _thresholds_for_regime(cfg, ts=ts)
+        )
 
         if side != 0:
             hold_bars = i - entry_bar
@@ -1205,9 +1367,9 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
             ):
                 exit_reason = "trailing_stop"
             elif hold_bars >= cfg.min_hold_bars:
-                long_flip = side > 0 and s <= -cfg.entry_score_threshold
-                short_flip = side < 0 and s >= cfg.entry_score_threshold
-                if (long_flip or short_flip) and conf >= cfg.confidence_threshold:
+                long_flip = side > 0 and s <= -effective_entry_threshold
+                short_flip = side < 0 and s >= effective_entry_threshold
+                if (long_flip or short_flip) and conf >= effective_confidence_threshold:
                     exit_reason = "signal_flip"
 
             if exit_reason is not None:
@@ -1232,6 +1394,10 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
                         "hold_bars": hold_bars,
                         "pnl_bps": float(pnl_bps),
                         "raw_pnl_bps": float(raw_pnl_bps),
+                        "session_regime": str(entry_session_regime),
+                        "threshold_source": str(entry_threshold_source),
+                        "confidence_threshold": float(entry_confidence_threshold),
+                        "entry_score_threshold": float(entry_entry_score_threshold),
                         "size_multiplier": float(entry_size_multiplier),
                         "sizing": dict(entry_sizing_context),
                         "exit_reason": exit_reason,
@@ -1244,13 +1410,17 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
                 best_price = 0.0
                 entry_size_multiplier = 1.0
                 entry_sizing_context = {"policy": "flat", "reason": "flat"}
+                entry_session_regime = "unknown"
+                entry_threshold_source = "global"
+                entry_confidence_threshold = float(cfg.confidence_threshold)
+                entry_entry_score_threshold = float(cfg.entry_score_threshold)
 
         if side == 0:
-            open_long = conf >= cfg.confidence_threshold and s >= cfg.entry_score_threshold
+            open_long = conf >= effective_confidence_threshold and s >= effective_entry_threshold
             open_short = (
                 cfg.allow_shorts
-                and conf >= cfg.confidence_threshold
-                and s <= -cfg.entry_score_threshold
+                and conf >= effective_confidence_threshold
+                and s <= -effective_entry_threshold
             )
             if open_long:
                 side = 1
@@ -1275,6 +1445,10 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
                 entry_bar = i
                 entry_ts = str(ts)
                 best_price = close
+                entry_session_regime = session_regime
+                entry_threshold_source = threshold_source
+                entry_confidence_threshold = effective_confidence_threshold
+                entry_entry_score_threshold = effective_entry_threshold
 
         equity_curve.append(equity)
 
@@ -1305,6 +1479,10 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
                 "hold_bars": hold_bars,
                 "pnl_bps": float(pnl_bps),
                 "raw_pnl_bps": float(raw_pnl_bps),
+                "session_regime": str(entry_session_regime),
+                "threshold_source": str(entry_threshold_source),
+                "confidence_threshold": float(entry_confidence_threshold),
+                "entry_score_threshold": float(entry_entry_score_threshold),
                 "size_multiplier": float(entry_size_multiplier),
                 "sizing": dict(entry_sizing_context),
                 "exit_reason": "end_of_data",
@@ -1459,6 +1637,8 @@ def _accepted_candidate_row(
         "side": side,
         "score": context.get("score"),
         "confidence": context.get("confidence"),
+        "session_regime": context.get("session_regime"),
+        "threshold_source": context.get("threshold_source"),
         "entry_score_threshold": context.get("entry_score_threshold"),
         "confidence_threshold": context.get("confidence_threshold"),
         "score_source": context.get("score_source"),
@@ -1775,6 +1955,16 @@ def _summarize_candidate_quality(
             key_name="session_segment",
             key_func=_session_segment,
         ),
+        "by_session_regime": _group_quality(
+            rows,
+            key_name="session_regime",
+            key_func=lambda row: str(row.get("session_regime") or "missing").lower(),
+        ),
+        "by_threshold_source": _group_quality(
+            rows,
+            key_name="threshold_source",
+            key_func=lambda row: str(row.get("threshold_source") or "global").lower(),
+        ),
         "cap_adjustments": _summarize_cap_adjustments(
             cap_adjustments,
             candidate_rows=rows,
@@ -1830,6 +2020,8 @@ def _write_accepted_candidate_artifacts(
         "side",
         "score",
         "confidence",
+        "session_regime",
+        "threshold_source",
         "entry_score_threshold",
         "confidence_threshold",
         "score_source",
@@ -1938,12 +2130,15 @@ def _run_parity_simulation(
             confidence = float(bar.get("confidence", 0.0) or 0.0)
         except (TypeError, ValueError):
             return None
-        if confidence < cfg.confidence_threshold:
+        confidence_threshold, entry_score_threshold, session_regime, threshold_source = (
+            _thresholds_for_regime(cfg, ts=ts_iso)
+        )
+        if confidence < confidence_threshold:
             return None
         side: str | None = None
-        if score >= cfg.entry_score_threshold:
+        if score >= entry_score_threshold:
             side = "buy"
-        elif cfg.allow_shorts and score <= -cfg.entry_score_threshold:
+        elif cfg.allow_shorts and score <= -entry_score_threshold:
             side = "sell"
         if side is None:
             return None
@@ -2073,8 +2268,10 @@ def _run_parity_simulation(
             "score": float(score),
             "confidence": float(confidence),
             "score_source": score_source,
-            "entry_score_threshold": float(cfg.entry_score_threshold),
-            "confidence_threshold": float(cfg.confidence_threshold),
+            "entry_score_threshold": float(entry_score_threshold),
+            "confidence_threshold": float(confidence_threshold),
+            "session_regime": session_regime,
+            "threshold_source": threshold_source,
             "policy_fill_prob_proxy": float(fill_prob_proxy),
             "policy_expected_capture_proxy_bps": float(expected_capture_proxy),
             "policy_expected_capture_adjusted_bps": float(adjusted_capture),
@@ -2168,6 +2365,7 @@ def _run_parity_simulation(
             "max_symbol_notional": args.max_symbol_notional,
             "max_gross_notional": args.max_gross_notional,
             "use_model_score": bool(model_context is not None),
+            "regime_thresholds": _regime_threshold_config_payload(cfg.regime_thresholds),
         },
     }
     if model_context is not None:
@@ -2643,6 +2841,7 @@ def _persist_replay_to_oms(
 
 def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
     live_cost_model = None if bool(args.simulation_mode) else _load_live_cost_replay_model(args)
+    regime_thresholds = _load_regime_threshold_model(args)
     cfg = ReplayConfig(
         confidence_threshold=float(args.confidence_threshold),
         entry_score_threshold=float(args.entry_score_threshold),
@@ -2655,6 +2854,7 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
         fee_bps=max(0.0, float(args.fee_bps)),
         slippage_bps=max(0.0, float(args.slippage_bps)),
         live_cost_model=live_cost_model,
+        regime_thresholds=regime_thresholds,
         sizing_policy=str(args.sizing_policy or "flat").strip().lower() or "flat",
         sizing_min_scale=max(0.0, float(args.sizing_min_scale)),
         sizing_max_scale=max(0.0, float(args.sizing_max_scale)),
@@ -2758,11 +2958,13 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
             "fee_bps": cfg.fee_bps,
             "slippage_bps": cfg.slippage_bps,
             "live_cost_model": _live_cost_model_config_payload(cfg.live_cost_model),
+            "regime_thresholds": _regime_threshold_config_payload(cfg.regime_thresholds),
             "sizing_policy": cfg.sizing_policy,
             "sizing_min_scale": cfg.sizing_min_scale,
             "sizing_max_scale": cfg.sizing_max_scale,
             "sizing_cost_penalty_bps": cfg.sizing_cost_penalty_bps,
         },
+        "by_session_regime": _summarize_trades_by_regime(all_trades),
     }
     return {
         "schema_version": OFFLINE_REPLAY_SCHEMA_VERSION,

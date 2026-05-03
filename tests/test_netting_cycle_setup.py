@@ -25,6 +25,82 @@ class _Logger:
         self.events.append((event, extra))
 
 
+def _enabled_sleeves() -> list[SimpleNamespace]:
+    return [
+        SimpleNamespace(
+            name="intraday",
+            enabled=True,
+            timeframe="1m",
+            entry_threshold=0.1,
+            exit_threshold=0.05,
+            flip_threshold=0.2,
+            reentry_threshold=0.1,
+            deadband_dollars=10.0,
+            deadband_shares=1.0,
+            cost_k=1.0,
+            edge_scale_bps=10.0,
+            turnover_cap_dollars=1000.0,
+            max_symbol_dollars=5000.0,
+            max_gross_dollars=10000.0,
+        )
+    ]
+
+
+def _prepare_kwargs(
+    *,
+    state: SimpleNamespace,
+    runtime: SimpleNamespace,
+    logger: _Logger,
+    env: dict[str, object],
+    pre_rank_calls: list[list[str]] | None = None,
+) -> dict[str, object]:
+    def _get_env(key: str, default: object = None, cast: object = None) -> object:
+        return env.get(key, default)
+
+    return {
+        "state": state,
+        "runtime": runtime,
+        "cfg": SimpleNamespace(),
+        "now": datetime(2026, 4, 19, 14, 30, tzinfo=UTC),
+        "market_open_now": True,
+        "breakers": SimpleNamespace(record_failure=lambda _dep, _error: None),
+        "logger": logger,
+        "get_env": _get_env,
+        "build_sleeve_configs_func": lambda _cfg: _enabled_sleeves(),
+        "resolve_runtime_sleeve_whitelist_func": lambda: set(),
+        "maybe_update_allocation_state_func": lambda *_args, **_kwargs: None,
+        "allocation_weights_for_sleeves_func": lambda _cfg, _sleeves: {"intraday": 1.0},
+        "load_learned_overrides_func": lambda _cfg: {},
+        "load_candidate_universe_func": lambda _runtime: [],
+        "pre_rank_execution_candidates_func": (
+            lambda items: (
+                pre_rank_calls.append(list(items)) if pre_rank_calls is not None else None
+            )
+            or list(items)
+        ),
+        "ensure_data_fetcher_func": lambda _runtime: None,
+        "retry_idempotent_func": lambda fn, **_kwargs: fn(),
+        "compute_current_positions_func": lambda _runtime: {},
+        "classify_exception_func": lambda exc, **_kwargs: exc,
+        "handle_error_func": lambda *_args, **_kwargs: None,
+        "merge_managed_position_symbols_func": lambda items, positions: list(items)
+        + [symbol for symbol in positions if symbol not in items],
+        "pending_orders_block_scope_func": lambda: "none",
+        "get_cycle_budget_context_func": lambda: None,
+        "resolve_adaptive_order_cap_func": lambda **_kwargs: (
+            None,
+            {"mode": "none", "headroom_ratio": 1.0},
+        ),
+        "select_symbols_with_budget_rotation_func": lambda items, positions, **_kwargs: (
+            list(items),
+            0,
+            0,
+        ),
+        "pending_order_blocked_symbols_attr": "_pending_order_blocked_symbols",
+        "pending_order_sample_limit": 5,
+    }
+
+
 def test_prepare_netting_cycle_inputs_returns_filtered_symbols_and_positions() -> None:
     state = SimpleNamespace(
         canary_mode_logged=False,
@@ -109,6 +185,68 @@ def test_prepare_netting_cycle_inputs_returns_filtered_symbols_and_positions() -
     assert result.allocation_weights == {"intraday": 1.0}
     assert result.learned_overrides == {"foo": "bar"}
     assert "SPY" in result.positions
+    assert result.symbols == ["AAPL"]
+
+
+def test_symbol_prune_shadow_mode_preserves_candidates_before_prerank() -> None:
+    state = SimpleNamespace(
+        canary_mode_logged=False,
+        last_loop_duration=0.0,
+        netting_symbol_budget_cursor=0,
+    )
+    runtime = SimpleNamespace(tickers=["AAPL", "MSFT"], execution_engine=None)
+    logger = _Logger()
+    pre_rank_calls: list[list[str]] = []
+
+    result = prepare_netting_cycle_inputs(
+        **_prepare_kwargs(
+            state=state,
+            runtime=runtime,
+            logger=logger,
+            env={
+                "AI_TRADING_SYMBOL_PRUNE_ENABLED": True,
+                "AI_TRADING_SYMBOL_PRUNE_MODE": "shadow",
+                "AI_TRADING_SYMBOL_PRUNE_DISABLED_SYMBOLS": "MSFT",
+                "AI_TRADING_SYMBOL_UNIVERSE_SCORECARD_ENABLED": False,
+            },
+            pre_rank_calls=pre_rank_calls,
+        )
+    )
+
+    assert result is not None
+    assert pre_rank_calls == [["AAPL", "MSFT"]]
+    assert result.symbols == ["AAPL", "MSFT"]
+    assert any(event == "SYMBOL_UNIVERSE_PRUNE_EVALUATED" for event, _ in logger.events)
+
+
+def test_symbol_prune_enforce_removes_disabled_before_prerank() -> None:
+    state = SimpleNamespace(
+        canary_mode_logged=False,
+        last_loop_duration=0.0,
+        netting_symbol_budget_cursor=0,
+    )
+    runtime = SimpleNamespace(tickers=["AAPL", "MSFT", "NVDA"], execution_engine=None)
+    logger = _Logger()
+    pre_rank_calls: list[list[str]] = []
+
+    result = prepare_netting_cycle_inputs(
+        **_prepare_kwargs(
+            state=state,
+            runtime=runtime,
+            logger=logger,
+            env={
+                "AI_TRADING_SYMBOL_PRUNE_ENABLED": True,
+                "AI_TRADING_SYMBOL_PRUNE_MODE": "enforce",
+                "AI_TRADING_SYMBOL_PRUNE_DISABLED_SYMBOLS": "MSFT",
+                "AI_TRADING_SYMBOL_PRUNE_ALLOWLIST": "AAPL,MSFT",
+                "AI_TRADING_SYMBOL_UNIVERSE_SCORECARD_ENABLED": False,
+            },
+            pre_rank_calls=pre_rank_calls,
+        )
+    )
+
+    assert result is not None
+    assert pre_rank_calls == [["AAPL"]]
     assert result.symbols == ["AAPL"]
 
 

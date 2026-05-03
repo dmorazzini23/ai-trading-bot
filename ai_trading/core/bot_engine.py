@@ -37700,6 +37700,120 @@ def _run_tca_cost_calibration(
                     "buckets": int(window_map.get("bucket_count", 0) or 0),
                 },
             )
+            try:
+                from ai_trading.tools.symbol_universe_scorecard import (
+                    build_symbol_universe_scorecard,
+                )
+
+                scorecard_path = resolve_runtime_artifact_path(
+                    str(
+                        get_env(
+                            "AI_TRADING_SYMBOL_UNIVERSE_SCORECARD_PATH",
+                            "runtime/symbol_universe_scorecard_latest.json",
+                        )
+                    ),
+                    default_relative="runtime/symbol_universe_scorecard_latest.json",
+                )
+                governor_path = resolve_runtime_artifact_path(
+                    str(
+                        get_env(
+                            "AI_TRADING_EXECUTION_QUALITY_GOVERNOR_REPORT_PATH",
+                            "runtime/execution_quality_governor_latest.json",
+                        )
+                    ),
+                    default_relative="runtime/execution_quality_governor_latest.json",
+                )
+                shadow_report_config = str(
+                    get_env("AI_TRADING_ML_SHADOW_REPORT_PATH", "", cast=str)
+                    or ""
+                ).strip()
+                shadow_report_path = (
+                    resolve_runtime_artifact_path(
+                        shadow_report_config,
+                        default_relative="runtime/ml_shadow_report_latest.json",
+                    )
+                    if shadow_report_config
+                    else None
+                )
+                replay_report_config = str(
+                    get_env("AI_TRADING_SYMBOL_UNIVERSE_REPLAY_REPORT_PATH", "", cast=str)
+                    or ""
+                ).strip()
+                replay_report_path = (
+                    resolve_runtime_artifact_path(
+                        replay_report_config,
+                        default_relative="runtime/replay_outputs/replay_latest.json",
+                    )
+                    if replay_report_config
+                    else None
+                )
+
+                def _read_json_mapping(path: Path | None) -> dict[str, Any]:
+                    if path is None or not path.exists():
+                        return {}
+                    try:
+                        parsed = json.loads(path.read_text(encoding="utf-8"))
+                    except BOT_ENGINE_FALLBACK_EXC:
+                        return {}
+                    return dict(parsed) if isinstance(parsed, Mapping) else {}
+
+                symbol_scorecard = build_symbol_universe_scorecard(
+                    live_cost_model=live_cost_model,
+                    shadow_report=_read_json_mapping(shadow_report_path),
+                    execution_quality_governor=_read_json_mapping(governor_path),
+                    replay_report=_read_json_mapping(replay_report_path),
+                    previous_scorecard=_read_json_mapping(scorecard_path),
+                    min_samples=max(
+                        1,
+                        int(
+                            get_env(
+                                "AI_TRADING_SYMBOL_UNIVERSE_SCORECARD_MIN_SAMPLES",
+                                25,
+                                cast=int,
+                            )
+                        ),
+                    ),
+                    min_persistence=max(
+                        1,
+                        int(
+                            get_env(
+                                "AI_TRADING_SYMBOL_UNIVERSE_SCORECARD_MIN_PERSISTENCE",
+                                2,
+                                cast=int,
+                            )
+                        ),
+                    ),
+                    now=now,
+                )
+                symbol_scorecard["paths"] = {
+                    "live_cost_model": str(live_cost_model_path),
+                    "shadow_report": str(shadow_report_path) if shadow_report_path else None,
+                    "replay_report": str(replay_report_path) if replay_report_path else None,
+                    "execution_quality_governor": str(governor_path),
+                    "previous_scorecard": str(scorecard_path),
+                    "report": str(scorecard_path),
+                }
+                scorecard_path.parent.mkdir(parents=True, exist_ok=True)
+                scorecard_path.write_text(
+                    json.dumps(symbol_scorecard, sort_keys=True, default=str),
+                    encoding="utf-8",
+                )
+                summary_payload = symbol_scorecard.get("summary")
+                summary_map = summary_payload if isinstance(summary_payload, Mapping) else {}
+                logger.info(
+                    "SYMBOL_UNIVERSE_SCORECARD_UPDATED",
+                    extra={
+                        "path": str(scorecard_path),
+                        "symbols": int(summary_map.get("symbol_count", 0) or 0),
+                        "disabled": int(summary_map.get("disabled_count", 0) or 0),
+                        "shadow_only": int(summary_map.get("shadow_only_count", 0) or 0),
+                    },
+                )
+            except BOT_ENGINE_FALLBACK_EXC as exc:
+                logger.warning(
+                    "SYMBOL_UNIVERSE_SCORECARD_UPDATE_FAILED",
+                    extra={"error": str(exc)},
+                )
         except BOT_ENGINE_FALLBACK_EXC as exc:
             logger.warning(
                 "LIVE_COST_MODEL_UPDATE_FAILED",

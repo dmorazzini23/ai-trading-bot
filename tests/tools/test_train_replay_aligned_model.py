@@ -50,9 +50,14 @@ def test_build_training_dataset_uses_future_net_markout_target(tmp_path: Path) -
 
     assert not dataset.empty
     assert set(REPLAY_ALIGNED_FEATURE_COLUMNS).issubset(dataset.columns)
-    assert {"symbol", "timestamp", "gross_long_bps", "net_long_bps", "target"}.issubset(
-        dataset.columns
-    )
+    assert {
+        "symbol",
+        "timestamp",
+        "session_regime",
+        "gross_long_bps",
+        "net_long_bps",
+        "target",
+    }.issubset(dataset.columns)
     assert dataset["target"].nunique() == 2
     assert set(dataset["target"].unique()).issubset({0, 1})
     assert bool((dataset["target"] == (dataset["net_long_bps"] > 0.0).astype(int)).all())
@@ -91,9 +96,12 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     assert verify_artifact(model_path=model_path, manifest_path=manifest_path) == (True, "OK")
     loaded = joblib.load(model_path)
     assert getattr(loaded, "edge_global_threshold_") == 0.66
+    assert getattr(loaded, "edge_thresholds_by_regime_")
 
     persisted = cast(dict[str, Any], json.loads(report_path.read_text(encoding="utf-8")))
     assert persisted["config"]["edge_global_threshold"] == 0.66
+    assert persisted["thresholds_by_regime"]
+    assert persisted["threshold_sweep_by_regime"]
     assert persisted["dataset"]["symbols"] == 2
     assert persisted["dataset"]["train_rows"] > 0
     assert persisted["dataset"]["validation_rows"] > 0

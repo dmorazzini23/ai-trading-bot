@@ -723,6 +723,70 @@ def test_pretrade_explicit_slippage_wins_over_live_cost_model(
 
     assert allowed is True
     assert reason == "OK"
+
+
+def test_pretrade_symbol_universe_gate_blocks_opening_but_allows_reduction(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "symbol_universe_scorecard_latest.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "artifact_type": "symbol_universe_scorecard",
+                "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "status": {"available": True, "status": "ready"},
+                "symbols": [
+                    {
+                        "symbol": "MSFT",
+                        "effective_mode": "disabled",
+                        "sample_count": 30,
+                        "persistence_count": 2,
+                        "reasons": ["p90_total_cost_bps_disable"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_PRETRADE_SYMBOL_UNIVERSE_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_SYMBOL_UNIVERSE_SCORECARD_PATH", str(artifact))
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(
+        _intent(
+            symbol="MSFT",
+            side="buy",
+            qty=1,
+            price=100.0,
+            bar_ts=datetime(2026, 5, 1, 15, 0, tzinfo=UTC),
+        ),
+        cfg=cfg,
+        ledger=_ExposureLedger(),
+        rate_limiter=limiter,
+    )
+
+    assert allowed is False
+    assert reason == "SYMBOL_UNIVERSE_MODE_BLOCK"
+    assert details["mode"] == "disabled"
+
+    allowed, reason, details = validate_pretrade(
+        _intent(
+            symbol="MSFT",
+            side="sell",
+            qty=1,
+            price=100.0,
+            bar_ts=datetime(2026, 5, 1, 15, 0, tzinfo=UTC),
+        ),
+        cfg=cfg,
+        ledger=_ExposureLedger(symbol_qty={"MSFT": 2.0}),
+        rate_limiter=limiter,
+    )
+
+    assert allowed is True
+    assert reason == "OK"
+    assert details == {}
     assert details == {}
 
 

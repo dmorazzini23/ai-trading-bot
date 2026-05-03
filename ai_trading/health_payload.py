@@ -879,6 +879,65 @@ def _live_cost_model_snapshot() -> dict[str, Any]:
     }
 
 
+def _symbol_universe_scorecard_snapshot() -> dict[str, Any]:
+    try:
+        latest_path = str(
+            get_env(
+                "AI_TRADING_SYMBOL_UNIVERSE_SCORECARD_PATH",
+                "runtime/symbol_universe_scorecard_latest.json",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or "runtime/symbol_universe_scorecard_latest.json"
+        ).strip()
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        latest_path = "runtime/symbol_universe_scorecard_latest.json"
+    payload, resolved = _read_json_mapping_artifact(
+        configured_path=latest_path,
+        default_relative="runtime/symbol_universe_scorecard_latest.json",
+    )
+    status_raw = payload.get("status") if isinstance(payload, Mapping) else {}
+    summary_raw = payload.get("summary") if isinstance(payload, Mapping) else {}
+    thresholds_raw = payload.get("thresholds") if isinstance(payload, Mapping) else {}
+    policy_raw = payload.get("policy") if isinstance(payload, Mapping) else {}
+    symbols_raw = payload.get("symbols") if isinstance(payload, Mapping) else []
+    symbols = (
+        [dict(row) for row in symbols_raw if isinstance(row, Mapping)]
+        if isinstance(symbols_raw, list)
+        else []
+    )
+    bottom_symbols = sorted(
+        symbols,
+        key=lambda row: (
+            str(row.get("effective_mode")) != "disabled",
+            str(row.get("effective_mode")) != "shadow_only",
+            float(row.get("quality_score") or 0.0),
+            str(row.get("symbol") or ""),
+        ),
+    )[:8]
+    top_symbols = sorted(
+        symbols,
+        key=lambda row: (
+            float(row.get("quality_score") or 0.0),
+            int(row.get("sample_count") or 0),
+            str(row.get("symbol") or ""),
+        ),
+        reverse=True,
+    )[:8]
+    return {
+        "available": bool(payload),
+        "path": str(resolved),
+        "schema_version": payload.get("schema_version"),
+        "generated_at": payload.get("generated_at"),
+        "status": dict(status_raw) if isinstance(status_raw, Mapping) else {},
+        "summary": dict(summary_raw) if isinstance(summary_raw, Mapping) else {},
+        "thresholds": dict(thresholds_raw) if isinstance(thresholds_raw, Mapping) else {},
+        "policy": dict(policy_raw) if isinstance(policy_raw, Mapping) else {},
+        "top_symbols": top_symbols,
+        "bottom_symbols": bottom_symbols,
+    }
+
+
 def _manual_override_snapshot() -> dict[str, Any]:
     try:
         from ai_trading.config.management import get_env
@@ -1369,6 +1428,7 @@ def build_control_plane_snapshot(
     runtime_performance = _runtime_performance_snapshot()
     execution_quality_governor = _execution_quality_governor_snapshot()
     live_cost_model = _live_cost_model_snapshot()
+    symbol_universe_scorecard = _symbol_universe_scorecard_snapshot()
     manual_overrides = _manual_override_snapshot()
     governance = _governance_snapshot()
 
@@ -1476,6 +1536,7 @@ def build_control_plane_snapshot(
             "oms_event_tca_available": runtime_oms_event_tca.get("available"),
             "governor": execution_quality_governor,
             "live_cost_model": live_cost_model,
+            "symbol_universe_scorecard": symbol_universe_scorecard,
             "submit_reject_rate_pct": runtime_oms_event_tca.get(
                 "submit_reject_rate_pct"
             ),

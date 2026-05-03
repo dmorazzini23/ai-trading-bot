@@ -5,7 +5,10 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
+import json
 from typing import Any, Callable, Mapping, Sequence
+
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 
 @dataclass(slots=True)
@@ -25,6 +28,113 @@ class NettingPreparationError(RuntimeError):
 
     def __post_init__(self) -> None:
         RuntimeError.__init__(self, self.reason_code)
+
+
+def _symbol_set(raw_value: Any) -> set[str]:
+    return {
+        token.strip().upper()
+        for token in str(raw_value or "").split(",")
+        if token and token.strip()
+    }
+
+
+def _scorecard_symbol_modes(
+    *,
+    get_env: Callable[..., Any],
+    logger: Any,
+) -> dict[str, str]:
+    if not bool(get_env("AI_TRADING_SYMBOL_UNIVERSE_SCORECARD_ENABLED", True, cast=bool)):
+        return {}
+    configured_path = str(
+        get_env(
+            "AI_TRADING_SYMBOL_UNIVERSE_SCORECARD_PATH",
+            "runtime/symbol_universe_scorecard_latest.json",
+            cast=str,
+        )
+        or "runtime/symbol_universe_scorecard_latest.json"
+    ).strip()
+    path = resolve_runtime_artifact_path(
+        configured_path,
+        default_relative="runtime/symbol_universe_scorecard_latest.json",
+    )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        if path.exists():
+            logger.warning(
+                "SYMBOL_UNIVERSE_SCORECARD_READ_FAILED",
+                extra={"path": str(path), "error": str(exc)},
+            )
+        return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    status = payload.get("status")
+    if not isinstance(status, Mapping) or not bool(status.get("available")):
+        return {}
+    rows = payload.get("symbols")
+    if not isinstance(rows, list):
+        return {}
+    modes: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        mode = str(row.get("effective_mode") or "allow").strip().lower()
+        if symbol and mode in {"allow", "shadow_only", "disabled"}:
+            modes[symbol] = mode
+    return modes
+
+
+def _apply_symbol_universe_pruning(
+    symbols: Sequence[str],
+    *,
+    get_env: Callable[..., Any],
+    logger: Any,
+) -> list[str]:
+    original = [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
+    if not original or not bool(get_env("AI_TRADING_SYMBOL_PRUNE_ENABLED", False, cast=bool)):
+        return original
+    mode = str(get_env("AI_TRADING_SYMBOL_PRUNE_MODE", "shadow", cast=str) or "shadow").strip().lower()
+    enforce = mode in {"enforce", "block", "live"}
+    disabled = _symbol_set(get_env("AI_TRADING_SYMBOL_PRUNE_DISABLED_SYMBOLS", "", cast=str))
+    allowlist = _symbol_set(get_env("AI_TRADING_SYMBOL_PRUNE_ALLOWLIST", "", cast=str))
+    scorecard_modes = _scorecard_symbol_modes(get_env=get_env, logger=logger)
+    prune_shadow_only = bool(
+        get_env("AI_TRADING_SYMBOL_PRUNE_SHADOW_ONLY_ENABLED", True, cast=bool)
+    )
+    disabled.update(symbol for symbol, symbol_mode in scorecard_modes.items() if symbol_mode == "disabled")
+    if prune_shadow_only:
+        disabled.update(
+            symbol for symbol, symbol_mode in scorecard_modes.items() if symbol_mode == "shadow_only"
+        )
+
+    kept: list[str] = []
+    pruned: list[str] = []
+    for symbol in original:
+        if allowlist and symbol not in allowlist:
+            pruned.append(symbol)
+            continue
+        if symbol in disabled:
+            pruned.append(symbol)
+            continue
+        kept.append(symbol)
+    if pruned or allowlist:
+        logger.info(
+            "SYMBOL_UNIVERSE_PRUNE_EVALUATED",
+            extra={
+                "mode": mode,
+                "enforced": bool(enforce),
+                "before": len(original),
+                "after": len(kept) if enforce else len(original),
+                "pruned_count": len(pruned),
+                "pruned_sample": sorted(set(pruned))[:10],
+                "allowlist_count": len(allowlist),
+                "scorecard_modes_count": len(scorecard_modes),
+            },
+        )
+    if not enforce:
+        return original
+    return kept
 
 
 def prepare_netting_cycle_inputs(
@@ -176,6 +286,15 @@ def prepare_netting_cycle_inputs(
         if not symbols:
             logger.warning("CANARY_MODE_EMPTY_UNIVERSE")
             return None
+
+    symbols = _apply_symbol_universe_pruning(
+        symbols,
+        get_env=get_env,
+        logger=logger,
+    )
+    if not symbols:
+        logger.info("NETTING_NO_ACTIONABLE_SYMBOLS", extra={"reason": "symbol_universe_prune"})
+        return None
 
     symbols = pre_rank_execution_candidates_func(symbols)
     if not symbols:

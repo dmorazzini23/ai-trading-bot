@@ -4,9 +4,93 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 from datetime import UTC, datetime
+import json
 from typing import Any, Callable, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 from ai_trading.contracts import Bar, bar_from_frame
+
+
+def _session_regime_for_now(now: datetime) -> str:
+    ts = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    ts_et = ts.astimezone(ZoneInfo("America/New_York"))
+    minute = (ts_et.hour * 60) + ts_et.minute
+    if ts_et.weekday() >= 5 or minute < (9 * 60 + 30) or minute >= (16 * 60):
+        return "offhours"
+    if minute < (10 * 60 + 15):
+        return "opening"
+    if minute >= (15 * 60 + 15):
+        return "closing"
+    return "midday"
+
+
+def _json_threshold_map(raw_value: Any) -> dict[str, float]:
+    if not str(raw_value or "").strip():
+        return {}
+    try:
+        parsed = json.loads(str(raw_value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    if not isinstance(parsed, Mapping):
+        return {}
+    out: dict[str, float] = {}
+    for key, value in parsed.items():
+        try:
+            threshold = float(value)
+        except (TypeError, ValueError):
+            continue
+        out[str(key).strip().lower()] = max(0.0, min(1.0, threshold))
+    return out
+
+
+def _resolve_regime_entry_threshold_adjustment(
+    *,
+    get_env_func: Callable[..., Any],
+    state: Any,
+    symbol: str,
+    base_threshold: float,
+    now: datetime,
+) -> tuple[float, dict[str, Any]]:
+    if not bool(get_env_func("AI_TRADING_REGIME_ENTRY_THRESHOLD_ENABLED", False, cast=bool)):
+        return float(base_threshold), {}
+    regime = str(getattr(state, "current_regime", "") or "unknown").strip().lower()
+    session_regime = _session_regime_for_now(now)
+    thresholds = _json_threshold_map(
+        get_env_func("AI_TRADING_REGIME_ENTRY_THRESHOLDS", "{}", cast=str)
+    )
+    candidates = [
+        (f"{regime}:{session_regime}", "regime_session"),
+        (session_regime, "session"),
+        (regime, "regime"),
+        ("default", "default"),
+    ]
+    selected: float | None = None
+    source = "none"
+    for key, candidate_source in candidates:
+        if key in thresholds:
+            selected = thresholds[key]
+            source = candidate_source
+            break
+    if selected is None:
+        return float(base_threshold), {
+            "symbol": str(symbol).upper(),
+            "regime": regime,
+            "session_regime": session_regime,
+            "threshold_before": float(base_threshold),
+            "threshold_after": float(base_threshold),
+            "source": "missing",
+        }
+    threshold_after = max(float(base_threshold), float(selected))
+    threshold_after = min(1.0, threshold_after)
+    return threshold_after, {
+        "symbol": str(symbol).upper(),
+        "regime": regime,
+        "session_regime": session_regime,
+        "threshold_before": float(base_threshold),
+        "threshold_after": float(threshold_after),
+        "configured_threshold": float(selected),
+        "source": source,
+    }
 
 
 def execute_trade_logic(
@@ -371,6 +455,21 @@ def execute_trade_logic(
                     "sample_count": int(feed_reliability.get("sample_count", 0) or 0),
                     "threshold_bonus": reliability_threshold_bonus,
                 },
+            )
+
+    if current_qty == 0:
+        threshold_before_regime = local_threshold
+        local_threshold, regime_threshold_context = _resolve_regime_entry_threshold_adjustment(
+            get_env_func=be.get_env,
+            state=state,
+            symbol=symbol,
+            base_threshold=float(local_threshold),
+            now=now,
+        )
+        if regime_threshold_context and local_threshold > threshold_before_regime:
+            be.logger.info(
+                "ENTRY_THRESHOLD_RAISED_REGIME_CONTEXT",
+                extra=regime_threshold_context,
             )
 
     long_entry_candidate = final_score > 0 and conf >= local_threshold and current_qty == 0

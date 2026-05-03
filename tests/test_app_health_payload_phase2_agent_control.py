@@ -108,6 +108,50 @@ def test_live_cost_model_snapshot_reads_symbol_session_artifact(
     assert snapshot["by_symbol_side_session"][0]["symbol"] == "AAPL"
 
 
+def test_symbol_universe_scorecard_snapshot_reads_policy_artifact(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "symbol_universe_scorecard_latest.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0.0",
+                "generated_at": "2026-05-01T15:00:00Z",
+                "status": {"available": True, "status": "ready", "mode": "observe"},
+                "summary": {"symbol_count": 2, "disabled_count": 1},
+                "thresholds": {"min_samples": 25},
+                "policy": {"disabled_symbols": ["MSFT"]},
+                "symbols": [
+                    {
+                        "symbol": "MSFT",
+                        "effective_mode": "disabled",
+                        "quality_score": -50.0,
+                        "sample_count": 30,
+                    },
+                    {
+                        "symbol": "AAPL",
+                        "effective_mode": "allow",
+                        "quality_score": 10.0,
+                        "sample_count": 30,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_SYMBOL_UNIVERSE_SCORECARD_PATH", str(artifact))
+
+    snapshot = health_payload._symbol_universe_scorecard_snapshot()
+
+    assert snapshot["available"] is True
+    assert snapshot["path"] == str(artifact)
+    assert snapshot["summary"]["disabled_count"] == 1
+    assert snapshot["policy"]["disabled_symbols"] == ["MSFT"]
+    assert snapshot["top_symbols"][0]["symbol"] == "AAPL"
+    assert snapshot["bottom_symbols"][0]["symbol"] == "MSFT"
+
+
 def test_build_runtime_health_payload_marks_required_database_failure(monkeypatch) -> None:
     monkeypatch.setattr(
         health_payload.runtime_state,

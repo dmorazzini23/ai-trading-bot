@@ -1169,3 +1169,82 @@ def test_offline_replay_model_scoring_applies_negative_symbol_penalties(
         penalized_payload["aggregate"]["total_trades"]
     )
     assert penalized_payload["aggregate"]["model_score"]["symbol_penalty_count"] == 1
+
+
+def test_offline_replay_applies_regime_threshold_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    csv_path = tmp_path / "REG.csv"
+    model_path = tmp_path / "model.joblib"
+    thresholds_path = tmp_path / "regime_thresholds.json"
+    out_path = tmp_path / "regime.json"
+    accepted_dir = tmp_path / "accepted"
+    _write_synthetic_bars(csv_path, periods=120)
+    _write_model(model_path, p_edge=0.9, orientation="direct")
+    thresholds_path.write_text(
+        json.dumps(
+            {
+                "artifact_type": "regime_thresholds",
+                "generated_at": "2026-05-01T15:00:00Z",
+                "status": {"available": True, "status": "ready"},
+                "regimes": [
+                    {
+                        "regime": "opening",
+                        "confidence_threshold": 0.95,
+                        "entry_score_threshold": 0.0,
+                        "sample_count": 50,
+                    },
+                    {
+                        "regime": "midday",
+                        "confidence_threshold": 0.0,
+                        "entry_score_threshold": 0.0,
+                        "sample_count": 50,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MIN_DELAY_MS", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MAX_DELAY_MS", "0")
+
+    assert (
+        main(
+            [
+                "--csv",
+                str(csv_path),
+                "--simulation-mode",
+                "--no-allow-shorts",
+                "--model-path",
+                str(model_path),
+                "--regime-thresholds-json",
+                str(thresholds_path),
+                "--confidence-threshold",
+                "0.0",
+                "--entry-score-threshold",
+                "0.0",
+                "--export-accepted-candidates",
+                "--accepted-candidates-dir",
+                str(accepted_dir),
+                "--output-json",
+                str(out_path),
+            ]
+        )
+        == 0
+    )
+
+    payload = _load_json(out_path)
+    assert payload["aggregate"]["config"]["regime_thresholds"]["enabled"] is True
+    rows = [
+        json.loads(line)
+        for line in (accepted_dir / "accepted_candidates.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert rows
+    assert {row["session_regime"] for row in rows} == {"midday"}
+    assert {row["threshold_source"] for row in rows} == {"regime_threshold:midday"}
+    by_regime = payload["aggregate"]["candidate_quality"]["by_session_regime"]
+    assert by_regime[0]["session_regime"] == "midday"

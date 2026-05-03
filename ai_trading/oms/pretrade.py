@@ -729,6 +729,116 @@ def _live_cost_model_payload() -> Mapping[str, Any] | None:
     return payload
 
 
+_SYMBOL_UNIVERSE_SCORECARD_LOCK = RLock()
+_SYMBOL_UNIVERSE_SCORECARD_CACHE: dict[str, Any] = {}
+
+
+def _symbol_universe_scorecard_payload() -> Mapping[str, Any] | None:
+    if not bool(get_env("AI_TRADING_PRETRADE_SYMBOL_UNIVERSE_GATE_ENABLED", False, cast=bool)):
+        return None
+    configured_path = str(
+        get_env(
+            "AI_TRADING_SYMBOL_UNIVERSE_SCORECARD_PATH",
+            "runtime/symbol_universe_scorecard_latest.json",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or "runtime/symbol_universe_scorecard_latest.json"
+    ).strip()
+    path = resolve_runtime_artifact_path(
+        configured_path,
+        default_relative="runtime/symbol_universe_scorecard_latest.json",
+    )
+    try:
+        stat_result = path.stat()
+    except OSError:
+        return None
+    with _SYMBOL_UNIVERSE_SCORECARD_LOCK:
+        if (
+            _SYMBOL_UNIVERSE_SCORECARD_CACHE.get("path") == str(path)
+            and _SYMBOL_UNIVERSE_SCORECARD_CACHE.get("mtime_ns") == stat_result.st_mtime_ns
+        ):
+            cached = _SYMBOL_UNIVERSE_SCORECARD_CACHE.get("payload")
+            return cached if isinstance(cached, Mapping) else None
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            parsed = None
+        payload = parsed if isinstance(parsed, Mapping) else None
+        _SYMBOL_UNIVERSE_SCORECARD_CACHE.update(
+            {
+                "path": str(path),
+                "mtime_ns": stat_result.st_mtime_ns,
+                "payload": payload,
+            }
+        )
+    return payload
+
+
+def _symbol_universe_scorecard_usable(payload: Mapping[str, Any]) -> bool:
+    if str(payload.get("artifact_type") or "") != "symbol_universe_scorecard":
+        return False
+    generated_at = _parse_utc_datetime_text(payload.get("generated_at"))
+    if generated_at is None:
+        return False
+    max_age_minutes = _finite_float(
+        get_env("AI_TRADING_SYMBOL_UNIVERSE_SCORECARD_MAX_AGE_MINUTES", 1440.0, cast=float)
+    )
+    if max_age_minutes is not None and max_age_minutes > 0.0:
+        if (datetime.now(UTC) - generated_at).total_seconds() > max_age_minutes * 60.0:
+            return False
+    status = payload.get("status")
+    return isinstance(status, Mapping) and bool(status.get("available"))
+
+
+def _symbol_universe_mode(symbol: str) -> tuple[str, Mapping[str, Any] | None]:
+    payload = _symbol_universe_scorecard_payload()
+    if payload is None or not _symbol_universe_scorecard_usable(payload):
+        return "allow", None
+    rows = payload.get("symbols")
+    if not isinstance(rows, list):
+        return "allow", None
+    symbol_token = str(symbol or "").strip().upper()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        if str(row.get("symbol") or "").strip().upper() != symbol_token:
+            continue
+        mode = str(row.get("effective_mode") or "allow").strip().lower()
+        if mode in {"allow", "shadow_only", "disabled"}:
+            return mode, row
+    return "allow", None
+
+
+def _symbol_universe_pretrade_gate(
+    intent: OrderIntent,
+    *,
+    ledger: Any,
+) -> tuple[bool, str, dict[str, Any]] | None:
+    if _intent_reduces_position(intent, ledger):
+        return None
+    mode, row = _symbol_universe_mode(intent.symbol)
+    if mode == "allow":
+        return None
+    if mode == "shadow_only" and not bool(
+        get_env("AI_TRADING_PRETRADE_SYMBOL_UNIVERSE_BLOCK_SHADOW_ONLY", True, cast=bool)
+    ):
+        return None
+    return (
+        False,
+        "SYMBOL_UNIVERSE_MODE_BLOCK",
+        {
+            "symbol": str(intent.symbol or "").strip().upper(),
+            "mode": mode,
+            "sample_count": row.get("sample_count") if isinstance(row, Mapping) else None,
+            "persistence_count": (
+                row.get("persistence_count") if isinstance(row, Mapping) else None
+            ),
+            "reasons": row.get("reasons") if isinstance(row, Mapping) else None,
+        },
+    )
+
+
 def _live_cost_model_usable(payload: Mapping[str, Any]) -> bool:
     if str(payload.get("artifact_type") or "") != "live_cost_model":
         return False
@@ -1522,6 +1632,10 @@ def validate_pretrade(
                 3,
             )
         return False, str(intent.broker_ready_reason or "BROKER_NOT_READY_BLOCK"), details
+
+    symbol_universe_decision = _symbol_universe_pretrade_gate(intent, ledger=ledger)
+    if symbol_universe_decision is not None:
+        return symbol_universe_decision
 
     if (rth_only or not allow_extended) and not _intent_regular_hours_open(intent):
         return (
