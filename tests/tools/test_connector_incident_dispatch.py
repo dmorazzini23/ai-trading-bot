@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "connector_incident_dispatch.py"
 _SPEC = importlib.util.spec_from_file_location("connector_incident_dispatch", _SCRIPT_PATH)
@@ -54,6 +56,51 @@ def test_run_dispatch_calls_active_connectors() -> None:
     assert calls["slack_eod"]["require_after_hours_training"] is True
     assert calls["slack_eod"]["block_on_training_gate"] is False
     assert "health_timeout_s" not in calls["incident_snapshot"]
+
+
+def test_run_dispatch_hydrates_slack_webhook_from_managed_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, dict[str, Any]] = {}
+
+    from ai_trading.config import managed_secrets
+
+    def _fake_fetch(secret_id: str, *, region: str, profile: str) -> dict[str, str]:
+        assert secret_id == "ai-trading/prod"
+        assert region == "us-west-2"
+        assert profile == ""
+        return {"AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/aws"}
+
+    monkeypatch.setattr(managed_secrets, "fetch_aws_secret_payload", _fake_fetch)
+
+    def _slack(args: dict[str, Any]) -> dict[str, Any]:
+        calls["slack"] = args
+        return {"sent": True}
+
+    payload = dispatch.run_dispatch(
+        env={
+            "AI_TRADING_CONNECTOR_OPENCLAW_ENABLED": "0",
+            "AI_TRADING_CONNECTOR_SLACK_EOD_ENABLED": "0",
+            "AI_TRADING_SECRETS_BACKEND": "aws-secrets-manager",
+            "AI_TRADING_AWS_SECRET_ID": "ai-trading/prod",
+            "AI_TRADING_AWS_REGION": "us-west-2",
+            "AI_TRADING_MANAGED_SECRET_KEYS": "AI_TRADING_SLACK_WEBHOOK_URL",
+        },
+        slack_notifier=_slack,
+        slack_eod_notifier=lambda args: {"unused": args},
+        openclaw_notifier=lambda args: {"unused": args},
+        incident_snapshot_builder=lambda args: {
+            "should_alert": False,
+            "fingerprint": "fp-1",
+            "snapshot": {"health_status": "ready"},
+            "triggers": [],
+        },
+    )
+
+    assert payload["ok"] is True
+    assert payload["managed_connector_secrets"]["hydrated"] == 1
+    assert payload["slack"]["attempted"] is True
+    assert calls["slack"]["webhook_url"] == "https://hooks.slack.test/aws"
 
 
 def test_resolve_openclaw_runtime_target_accepts_explicit_url_with_config_token(
@@ -303,6 +350,90 @@ def test_run_dispatch_openclaw_alert_uses_snapshot_builder() -> None:
     assert payload["openclaw"]["result"]["sent"] is True
     assert calls["openclaw"]["snapshot_result"]["fingerprint"] == "fp-openclaw"
     assert calls["openclaw"]["env"]["AI_TRADING_CONNECTOR_OPENCLAW_ENABLED"] == "1"
+
+
+def test_run_dispatch_openclaw_min_severity_suppresses_noncritical() -> None:
+    calls: dict[str, dict[str, Any]] = {}
+
+    def _incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
+        calls["incident_snapshot"] = args
+        return {
+            "should_alert": True,
+            "fingerprint": "fp-openclaw-error",
+            "incident_signature": "sig-openclaw-error",
+            "snapshot": {
+                "health_status": "degraded",
+                "health_ok": False,
+                "broker_status": "connected",
+            },
+            "triggers": ["health_degraded"],
+        }
+
+    def _openclaw(args: dict[str, Any]) -> dict[str, Any]:
+        calls["openclaw"] = args
+        return {"sent": True}
+
+    payload = dispatch.run_dispatch(
+        env={
+            "AI_TRADING_CONNECTOR_OPENCLAW_ENABLED": "1",
+            "AI_TRADING_CONNECTOR_OPENCLAW_MIN_SEVERITY": "critical",
+            "AI_TRADING_CONNECTOR_SLACK_ENABLED": "0",
+            "AI_TRADING_CONNECTOR_SLACK_EOD_ENABLED": "0",
+        },
+        slack_notifier=lambda args: {"unused": args},
+        slack_eod_notifier=lambda args: {"unused": args},
+        openclaw_notifier=_openclaw,
+        incident_snapshot_builder=_incident_snapshot,
+    )
+
+    assert payload["ok"] is True
+    assert payload["openclaw"]["attempted"] is True
+    assert payload["openclaw"]["min_severity"] == "critical"
+    assert payload["openclaw"]["severity"] == "error"
+    assert payload["openclaw"]["result"]["sent"] is False
+    assert payload["openclaw"]["result"]["reason"] == "below_min_severity"
+    assert "openclaw" not in calls
+
+
+def test_run_dispatch_openclaw_min_severity_allows_critical() -> None:
+    calls: dict[str, dict[str, Any]] = {}
+
+    def _incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
+        calls["incident_snapshot"] = args
+        return {
+            "should_alert": True,
+            "fingerprint": "fp-openclaw-critical",
+            "incident_signature": "sig-openclaw-critical",
+            "snapshot": {
+                "health_status": "degraded",
+                "health_ok": False,
+                "broker_status": "disconnected",
+            },
+            "triggers": ["broker_disconnected"],
+        }
+
+    def _openclaw(args: dict[str, Any]) -> dict[str, Any]:
+        calls["openclaw"] = args
+        return {"sent": True, "status_code": 202}
+
+    payload = dispatch.run_dispatch(
+        env={
+            "AI_TRADING_CONNECTOR_OPENCLAW_ENABLED": "1",
+            "AI_TRADING_CONNECTOR_OPENCLAW_MIN_SEVERITY": "critical",
+            "AI_TRADING_CONNECTOR_SLACK_ENABLED": "0",
+            "AI_TRADING_CONNECTOR_SLACK_EOD_ENABLED": "0",
+        },
+        slack_notifier=lambda args: {"unused": args},
+        slack_eod_notifier=lambda args: {"unused": args},
+        openclaw_notifier=_openclaw,
+        incident_snapshot_builder=_incident_snapshot,
+    )
+
+    assert payload["ok"] is True
+    assert payload["openclaw"]["min_severity"] == "critical"
+    assert payload["openclaw"]["severity"] == "critical"
+    assert payload["openclaw"]["result"]["sent"] is True
+    assert calls["openclaw"]["snapshot_result"]["fingerprint"] == "fp-openclaw-critical"
 
 
 def test_run_dispatch_openclaw_model_readiness_notifies_when_ready(

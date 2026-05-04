@@ -82,6 +82,23 @@ def _int_value(value: Any) -> int | None:
         return None
 
 
+_SEVERITY_RANKS = {
+    "info": 0,
+    "warning": 1,
+    "error": 2,
+    "critical": 3,
+}
+
+
+def _normalize_severity(value: Any, *, default: str = "warning") -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in _SEVERITY_RANKS else default
+
+
+def _severity_at_least(severity: str, minimum: str) -> bool:
+    return _SEVERITY_RANKS[severity] >= _SEVERITY_RANKS[minimum]
+
+
 def _resolve_runtime_env_path(*, env: Mapping[str, str], repo_root: Path) -> Path:
     raw = str(env.get("AI_TRADING_RUNTIME_ENV_PATH") or "").strip()
     if raw:
@@ -138,6 +155,68 @@ def _load_runtime_env_defaults(
         "entries": int(len(parsed)),
         "applied": int(applied),
     }
+
+
+def _csv_env_keys(raw: str | None) -> set[str]:
+    return {
+        item.strip().upper()
+        for item in str(raw or "").split(",")
+        if item.strip()
+    }
+
+
+def _load_managed_connector_secret_defaults(env: dict[str, str]) -> dict[str, Any]:
+    """Hydrate connector-only secret values from the configured backend in memory."""
+
+    backend = str(env.get("AI_TRADING_SECRETS_BACKEND", "none") or "none").strip().lower()
+    if backend in {"", "none", "off", "disabled"}:
+        return {"secrets_backend": backend or "none", "hydrated": 0}
+    if backend not in {"aws-secrets-manager", "aws_sm", "aws"}:
+        return {"secrets_backend": backend, "hydrated": 0, "error": "unsupported_backend"}
+
+    secret_id = str(env.get("AI_TRADING_AWS_SECRET_ID") or "").strip()
+    if not secret_id:
+        return {"secrets_backend": backend, "hydrated": 0, "error": "missing_secret_id"}
+
+    explicit_keys = _csv_env_keys(env.get("AI_TRADING_MANAGED_SECRET_KEYS"))
+    excluded_keys = _csv_env_keys(env.get("AI_TRADING_EXCLUDED_MANAGED_SECRET_KEYS"))
+    candidate_keys = {
+        "AI_TRADING_SLACK_WEBHOOK_URL",
+        "SLACK_WEBHOOK_URL",
+    }
+    if explicit_keys:
+        candidate_keys &= explicit_keys
+    candidate_keys -= excluded_keys
+    missing_keys = {
+        key for key in candidate_keys if not str(env.get(key) or "").strip()
+    }
+    if not missing_keys:
+        return {"secrets_backend": backend, "hydrated": 0}
+
+    try:
+        from ai_trading.config.managed_secrets import fetch_aws_secret_payload
+
+        payload = fetch_aws_secret_payload(
+            secret_id,
+            region=str(env.get("AI_TRADING_AWS_REGION") or "").strip(),
+            profile=str(env.get("AI_TRADING_AWS_PROFILE") or "").strip(),
+        )
+    except Exception as exc:  # pragma: no cover - runtime guard
+        return {
+            "secrets_backend": backend,
+            "hydrated": 0,
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        }
+
+    hydrated = 0
+    for key in sorted(missing_keys):
+        value = str(payload.get(key) or "").strip()
+        if not value:
+            continue
+        env[key] = value
+        hydrated += 1
+    return {"secrets_backend": backend, "hydrated": hydrated}
 
 
 def _load_connector_callables() -> tuple[
@@ -327,6 +406,13 @@ def _build_openclaw_runtime_payload(snapshot_result: dict[str, Any]) -> dict[str
         "suggestedAction": suggested_action,
         "details": details,
     }
+
+
+def _openclaw_incident_severity(snapshot_result: dict[str, Any]) -> str:
+    return _normalize_severity(
+        _build_openclaw_runtime_payload(snapshot_result).get("severity"),
+        default="warning",
+    )
 
 
 def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
@@ -775,13 +861,15 @@ def run_dispatch(
     incident_snapshot_builder: IncidentSnapshotBuilder,
     openclaw_model_readiness_notifier: OpenClawModelReadinessNotifier | None = None,
 ) -> dict[str, Any]:
-    env_map = os.environ if env is None else env
+    env_map = dict(os.environ if env is None else env)
+    managed_secret_summary = _load_managed_connector_secret_defaults(env_map)
     summary: dict[str, Any] = {
         "started_at": datetime.now(UTC).isoformat(),
         "slack": {"enabled": False, "attempted": False},
         "slack_eod": {"enabled": False, "attempted": False},
         "openclaw": {"enabled": False, "attempted": False},
         "openclaw_model_readiness": {"enabled": False, "attempted": False},
+        "managed_connector_secrets": managed_secret_summary,
         "errors": [],
     }
 
@@ -860,6 +948,11 @@ def run_dispatch(
     )
     summary["openclaw"]["enabled"] = openclaw_enabled
     if openclaw_enabled:
+        openclaw_min_severity = _normalize_severity(
+            env_map.get("AI_TRADING_CONNECTOR_OPENCLAW_MIN_SEVERITY"),
+            default="warning",
+        )
+        summary["openclaw"]["min_severity"] = openclaw_min_severity
         openclaw_args: dict[str, Any] = {
             "on_change_only": _bool_env(
                 env_map.get("AI_TRADING_CONNECTOR_OPENCLAW_ON_CHANGE_ONLY"),
@@ -925,7 +1018,21 @@ def run_dispatch(
         try:
             snapshot_result = incident_snapshot_builder(openclaw_args)
             openclaw_args["snapshot_result"] = snapshot_result
-            summary["openclaw"]["result"] = openclaw_notifier(openclaw_args)
+            incident_severity = _openclaw_incident_severity(snapshot_result)
+            summary["openclaw"]["severity"] = incident_severity
+            if _severity_at_least(incident_severity, openclaw_min_severity):
+                summary["openclaw"]["result"] = openclaw_notifier(openclaw_args)
+            else:
+                summary["openclaw"]["result"] = {
+                    "sent": False,
+                    "reason": "below_min_severity",
+                    "severity": incident_severity,
+                    "min_severity": openclaw_min_severity,
+                    "fingerprint": snapshot_result.get("fingerprint"),
+                    "incident_signature": snapshot_result.get("incident_signature")
+                    or snapshot_result.get("fingerprint"),
+                    "triggers": snapshot_result.get("triggers") or [],
+                }
         except Exception as exc:  # pragma: no cover - runtime guard
             summary["openclaw"]["error"] = str(exc)
             summary["errors"].append(

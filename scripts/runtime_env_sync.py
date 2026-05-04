@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render `.env.runtime` from `.env`, with optional secrets-manager overlay."""
+"""Render `.env.runtime` from `.env`, verifying but not writing managed secrets."""
 
 from __future__ import annotations
 
@@ -48,6 +48,19 @@ _DEFAULT_MANAGED_KEYS = {
     "SENTIMENT_API_KEY",
     "IEX_API_TOKEN",
     "FRED_API_KEY",
+}
+
+_DEFAULT_EXCLUDED_MANAGED_KEYS = {
+    "AI_TRADING_AWS_PROFILE",
+    "AI_TRADING_AWS_REGION",
+    "AI_TRADING_AWS_SECRET_ID",
+    "AI_TRADING_EXCLUDED_MANAGED_SECRET_KEYS",
+    "AI_TRADING_MANAGED_SECRET_KEYS",
+    "AI_TRADING_REQUIRE_MANAGED_SECRETS",
+    "AI_TRADING_SECRETS_BACKEND",
+    "AWS_CONFIG_FILE",
+    "AWS_REGION",
+    "AWS_SHARED_CREDENTIALS_FILE",
 }
 
 _BACKEND_NONE = BACKEND_NONE
@@ -134,7 +147,7 @@ def _parse_csv_keys(raw: str | None) -> set[str]:
 
 
 def _excluded_managed_keys(*, env_map: Mapping[str, str]) -> set[str]:
-    return _parse_csv_keys(
+    return _DEFAULT_EXCLUDED_MANAGED_KEYS | _parse_csv_keys(
         _resolve_setting("AI_TRADING_EXCLUDED_MANAGED_SECRET_KEYS", env_map=env_map)
     )
 
@@ -250,14 +263,15 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
             if managed_value not in (None, ""):
                 managed_keys_verified += 1
                 manager_overrides_applied += 1
-                managed_secret_values_written += 1
-                out_entries.append(EnvEntry(key=key, value=managed_value))
+                managed_secret_values_omitted += 1
+                out_entries.append(EnvEntry(key=key, value=""))
             elif require_managed:
                 raise RuntimeError(
                     f"managed secret key '{key}' missing in secrets backend payload"
                 )
             else:
                 managed_secret_values_omitted += 1
+                out_entries.append(EnvEntry(key=key, value=""))
             seen.add(key)
             continue
         out_entries.append(EnvEntry(key=key, value=value))
@@ -276,8 +290,7 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
                 managed_secret_values_omitted += 1
                 continue
             managed_keys_verified += 1
-            managed_secret_values_written += 1
-            out_entries.append(EnvEntry(key=key, value=managed_value))
+            managed_secret_values_omitted += 1
             seen.add(key)
 
     rendered = "\n".join(
