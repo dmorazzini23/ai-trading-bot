@@ -856,6 +856,13 @@ def test_notify_incident_channel_dedupes(monkeypatch, tmp_path: Path) -> None:
     assert second["sent"] is False
     assert second["reason"] == "repeat_cooldown_active"
     assert len(posts) == 1
+    payload = posts[0]["payload"]
+    assert isinstance(payload, dict)
+    assert "ai-trading incident update" in str(payload.get("text"))
+    blocks = payload.get("blocks")
+    assert isinstance(blocks, list)
+    assert blocks[0]["type"] == "header"
+    assert any("Triggered by" in str(block) for block in blocks)
 
 
 def test_notify_incident_channel_dedupes_on_signature_drift(monkeypatch, tmp_path: Path) -> None:
@@ -1137,6 +1144,10 @@ def test_notify_eod_summary_sends_once_per_report_date(monkeypatch, tmp_path: Pa
     text = payload.get("text")
     assert isinstance(text, str)
     assert "ai-trading EOD summary" in text
+    blocks = payload.get("blocks")
+    assert isinstance(blocks, list)
+    assert blocks[0]["type"] == "header"
+    assert any("Day performance" in str(block) for block in blocks)
 
 
 def test_notify_eod_summary_respects_market_closed_gate(monkeypatch) -> None:
@@ -1433,6 +1444,72 @@ def test_collect_eod_summary_prefers_daily_trade_stats_for_daily_kpis(monkeypatc
     assert snapshot["profit_factor"] == 0.8
     assert snapshot["win_rate"] == 0.4
     assert snapshot["closed_trades"] == 11
+
+
+def test_collect_eod_summary_uses_nested_report_daily_trade_stats(monkeypatch) -> None:
+    def _fake_runtime_report() -> dict[str, Any]:
+        return {
+            "go_no_go": {
+                "gate_passed": False,
+                "failed_checks": ["win_rate"],
+                "observed": {
+                    "net_pnl": 19.88,
+                    "profit_factor": 1.18,
+                    "win_rate": 0.453,
+                    "closed_trades": 97,
+                    "trade_metric_scope": {"end_date": "2026-05-04"},
+                },
+            },
+            "report": {
+                "execution_vs_alpha": {
+                    "execution_capture_ratio": 0.565,
+                    "slippage_drag_bps": 8.613,
+                    "daily": [{"date": "2026-05-04"}],
+                },
+                "trade_history": {
+                    "daily_trade_stats": [
+                        {
+                            "date": "2026-05-04",
+                            "net_pnl": -0.45,
+                            "profit_factor": 0.934,
+                            "win_rate": 0.542,
+                            "trades": 24,
+                        }
+                    ],
+                    "top_loss_drivers": {
+                        "symbols": [{"name": "AMZN", "net_pnl": -3.54}]
+                    },
+                },
+            },
+        }
+
+    def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
+        assert port == 9001
+        assert timeout_s == 2.0
+        return {
+            "status": "healthy",
+            "reason": "market_closed",
+            "data_provider": {"status": "healthy", "active": "alpaca", "using_backup": False},
+            "broker": {"status": "connected"},
+            "model_liveness": {},
+            "timestamp": "2026-05-04T20:01:00Z",
+        }
+
+    monkeypatch.setattr(slack_srv, "_runtime_report_payload", _fake_runtime_report)
+    monkeypatch.setattr(slack_srv, "_health_payload", _fake_health_payload)
+
+    snapshot = slack_srv._collect_eod_summary_snapshot({})
+    assert snapshot["report_date"] == "2026-05-04"
+    assert snapshot["go_no_go_failed_checks"] == ["win_rate"]
+    assert snapshot["net_pnl"] == -0.45
+    assert snapshot["profit_factor"] == 0.934
+    assert snapshot["win_rate"] == 0.542
+    assert snapshot["closed_trades"] == 24
+    assert snapshot["top_loss_symbols"] == [{"symbol": "AMZN", "net_pnl": -3.54}]
+    message = slack_srv._eod_message_text(snapshot)
+    assert "💰 Day performance:" in message
+    assert "- Net PnL: $-0.45" in message
+    assert "- Closed trades: 24" in message
 
 
 def test_collect_eod_summary_degrades_when_health_payload_fails(monkeypatch) -> None:
