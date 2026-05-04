@@ -22444,6 +22444,15 @@ class ExecutionEngine:
                     client_order_id=client_order_id,
                     error=reason_token,
                 )
+                self._sync_durable_order_state(
+                    intent_id=durable_intent_id,
+                    order_id=None,
+                    client_order_id=client_order_id,
+                    status="rejected",
+                    filled_qty=0.0,
+                    fill_price=None,
+                    error=reason_token,
+                )
                 _release_capacity_reservation("submit_skipped")
                 return None
         if order is None:
@@ -22476,6 +22485,31 @@ class ExecutionEngine:
                             "prior_reason": prior_outcome.get("reason"),
                             "prior_age_s": round(float(prior_age_s), 3) if prior_age_s is not None else None,
                         },
+                    )
+                    prior_reason = (
+                        str(prior_outcome.get("reason") or prior_status or "submit_skipped")
+                        .strip()
+                        .lower()
+                        or "submit_skipped"
+                    )
+                    prior_detail = str(prior_outcome.get("detail") or "").strip()
+                    durable_error = prior_reason
+                    if prior_detail:
+                        durable_error = f"{prior_reason}:{prior_detail}"
+                    self._record_durable_submit_error(
+                        intent_id=durable_intent_id,
+                        order_id=None,
+                        client_order_id=client_order_id,
+                        error=durable_error,
+                    )
+                    self._sync_durable_order_state(
+                        intent_id=durable_intent_id,
+                        order_id=None,
+                        client_order_id=client_order_id,
+                        status="rejected",
+                        filled_qty=0.0,
+                        fill_price=None,
+                        error=durable_error,
                     )
                     _release_capacity_reservation("submit_no_result_suppressed")
                     return None

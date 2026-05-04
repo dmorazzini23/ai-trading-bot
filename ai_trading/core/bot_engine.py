@@ -2110,10 +2110,24 @@ def _record_prerank_ml_signal_shadow(
     manager = globals().get("signal_manager")
     if not isinstance(manager, SignalManager):
         manager = SignalManager()
-    for raw_symbol in list(selected_symbols)[:limit]:
+    raw_extra_symbols = str(get_env("AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS", "", cast=str) or "")
+    extra_symbols = [
+        token.strip().upper()
+        for token in raw_extra_symbols.split(",")
+        if token and token.strip()
+    ]
+    symbols_to_score: list[str] = []
+    seen_symbols: set[str] = set()
+    for raw_symbol in list(selected_symbols)[:limit] + extra_symbols:
         symbol = str(raw_symbol).strip().upper()
-        if not symbol:
+        if not symbol or symbol in seen_symbols:
             continue
+        seen_symbols.add(symbol)
+        symbols_to_score.append(symbol)
+        if len(symbols_to_score) >= 50:
+            break
+
+    for symbol in symbols_to_score:
         frame: pd.DataFrame | None = None
         try:
             frame = fetch_minute_df_safe(symbol)

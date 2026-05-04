@@ -764,8 +764,30 @@ def test_execute_order_records_skip_outcome_for_duplicate_intent(engine_factory,
 
 def test_execute_order_propagates_precheck_failure_detail(engine_factory):
     engine = engine_factory()
+    submit_errors: list[dict[str, Any]] = []
+    synced_states: list[dict[str, Any]] = []
+
+    class DurableManager:
+        def begin_external_order_lifecycle(self, **kwargs):
+            return str(kwargs["intent_id"])
+
+        def record_external_submit_error(self, **kwargs):
+            submit_errors.append(dict(kwargs))
+            return str(kwargs["intent_id"])
+
+        def sync_external_order_state(self, **kwargs):
+            synced_states.append(dict(kwargs))
+            return str(kwargs["intent_id"])
+
+    engine.order_manager = DurableManager()
+
+    precheck_calls = 0
 
     def _reject_with_detail(_order):
+        nonlocal precheck_calls
+        precheck_calls += 1
+        if precheck_calls == 1:
+            return True
         engine._last_pre_execution_order_check_failure = {
             "reason": "symbol_reentry_cooldown",
             "context": {"cooldown_minutes": 60},
@@ -780,6 +802,15 @@ def test_execute_order_propagates_precheck_failure_detail(engine_factory):
     assert engine._last_submit_outcome.get("status") == "skipped"
     assert engine._last_submit_outcome.get("reason") == "pre_execution_order_checks_failed"
     assert engine._last_submit_outcome.get("detail") == "symbol_reentry_cooldown"
+    assert submit_errors
+    assert submit_errors[-1]["error"] == (
+        "pre_execution_order_checks_failed:symbol_reentry_cooldown"
+    )
+    assert synced_states
+    assert synced_states[-1]["status"] == "rejected"
+    assert synced_states[-1]["error"] == (
+        "pre_execution_order_checks_failed:symbol_reentry_cooldown"
+    )
 
 
 def test_execute_order_records_skip_outcome_for_cycle_duplicate_intent(engine_factory, caplog):

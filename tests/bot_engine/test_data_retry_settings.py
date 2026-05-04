@@ -321,6 +321,52 @@ def test_prerank_ml_signal_shadow_scores_selected_symbols(monkeypatch):
     assert all(isinstance(model, Model) for _symbol, model in calls)
 
 
+def test_prerank_ml_signal_shadow_scores_extra_shadow_symbols(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_PRERANK_SIGNAL_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_PRERANK_SIGNAL_LIMIT", "2")
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS", "MSFT")
+
+    class Model:
+        def predict(self, _frame):
+            return [1]
+
+        def predict_proba(self, _frame):
+            return [[0.2, 0.8]]
+
+    class Fetcher:
+        def get_daily_df(self, _runtime, _symbol):
+            return pd.DataFrame(
+                {
+                    "open": [100.0] * 20,
+                    "high": [101.0] * 20,
+                    "low": [99.0] * 20,
+                    "close": [100.0] * 20,
+                    "volume": [1000.0] * 20,
+                }
+            )
+
+    calls: list[str | None] = []
+    manager = bot_engine.SignalManager()
+    monkeypatch.setattr(
+        manager,
+        "signal_ml",
+        lambda frame, model=None, symbol=None: calls.append(symbol),
+    )
+    monkeypatch.setattr(bot_engine, "signal_manager", manager)
+    monkeypatch.setattr(bot_engine, "_load_required_model", lambda: Model())
+    monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", lambda symbol: None)
+
+    runtime = type("_Runtime", (), {"data_fetcher": Fetcher()})()
+
+    bot_engine._record_prerank_ml_signal_shadow(
+        selected_symbols=["AAPL", "AMZN", "GOOG"],
+        runtime=runtime,
+    )
+
+    assert calls == ["AAPL", "AMZN", "MSFT"]
+
+
 def test_prerank_ml_signal_shadow_prefetches_symbol_quote(monkeypatch):
     monkeypatch.setenv("AI_TRADING_ML_SHADOW_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_ML_SHADOW_PRERANK_SIGNAL_ENABLED", "1")
