@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "updatedAt": "2026-05-04T12:30:29.466Z",
+  "entries": {
+    "memory:memory/2026-04-22.md:1:7": {
+      "key": "memory:memory/2026-04-22.md:1:7",
+      "path": "memory/2026-04-22.md",
+      "startLine": 1,
+      "endLine": 7,
+      "source": "memory",
+      "snippet": "# 2026-04-22 - OpenClaw was upgraded into a repo-specific multi-agent setup for `ai-trading-bot` - Specialized agents now exist for coding, ops, and audits - Hooks, cron, heartbeat guidance, and repo-local bootstrap files were added - Memory search was configured for text-first repo recall so it works without remote embedding credentials",
+      "recallCount": 3,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 1.8068205864285694,
+      "maxScore": 0.6936345250621777,
+      "firstRecalledAt": "2026-05-04T05:05:52.433Z",
+      "lastRecalledAt": "2026-05-04T12:30:29.466Z",
+      "queryHashes": [
+        "0086338e8725",
+        "03223af5c6a7"
+      ],
+      "recallDays": [
+        "2026-05-04"
+      ],
+      "conceptTags": [
+        "embedding",
+        "repo-specific",
+        "multi-agent",
+        "ai-trading-bot",
+        "repo-local",
+        "text-first",
+        "openclaw",
+        "was"
+      ]
+    }
+  }
+}

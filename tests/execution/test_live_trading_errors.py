@@ -242,3 +242,34 @@ def test_close_cover_clipping_preserves_fractional_broker_positions() -> None:
     assert adjusted == pytest.approx(0.25)
     assert context is not None
     assert context["available_qty"] == pytest.approx(0.25)
+
+
+def test_position_quantity_treats_alpaca_missing_position_as_flat(monkeypatch) -> None:
+    class ImportedPositionLookupError(Exception):
+        code = "40410000"
+        status_code = 404
+
+    old_lookup_exc = live_trading.LIVE_TRADING_ORDER_LOOKUP_EXC
+    monkeypatch.setattr(
+        live_trading,
+        "LIVE_TRADING_ORDER_LOOKUP_EXC",
+        old_lookup_exc + (ImportedPositionLookupError,),
+    )
+    called_list_positions = False
+
+    def _missing_position(_symbol: str) -> None:
+        raise ImportedPositionLookupError('{"code":40410000,"message":"position does not exist"}')
+
+    def _list_positions() -> list[object]:
+        nonlocal called_list_positions
+        called_list_positions = True
+        return [SimpleNamespace(symbol="MSFT", qty="3", side="long")]
+
+    engine: Any = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    engine.trading_client = SimpleNamespace(
+        get_open_position=_missing_position,
+        get_all_positions=_list_positions,
+    )
+
+    assert engine._position_quantity("AAPL") == pytest.approx(0.0)
+    assert called_list_positions is False

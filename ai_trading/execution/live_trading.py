@@ -23718,7 +23718,18 @@ class ExecutionEngine:
         if callable(get_open_position):
             try:
                 position_obj = get_open_position(symbol)
-            except LIVE_TRADING_FALLBACK_EXC:
+            except LIVE_TRADING_ORDER_LOOKUP_EXC as exc:
+                if _is_missing_order_lookup_error(exc):
+                    logger.debug(
+                        "POSITION_LOOKUP_MISSING",
+                        extra={"symbol": symbol},
+                    )
+                    return 0.0
+                logger.debug(
+                    "POSITION_LOOKUP_FAILED",
+                    extra={"symbol": symbol},
+                    exc_info=True,
+                )
                 position_obj = None
         if position_obj is None:
             get_all_positions = getattr(client, "get_all_positions", None)
@@ -23729,7 +23740,7 @@ class ExecutionEngine:
                         if str(_extract_value(pos, "symbol") or "").upper() == symbol.upper():
                             position_obj = pos
                             break
-                except LIVE_TRADING_FALLBACK_EXC:
+                except LIVE_TRADING_ORDER_LOOKUP_EXC:
                     logger.debug(
                         "POSITION_LIST_SCAN_FAILED",
                         extra={"symbol": symbol},
