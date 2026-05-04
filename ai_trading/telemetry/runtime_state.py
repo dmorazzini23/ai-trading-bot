@@ -417,7 +417,12 @@ def update_quote_status(
         updates["gate_reason"] = str(gate_reason)
     with _LOCK:
         global _quote_status, _quote_status_by_symbol
-        _quote_status = _merge_state(_quote_status, updates)
+        latest_base = _quote_status
+        if normalized_symbol:
+            current_latest_symbol = str(_quote_status.get("symbol") or "").strip().upper()
+            if current_latest_symbol and current_latest_symbol != normalized_symbol:
+                latest_base = _fresh_quote_state()
+        _quote_status = _merge_state(latest_base, updates)
         if normalized_symbol:
             current = _quote_status_by_symbol.get(normalized_symbol, _fresh_quote_state())
             _quote_status_by_symbol[normalized_symbol] = _merge_state(current, updates)

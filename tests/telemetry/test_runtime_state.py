@@ -79,3 +79,40 @@ def test_quote_status_tracks_symbol_snapshots_independently() -> None:
     assert aapl["gate_reason"] == "ok"
     assert msft["symbol"] == "MSFT"
     assert msft["allowed"] is False
+
+
+def test_latest_quote_status_does_not_mix_fields_across_symbols() -> None:
+    runtime_state.reset_all_states()
+
+    runtime_state.update_quote_status(
+        allowed=True,
+        symbol="MSFT",
+        status="ready",
+        bid=414.0,
+        ask=421.0,
+        last_price=421.0,
+        spread_bps=167.66,
+    )
+    runtime_state.update_quote_status(
+        allowed=True,
+        symbol="AAPL",
+        status="ready",
+        bid=276.08,
+        ask=276.11,
+        quote_age_ms=435.0,
+    )
+
+    latest = runtime_state.observe_quote_status()
+    msft = runtime_state.observe_symbol_quote_status("MSFT")
+    aapl = runtime_state.observe_symbol_quote_status("AAPL")
+
+    assert latest["symbol"] == "AAPL"
+    assert latest["bid"] == 276.08
+    assert latest["ask"] == 276.11
+    assert latest["quote_age_ms"] == 435.0
+    assert latest["last_price"] is None
+    assert latest["spread_bps"] is None
+    assert msft["last_price"] == 421.0
+    assert msft["spread_bps"] == 167.66
+    assert aapl["last_price"] is None
+    assert aapl["spread_bps"] is None
