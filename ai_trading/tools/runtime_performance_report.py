@@ -1337,7 +1337,31 @@ def _bounded_runtime_report_call(
         return True, RuntimeError("runtime_report_bounded_call_no_result")
 
 
+def _hydrate_runtime_report_broker_credentials() -> None:
+    """Hydrate process-local broker credentials for offline report commands."""
+
+    enabled = get_env(
+        "AI_TRADING_RUNTIME_PERF_HYDRATE_MANAGED_SECRETS",
+        True,
+        cast=bool,
+        resolve_aliases=False,
+    )
+    if not bool(enabled):
+        return
+
+    from ai_trading.config.managed_secrets import hydrate_managed_secrets
+
+    hydrate_managed_secrets(
+        required_keys=(
+            "ALPACA_API_KEY",
+            "ALPACA_SECRET_KEY",
+        )
+    )
+
+
 def _fetch_broker_open_positions_snapshot() -> dict[str, Any]:
+    _hydrate_runtime_report_broker_credentials()
+
     from ai_trading.alpaca_api import _get_rest
 
     client = _get_rest(bars=False)

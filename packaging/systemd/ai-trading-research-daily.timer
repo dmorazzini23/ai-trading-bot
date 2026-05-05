@@ -1,0 +1,12 @@
+[Unit]
+Description=Run AI Trading Daily Research Automation After Market Close
+
+[Timer]
+OnCalendar=Mon..Fri 16:35 America/New_York
+RandomizedDelaySec=5m
+AccuracySec=1m
+Persistent=true
+Unit=ai-trading-research-daily.service
+
+[Install]
+WantedBy=timers.target

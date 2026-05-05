@@ -129,6 +129,27 @@ shadow telemetry, live-cost health, and runtime decay controls before reporting
 `promotion_ready=true`. Keep the current champion model path available and use
 the report rollback command if live behavior regresses.
 
+### Research Automation
+
+Recurring research is orchestrated by
+`ai_trading.tools.research_automation` and the
+`ai-trading-research-{daily,weekly,monthly}.timer` units. The timers write
+dated bundles under `/var/lib/ai-trading-bot/runtime/research_reports/` and
+stable latest summaries under
+`/var/lib/ai-trading-bot/runtime/research_reports/latest/`.
+
+Daily automation refreshes evidence and lightweight candidates. Weekly
+automation searches horizons, objectives, symbol expansion, exits, and sizing.
+Monthly automation performs broader architecture and capital-profile review.
+Manual workflows generate gated promotion, live-cutover, incident-replay, and
+strategy-change artifacts.
+
+The automation never promotes production models or enables live money. Slack and
+OpenClaw summaries should read the generated artifacts instead of running heavy
+training directly. See
+[docs/RESEARCH_AUTOMATION.md](/home/aiuser/ai-trading-bot/docs/RESEARCH_AUTOMATION.md)
+for commands and timer installation.
+
 ### Health and Control-Plane Signals
 
 When investigating a degraded runtime, check:

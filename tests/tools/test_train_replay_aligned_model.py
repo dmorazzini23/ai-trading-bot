@@ -63,6 +63,33 @@ def test_build_training_dataset_uses_future_net_markout_target(tmp_path: Path) -
     assert bool((dataset["target"] == (dataset["net_long_bps"] > 0.0).astype(int)).all())
 
 
+def test_build_training_dataset_supports_risk_adjusted_excursion_labels(tmp_path: Path) -> None:
+    _write_cycle_bars(tmp_path / "AAPL.csv", periods=120)
+
+    dataset = build_training_dataset(
+        data_dir=tmp_path,
+        horizon_bars=5,
+        label_objective="risk_adjusted",
+        fee_bps=0.0,
+        slippage_bps=0.0,
+        min_net_edge_bps=0.0,
+    )
+
+    assert not dataset.empty
+    assert {
+        "max_adverse_excursion_bps",
+        "max_favorable_excursion_bps",
+        "risk_adjusted_net_bps",
+        "label_score_bps",
+        "label_objective",
+    }.issubset(dataset.columns)
+    assert set(dataset["label_objective"].unique()) == {"risk_adjusted"}
+    assert not bool(dataset["label_score_bps"].equals(dataset["net_long_bps"]))
+    assert bool(
+        (dataset["target"] == (dataset["label_score_bps"] > 0.0).astype(int)).all()
+    )
+
+
 def test_build_training_dataset_can_use_live_cost_model_labels(tmp_path: Path) -> None:
     _write_cycle_bars(tmp_path / "AAPL.csv", periods=120)
     live_cost_model = {
@@ -125,6 +152,7 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
         model_name="replay_aligned_test",
         model_type="logistic",
         horizon_bars=1,
+        label_objective="mae_mfe",
         fee_bps=0.0,
         slippage_bps=0.0,
         min_net_edge_bps=0.0,
@@ -148,6 +176,8 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
 
     persisted = cast(dict[str, Any], json.loads(report_path.read_text(encoding="utf-8")))
     assert persisted["config"]["edge_global_threshold"] == 0.66
+    assert persisted["config"]["label_objective"] == "mae_mfe"
+    assert persisted["dataset"]["mean_label_score_bps"] != persisted["dataset"]["mean_round_trip_cost_bps"]
     assert persisted["thresholds_by_regime"]
     assert persisted["threshold_sweep_by_regime"]
     assert persisted["dataset"]["symbols"] == 2

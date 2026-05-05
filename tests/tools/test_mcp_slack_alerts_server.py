@@ -865,6 +865,92 @@ def test_notify_incident_channel_dedupes(monkeypatch, tmp_path: Path) -> None:
     assert any("Triggered by" in str(block) for block in blocks)
 
 
+def test_notify_incident_channel_confirms_health_unavailable_before_alert(
+    monkeypatch, tmp_path: Path
+) -> None:
+    snapshot = {
+        "go_no_go_gate_passed": False,
+        "go_no_go_failed_checks": ["win_rate"],
+        "execution_capture_ratio": 0.2,
+        "slippage_drag_bps": 7.0,
+        "health_ok": False,
+        "health_status": "degraded",
+        "health_reason": "health_payload_unavailable",
+        "provider_status": "unknown",
+        "provider_active": "unknown",
+        "provider_reason": "health_payload_unavailable",
+        "using_backup": False,
+        "broker_status": "unknown",
+        "timestamp": "2026-03-28T20:00:00Z",
+    }
+
+    posts: list[dict[str, object]] = []
+
+    def _fake_collect(_args: dict[str, object]) -> dict[str, object]:
+        return snapshot
+
+    def _fake_post(webhook_url: str, payload: dict[str, object], timeout_s: float = 5.0) -> int:
+        posts.append({"webhook_url": webhook_url, "payload": payload, "timeout_s": timeout_s})
+        return 200
+
+    monkeypatch.setattr(slack_srv, "_collect_runtime_snapshot", _fake_collect)
+    monkeypatch.setattr(slack_srv, "_post_slack_message", _fake_post)
+
+    args = {
+        "state_path": str(tmp_path / "slack_state.json"),
+        "webhook_url": "https://hooks.slack.test/example",
+    }
+    first = slack_srv.tool_notify_incident_channel(args)
+    second = slack_srv.tool_notify_incident_channel(args)
+
+    assert first["sent"] is False
+    assert first["reason"] == "health_unavailable_confirmation_pending"
+    assert second["sent"] is True
+    assert len(posts) == 1
+
+
+def test_notify_incident_channel_can_disable_health_unavailable_confirmation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    snapshot = {
+        "go_no_go_gate_passed": False,
+        "go_no_go_failed_checks": ["win_rate"],
+        "execution_capture_ratio": 0.2,
+        "slippage_drag_bps": 7.0,
+        "health_ok": False,
+        "health_status": "degraded",
+        "health_reason": "health_payload_unavailable",
+        "provider_status": "unknown",
+        "provider_active": "unknown",
+        "provider_reason": "health_payload_unavailable",
+        "using_backup": False,
+        "broker_status": "unknown",
+        "timestamp": "2026-03-28T20:00:00Z",
+    }
+    posts: list[dict[str, object]] = []
+
+    monkeypatch.setattr(slack_srv, "_collect_runtime_snapshot", lambda _args: snapshot)
+    monkeypatch.setattr(
+        slack_srv,
+        "_post_slack_message",
+        lambda webhook_url, payload, timeout_s=5.0: posts.append(
+            {"webhook_url": webhook_url, "payload": payload, "timeout_s": timeout_s}
+        )
+        or 200,
+    )
+
+    result = slack_srv.tool_notify_incident_channel(
+        {
+            "state_path": str(tmp_path / "slack_state.json"),
+            "webhook_url": "https://hooks.slack.test/example",
+            "confirm_health_unavailable_before_alert": False,
+        }
+    )
+
+    assert result["sent"] is True
+    assert len(posts) == 1
+
+
 def test_notify_incident_channel_dedupes_on_signature_drift(monkeypatch, tmp_path: Path) -> None:
     snapshots = [
         {

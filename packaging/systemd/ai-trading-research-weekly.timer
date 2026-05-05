@@ -1,0 +1,12 @@
+[Unit]
+Description=Run AI Trading Weekly Research Automation
+
+[Timer]
+OnCalendar=Sat 10:15 America/New_York
+RandomizedDelaySec=10m
+AccuracySec=1m
+Persistent=true
+Unit=ai-trading-research-weekly.service
+
+[Install]
+WantedBy=timers.target

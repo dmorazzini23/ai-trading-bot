@@ -1259,6 +1259,27 @@ def _incident_min_interval_minutes(args: dict[str, Any]) -> int:
     return max(0, _int_arg(raw, default=0))
 
 
+def _confirm_health_unavailable_before_alert(args: dict[str, Any]) -> bool:
+    return _bool_arg(
+        args.get("confirm_health_unavailable_before_alert"),
+        default=_bool_arg(
+            os.getenv("AI_TRADING_SLACK_CONFIRM_HEALTH_UNAVAILABLE_BEFORE_ALERT"),
+            default=True,
+        ),
+    )
+
+
+def _requires_health_unavailable_confirmation(
+    snapshot: dict[str, Any], triggers: list[str], args: dict[str, Any]
+) -> bool:
+    if not _confirm_health_unavailable_before_alert(args):
+        return False
+    health_reason = str(snapshot.get("health_reason") or "").strip().lower()
+    if health_reason != "health_payload_unavailable":
+        return False
+    return "health_degraded" in set(triggers)
+
+
 def _slack_webhook_url(args: dict[str, Any]) -> str:
     direct = str(args.get("webhook_url") or "").strip()
     if direct:
@@ -1853,6 +1874,33 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
     trigger_set_changed = current_triggers != prior_triggers
     prior_sent_at = _parse_iso_ts(prior.get("sent_at"))
     now = datetime.now(UTC)
+    if (
+        not force
+        and _requires_health_unavailable_confirmation(snapshot, triggers, args)
+    ):
+        pending_signature = str(prior.get("pending_health_unavailable_signature") or "")
+        pending_seen_at = _parse_iso_ts(prior.get("pending_health_unavailable_seen_at"))
+        if pending_signature != signature or pending_seen_at is None:
+            pending_payload = dict(prior)
+            pending_payload.update(
+                {
+                    "pending_health_unavailable_signature": signature,
+                    "pending_health_unavailable_seen_at": utc_now_iso(),
+                    "pending_health_unavailable_triggers": triggers,
+                    "pending_health_unavailable_snapshot": snapshot,
+                }
+            )
+            _save_state(state_path, pending_payload)
+            return {
+                "sent": False,
+                "reason": "health_unavailable_confirmation_pending",
+                "fingerprint": fingerprint,
+                "incident_signature": signature,
+                "state_path": str(state_path),
+                "triggers": triggers,
+                "snapshot": snapshot,
+            }
+
     if (
         min_interval_minutes > 0
         and prior_sent_at is not None

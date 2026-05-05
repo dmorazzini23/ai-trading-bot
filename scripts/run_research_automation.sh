@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT_DIR}"
+
+CADENCE="${1:-daily}"
+WORKFLOW="${2:-}"
+
+if [[ ! -x "${ROOT_DIR}/venv/bin/python" ]]; then
+  echo "missing virtualenv python: ${ROOT_DIR}/venv/bin/python" >&2
+  exit 1
+fi
+
+PY_VERSION="$("${ROOT_DIR}/venv/bin/python" - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+)"
+if [[ "${PY_VERSION}" != "3.12" ]]; then
+  echo "unsupported python version ${PY_VERSION}; expected 3.12" >&2
+  exit 1
+fi
+
+RUNTIME_DIR="${AI_TRADING_RESEARCH_LOCK_DIR:-/var/lib/ai-trading-bot/runtime}"
+mkdir -p "${RUNTIME_DIR}"
+LOCK_PATH="${RUNTIME_DIR}/research_automation_${CADENCE}.lock"
+
+ARGS=("${CADENCE}")
+if [[ "${CADENCE}" == "manual" && -n "${WORKFLOW}" ]]; then
+  ARGS+=("--workflow" "${WORKFLOW}")
+fi
+if [[ "${AI_TRADING_RESEARCH_PLAN_ONLY:-0}" == "1" ]]; then
+  ARGS+=("--plan-only")
+fi
+if [[ "${AI_TRADING_RESEARCH_DRY_RUN:-0}" == "1" ]]; then
+  ARGS+=("--dry-run")
+fi
+
+exec flock -n "${LOCK_PATH}" \
+  "${ROOT_DIR}/venv/bin/python" -m ai_trading.tools.research_automation "${ARGS[@]}"

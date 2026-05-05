@@ -62,6 +62,7 @@ class ReplayAlignedTrainingConfig:
     data_dir: str
     symbols: tuple[str, ...]
     horizon_bars: int
+    label_objective: str
     fee_bps: float
     slippage_bps: float
     min_net_edge_bps: float
@@ -101,12 +102,71 @@ def _feature_frame(frame: pd.DataFrame, *, symbol: str) -> pd.DataFrame:
     return cast(pd.DataFrame, features.replace([np.inf, -np.inf], np.nan).ffill().fillna(0.0))
 
 
+def _normalize_label_objective(value: str) -> str:
+    normalized = str(value or "net_markout").strip().lower().replace("-", "_")
+    aliases = {
+        "net": "net_markout",
+        "markout": "net_markout",
+        "spread": "spread_adjusted",
+        "spread_adjusted_markout": "spread_adjusted",
+        "risk": "risk_adjusted",
+        "risk_adjusted_markout": "risk_adjusted",
+        "excursion": "mae_mfe",
+        "mae_mfe_markout": "mae_mfe",
+    }
+    normalized = aliases.get(normalized, normalized)
+    allowed = {"net_markout", "spread_adjusted", "risk_adjusted", "mae_mfe"}
+    if normalized not in allowed:
+        raise ValueError(
+            "Unsupported label objective: "
+            f"{value}. Expected one of {', '.join(sorted(allowed))}."
+        )
+    return normalized
+
+
+def _excursion_bps(
+    close: pd.Series,
+    *,
+    horizon_bars: int,
+) -> tuple[pd.Series, pd.Series]:
+    horizon = max(1, int(horizon_bars))
+    close_float = pd.to_numeric(close, errors="coerce").astype(float)
+    base = close_float.replace(0.0, np.nan)
+    future_returns: list[pd.Series] = []
+    for offset in range(1, horizon + 1):
+        future = close_float.shift(-offset)
+        future_returns.append(((future / base) - 1.0) * 10000.0)
+    returns = pd.concat(future_returns, axis=1)
+    max_favorable = returns.max(axis=1, skipna=True)
+    max_adverse = returns.min(axis=1, skipna=True)
+    return cast(pd.Series, max_adverse), cast(pd.Series, max_favorable)
+
+
+def _label_score(
+    *,
+    objective: str,
+    net_long_bps: pd.Series,
+    max_adverse_excursion_bps: pd.Series,
+    max_favorable_excursion_bps: pd.Series,
+    round_trip_cost_bps: pd.Series,
+) -> pd.Series:
+    normalized = _normalize_label_objective(objective)
+    if normalized in {"net_markout", "spread_adjusted"}:
+        return net_long_bps
+    adverse_penalty = max_adverse_excursion_bps.clip(upper=0.0).abs()
+    favorable_credit = max_favorable_excursion_bps.clip(lower=0.0)
+    if normalized == "risk_adjusted":
+        return net_long_bps - (0.75 * adverse_penalty) + (0.25 * favorable_credit)
+    return net_long_bps - adverse_penalty + (0.50 * favorable_credit) - (0.50 * round_trip_cost_bps)
+
+
 def _build_symbol_dataset(
     symbol: str,
     csv_path: Path,
     *,
     timestamp_col: str,
     horizon_bars: int,
+    label_objective: str,
     fee_bps: float,
     slippage_bps: float,
     min_net_edge_bps: float,
@@ -158,6 +218,25 @@ def _build_symbol_dataset(
     )
     round_trip_cost_bps = (2.0 * max(0.0, float(fee_bps))) + entry_slippage + exit_slippage
     net_long_bps = gross_long_bps - round_trip_cost_bps
+    max_adverse_excursion_bps, max_favorable_excursion_bps = _excursion_bps(
+        close,
+        horizon_bars=horizon_bars,
+    )
+    risk_adjusted_net_bps = _label_score(
+        objective="risk_adjusted",
+        net_long_bps=net_long_bps,
+        max_adverse_excursion_bps=max_adverse_excursion_bps,
+        max_favorable_excursion_bps=max_favorable_excursion_bps,
+        round_trip_cost_bps=round_trip_cost_bps,
+    )
+    normalized_objective = _normalize_label_objective(label_objective)
+    label_score_bps = _label_score(
+        objective=normalized_objective,
+        net_long_bps=net_long_bps,
+        max_adverse_excursion_bps=max_adverse_excursion_bps,
+        max_favorable_excursion_bps=max_favorable_excursion_bps,
+        round_trip_cost_bps=round_trip_cost_bps,
+    )
     out = features.copy()
     out["symbol"] = symbol
     out["timestamp"] = frame.index
@@ -167,9 +246,14 @@ def _build_symbol_dataset(
     out["exit_slippage_bps"] = exit_slippage.to_numpy(dtype=float)
     out["round_trip_cost_bps"] = round_trip_cost_bps.to_numpy(dtype=float)
     out["net_long_bps"] = net_long_bps.to_numpy(dtype=float)
-    out["target"] = (out["net_long_bps"] > float(min_net_edge_bps)).astype(int)
+    out["max_adverse_excursion_bps"] = max_adverse_excursion_bps.to_numpy(dtype=float)
+    out["max_favorable_excursion_bps"] = max_favorable_excursion_bps.to_numpy(dtype=float)
+    out["risk_adjusted_net_bps"] = risk_adjusted_net_bps.to_numpy(dtype=float)
+    out["label_score_bps"] = label_score_bps.to_numpy(dtype=float)
+    out["label_objective"] = normalized_objective
+    out["target"] = (out["label_score_bps"] > float(min_net_edge_bps)).astype(int)
     out = out.replace([np.inf, -np.inf], np.nan).dropna(
-        subset=[*REPLAY_ALIGNED_FEATURE_COLUMNS, "net_long_bps", "target"]
+        subset=[*REPLAY_ALIGNED_FEATURE_COLUMNS, "net_long_bps", "label_score_bps", "target"]
     )
     return cast(pd.DataFrame, out)
 
@@ -180,6 +264,7 @@ def build_training_dataset(
     symbols: str = "",
     timestamp_col: str = "timestamp",
     horizon_bars: int = 1,
+    label_objective: str = "net_markout",
     fee_bps: float = 1.0,
     slippage_bps: float = 2.0,
     min_net_edge_bps: float = 0.0,
@@ -192,6 +277,7 @@ def build_training_dataset(
             csv_path,
             timestamp_col=timestamp_col,
             horizon_bars=horizon_bars,
+            label_objective=label_objective,
             fee_bps=fee_bps,
             slippage_bps=slippage_bps,
             min_net_edge_bps=min_net_edge_bps,
@@ -410,6 +496,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         symbols=str(args.symbols or ""),
         timestamp_col=str(args.timestamp_col),
         horizon_bars=int(args.horizon_bars),
+        label_objective=str(getattr(args, "label_objective", "net_markout")),
         fee_bps=float(args.fee_bps),
         slippage_bps=float(args.slippage_bps),
         min_net_edge_bps=float(args.min_net_edge_bps),
@@ -453,6 +540,9 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         data_dir=str(data_dir),
         symbols=tuple(sorted(dataset["symbol"].astype(str).str.upper().unique().tolist())),
         horizon_bars=int(args.horizon_bars),
+        label_objective=_normalize_label_objective(
+            str(getattr(args, "label_objective", "net_markout"))
+        ),
         fee_bps=float(args.fee_bps),
         slippage_bps=float(args.slippage_bps),
         min_net_edge_bps=float(args.min_net_edge_bps),
@@ -471,7 +561,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         metadata={
             "strategy": "replay_aligned_markout",
             "feature_columns": list(REPLAY_ALIGNED_FEATURE_COLUMNS),
-            "objective": "one_bar_net_markout_binary",
+            "objective": f"{config.horizon_bars}_bar_{config.label_objective}_binary",
             "config": asdict(config),
             "thresholds_by_regime": edge_thresholds_by_regime,
             "live_cost_model": {
@@ -501,6 +591,10 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "mean_round_trip_cost_bps": float(dataset["round_trip_cost_bps"].mean()),
             "mean_entry_slippage_bps": float(dataset["entry_slippage_bps"].mean()),
             "mean_exit_slippage_bps": float(dataset["exit_slippage_bps"].mean()),
+            "mean_max_adverse_excursion_bps": float(dataset["max_adverse_excursion_bps"].mean()),
+            "mean_max_favorable_excursion_bps": float(dataset["max_favorable_excursion_bps"].mean()),
+            "mean_risk_adjusted_net_bps": float(dataset["risk_adjusted_net_bps"].mean()),
+            "mean_label_score_bps": float(dataset["label_score_bps"].mean()),
         },
         "live_cost_model": {
             "enabled": live_cost_model is not None,
@@ -545,6 +639,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default="hist_gradient",
     )
     parser.add_argument("--horizon-bars", type=int, default=1)
+    parser.add_argument(
+        "--label-objective",
+        choices=("net_markout", "spread_adjusted", "risk_adjusted", "mae_mfe"),
+        default="net_markout",
+        help=(
+            "Training label objective. net_markout and spread_adjusted use cost-adjusted "
+            "future markout; risk_adjusted and mae_mfe include adverse/favorable excursion."
+        ),
+    )
     parser.add_argument("--fee-bps", type=float, default=1.0)
     parser.add_argument("--slippage-bps", type=float, default=2.0)
     parser.add_argument(

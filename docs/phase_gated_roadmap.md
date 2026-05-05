@@ -126,6 +126,25 @@ Current automation surface:
 
 ## Operator Checks
 
+## Research Automation Cadence
+
+Daily, weekly, monthly, and manual research workflows are now centralized in
+`ai_trading.tools.research_automation`.
+
+- Daily: evidence refresh, live cost model, shadow report, symbol scorecard,
+  runtime decay controls, go/no-go snapshot, and lightweight candidate training
+  when research bars are configured.
+- Weekly: symbol expansion, exit/sizing/objective research through multi-horizon
+  replay-aligned candidates and optional microstructure bridge review.
+- Monthly: broader regime/model robustness checks and a paper-mode cutover drill
+  artifact for capital-profile review.
+- Manual: promotion reports, live-cutover drills, incident replay, and major
+  strategy-change review.
+
+All automated cadences produce artifacts only. Production promotion, live-money
+enablement, incident response, and major strategy changes remain explicit
+operator decisions.
+
 Phase 1 verification command:
 
 ```bash

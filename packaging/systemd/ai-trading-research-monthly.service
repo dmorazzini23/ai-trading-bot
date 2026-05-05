@@ -1,0 +1,30 @@
+[Unit]
+Description=Run AI Trading Monthly Research Automation
+After=network-online.target ai-trading.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=aiuser
+Group=aiuser
+WorkingDirectory=/home/aiuser/ai-trading-bot
+Environment=PATH=/home/aiuser/ai-trading-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=AI_TRADING_DATA_DIR=/var/lib/ai-trading-bot
+Environment=AI_TRADING_CACHE_DIR=/var/cache/ai-trading-bot
+Environment=AI_TRADING_LOG_DIR=/var/log/ai-trading-bot
+Environment=AI_TRADING_ENV_SRC=/etc/ai-trading-bot/ai-trading.env
+Environment=AI_TRADING_RUNTIME_ENV_DST=/run/ai-trading-bot/ai-trading-runtime.env
+Environment=AI_TRADING_RUNTIME_ENV_PATH=/run/ai-trading-bot/ai-trading-runtime.env
+EnvironmentFile=-/etc/ai-trading-bot/ai-trading.env
+EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env
+ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh
+ExecStart=/home/aiuser/ai-trading-bot/scripts/run_research_automation.sh monthly
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=strict
+RuntimeDirectory=ai-trading-bot
+ReadWritePaths=/var/lib/ai-trading-bot /var/cache/ai-trading-bot /var/log/ai-trading-bot /run/ai-trading-bot
+
+[Install]
+WantedBy=multi-user.target

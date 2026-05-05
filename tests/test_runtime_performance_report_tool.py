@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -80,6 +81,33 @@ def test_summarize_broker_open_positions_times_out(monkeypatch) -> None:
     assert summary["broker_open_positions_available"] is False
     assert summary["broker_open_position_count"] == 0
     assert "broker_open_positions_timeout_after_" in summary["broker_open_positions_error"]
+
+
+def test_fetch_broker_open_positions_hydrates_managed_secrets(monkeypatch) -> None:
+    import ai_trading.alpaca_api as alpaca_api
+    from ai_trading.config import managed_secrets
+
+    hydrated: list[tuple[str, ...]] = []
+
+    class _Client:
+        def get_all_positions(self):
+            return [SimpleNamespace(symbol="AAPL", qty="3.5", side="long")]
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_HYDRATE_MANAGED_SECRETS", "1")
+    monkeypatch.setattr(
+        managed_secrets,
+        "hydrate_managed_secrets",
+        lambda *, required_keys=(): hydrated.append(tuple(required_keys))
+        or {"hydrated_count": len(tuple(required_keys))},
+    )
+    monkeypatch.setattr(alpaca_api, "_get_rest", lambda *, bars=False: _Client())
+
+    summary = rpt._fetch_broker_open_positions_snapshot()
+
+    assert hydrated == [("ALPACA_API_KEY", "ALPACA_SECRET_KEY")]
+    assert summary["broker_open_positions_available"] is True
+    assert summary["broker_open_positions"] == {"AAPL": 3.5}
+    assert summary["broker_open_position_count"] == 1
 
 
 def test_summarize_oms_invariants_times_out(monkeypatch) -> None:

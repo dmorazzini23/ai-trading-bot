@@ -91,6 +91,24 @@ uses `RestartPreventExitStatus=98`.
 4. `journalctl -u ai-trading.service -n 200 --no-pager`
 5. `curl -s http://127.0.0.1:9001/healthz | jq .`
 
+## Research Automation Timers
+
+After installing the main service, install the after-hours research timers:
+
+```bash
+sudo cp packaging/systemd/ai-trading-research-*.service /etc/systemd/system/
+sudo cp packaging/systemd/ai-trading-research-*.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ai-trading-research-daily.timer
+sudo systemctl enable --now ai-trading-research-weekly.timer
+sudo systemctl enable --now ai-trading-research-monthly.timer
+systemctl list-timers 'ai-trading-research-*' --no-pager
+```
+
+The timers write research artifacts under
+`/var/lib/ai-trading-bot/runtime/research_reports/`. They are evidence builders
+only; model promotion and live-money cutover remain manual gated workflows.
+
 ## Additional Hardening Defaults
 
 - Pretrade pacing persists to `runtime/pretrade_rate_limiter.db` by default outside tests.
