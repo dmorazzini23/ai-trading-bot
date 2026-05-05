@@ -46,6 +46,11 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "live_cost_model" in step_names
     assert "runtime_decay_controls" in step_names
     assert "runtime_gonogo_status" in step_names
+    assert "trading_day_report" in step_names
+    assert "daily_research_pipeline" in step_names
+    assert "live_capital_readiness" in step_names
+    readiness = next(step for step in payload["steps"] if step["name"] == "live_capital_readiness")  # type: ignore[index]
+    assert readiness["metadata"]["live_money_authority"] is False
 
 
 def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(

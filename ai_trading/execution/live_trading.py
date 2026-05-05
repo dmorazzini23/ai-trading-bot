@@ -38,6 +38,7 @@ from ai_trading.config.settings import get_settings
 from ai_trading.config import EXECUTION_MODE, SAFE_MODE_ALLOW_PAPER, get_trading_config
 from ai_trading.broker.adapters import build_broker_adapter, list_alpaca_orders
 from ai_trading.runtime.atomic_io import atomic_write_text
+from ai_trading.runtime.live_canary import evaluate_canary_order
 from ai_trading.execution.guards import (
     can_execute,
     quote_fresh_enough,
@@ -29976,6 +29977,37 @@ class ExecutionEngine:
                     extra=skip_payload | {"detail": "runtime_gonogo_gate"},
                 )
                 _mark_precheck_failure("runtime_gonogo_gate", gonogo_context)
+                return False
+            canary_allowed, canary_context = evaluate_canary_order(
+                order,
+                execution_mode=str(EXECUTION_MODE or ""),
+            )
+            if not canary_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "live_canary_gate",
+                    "context": canary_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_LIVE_CANARY", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "live_canary_gate",
+                    canary_context,
+                    extra=skip_payload | {"detail": "live_canary_gate"},
+                )
+                _mark_precheck_failure("live_canary_gate", canary_context)
                 return False
             reconciliation_allowed, reconciliation_context = (
                 self._reconciliation_openings_guard_allows_openings()

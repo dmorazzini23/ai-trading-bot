@@ -150,6 +150,10 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     decay = config.run_dir / "runtime_decay_controls.json"
     gonogo = config.run_dir / "runtime_gonogo_status.json"
     replay = config.run_dir / "replay_governance_summary.json"
+    trading_day = config.run_dir / "trading_day_report.json"
+    daily_research = config.run_dir / "daily_research_report.json"
+    daily_research_md = config.run_dir / "daily_research_report.md"
+    live_readiness = config.run_dir / "live_capital_readiness.json"
     multi_horizon_dir = config.run_dir / "multi_horizon_lightweight"
     steps = [
         ResearchStep(
@@ -236,6 +240,72 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             command=_python_module("ai_trading.tools.runtime_gonogo_status", "--json"),
             purpose="Capture the daily go/no-go status as an artifact.",
             stdout_path=gonogo,
+        ),
+        ResearchStep(
+            name="trading_day_report",
+            command=_python_module(
+                "ai_trading.tools.trading_day_report",
+                "--shadow-jsonl",
+                config.shadow_jsonl,
+                "--live-cost-model-json",
+                live_cost,
+                "--symbol-scorecard-json",
+                scorecard,
+                "--output-json",
+                trading_day,
+                "--latest-json",
+                config.report_root / "latest" / "trading_day_latest.json",
+                "--latest-md",
+                config.report_root / "latest" / "trading_day_latest.md",
+            ),
+            purpose="Summarize desired/submitted/rejected trades and daily attribution.",
+            output_path=trading_day,
+        ),
+        ResearchStep(
+            name="daily_research_pipeline",
+            command=_python_module(
+                "ai_trading.tools.daily_research_pipeline",
+                "--health-url",
+                "http://127.0.0.1:9001/healthz",
+                "--live-cost-model-json",
+                live_cost,
+                "--shadow-report-json",
+                shadow_report,
+                "--replay-governance-json",
+                replay,
+                "--symbol-scorecard-json",
+                scorecard,
+                "--runtime-gonogo-json",
+                gonogo,
+                "--output-json",
+                daily_research,
+                "--latest-json",
+                config.report_root / "latest" / "daily_readiness_latest.json",
+                "--output-md",
+                daily_research_md,
+            ),
+            purpose="Produce the daily operator answer: can the system trade tomorrow, with what limits, and why.",
+            output_path=daily_research,
+        ),
+        ResearchStep(
+            name="live_capital_readiness",
+            command=_python_module(
+                "ai_trading.tools.live_capital_readiness",
+                "--health-url",
+                "http://127.0.0.1:9001/healthz",
+                "--live-cost-model-json",
+                live_cost,
+                "--promotion-report-json",
+                config.report_root / "latest" / "promotion_report_latest.json",
+                "--canary-plan-json",
+                daily_research,
+                "--output-json",
+                live_readiness,
+                "--success-on-blocked",
+            ),
+            purpose="Create the live-capital cutover gate artifact without enabling live money.",
+            output_path=live_readiness,
+            metadata={"live_money_authority": False, "manual_approval_required": True},
         ),
     ]
     if config.data_dir is not None:

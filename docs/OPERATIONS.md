@@ -150,6 +150,39 @@ training directly. See
 [docs/RESEARCH_AUTOMATION.md](/home/aiuser/ai-trading-bot/docs/RESEARCH_AUTOMATION.md)
 for commands and timer installation.
 
+### Launch Profiles And Live-Readiness
+
+Runtime policy is explicit through `AI_TRADING_LAUNCH_PROFILE`:
+
+- `paper_observe`: no new orders; research and health observation only.
+- `paper_trade`: paper trading with normal paper safeguards.
+- `live_canary`: tiny live-capital profile, no shorts by default, allowlisted
+  symbols only, strict quote/spread caps, and at most three entries per day.
+- `live_restricted`: larger but still constrained live profile after canary
+  evidence is reviewed.
+- `live_normal`: normal live profile, still gated by promotion, provider, cost,
+  decay, and daily-loss controls.
+
+The active profile and provider-authority decision are exposed in `/healthz` as
+`launch_profile` and `provider_authority`. The daily research timer also writes
+`live_capital_readiness.json`; live money must remain disabled unless that
+artifact and the operator runbook both allow the next step.
+
+Useful manual checks:
+
+```bash
+./venv/bin/python -m ai_trading.tools.daily_research_pipeline \
+  --output-json /var/lib/ai-trading-bot/runtime/research_reports/daily_research_latest.json
+
+./venv/bin/python -m ai_trading.tools.live_capital_readiness \
+  --output-json /var/lib/ai-trading-bot/runtime/live_capital_readiness_latest.json \
+  --success-on-blocked
+```
+
+For live profiles, execution quote authority defaults to Alpaca-only and backup
+providers are research-only. Yahoo/backfill data may support research reports,
+but it must not silently justify live execution entries.
+
 ### Health and Control-Plane Signals
 
 When investigating a degraded runtime, check:

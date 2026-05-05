@@ -16,6 +16,9 @@ Daily after market close:
 - refresh the symbol universe scorecard
 - refresh runtime decay controls
 - capture runtime go/no-go status
+- generate the trading-day attribution report
+- generate the daily research/readiness report
+- generate the live-capital readiness gate artifact
 - optionally train lightweight 1-bar and 15-bar risk-adjusted candidates when a
   research data directory is configured
 
@@ -59,8 +62,14 @@ Important files:
 
 - `research_automation_report.json`
 - `operator_summary.json`
+- `daily_research_report.json`
+- `trading_day_report.json`
+- `live_capital_readiness.json`
 - `<cadence>_research_latest.json`
 - `<cadence>_operator_summary.json`
+- `latest/daily_readiness_latest.json`
+- `latest/trading_day_latest.json`
+- `latest/trading_day_latest.md`
 
 Slack/OpenClaw should read these artifacts and summarize them. Heavy training
 should stay in systemd/repo scripts, not in Slack app handlers.
@@ -104,6 +113,28 @@ Manual workflows:
 These workflows produce artifacts only. The operator must still review gates and
 explicitly perform any runtime model cutover, live-money enablement, incident
 response action, or strategy change.
+
+## Live-Capital Readiness
+
+The daily bundle now answers the operator question:
+
+```text
+Can this system trade tomorrow, with what limits, and why?
+```
+
+The answer is split across two artifacts:
+
+- `daily_research_report.json` summarizes runtime health, provider authority,
+  live costs, shadow evidence, replay governance, promotion status, symbol
+  actions, and the recommended next-session mode.
+- `live_capital_readiness.json` is the hard live-money gate. It requires a green
+  full-validation artifact, healthy runtime, broker/database/OMS/replay health,
+  acceptable promotion and live-cost evidence, explicit live-account
+  confirmation, a launch profile, and a canary plan before allowing live capital.
+
+The live-capital artifact can report `blocked`, `paper_only`,
+`live_canary_allowed`, or `live_allowed`. Only the operator may act on an
+allowed status; automation never flips execution mode or account authority.
 
 ## Systemd
 

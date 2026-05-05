@@ -334,6 +334,9 @@ def _env_defaults(
     else:
         monkeypatch.setenv("ALPACA_API_KEY", "dummy")
         monkeypatch.setenv("ALPACA_SECRET_KEY", "dummy")
+        monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
+        monkeypatch.setenv("WEBHOOK_SECRET", "dummy-webhook-secret")
+        monkeypatch.setenv("DOLLAR_RISK_LIMIT", "0.05")
     runtime_data_dir = tmp_path / "runtime_data"
     runtime_data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("AI_TRADING_DATA_DIR", str(runtime_data_dir))

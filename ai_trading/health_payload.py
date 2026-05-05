@@ -10,6 +10,11 @@ from threading import Lock, Thread
 from typing import Any, Callable, Mapping
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.config.launch_profiles import (
+    launch_profile_payload,
+    provider_authority_allows,
+    resolve_launch_profile,
+)
 from ai_trading.config.management import get_env
 from ai_trading.governance.paths import resolve_governance_base_path
 from ai_trading.settings import get_backup_data_provider
@@ -1090,6 +1095,21 @@ def build_runtime_health_payload(
     replay_live_parity_gate = _replay_live_parity_gate_snapshot_cached(
         oms_lifecycle_parity=oms_lifecycle_parity,
     )
+    launch_profile = _safe_observe(resolve_launch_profile, None)
+    launch_profile_status = (
+        launch_profile_payload(launch_profile)
+        if launch_profile is not None
+        else {"name": "unknown", "error": "launch_profile_unavailable"}
+    )
+    provider_authority_ok, provider_authority = (
+        provider_authority_allows(
+            profile=launch_profile,
+            provider_state=provider_state,
+            quote_state=quote_state,
+        )
+        if launch_profile is not None
+        else (False, {"reasons": ["launch_profile_unavailable"]})
+    )
 
     raw_provider_status = provider_state.get("status")
     provider_status = raw_provider_status or (
@@ -1391,6 +1411,8 @@ def build_runtime_health_payload(
         "readiness_gates": readiness_gates,
         "readiness_failures": readiness_failures,
         "attention_flags": attention_flags,
+        "launch_profile": launch_profile_status,
+        "provider_authority": provider_authority | {"ok": provider_authority_ok},
     }
     if offhours_market_closed_ready:
         payload["reason"] = "market_closed"

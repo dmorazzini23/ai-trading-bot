@@ -1,0 +1,56 @@
+# Artifact Authority
+
+This document defines which artifacts are authoritative for operators and agents.
+It prevents old research outputs from being mistaken for live-capital evidence.
+
+## Authoritative Runtime Evidence
+
+Use these latest pointers for current operational decisions:
+
+- Runtime health: `http://127.0.0.1:9001/healthz`
+- Daily research answer:
+  `/var/lib/ai-trading-bot/runtime/research_reports/latest/daily_readiness_latest.json`
+- Trading-day attribution:
+  `/var/lib/ai-trading-bot/runtime/research_reports/latest/trading_day_latest.json`
+- Live-capital readiness:
+  `/var/lib/ai-trading-bot/runtime/live_capital_readiness_latest.json`, or the
+  latest daily bundle's `live_capital_readiness.json`
+- Live cost model:
+  `/var/lib/ai-trading-bot/runtime/live_cost_model_latest.json`, or the current
+  daily bundle's `live_cost_model.json`
+- Replay governance:
+  `/var/lib/ai-trading-bot/runtime/replay_outputs/` plus the health payload's
+  `replay_live_parity_gate`
+- Promotion reports:
+  `artifacts/promotion/promotion_report_latest.json` when generated manually
+- Research automation summary:
+  `/var/lib/ai-trading-bot/runtime/research_reports/latest/daily_operator_summary.json`
+
+## Research Artifacts
+
+Daily, weekly, and monthly research bundles are evidence, not authority to mutate
+the runtime. They may contain candidate models, replay studies, symbol rankings,
+or suggested gates. A candidate becomes operational only after a manual promotion
+report and an operator cutover.
+
+## Archive Rules
+
+Old experimental outputs should move under `artifacts/archive/` or
+`docs/archive/` when they are no longer referenced by tests or runbooks. Do not
+delete historical evidence blindly. Do not move fixtures used by tests.
+
+Agents should treat root-level `*_SUMMARY.md`, `*_REPORT.md`, and snapshot-style
+documents as archival unless they are explicitly refreshed in the current task.
+
+## Authority Rules
+
+- Runtime health and live-capital readiness decide whether live money is even
+  eligible.
+- Promotion reports decide whether a model candidate is eligible for manual
+  cutover.
+- Daily research reports explain tomorrow's recommended mode and blockers.
+- Trading-day reports explain what happened today.
+- Supabase, if enabled, is durable analytics/history only. It is not live
+  execution authority.
+- RL and advanced models remain research/shadow unless a promotion report and
+  live-readiness gate explicitly allow them.

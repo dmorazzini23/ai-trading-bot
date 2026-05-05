@@ -61,6 +61,9 @@ python3 -m ai_trading.tools.offline_replay \
 
 - [Deployment Guide](DEPLOYING.md)
 - [Operations](OPERATIONS.md)
+- [Research Automation](RESEARCH_AUTOMATION.md)
+- [Live Capital Runbook](LIVE_CAPITAL_RUNBOOK.md)
+- [Artifact Authority](ARTIFACT_AUTHORITY.md)
 - [Trading System Checklist](TRADING_SYSTEM_CHECKLIST.md)
 - [Provider Configuration](provider_configuration.md)
 - [Data Providers](data-providers.md)
