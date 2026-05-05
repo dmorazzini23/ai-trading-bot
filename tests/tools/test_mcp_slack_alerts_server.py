@@ -1105,6 +1105,90 @@ def test_notify_incident_channel_dedupes_provider_reason_churn(
     assert len(posts) == 1
 
 
+def test_notify_incident_channel_dedupes_precheck_spike_under_same_gonogo(
+    monkeypatch, tmp_path: Path
+) -> None:
+    snapshots = [
+        {
+            "runtime_gonogo_block_openings_enabled": True,
+            "go_no_go_gate_passed": False,
+            "go_no_go_failed_checks": ["win_rate"],
+            "execution_capture_ratio": 0.54,
+            "slippage_drag_bps": 8.4,
+            "execution_fill_ratio": None,
+            "execution_fill_ratio_samples": 0,
+            "execution_fill_ratio_filled": 0,
+            "execution_window_minutes": 30,
+            "execution_skipped_count": 29,
+            "precheck_failure_count": 29,
+            "precheck_failure_ratio": 1.0,
+            "health_ok": True,
+            "health_status": "ready",
+            "health_reason": "runtime_health_ok",
+            "provider_status": "healthy",
+            "provider_active": "alpaca-iex",
+            "provider_reason": "data_available_netting",
+            "using_backup": False,
+            "broker_status": "connected",
+            "timestamp": "2026-05-05T15:30:14Z",
+        },
+        {
+            "runtime_gonogo_block_openings_enabled": True,
+            "go_no_go_gate_passed": False,
+            "go_no_go_failed_checks": ["win_rate"],
+            "execution_capture_ratio": 0.54,
+            "slippage_drag_bps": 8.4,
+            "execution_fill_ratio": None,
+            "execution_fill_ratio_samples": 0,
+            "execution_fill_ratio_filled": 0,
+            "execution_window_minutes": 30,
+            "execution_skipped_count": 31,
+            "precheck_failure_count": 31,
+            "precheck_failure_ratio": 1.0,
+            "health_ok": True,
+            "health_status": "ready",
+            "health_reason": "runtime_health_ok",
+            "provider_status": "healthy",
+            "provider_active": "alpaca-iex",
+            "provider_reason": "data_available_netting",
+            "using_backup": False,
+            "broker_status": "connected",
+            "timestamp": "2026-05-05T15:31:17Z",
+        },
+    ]
+
+    posts: list[dict[str, object]] = []
+
+    def _fake_collect(_args: dict[str, object]) -> dict[str, object]:
+        idx = min(len(posts), len(snapshots) - 1)
+        return snapshots[idx]
+
+    def _fake_post(webhook_url: str, payload: dict[str, object], timeout_s: float = 5.0) -> int:
+        posts.append({"webhook_url": webhook_url, "payload": payload, "timeout_s": timeout_s})
+        return 200
+
+    monkeypatch.setattr(slack_srv, "_collect_runtime_snapshot", _fake_collect)
+    monkeypatch.setattr(slack_srv, "_post_slack_message", _fake_post)
+
+    args = {
+        "state_path": str(tmp_path / "slack_state.json"),
+        "webhook_url": "https://hooks.slack.test/example",
+        "repeat_cooldown_minutes": 120,
+        "precheck_spike_min_count": 30,
+        "precheck_spike_min_ratio": 0.75,
+        "precheck_spike_min_skipped": 30,
+    }
+    first = slack_srv.tool_notify_incident_channel(args)
+    second = slack_srv.tool_notify_incident_channel(args)
+
+    assert first["sent"] is True
+    assert first["triggers"] == ["go_no_go_failed", "go_no_go_failed_checks"]
+    assert second["sent"] is False
+    assert second["reason"] == "repeat_cooldown_active"
+    assert "pre_execution_checks_spike" in second["triggers"]
+    assert len(posts) == 1
+
+
 def test_notify_incident_channel_honors_min_interval(
     monkeypatch, tmp_path: Path
 ) -> None:

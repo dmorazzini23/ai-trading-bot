@@ -1232,7 +1232,7 @@ def _incident_fingerprint(snapshot: dict[str, Any], triggers: list[str]) -> str:
 def _incident_signature(snapshot: dict[str, Any], triggers: list[str]) -> str:
     """Stable trigger signature for anti-spam dedupe across metric drift."""
     material = {
-        "triggers": sorted(triggers),
+        "triggers": _material_incident_triggers_for_dedupe(triggers),
         "go_no_go_gate_passed": snapshot.get("go_no_go_gate_passed"),
         "go_no_go_failed_checks": sorted(set(snapshot.get("go_no_go_failed_checks") or [])),
         "health_status": snapshot.get("health_status"),
@@ -1241,6 +1241,19 @@ def _incident_signature(snapshot: dict[str, Any], triggers: list[str]) -> str:
     }
     encoded = json.dumps(material, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _material_incident_triggers_for_dedupe(triggers: list[str] | set[str]) -> list[str]:
+    """Collapse secondary execution-noise triggers under the same Go/No-Go incident."""
+
+    material = {
+        str(trigger).strip()
+        for trigger in triggers
+        if str(trigger).strip()
+    }
+    if material.intersection({"go_no_go_failed", "go_no_go_failed_checks"}):
+        material.discard("pre_execution_checks_spike")
+    return sorted(material)
 
 
 def _incident_repeat_cooldown_minutes(args: dict[str, Any]) -> int:
@@ -1859,18 +1872,18 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
     )
     prior_triggers_raw = prior.get("triggers")
     if isinstance(prior_triggers_raw, list):
-        prior_triggers = {
+        prior_triggers = set(_material_incident_triggers_for_dedupe({
             str(item).strip()
             for item in prior_triggers_raw
             if str(item).strip()
-        }
+        }))
     else:
         prior_triggers = set()
-    current_triggers = {
+    current_triggers = set(_material_incident_triggers_for_dedupe({
         str(item).strip()
         for item in triggers
         if str(item).strip()
-    }
+    }))
     trigger_set_changed = current_triggers != prior_triggers
     prior_sent_at = _parse_iso_ts(prior.get("sent_at"))
     now = datetime.now(UTC)
