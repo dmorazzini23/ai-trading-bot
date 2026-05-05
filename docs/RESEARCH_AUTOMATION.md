@@ -74,6 +74,13 @@ Important files:
 Slack/OpenClaw should read these artifacts and summarize them. Heavy training
 should stay in systemd/repo scripts, not in Slack app handlers.
 
+When `AI_TRADING_RESEARCH_NOTIFY_SLACK=1`, the runner posts a completion summary
+after each daily, weekly, monthly, or manual research job. The message is sent
+through `AI_TRADING_RESEARCH_SLACK_WEBHOOK_URL`, falling back to
+`AI_TRADING_SLACK_WEBHOOK_URL` or `SLACK_WEBHOOK_URL`. The packaged systemd
+units set the target label to `#all-beatwallstreet`; make sure the configured
+webhook URL is the incoming webhook for that channel.
+
 ## Operator Commands
 
 Plan a run without executing steps:
@@ -155,6 +162,15 @@ Check timers and recent runs:
 systemctl list-timers 'ai-trading-research-*' --no-pager
 journalctl -u ai-trading-research-daily.service -n 100 --no-pager
 jq . /var/lib/ai-trading-bot/runtime/research_reports/latest/daily_operator_summary.json
+```
+
+Smoke-test the completion notification without sending:
+
+```bash
+./venv/bin/python -m ai_trading.tools.research_completion_notify \
+  --cadence daily \
+  --channel '#all-beatwallstreet' \
+  --dry-run
 ```
 
 Run a manual workflow through systemd:

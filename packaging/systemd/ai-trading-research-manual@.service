@@ -15,6 +15,8 @@ Environment=AI_TRADING_LOG_DIR=/var/log/ai-trading-bot
 Environment=AI_TRADING_ENV_SRC=/etc/ai-trading-bot/ai-trading.env
 Environment=AI_TRADING_RUNTIME_ENV_DST=/run/ai-trading-bot/ai-trading-runtime.env
 Environment=AI_TRADING_RUNTIME_ENV_PATH=/run/ai-trading-bot/ai-trading-runtime.env
+Environment=AI_TRADING_RESEARCH_NOTIFY_SLACK=1
+Environment="AI_TRADING_RESEARCH_SLACK_CHANNEL=#all-beatwallstreet"
 EnvironmentFile=-/etc/ai-trading-bot/ai-trading.env
 EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env
 ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh

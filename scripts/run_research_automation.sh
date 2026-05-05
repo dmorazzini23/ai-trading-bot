@@ -37,5 +37,20 @@ if [[ "${AI_TRADING_RESEARCH_DRY_RUN:-0}" == "1" ]]; then
   ARGS+=("--dry-run")
 fi
 
-exec flock -n "${LOCK_PATH}" \
+set +e
+flock -n "${LOCK_PATH}" \
   "${ROOT_DIR}/venv/bin/python" -m ai_trading.tools.research_automation "${ARGS[@]}"
+STATUS=$?
+set -e
+
+if [[ "${AI_TRADING_RESEARCH_NOTIFY_SLACK:-1}" == "1" ]]; then
+  if [[ "${AI_TRADING_RESEARCH_PLAN_ONLY:-0}" != "1" || "${AI_TRADING_RESEARCH_NOTIFY_PLAN_ONLY:-0}" == "1" ]]; then
+    "${ROOT_DIR}/venv/bin/python" -m ai_trading.tools.research_completion_notify \
+      --cadence "${CADENCE}" \
+      --workflow "${WORKFLOW:-${CADENCE}}" \
+      --exit-code "${STATUS}" \
+      --channel "${AI_TRADING_RESEARCH_SLACK_CHANNEL:-#all-beatwallstreet}" || true
+  fi
+fi
+
+exit "${STATUS}"
