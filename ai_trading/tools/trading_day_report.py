@@ -23,7 +23,12 @@ def _read_json(path: Path | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _read_jsonl(path: Path | None) -> list[dict[str, Any]]:
+def _read_jsonl(
+    path: Path | None,
+    *,
+    report_date: str | None = None,
+    max_rows: int = 200_000,
+) -> list[dict[str, Any]]:
     if path is None or not path.exists():
         return []
     rows: list[dict[str, Any]] = []
@@ -36,7 +41,11 @@ def _read_jsonl(path: Path | None) -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
             if isinstance(parsed, dict):
+                if report_date and not _date_match(parsed, report_date):
+                    continue
                 rows.append(parsed)
+                if len(rows) >= max(1, int(max_rows)):
+                    rows.pop(0)
     return rows
 
 
@@ -150,10 +159,10 @@ def main(argv: list[str] | None = None) -> int:
     latest_md = args.latest_md or latest_md
     report = build_trading_day_report(
         report_date=str(args.report_date),
-        order_intents=_read_jsonl(args.order_intents_jsonl),
-        fills=_read_jsonl(args.fills_jsonl),
-        shadow_rows=_read_jsonl(args.shadow_jsonl),
-        gate_rows=_read_jsonl(args.gate_jsonl),
+        order_intents=_read_jsonl(args.order_intents_jsonl, report_date=str(args.report_date)),
+        fills=_read_jsonl(args.fills_jsonl, report_date=str(args.report_date)),
+        shadow_rows=_read_jsonl(args.shadow_jsonl, report_date=str(args.report_date)),
+        gate_rows=_read_jsonl(args.gate_jsonl, report_date=str(args.report_date)),
         live_cost_model=_read_json(args.live_cost_model_json),
         symbol_scorecard=_read_json(args.symbol_scorecard_json),
     )

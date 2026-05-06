@@ -43,6 +43,8 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
         "slack_openclaw_source": "generated_artifacts",
     }
     step_names = {str(step["name"]) for step in payload["steps"]}  # type: ignore[index]
+    assert "memory_hotspot_audit" in step_names
+    assert "runtime_artifact_retention_plan" in step_names
     assert "live_cost_model" in step_names
     assert "runtime_decay_controls" in step_names
     assert "runtime_gonogo_status" in step_names
@@ -51,6 +53,8 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "live_capital_readiness" in step_names
     readiness = next(step for step in payload["steps"] if step["name"] == "live_capital_readiness")  # type: ignore[index]
     assert readiness["metadata"]["live_money_authority"] is False
+    retention = next(step for step in payload["steps"] if step["name"] == "runtime_artifact_retention_plan")  # type: ignore[index]
+    assert retention["metadata"]["mutates_runtime_artifacts"] is False
 
 
 def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(

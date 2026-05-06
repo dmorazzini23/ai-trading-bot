@@ -93,6 +93,8 @@ def _trade_allowed(report: Mapping[str, Any]) -> tuple[bool, list[str]]:
         promotion_status = _nested(report, "promotion_status")
         if not bool(promotion_status.get("promotion_ready")):
             reasons.append("promotion_not_ready")
+    if str(_nested(report, "memory_status").get("status") or "").lower() == "critical":
+        reasons.append("memory_status_critical")
     return not reasons, reasons
 
 
@@ -106,6 +108,8 @@ def build_daily_research_report(
     symbol_scorecard: Mapping[str, Any] | None = None,
     promotion_report: Mapping[str, Any] | None = None,
     runtime_gonogo: Mapping[str, Any] | None = None,
+    memory_audit: Mapping[str, Any] | None = None,
+    artifact_retention: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     health = health or {}
     live_cost_model = live_cost_model or {}
@@ -114,6 +118,8 @@ def build_daily_research_report(
     symbol_scorecard = symbol_scorecard or {}
     promotion_report = promotion_report or {}
     runtime_gonogo = runtime_gonogo or {}
+    memory_audit = memory_audit or {}
+    artifact_retention = artifact_retention or {}
     report: dict[str, Any] = {
         "schema_version": "1.0.0",
         "artifact_type": "daily_research_report",
@@ -150,6 +156,19 @@ def build_daily_research_report(
             if isinstance(runtime_gonogo.get("failed_checks"), list)
             else [],
         },
+        "memory_status": {
+            "status": memory_audit.get("status", "missing"),
+            "service_memory": _nested(memory_audit, "service_memory"),
+            "recent_memory_samples": _nested(memory_audit, "recent_memory_samples"),
+            "observations": list(memory_audit.get("observations", []))
+            if isinstance(memory_audit.get("observations"), list)
+            else [],
+        },
+        "artifact_retention": {
+            "status": artifact_retention.get("status", "missing"),
+            "apply": bool(artifact_retention.get("apply", False)),
+            "total_reclaimable_mb": artifact_retention.get("total_reclaimable_mb"),
+        },
         "symbol_actions": {
             "summary": _nested(symbol_scorecard, "summary"),
             "symbols": symbol_scorecard.get("symbols", []),
@@ -177,6 +196,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Runtime health: `{_nested(report, 'runtime_health').get('status')}`",
             f"- Data provider: `{_nested(report, 'data_provider_health').get('status')}`",
             f"- Live cost: `{_nested(report, 'live_cost_status').get('status', 'missing')}`",
+            f"- Memory: `{_nested(report, 'memory_status').get('status', 'missing')}`",
             f"- Promotion: `{_nested(report, 'promotion_status').get('status', 'missing')}`",
             "",
         ]
@@ -194,6 +214,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--symbol-scorecard-json", type=Path, default=None)
     parser.add_argument("--promotion-report-json", type=Path, default=None)
     parser.add_argument("--runtime-gonogo-json", type=Path, default=None)
+    parser.add_argument("--memory-audit-json", type=Path, default=None)
+    parser.add_argument("--artifact-retention-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     parser.add_argument("--output-md", type=Path, default=None)
@@ -228,6 +250,13 @@ def main(argv: list[str] | None = None) -> int:
             args.promotion_report_json or _default_path("runtime/promotion_report_latest.json")
         ),
         runtime_gonogo=_read_json(args.runtime_gonogo_json),
+        memory_audit=_read_json(
+            args.memory_audit_json or _default_path("runtime/memory_hotspot_audit_latest.json")
+        ),
+        artifact_retention=_read_json(
+            args.artifact_retention_json
+            or _default_path("runtime/runtime_artifact_retention_latest.json")
+        ),
     )
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

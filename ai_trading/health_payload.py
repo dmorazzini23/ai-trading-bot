@@ -668,9 +668,14 @@ def _read_jsonl_tail(path: Path, *, limit: int = 20) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        size = path.stat().st_size
+        max_bytes = 256_000
+        with path.open("rb") as handle:
+            handle.seek(max(0, size - max_bytes))
+            data = handle.read(max_bytes)
     except OSError:
         return []
+    lines = data.decode("utf-8", errors="replace").splitlines()
     rows: list[dict[str, Any]] = []
     for raw in lines[-max(1, int(limit)):]:
         text = str(raw or "").strip()

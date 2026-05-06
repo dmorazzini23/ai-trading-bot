@@ -154,6 +154,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     daily_research = config.run_dir / "daily_research_report.json"
     daily_research_md = config.run_dir / "daily_research_report.md"
     live_readiness = config.run_dir / "live_capital_readiness.json"
+    memory_audit = config.run_dir / "memory_hotspot_audit.json"
+    artifact_retention = config.run_dir / "runtime_artifact_retention.json"
     multi_horizon_dir = config.run_dir / "multi_horizon_lightweight"
     steps = [
         ResearchStep(
@@ -161,6 +163,27 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             command=_script("scripts/refresh_runtime_reports.sh"),
             purpose="Refresh end-of-day runtime performance and gate reports.",
             required=False,
+        ),
+        ResearchStep(
+            name="memory_hotspot_audit",
+            command=_python_module(
+                "ai_trading.tools.memory_hotspot_audit",
+                "--output-json",
+                memory_audit,
+            ),
+            purpose="Audit service memory, runtime artifact sizes, and likely whole-file reader hotspots.",
+            output_path=memory_audit,
+        ),
+        ResearchStep(
+            name="runtime_artifact_retention_plan",
+            command=_python_module(
+                "ai_trading.tools.runtime_artifact_retention",
+                "--output-json",
+                artifact_retention,
+            ),
+            purpose="Plan safe runtime JSONL retention without compacting evidence automatically.",
+            output_path=artifact_retention,
+            metadata={"mutates_runtime_artifacts": False, "apply_requires_operator_command": True},
         ),
         ResearchStep(
             name="live_cost_model",
@@ -277,6 +300,10 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 scorecard,
                 "--runtime-gonogo-json",
                 gonogo,
+                "--memory-audit-json",
+                memory_audit,
+                "--artifact-retention-json",
+                artifact_retention,
                 "--output-json",
                 daily_research,
                 "--latest-json",

@@ -4501,10 +4501,22 @@ def main(argv: list[str] | None = None) -> None:
             now_mono = monotonic_time()
             if now_mono - last_health >= health_tick_runtime:
                 liveness_snapshot: dict[str, Any] | None = None
+                memory_snapshot: dict[str, Any] | None = None
                 try:
                     liveness_snapshot = get_model_liveness_snapshot()
                 except MAIN_FALLBACK_EXC:
                     logger.debug("MODEL_LIVENESS_SNAPSHOT_FAILED", exc_info=True)
+                try:
+                    from ai_trading.utils.memory_optimizer import report_memory_use
+
+                    memory_snapshot = report_memory_use(
+                        cycle_index=cycle_index,
+                        closed=closed,
+                        interval_s=float(effective_interval),
+                        write_sample=True,
+                    )
+                except MAIN_FALLBACK_EXC:
+                    logger.debug("MEMORY_TELEMETRY_SAMPLE_FAILED", exc_info=True)
                 logger.info(
                     "HEALTH_TICK",
                     extra={
@@ -4513,8 +4525,22 @@ def main(argv: list[str] | None = None) -> None:
                         "interval": effective_interval,
                         "closed": closed,
                         "model_liveness": liveness_snapshot,
+                        "memory": memory_snapshot,
                     },
                 )
+                if isinstance(memory_snapshot, dict) and str(
+                    memory_snapshot.get("level") or "normal"
+                ) in {"warning", "critical"}:
+                    logger.warning(
+                        "MEMORY_TELEMETRY_THRESHOLD",
+                        extra={
+                            "cycle_index": cycle_index,
+                            "level": memory_snapshot.get("level"),
+                            "rss_mb": memory_snapshot.get("rss_mb"),
+                            "maxrss_mb": memory_snapshot.get("maxrss_mb"),
+                            "sample_path": memory_snapshot.get("sample_path"),
+                        },
+                    )
                 last_health = now_mono
             try:
                 # Resolve mode directly from env to honor MAX_POSITION_MODE without relying on Settings
@@ -4645,7 +4671,7 @@ if __name__ == "__main__":
         if code != 0:
             logger.error("SERVICE_EXIT", extra={"code": code})
         raise
-    except BaseException as exc:  # noqa: BLE001
+    except MAIN_FALLBACK_EXC as exc:
         _maybe_build_bad_session_replay_dataset(
             trigger="service_crash",
             detail={"error": str(exc), "exc_type": exc.__class__.__name__},
