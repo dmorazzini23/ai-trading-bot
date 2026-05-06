@@ -68,6 +68,8 @@ def _seed_runtime(tmp_path: Path, rows: list[dict[str, object]]) -> tuple[Path, 
             "AUTH_BROKER_HALT_FORBIDDEN_MAX_RATE": "0.35",
             "OK_TRADE_MIN_RATE": "0.005",
             "CYCLE_DUPLICATE_INTENT_MAX_RATE": "0.70",
+            "SKIP_HEALTHZ_PROBE": "1",
+            "SKIP_SERVICE_LIVENESS": "1",
         }
     )
     return decision_file, env
@@ -151,3 +153,53 @@ def test_runtime_health_check_fails_on_auth_broker_halt_forbidden_spike(tmp_path
     combined = f"{proc.stdout}\n{proc.stderr}"
     assert "auth_broker_halt_forbidden_rate=" in combined
     assert "AUTH_BROKER_HALT_FORBIDDEN spike detected" in combined
+
+
+def test_runtime_health_check_probes_healthz_and_service_liveness(tmp_path: Path) -> None:
+    _, env = _seed_runtime(
+        tmp_path,
+        _rows_for_gate_rates(total=160, duplicate_rows=20, ok_rows=16),
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    curl_log = tmp_path / "curl.log"
+    systemctl_log = tmp_path / "systemctl.log"
+    (bin_dir / "curl").write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$@\" > \"$CURL_LOG\"\n"
+        "printf '%s\\n' '{\"service\":\"ai-trading\",\"ok\":true}'\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "systemctl").write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$@\" > \"$SYSTEMCTL_LOG\"\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "curl").chmod(0o755)
+    (bin_dir / "systemctl").chmod(0o755)
+    env.update(
+        {
+            "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+            "SKIP_HEALTHZ_PROBE": "0",
+            "SKIP_SERVICE_LIVENESS": "0",
+            "HEALTHCHECK_URL": "http://127.0.0.1:9001/healthz",
+            "HEALTHCHECK_SYSTEMD_UNIT": "ai-trading.service",
+            "CURL_LOG": str(curl_log),
+            "SYSTEMCTL_LOG": str(systemctl_log),
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", str(_health_check_script())],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OK: service active: ai-trading.service" in proc.stdout
+    assert "OK: /healthz probe healthy: http://127.0.0.1:9001/healthz" in proc.stdout
+    assert "is-active\n--quiet\nai-trading.service" in systemctl_log.read_text(encoding="utf-8")
+    assert "http://127.0.0.1:9001/healthz" in curl_log.read_text(encoding="utf-8")

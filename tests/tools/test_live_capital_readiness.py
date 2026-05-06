@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ai_trading.tools import live_capital_readiness
@@ -39,18 +40,39 @@ def test_live_capital_readiness_allows_explicit_tiny_canary(monkeypatch):
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
     monkeypatch.setenv("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", "1")
     monkeypatch.setenv("AI_TRADING_LIVE_MAX_DAILY_LOSS", "25")
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
     report = live_capital_readiness.build_live_capital_readiness(
         health=_healthy_payload(),
-        live_cost_model={"status": {"available": True, "breach_count": 0}},
-        promotion_report={"promotion_ready": True},
-        validation={"full_validation_green": True},
-        canary_plan={"paper_vs_live_canary_plan": "ready"},
+        live_cost_model={"generated_at": now, "status": {"available": True, "breach_count": 0}},
+        promotion_report={"generated_at": now, "promotion_ready": True},
+        validation={"generated_at": now, "full_validation_green": True},
+        canary_plan={"generated_at": now, "paper_vs_live_canary_plan": "ready"},
     )
 
     assert report["status"] == "live_canary_allowed"
     assert report["reasons"] == []
     assert report["gates"]["live_account_confirmed"] is True
+
+
+def test_live_capital_readiness_blocks_stale_live_cost_evidence(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", "1")
+    monkeypatch.setenv("AI_TRADING_LIVE_MAX_DAILY_LOSS", "25")
+    fresh = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    stale = (datetime.now(UTC) - timedelta(hours=30)).isoformat().replace("+00:00", "Z")
+
+    report = live_capital_readiness.build_live_capital_readiness(
+        health=_healthy_payload(),
+        live_cost_model={"generated_at": stale, "status": {"available": True, "breach_count": 0}},
+        promotion_report={"generated_at": fresh, "promotion_ready": True},
+        validation={"generated_at": fresh, "full_validation_green": True},
+        canary_plan={"generated_at": fresh, "paper_vs_live_canary_plan": "ready"},
+    )
+
+    assert report["status"] == "blocked"
+    assert "live_cost_model_stale" in report["reasons"]
+    assert report["freshness"]["live_cost_model"]["fresh"] is False
 
 
 def test_live_capital_readiness_cli_writes_blocked_artifact_with_success_override(

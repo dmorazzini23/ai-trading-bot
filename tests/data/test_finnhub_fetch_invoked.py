@@ -42,3 +42,39 @@ def test_finnhub_called_when_alpaca_none(monkeypatch):
     assert called.get("used")
     assert mark_called.get("called")
     assert not df.empty
+
+
+def test_early_finnhub_skipped_when_disabled(monkeypatch):
+    monkeypatch.setenv("ENABLE_FINNHUB", "0")
+    monkeypatch.setenv("FINNHUB_API_KEY", "test")
+    monkeypatch.setenv("BACKUP_DATA_PROVIDER", "yahoo")
+
+    monkeypatch.setattr(data_fetcher, "_fetch_bars", lambda *a, **k: pd.DataFrame())
+    fetcher = type("DummyFinnhubFetcher", (), {})()
+
+    def fail_fetch(*_args, **_kwargs):  # pragma: no cover - should never be called
+        raise AssertionError("Finnhub fetch should be skipped when disabled")
+
+    setattr(fetcher, "fetch", fail_fetch)
+    monkeypatch.setattr(data_fetcher, "fh_fetcher", fetcher, raising=False)
+    monkeypatch.setattr(
+        data_fetcher,
+        "_safe_backup_get_bars",
+        lambda *_args, **_kwargs: pd.DataFrame(
+            {
+                "timestamp": [pd.Timestamp("2023-01-01T00:00:00Z")],
+                "open": [1.0],
+                "high": [1.0],
+                "low": [1.0],
+                "close": [1.0],
+                "volume": [1],
+            }
+        ),
+    )
+
+    start = dt.datetime(2023, 1, 1, tzinfo=dt.UTC)
+    end = dt.datetime(2023, 1, 2, tzinfo=dt.UTC)
+    df = data_fetcher.get_minute_df("AAPL", start, end)
+
+    assert not df.empty
+    assert df["close"].iloc[-1] == 1.0

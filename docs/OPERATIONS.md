@@ -43,7 +43,7 @@ exits with status `98`, and the packaged systemd unit uses
 - `TRADE_LOG_PATH` defaults to `/var/log/ai-trading-bot/trades.jsonl` unless
   overridden.
 - The packaged systemd unit pins `TRADE_LOG_PATH` to
-  `/home/aiuser/ai-trading-bot/logs/trades.jsonl`.
+  `/var/log/ai-trading-bot/trades.jsonl`.
 - Writable runtime directories are controlled by:
   `AI_TRADING_DATA_DIR`, `AI_TRADING_CACHE_DIR`, `AI_TRADING_LOG_DIR`,
   `AI_TRADING_MODELS_DIR`, and `AI_TRADING_OUTPUT_DIR`.

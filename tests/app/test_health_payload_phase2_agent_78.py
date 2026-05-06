@@ -40,6 +40,41 @@ def test_database_readiness_reports_unconfigured(monkeypatch) -> None:
     }
 
 
+def test_database_readiness_default_expected_revision_matches_head(monkeypatch) -> None:
+    import ai_trading.config.management as config_management
+    import ai_trading.oms.event_store as event_store
+
+    observed: dict[str, str] = {}
+
+    def fake_get_env(name: str, default: str = "", **_kwargs) -> str:
+        if name == "AI_TRADING_OMS_INTENT_STORE_PATH":
+            return "/tmp/oms-events.sqlite"
+        if name == "AI_TRADING_OMS_EXPECTED_ALEMBIC_REVISION":
+            return default
+        return ""
+
+    class FakeEventStore:
+        def __init__(self, *, path: str | None, url: str | None) -> None:
+            observed["path"] = path or ""
+
+        def is_healthy(self, *, expected_revision: str) -> bool:
+            observed["expected_revision"] = expected_revision
+            return True
+
+        def close(self) -> None:
+            observed["closed"] = "true"
+
+    monkeypatch.setattr(health_payload, "_env_bool", lambda name, default: bool(default))
+    monkeypatch.setattr(config_management, "get_env", fake_get_env)
+    monkeypatch.setattr(event_store, "EventStore", FakeEventStore)
+
+    payload = health_payload._database_readiness_snapshot()
+
+    assert payload["expected_revision"] == "20260506_0001"
+    assert observed["expected_revision"] == "20260506_0001"
+    assert observed["closed"] == "true"
+
+
 def test_database_readiness_fails_unconfigured_when_required(monkeypatch) -> None:
     monkeypatch.setattr(health_payload, "_env_bool", lambda name, default: True)
     monkeypatch.setattr(

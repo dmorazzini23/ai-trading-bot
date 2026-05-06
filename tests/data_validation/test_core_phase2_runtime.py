@@ -76,6 +76,26 @@ def test_freshness_stale_symbols_and_validate_trading_data(monkeypatch: pytest.M
     ] is True
 
 
+def test_freshness_uses_timestamp_column_when_index_is_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 4, 24, 15, 0, tzinfo=UTC)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
+            return now if tz is not None else now.replace(tzinfo=None)
+
+    monkeypatch.setattr(core, "datetime", FixedDatetime)
+    frame = _ohlcv().assign(
+        timestamp=[now - timedelta(minutes=4), now - timedelta(minutes=1)],
+    )
+
+    info = core.check_data_freshness(frame, "AAPL", max_staleness_minutes=5)
+
+    assert isinstance(frame.index, pd.RangeIndex)
+    assert info["is_fresh"] is True
+    assert info["minutes_stale"] == pytest.approx(1.0)
+
+
 def test_emergency_data_check_and_market_data_validator() -> None:
     good = pd.DataFrame({"close": [1.0, 2.0]})
     bad = pd.DataFrame({"close": [1.0, -2.0]})

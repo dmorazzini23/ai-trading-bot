@@ -65,6 +65,30 @@ def test_run_standalone_healthcheck_app_raises_for_standalone_bind_error() -> No
     ]
 
 
+def test_run_standalone_healthcheck_app_reports_bound_before_serving(monkeypatch) -> None:
+    events: list[object] = []
+
+    class _Server:
+        def serve_forever(self) -> None:
+            events.append("serve")
+
+    def _make_server(host: str, port: int, app: object, *, threaded: bool) -> _Server:
+        events.append((host, port, app, threaded))
+        return _Server()
+
+    monkeypatch.setattr("werkzeug.serving.make_server", _make_server)
+
+    app = object()
+    app_module.run_standalone_healthcheck_app(
+        app,
+        host="127.0.0.1",
+        port=8081,
+        on_bound=lambda: events.append("bound"),
+    )
+
+    assert events == [("127.0.0.1", 8081, app, True), "bound", "serve"]
+
+
 def test_module_entrypoint_loads_dotenv_before_standalone_settings(monkeypatch) -> None:
     calls: list[str] = []
 

@@ -174,6 +174,13 @@ def execute_run_all_trades_cycle(
         write_impl=be._write_decision_record,
     )
     setattr(state, "_decision_journal_recorder", decision_recorder)
+
+    def _record_open_order_unknown(exc: BaseException) -> None:
+        breaker_info = be.classify_exception(exc, dependency="broker_open_orders")
+        breakers = be._dependency_breakers(state)
+        breakers.record_failure("broker_open_orders", breaker_info)
+        be._handle_error(breaker_info, state=state, ctx=runtime)
+
     try:
         can_list_orders = (
             hasattr(api, "list_orders") and callable(getattr(api, "list_orders", None))
@@ -182,7 +189,10 @@ def execute_run_all_trades_cycle(
             if not getattr(state, "_warned_missing_list_orders", False):
                 be.logger.warning("API capability unavailable: list_orders/get_orders")
                 setattr(state, "_warned_missing_list_orders", True)
-            open_orders = []
+            _record_open_order_unknown(
+                AttributeError("broker client missing list_orders/get_orders")
+            )
+            return
         else:
             try:
                 open_orders = be.list_open_orders(api)
@@ -196,11 +206,8 @@ def execute_run_all_trades_cycle(
                     "api.list_orders failed during order check",
                     extra={"cause": e.__class__.__name__, "detail": str(e)},
                 )
-                breaker_info = be.classify_exception(e, dependency="broker_open_orders")
-                breakers = be._dependency_breakers(state)
-                breakers.record_failure("broker_open_orders", breaker_info)
-                be._handle_error(breaker_info, state=state, ctx=runtime)
-                open_orders = []
+                _record_open_order_unknown(e)
+                return
         pending_skip_cycle = be._handle_pending_orders(open_orders, runtime)
         if pending_skip_cycle:
             blocked_symbols_raw = getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, ())

@@ -35,6 +35,7 @@ _run_module_json = cast(
 _DEFAULT_RUNTIME_ROOT = Path("/var/lib/ai-trading-bot/runtime")
 _DEFAULT_INCIDENT_STATE = _DEFAULT_RUNTIME_ROOT / "slack_incident_state.json"
 _DEFAULT_EOD_STATE = _DEFAULT_RUNTIME_ROOT / "slack_eod_state.json"
+_DEFAULT_INCIDENT_REPEAT_COOLDOWN_MINUTES = 45
 _DEFAULT_HEALTH_PORT = 9001
 _STARTUP_WARMUP_HEALTH_REASONS = frozenset(
     {
@@ -1233,11 +1234,7 @@ def _incident_signature(snapshot: dict[str, Any], triggers: list[str]) -> str:
     """Stable trigger signature for anti-spam dedupe across metric drift."""
     material = {
         "triggers": _material_incident_triggers_for_dedupe(triggers),
-        "go_no_go_gate_passed": snapshot.get("go_no_go_gate_passed"),
         "go_no_go_failed_checks": sorted(set(snapshot.get("go_no_go_failed_checks") or [])),
-        "health_status": snapshot.get("health_status"),
-        "provider_status": snapshot.get("provider_status"),
-        "using_backup": bool(snapshot.get("using_backup", False)),
     }
     encoded = json.dumps(material, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -1261,7 +1258,7 @@ def _incident_repeat_cooldown_minutes(args: dict[str, Any]) -> int:
         args.get("repeat_cooldown_minutes")
         or os.getenv("AI_TRADING_SLACK_INCIDENT_REPEAT_COOLDOWN_MINUTES")
     )
-    return max(0, _int_arg(raw, default=45))
+    return max(0, _int_arg(raw, default=_DEFAULT_INCIDENT_REPEAT_COOLDOWN_MINUTES))
 
 
 def _incident_min_interval_minutes(args: dict[str, Any]) -> int:
@@ -1840,6 +1837,7 @@ def tool_runtime_incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         "triggers": triggers,
         "should_alert": bool(triggers),
         "fingerprint": _incident_fingerprint(snapshot, triggers),
+        "incident_signature": _incident_signature(snapshot, triggers),
     }
 
 

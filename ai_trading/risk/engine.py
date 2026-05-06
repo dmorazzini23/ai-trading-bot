@@ -1093,9 +1093,9 @@ class RiskEngine:
                 projected_asset_exp,
                 asset_cap,
             )
-            if not get_env("FORCE_CONTINUE_ON_EXPOSURE", "false", cast=bool):
-                return False
-            logger.warning("FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap")
+            if get_env("FORCE_CONTINUE_ON_EXPOSURE", "false", cast=bool):
+                logger.warning("FORCE_CONTINUE_ON_EXPOSURE ignored; exposure caps fail closed")
+            return False
         strat_cap = self.strategy_limits.get(strategy, self.global_limit)
         projected_strategy_exp = self.strategy_exposure.get(strategy, 0.0) + max(pending, 0.0) + opening_weight
         if projected_strategy_exp > strat_cap:
@@ -1105,9 +1105,9 @@ class RiskEngine:
                 projected_strategy_exp,
                 strat_cap,
             )
-            if not get_env("FORCE_CONTINUE_ON_EXPOSURE", "false", cast=bool):
-                return False
-            logger.warning("FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap")
+            if get_env("FORCE_CONTINUE_ON_EXPOSURE", "false", cast=bool):
+                logger.warning("FORCE_CONTINUE_ON_EXPOSURE ignored; exposure caps fail closed")
+            return False
         return True
 
     def register_fill(self, signal: Any) -> None:

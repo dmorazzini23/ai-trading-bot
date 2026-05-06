@@ -304,8 +304,33 @@ def test_execute_cycle_missing_list_orders_degrades_to_pending_skip(monkeypatch)
     monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_GATE_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE", "0")
     monkeypatch.setattr(bot_engine, "_decision_log_runtime_path", lambda: "runtime/test-decisions.jsonl")
-    monkeypatch.setattr(bot_engine, "_handle_pending_orders", lambda orders, runtime: True)
+    handled: list[object] = []
+    monkeypatch.setattr(
+        bot_engine,
+        "_handle_pending_orders",
+        lambda orders, runtime: handled.append(list(orders)) or True,
+    )
     monkeypatch.setattr(bot_engine, "_pending_orders_block_scope", lambda: "account")
+    breaker_failures: list[tuple[str, object]] = []
+    handled_errors: list[object] = []
+    breaker_info = {"dependency": "broker_open_orders", "kind": "missing_capability"}
+    monkeypatch.setattr(
+        bot_engine,
+        "classify_exception",
+        lambda exc, dependency: breaker_info,
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_dependency_breakers",
+        lambda _state: SimpleNamespace(
+            record_failure=lambda dependency, info: breaker_failures.append((dependency, info))
+        ),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_handle_error",
+        lambda info, **_kwargs: handled_errors.append(info),
+    )
 
     state = SimpleNamespace()
 
@@ -320,6 +345,9 @@ def test_execute_cycle_missing_list_orders_degrades_to_pending_skip(monkeypatch)
     )
 
     assert state._warned_missing_list_orders is True
+    assert breaker_failures == [("broker_open_orders", breaker_info)]
+    assert handled_errors == [breaker_info]
+    assert handled == []
 
 
 def test_execute_cycle_open_order_failure_records_dependency_breaker(monkeypatch) -> None:
@@ -332,7 +360,12 @@ def test_execute_cycle_open_order_failure_records_dependency_breaker(monkeypatch
         "list_open_orders",
         lambda _api: (_ for _ in ()).throw(TimeoutError("broker slow")),
     )
-    monkeypatch.setattr(bot_engine, "_handle_pending_orders", lambda orders, runtime: True)
+    handled: list[object] = []
+    monkeypatch.setattr(
+        bot_engine,
+        "_handle_pending_orders",
+        lambda orders, runtime: handled.append(list(orders)) or True,
+    )
     monkeypatch.setattr(bot_engine, "_pending_orders_block_scope", lambda: "account")
 
     breaker_failures: list[tuple[str, object]] = []
@@ -373,6 +406,7 @@ def test_execute_cycle_open_order_failure_records_dependency_breaker(monkeypatch
 
     assert breaker_failures == [("broker_open_orders", breaker_info)]
     assert handled_errors == [breaker_info]
+    assert handled == []
 
 
 def test_execute_cycle_logs_symbol_scoped_pending_block_then_runs_netting(

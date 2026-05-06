@@ -126,6 +126,8 @@ def _stub_runtime(monkeypatch):
             cash=0.0, equity=0.0, last_equity=0.0
         ),
         list_positions=lambda: [],
+        list_orders=lambda *a, **k: [],
+        get_orders=lambda *a, **k: [],
     )
     runtime = types.SimpleNamespace(
         api=api,

@@ -77,6 +77,32 @@ def test_event_store_enforces_source_idempotency_uniqueness(tmp_path: Path) -> N
     assert rows[0]["event_type"] == "INTENT_CREATED"
 
 
+def test_event_store_enforces_intent_sequence_uniqueness(tmp_path: Path) -> None:
+    store = EventStore(url=f"sqlite:///{tmp_path / 'oms_events_sequence.db'}")
+    inserted_first = store.append_oms_event_payload(
+        event_type="INTENT_CREATED",
+        event_source="unit_test",
+        idempotency_key="sequence-key-1",
+        intent_id="intent-sequence-1",
+        sequence_no=1,
+        payload={"symbol": "AAPL"},
+    )
+    inserted_second = store.append_oms_event_payload(
+        event_type="ORDER_SUBMITTED",
+        event_source="unit_test",
+        idempotency_key="sequence-key-2",
+        intent_id="intent-sequence-1",
+        sequence_no=1,
+        payload={"symbol": "AAPL"},
+    )
+    rows = store.list_oms_events(intent_id="intent-sequence-1")
+
+    assert inserted_first is True
+    assert inserted_second is False
+    assert len(rows) == 1
+    assert rows[0]["event_type"] == "INTENT_CREATED"
+
+
 def test_event_store_enforces_decision_idempotency(tmp_path: Path) -> None:
     store = EventStore(url=f"sqlite:///{tmp_path / 'decision_events.db'}")
     decision = DecisionEvent(

@@ -78,8 +78,17 @@ def check_data_freshness(df: DataFrame | None, symbol: str, *, max_staleness_min
             'staleness_threshold': threshold,
         }
     try:
-        last_ts = df.index[-1]
-        if not isinstance(last_ts, datetime):
+        last_ts: Any | None = None
+        if "timestamp" in df.columns and not isinstance(df.index, pd.DatetimeIndex):
+            parsed_ts = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+            parsed_ts = parsed_ts.dropna()
+            if not parsed_ts.empty:
+                last_ts = parsed_ts.max()
+        if last_ts is None:
+            last_ts = df.index[-1]
+        if hasattr(last_ts, "to_pydatetime"):
+            last_ts = last_ts.to_pydatetime()
+        elif not isinstance(last_ts, datetime):
             last_ts = datetime.fromtimestamp(float(last_ts), tz=UTC)
         if last_ts.tzinfo is None:
             last_ts = last_ts.replace(tzinfo=UTC)

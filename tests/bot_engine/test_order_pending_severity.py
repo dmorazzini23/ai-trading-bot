@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import sys
 import types
@@ -15,47 +16,58 @@ def _set_module_attr(module: types.ModuleType, attr_name: str, value: Any) -> No
 
 
 if "ai_trading.indicators" not in sys.modules:
-    indicators_stub = types.ModuleType("ai_trading.indicators")
+    try:
+        importlib.import_module("ai_trading.indicators")
+    except (ImportError, RuntimeError, AttributeError, OSError):
+        indicators_stub = types.ModuleType("ai_trading.indicators")
 
-    def _unavailable_indicator(*_args, **_kwargs):  # pragma: no cover - safety stub
-        raise RuntimeError("Indicator module unavailable in tests")
+        def _unavailable_indicator(*_args, **_kwargs):  # pragma: no cover - safety stub
+            raise RuntimeError("Indicator module unavailable in tests")
 
-    _set_module_attr(indicators_stub, "compute_atr", _unavailable_indicator)
-    _set_module_attr(indicators_stub, "atr", _unavailable_indicator)
-    _set_module_attr(indicators_stub, "mean_reversion_zscore", _unavailable_indicator)
-    _set_module_attr(indicators_stub, "rsi", _unavailable_indicator)
-    sys.modules["ai_trading.indicators"] = indicators_stub
+        _set_module_attr(indicators_stub, "compute_atr", _unavailable_indicator)
+        _set_module_attr(indicators_stub, "atr", _unavailable_indicator)
+        _set_module_attr(indicators_stub, "mean_reversion_zscore", _unavailable_indicator)
+        _set_module_attr(indicators_stub, "rsi", _unavailable_indicator)
+        sys.modules["ai_trading.indicators"] = indicators_stub
 
 if "ai_trading.signals" not in sys.modules:
-    signals_stub = types.ModuleType("ai_trading.signals")
-    signals_indicators_stub = types.ModuleType("ai_trading.signals.indicators")
+    try:
+        importlib.import_module("ai_trading.signals")
+        importlib.import_module("ai_trading.signals.indicators")
+    except (ImportError, RuntimeError, AttributeError, OSError):
+        signals_stub = types.ModuleType("ai_trading.signals")
+        signals_indicators_stub = types.ModuleType("ai_trading.signals.indicators")
 
-    def _composite_confidence_stub(*_args, **_kwargs):  # pragma: no cover - safety stub
-        return {}
+        def _composite_confidence_stub(*_args, **_kwargs):  # pragma: no cover - safety stub
+            return {}
 
-    _set_module_attr(
-        signals_indicators_stub, "composite_signal_confidence", _composite_confidence_stub
-    )
-    sys.modules["ai_trading.signals"] = signals_stub
-    sys.modules["ai_trading.signals.indicators"] = signals_indicators_stub
-    _set_module_attr(signals_stub, "indicators", signals_indicators_stub)
+        _set_module_attr(
+            signals_indicators_stub, "composite_signal_confidence", _composite_confidence_stub
+        )
+        sys.modules["ai_trading.signals"] = signals_stub
+        sys.modules["ai_trading.signals.indicators"] = signals_indicators_stub
+        _set_module_attr(signals_stub, "indicators", signals_indicators_stub)
 
 if "ai_trading.features" not in sys.modules:
-    features_stub = types.ModuleType("ai_trading.features")
-    features_indicators_stub = types.ModuleType("ai_trading.features.indicators")
+    try:
+        importlib.import_module("ai_trading.features")
+        importlib.import_module("ai_trading.features.indicators")
+    except (ImportError, RuntimeError, AttributeError, OSError):
+        features_stub = types.ModuleType("ai_trading.features")
+        features_indicators_stub = types.ModuleType("ai_trading.features.indicators")
 
-    def _feature_passthrough(df, **_kwargs):  # pragma: no cover - safety stub
-        return df
+        def _feature_passthrough(df, **_kwargs):  # pragma: no cover - safety stub
+            return df
 
-    _set_module_attr(features_indicators_stub, "compute_macd", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "compute_macds", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "compute_vwap", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "compute_atr", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "compute_sma", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "ensure_columns", _feature_passthrough)
-    sys.modules["ai_trading.features"] = features_stub
-    sys.modules["ai_trading.features.indicators"] = features_indicators_stub
-    _set_module_attr(features_stub, "indicators", features_indicators_stub)
+        _set_module_attr(features_indicators_stub, "compute_macd", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "compute_macds", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "compute_vwap", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "compute_atr", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "compute_sma", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "ensure_columns", _feature_passthrough)
+        sys.modules["ai_trading.features"] = features_stub
+        sys.modules["ai_trading.features.indicators"] = features_indicators_stub
+        _set_module_attr(features_stub, "indicators", features_indicators_stub)
 
 if "portalocker" not in sys.modules:
     portalocker_stub = types.ModuleType("portalocker")
@@ -113,14 +125,19 @@ def _reset_pending_tracker():
 def test_pending_orders_log_warning_levels(monkeypatch, caplog):
     """Pending-order logs escalate from info to warning as age grows."""
 
-    runtime = types.SimpleNamespace(state={})
-    cancel_called: list[types.SimpleNamespace] = []
+    canceled_ids: list[str] = []
+    runtime = types.SimpleNamespace(
+        state={},
+        api=types.SimpleNamespace(cancel_order_by_id=lambda order_id: canceled_ids.append(order_id)),
+    )
 
     monkeypatch.setattr(
         be,
         "cancel_all_open_orders",
-        lambda rt: cancel_called.append(rt),
+        lambda _rt: (_ for _ in ()).throw(AssertionError("global cancel must not be used")),
     )
+    monkeypatch.setattr(be, "_arm_pending_cleanup_warmup", lambda *_a, **_k: False)
+    monkeypatch.setattr(be, "_maybe_apply_pending_stale_sweep", lambda *_a, **_k: None)
     monkeypatch.setattr(
         be,
         "get_trading_config",
@@ -143,13 +160,14 @@ def test_pending_orders_log_warning_levels(monkeypatch, caplog):
     pending = [_order("pending_new", "alpha")]
 
     assert be._handle_pending_orders(pending, runtime) is True
-    assert caplog.records[0].message == "PENDING_ORDERS_DETECTED"
-    assert caplog.records[0].levelno == logging.INFO
+    detected_logs = [rec for rec in caplog.records if rec.message == "PENDING_ORDERS_DETECTED"]
+    assert detected_logs
+    assert detected_logs[0].levelno == logging.INFO
 
     caplog.clear()
     clock.value += be._PENDING_ORDER_LOG_INTERVAL_SECONDS + 1
     assert be._handle_pending_orders(pending, runtime) is False
-    assert cancel_called == [runtime]
+    assert canceled_ids == ["alpha"]
     messages = [rec.message for rec in caplog.records]
     assert "PENDING_ORDERS_STILL_PRESENT" in messages
     assert "PENDING_ORDERS_CANCELED" in messages
@@ -168,14 +186,19 @@ def test_pending_orders_log_warning_levels(monkeypatch, caplog):
 def test_pending_orders_long_lived_backlog_uses_warning(monkeypatch, caplog):
     """Long-lived pending-order backlog emits WARNING (not ERROR)."""
 
-    runtime = types.SimpleNamespace(state={})
-    cancel_called: list[types.SimpleNamespace] = []
+    canceled_ids: list[str] = []
+    runtime = types.SimpleNamespace(
+        state={},
+        api=types.SimpleNamespace(cancel_order_by_id=lambda order_id: canceled_ids.append(order_id)),
+    )
 
     monkeypatch.setattr(
         be,
         "cancel_all_open_orders",
-        lambda rt: cancel_called.append(rt),
+        lambda _rt: (_ for _ in ()).throw(AssertionError("global cancel must not be used")),
     )
+    monkeypatch.setattr(be, "_arm_pending_cleanup_warmup", lambda *_a, **_k: False)
+    monkeypatch.setattr(be, "_maybe_apply_pending_stale_sweep", lambda *_a, **_k: None)
     monkeypatch.setattr(
         be,
         "get_trading_config",
@@ -204,7 +227,7 @@ def test_pending_orders_long_lived_backlog_uses_warning(monkeypatch, caplog):
     caplog.clear()
     clock.value += 361.0
     assert be._handle_pending_orders(pending, runtime) is False
-    assert cancel_called == [runtime]
+    assert canceled_ids == ["alpha"]
     still_present = [
         rec for rec in caplog.records if rec.message == "PENDING_ORDERS_STILL_PRESENT"
     ]

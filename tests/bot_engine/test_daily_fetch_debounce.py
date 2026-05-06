@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import UTC, datetime, time as dt_time, timedelta
+import importlib
 import logging
 import sys
 import types
@@ -21,47 +22,58 @@ def _set_module_attr(module: types.ModuleType, attr_name: str, value: Any) -> No
 
 
 if "ai_trading.indicators" not in sys.modules:
-    indicators_stub = types.ModuleType("ai_trading.indicators")
+    try:
+        importlib.import_module("ai_trading.indicators")
+    except (ImportError, RuntimeError, AttributeError, OSError):
+        indicators_stub = types.ModuleType("ai_trading.indicators")
 
-    def _unavailable_indicator(*_args, **_kwargs):  # pragma: no cover - safety stub
-        raise RuntimeError("Indicator module unavailable in tests")
+        def _unavailable_indicator(*_args, **_kwargs):  # pragma: no cover - safety stub
+            raise RuntimeError("Indicator module unavailable in tests")
 
-    _set_module_attr(indicators_stub, "compute_atr", _unavailable_indicator)
-    _set_module_attr(indicators_stub, "atr", _unavailable_indicator)
-    _set_module_attr(indicators_stub, "mean_reversion_zscore", _unavailable_indicator)
-    _set_module_attr(indicators_stub, "rsi", _unavailable_indicator)
-    sys.modules["ai_trading.indicators"] = indicators_stub
+        _set_module_attr(indicators_stub, "compute_atr", _unavailable_indicator)
+        _set_module_attr(indicators_stub, "atr", _unavailable_indicator)
+        _set_module_attr(indicators_stub, "mean_reversion_zscore", _unavailable_indicator)
+        _set_module_attr(indicators_stub, "rsi", _unavailable_indicator)
+        sys.modules["ai_trading.indicators"] = indicators_stub
 
 if "ai_trading.signals" not in sys.modules:
-    signals_stub = types.ModuleType("ai_trading.signals")
-    signals_indicators_stub = types.ModuleType("ai_trading.signals.indicators")
+    try:
+        importlib.import_module("ai_trading.signals")
+        importlib.import_module("ai_trading.signals.indicators")
+    except (ImportError, RuntimeError, AttributeError, OSError):
+        signals_stub = types.ModuleType("ai_trading.signals")
+        signals_indicators_stub = types.ModuleType("ai_trading.signals.indicators")
 
-    def _composite_confidence_stub(*_args, **_kwargs):  # pragma: no cover - safety stub
-        return {}
+        def _composite_confidence_stub(*_args, **_kwargs):  # pragma: no cover - safety stub
+            return {}
 
-    _set_module_attr(
-        signals_indicators_stub, "composite_signal_confidence", _composite_confidence_stub
-    )
-    sys.modules["ai_trading.signals"] = signals_stub
-    sys.modules["ai_trading.signals.indicators"] = signals_indicators_stub
-    _set_module_attr(signals_stub, "indicators", signals_indicators_stub)
+        _set_module_attr(
+            signals_indicators_stub, "composite_signal_confidence", _composite_confidence_stub
+        )
+        sys.modules["ai_trading.signals"] = signals_stub
+        sys.modules["ai_trading.signals.indicators"] = signals_indicators_stub
+        _set_module_attr(signals_stub, "indicators", signals_indicators_stub)
 
 if "ai_trading.features" not in sys.modules:
-    features_stub = types.ModuleType("ai_trading.features")
-    features_indicators_stub = types.ModuleType("ai_trading.features.indicators")
+    try:
+        importlib.import_module("ai_trading.features")
+        importlib.import_module("ai_trading.features.indicators")
+    except (ImportError, RuntimeError, AttributeError, OSError):
+        features_stub = types.ModuleType("ai_trading.features")
+        features_indicators_stub = types.ModuleType("ai_trading.features.indicators")
 
-    def _feature_passthrough(df, **_kwargs):  # pragma: no cover - safety stub
-        return df
+        def _feature_passthrough(df, **_kwargs):  # pragma: no cover - safety stub
+            return df
 
-    _set_module_attr(features_indicators_stub, "compute_macd", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "compute_macds", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "compute_vwap", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "compute_atr", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "compute_sma", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "ensure_columns", _feature_passthrough)
-    sys.modules["ai_trading.features"] = features_stub
-    sys.modules["ai_trading.features.indicators"] = features_indicators_stub
-    _set_module_attr(features_stub, "indicators", features_indicators_stub)
+        _set_module_attr(features_indicators_stub, "compute_macd", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "compute_macds", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "compute_vwap", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "compute_atr", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "compute_sma", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "ensure_columns", _feature_passthrough)
+        sys.modules["ai_trading.features"] = features_stub
+        sys.modules["ai_trading.features.indicators"] = features_indicators_stub
+        _set_module_attr(features_stub, "indicators", features_indicators_stub)
 
 if "portalocker" not in sys.modules:
     portalocker_stub = types.ModuleType("portalocker")

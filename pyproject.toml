@@ -50,6 +50,7 @@ dependencies = [
   "hmmlearn==0.3.2",
   "SQLAlchemy>=2.0,<3",
   "psycopg[binary]>=3.2,<4",
+  "alembic==1.14.1",
 ]
 
 [project.optional-dependencies]

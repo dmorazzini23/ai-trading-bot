@@ -41,13 +41,24 @@ def test_drawdown_breaker_invalid_values_callbacks_and_recovery() -> None:
     assert events[0][0] == "halt"
 
     assert breaker.update_equity(89_000.0) is False
-    assert breaker.update_equity(90_000.0) is True
+    assert breaker.update_equity(90_000.0) is False
+    assert breaker.update_equity(90_001.0) is True
     assert breaker.state is CircuitBreakerState.CLOSED
     assert events[-1][0] == "reset"
 
     status = breaker.get_status()
     assert status["trading_allowed"] is True
     assert status["peak_equity"] == 100_000.0
+
+
+def test_drawdown_breaker_manual_reset_rejects_at_max_drawdown() -> None:
+    breaker = DrawdownCircuitBreaker(max_drawdown=0.10, recovery_threshold=0.10)
+
+    assert breaker.update_equity(100_000.0) is True
+    assert breaker.update_equity(90_000.0) is False
+
+    assert breaker.manual_reset() is False
+    assert breaker.state is CircuitBreakerState.OPEN
 
 
 @pytest.mark.parametrize(

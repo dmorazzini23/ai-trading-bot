@@ -45,6 +45,13 @@ def _runtime_dotenv_override_enabled() -> bool:
     return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _resolve_runtime_dotenv_path(dotenv_path: str) -> str:
+    raw = get_env("AI_TRADING_RUNTIME_ENV_PATH", "", cast=str, resolve_aliases=False)
+    if str(raw or "").strip():
+        return str(Path(str(raw).strip()).expanduser())
+    return str(Path(dotenv_path).with_name(".env.runtime"))
+
+
 def _populate_blank_values_from_dotenv(dotenv_path: str) -> None:
     """Fill explicitly blank process values without replacing configured ones."""
 
@@ -137,7 +144,7 @@ def ensure_dotenv_loaded(dotenv_path: str | None = None) -> None:
         return
     set_runtime_env_override("MULTI_LOAD_TEST", "safe_value")
     path = dotenv_path or str(Path(__file__).resolve().parents[2] / ".env")
-    runtime_path = str(Path(path).with_name(".env.runtime"))
+    runtime_path = _resolve_runtime_dotenv_path(path)
     runtime_loaded = False
     runtime_loaded_now = False
     runtime_override = _runtime_dotenv_override_enabled()

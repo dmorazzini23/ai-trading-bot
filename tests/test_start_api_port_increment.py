@@ -3,6 +3,7 @@ import socket
 
 import pytest
 
+import ai_trading.app as app_module
 from ai_trading import main
 
 
@@ -155,3 +156,84 @@ def test_start_api_fails_before_logging_aux_health_started(monkeypatch, caplog):
 
     assert "HEALTHCHECK_PORT_CONFLICT" in caplog.text
     assert "HEALTH_SERVER_STARTED" not in caplog.text
+
+
+def test_start_api_surfaces_immediate_aux_health_thread_failure(monkeypatch, caplog):
+    api_probe = socket.socket()
+    api_probe.bind(("0.0.0.0", 0))
+    api_port = api_probe.getsockname()[1]
+    api_probe.close()
+
+    health_probe = socket.socket()
+    health_probe.bind(("0.0.0.0", 0))
+    health_port = health_probe.getsockname()[1]
+    health_probe.close()
+
+    class ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(
+        main,
+        "get_settings",
+        lambda: DummySettings(api_port, 0.0, healthcheck_port=health_port),
+    )
+    monkeypatch.setattr(main, "ensure_dotenv_loaded", lambda: None)
+    monkeypatch.setattr(main.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(main, "run_flask_app", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app_module, "build_standalone_healthcheck_app", lambda **_kwargs: object())
+
+    def fail_aux_health(*_args, **_kwargs):
+        raise SystemExit(1)
+
+    monkeypatch.setattr(app_module, "run_standalone_healthcheck_app", fail_aux_health)
+
+    with caplog.at_level("INFO"), pytest.raises(OSError):
+        main.start_api()
+
+    assert "HEALTH_SERVER_START_FAILED" in caplog.text
+    assert "HEALTH_SERVER_START_ABORTED" in caplog.text
+    assert "HEALTH_SERVER_STARTED" not in caplog.text
+
+
+def test_start_api_logs_aux_health_started_only_after_bound_signal(monkeypatch, caplog):
+    api_probe = socket.socket()
+    api_probe.bind(("0.0.0.0", 0))
+    api_port = api_probe.getsockname()[1]
+    api_probe.close()
+
+    health_probe = socket.socket()
+    health_probe.bind(("0.0.0.0", 0))
+    health_port = health_probe.getsockname()[1]
+    health_probe.close()
+
+    class ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(
+        main,
+        "get_settings",
+        lambda: DummySettings(api_port, 0.0, healthcheck_port=health_port),
+    )
+    monkeypatch.setattr(main, "ensure_dotenv_loaded", lambda: None)
+    monkeypatch.setattr(main.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(main, "run_flask_app", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app_module, "build_standalone_healthcheck_app", lambda **_kwargs: object())
+
+    def run_aux_health(*_args, **kwargs):
+        kwargs["on_bound"]()
+
+    monkeypatch.setattr(app_module, "run_standalone_healthcheck_app", run_aux_health)
+
+    with caplog.at_level("INFO"):
+        main.start_api()
+
+    assert "HEALTH_SERVER_STARTED" in caplog.text
+    assert "HEALTH_SERVER_START_TIMEOUT" not in caplog.text

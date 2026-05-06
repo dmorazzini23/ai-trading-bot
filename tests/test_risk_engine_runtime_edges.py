@@ -121,14 +121,20 @@ def test_can_trade_rejects_invalid_signal_and_bad_weight(caplog: pytest.LogCaptu
     assert any("Invalid signal.weight" in rec.message for rec in caplog.records)
 
 
-def test_can_trade_force_continue_overrides_exposure_breach(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_can_trade_force_continue_does_not_override_exposure_breach(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     engine = _engine()
     engine.global_limit = 0.1
     engine.asset_limits["equity"] = 0.1
     engine.exposure["equity"] = 0.2
     monkeypatch.setenv("FORCE_CONTINUE_ON_EXPOSURE", "true")
 
-    assert engine.can_trade(_signal(weight=0.2)) is True
+    with caplog.at_level(logging.WARNING):
+        assert engine.can_trade(_signal(weight=0.2)) is False
+
+    assert any("FORCE_CONTINUE_ON_EXPOSURE ignored" in rec.message for rec in caplog.records)
 
 
 def test_can_trade_rejects_negative_weight_short_exposure_breach() -> None:

@@ -12735,7 +12735,7 @@ def get_minute_df(
     forced_threshold_sip_switch_logged = False
 
     finnhub_api_key = get_env("FINNHUB_API_KEY")
-    if finnhub_api_key and fh_fetcher is not None:
+    if use_finnhub and finnhub_api_key and fh_fetcher is not None:
         finnhub_frame = _minute_df_from_finnhub(symbol, start_dt, end_dt)
         if finnhub_frame is not None and not getattr(finnhub_frame, "empty", True):
             finnhub_processed = _post_process(finnhub_frame, symbol=symbol, timeframe="1Min")

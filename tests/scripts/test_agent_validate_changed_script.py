@@ -34,6 +34,14 @@ def test_agent_validate_changed_script_keeps_runtime_smoke_checks() -> None:
     assert "--skip-runtime-smoke" in text
 
 
+def test_agent_validate_changed_script_verifies_existing_systemd_units_only() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+
+    assert "SYSTEMD_VERIFY_FILES" in text
+    assert 'path_exists "$file"' in text
+    assert 'systemd-analyze verify "${SYSTEMD_VERIFY_FILES[@]}"' in text
+
+
 def test_agent_validate_changed_script_keeps_danger_pattern_guards() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
 

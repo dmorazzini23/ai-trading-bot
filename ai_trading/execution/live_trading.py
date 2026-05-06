@@ -32584,6 +32584,13 @@ class ExecutionEngine:
         if fresh_lookup_grace_s is None:
             fresh_lookup_grace_s = 30.0
         fresh_lookup_grace_s = max(0.0, min(float(fresh_lookup_grace_s), 300.0))
+        missing_lookup_min_misses = _config_int(
+            "AI_TRADING_PENDING_RECONCILE_MISSING_LOOKUP_MIN_MISSES",
+            2,
+        )
+        if missing_lookup_min_misses is None:
+            missing_lookup_min_misses = 2
+        missing_lookup_min_misses = max(1, min(int(missing_lookup_min_misses), 20))
 
         def _pending_entry_age_seconds(entry: Mapping[str, Any]) -> float | None:
             updated_raw = _extract_value(entry, "updated_at", "ts", "timestamp")
@@ -32665,24 +32672,63 @@ class ExecutionEngine:
                 except LIVE_TRADING_FALLBACK_EXC as err:
                     if _is_missing_order_lookup_error(err):
                         lookup_not_found += 1
-                        refreshed = {
-                            "id": ref_order_id,
-                            "client_order_id": ref_client_id,
-                            "symbol": _extract_value(entry, "symbol"),
-                            "side": _extract_value(entry, "side"),
-                            "qty": _extract_value(entry, "qty", "quantity"),
-                            "limit_price": _extract_value(entry, "limit_price", "expected_price", "price"),
-                            "status": "canceled",
-                            "filled_qty": _extract_value(entry, "filled_qty") or 0,
-                        }
-                        logger.info(
-                            "PENDING_ORDER_RECONCILE_LOOKUP_NOT_FOUND",
-                            extra={
-                                "pending_key": key,
-                                "order_id": ref_order_id,
-                                "client_order_id": ref_client_id,
-                            },
+                        pending_age_s = _pending_entry_age_seconds(entry)
+                        previous_misses = _safe_int(
+                            _extract_value(entry, "lookup_missing_count"),
+                            0,
                         )
+                        missing_count = int(max(previous_misses, 0)) + 1
+                        updated_entry = dict(entry)
+                        updated_entry["lookup_missing_count"] = missing_count
+                        updated_entry["lookup_missing_at"] = now_iso
+                        store[key] = updated_entry
+                        defer_missing = (
+                            pending_age_s is None
+                            or pending_age_s <= fresh_lookup_grace_s
+                            or missing_count < missing_lookup_min_misses
+                        )
+                        if defer_missing:
+                            lookup_deferred_fresh += 1
+                            logger.info(
+                                "PENDING_ORDER_RECONCILE_LOOKUP_NOT_FOUND_DEFERRED",
+                                extra={
+                                    "pending_key": key,
+                                    "order_id": ref_order_id,
+                                    "client_order_id": ref_client_id,
+                                    "pending_age_s": (
+                                        round(float(pending_age_s), 3)
+                                        if pending_age_s is not None
+                                        else None
+                                    ),
+                                    "fresh_lookup_grace_s": round(float(fresh_lookup_grace_s), 3),
+                                    "lookup_missing_count": missing_count,
+                                    "lookup_missing_min_misses": missing_lookup_min_misses,
+                                },
+                            )
+                        else:
+                            lookup_stale_terminalized += 1
+                            refreshed = {
+                                "id": ref_order_id,
+                                "client_order_id": ref_client_id,
+                                "symbol": _extract_value(entry, "symbol"),
+                                "side": _extract_value(entry, "side"),
+                                "qty": _extract_value(entry, "qty", "quantity"),
+                                "limit_price": _extract_value(entry, "limit_price", "expected_price", "price"),
+                                "status": "canceled",
+                                "filled_qty": _extract_value(entry, "filled_qty") or 0,
+                            }
+                            logger.info(
+                                "PENDING_ORDER_RECONCILE_LOOKUP_NOT_FOUND_TERMINALIZED",
+                                extra={
+                                    "pending_key": key,
+                                    "order_id": ref_order_id,
+                                    "client_order_id": ref_client_id,
+                                    "pending_age_s": round(float(pending_age_s), 3),
+                                    "fresh_lookup_grace_s": round(float(fresh_lookup_grace_s), 3),
+                                    "lookup_missing_count": missing_count,
+                                    "lookup_missing_min_misses": missing_lookup_min_misses,
+                                },
+                            )
                     else:
                         pending_age_s = _pending_entry_age_seconds(entry)
                         if (
@@ -33063,6 +33109,8 @@ class ExecutionEngine:
             updated_entry["filled_qty"] = float(max(float(refreshed_filled_qty or 0.0), 0.0))
             updated_entry["event_seq"] = int(max(event_seq, 0))
             updated_entry["updated_at"] = now_iso
+            updated_entry.pop("lookup_missing_count", None)
+            updated_entry.pop("lookup_missing_at", None)
             if expected_price_value is not None and expected_price_value > 0:
                 updated_entry["expected_price"] = float(expected_price_value)
             if (
@@ -33143,6 +33191,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         """Return (open_orders, positions) using the active trading client."""
 
         client = getattr(self, "trading_client", None)
+        self._broker_open_orders_unknown = False
         if client is None:
             return ([], [])
 
@@ -33153,8 +33202,13 @@ class LiveTradingExecutionEngine(ExecutionEngine):
             open_orders_resp: Any | None = list_alpaca_orders(client, status="open")
             if open_orders_resp is not None:
                 open_orders_list = list(open_orders_resp)
-        except LIVE_TRADING_FALLBACK_EXC:
-            logger.debug("BROKER_SYNC_OPEN_ORDERS_FAILED", exc_info=True)
+        except LIVE_TRADING_FALLBACK_EXC as exc:
+            self._broker_open_orders_unknown = True
+            logger.warning(
+                "BROKER_SYNC_OPEN_ORDERS_UNKNOWN",
+                extra={"client_type": type(client).__name__, "error": str(exc)},
+                exc_info=True,
+            )
 
         try:
             positions_resp: Any | None = None
@@ -33181,6 +33235,12 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         if account_snapshot is not None:
             self._cycle_account = account_snapshot
             self._cycle_account_fetched = True
+        if bool(getattr(self, "_broker_open_orders_unknown", False)):
+            logger.warning(
+                "BROKER_SYNC_FAIL_CLOSED_OPEN_ORDERS_UNKNOWN",
+                extra={"positions_count": len(positions)},
+            )
+            return super().synchronize_broker_state()
         self._reconcile_durable_intents(open_orders=open_orders)
         try:
             snapshot = self._update_broker_snapshot(open_orders, positions)

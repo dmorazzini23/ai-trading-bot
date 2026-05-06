@@ -29,6 +29,12 @@ SHADOW_FILE_MAX_AGE_MINUTES="${SHADOW_FILE_MAX_AGE_MINUTES:-180}" # 3h
 SHADOW_ACTIVITY_LOG_UNIT="${SHADOW_ACTIVITY_LOG_UNIT:-ai-trading.service}"
 SHADOW_ACTIVITY_LOOKBACK_MINUTES="${SHADOW_ACTIVITY_LOOKBACK_MINUTES:-90}"
 SHADOW_REQUIRE_ACTIVITY_FOR_ARTIFACT="${SHADOW_REQUIRE_ACTIVITY_FOR_ARTIFACT:-1}"
+HEALTHCHECK_PROBE_PORT="${HEALTHCHECK_PORT:-${API_PORT:-9001}}"
+HEALTHCHECK_URL="${HEALTHCHECK_URL:-http://127.0.0.1:${HEALTHCHECK_PROBE_PORT}/healthz}"
+HEALTHCHECK_SYSTEMD_UNIT="${HEALTHCHECK_SYSTEMD_UNIT:-ai-trading.service}"
+HEALTHCHECK_PROBE_TIMEOUT_SECONDS="${HEALTHCHECK_PROBE_TIMEOUT_SECONDS:-3}"
+SKIP_HEALTHZ_PROBE="${SKIP_HEALTHZ_PROBE:-0}"
+SKIP_SERVICE_LIVENESS="${SKIP_SERVICE_LIVENESS:-0}"
 
 failures=0
 
@@ -176,13 +182,52 @@ require_cmd stat
 require_cmd find
 require_cmd date
 
+if ! is_truthy "${SKIP_HEALTHZ_PROBE}" && [[ -n "${HEALTHCHECK_URL}" ]]; then
+  require_cmd curl
+fi
+
 echo "== runtime phase-1 health check =="
 echo "runtime_dir=${RUNTIME_DIR}"
 echo "decision_file=${DECISION_FILE}"
 echo "report_dir=${REPORT_DIR}"
 echo "window_rows=${N}"
+echo "healthcheck_url=${HEALTHCHECK_URL:-<skipped>}"
+echo "healthcheck_systemd_unit=${HEALTHCHECK_SYSTEMD_UNIT:-<skipped>}"
 echo "thresholds: auth_halt_max_rate=${AUTH_HALT_MAX_RATE}, auth_broker_halt_forbidden_max_rate=${AUTH_BROKER_HALT_FORBIDDEN_MAX_RATE}, ok_trade_min_rate=${OK_TRADE_MIN_RATE}, cycle_duplicate_intent_max_rate=${CYCLE_DUPLICATE_INTENT_MAX_RATE}"
 echo "decision_window: min_rows_for_rate_alerts=${RATE_ALERT_MIN_ROWS}, stale_max_age_minutes=${DECISION_STALE_MAX_AGE_MINUTES}"
+
+if is_truthy "${SKIP_SERVICE_LIVENESS}" || [[ -z "${HEALTHCHECK_SYSTEMD_UNIT}" ]]; then
+  echo "INFO: service liveness check skipped"
+else
+  if ! command -v systemctl >/dev/null 2>&1; then
+    fail "systemctl unavailable; cannot verify ${HEALTHCHECK_SYSTEMD_UNIT} liveness"
+  elif systemctl is-active --quiet "${HEALTHCHECK_SYSTEMD_UNIT}"; then
+    ok "service active: ${HEALTHCHECK_SYSTEMD_UNIT}"
+  else
+    fail "service not active: ${HEALTHCHECK_SYSTEMD_UNIT}"
+  fi
+fi
+
+if is_truthy "${SKIP_HEALTHZ_PROBE}" || [[ -z "${HEALTHCHECK_URL}" ]]; then
+  echo "INFO: /healthz probe skipped"
+else
+  health_payload="$(
+    curl --fail --silent --show-error \
+      --max-time "${HEALTHCHECK_PROBE_TIMEOUT_SECONDS}" \
+      "${HEALTHCHECK_URL}" 2>&1
+  )" || {
+    fail "/healthz probe failed: ${HEALTHCHECK_URL}: ${health_payload}"
+    health_payload=""
+  }
+  if [[ -n "${health_payload}" ]]; then
+    if jq -e '(.service == "ai-trading") and ((.ok == true) or (.status == "healthy"))' \
+      >/dev/null 2>&1 <<<"${health_payload}"; then
+      ok "/healthz probe healthy: ${HEALTHCHECK_URL}"
+    else
+      fail "/healthz probe returned unexpected payload: ${HEALTHCHECK_URL}: ${health_payload}"
+    fi
+  fi
+fi
 
 skip_decision_derived_artifact_checks=0
 

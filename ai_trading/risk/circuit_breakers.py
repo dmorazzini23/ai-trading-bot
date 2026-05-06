@@ -101,7 +101,10 @@ class DrawdownCircuitBreaker:
                     self._trigger_halt('Maximum drawdown exceeded')
                     return False
             elif self.state == CircuitBreakerState.OPEN:
-                if self.current_drawdown <= self._recovery_drawdown_threshold():
+                if (
+                    self.current_drawdown < float(self.max_drawdown)
+                    and self.current_drawdown <= self._recovery_drawdown_threshold()
+                ):
                     self._reset_breaker('Drawdown recovery achieved')
                     return True
                 return False
@@ -147,6 +150,17 @@ class DrawdownCircuitBreaker:
         if current_equity is not None:
             if self.update_equity(current_equity) and self.state == CircuitBreakerState.CLOSED:
                 return True
+        try:
+            max_drawdown = float(self.max_drawdown)
+        except (TypeError, ValueError):
+            max_drawdown = 0.0
+        if max_drawdown > 0.0 and self.current_drawdown >= max_drawdown:
+            logger.warning(
+                'Drawdown reset rejected: current drawdown %s at or above max drawdown %s',
+                self._safe_format_percentage(self.current_drawdown),
+                self._safe_format_percentage(max_drawdown),
+            )
+            return False
         if self.current_drawdown > self._recovery_drawdown_threshold():
             logger.warning(
                 'Drawdown reset rejected: current drawdown %s above recovery threshold %s',

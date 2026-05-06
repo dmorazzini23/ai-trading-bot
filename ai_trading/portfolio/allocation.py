@@ -21,6 +21,62 @@ def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
+def _normalize_bounded(
+    weights: Mapping[str, float],
+    *,
+    min_weight: float,
+    max_weight: float,
+) -> dict[str, float]:
+    if not weights:
+        return {}
+    low = max(0.0, float(min_weight))
+    high = max(low, float(max_weight))
+    names = list(weights)
+    count = len(names)
+    if count <= 0:
+        return {}
+    if (low * count) > 1.0 or (high * count) < 1.0:
+        equal = 1.0 / count
+        return {name: equal for name in names}
+
+    result = {name: low for name in names}
+    headroom = {name: high - low for name in names}
+    remaining = 1.0 - (low * count)
+    demand = {
+        name: max(0.0, _clamp(float(weights[name]), low, high) - low)
+        for name in names
+    }
+    active = {name for name in names if headroom[name] > 0.0}
+    while remaining > 1e-12 and active:
+        total_demand = sum(demand[name] for name in active)
+        equal_share = total_demand <= 0.0
+        total_basis = float(len(active)) if equal_share else total_demand
+        progressed = 0.0
+        saturated: set[str] = set()
+        for name in list(active):
+            basis = 1.0 if equal_share else demand[name]
+            add = min(headroom[name], remaining * (basis / total_basis))
+            if add <= 0.0:
+                if headroom[name] <= 1e-12:
+                    saturated.add(name)
+                continue
+            result[name] += add
+            headroom[name] -= add
+            progressed += add
+            if headroom[name] <= 1e-12:
+                saturated.add(name)
+        remaining -= progressed
+        active.difference_update(saturated)
+        if progressed <= 1e-12:
+            break
+
+    total = sum(result.values())
+    if total <= 0.0:
+        equal = 1.0 / count
+        return {name: equal for name in names}
+    return {name: value / total for name, value in result.items()}
+
+
 def update_allocation_weights(
     *,
     base_weights: Mapping[str, float],
@@ -45,11 +101,7 @@ def update_allocation_weights(
             delta = abs(daily_max_delta)
         updated[sleeve] = _clamp(base + delta, min_weight, max_weight)
 
-    total = sum(updated.values())
-    if total <= 0:
-        equal = 1.0 / max(1, len(updated))
-        return {sleeve: equal for sleeve in updated}
-    return {sleeve: weight / total for sleeve, weight in updated.items()}
+    return _normalize_bounded(updated, min_weight=min_weight, max_weight=max_weight)
 
 
 def save_allocation_state(path: str, weights: Mapping[str, float], *, metadata: Mapping[str, Any] | None = None) -> None:

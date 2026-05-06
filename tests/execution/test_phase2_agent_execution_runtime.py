@@ -172,7 +172,6 @@ def _order_manager_with_store(store: _FakeIntentStore) -> eng.OrderManager:
 
 def test_order_manager_external_lifecycle_records_delta_fills_and_clears_terminal_maps() -> None:
     store = _FakeIntentStore()
-    store.raise_on_claim = True
     manager = _order_manager_with_store(store)
 
     assert manager.begin_external_order_lifecycle(
@@ -215,6 +214,27 @@ def test_order_manager_external_lifecycle_records_delta_fills_and_clears_termina
         (2.5, 102.5),
     ]
     assert store.closed == [("intent-1", "FILLED", None)]
+    assert manager._intent_by_order_id == {}
+    assert manager._intent_reported_fill_qty == {}
+
+
+def test_order_manager_external_lifecycle_returns_none_when_claim_fails() -> None:
+    store = _FakeIntentStore()
+    store.raise_on_claim = True
+    manager = _order_manager_with_store(store)
+
+    assert (
+        manager.begin_external_order_lifecycle(
+            intent_id="intent-claim-fail",
+            idempotency_key="idem-claim-fail",
+            symbol="aapl",
+            side="BUY",
+            quantity=5,
+            metadata={"source": "test"},
+        )
+        is None
+    )
+    assert store.claimed == [("intent-claim-fail", 90)]
     assert manager._intent_by_order_id == {}
     assert manager._intent_reported_fill_qty == {}
 

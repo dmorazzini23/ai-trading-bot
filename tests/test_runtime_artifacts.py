@@ -91,6 +91,34 @@ def test_resolve_runtime_artifact_path_prefers_newest_existing_candidate(
     assert resolved == secondary_target
 
 
+def test_resolve_runtime_artifact_path_prefers_runtime_root_over_repo_local(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime-root"
+    repo_root = tmp_path / "repo"
+    monkeypatch.delenv("AI_TRADING_DATA_DIR", raising=False)
+    monkeypatch.setattr(runtime_artifacts, "_iter_runtime_roots", lambda: [runtime_root])
+    monkeypatch.setattr(runtime_artifacts, "_REPO_ROOT", repo_root)
+
+    relative_path = "runtime/live_cost_model_latest.json"
+    runtime_target = (runtime_root / relative_path).resolve()
+    repo_target = (repo_root / relative_path).resolve()
+    runtime_target.parent.mkdir(parents=True, exist_ok=True)
+    repo_target.parent.mkdir(parents=True, exist_ok=True)
+    runtime_target.write_text("{}", encoding="utf-8")
+    repo_target.write_text("{}", encoding="utf-8")
+    os.utime(runtime_target, (1_700_000_000, 1_700_000_000))
+    os.utime(repo_target, (2_100_000_000, 2_100_000_000))
+
+    resolved = resolve_runtime_artifact_path(
+        relative_path,
+        default_relative=relative_path,
+    )
+
+    assert resolved == runtime_target
+
+
 def test_resolve_runtime_artifact_path_prefers_existing_secondary_root_when_data_dir_empty(
     monkeypatch,
     tmp_path: Path,

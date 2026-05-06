@@ -868,7 +868,14 @@ class OrderManager:
                 stale_after_seconds=max(1, int(stale_after_seconds)),
             )
         except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
-            logger.debug("OMS_EXTERNAL_INTENT_CLAIM_FAILED", exc_info=True)
+            logger.warning(
+                "OMS_EXTERNAL_INTENT_CLAIM_FAILED",
+                extra={"intent_id": record.intent_id},
+                exc_info=True,
+            )
+            self._intent_by_order_id.pop(resolved_intent_id, None)
+            self._intent_reported_fill_qty.pop(record.intent_id, None)
+            return None
         return str(record.intent_id)
 
     def record_external_submit_error(

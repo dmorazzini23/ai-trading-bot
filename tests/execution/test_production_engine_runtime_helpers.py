@@ -327,7 +327,7 @@ def test_live_execution_uses_broker_adapter(monkeypatch) -> None:
 
     result = _run(coordinator._execute_order_with_monitoring(order, {"estimated_slippage_bps": 5}))
 
-    assert result.status == "success"
+    assert result.status == "accepted"
     assert result.order_id == "broker-1"
     assert result.venue == "alpaca"
     assert adapter.payload is not None
@@ -396,12 +396,13 @@ def test_position_tracking_statistics_summary_and_cancel(monkeypatch) -> None:
         )
     )
     _run(coordinator._update_execution_statistics({"status": "rejected"}, execution_time_ms=5.0))
+    _run(coordinator._update_execution_statistics({"status": "accepted"}, execution_time_ms=5.0))
 
-    assert coordinator.execution_stats["total_orders"] == 2
+    assert coordinator.execution_stats["total_orders"] == 3
     assert coordinator.execution_stats["successful_orders"] == 1
     assert coordinator.execution_stats["rejected_orders"] == 1
     summary = coordinator.get_execution_summary()
-    assert summary["success_rate_pct"] == pytest.approx(50.0)
+    assert summary["success_rate_pct"] == pytest.approx(100.0 / 3.0)
     assert summary["average_slippage_bps"] == pytest.approx(4.0)
     assert coordinator.get_current_positions() == coordinator.current_positions
 

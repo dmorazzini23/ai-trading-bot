@@ -3391,19 +3391,62 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                 )
                 raise
             health_app = build_standalone_healthcheck_app(fail_fast_env=True)
+            health_start_failed = threading.Event()
+            health_bound = threading.Event()
+
+            def _run_aux_health_server() -> None:
+                try:
+                    run_standalone_healthcheck_app(
+                        app=health_app,
+                        host=health_host,
+                        port=health_port,
+                        logger=logger,
+                        raise_on_bind_error=True,
+                        on_bound=health_bound.set,
+                    )
+                except SystemExit as exc:
+                    logger.critical(
+                        "HEALTH_SERVER_START_FAILED",
+                        extra={
+                            "host": health_host,
+                            "port": health_port,
+                            "exit_code": exc.code,
+                        },
+                    )
+                    health_start_failed.set()
+                except MAIN_FALLBACK_EXC as exc:
+                    logger.critical(
+                        "HEALTH_SERVER_START_FAILED",
+                        extra={"host": health_host, "port": health_port, "error": str(exc)},
+                    )
+                    health_start_failed.set()
+
             th = threading.Thread(
-                target=run_standalone_healthcheck_app,
-                kwargs={
-                    "app": health_app,
-                    "host": health_host,
-                    "port": health_port,
-                    "logger": logger,
-                },
+                target=_run_aux_health_server,
                 name="health-server",
                 daemon=True,
             )
             th.start()
-            logger.info("HEALTH_SERVER_STARTED", extra={"port": health_port})
+            try:
+                health_start_timeout_s = float(
+                    _managed_env("AI_TRADING_HEALTH_SERVER_START_TIMEOUT_SECONDS", 2.0)
+                    or 2.0
+                )
+            except (TypeError, ValueError):
+                health_start_timeout_s = 2.0
+            health_start_timeout_s = max(0.1, min(health_start_timeout_s, 30.0))
+            health_bound.wait(timeout=health_start_timeout_s)
+            if health_start_failed.is_set():
+                logger.critical("HEALTH_SERVER_START_ABORTED", extra={"port": health_port})
+                raise OSError("Health server failed to start")
+            elif not health_bound.is_set():
+                logger.critical(
+                    "HEALTH_SERVER_START_TIMEOUT",
+                    extra={"port": health_port, "timeout_s": health_start_timeout_s},
+                )
+                raise OSError("Health server did not confirm bind before startup timeout")
+            else:
+                logger.info("HEALTH_SERVER_STARTED", extra={"port": health_port})
         else:
             logger.info("HEALTH_SERVER_PORT_SHARED", extra={"port": port})
     except OSError:

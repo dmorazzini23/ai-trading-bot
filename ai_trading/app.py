@@ -6,7 +6,7 @@ import hmac
 import ipaddress
 import logging
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from importlib import import_module
 from typing import Any, cast
@@ -226,13 +226,21 @@ def run_standalone_healthcheck_app(
     port: int,
     logger: Any | None = None,
     raise_on_bind_error: bool = False,
+    on_bound: Callable[[], None] | None = None,
 ) -> None:
     """Run ``app`` with the canonical standalone healthcheck server settings."""
 
     active_logger = _log if logger is None else logger
     try:
         suppress_flask_startup_noise()
-        app.run(host=host, port=port, threaded=True, use_reloader=False)
+        if on_bound is None:
+            app.run(host=host, port=port, threaded=True, use_reloader=False)
+        else:
+            from werkzeug.serving import make_server
+
+            server = make_server(host, port, app, threaded=True)
+            on_bound()
+            server.serve_forever()
     except OSError as exc:
         log_method = active_logger.critical if raise_on_bind_error else active_logger.warning
         log_method(

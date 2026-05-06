@@ -138,14 +138,10 @@ def resolve_runtime_artifact_path(
             if preferred_candidate.exists() or is_test_runtime() or not allow_repo_fallback:
                 return preferred_candidate
         existing: list[Path] = [candidate for candidate in candidates if candidate.exists()]
-        canonical_root = (Path("/var/lib") / _APP_NAME).resolve()
-        preferred_existing = [
-            candidate
-            for candidate in existing
-            if not candidate.is_relative_to(canonical_root)
-        ]
-        if preferred_existing:
-            existing = preferred_existing
+        repo_candidate = (_REPO_ROOT / target).resolve()
+        runtime_existing = [candidate for candidate in existing if candidate != repo_candidate]
+        if runtime_existing:
+            existing = runtime_existing
         if existing:
             try:
                 return max(existing, key=lambda value: value.stat().st_mtime)

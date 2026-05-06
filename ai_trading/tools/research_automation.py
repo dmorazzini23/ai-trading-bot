@@ -531,6 +531,18 @@ def _manual_steps(config: ResearchConfig) -> tuple[list[ResearchStep], list[str]
             config.model_path,
             "--output-json",
             output,
+            "--full-replay-json",
+            _runtime_input_path("runtime/replay_governance_refresh_latest.json"),
+            "--tail-replay-json",
+            _runtime_input_path("runtime/replay_governance_refresh_latest.json"),
+            "--recent-replay-json",
+            _runtime_input_path("runtime/replay_governance_refresh_latest.json"),
+            "--shadow-report-json",
+            _runtime_input_path("runtime/ml_shadow_report_latest.json"),
+            "--live-cost-model-json",
+            _runtime_input_path("runtime/live_cost_model_latest.json"),
+            "--runtime-decay-controls-json",
+            _runtime_input_path("runtime/runtime_decay_controls_latest.json"),
         ]
         if config.manifest_path is not None:
             command.extend(["--manifest-path", config.manifest_path])
@@ -765,12 +777,19 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
         step_results = []
     else:
         step_results = [_run_step(step) for step in steps]
-        required_failed = [
+        failed_steps = [row for row in step_results if row.get("status") == "failed"]
+        blocked_steps = [row for row in step_results if row.get("status") == "blocked"]
+        required_skipped = [
             row
             for row in step_results
-            if row.get("required") and row.get("status") not in {"passed", "skipped"}
+            if row.get("required") and row.get("status") == "skipped"
         ]
-        status = "failed" if required_failed else "complete"
+        if failed_steps:
+            status = "failed"
+        elif blocked_steps or required_skipped:
+            status = "blocked"
+        else:
+            status = "complete"
 
     report: dict[str, Any] = {
         "schema_version": "1.0.0",

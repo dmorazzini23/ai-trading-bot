@@ -1013,7 +1013,11 @@ def handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
             return True
 
     try:
-        be.cancel_all_open_orders(runtime)
+        cleanup_result = be._cancel_open_orders_subset(
+            runtime,
+            orders=confirmed_pending,
+            reason_code="PENDING_ORDERS_CLEANUP",
+        )
     except be.COMMON_EXC as exc:  # pragma: no cover - network/API failure
         tracker[be._PENDING_ORDER_LAST_LOG_KEY] = now
         be.logger.warning(
@@ -1026,6 +1030,23 @@ def handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
             exc_info=True,
         )
         return True
+    if int(getattr(cleanup_result, "failed", 0) or 0) > 0:
+        tracker[be._PENDING_ORDER_LAST_LOG_KEY] = now
+        be.logger.warning(
+            "PENDING_ORDERS_CLEANUP_FAILED",
+            extra=payload_base
+            | {
+                "age_s": int(max(age, 0)),
+                "cancel_result": {
+                    "total_open": int(getattr(cleanup_result, "total_open", 0) or 0),
+                    "cancelled": int(getattr(cleanup_result, "cancelled", 0) or 0),
+                    "failed": int(getattr(cleanup_result, "failed", 0) or 0),
+                    "reason_code": str(getattr(cleanup_result, "reason_code", "")),
+                    "errors": list(getattr(cleanup_result, "errors", ()) or ()),
+                },
+            },
+        )
+        return True
 
     be.logger.info(
         "PENDING_ORDERS_CANCELED",
@@ -1033,6 +1054,12 @@ def handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         | {
             "canceled_ids": sample_ids,
             "age_s": int(max(age, 0)),
+            "cancel_result": {
+                "total_open": int(getattr(cleanup_result, "total_open", 0) or 0),
+                "cancelled": int(getattr(cleanup_result, "cancelled", 0) or 0),
+                "failed": int(getattr(cleanup_result, "failed", 0) or 0),
+                "reason_code": str(getattr(cleanup_result, "reason_code", "")),
+            },
         },
     )
     tracker[be._PENDING_ORDER_FIRST_SEEN_KEY] = None

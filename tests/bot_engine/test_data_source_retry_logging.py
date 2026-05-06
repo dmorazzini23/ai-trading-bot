@@ -66,6 +66,12 @@ class DummyAPI:
     def list_positions(self) -> list:
         return []
 
+    def list_orders(self, *args, **kwargs) -> list:
+        return []
+
+    def get_orders(self, *args, **kwargs) -> list:
+        return []
+
     def get_account(self):
         return types.SimpleNamespace(cash=1000.0, equity=1000.0, last_equity=900.0)
 

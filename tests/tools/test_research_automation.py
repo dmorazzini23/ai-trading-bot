@@ -131,6 +131,45 @@ def test_manual_promotion_blocks_without_model_path(tmp_path: Path) -> None:
     assert summary["operator_action"] == "resolve_blocked_reasons_then_rerun"
 
 
+def test_manual_promotion_plan_includes_evidence_paths(tmp_path: Path) -> None:
+    model = tmp_path / "candidate.joblib"
+    model.write_text("model", encoding="utf-8")
+
+    exit_code = research_automation.main(
+        [
+            "manual",
+            "--workflow",
+            "promotion",
+            "--report-root",
+            str(tmp_path / "reports"),
+            "--run-id",
+            "manual-plan",
+            "--model-path",
+            str(model),
+            "--plan-only",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = _read(
+        tmp_path
+        / "reports"
+        / "manual"
+        / "manual-plan"
+        / "research_automation_report.json"
+    )
+    command = payload["steps"][0]["command"]  # type: ignore[index]
+    for flag in (
+        "--full-replay-json",
+        "--tail-replay-json",
+        "--recent-replay-json",
+        "--shadow-report-json",
+        "--live-cost-model-json",
+        "--runtime-decay-controls-json",
+    ):
+        assert flag in command
+
+
 def test_manual_live_cutover_plan_has_no_live_money_authority(tmp_path: Path) -> None:
     exit_code = research_automation.main(
         [
@@ -233,3 +272,35 @@ def test_json_stdout_artifact_keeps_final_payload(tmp_path: Path) -> None:
 
     assert result["status"] == "blocked"
     assert payload == {"failed_checks": ["win_rate"], "gate_passed": False}
+
+
+def test_run_status_is_blocked_when_any_step_blocks(tmp_path: Path, monkeypatch) -> None:
+    config = research_automation.ResearchConfig(
+        cadence="daily",
+        workflow="daily",
+        report_root=tmp_path / "reports",
+        run_dir=tmp_path / "run",
+        run_id="run",
+        symbols="AAPL",
+        data_dir=None,
+        shadow_jsonl=tmp_path / "shadow.jsonl",
+        accepted_candidates_jsonl=None,
+        model_path=None,
+        manifest_path=None,
+        current_champion_path="",
+        report_date="2026-05-05",
+        plan_only=False,
+        dry_run=False,
+    )
+    step = research_automation.ResearchStep(
+        name="runtime_gonogo_status",
+        command=("bash", "-lc", "exit 2"),
+        purpose="blocked gate",
+        blocked_returncodes=(2,),
+    )
+    monkeypatch.setattr(research_automation, "build_research_steps", lambda _config: ([step], []))
+
+    report = research_automation.run_research_automation(config)
+
+    assert report["status"] == "blocked"
+    assert report["step_results"][0]["status"] == "blocked"

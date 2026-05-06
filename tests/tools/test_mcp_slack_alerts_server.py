@@ -32,6 +32,35 @@ def test_evaluate_incident_triggers_catches_regressions() -> None:
     assert "broker_disconnected" in triggers
 
 
+def test_runtime_incident_snapshot_exposes_stable_signature(monkeypatch) -> None:
+    snapshot = {
+        "go_no_go_gate_passed": True,
+        "go_no_go_failed_checks": [],
+        "execution_capture_ratio": 0.2,
+        "slippage_drag_bps": 7.0,
+        "health_ok": False,
+        "health_status": "degraded",
+        "health_reason": "runtime_gate_failed",
+        "provider_status": "degraded",
+        "provider_active": "alpaca",
+        "provider_reason": "runtime_gate_failed",
+        "using_backup": False,
+        "broker_status": "connected",
+    }
+
+    monkeypatch.setattr(slack_srv, "_collect_runtime_snapshot", lambda _args: snapshot)
+
+    result = slack_srv.tool_runtime_incident_snapshot({})
+
+    assert result["should_alert"] is True
+    assert result["triggers"] == ["health_degraded"]
+    assert result["incident_signature"] == slack_srv._incident_signature(
+        snapshot,
+        ["health_degraded"],
+    )
+    assert result["incident_signature"] != result["fingerprint"]
+
+
 def test_evaluate_incident_triggers_flags_fill_and_precheck_spikes() -> None:
     snapshot = {
         "go_no_go_gate_passed": True,
@@ -1095,6 +1124,67 @@ def test_notify_incident_channel_dedupes_provider_reason_churn(
         "state_path": str(state_path),
         "webhook_url": "https://hooks.slack.test/example",
         "repeat_cooldown_minutes": 120,
+    }
+    first = slack_srv.tool_notify_incident_channel(args)
+    second = slack_srv.tool_notify_incident_channel(args)
+
+    assert first["sent"] is True
+    assert second["sent"] is False
+    assert second["reason"] == "repeat_cooldown_active"
+    assert len(posts) == 1
+
+
+def test_notify_incident_channel_dedupes_health_status_churn_with_default_cooldown(
+    monkeypatch, tmp_path: Path
+) -> None:
+    snapshots = [
+        {
+            "go_no_go_gate_passed": True,
+            "go_no_go_failed_checks": [],
+            "execution_capture_ratio": 0.2,
+            "slippage_drag_bps": 7.0,
+            "health_ok": False,
+            "health_status": "degraded",
+            "health_reason": "runtime_gate_failed",
+            "provider_status": "degraded",
+            "provider_active": "alpaca",
+            "provider_reason": "runtime_gate_failed",
+            "using_backup": False,
+            "broker_status": "connected",
+            "timestamp": "2026-05-06T15:00:00Z",
+        },
+        {
+            "go_no_go_gate_passed": True,
+            "go_no_go_failed_checks": [],
+            "execution_capture_ratio": 0.2,
+            "slippage_drag_bps": 7.0,
+            "health_ok": False,
+            "health_status": "unhealthy",
+            "health_reason": "runtime_gate_failed",
+            "provider_status": "unavailable",
+            "provider_active": "alpaca",
+            "provider_reason": "runtime_gate_failed",
+            "using_backup": False,
+            "broker_status": "reachable",
+            "timestamp": "2026-05-06T15:01:00Z",
+        },
+    ]
+    posts: list[dict[str, object]] = []
+
+    def _fake_collect(_args: dict[str, object]) -> dict[str, object]:
+        idx = min(len(posts), len(snapshots) - 1)
+        return snapshots[idx]
+
+    def _fake_post(webhook_url: str, payload: dict[str, object], timeout_s: float = 5.0) -> int:
+        posts.append({"webhook_url": webhook_url, "payload": payload, "timeout_s": timeout_s})
+        return 200
+
+    monkeypatch.setattr(slack_srv, "_collect_runtime_snapshot", _fake_collect)
+    monkeypatch.setattr(slack_srv, "_post_slack_message", _fake_post)
+
+    args = {
+        "state_path": str(tmp_path / "slack_state.json"),
+        "webhook_url": "https://hooks.slack.test/example",
     }
     first = slack_srv.tool_notify_incident_channel(args)
     second = slack_srv.tool_notify_incident_channel(args)

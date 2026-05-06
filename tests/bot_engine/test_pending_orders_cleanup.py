@@ -1,6 +1,7 @@
 """Tests for pending-order reconciliation logic in the bot engine."""
 
 from datetime import UTC, datetime, timedelta
+import importlib
 import logging
 import sys
 import types
@@ -13,45 +14,56 @@ def _set_module_attr(module: types.ModuleType, name: str, value: Any) -> None:
 
 
 if "ai_trading.indicators" not in sys.modules:
-    indicators_stub = types.ModuleType("ai_trading.indicators")
+    try:
+        importlib.import_module("ai_trading.indicators")
+    except (ImportError, RuntimeError, AttributeError, OSError):
+        indicators_stub = types.ModuleType("ai_trading.indicators")
 
-    def _unavailable_indicator(*_args, **_kwargs):  # pragma: no cover - safety stub
-        raise RuntimeError("Indicator module unavailable in tests")
+        def _unavailable_indicator(*_args, **_kwargs):  # pragma: no cover - safety stub
+            raise RuntimeError("Indicator module unavailable in tests")
 
-    _set_module_attr(indicators_stub, "compute_atr", _unavailable_indicator)
-    _set_module_attr(indicators_stub, "atr", _unavailable_indicator)
-    _set_module_attr(indicators_stub, "mean_reversion_zscore", _unavailable_indicator)
-    _set_module_attr(indicators_stub, "rsi", _unavailable_indicator)
-    sys.modules["ai_trading.indicators"] = indicators_stub
+        _set_module_attr(indicators_stub, "compute_atr", _unavailable_indicator)
+        _set_module_attr(indicators_stub, "atr", _unavailable_indicator)
+        _set_module_attr(indicators_stub, "mean_reversion_zscore", _unavailable_indicator)
+        _set_module_attr(indicators_stub, "rsi", _unavailable_indicator)
+        sys.modules["ai_trading.indicators"] = indicators_stub
 
 if "ai_trading.signals" not in sys.modules:
-    signals_stub = types.ModuleType("ai_trading.signals")
-    signals_indicators_stub = types.ModuleType("ai_trading.signals.indicators")
+    try:
+        importlib.import_module("ai_trading.signals")
+        importlib.import_module("ai_trading.signals.indicators")
+    except (ImportError, RuntimeError, AttributeError, OSError):
+        signals_stub = types.ModuleType("ai_trading.signals")
+        signals_indicators_stub = types.ModuleType("ai_trading.signals.indicators")
 
-    def _composite_confidence_stub(*_args, **_kwargs):  # pragma: no cover - safety stub
-        return {}
+        def _composite_confidence_stub(*_args, **_kwargs):  # pragma: no cover - safety stub
+            return {}
 
-    _set_module_attr(signals_indicators_stub, "composite_signal_confidence", _composite_confidence_stub)
-    sys.modules["ai_trading.signals"] = signals_stub
-    sys.modules["ai_trading.signals.indicators"] = signals_indicators_stub
-    _set_module_attr(signals_stub, "indicators", signals_indicators_stub)
+        _set_module_attr(signals_indicators_stub, "composite_signal_confidence", _composite_confidence_stub)
+        sys.modules["ai_trading.signals"] = signals_stub
+        sys.modules["ai_trading.signals.indicators"] = signals_indicators_stub
+        _set_module_attr(signals_stub, "indicators", signals_indicators_stub)
 
 if "ai_trading.features" not in sys.modules:
-    features_stub = types.ModuleType("ai_trading.features")
-    features_indicators_stub = types.ModuleType("ai_trading.features.indicators")
+    try:
+        importlib.import_module("ai_trading.features")
+        importlib.import_module("ai_trading.features.indicators")
+    except (ImportError, RuntimeError, AttributeError, OSError):
+        features_stub = types.ModuleType("ai_trading.features")
+        features_indicators_stub = types.ModuleType("ai_trading.features.indicators")
 
-    def _feature_passthrough(df, **_kwargs):  # pragma: no cover - safety stub
-        return df
+        def _feature_passthrough(df, **_kwargs):  # pragma: no cover - safety stub
+            return df
 
-    _set_module_attr(features_indicators_stub, "compute_macd", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "compute_macds", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "compute_vwap", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "compute_atr", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "compute_sma", _feature_passthrough)
-    _set_module_attr(features_indicators_stub, "ensure_columns", _feature_passthrough)
-    sys.modules["ai_trading.features"] = features_stub
-    sys.modules["ai_trading.features.indicators"] = features_indicators_stub
-    _set_module_attr(features_stub, "indicators", features_indicators_stub)
+        _set_module_attr(features_indicators_stub, "compute_macd", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "compute_macds", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "compute_vwap", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "compute_atr", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "compute_sma", _feature_passthrough)
+        _set_module_attr(features_indicators_stub, "ensure_columns", _feature_passthrough)
+        sys.modules["ai_trading.features"] = features_stub
+        sys.modules["ai_trading.features.indicators"] = features_indicators_stub
+        _set_module_attr(features_stub, "indicators", features_indicators_stub)
 
 if "portalocker" not in sys.modules:
     portalocker_stub = types.ModuleType("portalocker")
@@ -88,8 +100,21 @@ def _order(status: str, oid: str = "order-1", **extra):
 
 def test_handle_pending_orders_grace_then_cleanup(monkeypatch, caplog):
     runtime = types.SimpleNamespace(state={})
-    cancel_mock = MagicMock()
-    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_mock)
+    cancel_all_mock = MagicMock()
+    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_all_mock)
+    subset_calls: list[list[Any]] = []
+
+    def _cancel_subset(_runtime, orders, **_kwargs):
+        subset_calls.append(list(orders))
+        return be.CancelAllResult(
+            total_open=1,
+            cancelled=1,
+            failed=0,
+            reason_code="PENDING_ORDERS_CLEANUP",
+            errors=[],
+        )
+
+    monkeypatch.setattr(be, "_cancel_open_orders_subset", _cancel_subset)
     monkeypatch.setattr(
         be,
         "get_trading_config",
@@ -106,20 +131,23 @@ def test_handle_pending_orders_grace_then_cleanup(monkeypatch, caplog):
     assert first_record.message == "PENDING_ORDERS_DETECTED"
     assert first_record.pending_ids == ["o-1"]
     assert first_record.cleanup_after_s == 12
-    assert cancel_mock.call_count == 0
+    assert cancel_all_mock.call_count == 0
+    assert subset_calls == []
     tracker = runtime.state[be._PENDING_ORDER_TRACKER_KEY]
     assert tracker[be._PENDING_ORDER_FIRST_SEEN_KEY] == clock.value
 
     clock.value = 105.0
     caplog.clear()
     assert be._handle_pending_orders(orders, runtime) is True
-    assert cancel_mock.call_count == 0
+    assert cancel_all_mock.call_count == 0
+    assert subset_calls == []
     assert all(record.message != "PENDING_ORDERS_CANCELED" for record in caplog.records)
 
     clock.value = 120.0
     caplog.clear()
     assert be._handle_pending_orders(orders, runtime) is False
-    cancel_mock.assert_called_once_with(runtime)
+    cancel_all_mock.assert_not_called()
+    assert subset_calls == [orders]
     messages = [record.message for record in caplog.records]
     assert "PENDING_ORDERS_CANCELED" in messages
     tracker = runtime.state[be._PENDING_ORDER_TRACKER_KEY]
@@ -188,8 +216,21 @@ def test_handle_pending_orders_tolerates_invalid_tracker_values(monkeypatch):
 
 def test_handle_pending_orders_force_cleanup_for_stuck_pending(monkeypatch):
     runtime = types.SimpleNamespace(state={})
-    cancel_mock = MagicMock()
-    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_mock)
+    cancel_all_mock = MagicMock()
+    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_all_mock)
+    subset_calls: list[list[Any]] = []
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda _runtime, orders, **_kwargs: subset_calls.append(list(orders))
+        or be.CancelAllResult(
+            total_open=1,
+            cancelled=1,
+            failed=0,
+            reason_code="PENDING_ORDERS_CLEANUP",
+            errors=[],
+        ),
+    )
     monkeypatch.setattr(
         be,
         "get_trading_config",
@@ -204,7 +245,8 @@ def test_handle_pending_orders_force_cleanup_for_stuck_pending(monkeypatch):
     assert be._handle_pending_orders(orders, runtime) is True
     clock.value = 131.0
     assert be._handle_pending_orders(orders, runtime) is False
-    cancel_mock.assert_called_once_with(runtime)
+    cancel_all_mock.assert_not_called()
+    assert subset_calls == [orders]
 
 
 def test_handle_pending_orders_applies_stale_sweep_before_full_cleanup(monkeypatch, caplog):
@@ -329,8 +371,21 @@ def test_handle_pending_orders_symbol_scope_policy_no_action_falls_back_to_clean
         state={},
         execution_engine=types.SimpleNamespace(_apply_pending_new_timeout_policy=lambda: False),
     )
-    cancel_mock = MagicMock()
-    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_mock)
+    cancel_all_mock = MagicMock()
+    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_all_mock)
+    subset_calls: list[list[Any]] = []
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda _runtime, orders, **_kwargs: subset_calls.append(list(orders))
+        or be.CancelAllResult(
+            total_open=1,
+            cancelled=1,
+            failed=0,
+            reason_code="PENDING_ORDERS_CLEANUP",
+            errors=[],
+        ),
+    )
     monkeypatch.setattr(
         be,
         "get_trading_config",
@@ -345,7 +400,8 @@ def test_handle_pending_orders_symbol_scope_policy_no_action_falls_back_to_clean
     assert be._handle_pending_orders(orders, runtime) is True
     clock.value = 131.0
     assert be._handle_pending_orders(orders, runtime) is False
-    cancel_mock.assert_called_once_with(runtime)
+    cancel_all_mock.assert_not_called()
+    assert subset_calls == [orders]
 
 
 def test_handle_pending_orders_partial_fill_excluded_from_stuck_pending_slo(monkeypatch):
@@ -522,14 +578,28 @@ def test_handle_pending_orders_symbol_scope_emits_cooldown_telemetry(monkeypatch
 
 def test_handle_pending_orders_stale_broker_age_triggers_immediate_cleanup(monkeypatch):
     runtime = types.SimpleNamespace(state={})
-    cancel_mock = MagicMock()
-    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_mock)
+    cancel_all_mock = MagicMock()
+    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_all_mock)
+    subset_calls: list[list[Any]] = []
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda _runtime, orders, **_kwargs: subset_calls.append(list(orders))
+        or be.CancelAllResult(
+            total_open=1,
+            cancelled=1,
+            failed=0,
+            reason_code="PENDING_ORDERS_CLEANUP",
+            errors=[],
+        ),
+    )
     monkeypatch.setattr(
         be,
         "get_trading_config",
         lambda: types.SimpleNamespace(order_stale_cleanup_interval=300),
     )
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_FORCE_CANCEL_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "0")
 
     now_dt = datetime(2026, 2, 9, 18, 0, 0, tzinfo=UTC)
     now_epoch = now_dt.timestamp()
@@ -541,13 +611,27 @@ def test_handle_pending_orders_stale_broker_age_triggers_immediate_cleanup(monke
     )
 
     assert be._handle_pending_orders([stale_order], runtime) is False
-    cancel_mock.assert_called_once_with(runtime)
+    cancel_all_mock.assert_not_called()
+    assert subset_calls == [[stale_order]]
 
 
 def test_handle_pending_orders_cleanup_warmup(monkeypatch):
     runtime = types.SimpleNamespace(state={})
-    cancel_mock = MagicMock()
-    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_mock)
+    cancel_all_mock = MagicMock()
+    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_all_mock)
+    subset_calls: list[list[Any]] = []
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda _runtime, orders, **_kwargs: subset_calls.append(list(orders))
+        or be.CancelAllResult(
+            total_open=1,
+            cancelled=1,
+            failed=0,
+            reason_code="PENDING_ORDERS_CLEANUP",
+            errors=[],
+        ),
+    )
     monkeypatch.setattr(
         be,
         "get_trading_config",
@@ -562,7 +646,8 @@ def test_handle_pending_orders_cleanup_warmup(monkeypatch):
     assert be._handle_pending_orders(orders, runtime) is True
     clock.value = 112.0
     assert be._handle_pending_orders(orders, runtime) is True
-    cancel_mock.assert_called_once_with(runtime)
+    cancel_all_mock.assert_not_called()
+    assert subset_calls == [orders]
 
     # One additional warmup cycle should be skipped even after pending clears.
     assert be._handle_pending_orders([], runtime) is True

@@ -84,6 +84,36 @@ def test_score_candidates_clips_model_outputs_and_generate_signals_copies() -> N
     assert generated is not scored
 
 
+def test_compute_signal_matrix_does_not_backfill_rsi_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    index = pd.date_range("2026-01-02 14:30", periods=30, freq="min", tz="UTC")
+    close = pd.Series(np.linspace(100.0, 103.0, len(index)), index=index)
+    close.iloc[0] = np.nan
+    df = pd.DataFrame(
+        {
+            "close": close,
+            "high": close.ffill().fillna(100.0) + 1.0,
+            "low": close.ffill().fillna(100.0) - 1.0,
+        },
+        index=index,
+    )
+    captured: dict[str, tuple[float, ...]] = {}
+
+    def fake_rsi(prices: tuple[float, ...], period: int) -> pd.Series:
+        captured["prices"] = prices
+        assert period == 14
+        return pd.Series([50.0] * len(prices), index=index)
+
+    monkeypatch.setattr(signals_mod, "rsi", fake_rsi)
+
+    matrix = signals_mod.compute_signal_matrix(df)
+
+    assert matrix is not None
+    assert np.isnan(captured["prices"][0])
+    assert captured["prices"][1] == pytest.approx(close.iloc[1])
+
+
 def test_signal_aggregation_votes_and_breakout_branches() -> None:
     index = pd.date_range("2026-01-03", periods=3, freq="min", tz="UTC")
     matrix = pd.DataFrame(
@@ -177,6 +207,89 @@ def test_metalearning_generate_signals_aggregates_non_hold_predictions(
     assert signals[0].metadata["bar_ts"] == bar_ts.isoformat()
     assert signals[1].metadata["model_accuracy"] == 0.72
     assert strategy.signals_generated == 2
+
+
+def test_metalearning_generate_signals_uses_supplied_backtest_frames_without_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = MetaLearning()
+    strategy.symbols = ["AAPL"]
+    strategy.is_trained = True
+    strategy.last_training_date = datetime.now(UTC)
+    strategy.prediction_accuracy = 0.8
+    frame = _price_frame(rows=80)
+
+    def blocked_fetch(*_args: object, **_kwargs: object) -> pd.DataFrame:
+        raise AssertionError("generate_signals fetched fresh data")
+
+    def fake_predict(data: pd.DataFrame) -> dict[str, object]:
+        assert data is frame
+        return {
+            "direction": "buy",
+            "confidence": 0.9,
+            "current_price": float(data["close"].iloc[-1]),
+            "volatility": 0.02,
+            "probability_distribution": {"buy": 0.9, "sell": 0.05, "hold": 0.05},
+        }
+
+    strategy.prediction_cache["AAPL"] = {"signal": "sell", "confidence": 0.9, "strength": 0.9}
+    strategy.cache_expiry["AAPL"] = datetime.now(UTC) + timedelta(hours=1)
+    monkeypatch.setattr(ml_mod, "get_minute_df", blocked_fetch)
+    monkeypatch.setattr(strategy, "predict_price_movement", fake_predict)
+
+    signals = strategy.generate_signals({"frames": {"AAPL": frame}, "backtest": True})
+
+    assert [(signal.symbol, signal.side) for signal in signals] == [("AAPL", "buy")]
+    assert strategy.prediction_cache["AAPL"]["signal"] == "sell"
+
+
+def test_metalearning_generate_signals_skips_missing_backtest_symbol_without_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = MetaLearning()
+    strategy.symbols = ["AAPL"]
+
+    def blocked_fetch(*_args: object, **_kwargs: object) -> pd.DataFrame:
+        raise AssertionError("missing backtest data fetched fresh data")
+
+    monkeypatch.setattr(ml_mod, "get_minute_df", blocked_fetch)
+
+    assert strategy.generate_signals({"frames": {}, "mode": "backtest"}) == []
+
+
+def test_train_model_exception_failure_does_not_mark_trained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StandardScaler:
+        pass
+
+    Preprocessing = type("Preprocessing", (), {"StandardScaler": StandardScaler})
+    Ensemble = type(
+        "Ensemble",
+        (),
+        {"RandomForestClassifier": object, "GradientBoostingClassifier": object},
+    )
+
+    class Metrics:
+        @staticmethod
+        def accuracy_score(*_args: object, **_kwargs: object) -> float:
+            return 0.0
+
+    strategy = MetaLearning()
+    monkeypatch.setattr(ml_mod, "ML_AVAILABLE", True)
+    monkeypatch.setattr(ml_mod, "PANDAS_AVAILABLE", True)
+    monkeypatch.setattr(ml_mod, "load_sklearn_preprocessing", lambda: Preprocessing)
+    monkeypatch.setattr(ml_mod, "load_sklearn_ensemble", lambda: Ensemble)
+    monkeypatch.setattr(ml_mod, "load_sklearn_metrics", lambda: Metrics)
+    monkeypatch.setattr(
+        strategy,
+        "extract_features",
+        lambda _data: (_ for _ in ()).throw(ValueError("feature failure")),
+    )
+
+    assert strategy.train_model(_price_frame(rows=80)) is False
+    assert strategy.is_trained is False
+    assert strategy.last_training_date is None
 
 
 def test_calculate_position_size_applies_confidence_strength_and_accuracy() -> None:
@@ -374,4 +487,3 @@ def test_retrain_and_cache_branch_characterization() -> None:
 
     strategy.cache_expiry["AAPL"] = datetime.now(UTC) - timedelta(seconds=1)
     assert not strategy._is_cached_prediction_valid("AAPL")
-

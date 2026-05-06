@@ -27,6 +27,7 @@ SlackEodNotifier = Callable[[dict[str, Any]], dict[str, Any]]
 OpenClawIncidentNotifier = Callable[[dict[str, Any]], dict[str, Any]]
 OpenClawModelReadinessNotifier = Callable[[dict[str, Any]], dict[str, Any]]
 IncidentSnapshotBuilder = Callable[[dict[str, Any]], dict[str, Any]]
+_DEFAULT_INCIDENT_REPEAT_COOLDOWN_MINUTES = 45
 
 
 def _bool_env(value: str | None, *, default: bool) -> bool:
@@ -446,7 +447,9 @@ def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
     prior_signature = str(prior.get("incident_signature") or "").strip()
     prior_sent_at = _parse_iso_ts(prior.get("sent_at"))
     on_change_only = bool(args.get("on_change_only", True))
-    repeat_cooldown_minutes = int(args.get("repeat_cooldown_minutes") or 0)
+    repeat_cooldown_minutes = int(
+        args.get("repeat_cooldown_minutes") or _DEFAULT_INCIDENT_REPEAT_COOLDOWN_MINUTES
+    )
     min_interval_minutes = int(args.get("min_interval_minutes") or 0)
     now = datetime.now(UTC)
     if (
@@ -958,6 +961,7 @@ def run_dispatch(
                 env_map.get("AI_TRADING_CONNECTOR_OPENCLAW_ON_CHANGE_ONLY"),
                 default=True,
             ),
+            "repeat_cooldown_minutes": _DEFAULT_INCIDENT_REPEAT_COOLDOWN_MINUTES,
             "env": env_map,
         }
         health_timeout_s = _float_env(

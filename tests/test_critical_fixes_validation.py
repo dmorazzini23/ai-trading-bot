@@ -216,7 +216,7 @@ class TestCriticalFixes(unittest.TestCase):
         )
         api_port_idx = main_content.index("Environment=API_PORT=9001")
         health_port_idx = main_content.index("Environment=HEALTHCHECK_PORT=9001")
-        alembic_idx = main_content.index("ExecStartPre=/home/aiuser/ai-trading-bot/venv/bin/alembic upgrade head")
+        alembic_idx = main_content.index("venv/bin/python -m alembic upgrade head")
         sync_idx = main_content.index("ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh")
         exec_start_idx = main_content.index("ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading")
         self.assertLess(paper_url_idx, env_file_idx)
@@ -227,9 +227,15 @@ class TestCriticalFixes(unittest.TestCase):
         self.assertLess(env_file_idx, health_port_idx)
         self.assertLess(sync_idx, alembic_idx)
         self.assertLess(alembic_idx, exec_start_idx)
+        self.assertNotIn("startup migration skipped", main_content)
 
         self.assertFalse((systemd_dir / "ai-trading-api.service").exists())
         self.assertFalse((systemd_dir / "ai-trading-metrics-forwarder.service").exists())
+
+        project_content = (Path(os.getcwd()) / "pyproject.toml").read_text(encoding="utf-8")
+        requirements_content = (Path(os.getcwd()) / "requirements.txt").read_text(encoding="utf-8")
+        self.assertIn('"alembic==1.14.1"', project_content)
+        self.assertIn("alembic==1.14.1", requirements_content)
 
         for service_name in (
             "ai-trading-connectors.service",

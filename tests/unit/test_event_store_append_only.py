@@ -147,3 +147,22 @@ def test_postgres_append_only_guard_bootstrap_uses_advisory_lock() -> None:
     assert executed[0] == (
         f"SELECT pg_advisory_xact_lock({_POSTGRES_APPEND_ONLY_GUARD_LOCK_KEY});"
     )
+
+
+def test_postgres_append_only_guard_trigger_checks_target_relation() -> None:
+    executed: list[str] = []
+
+    class DummyConnection:
+        dialect = SimpleNamespace(name="postgresql")
+
+        def execute(self, stmt: object) -> None:
+            executed.append(str(stmt).strip())
+
+    store = object.__new__(EventStore)
+    store._ensure_append_only_guards(DummyConnection())
+
+    joined = "\n".join(executed)
+    assert "tgrelid = 'oms_events'::regclass" in joined
+    assert "tgrelid = 'decision_events'::regclass" in joined
+    assert "tgrelid = 'position_snapshots'::regclass" in joined
+    assert "tgrelid = 'risk_snapshots'::regclass" in joined

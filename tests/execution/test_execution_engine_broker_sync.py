@@ -145,6 +145,45 @@ def test_live_engine_fetches_broker_state() -> None:
     assert getattr(engine, "_position_tracker", {}).get("AMD") == 2
 
 
+def test_live_engine_broker_sync_fail_closes_on_open_order_fetch_failure(
+    monkeypatch,
+) -> None:
+    """Broker sync must not reconcile durable state against an unknown open-order list."""
+
+    class _OpenOrderFailureClient:
+        def get_orders(self, **_kwargs):
+            raise TimeoutError("open orders unavailable")
+
+        def get_all_positions(self):
+            return [SimpleNamespace(symbol="AMD", qty=2)]
+
+    engine = LiveTradingExecutionEngine(ctx=None)
+    preserved = engine._update_broker_snapshot(
+        [SimpleNamespace(symbol="AAPL", side="buy", qty=2)],
+        positions=[],
+    )
+    engine.trading_client = _OpenOrderFailureClient()
+    reconcile_calls: list[object] = []
+    pending_calls: list[object] = []
+    monkeypatch.setattr(
+        engine,
+        "_reconcile_durable_intents",
+        lambda **kwargs: reconcile_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_reconcile_pending_order_runtime_artifacts",
+        lambda **kwargs: pending_calls.append(kwargs),
+    )
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot is preserved
+    assert reconcile_calls == []
+    assert pending_calls == []
+    assert engine.open_order_totals("AAPL") == (2, 0)
+
+
 def test_live_engine_fetches_native_alpaca_orders_with_filter_request() -> None:
     """Broker sync should use alpaca-py's get_orders(filter=...) contract."""
 

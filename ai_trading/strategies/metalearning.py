@@ -74,8 +74,9 @@ class MetaLearning(BaseStrategy):
         if symbol is None:
             logger.error('execute_strategy called without symbol')
             return self._neutral_signal()
+        explicit_data = data is not None
         try:
-            if self._is_cached_prediction_valid(symbol):
+            if not explicit_data and self._is_cached_prediction_valid(symbol):
                 cached_result = self.prediction_cache[symbol]
                 logger.debug(f'Using cached prediction for {symbol}')
                 return dict(cached_result)
@@ -99,12 +100,38 @@ class MetaLearning(BaseStrategy):
                 logger.warning(f'Prediction failed for {symbol}')
                 return self._neutral_signal()
             signal_dict = self._convert_prediction_to_signal(symbol, prediction_result, data)
-            self._cache_prediction(symbol, signal_dict)
+            if not explicit_data:
+                self._cache_prediction(symbol, signal_dict)
             logger.info(f"Generated signal for {symbol}: {signal_dict.get('signal', 'hold')} (confidence: {signal_dict.get('confidence', 0):.2f})")
             return signal_dict
         except COMMON_EXC as e:
             logger.error(f'Error in execute_strategy for {symbol}: {e}')
             return self._neutral_signal()
+
+    def _market_data_for_symbol(self, market_data: dict, symbol: str) -> Any | None:
+        """Return supplied historical bars for ``symbol`` when present."""
+        if not isinstance(market_data, dict):
+            return None
+        symbol_keys = {symbol, symbol.upper(), symbol.lower()}
+        for container_key in ("frames", "data", "bars", "history", "market_data"):
+            container = market_data.get(container_key)
+            if isinstance(container, dict):
+                for key in symbol_keys:
+                    value = container.get(key)
+                    if value is not None:
+                        return value
+        for key in symbol_keys:
+            value = market_data.get(key)
+            if value is not None:
+                return value
+        return None
+
+    @staticmethod
+    def _is_backtest_market_data(market_data: dict) -> bool:
+        if not isinstance(market_data, dict):
+            return False
+        mode = str(market_data.get("mode") or market_data.get("context") or "").strip().lower()
+        return bool(market_data.get("backtest") or market_data.get("is_backtest") or mode == "backtest")
 
     def generate_signals(self, market_data: dict) -> list[StrategySignal]:
         """
@@ -119,7 +146,14 @@ class MetaLearning(BaseStrategy):
         signals = []
         try:
             for symbol in self.symbols:
-                signal_dict = self.execute_strategy(symbol)
+                supplied_data = self._market_data_for_symbol(market_data, symbol)
+                if supplied_data is None and self._is_backtest_market_data(market_data):
+                    logger.debug(f'No supplied backtest data for {symbol}, skipping MetaLearning signal')
+                    continue
+                if supplied_data is None:
+                    signal_dict = self.execute_strategy(symbol)
+                else:
+                    signal_dict = self.execute_strategy(supplied_data, symbol=symbol)
                 if signal_dict and signal_dict.get('signal') != 'hold':
                     side = signal_dict.get('signal', 'hold')
                     bar_ts = signal_dict.get('bar_ts') if isinstance(signal_dict, dict) else None
@@ -281,11 +315,9 @@ class MetaLearning(BaseStrategy):
             return True
         except COMMON_EXC as e:
             logger.error(f'Error training model: {e}')
-            logger.info('ML training failed, enabling fallback mode')
-            self.is_trained = True
-            self.prediction_accuracy = 0.6
-            self.last_training_date = datetime.now(UTC)
-            return True
+            logger.info('ML training failed')
+            self.is_trained = False
+            return False
 
     def predict_price_movement(self, data: Any) -> dict[str, Any] | None:
         """

@@ -366,7 +366,7 @@ def _database_readiness_snapshot() -> dict[str, Any]:
         expected_revision = str(
             get_env(
                 "AI_TRADING_OMS_EXPECTED_ALEMBIC_REVISION",
-                "20260414_0001",
+                "20260506_0001",
                 cast=str,
                 resolve_aliases=False,
             )

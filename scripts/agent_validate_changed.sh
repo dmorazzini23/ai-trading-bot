@@ -327,7 +327,15 @@ fi
 
 if [[ "${#SYSTEMD_FILES[@]}" -gt 0 ]]; then
   if have_cmd systemd-analyze; then
-    run systemd-analyze verify "${SYSTEMD_FILES[@]}"
+    SYSTEMD_VERIFY_FILES=()
+    for file in "${SYSTEMD_FILES[@]}"; do
+      if path_exists "$file"; then
+        SYSTEMD_VERIFY_FILES+=("$file")
+      fi
+    done
+    if [[ "${#SYSTEMD_VERIFY_FILES[@]}" -gt 0 ]]; then
+      run systemd-analyze verify "${SYSTEMD_VERIFY_FILES[@]}"
+    fi
   else
     echo "systemd-analyze not available; cannot verify systemd unit changes" >&2
     exit 1

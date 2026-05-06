@@ -173,6 +173,17 @@ def test_build_symbol_dataset_uses_configured_label_horizon(
     assert dataset.iloc[0]["label_ts"] == expected_label_ts
 
 
+def test_infer_regime_thresholds_are_past_only() -> None:
+    base = 100.0 + np.arange(140, dtype=float) * 0.05
+    future_shock = base.copy()
+    future_shock[90:] = future_shock[90:] + np.where(np.arange(50) % 2 == 0, 40.0, -35.0)
+
+    base_labels = after_hours._infer_regime(base)
+    shocked_labels = after_hours._infer_regime(future_shock)
+
+    assert shocked_labels[:80].tolist() == base_labels[:80].tolist()
+
+
 def test_candidate_selection_score_penalizes_poor_calibration() -> None:
     strong = after_hours.CandidateMetrics(
         name="model_a",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.request import urlopen
@@ -69,6 +69,48 @@ def _daily_loss_configured() -> bool:
     return False
 
 
+def _parse_utc_timestamp(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+def _freshness(payload: Mapping[str, Any], *, max_age_hours: float, now: datetime | None = None) -> dict[str, Any]:
+    generated = _parse_utc_timestamp(
+        payload.get("generated_at")
+        or payload.get("created_at")
+        or payload.get("timestamp")
+        or payload.get("as_of")
+    )
+    now_utc = (now or datetime.now(UTC)).astimezone(UTC)
+    max_age = timedelta(hours=max(0.0, float(max_age_hours)))
+    fresh = bool(generated is not None and generated <= now_utc and now_utc - generated <= max_age)
+    age_hours = None
+    if generated is not None:
+        age_hours = max(0.0, (now_utc - generated).total_seconds() / 3600.0)
+    return {
+        "fresh": fresh,
+        "generated_at": generated.isoformat().replace("+00:00", "Z") if generated else None,
+        "age_hours": age_hours,
+        "max_age_hours": float(max_age_hours),
+    }
+
+
+def _freshness_limit(name: str, default: float) -> float:
+    raw = _env_text(name, str(default))
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return float(default)
+    return max(0.0, parsed)
+
+
 def build_live_capital_readiness(
     *,
     health: Mapping[str, Any],
@@ -83,10 +125,31 @@ def build_live_capital_readiness(
     profile_payload = launch_profile_payload(profile)
     reasons: list[str] = []
     actions: list[str] = []
+    freshness = {
+        "validation": _freshness(
+            validation,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_VALIDATION_MAX_AGE_HOURS", 72.0),
+        ),
+        "live_cost_model": _freshness(
+            live_cost_model,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_COST_MAX_AGE_HOURS", 24.0),
+        ),
+        "promotion_report": _freshness(
+            promotion_report,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_PROMOTION_MAX_AGE_HOURS", 72.0),
+        ),
+        "canary_plan": _freshness(
+            canary_plan,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_CANARY_PLAN_MAX_AGE_HOURS", 72.0),
+        ),
+    }
 
     if not bool(validation.get("full_validation_green", False)):
         reasons.append("full_validation_green_artifact_missing")
         actions.append("run full validation and save a green validation artifact")
+    elif not freshness["validation"]["fresh"]:
+        reasons.append("full_validation_green_artifact_stale")
+        actions.append("rerun full validation and save a fresh green artifact")
     if not bool(health.get("ok")) or str(health.get("status") or "").lower() not in {"healthy", "ready"}:
         reasons.append("health_not_healthy")
     broker = _nested(health, "broker")
@@ -103,9 +166,13 @@ def build_live_capital_readiness(
         reasons.append("replay_governance_not_ok")
     if profile.promotion_required and not bool(promotion_report.get("promotion_ready")):
         reasons.append("promotion_report_not_ready")
+    if profile.promotion_required and promotion_report and not freshness["promotion_report"]["fresh"]:
+        reasons.append("promotion_report_stale")
     live_status = _nested(live_cost_model, "status")
     if not bool(live_status.get("available", bool(live_cost_model))):
         reasons.append("live_cost_model_unavailable")
+    elif not freshness["live_cost_model"]["fresh"]:
+        reasons.append("live_cost_model_stale")
     if int(live_status.get("breach_count") or 0) > 0:
         reasons.append("live_cost_breaches_present")
     provider = _nested(health, "data_provider")
@@ -120,6 +187,8 @@ def build_live_capital_readiness(
         actions.append("set AI_TRADING_LIVE_ACCOUNT_CONFIRMED=1 only after account review")
     if not canary_plan and profile.name == "live_canary":
         reasons.append("paper_vs_live_canary_plan_missing")
+    elif profile.name == "live_canary" and not freshness["canary_plan"]["fresh"]:
+        reasons.append("paper_vs_live_canary_plan_stale")
     if profile.name == "live_canary" and (
         profile.max_notional_per_order is None or float(profile.max_notional_per_order) > 250.0
     ):
@@ -141,6 +210,7 @@ def build_live_capital_readiness(
         "reasons": reasons,
         "required_operator_actions": actions,
         "launch_profile": profile_payload,
+        "freshness": freshness,
         "gates": {
             "full_validation_green": bool(validation.get("full_validation_green", False)),
             "health_ok": bool(health.get("ok")),

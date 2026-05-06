@@ -140,10 +140,29 @@ jobs:
           db_path = Path(os.environ["OMS_CI_DB_PATH"])
           with sqlite3.connect(db_path) as conn:
               row = conn.execute("SELECT version_num FROM alembic_version LIMIT 1").fetchone()
+              columns = {
+                  item[1]: item
+                  for item in conn.execute("PRAGMA table_info(oms_events)").fetchall()
+              }
+              indexes = {
+                  item[1]: item
+                  for item in conn.execute("PRAGMA index_list(oms_events)").fetchall()
+              }
 
-          if row is None or str(row[0]) != "20260414_0001":
+          if row is None or str(row[0]) != "20260506_0001":
               raise SystemExit(f"Alembic head mismatch: got {row!r}")
+          required_columns = {"intent_id", "sequence_no", "event_source", "idempotency_key"}
+          missing_columns = sorted(required_columns - set(columns))
+          if missing_columns:
+              raise SystemExit(f"oms_events missing columns: {missing_columns}")
+          intent_sequence_index = indexes.get("uq_oms_events_intent_sequence")
+          if intent_sequence_index is None or int(intent_sequence_index[2]) != 1:
+              raise SystemExit(
+                  "oms_events missing unique intent sequence index: "
+                  f"{intent_sequence_index!r}"
+              )
           print("ALEMBIC_HEAD_OK")
+          print("OMS_SCHEMA_INTROSPECTION_OK")
           PY
       - name: OMS invariants gate
         env:

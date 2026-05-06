@@ -335,8 +335,9 @@ class ProductionExecutionCoordinator:
             self.pending_orders[order.id] = order
 
         provider = str(getattr(adapter, "provider", "broker"))
+        result_status = "filled" if status_token == "filled" else (status_token or "accepted")
         return ExecutionResult(
-            status="success",
+            status=result_status,
             order_id=broker_order_id,
             symbol=order.symbol,
             side=order.side.value if isinstance(order.side, OrderSide) else order.side,
@@ -363,7 +364,7 @@ class ProductionExecutionCoordinator:
         try:
             payload = execution_result.to_dict() if hasattr(execution_result, 'to_dict') else execution_result
             payload = payload if isinstance(payload, dict) else {}
-            if payload.get('status') == 'success':
+            if payload.get('status') in {'success', 'filled', 'partially_filled'}:
                 self.halt_manager.record_trade()
                 notional_value = order.quantity * float(payload.get('fill_price', 0) or 0)
                 if notional_value > 50000:
@@ -464,7 +465,8 @@ class ProductionExecutionCoordinator:
         """Update execution performance statistics."""
         try:
             self.execution_stats['total_orders'] += 1
-            if execution_result['status'] == 'success':
+            status = str(execution_result.get('status') or '').strip().lower()
+            if status in {'success', 'filled', 'partially_filled'}:
                 self.execution_stats['successful_orders'] += 1
                 alpha = 0.1
                 if self.execution_stats['average_execution_time_ms'] == 0:
@@ -485,7 +487,7 @@ class ProductionExecutionCoordinator:
                         )
                 except AI_TRADING_FALLBACK_EXCEPTIONS:
                     logger.debug("SLIPPAGE_LOG_RECORD_FAILED", exc_info=True)
-            else:
+            elif status in {'failed', 'error', 'rejected'}:
                 self.execution_stats['rejected_orders'] += 1
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error('EXECUTION_STATS_UPDATE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})

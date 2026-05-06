@@ -550,11 +550,18 @@ def _infer_regime(close: np.ndarray) -> np.ndarray:
         seg = returns[idx - window : idx]
         vol[idx] = float(np.std(seg))
         trend[idx] = float((close[idx] / close[idx - window]) - 1.0)
-    vol_threshold = np.nanpercentile(vol, 70) if np.isfinite(vol).any() else 0.02
     labels: list[str] = []
+    threshold_window = max(window * 3, window)
     for idx in range(len(close)):
         vol_val = vol[idx]
         trend_val = trend[idx]
+        threshold_slice = vol[max(0, idx - threshold_window + 1) : idx + 1]
+        finite_thresholds = threshold_slice[np.isfinite(threshold_slice)]
+        vol_threshold = (
+            float(np.nanpercentile(finite_thresholds, 70))
+            if finite_thresholds.size
+            else 0.02
+        )
         if np.isfinite(vol_val) and vol_val >= vol_threshold:
             labels.append("volatile")
         elif np.isfinite(trend_val) and trend_val >= 0.02:
@@ -587,18 +594,23 @@ def _safe_rsi(close_values: np.ndarray) -> np.ndarray:
 def _augment_training_features(frame: Any) -> Any:
     import pandas as pd
 
-    close = pd.to_numeric(frame.get("close"), errors="coerce")
+    def _numeric_feature(name: str, fallback: Any = None) -> Any:
+        raw = frame.get(name, fallback)
+        if raw is None:
+            raw = pd.Series(np.nan, index=frame.index)
+        elif not hasattr(raw, "index"):
+            raw = pd.Series(raw, index=frame.index)
+        return pd.to_numeric(raw, errors="coerce")
+
+    close = _numeric_feature("close")
     close_abs = close.abs().replace(0.0, np.nan)
-    atr = pd.to_numeric(frame.get("atr"), errors="coerce")
-    vwap = pd.to_numeric(frame.get("vwap"), errors="coerce").replace(0.0, np.nan)
-    sma_50 = pd.to_numeric(frame.get("sma_50"), errors="coerce")
-    sma_200 = pd.to_numeric(frame.get("sma_200"), errors="coerce")
-    macd = pd.to_numeric(frame.get("macd"), errors="coerce")
-    rsi = pd.to_numeric(frame.get("rsi"), errors="coerce")
-    signal = pd.to_numeric(
-        frame.get("signal", frame.get("macds", frame.get("macd"))),
-        errors="coerce",
-    )
+    atr = _numeric_feature("atr")
+    vwap = _numeric_feature("vwap").replace(0.0, np.nan)
+    sma_50 = _numeric_feature("sma_50")
+    sma_200 = _numeric_feature("sma_200")
+    macd = _numeric_feature("macd")
+    rsi = _numeric_feature("rsi")
+    signal = _numeric_feature("signal", frame.get("macds", frame.get("macd")))
 
     frame["signal"] = signal
     frame["atr_pct"] = (atr / close_abs) * 100.0

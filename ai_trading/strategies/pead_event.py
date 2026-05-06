@@ -53,19 +53,19 @@ class PEADEventStrategy(BaseStrategy):
                 if len(df) <= self.lookback + 2:
                     continue
                 tail = df.tail(self.lookback + 2)
-                prev_close = float(tail["close"].iloc[-2])
-                today_open = float(tail["open"].iloc[-1])
-                today_close = float(tail["close"].iloc[-1])
-                if prev_close <= 0 or today_open <= 0:
+                prev_close = float(tail["close"].iloc[-3])
+                event_open = float(tail["open"].iloc[-2])
+                event_close = float(tail["close"].iloc[-2])
+                if prev_close <= 0 or event_open <= 0:
                     continue
-                gap = (today_open / prev_close) - 1.0
-                vol_arr = np.asarray(tail["volume"].iloc[:-1].values, dtype=float)
+                gap = (event_open / prev_close) - 1.0
+                vol_arr = np.asarray(tail["volume"].iloc[:-2].values, dtype=float)
                 avg_vol = float(np.mean(vol_arr))
-                today_vol = float(tail["volume"].iloc[-1])
+                event_vol = float(tail["volume"].iloc[-2])
                 if avg_vol <= 0:
                     continue
-                vol_mult = today_vol / avg_vol
-                intraday_follow = (today_close / today_open) - 1.0
+                vol_mult = event_vol / avg_vol
+                intraday_follow = (event_close / event_open) - 1.0
             except (AttributeError, KeyError, IndexError, TypeError, ValueError):
                 continue
 

@@ -411,7 +411,7 @@ def test_refresh_positions_counts_short_exposure_as_gross() -> None:
     assert engine.exposure == {"equity": pytest.approx(0.65)}
 
 
-def test_can_trade_rejects_limits_and_allows_force_override(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_can_trade_rejects_limits_and_ignores_force_override(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _bare_engine()
     assert engine.can_trade(object()) is False
 
@@ -425,7 +425,7 @@ def test_can_trade_rejects_limits_and_allows_force_override(monkeypatch: pytest.
     assert engine.can_trade(_signal(weight=0.20)) is False
 
     monkeypatch.setattr(risk_engine, "get_env", lambda *_args, **_kwargs: True)
-    assert engine.can_trade(_signal(weight=0.20)) is True
+    assert engine.can_trade(_signal(weight=0.20)) is False
 
     engine = _bare_engine()
     assert engine.can_trade(_signal(weight="bad")) is True

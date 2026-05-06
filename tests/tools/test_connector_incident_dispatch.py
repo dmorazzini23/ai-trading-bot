@@ -55,6 +55,7 @@ def test_run_dispatch_calls_active_connectors() -> None:
     assert calls["slack_eod"]["webhook_url"] == "https://hooks.slack.test/abc"
     assert calls["slack_eod"]["require_after_hours_training"] is True
     assert calls["slack_eod"]["block_on_training_gate"] is False
+    assert calls["incident_snapshot"]["repeat_cooldown_minutes"] == 45
     assert "health_timeout_s" not in calls["incident_snapshot"]
 
 
@@ -350,6 +351,49 @@ def test_run_dispatch_openclaw_alert_uses_snapshot_builder() -> None:
     assert payload["openclaw"]["result"]["sent"] is True
     assert calls["openclaw"]["snapshot_result"]["fingerprint"] == "fp-openclaw"
     assert calls["openclaw"]["env"]["AI_TRADING_CONNECTOR_OPENCLAW_ENABLED"] == "1"
+
+
+def test_notify_openclaw_incident_suppresses_duplicate_without_send(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "openclaw_incident_state.json"
+    state_path.write_text(
+        dispatch.json.dumps(
+            {
+                "fingerprint": "old-fingerprint",
+                "incident_signature": "stable-health-degraded",
+                "sent_at": dispatch._utc_now_iso(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _unexpected_post(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("duplicate incident should not post to OpenClaw")
+
+    monkeypatch.setattr(dispatch, "_post_openclaw_runtime_event", _unexpected_post)
+
+    result = dispatch._notify_openclaw_incident(
+        {
+            "state_path": str(state_path),
+            "env": {
+                "AI_TRADING_OPENCLAW_RUNTIME_WEBHOOK_URL": "https://openclaw.test/runtime",
+                "AI_TRADING_OPENCLAW_HOOK_TOKEN": "token",
+            },
+            "snapshot_result": {
+                "should_alert": True,
+                "fingerprint": "new-metric-fingerprint",
+                "incident_signature": "stable-health-degraded",
+                "snapshot": {"health_status": "unhealthy", "health_ok": False},
+                "triggers": ["health_degraded"],
+            },
+        }
+    )
+
+    assert result["sent"] is False
+    assert result["reason"] == "repeat_cooldown_active"
+    assert result["incident_signature"] == "stable-health-degraded"
 
 
 def test_run_dispatch_openclaw_min_severity_suppresses_noncritical() -> None:

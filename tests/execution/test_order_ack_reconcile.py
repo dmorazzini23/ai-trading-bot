@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -971,7 +972,7 @@ def test_synchronize_broker_state_reconciles_pending_with_get_order_by_id_lookup
     assert engine._pending_orders == {}
 
 
-def test_synchronize_broker_state_terminalizes_missing_lookup(monkeypatch, tmp_path):
+def test_synchronize_broker_state_defers_fresh_missing_lookup(monkeypatch, tmp_path):
     class _MissingLookupClient:
         def get_orders(self, status: str = "open"):
             return []
@@ -989,6 +990,7 @@ def test_synchronize_broker_state_terminalizes_missing_lookup(monkeypatch, tmp_p
     monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
     monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_PENDING_RECONCILE_FRESH_LOOKUP_GRACE_SEC", "60")
 
     engine = _build_engine(_MissingLookupClient())
     _prime_engine(engine, monkeypatch)
@@ -1000,6 +1002,52 @@ def test_synchronize_broker_state_terminalizes_missing_lookup(monkeypatch, tmp_p
             "qty": 3,
             "order_type": "limit",
             "client_order_id": "client-missing",
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+    }
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot is not None
+    order_events_path = tmp_path / "runtime" / "order_events.jsonl"
+    assert not order_events_path.exists()
+    assert "order-missing" in engine._pending_orders
+    assert engine._pending_orders["order-missing"]["lookup_missing_count"] == 1
+
+
+def test_synchronize_broker_state_terminalizes_repeated_missing_lookup(monkeypatch, tmp_path):
+    class _MissingLookupClient:
+        def get_orders(self, status: str = "open"):
+            return []
+
+        def get_order_by_id(self, order_id: str):
+            raise RuntimeError("order not found")
+
+        def get_all_positions(self):
+            return []
+
+        def get_account(self):
+            return SimpleNamespace(cash="10000", buying_power="10000")
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_PENDING_RECONCILE_FRESH_LOOKUP_GRACE_SEC", "0")
+    monkeypatch.setenv("AI_TRADING_PENDING_RECONCILE_MISSING_LOOKUP_MIN_MISSES", "2")
+
+    engine = _build_engine(_MissingLookupClient())
+    _prime_engine(engine, monkeypatch)
+    stale_ts = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
+    engine._pending_orders = {
+        "order-missing": {
+            "status": "pending_new",
+            "symbol": "CSCO",
+            "side": "buy",
+            "qty": 3,
+            "order_type": "limit",
+            "client_order_id": "client-missing",
+            "updated_at": stale_ts,
+            "lookup_missing_count": 1,
         }
     }
 

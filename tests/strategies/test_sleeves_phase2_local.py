@@ -134,9 +134,11 @@ def test_pead_event_detects_buy_sell_and_filters_frames() -> None:
 
     def frame(gap: float, follow: float, volume: float = 3_000.0) -> Any:
         rows = 24
-        close = [100.0] * (rows - 1) + [100.0 * (1.0 + gap) * (1.0 + follow)]
-        open_ = [100.0] * (rows - 1) + [100.0 * (1.0 + gap)]
-        vol = [1_000.0] * (rows - 1) + [volume]
+        event_open = 100.0 * (1.0 + gap)
+        event_close = event_open * (1.0 + follow)
+        close = [100.0] * (rows - 2) + [event_close, event_close * 0.99]
+        open_ = [100.0] * (rows - 2) + [event_open, event_close]
+        vol = [1_000.0] * (rows - 2) + [volume, 1_000.0]
         return pd.DataFrame({"open": open_, "close": close, "volume": vol})
 
     signals = strategy.generate_signals(
@@ -153,6 +155,25 @@ def test_pead_event_detects_buy_sell_and_filters_frames() -> None:
     )
     assert [signal.symbol for signal in strategy.generate(ctx)] == ["UP"]
     assert strategy.generate(SimpleNamespace(data_fetcher=None, tickers=["UP"])) == []
+
+
+def test_pead_event_ignores_latest_decision_bar_close() -> None:
+    strategy = PEADEventStrategy(gap_threshold=0.03, volume_multiple=1.5, lookback=20)
+    rows = 24
+    event_open = 105.0
+    event_close = 106.0
+    bullish = pd.DataFrame(
+        {
+            "open": [100.0] * (rows - 2) + [event_open, 1.0],
+            "close": [100.0] * (rows - 2) + [event_close, 1.0],
+            "volume": [1_000.0] * (rows - 2) + [3_000.0, 100_000.0],
+        }
+    )
+
+    signals = strategy.generate_signals({"frames": {"up": bullish}})
+
+    assert [(signal.symbol, signal.side) for signal in signals] == [("UP", "buy")]
+    assert signals[0].metadata["event_gap"] == pytest.approx(0.05)
 
 
 def test_time_series_momentum_overlay_trades_trends_and_loads_closes() -> None:

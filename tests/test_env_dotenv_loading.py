@@ -136,3 +136,20 @@ def test_ensure_dotenv_loaded_allows_explicit_runtime_override(monkeypatch, tmp_
 
     assert os.environ["ALPACA_API_KEY"] == "runtime_api"
     assert (str(runtime_file), True) in stub.calls
+
+
+def test_ensure_dotenv_loaded_honors_runtime_env_path(monkeypatch, tmp_path):
+    stub = _reset_env_module(monkeypatch)
+    dotenv_file = tmp_path / ".env"
+    runtime_file = tmp_path / "systemd" / "ai-trading-runtime.env"
+    runtime_file.parent.mkdir()
+    dotenv_file.write_text("ALPACA_API_KEY=\n", encoding="utf-8")
+    runtime_file.write_text("ALPACA_API_KEY=runtime_path_api\n", encoding="utf-8")
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_ENV_PATH", str(runtime_file))
+    monkeypatch.setenv("ALPACA_API_KEY", "")
+
+    env_mod.ensure_dotenv_loaded(str(dotenv_file))
+
+    assert env_mod.get_env("ALPACA_API_KEY", "", cast=str, resolve_aliases=False) == "runtime_path_api"
+    assert (str(runtime_file), False) in stub.calls

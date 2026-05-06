@@ -411,7 +411,10 @@ class EventStore:
                 DO $$
                 BEGIN
                   IF NOT EXISTS (
-                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_oms_events_no_update'
+                    SELECT 1
+                    FROM pg_trigger
+                    WHERE tgname = 'trg_oms_events_no_update'
+                      AND tgrelid = 'oms_events'::regclass
                   ) THEN
                     CREATE TRIGGER trg_oms_events_no_update
                     BEFORE UPDATE ON oms_events
@@ -424,7 +427,10 @@ class EventStore:
                 DO $$
                 BEGIN
                   IF NOT EXISTS (
-                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_oms_events_no_delete'
+                    SELECT 1
+                    FROM pg_trigger
+                    WHERE tgname = 'trg_oms_events_no_delete'
+                      AND tgrelid = 'oms_events'::regclass
                   ) THEN
                     CREATE TRIGGER trg_oms_events_no_delete
                     BEFORE DELETE ON oms_events
@@ -437,7 +443,10 @@ class EventStore:
                 DO $$
                 BEGIN
                   IF NOT EXISTS (
-                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_decision_events_no_update'
+                    SELECT 1
+                    FROM pg_trigger
+                    WHERE tgname = 'trg_decision_events_no_update'
+                      AND tgrelid = 'decision_events'::regclass
                   ) THEN
                     CREATE TRIGGER trg_decision_events_no_update
                     BEFORE UPDATE ON decision_events
@@ -450,7 +459,10 @@ class EventStore:
                 DO $$
                 BEGIN
                   IF NOT EXISTS (
-                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_decision_events_no_delete'
+                    SELECT 1
+                    FROM pg_trigger
+                    WHERE tgname = 'trg_decision_events_no_delete'
+                      AND tgrelid = 'decision_events'::regclass
                   ) THEN
                     CREATE TRIGGER trg_decision_events_no_delete
                     BEFORE DELETE ON decision_events
@@ -463,7 +475,10 @@ class EventStore:
                 DO $$
                 BEGIN
                   IF NOT EXISTS (
-                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_position_snapshots_no_update'
+                    SELECT 1
+                    FROM pg_trigger
+                    WHERE tgname = 'trg_position_snapshots_no_update'
+                      AND tgrelid = 'position_snapshots'::regclass
                   ) THEN
                     CREATE TRIGGER trg_position_snapshots_no_update
                     BEFORE UPDATE ON position_snapshots
@@ -476,7 +491,10 @@ class EventStore:
                 DO $$
                 BEGIN
                   IF NOT EXISTS (
-                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_position_snapshots_no_delete'
+                    SELECT 1
+                    FROM pg_trigger
+                    WHERE tgname = 'trg_position_snapshots_no_delete'
+                      AND tgrelid = 'position_snapshots'::regclass
                   ) THEN
                     CREATE TRIGGER trg_position_snapshots_no_delete
                     BEFORE DELETE ON position_snapshots
@@ -489,7 +507,10 @@ class EventStore:
                 DO $$
                 BEGIN
                   IF NOT EXISTS (
-                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_risk_snapshots_no_update'
+                    SELECT 1
+                    FROM pg_trigger
+                    WHERE tgname = 'trg_risk_snapshots_no_update'
+                      AND tgrelid = 'risk_snapshots'::regclass
                   ) THEN
                     CREATE TRIGGER trg_risk_snapshots_no_update
                     BEFORE UPDATE ON risk_snapshots
@@ -502,7 +523,10 @@ class EventStore:
                 DO $$
                 BEGIN
                   IF NOT EXISTS (
-                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_risk_snapshots_no_delete'
+                    SELECT 1
+                    FROM pg_trigger
+                    WHERE tgname = 'trg_risk_snapshots_no_delete'
+                      AND tgrelid = 'risk_snapshots'::regclass
                   ) THEN
                     CREATE TRIGGER trg_risk_snapshots_no_delete
                     BEFORE DELETE ON risk_snapshots
