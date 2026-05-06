@@ -208,12 +208,56 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
         before_mtime_ns = _artifact_mtime_ns(replay_path)
         started_mono = time.monotonic()
         state = bot_engine.BotState()
-        bot_engine._run_replay_governance(
-            state,
-            now=now,
-            market_open_now=bool(args.market_open_now),
-            force=bool(args.force),
-        )
+        try:
+            bot_engine._run_replay_governance(
+                state,
+                now=now,
+                market_open_now=bool(args.market_open_now),
+                force=bool(args.force),
+            )
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+            replay_snapshot = _collect_replay_snapshot(replay_path)
+            error_text = str(exc)
+            status = (
+                "blocked"
+                if error_text == "REPLAY_POLICY_NON_REGRESSION_FAILED"
+                else "failed"
+            )
+            blocked_payload: dict[str, Any] = {
+                "status": status,
+                "reason": error_text or type(exc).__name__,
+                "now": now.isoformat(),
+                "force": bool(args.force),
+                "market_open_now": bool(args.market_open_now),
+                "fresh_artifact": False,
+                "elapsed_sec": max(0.0, time.monotonic() - started_mono),
+                "last_replay_run_date": (
+                    state.last_replay_run_date.isoformat()
+                    if getattr(state, "last_replay_run_date", None) is not None
+                    else None
+                ),
+                "replay": replay_snapshot,
+                "error": {
+                    "type": type(exc).__name__,
+                    "message": error_text,
+                },
+            }
+            if args.summary_json is not None:
+                _write_summary(Path(args.summary_json), blocked_payload)
+                blocked_payload["summary_path"] = str(args.summary_json)
+            logger.info(
+                "REPLAY_GOVERNANCE_TOOL_BLOCKED"
+                if status == "blocked"
+                else "REPLAY_GOVERNANCE_TOOL_FAILED",
+                extra={
+                    "force": bool(args.force),
+                    "market_open_now": bool(args.market_open_now),
+                    "replay_path": str(replay_path),
+                    "status": status,
+                    "reason": blocked_payload["reason"],
+                },
+            )
+            return blocked_payload
         replay_snapshot = _collect_replay_snapshot(replay_path)
         after_mtime_ns = _artifact_mtime_ns(replay_path)
         fresh_artifact = bool(
@@ -245,12 +289,12 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
             extra={
                 "force": bool(args.force),
                 "market_open_now": bool(args.market_open_now),
-                "replay_path": payload["replay"]["path"],
+                "replay_path": replay_snapshot.get("path"),
                 "status": payload["status"],
-                "replay_exists": bool(payload["replay"]["exists"]),
+                "replay_exists": bool(replay_snapshot.get("exists")),
                 "fresh_artifact": fresh_artifact,
-                "violations_count": int(payload["replay"].get("violations_count", 0) or 0),
-                "cap_adjustments_count": int(payload["replay"].get("cap_adjustments_count", 0) or 0),
+                "violations_count": int(replay_snapshot.get("violations_count", 0) or 0),
+                "cap_adjustments_count": int(replay_snapshot.get("cap_adjustments_count", 0) or 0),
             },
         )
         return payload
@@ -265,7 +309,11 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("REPLAY_GOVERNANCE_TOOL_FAILED", extra={"error": str(exc)}, exc_info=True)
         return 1
     sys.stdout.write(f"{json.dumps(payload, sort_keys=True, indent=2, default=str)}\n")
-    return 0 if payload.get("status") == "ok" else 1
+    if payload.get("status") == "ok":
+        return 0
+    if payload.get("status") == "blocked":
+        return 2
+    return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

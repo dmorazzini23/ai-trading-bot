@@ -18,8 +18,22 @@ def test_trading_day_report_attributes_rejections_and_symbol_pnl():
             {"ts": "2026-05-04T14:00:00Z", "symbol": "AMZN", "status": "SUBMITTED"},
         ],
         fills=[
-            {"ts": "2026-05-05T14:01:00Z", "symbol": "AAPL", "realized_pnl": "3.25"},
-            {"ts": "2026-05-05T14:02:00Z", "symbol": "AMZN", "pnl": "-1.0"},
+            {
+                "ts": "2026-05-05T14:01:00Z",
+                "symbol": "AAPL",
+                "realized_pnl": "3.25",
+                "realized_net_edge_bps": "1.5",
+                "expected_net_edge_bps": "2.0",
+                "slippage_bps": "0.5",
+            },
+            {
+                "ts": "2026-05-05T14:02:00Z",
+                "symbol": "AMZN",
+                "pnl": "-1.0",
+                "realized_net_edge_bps": "-3.0",
+                "expected_net_edge_bps": "1.0",
+                "slippage_bps": "3.0",
+            },
         ],
         shadow_rows=[
             {
@@ -40,6 +54,9 @@ def test_trading_day_report_attributes_rejections_and_symbol_pnl():
     assert report["submitted_trades"]["count"] == 1
     assert report["rejected_trades"]["reasons"] == {"quote_age": 1, "spread_cap": 1}
     assert report["symbol_contribution"] == {"AAPL": 3.25, "AMZN": -1.0}
+    assert report["symbol_realized_edge_bps"] == {"AAPL": 1.5, "AMZN": -3.0}
+    assert report["symbol_expected_edge_bps"] == {"AAPL": 2.0, "AMZN": 1.0}
+    assert report["symbol_slippage_bps"] == {"AAPL": 0.5, "AMZN": 3.0}
     assert report["missed_opportunities"]["shadow_only_count"] == 1
 
 

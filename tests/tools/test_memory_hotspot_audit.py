@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from ai_trading.tools import memory_hotspot_audit
 from ai_trading.tools.memory_hotspot_audit import build_memory_hotspot_audit
 
 
@@ -44,3 +45,14 @@ def test_memory_hotspot_audit_reports_runtime_files_samples_and_code_patterns(tm
     assert report["runtime_artifacts"]["largest_file"]["path"].endswith("large_runtime.jsonl")
     assert report["code_hotspots"][0]["path"].endswith("reader.py")
     assert "whole_file_reader_patterns_present" in report["observations"]
+
+
+def test_memory_hotspot_audit_prefers_canonical_runtime_when_available(monkeypatch, tmp_path):
+    canonical = tmp_path / "var" / "runtime"
+    canonical.mkdir(parents=True)
+    repo_runtime = tmp_path / "repo" / "runtime"
+    repo_runtime.mkdir(parents=True)
+    monkeypatch.setattr(memory_hotspot_audit, "_CANONICAL_RUNTIME_DIR", canonical)
+
+    assert memory_hotspot_audit._resolve_runtime_dir(None) == canonical.resolve()
+    assert memory_hotspot_audit._resolve_runtime_dir(str(repo_runtime)) == repo_runtime.resolve()

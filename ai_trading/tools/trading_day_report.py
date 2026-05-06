@@ -71,6 +71,9 @@ def build_trading_day_report(
     rejected = [row for row in gates if str(row.get("action") or row.get("status") or "").lower() in {"reject", "rejected", "blocked"}]
     reject_reasons = Counter(str(row.get("reason") or row.get("gate") or "unknown") for row in rejected)
     symbol_pnl: dict[str, float] = defaultdict(float)
+    symbol_realized_edge_bps: dict[str, float] = defaultdict(float)
+    symbol_expected_edge_bps: dict[str, float] = defaultdict(float)
+    symbol_slippage_bps: dict[str, float] = defaultdict(float)
     for row in fill_rows:
         symbol = str(row.get("symbol") or "").upper() or "UNKNOWN"
         pnl = row.get("pnl") if row.get("pnl") is not None else row.get("realized_pnl")
@@ -78,6 +81,15 @@ def build_trading_day_report(
             symbol_pnl[symbol] += float(pnl or 0.0)
         except (TypeError, ValueError):
             pass
+        for source_key, target in (
+            ("realized_net_edge_bps", symbol_realized_edge_bps),
+            ("expected_net_edge_bps", symbol_expected_edge_bps),
+            ("slippage_bps", symbol_slippage_bps),
+        ):
+            try:
+                target[symbol] += float(row.get(source_key) or 0.0)
+            except (TypeError, ValueError):
+                pass
     return {
         "schema_version": "1.0.0",
         "artifact_type": "trading_day_report",
@@ -99,6 +111,9 @@ def build_trading_day_report(
             "fill_rows": len(fill_rows),
         },
         "symbol_contribution": dict(sorted(symbol_pnl.items())),
+        "symbol_realized_edge_bps": dict(sorted(symbol_realized_edge_bps.items())),
+        "symbol_expected_edge_bps": dict(sorted(symbol_expected_edge_bps.items())),
+        "symbol_slippage_bps": dict(sorted(symbol_slippage_bps.items())),
         "gate_effectiveness": {"rejected_by_gate": dict(reject_reasons)},
         "missed_opportunities": {
             "shadow_only_count": sum(1 for row in shadows if bool(row.get("challenger_would_trade")) and not bool(row.get("champion_would_trade"))),

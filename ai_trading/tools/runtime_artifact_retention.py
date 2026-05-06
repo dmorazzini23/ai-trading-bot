@@ -17,6 +17,7 @@ from typing import Any
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 _DEFAULT_OUTPUT = "runtime/runtime_artifact_retention_latest.json"
+_CANONICAL_RUNTIME_DIR = Path("/var/lib/ai-trading-bot/runtime")
 
 
 @dataclass(frozen=True)
@@ -185,11 +186,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
 
-    runtime_dir = resolve_runtime_artifact_path(
-        args.runtime_dir,
-        default_relative="runtime",
-        for_write=False,
-    )
+    if args.runtime_dir:
+        runtime_dir = Path(args.runtime_dir).expanduser().resolve()
+    elif _CANONICAL_RUNTIME_DIR.exists():
+        runtime_dir = _CANONICAL_RUNTIME_DIR.resolve()
+    else:
+        runtime_dir = resolve_runtime_artifact_path(
+            "runtime",
+            default_relative="runtime",
+            for_write=False,
+        )
     output_path = resolve_runtime_artifact_path(
         args.output_json,
         default_relative=_DEFAULT_OUTPUT,

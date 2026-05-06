@@ -55,6 +55,11 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert readiness["metadata"]["live_money_authority"] is False
     retention = next(step for step in payload["steps"] if step["name"] == "runtime_artifact_retention_plan")  # type: ignore[index]
     assert retention["metadata"]["mutates_runtime_artifacts"] is False
+    trading_day = next(step for step in payload["steps"] if step["name"] == "trading_day_report")  # type: ignore[index]
+    assert "--report-date" in trading_day["command"]
+    assert "--order-intents-jsonl" in trading_day["command"]
+    assert "--fills-jsonl" in trading_day["command"]
+    assert "--gate-jsonl" in trading_day["command"]
 
 
 def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(
@@ -152,3 +157,79 @@ def test_manual_live_cutover_plan_has_no_live_money_authority(tmp_path: Path) ->
     assert step["name"] == "manual_live_cutover_drill"
     assert step["metadata"]["live_money_authority"] is False
     assert payload["safety"]["live_money_cutover"] == "manual_only"
+
+
+def test_step_blocked_returncode_is_not_failed(tmp_path: Path) -> None:
+    stdout_path = tmp_path / "gonogo.json"
+    step = research_automation.ResearchStep(
+        name="runtime_gonogo_status",
+        command=(
+            "bash",
+            "-lc",
+            "printf '%s\\n' '{\"gate_passed\": false}'; exit 2",
+        ),
+        purpose="test blocked return code",
+        stdout_path=stdout_path,
+        blocked_returncodes=(2,),
+    )
+
+    result = research_automation._run_step(step)
+
+    assert result["status"] == "blocked"
+    assert result["returncode"] == 2
+    assert json.loads(stdout_path.read_text(encoding="utf-8")) == {"gate_passed": False}
+
+
+def test_operator_summary_separates_blocked_from_failed(tmp_path: Path) -> None:
+    config = research_automation.ResearchConfig(
+        cadence="daily",
+        workflow="daily",
+        report_root=tmp_path / "reports",
+        run_dir=tmp_path / "run",
+        run_id="run",
+        symbols="AAPL",
+        data_dir=None,
+        shadow_jsonl=tmp_path / "shadow.jsonl",
+        accepted_candidates_jsonl=None,
+        model_path=None,
+        manifest_path=None,
+        current_champion_path="",
+        report_date="2026-05-05",
+        plan_only=False,
+        dry_run=False,
+    )
+
+    summary = research_automation._operator_summary(
+        config=config,
+        status="complete",
+        blocked_reasons=[],
+        step_results=[
+            {"name": "runtime_gonogo_status", "status": "blocked"},
+            {"name": "live_cost_model", "status": "passed"},
+        ],
+        latest_path=tmp_path / "latest.json",
+    )
+
+    assert summary["failed_steps"] == []
+    assert summary["blocked_steps"] == ["runtime_gonogo_status"]
+
+
+def test_json_stdout_artifact_keeps_final_payload(tmp_path: Path) -> None:
+    stdout_path = tmp_path / "status.json"
+    step = research_automation.ResearchStep(
+        name="runtime_gonogo_status",
+        command=(
+            "bash",
+            "-lc",
+            "printf '%s\\n' '{\"msg\":\"startup\"}' '{\"gate_passed\":false,\"failed_checks\":[\"win_rate\"]}'; exit 2",
+        ),
+        purpose="test stdout normalization",
+        stdout_path=stdout_path,
+        blocked_returncodes=(2,),
+    )
+
+    result = research_automation._run_step(step)
+    payload = json.loads(stdout_path.read_text(encoding="utf-8"))
+
+    assert result["status"] == "blocked"
+    assert payload == {"failed_checks": ["win_rate"], "gate_passed": False}

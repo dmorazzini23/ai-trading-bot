@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
@@ -39,6 +40,7 @@ class ResearchStep:
     stdout_path: Path | None = None
     skip_if_missing: tuple[Path, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    blocked_returncodes: tuple[int, ...] = ()
 
     def to_plan(self) -> dict[str, Any]:
         return {
@@ -50,6 +52,7 @@ class ResearchStep:
             "stdout_path": str(self.stdout_path) if self.stdout_path is not None else None,
             "skip_if_missing": [str(path) for path in self.skip_if_missing],
             "metadata": dict(self.metadata),
+            "blocked_returncodes": list(self.blocked_returncodes),
         }
 
 
@@ -67,6 +70,7 @@ class ResearchConfig:
     model_path: Path | None
     manifest_path: Path | None
     current_champion_path: str
+    report_date: str
     plan_only: bool
     dry_run: bool
 
@@ -77,6 +81,10 @@ def _now() -> datetime:
 
 def _iso_now() -> str:
     return _now().isoformat().replace("+00:00", "Z")
+
+
+def _default_market_report_date() -> str:
+    return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
 
 
 def _env_text(name: str, default: str) -> str:
@@ -141,6 +149,10 @@ def _script(path: str | Path, *args: str | Path) -> tuple[str, ...]:
 
 def _runtime_path(relative: str) -> Path:
     return resolve_runtime_artifact_path(relative, default_relative=relative, for_write=True)
+
+
+def _runtime_input_path(relative: str) -> Path:
+    return resolve_runtime_artifact_path(relative, default_relative=relative, for_write=False)
 
 
 def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
@@ -229,6 +241,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             ),
             purpose="Refresh replay governance evidence used by health and promotion gates.",
             output_path=replay,
+            blocked_returncodes=(1, 2),
         ),
         ResearchStep(
             name="symbol_universe_scorecard",
@@ -263,13 +276,22 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             command=_python_module("ai_trading.tools.runtime_gonogo_status", "--json"),
             purpose="Capture the daily go/no-go status as an artifact.",
             stdout_path=gonogo,
+            blocked_returncodes=(2,),
         ),
         ResearchStep(
             name="trading_day_report",
             command=_python_module(
                 "ai_trading.tools.trading_day_report",
+                "--report-date",
+                config.report_date,
+                "--order-intents-jsonl",
+                _runtime_input_path("runtime/order_events.jsonl"),
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
                 "--shadow-jsonl",
                 config.shadow_jsonl,
+                "--gate-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
                 "--live-cost-model-json",
                 live_cost,
                 "--symbol-scorecard-json",
@@ -288,6 +310,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             name="daily_research_pipeline",
             command=_python_module(
                 "ai_trading.tools.daily_research_pipeline",
+                "--report-date",
+                config.report_date,
                 "--health-url",
                 "http://127.0.0.1:9001/healthz",
                 "--live-cost-model-json",
@@ -444,6 +468,7 @@ def _monthly_steps(config: ResearchConfig) -> list[ResearchStep]:
             ),
             purpose="Refresh replay governance before monthly architecture review.",
             output_path=config.run_dir / "replay_governance_summary.json",
+            blocked_returncodes=(1, 2),
         ),
     ]
     if config.data_dir is not None:
@@ -551,12 +576,14 @@ def _manual_steps(config: ResearchConfig) -> tuple[list[ResearchStep], list[str]
                 ),
                 purpose="Recreate replay governance evidence for incident review.",
                 output_path=output,
+                blocked_returncodes=(1, 2),
             ),
             ResearchStep(
                 name="incident_runtime_gonogo",
                 command=_python_module("ai_trading.tools.runtime_gonogo_status", "--json"),
                 purpose="Capture runtime go/no-go state for incident review.",
                 stdout_path=gonogo,
+                blocked_returncodes=(2,),
             ),
         ], blocked
     if workflow == "strategy-change":
@@ -585,6 +612,31 @@ def _tail(text: str, limit: int = 4000) -> str:
     if len(text) <= limit:
         return text
     return text[-limit:]
+
+
+def _json_payload_from_stdout(text: str) -> dict[str, Any] | None:
+    payload: dict[str, Any] | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            payload = parsed
+    return payload
+
+
+def _write_stdout_artifact(path: Path, stdout: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.suffix.lower() == ".json":
+        payload = _json_payload_from_stdout(stdout)
+        if payload is not None:
+            _write_json(path, payload)
+            return
+    path.write_text(stdout, encoding="utf-8")
 
 
 def _run_step(step: ResearchStep) -> dict[str, Any]:
@@ -618,9 +670,13 @@ def _run_step(step: ResearchStep) -> dict[str, Any]:
             "error": {"type": type(exc).__name__, "message": str(exc)},
         }
     if step.stdout_path is not None:
-        step.stdout_path.parent.mkdir(parents=True, exist_ok=True)
-        step.stdout_path.write_text(proc.stdout, encoding="utf-8")
-    status = "passed" if proc.returncode == 0 else "failed"
+        _write_stdout_artifact(step.stdout_path, proc.stdout)
+    if proc.returncode == 0:
+        status = "passed"
+    elif int(proc.returncode) in set(step.blocked_returncodes):
+        status = "blocked"
+    else:
+        status = "failed"
     return {
         "name": step.name,
         "status": status,
@@ -658,6 +714,7 @@ def _operator_summary(
     latest_path: Path | None,
 ) -> dict[str, Any]:
     failed = [row["name"] for row in step_results if row.get("status") == "failed"]
+    blocked = [row["name"] for row in step_results if row.get("status") == "blocked"]
     skipped = [row["name"] for row in step_results if row.get("status") == "skipped"]
     return {
         "artifact_type": "research_operator_summary",
@@ -667,6 +724,7 @@ def _operator_summary(
         "status": status,
         "blocked_reasons": list(blocked_reasons),
         "failed_steps": failed,
+        "blocked_steps": blocked,
         "skipped_steps": skipped,
         "latest_report": str(latest_path) if latest_path is not None else None,
         "operator_action": _operator_action(status, config.cadence, config.workflow),
@@ -729,6 +787,7 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
             "data_dir": str(config.data_dir) if config.data_dir is not None else None,
             "shadow_jsonl": str(config.shadow_jsonl),
             "manual_model_path": str(config.model_path) if config.model_path is not None else None,
+            "report_date": config.report_date,
         },
         "safety": {
             "production_model_promotion": "manual_only",
@@ -803,6 +862,7 @@ def _build_config(args: argparse.Namespace) -> ResearchConfig:
         model_path=model_path,
         manifest_path=manifest_path,
         current_champion_path=str(args.current_champion_path or "").strip(),
+        report_date=str(args.report_date or "").strip() or _default_market_report_date(),
         plan_only=bool(args.plan_only),
         dry_run=bool(args.dry_run),
     )
@@ -821,6 +881,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-path", type=Path, default=None)
     parser.add_argument("--manifest-path", type=Path, default=None)
     parser.add_argument("--current-champion-path", type=str, default="")
+    parser.add_argument("--report-date", type=str, default="")
     parser.add_argument("--plan-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser

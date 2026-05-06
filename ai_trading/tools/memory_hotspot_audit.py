@@ -16,6 +16,7 @@ from ai_trading.utils.memory_optimizer import report_memory_use
 
 _DEFAULT_OUTPUT = "runtime/memory_hotspot_audit_latest.json"
 _DEFAULT_SAMPLES = "runtime/memory_samples.jsonl"
+_CANONICAL_RUNTIME_DIR = Path("/var/lib/ai-trading-bot/runtime")
 _HOTSPOT_PATTERNS = (
     ".read_text(",
     ".read_bytes(",
@@ -278,6 +279,14 @@ def _recommended_actions(
     return actions
 
 
+def _resolve_runtime_dir(value: str | None) -> Path:
+    if value:
+        return Path(value).expanduser().resolve()
+    if _CANONICAL_RUNTIME_DIR.exists():
+        return _CANONICAL_RUNTIME_DIR.resolve()
+    return resolve_runtime_artifact_path("runtime", default_relative="runtime", for_write=False)
+
+
 def _resolve_path(value: str | None, default_relative: str, *, for_write: bool) -> Path:
     return resolve_runtime_artifact_path(value, default_relative=default_relative, for_write=for_write)
 
@@ -294,7 +303,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sample-lines", type=int, default=100)
     args = parser.parse_args(argv)
 
-    runtime_dir = _resolve_path(args.runtime_dir, "runtime", for_write=False)
+    runtime_dir = _resolve_runtime_dir(args.runtime_dir)
     sample_path = _resolve_path(args.sample_jsonl, _DEFAULT_SAMPLES, for_write=False)
     output_path = _resolve_path(args.output_json, _DEFAULT_OUTPUT, for_write=True)
     report = build_memory_hotspot_audit(

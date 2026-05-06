@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ai_trading.tools import runtime_artifact_retention
 from ai_trading.tools.runtime_artifact_retention import (
     RetentionRule,
     evaluate_runtime_artifact_retention,
@@ -60,3 +61,19 @@ def test_retention_cli_writes_report(tmp_path):
     assert rc == 0
     assert output.is_file()
     assert json.loads(output.read_text(encoding="utf-8"))["artifact_type"] == "runtime_artifact_retention"
+
+
+def test_retention_cli_prefers_canonical_runtime(monkeypatch, tmp_path):
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    repo_runtime = tmp_path / "repo" / "runtime"
+    repo_runtime.mkdir(parents=True)
+    output = tmp_path / "retention.json"
+    monkeypatch.chdir(tmp_path / "repo")
+    monkeypatch.setattr(runtime_artifact_retention, "_CANONICAL_RUNTIME_DIR", canonical)
+
+    rc = runtime_artifact_retention.main(["--output-json", str(output)])
+
+    assert rc == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["runtime_dir"] == str(canonical.resolve())

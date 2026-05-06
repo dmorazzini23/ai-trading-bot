@@ -129,3 +129,60 @@ def test_replay_governance_main_returns_nonzero_without_fresh_artifact(
     )
 
     assert exit_code == 1
+
+
+def test_replay_governance_policy_regression_writes_blocked_summary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    summary_path = tmp_path / "summary.json"
+
+    def _fake_run(state, **_kwargs) -> None:
+        state.last_replay_run_date = _kwargs["now"].date()
+        raise RuntimeError("REPLAY_POLICY_NON_REGRESSION_FAILED")
+
+    monkeypatch.setattr(tool.bot_engine, "_run_replay_governance", _fake_run)
+    monkeypatch.setattr(tool, "ensure_dotenv_loaded", lambda: None)
+
+    payload = tool.run_replay_governance(
+        [
+            "--force",
+            "--replay-output-dir",
+            str(tmp_path / "replay_outputs"),
+            "--summary-json",
+            str(summary_path),
+        ],
+    )
+
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == "REPLAY_POLICY_NON_REGRESSION_FAILED"
+    assert payload["fresh_artifact"] is False
+    assert payload["summary_path"] == str(summary_path)
+    saved = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "blocked"
+
+
+def test_replay_governance_main_returns_two_for_policy_regression(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        tool.bot_engine,
+        "_run_replay_governance",
+        lambda state, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("REPLAY_POLICY_NON_REGRESSION_FAILED")
+        ),
+    )
+    monkeypatch.setattr(tool, "ensure_dotenv_loaded", lambda: None)
+
+    exit_code = tool.main(
+        [
+            "--force",
+            "--replay-output-dir",
+            str(tmp_path / "replay_outputs"),
+            "--summary-json",
+            str(tmp_path / "summary.json"),
+        ],
+    )
+
+    assert exit_code == 2
