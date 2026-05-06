@@ -16,6 +16,18 @@ The timer schedules the bot around the market session. If the service starts
 outside market hours, the runtime waits for the next NYSE session unless
 `ALLOW_AFTER_HOURS=1` is set.
 
+## Environment Sync
+
+The packaged units treat `/home/aiuser/ai-trading-bot/.env` as the editable
+source of truth. Each service start runs `scripts/sync_env_runtime.sh`, which
+renders `/run/ai-trading-bot/ai-trading-runtime.env`; the process then loads
+that runtime file. After the systemd units are deployed, normal config changes
+only require editing `.env` and restarting the relevant service.
+
+There is no repo-local runtime env file in the production or operator workflow.
+Manual commands should either read `.env` directly or use the generated
+`/run/ai-trading-bot/ai-trading-runtime.env` when the service is installed.
+
 ## Health Checks
 
 Packaged main service:

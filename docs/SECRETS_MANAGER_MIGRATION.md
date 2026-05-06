@@ -17,7 +17,7 @@ This moves runtime secrets out of local `.env` values and into AWS Secrets Manag
 - `scripts/runtime_env_sync.py`
   - used by `scripts/sync_env_runtime.sh`
   - supports `AI_TRADING_SECRETS_BACKEND=aws-secrets-manager`
-  - pulls secret payload from AWS and overlays managed keys into `.env.runtime`
+  - pulls secret payload from AWS and overlays managed keys into the runtime env
 - `scripts/migrate_secrets_to_aws_sm.py`
   - uploads current local secret values from `.env` to AWS Secrets Manager
   - optional flags to strip local secrets and write backend config keys
@@ -42,13 +42,17 @@ Notes:
 - `--strip-local` blanks managed secrets in `.env` after successful upload.
 - a backup `.env.bak.<timestamp>` is written before modifying `.env`.
 
-## 2) Render `.env.runtime` from manager-backed secrets
+## 2) Render runtime env from manager-backed secrets
 
 ```bash
 ./scripts/sync_env_runtime.sh
 ```
 
-This now runs `scripts/runtime_env_sync.py` and writes `.env.runtime` with mode `0600`.
+For packaged services, systemd sets `AI_TRADING_RUNTIME_ENV_DST` to
+`/run/ai-trading-bot/ai-trading-runtime.env`, so a normal service restart
+renders the managed runtime env from repo `.env` automatically. Manual syncs
+also prefer `/run/ai-trading-bot/ai-trading-runtime.env` when that runtime
+directory exists, otherwise they write `runtime/ai-trading-runtime.env`.
 
 ## 3) Enforce manager-only secrets (optional but recommended)
 
@@ -63,8 +67,9 @@ With this enabled, sync fails fast if a managed key is missing from the AWS secr
 ## 4) Verify bot can read managed secrets
 
 ```bash
-grep -n '^AI_TRADING_SECRETS_BACKEND=' .env .env.runtime
+grep -n '^AI_TRADING_SECRETS_BACKEND=' .env
 sudo systemctl restart ai-trading
+grep -n '^AI_TRADING_SECRETS_BACKEND=' /run/ai-trading-bot/ai-trading-runtime.env
 curl -fsS http://127.0.0.1:9001/healthz | jq '{ok,status,reason,broker_status:.broker.status}'
 ```
 

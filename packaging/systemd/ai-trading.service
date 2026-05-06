@@ -10,11 +10,11 @@ Group=aiuser
 WorkingDirectory=/home/aiuser/ai-trading-bot
 Environment=PATH=/home/aiuser/ai-trading-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 Environment=ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
-Environment=AI_TRADING_ENV_SRC=/etc/ai-trading-bot/ai-trading.env
+Environment=AI_TRADING_ENV_SRC=/home/aiuser/ai-trading-bot/.env
 Environment=AI_TRADING_RUNTIME_ENV_DST=/run/ai-trading-bot/ai-trading-runtime.env
 Environment=AI_TRADING_RUNTIME_ENV_PATH=/run/ai-trading-bot/ai-trading-runtime.env
-EnvironmentFile=-/etc/ai-trading-bot/ai-trading.env
 EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env
+Environment=AI_TRADING_DOTENV_RUNTIME_OVERRIDE=1
 Environment=AI_TRADING_MODEL_MODULE=ai_trading.model_loader
 Environment=AI_TRADING_MODEL_PATH=/var/lib/ai-trading-bot/models/trained_model.pkl
 Environment=AI_TRADING_DATA_DIR=/var/lib/ai-trading-bot
@@ -39,7 +39,7 @@ ExecStartPre=/usr/bin/install -d -m 775 \
 ExecStartPre=/usr/bin/find /var/lib/ai-trading-bot/runtime/research_reports -type f \
     -name after_hours_training*.json -exec /usr/bin/chmod 664 {} +
 ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh
-ExecStartPre=/home/aiuser/ai-trading-bot/venv/bin/python -m alembic upgrade head
+ExecStartPre=/bin/bash -lc 'set -a; source /run/ai-trading-bot/ai-trading-runtime.env; set +a; exec /home/aiuser/ai-trading-bot/venv/bin/python -m alembic upgrade head'
 ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading
 # Allow long-lived process; systemd will supervise restarts
 RuntimeMaxSec=infinity

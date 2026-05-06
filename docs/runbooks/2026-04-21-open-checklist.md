@@ -22,7 +22,7 @@ systemctl status ai-trading.service --no-pager
 
 ```bash
 set -a
-source .env.runtime >/dev/null 2>&1
+source /run/ai-trading-bot/ai-trading-runtime.env >/dev/null 2>&1
 ./venv/bin/python - <<'PY'
 from alpaca.trading.client import TradingClient
 import os

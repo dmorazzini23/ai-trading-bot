@@ -17,6 +17,12 @@ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9001/metrics
 The packaged `ai-trading.service` runs the main API on `:9001` and, by
 default, exposes `/healthz` and `/metrics` on that same API port.
 
+On restart, packaged services run `scripts/sync_env_runtime.sh` and render
+`/run/ai-trading-bot/ai-trading-runtime.env` from the repo `.env`. Operators
+should edit `/home/aiuser/ai-trading-bot/.env`; after the updated unit files
+are deployed, `sudo systemctl restart ai-trading.service` is enough to refresh
+the runtime environment.
+
 Use `RUN_HEALTHCHECK=1 python -m ai_trading.app` only when you want the
 standalone lightweight health app. In that mode the standalone health server
 binds to `HEALTHCHECK_PORT` (default `8081`) and exposes only `/healthz` and

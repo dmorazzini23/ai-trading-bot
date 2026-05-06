@@ -18,7 +18,7 @@ _SPEC.loader.exec_module(runtime_env_sync)
 
 def test_render_runtime_env_copies_plain_env(tmp_path: Path) -> None:
     src = tmp_path / ".env"
-    dst = tmp_path / ".env.runtime"
+    dst = tmp_path / "runtime" / "ai-trading-runtime.env"
     src.write_text(
         "\n".join(
             [
@@ -45,7 +45,7 @@ def test_render_runtime_env_replaces_with_private_temp_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     src = tmp_path / ".env"
-    dst = tmp_path / ".env.runtime"
+    dst = tmp_path / "runtime" / "ai-trading-runtime.env"
     src.write_text("HEALTHCHECK_PORT=8081\n", encoding="utf-8")
     observed_modes: list[int] = []
     real_replace = runtime_env_sync.os.replace
@@ -64,7 +64,7 @@ def test_render_runtime_env_replaces_with_private_temp_file(
 
 def test_render_runtime_env_quotes_values_for_envfile(tmp_path: Path) -> None:
     src = tmp_path / ".env"
-    dst = tmp_path / ".env.runtime"
+    dst = tmp_path / "runtime" / "ai-trading-runtime.env"
     src.write_text(
         "AI_TRADING_PROM_REMOTE_WRITE_PASSWORD=pa ss'word;$(touch /tmp/nope)\n",
         encoding="utf-8",
@@ -80,7 +80,7 @@ def test_render_runtime_env_verifies_aws_secrets_without_writing_values(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     src = tmp_path / ".env"
-    dst = tmp_path / ".env.runtime"
+    dst = tmp_path / "runtime" / "ai-trading-runtime.env"
     src.write_text(
         "\n".join(
             [
@@ -126,7 +126,7 @@ def test_render_runtime_env_require_managed_fails_when_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     src = tmp_path / ".env"
-    dst = tmp_path / ".env.runtime"
+    dst = tmp_path / "runtime" / "ai-trading-runtime.env"
     src.write_text(
         "\n".join(
             [
@@ -149,7 +149,7 @@ def test_render_runtime_env_excludes_selected_managed_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     src = tmp_path / ".env"
-    dst = tmp_path / ".env.runtime"
+    dst = tmp_path / "runtime" / "ai-trading-runtime.env"
     src.write_text(
         "\n".join(
             [

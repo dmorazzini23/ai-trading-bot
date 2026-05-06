@@ -2,7 +2,7 @@
 """Pre-open acceptance gate for the next trading session.
 
 Workflow:
-1. Sync ``.env`` -> ``.env.runtime``.
+1. Sync ``.env`` -> the packaged runtime env.
 2. Refresh runtime reports.
 3. Enforce runtime go/no-go (including reconciliation consistency checks).
 4. Verify health endpoint is reachable.
@@ -36,6 +36,7 @@ HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY_ENV = "AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYC
 
 _SECRET_KEY_HINT_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|WEBHOOK_URL$|API_KEY$)")
 _SECRETS_BACKEND_NONE = {"", "none", "off", "disabled"}
+_PACKAGED_RUNTIME_ENV_PATH = Path("/run/ai-trading-bot/ai-trading-runtime.env")
 
 
 @dataclass
@@ -46,14 +47,35 @@ class Step:
     details: dict[str, Any]
 
 
-def _run_command(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+def _run_command(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    process_env = os.environ.copy()
+    if env:
+        process_env.update(env)
     return subprocess.run(
         command,
         cwd=str(cwd),
+        env=process_env,
         check=False,
         text=True,
         capture_output=True,
     )
+
+
+def _runtime_env_path(repo_dir: Path) -> Path:
+    configured = (
+        os.environ.get("AI_TRADING_RUNTIME_ENV_PATH")
+        or os.environ.get("AI_TRADING_RUNTIME_ENV_DST")
+    )
+    if configured and configured.strip():
+        return Path(configured.strip()).expanduser()
+    if repo_dir == Path("/home/aiuser/ai-trading-bot").resolve() and _PACKAGED_RUNTIME_ENV_PATH.parent.exists():
+        return _PACKAGED_RUNTIME_ENV_PATH
+    return repo_dir / "runtime" / "ai-trading-runtime.env"
 
 
 def _canonical_env_lines(path: Path) -> list[str]:
@@ -113,9 +135,10 @@ def _env_value(repo_dir: Path, key: str) -> tuple[str | None, str | None]:
     raw = os.environ.get(key)
     if raw is not None:
         return raw, "process"
-    runtime_map = _canonical_env_map(repo_dir / ".env.runtime")
+    runtime_path = _runtime_env_path(repo_dir)
+    runtime_map = _canonical_env_map(runtime_path)
     if key in runtime_map:
-        return runtime_map[key], ".env.runtime"
+        return runtime_map[key], str(runtime_path)
     env_map = _canonical_env_map(repo_dir / ".env")
     if key in env_map:
         return env_map[key], ".env"
@@ -152,6 +175,7 @@ def _infer_secret_key_names(keys: set[str]) -> set[str]:
 
 def _check_env_sync(repo_dir: Path, *, sync: bool) -> Step:
     sync_script = repo_dir / "scripts" / "sync_env_runtime.sh"
+    runtime_path = _runtime_env_path(repo_dir)
     if sync:
         if not sync_script.exists():
             return Step(
@@ -160,21 +184,30 @@ def _check_env_sync(repo_dir: Path, *, sync: bool) -> Step:
                 summary="sync_env_runtime.sh is missing",
                 details={"path": str(sync_script)},
             )
-        proc = _run_command(["bash", str(sync_script)], cwd=repo_dir)
+        proc = _run_command(
+            ["bash", str(sync_script)],
+            cwd=repo_dir,
+            env={
+                "AI_TRADING_ENV_SRC": str(repo_dir / ".env"),
+                "AI_TRADING_RUNTIME_ENV_DST": str(runtime_path),
+                "AI_TRADING_RUNTIME_ENV_PATH": str(runtime_path),
+            },
+        )
         if proc.returncode != 0:
             return Step(
                 name="env_sync",
                 status="fail",
-                summary="failed to sync .env.runtime",
+                summary="failed to sync runtime env",
                 details={
                     "command": f"bash {sync_script}",
+                    "runtime_env_path": str(runtime_path),
                     "returncode": proc.returncode,
                     "stderr_tail": proc.stderr[-500:],
                     "stdout_tail": proc.stdout[-500:],
                 },
             )
     env_map = _canonical_env_map(repo_dir / ".env")
-    runtime_map = _canonical_env_map(repo_dir / ".env.runtime")
+    runtime_map = _canonical_env_map(runtime_path)
     backend = str(env_map.get("AI_TRADING_SECRETS_BACKEND", "none") or "none").strip().lower()
     if backend in _SECRETS_BACKEND_NONE:
         missing = sorted(set(env_map) - set(runtime_map))
@@ -188,8 +221,9 @@ def _check_env_sync(repo_dir: Path, *, sync: bool) -> Step:
             return Step(
                 name="env_sync",
                 status="fail",
-                summary=".env.runtime does not match .env",
+                summary="runtime env does not match .env",
                 details={
+                    "runtime_env_path": str(runtime_path),
                     "missing_from_runtime": missing[:50],
                     "extra_in_runtime": extra[:50],
                     "value_mismatch_keys": mismatch[:50],
@@ -200,8 +234,8 @@ def _check_env_sync(repo_dir: Path, *, sync: bool) -> Step:
         return Step(
             name="env_sync",
             status="pass",
-            summary=".env.runtime matches .env",
-            details={"line_count": len(env_map)},
+            summary="runtime env matches .env",
+            details={"line_count": len(env_map), "runtime_env_path": str(runtime_path)},
         )
 
     managed_keys = _parse_managed_secret_keys(env_map.get("AI_TRADING_MANAGED_SECRET_KEYS", ""))
@@ -228,8 +262,9 @@ def _check_env_sync(repo_dir: Path, *, sync: bool) -> Step:
         return Step(
             name="env_sync",
             status="fail",
-            summary=".env.runtime does not match .env (non-secret keys)",
+            summary="runtime env does not match .env (non-secret keys)",
             details={
+                "runtime_env_path": str(runtime_path),
                 "secrets_backend": backend,
                 "managed_secret_key_count": len(managed_keys),
                 "missing_from_runtime": missing[:50],
@@ -243,8 +278,9 @@ def _check_env_sync(repo_dir: Path, *, sync: bool) -> Step:
     return Step(
         name="env_sync",
         status="pass",
-        summary=".env.runtime matches .env for non-secret keys",
+        summary="runtime env matches .env for non-secret keys",
         details={
+            "runtime_env_path": str(runtime_path),
             "secrets_backend": backend,
             "managed_secret_key_count": len(managed_keys),
             "line_count": len(compare_keys),
@@ -354,7 +390,7 @@ def _health_port_from_env(repo_dir: Path) -> int:
             return int(raw.strip())
         except ValueError:
             pass
-    runtime_env_path = repo_dir / ".env.runtime"
+    runtime_env_path = _runtime_env_path(repo_dir)
     runtime_api_port: int | None = None
     for line in _canonical_env_lines(runtime_env_path):
         key, value = line.split("=", 1)
@@ -674,7 +710,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-sync-env",
         action="store_true",
-        help="Skip .env -> .env.runtime sync step.",
+        help="Skip .env -> runtime env sync step.",
     )
     parser.add_argument(
         "--no-refresh",

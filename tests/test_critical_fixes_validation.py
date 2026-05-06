@@ -204,30 +204,40 @@ class TestCriticalFixes(unittest.TestCase):
         self.assertIn("Restart=always", content, "Should restart on failure")
 
     def test_systemd_environment_precedence(self):
-        """Packaged units should keep managed runtime settings authoritative."""
+        """Packaged units should sync repo env into the runtime env on restart."""
         systemd_dir = Path(os.getcwd()) / "packaging" / "systemd"
         main_content = (systemd_dir / "ai-trading.service").read_text(encoding="utf-8")
-        env_file_idx = main_content.index("EnvironmentFile=-/etc/ai-trading-bot/ai-trading.env")
+        env_src_idx = main_content.index(
+            "Environment=AI_TRADING_ENV_SRC=/home/aiuser/ai-trading-bot/.env"
+        )
         runtime_env_file_idx = main_content.index(
             "EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env"
         )
+        runtime_override_idx = main_content.index("Environment=AI_TRADING_DOTENV_RUNTIME_OVERRIDE=1")
         paper_url_idx = main_content.index(
             "Environment=ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets"
         )
         api_port_idx = main_content.index("Environment=API_PORT=9001")
         health_port_idx = main_content.index("Environment=HEALTHCHECK_PORT=9001")
         alembic_idx = main_content.index("venv/bin/python -m alembic upgrade head")
+        alembic_source_idx = main_content.index(
+            "source /run/ai-trading-bot/ai-trading-runtime.env"
+        )
         sync_idx = main_content.index("ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh")
         exec_start_idx = main_content.index("ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading")
-        self.assertLess(paper_url_idx, env_file_idx)
-        self.assertLess(env_file_idx, runtime_env_file_idx)
+        self.assertLess(paper_url_idx, env_src_idx)
+        self.assertLess(env_src_idx, runtime_env_file_idx)
+        self.assertLess(runtime_env_file_idx, runtime_override_idx)
         self.assertLess(runtime_env_file_idx, api_port_idx)
         self.assertLess(runtime_env_file_idx, health_port_idx)
-        self.assertLess(env_file_idx, api_port_idx)
-        self.assertLess(env_file_idx, health_port_idx)
+        self.assertLess(env_src_idx, api_port_idx)
+        self.assertLess(env_src_idx, health_port_idx)
         self.assertLess(sync_idx, alembic_idx)
+        self.assertLess(sync_idx, alembic_source_idx)
+        self.assertLess(alembic_source_idx, alembic_idx)
         self.assertLess(alembic_idx, exec_start_idx)
         self.assertNotIn("startup migration skipped", main_content)
+        self.assertNotIn("/etc/ai-trading-bot/ai-trading.env", main_content)
 
         self.assertFalse((systemd_dir / "ai-trading-api.service").exists())
         self.assertFalse((systemd_dir / "ai-trading-metrics-forwarder.service").exists())
@@ -246,12 +256,17 @@ class TestCriticalFixes(unittest.TestCase):
             "ai-trading-runtime-prune.service",
         ):
             content = (systemd_dir / service_name).read_text(encoding="utf-8")
-            dotenv_idx = content.index("EnvironmentFile=-/etc/ai-trading-bot/ai-trading.env")
+            env_src_idx = content.index(
+                "Environment=AI_TRADING_ENV_SRC=/home/aiuser/ai-trading-bot/.env"
+            )
             runtime_idx = content.index("EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env")
+            override_idx = content.index("Environment=AI_TRADING_DOTENV_RUNTIME_OVERRIDE=1")
             sync_idx = content.index("ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh")
             exec_idx = content.index("ExecStart=")
-            self.assertLess(dotenv_idx, runtime_idx, f"{service_name} should load .env.runtime last")
-            self.assertLess(sync_idx, exec_idx, f"{service_name} should sync .env.runtime before start")
+            self.assertLess(env_src_idx, runtime_idx, f"{service_name} should sync from repo .env")
+            self.assertLess(runtime_idx, override_idx, f"{service_name} should let fresh runtime env win")
+            self.assertLess(sync_idx, exec_idx, f"{service_name} should sync runtime env before start")
+            self.assertNotIn("/etc/ai-trading-bot/ai-trading.env", content)
 
         timer_content = (systemd_dir / "ai-trading.timer").read_text(encoding="utf-8")
         self.assertNotIn("Timezone=", timer_content)

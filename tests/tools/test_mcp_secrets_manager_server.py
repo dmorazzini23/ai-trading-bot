@@ -9,7 +9,8 @@ from tools import mcp_secrets_manager_server as secrets_srv
 
 def test_secrets_backend_status_reports_config(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
-    runtime_env_file = tmp_path / ".env.runtime"
+    runtime_env_file = tmp_path / "runtime" / "ai-trading-runtime.env"
+    runtime_env_file.parent.mkdir()
     env_file.write_text(
         "\n".join(
             [

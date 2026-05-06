@@ -38,7 +38,8 @@ def _pass_step(module: ModuleType, name: str):
 
 def test_canonical_env_map_normalizes_runtime_quotes(tmp_path: Path) -> None:
     module = _load_gate_module()
-    env_path = tmp_path / ".env.runtime"
+    env_path = tmp_path / "runtime" / "ai-trading-runtime.env"
+    env_path.parent.mkdir()
     env_path.write_text(
         "\n".join(
             [
@@ -63,7 +64,9 @@ def test_health_port_prefers_healthcheck_env(tmp_path: Path, monkeypatch) -> Non
     module = _load_gate_module()
     monkeypatch.setenv("HEALTHCHECK_PORT", "18081")
     monkeypatch.setenv("API_PORT", "9001")
-    (tmp_path / ".env.runtime").write_text("HEALTHCHECK_PORT=9001\n", encoding="utf-8")
+    runtime_path = tmp_path / "runtime" / "ai-trading-runtime.env"
+    runtime_path.parent.mkdir()
+    runtime_path.write_text("HEALTHCHECK_PORT=9001\n", encoding="utf-8")
 
     assert module._health_port_from_env(tmp_path) == 18081
 
@@ -80,9 +83,57 @@ def test_health_port_falls_back_to_runtime_api_port(tmp_path: Path, monkeypatch)
     module = _load_gate_module()
     monkeypatch.delenv("HEALTHCHECK_PORT", raising=False)
     monkeypatch.delenv("API_PORT", raising=False)
-    (tmp_path / ".env.runtime").write_text("API_PORT=19001\n", encoding="utf-8")
+    runtime_path = tmp_path / "runtime" / "ai-trading-runtime.env"
+    runtime_path.parent.mkdir()
+    runtime_path.write_text("API_PORT=19001\n", encoding="utf-8")
 
     assert module._health_port_from_env(tmp_path) == 19001
+
+
+def test_runtime_env_path_prefers_configured_packaged_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _load_gate_module()
+    runtime_path = tmp_path / "run" / "ai-trading-runtime.env"
+    monkeypatch.setenv("AI_TRADING_RUNTIME_ENV_PATH", str(runtime_path))
+
+    assert module._runtime_env_path(tmp_path) == runtime_path
+
+
+def test_env_sync_writes_configured_runtime_env_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _load_gate_module()
+    runtime_path = tmp_path / "run" / "ai-trading-runtime.env"
+    (tmp_path / ".env").write_text("API_PORT=19001\n", encoding="utf-8")
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "sync_env_runtime.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    captured: dict[str, str] = {}
+
+    def _fake_run_command(command, *, cwd, env=None):
+        assert command[-1].endswith("sync_env_runtime.sh")
+        assert cwd == tmp_path
+        assert env is not None
+        captured.update(env)
+        Path(env["AI_TRADING_RUNTIME_ENV_DST"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(env["AI_TRADING_RUNTIME_ENV_DST"]).write_text(
+            (tmp_path / ".env").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        return module.subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_ENV_PATH", str(runtime_path))
+    monkeypatch.setattr(module, "_run_command", _fake_run_command)
+
+    step = module._check_env_sync(tmp_path, sync=True)
+
+    assert step.status == "pass"
+    assert step.details["runtime_env_path"] == str(runtime_path)
+    assert captured["AI_TRADING_ENV_SRC"] == str(tmp_path / ".env")
+    assert captured["AI_TRADING_RUNTIME_ENV_DST"] == str(runtime_path)
 
 
 def test_preopen_operator_drill_fails_when_flat_required_and_broker_not_flat(
@@ -93,7 +144,9 @@ def test_preopen_operator_drill_fails_when_flat_required_and_broker_not_flat(
     monkeypatch.delenv("AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START", raising=False)
     monkeypatch.delenv("AI_TRADING_HEALTH_REQUIRE_OMS_INVARIANTS", raising=False)
     monkeypatch.delenv("AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY", raising=False)
-    (tmp_path / ".env.runtime").write_text(
+    runtime_path = tmp_path / "runtime" / "ai-trading-runtime.env"
+    runtime_path.parent.mkdir()
+    runtime_path.write_text(
         "\n".join(
             [
                 "AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START=1",

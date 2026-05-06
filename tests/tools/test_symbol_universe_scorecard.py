@@ -143,6 +143,38 @@ def test_symbol_universe_scorecard_uses_replay_symbol_summary() -> None:
     assert by_symbol["MSFT"]["profit_factor"] == 0.03
 
 
+def test_symbol_universe_scorecard_suggests_shadow_promotion() -> None:
+    report = symbol_universe_scorecard.build_symbol_universe_scorecard(
+        replay_report={
+            "replay_symbol_summary": {
+                "AAPL": {
+                    "sample_count": 40,
+                    "net_edge_bps": -4.0,
+                    "win_rate": 0.45,
+                },
+                "AMZN": {
+                    "sample_count": 40,
+                    "net_edge_bps": 2.0,
+                    "win_rate": 0.58,
+                },
+            }
+        },
+        executable_symbols={"AAPL"},
+        shadow_symbols={"AMZN", "MSFT"},
+        shadow_promotion_min_score_delta=0.5,
+        shadow_promotion_min_samples=10,
+        min_samples=25,
+        now=datetime(2026, 5, 1, 15, 0, tzinfo=UTC),
+    )
+
+    promotion = report["shadow_promotion"]
+    assert promotion["available"] is True
+    assert [row["symbol"] for row in promotion["suggestions"]] == ["AMZN"]
+    assert promotion["suggestions"][0]["recommended_action"] == (
+        "consider_promote_shadow_to_canary"
+    )
+
+
 def test_symbol_universe_scorecard_cli_writes_artifact(tmp_path: Path) -> None:
     live_cost_path = tmp_path / "live_cost_model_latest.json"
     output_path = tmp_path / "symbol_universe_scorecard_latest.json"

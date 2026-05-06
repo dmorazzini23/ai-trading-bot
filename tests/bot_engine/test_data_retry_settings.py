@@ -275,6 +275,58 @@ def test_pre_rank_execution_candidates_records_shadow_snapshot_when_enabled(monk
     assert [entry["symbol"] for entry in latest["ranked"]] == ["AAPL", "GOOG"]
 
 
+def test_pre_rank_execution_candidates_rotates_single_slot_exploration(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N", "1")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_ADAPTIVE_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_EXPLORATION_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_EXPLORATION_STALE_CYCLES", "1")
+    runtime = type(
+        "_Runtime",
+        (),
+        {
+            "execution_candidate_rank": {"AAPL": 10.0, "AMZN": 1.0},
+            "_execution_candidate_last_selected_cycle": {"AAPL": 1},
+            "_execution_prerank_cycle_idx": 1,
+        },
+    )()
+
+    ranked = bot_engine._pre_rank_execution_candidates(
+        ["AAPL", "AMZN"],
+        runtime=runtime,
+    )
+
+    assert ranked == ["AMZN"]
+
+
+def test_pre_rank_execution_candidates_logs_symbol_starvation(monkeypatch, caplog):
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N", "1")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_ADAPTIVE_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_SYMBOL_STARVATION_ALERT_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_SYMBOL_STARVATION_WINDOW", "10")
+    monkeypatch.setenv("AI_TRADING_SYMBOL_STARVATION_MIN_SAMPLES", "5")
+    monkeypatch.setenv("AI_TRADING_SYMBOL_STARVATION_DOMINANCE_RATIO", "0.95")
+    monkeypatch.setenv("AI_TRADING_SYMBOL_STARVATION_ALERT_COOLDOWN_CYCLES", "1")
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS", "AMZN")
+    runtime = type(
+        "_Runtime",
+        (),
+        {"execution_candidate_rank": {"AAPL": 10.0}},
+    )()
+    caplog.set_level(logging.WARNING, logger="ai_trading.core.bot_engine")
+
+    for _ in range(5):
+        bot_engine._pre_rank_execution_candidates(["AAPL"], runtime=runtime)
+
+    matching = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "SYMBOL_STARVATION_ALERT"
+    ]
+    assert matching
+    assert matching[-1].dominant_symbol == "AAPL"
+    assert "AMZN" in matching[-1].configured_symbols
+
+
 def test_prerank_ml_signal_shadow_scores_selected_symbols(monkeypatch):
     monkeypatch.setenv("AI_TRADING_ML_SHADOW_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_ML_SHADOW_PRERANK_SIGNAL_ENABLED", "1")

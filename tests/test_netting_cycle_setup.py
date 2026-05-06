@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -248,6 +249,43 @@ def test_symbol_prune_enforce_removes_disabled_before_prerank() -> None:
     assert result is not None
     assert pre_rank_calls == [["AAPL"]]
     assert result.symbols == ["AAPL"]
+
+
+def test_universe_mismatch_alert_when_research_symbols_are_not_executable(
+    tmp_path,
+) -> None:
+    report_path = tmp_path / "daily_research_latest.json"
+    report_path.write_text(json.dumps({"symbols": "AAPL,AMZN"}), encoding="utf-8")
+    state = SimpleNamespace(
+        canary_mode_logged=False,
+        last_loop_duration=0.0,
+        netting_symbol_budget_cursor=0,
+    )
+    runtime = SimpleNamespace(tickers=["AAPL", "AMZN"], execution_engine=None)
+    logger = _Logger()
+
+    result = prepare_netting_cycle_inputs(
+        **_prepare_kwargs(
+            state=state,
+            runtime=runtime,
+            logger=logger,
+            env={
+                "AI_TRADING_CANARY_SYMBOLS": "AAPL",
+                "AI_TRADING_CANARY_PERCENT": 0.0,
+                "AI_TRADING_DAILY_RESEARCH_REPORT_PATH": str(report_path),
+                "AI_TRADING_UNIVERSE_MISMATCH_ALERT_ENABLED": True,
+                "AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS": "AMZN",
+            },
+        )
+    )
+
+    assert result is not None
+    assert result.symbols == ["AAPL"]
+    events = [event for event, _extra in logger.events]
+    assert "UNIVERSE_MISMATCH_ALERT" in events
+    mismatch = next(extra for event, extra in logger.events if event == "UNIVERSE_MISMATCH_ALERT")
+    assert mismatch is not None
+    assert mismatch["missing_executable_symbols"] == ["AMZN"]
 
 
 def test_prepare_netting_cycle_inputs_raises_preparation_error_on_position_failure() -> None:

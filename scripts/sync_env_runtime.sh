@@ -24,7 +24,13 @@ if [[ ! -f "${ENV_SRC}" ]]; then
   echo "AI_TRADING_ENV_SRC does not exist: ${ENV_SRC}" >&2
   exit 1
 fi
-RUNTIME_ENV_DST="${AI_TRADING_RUNTIME_ENV_DST:-.env.runtime}"
+if [[ -n "${AI_TRADING_RUNTIME_ENV_DST:-}" ]]; then
+  RUNTIME_ENV_DST="${AI_TRADING_RUNTIME_ENV_DST}"
+elif [[ -d "/run/ai-trading-bot" && -w "/run/ai-trading-bot" ]]; then
+  RUNTIME_ENV_DST="/run/ai-trading-bot/ai-trading-runtime.env"
+else
+  RUNTIME_ENV_DST="runtime/ai-trading-runtime.env"
+fi
 mkdir -p "$(dirname "${RUNTIME_ENV_DST}")"
 
 "${PYTHON_BIN}" scripts/runtime_env_sync.py --src "${ENV_SRC}" --dst "${RUNTIME_ENV_DST}"

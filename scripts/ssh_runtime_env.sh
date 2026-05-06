@@ -2,7 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUNTIME_ENV_FILE="${ROOT_DIR}/.env.runtime"
+RUNTIME_ENV_FILE="${AI_TRADING_RUNTIME_ENV_PATH:-/run/ai-trading-bot/ai-trading-runtime.env}"
+if [[ ! -f "${RUNTIME_ENV_FILE}" ]]; then
+  RUNTIME_ENV_FILE="${ROOT_DIR}/runtime/ai-trading-runtime.env"
+fi
+if [[ ! -f "${RUNTIME_ENV_FILE}" ]]; then
+  RUNTIME_ENV_FILE="${ROOT_DIR}/.env"
+fi
 VENV_BIN="${ROOT_DIR}/venv/bin"
 PYTHON_BIN="${VENV_BIN}/python"
 
@@ -92,7 +98,7 @@ mkdir -p \
 
 _load_env_file "${RUNTIME_ENV_FILE}"
 
-# Mirror the later systemd model override drop-in after .env.runtime is loaded.
+# Mirror the later systemd model override drop-in after runtime env is loaded.
 export AI_TRADING_MODEL_PATH="/var/lib/ai-trading-bot/models/trained_model.pkl"
 export AI_TRADING_MODEL_MODULE="ai_trading.simple_models"
 

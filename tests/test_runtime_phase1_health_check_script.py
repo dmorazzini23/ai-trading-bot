@@ -57,7 +57,7 @@ def _seed_runtime(tmp_path: Path, rows: list[dict[str, object]]) -> tuple[Path, 
             "GATE_EFFECTIVENESS_JSONL": str(gate_effectiveness_jsonl),
             "GATE_EFFECTIVENESS_SUMMARY": str(gate_effectiveness_summary),
             "SHADOW_PREDICTIONS_FILE": str(runtime_dir / "ml_shadow_predictions.jsonl"),
-            "ENV_RUNTIME_FILE": str(tmp_path / ".env.runtime"),
+            "ENV_RUNTIME_FILE": str(tmp_path / "runtime" / "ai-trading-runtime.env"),
             "AI_TRADING_ML_SHADOW_ENABLED": "0",
             "RATE_ALERT_MIN_ROWS": "100",
             # Keep rate checks active in tests even when Python time is frozen.

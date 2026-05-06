@@ -71,6 +71,11 @@ sudo systemctl enable --now ai-trading.service
 Institutional production deployment uses `ai-trading.service` as the single
 authoritative topology for trading, API, health, and metrics on `:9001`.
 
+The packaged services sync `/home/aiuser/ai-trading-bot/.env` into
+`/run/ai-trading-bot/ai-trading-runtime.env` during service startup. Edit the
+repo `.env`, then restart the service; do not maintain a separate packaged env
+copy under `/etc/ai-trading-bot`.
+
 ## Health Surfaces
 
 Main runtime:

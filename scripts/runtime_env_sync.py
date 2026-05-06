@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render `.env.runtime` from `.env`, verifying but not writing managed secrets."""
+"""Render a runtime env file from `.env`, verifying managed secrets."""
 
 from __future__ import annotations
 
@@ -315,9 +315,9 @@ def _render_runtime_env(src: Path, dst: Path) -> dict[str, object]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Render .env.runtime from .env with secrets overlay.")
+    parser = argparse.ArgumentParser(description="Render runtime env from .env with secrets overlay.")
     parser.add_argument("--src", default=".env", help="Source env file")
-    parser.add_argument("--dst", default=".env.runtime", help="Destination runtime env file")
+    parser.add_argument("--dst", default="runtime/ai-trading-runtime.env", help="Destination runtime env file")
     parser.add_argument(
         "--json",
         action="store_true",

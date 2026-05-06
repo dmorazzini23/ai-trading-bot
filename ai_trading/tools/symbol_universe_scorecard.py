@@ -44,6 +44,14 @@ def _read_json(path: Path | None) -> dict[str, Any]:
     return dict(parsed) if isinstance(parsed, dict) else {}
 
 
+def _symbol_set(raw_value: Any) -> set[str]:
+    return {
+        token.strip().upper()
+        for token in str(raw_value or "").replace(";", ",").split(",")
+        if token and token.strip()
+    }
+
+
 def _default_path(env_key: str, default_relative: str) -> Path:
     configured = str(
         get_env(env_key, default_relative, cast=str, resolve_aliases=False)
@@ -253,6 +261,65 @@ def _mode_for_symbol(
     return "allow", reasons or ["healthy"]
 
 
+def _shadow_promotion_suggestions(
+    rows: list[dict[str, Any]],
+    *,
+    executable_symbols: set[str],
+    shadow_symbols: set[str],
+    min_score_delta: float,
+    min_samples: int,
+) -> dict[str, Any]:
+    by_symbol = {
+        str(row.get("symbol") or "").strip().upper(): row
+        for row in rows
+        if str(row.get("symbol") or "").strip()
+    }
+    executable_scores = [
+        _to_float(by_symbol[symbol].get("quality_score"))
+        for symbol in executable_symbols
+        if symbol in by_symbol
+    ]
+    executable_scores = [score for score in executable_scores if score is not None]
+    baseline_score = min(executable_scores) if executable_scores else None
+    suggestions: list[dict[str, Any]] = []
+    for symbol in sorted(shadow_symbols):
+        row = by_symbol.get(symbol)
+        if row is None:
+            continue
+        if str(row.get("effective_mode") or "").lower() != "allow":
+            continue
+        sample_count = _to_int(row.get("sample_count"))
+        if sample_count < max(1, int(min_samples)):
+            continue
+        quality_score = _to_float(row.get("quality_score"))
+        if quality_score is None:
+            continue
+        score_delta = None if baseline_score is None else float(quality_score - baseline_score)
+        if score_delta is not None and score_delta < float(min_score_delta):
+            continue
+        suggestions.append(
+            {
+                "symbol": symbol,
+                "recommended_action": "consider_promote_shadow_to_canary",
+                "quality_score": float(quality_score),
+                "baseline_executable_score": baseline_score,
+                "score_delta": score_delta,
+                "sample_count": int(sample_count),
+                "current_shadow_symbols": sorted(shadow_symbols),
+                "current_executable_symbols": sorted(executable_symbols),
+                "reason": "shadow_symbol_scores_better_than_executable_baseline",
+            }
+        )
+    return {
+        "available": bool(suggestions),
+        "suggestions": suggestions,
+        "thresholds": {
+            "min_score_delta": float(min_score_delta),
+            "min_samples": int(max(1, min_samples)),
+        },
+    }
+
+
 def build_symbol_universe_scorecard(
     *,
     live_cost_model: Mapping[str, Any] | None = None,
@@ -268,6 +335,10 @@ def build_symbol_universe_scorecard(
     disable_markout_bps: float = -25.0,
     shadow_spread_bps: float = 35.0,
     disable_spread_bps: float = 60.0,
+    executable_symbols: Iterable[str] | None = None,
+    shadow_symbols: Iterable[str] | None = None,
+    shadow_promotion_min_score_delta: float = 0.5,
+    shadow_promotion_min_samples: int = 10,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return a symbol universe scorecard from recent runtime artifacts."""
@@ -364,6 +435,16 @@ def build_symbol_universe_scorecard(
     shadow_only = [
         str(row["symbol"]) for row in rows if row.get("effective_mode") == "shadow_only"
     ]
+    executable_set = {
+        str(symbol).strip().upper()
+        for symbol in (executable_symbols or [])
+        if str(symbol).strip()
+    }
+    shadow_set = {
+        str(symbol).strip().upper()
+        for symbol in (shadow_symbols or [])
+        if str(symbol).strip()
+    }
     status = "ready" if rows else "unavailable"
     return {
         "schema_version": "1.0.0",
@@ -401,6 +482,13 @@ def build_symbol_universe_scorecard(
                 str(row["symbol"]) for row in rows if row.get("effective_mode") == "allow"
             ],
         },
+        "shadow_promotion": _shadow_promotion_suggestions(
+            rows,
+            executable_symbols=executable_set,
+            shadow_symbols=shadow_set,
+            min_score_delta=float(shadow_promotion_min_score_delta),
+            min_samples=int(shadow_promotion_min_samples),
+        ),
         "symbols": rows,
     }
 
@@ -421,6 +509,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--disable-markout-bps", type=float, default=-25.0)
     parser.add_argument("--shadow-spread-bps", type=float, default=35.0)
     parser.add_argument("--disable-spread-bps", type=float, default=60.0)
+    parser.add_argument("--executable-symbols", default="")
+    parser.add_argument("--shadow-symbols", default="")
+    parser.add_argument("--shadow-promotion-min-score-delta", type=float, default=0.5)
+    parser.add_argument("--shadow-promotion-min-samples", type=int, default=10)
     args = parser.parse_args(argv)
 
     live_cost_path = _path_arg(
@@ -459,6 +551,16 @@ def main(argv: list[str] | None = None) -> int:
         disable_markout_bps=float(args.disable_markout_bps),
         shadow_spread_bps=float(args.shadow_spread_bps),
         disable_spread_bps=float(args.disable_spread_bps),
+        executable_symbols=_symbol_set(
+            args.executable_symbols
+            or get_env("AI_TRADING_CANARY_SYMBOLS", "", cast=str, resolve_aliases=False)
+        ),
+        shadow_symbols=_symbol_set(
+            args.shadow_symbols
+            or get_env("AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS", "", cast=str, resolve_aliases=False)
+        ),
+        shadow_promotion_min_score_delta=float(args.shadow_promotion_min_score_delta),
+        shadow_promotion_min_samples=max(1, int(args.shadow_promotion_min_samples)),
     )
     report["paths"] = {
         "live_cost_model": str(live_cost_path),

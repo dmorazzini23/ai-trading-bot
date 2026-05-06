@@ -79,7 +79,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--dotenv-path",
-        default=".env.runtime",
+        default="runtime/ai-trading-runtime.env",
         help=(
             "Optional dotenv file to load once before the sweep. "
             "Use an empty string to skip dotenv loading."

@@ -2018,6 +2018,131 @@ def _record_prerank_shadow_snapshot(
     _record_shadow_prediction(payload)
 
 
+def _symbol_tokens_from_env(name: str) -> set[str]:
+    try:
+        raw = str(get_env(name, "", cast=str) or "")
+    except BOT_ENGINE_FALLBACK_EXC:
+        raw = ""
+    return {
+        token.strip().upper()
+        for token in raw.split(",")
+        if token and token.strip()
+    }
+
+
+def _record_symbol_starvation_alert(
+    *,
+    ranked_symbols: Sequence[str],
+    selected_symbols: Sequence[str],
+    runtime: Any | None,
+    prerank_cycle: int,
+) -> None:
+    if runtime is None or not selected_symbols:
+        return
+    try:
+        enabled = bool(
+            get_env("AI_TRADING_SYMBOL_STARVATION_ALERT_ENABLED", True, cast=bool)
+        )
+    except BOT_ENGINE_FALLBACK_EXC:
+        enabled = True
+    if not enabled:
+        return
+    configured_symbols = {
+        str(symbol).strip().upper()
+        for symbol in ranked_symbols
+        if str(symbol).strip()
+    }
+    configured_symbols.update(_symbol_tokens_from_env("AI_TRADING_CANARY_SYMBOLS"))
+    configured_symbols.update(_symbol_tokens_from_env("AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS"))
+    if len(configured_symbols) < 2:
+        return
+    try:
+        window_size = int(
+            get_env("AI_TRADING_SYMBOL_STARVATION_WINDOW", 100, cast=int)
+        )
+    except BOT_ENGINE_FALLBACK_EXC:
+        window_size = 100
+    window_size = max(10, min(window_size, 1000))
+    try:
+        min_samples = int(
+            get_env("AI_TRADING_SYMBOL_STARVATION_MIN_SAMPLES", 20, cast=int)
+        )
+    except BOT_ENGINE_FALLBACK_EXC:
+        min_samples = 20
+    min_samples = max(5, min(min_samples, window_size))
+    try:
+        threshold = float(
+            get_env("AI_TRADING_SYMBOL_STARVATION_DOMINANCE_RATIO", 0.95, cast=float)
+        )
+    except BOT_ENGINE_FALLBACK_EXC:
+        threshold = 0.95
+    threshold = max(0.5, min(threshold, 1.0))
+    raw_window = getattr(runtime, "_execution_symbol_selection_window", None)
+    if not isinstance(raw_window, deque):
+        raw_window = deque(maxlen=window_size)
+    elif raw_window.maxlen != window_size:
+        raw_window = deque(raw_window, maxlen=window_size)
+    for raw_symbol in selected_symbols:
+        symbol = str(raw_symbol).strip().upper()
+        if symbol:
+            raw_window.append(symbol)
+    try:
+        setattr(runtime, "_execution_symbol_selection_window", raw_window)
+    except BOT_ENGINE_FALLBACK_EXC:
+        return
+    total = len(raw_window)
+    if total < min_samples:
+        return
+    counts = Counter(raw_window)
+    dominant_symbol, dominant_count = counts.most_common(1)[0]
+    dominant_ratio = float(dominant_count / total) if total else 0.0
+    if dominant_ratio < threshold:
+        return
+    try:
+        cooldown_cycles = int(
+            get_env("AI_TRADING_SYMBOL_STARVATION_ALERT_COOLDOWN_CYCLES", 10, cast=int)
+        )
+    except BOT_ENGINE_FALLBACK_EXC:
+        cooldown_cycles = 10
+    cooldown_cycles = max(1, min(cooldown_cycles, 1000))
+    last_alert_cycle = getattr(runtime, "_execution_symbol_starvation_last_alert_cycle", 0)
+    try:
+        last_alert_cycle_int = int(last_alert_cycle)
+    except (TypeError, ValueError):
+        last_alert_cycle_int = 0
+    if int(prerank_cycle) - last_alert_cycle_int < cooldown_cycles:
+        return
+    try:
+        setattr(
+            runtime,
+            "_execution_symbol_starvation_last_alert_cycle",
+            int(prerank_cycle),
+        )
+    except BOT_ENGINE_FALLBACK_EXC:
+        pass
+    logger.warning(
+        "SYMBOL_STARVATION_ALERT",
+        extra={
+            "dominant_symbol": dominant_symbol,
+            "dominant_ratio": dominant_ratio,
+            "dominant_count": int(dominant_count),
+            "window_samples": int(total),
+            "configured_symbols": sorted(configured_symbols),
+            "ranked_symbols": [
+                str(symbol).strip().upper()
+                for symbol in ranked_symbols
+                if str(symbol).strip()
+            ][:20],
+            "selected_symbols": [
+                str(symbol).strip().upper()
+                for symbol in selected_symbols
+                if str(symbol).strip()
+            ][:20],
+            "reason": "candidate_selection_collapsed_to_one_symbol",
+        },
+    )
+
+
 def _prefetch_ml_shadow_quote(runtime: Any | None, symbol: str) -> None:
     """Warm per-symbol quote telemetry before writing ML shadow predictions."""
 
@@ -2428,7 +2553,7 @@ def _pre_rank_execution_candidates(
                 )
             except BOT_ENGINE_FALLBACK_EXC:
                 exploration_enabled = False
-        if exploration_enabled and top_n > 1 and dropped:
+        if exploration_enabled and top_n >= 1 and dropped:
             try:
                 exploration_fraction = float(
                     get_env(
@@ -2468,7 +2593,11 @@ def _pre_rank_execution_candidates(
                 else 0
             )
             exploration_slots = max(exploration_min, fraction_slots)
-            exploration_slots = max(0, min(exploration_slots, top_n - 1, len(dropped)))
+            max_exploration_slots = top_n if top_n == 1 else top_n - 1
+            exploration_slots = max(
+                0,
+                min(exploration_slots, max_exploration_slots, len(dropped)),
+            )
             if exploration_slots > 0:
 
                 def _stale_age(sym: str) -> int:
@@ -2530,6 +2659,12 @@ def _pre_rank_execution_candidates(
             "opportunity_quality_allowed_count": int(len(quality_allowed_symbols)),
             "opportunity_quality_allowed_sample": sorted(quality_allowed_symbols)[:10],
         },
+    )
+    _record_symbol_starvation_alert(
+        ranked_symbols=ranked,
+        selected_symbols=selected,
+        runtime=runtime,
+        prerank_cycle=prerank_cycle,
     )
     _record_prerank_shadow_snapshot(
         ranked_symbols=ranked,

@@ -626,7 +626,8 @@ def test_run_dispatch_openclaw_model_readiness_blocks_unclean_candidate(
 
 
 def test_load_runtime_env_defaults_populates_missing_values(tmp_path: Path) -> None:
-    runtime_env = tmp_path / ".env.runtime"
+    runtime_env = tmp_path / "runtime" / "ai-trading-runtime.env"
+    runtime_env.parent.mkdir()
     runtime_env.write_text(
         "AI_TRADING_SLACK_WEBHOOK_URL=https://hooks.slack.test/from-runtime\n"
         "AI_TRADING_OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789\n",
@@ -643,7 +644,8 @@ def test_load_runtime_env_defaults_populates_missing_values(tmp_path: Path) -> N
 
 
 def test_load_runtime_env_defaults_does_not_override_existing(tmp_path: Path) -> None:
-    runtime_env = tmp_path / ".env.runtime"
+    runtime_env = tmp_path / "runtime" / "ai-trading-runtime.env"
+    runtime_env.parent.mkdir()
     runtime_env.write_text(
         "AI_TRADING_SLACK_WEBHOOK_URL=https://hooks.slack.test/from-runtime\n",
         encoding="utf-8",

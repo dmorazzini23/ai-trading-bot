@@ -171,6 +171,8 @@ def build_daily_research_report(
         },
         "symbol_actions": {
             "summary": _nested(symbol_scorecard, "summary"),
+            "policy": _nested(symbol_scorecard, "policy"),
+            "shadow_promotion": _nested(symbol_scorecard, "shadow_promotion"),
             "symbols": symbol_scorecard.get("symbols", []),
         },
     }
@@ -186,6 +188,17 @@ def build_daily_research_report(
 
 def _markdown(report: Mapping[str, Any]) -> str:
     reasons = report.get("blocked_reasons") if isinstance(report.get("blocked_reasons"), list) else []
+    shadow_suggestions = _nested(report, "symbol_actions", "shadow_promotion").get(
+        "suggestions",
+        [],
+    )
+    suggestion_text = "none"
+    if isinstance(shadow_suggestions, list) and shadow_suggestions:
+        suggestion_text = ", ".join(
+            str(item.get("symbol"))
+            for item in shadow_suggestions
+            if isinstance(item, Mapping) and item.get("symbol")
+        ) or "none"
     return "\n".join(
         [
             f"# Daily Research {report.get('report_date')}",
@@ -198,6 +211,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Live cost: `{_nested(report, 'live_cost_status').get('status', 'missing')}`",
             f"- Memory: `{_nested(report, 'memory_status').get('status', 'missing')}`",
             f"- Promotion: `{_nested(report, 'promotion_status').get('status', 'missing')}`",
+            f"- Shadow promotion candidates: {suggestion_text}",
             "",
         ]
     )

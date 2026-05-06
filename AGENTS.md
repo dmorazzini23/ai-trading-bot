@@ -123,6 +123,10 @@ Use these stable strings to anchor surgical edits:
 
 ## 7. Operational Notes
 - The checked-in `packaging/systemd/ai-trading.service` currently exposes `/healthz` on `:9001` because it sets `HEALTHCHECK_PORT=9001`.
+- Packaged systemd services sync `/home/aiuser/ai-trading-bot/.env` to
+  `/run/ai-trading-bot/ai-trading-runtime.env` on service start. Do not add a
+  second packaged source of truth under `/etc/ai-trading-bot`; after unit
+  deployment, editing `.env` plus restarting the service refreshes runtime env.
 - Validate the surface that matches the deployment mode:
   - packaged main service: `curl -sS http://127.0.0.1:9001/healthz`
   - standalone health app: `curl -sS http://127.0.0.1:${HEALTHCHECK_PORT}/healthz`

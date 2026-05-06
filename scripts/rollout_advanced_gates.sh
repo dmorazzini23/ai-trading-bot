@@ -28,7 +28,7 @@ fi
 STAGE="$1"
 shift
 
-ENV_FILE=".env.runtime"
+ENV_FILE=".env"
 SERVICE_NAME="ai-trading.service"
 DO_RESTART=0
 DO_VERIFY=0

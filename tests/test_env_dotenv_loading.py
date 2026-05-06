@@ -87,7 +87,8 @@ def test_ensure_dotenv_loaded_populates_missing_values(monkeypatch, tmp_path):
 def test_ensure_dotenv_loaded_prefers_env_runtime_for_blank_process_values(monkeypatch, tmp_path):
     _reset_env_module(monkeypatch)
     dotenv_file = tmp_path / ".env"
-    runtime_file = tmp_path / ".env.runtime"
+    runtime_file = tmp_path / "runtime" / "ai-trading-runtime.env"
+    runtime_file.parent.mkdir()
     dotenv_file.write_text("ALPACA_API_KEY=\nALPACA_SECRET_KEY=\n", encoding="utf-8")
     runtime_file.write_text(
         "ALPACA_API_KEY=runtime_api\nALPACA_SECRET_KEY=runtime_secret\n",
@@ -109,7 +110,8 @@ def test_ensure_dotenv_loaded_does_not_override_process_values_from_runtime(
 ):
     stub = _reset_env_module(monkeypatch)
     dotenv_file = tmp_path / ".env"
-    runtime_file = tmp_path / ".env.runtime"
+    runtime_file = tmp_path / "runtime" / "ai-trading-runtime.env"
+    runtime_file.parent.mkdir()
     dotenv_file.write_text("", encoding="utf-8")
     runtime_file.write_text("ALPACA_API_KEY=runtime_api\n", encoding="utf-8")
 
@@ -125,7 +127,8 @@ def test_ensure_dotenv_loaded_does_not_override_process_values_from_runtime(
 def test_ensure_dotenv_loaded_allows_explicit_runtime_override(monkeypatch, tmp_path):
     stub = _reset_env_module(monkeypatch)
     dotenv_file = tmp_path / ".env"
-    runtime_file = tmp_path / ".env.runtime"
+    runtime_file = tmp_path / "runtime" / "ai-trading-runtime.env"
+    runtime_file.parent.mkdir()
     dotenv_file.write_text("", encoding="utf-8")
     runtime_file.write_text("ALPACA_API_KEY=runtime_api\n", encoding="utf-8")
 

@@ -38,6 +38,101 @@ def _symbol_set(raw_value: Any) -> set[str]:
     }
 
 
+def _read_json_mapping(path: Any) -> Mapping[str, Any]:
+    try:
+        payload = json.loads(resolve_runtime_artifact_path(
+            str(path),
+            default_relative=str(path),
+        ).read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _research_universe_symbols(
+    *,
+    get_env: Callable[..., Any],
+) -> set[str]:
+    if not bool(get_env("AI_TRADING_UNIVERSE_MISMATCH_ALERT_ENABLED", True, cast=bool)):
+        return set()
+    configured_path = str(
+        get_env(
+            "AI_TRADING_DAILY_RESEARCH_REPORT_PATH",
+            "runtime/research_reports/latest/daily_research_latest.json",
+            cast=str,
+        )
+        or "runtime/research_reports/latest/daily_research_latest.json"
+    ).strip()
+    payload = _read_json_mapping(configured_path)
+    raw_symbols = payload.get("symbols")
+    if isinstance(raw_symbols, str):
+        return _symbol_set(raw_symbols)
+    if isinstance(raw_symbols, list):
+        return {
+            str(symbol).strip().upper()
+            for symbol in raw_symbols
+            if str(symbol).strip()
+        }
+    symbol_actions = payload.get("symbol_actions")
+    if isinstance(symbol_actions, Mapping):
+        rows = symbol_actions.get("symbols")
+        if isinstance(rows, list):
+            return {
+                str(row.get("symbol") or "").strip().upper()
+                for row in rows
+                if isinstance(row, Mapping) and str(row.get("symbol") or "").strip()
+            }
+    return set()
+
+
+def _emit_universe_mismatch_alert(
+    *,
+    state: Any,
+    logger: Any,
+    get_env: Callable[..., Any],
+    source_symbols: Sequence[str],
+    executable_symbols: Sequence[str],
+    canary_symbols: set[str],
+) -> None:
+    research_symbols = _research_universe_symbols(get_env=get_env)
+    shadow_symbols = _symbol_set(
+        get_env("AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS", "", cast=str)
+    )
+    executable = {
+        str(symbol).strip().upper()
+        for symbol in executable_symbols
+        if str(symbol).strip()
+    }
+    source = {
+        str(symbol).strip().upper()
+        for symbol in source_symbols
+        if str(symbol).strip()
+    }
+    configured = (research_symbols | shadow_symbols | canary_symbols) & (source | research_symbols | shadow_symbols)
+    missing = sorted(symbol for symbol in configured if symbol not in executable)
+    if not missing:
+        return
+    signature = ",".join(missing)
+    if getattr(state, "_last_universe_mismatch_signature", "") == signature:
+        return
+    try:
+        setattr(state, "_last_universe_mismatch_signature", signature)
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        pass
+    logger.warning(
+        "UNIVERSE_MISMATCH_ALERT",
+        extra={
+            "missing_executable_symbols": missing,
+            "executable_symbols": sorted(executable),
+            "research_symbols": sorted(research_symbols),
+            "shadow_symbols": sorted(shadow_symbols),
+            "canary_symbols": sorted(canary_symbols),
+            "source_symbols": sorted(source),
+            "reason": "configured_or_researched_symbols_not_executable",
+        },
+    )
+
+
 def _scorecard_symbol_modes(
     *,
     get_env: Callable[..., Any],
@@ -236,7 +331,9 @@ def prepare_netting_cycle_inputs(
             logger.warning("NETTING_NO_SYMBOLS")
         return None
 
+    pre_canary_symbols = list(symbols)
     canary_raw = str(get_env("AI_TRADING_CANARY_SYMBOLS", "") or "").strip()
+    active_canary_symbols: set[str] = set()
     canary_percent = max(
         0.0,
         min(
@@ -252,6 +349,7 @@ def prepare_netting_cycle_inputs(
                 for token in canary_raw.split(",")
                 if token and token.strip()
             }
+            active_canary_symbols = set(canary_symbols)
             selected_symbols = [
                 symbol for symbol in selected_symbols if str(symbol).upper() in canary_symbols
             ]
@@ -283,9 +381,17 @@ def prepare_netting_cycle_inputs(
                 },
             )
             state.canary_mode_logged = True
-        if not symbols:
-            logger.warning("CANARY_MODE_EMPTY_UNIVERSE")
-            return None
+    _emit_universe_mismatch_alert(
+        state=state,
+        logger=logger,
+        get_env=get_env,
+        source_symbols=pre_canary_symbols,
+        executable_symbols=symbols,
+        canary_symbols=active_canary_symbols,
+    )
+    if not symbols:
+        logger.warning("CANARY_MODE_EMPTY_UNIVERSE")
+        return None
 
     symbols = _apply_symbol_universe_pruning(
         symbols,

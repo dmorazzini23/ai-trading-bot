@@ -17,20 +17,24 @@ def test_research_automation_units_follow_runtime_safety_contract() -> None:
         assert "User=aiuser" in content
         assert "Group=aiuser" in content
         assert "WorkingDirectory=/home/aiuser/ai-trading-bot" in content
-        assert "EnvironmentFile=-/etc/ai-trading-bot/ai-trading.env" in content
+        assert "Environment=AI_TRADING_ENV_SRC=/home/aiuser/ai-trading-bot/.env" in content
         assert "EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env" in content
+        assert "Environment=AI_TRADING_DOTENV_RUNTIME_OVERRIDE=1" in content
         assert "ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh" in content
         assert "ExecStart=/home/aiuser/ai-trading-bot/scripts/run_research_automation.sh" in content
         assert "NoNewPrivileges=true" in content
         assert "ProtectSystem=strict" in content
         assert "RuntimeDirectory=ai-trading-bot" in content
         assert "ReadWritePaths=/var/lib/ai-trading-bot" in content
-        dotenv_idx = content.index("EnvironmentFile=-/etc/ai-trading-bot/ai-trading.env")
+        env_src_idx = content.index("Environment=AI_TRADING_ENV_SRC=/home/aiuser/ai-trading-bot/.env")
         runtime_idx = content.index("EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env")
+        override_idx = content.index("Environment=AI_TRADING_DOTENV_RUNTIME_OVERRIDE=1")
         sync_idx = content.index("ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh")
         exec_idx = content.index("ExecStart=")
-        assert dotenv_idx < runtime_idx
+        assert env_src_idx < runtime_idx
+        assert runtime_idx < override_idx
         assert sync_idx < exec_idx
+        assert "/etc/ai-trading-bot/ai-trading.env" not in content
 
 
 def test_research_automation_timers_are_after_hours_and_persistent() -> None:

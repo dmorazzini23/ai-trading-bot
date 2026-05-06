@@ -46,7 +46,7 @@ _parse_secret_string = cast(
 _aws_cli_env = cast(Callable[[], dict[str, str]], getattr(_sync_mod, "_aws_cli_env"))
 
 _DEFAULT_ENV_FILE = _REPO_ROOT / ".env"
-_DEFAULT_RUNTIME_ENV_FILE = _REPO_ROOT / ".env.runtime"
+_DEFAULT_RUNTIME_ENV_FILE = Path("/run/ai-trading-bot/ai-trading-runtime.env")
 
 
 def _bool_arg(value: Any, default: bool = False) -> bool:
@@ -299,7 +299,7 @@ TOOL_SPECS: list[ToolSpec] = [
     },
     {
         "name": "sync_runtime_env",
-        "description": "Render .env.runtime using scripts/sync_env_runtime.sh.",
+        "description": "Render the runtime env using scripts/sync_env_runtime.sh.",
     },
     {
         "name": "migrate_local_env_to_aws",

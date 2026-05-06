@@ -49,7 +49,14 @@ def _resolve_runtime_dotenv_path(dotenv_path: str) -> str:
     raw = get_env("AI_TRADING_RUNTIME_ENV_PATH", "", cast=str, resolve_aliases=False)
     if str(raw or "").strip():
         return str(Path(str(raw).strip()).expanduser())
-    return str(Path(dotenv_path).with_name(".env.runtime"))
+    env_path = Path(dotenv_path).expanduser()
+    local_runtime_path = env_path.parent / "runtime" / "ai-trading-runtime.env"
+    if local_runtime_path.exists():
+        return str(local_runtime_path)
+    packaged_runtime_path = Path("/run/ai-trading-bot/ai-trading-runtime.env")
+    if packaged_runtime_path.exists():
+        return str(packaged_runtime_path)
+    return str(local_runtime_path)
 
 
 def _populate_blank_values_from_dotenv(dotenv_path: str) -> None:

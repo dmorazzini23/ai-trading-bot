@@ -107,7 +107,10 @@ def _resolve_runtime_env_path(*, env: Mapping[str, str], repo_root: Path) -> Pat
         if not candidate.is_absolute():
             candidate = (repo_root / candidate).resolve()
         return candidate
-    return (repo_root / ".env.runtime").resolve()
+    packaged_runtime = Path("/run/ai-trading-bot/ai-trading-runtime.env")
+    if packaged_runtime.exists():
+        return packaged_runtime
+    return (repo_root / "runtime" / "ai-trading-runtime.env").resolve()
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:

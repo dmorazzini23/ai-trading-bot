@@ -50,6 +50,30 @@ def test_daily_research_report_blocks_on_critical_memory(monkeypatch):
     assert "memory_status_critical" in report["blocked_reasons"]
 
 
+def test_daily_research_report_surfaces_shadow_promotion(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+
+    report = daily_research_pipeline.build_daily_research_report(
+        report_date="2026-05-05",
+        health={"ok": True, "status": "ready", "data_provider": {"status": "healthy"}},
+        live_cost_model={"status": {"available": True, "breach_count": 0, "status": "ready"}},
+        symbol_scorecard={
+            "summary": {"allow": 2},
+            "policy": {"allowed_symbols": ["AAPL"]},
+            "shadow_promotion": {
+                "available": True,
+                "suggestions": [{"symbol": "AMZN"}],
+            },
+            "symbols": [],
+        },
+        memory_audit={"status": "ok"},
+    )
+
+    assert report["symbol_actions"]["shadow_promotion"]["available"] is True
+    assert report["symbol_actions"]["shadow_promotion"]["suggestions"][0]["symbol"] == "AMZN"
+    assert "AMZN" in daily_research_pipeline._markdown(report)
+
+
 def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
     health = tmp_path / "health.json"
