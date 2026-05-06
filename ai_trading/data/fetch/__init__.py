@@ -5166,13 +5166,25 @@ def refresh_default_feed(feed: str | None = None) -> str:
     _DATA_FEED_OVERRIDE = new_override
 
     if _DATA_FEED_OVERRIDE:
-        if override_changed or _DATA_FEED_OVERRIDE != _LAST_OVERRIDE_LOGGED:
+        downgrade_reason = get_data_feed_downgrade_reason() or "missing_credentials"
+        secrets_backend = str(
+            get_env("AI_TRADING_SECRETS_BACKEND", "none", cast=str, resolve_aliases=False)
+            or "none"
+        ).strip().lower()
+        pending_managed_secrets = (
+            downgrade_reason == "missing_credentials"
+            and secrets_backend not in {"", "none", "off", "disabled"}
+        )
+        if (
+            not pending_managed_secrets
+            and (override_changed or _DATA_FEED_OVERRIDE != _LAST_OVERRIDE_LOGGED)
+        ):
             logger.info(
                 "DATA_PROVIDER_DOWNGRADED",
                 extra={
                     "from": f"alpaca_{_DEFAULT_FEED or 'iex'}",
                     "to": _DATA_FEED_OVERRIDE,
-                    "reason": get_data_feed_downgrade_reason() or "missing_credentials",
+                    "reason": downgrade_reason,
                 },
             )
         _LAST_OVERRIDE_LOGGED = _DATA_FEED_OVERRIDE

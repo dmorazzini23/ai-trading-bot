@@ -23,6 +23,25 @@ def test_resolve_launch_profile_applies_profile_scoped_overrides(monkeypatch):
     assert profile.manual_approval_required is True
 
 
+def test_resolve_launch_profile_inherits_global_shorting_flag(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+    monkeypatch.setenv("TRADING__ALLOW_SHORTS", "0")
+
+    profile = resolve_launch_profile()
+
+    assert profile.shorts_allowed is False
+
+
+def test_resolve_launch_profile_scoped_shorting_override_wins(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+    monkeypatch.setenv("TRADING__ALLOW_SHORTS", "0")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_PAPER_TRADE_ALLOW_SHORTS", "1")
+
+    profile = resolve_launch_profile()
+
+    assert profile.shorts_allowed is True
+
+
 def test_provider_authority_blocks_backup_and_synthetic_quotes_for_live(monkeypatch):
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
     profile = resolve_launch_profile()

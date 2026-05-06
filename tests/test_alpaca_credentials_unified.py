@@ -78,6 +78,22 @@ def test_canonical_creds_enable_alpaca(monkeypatch: pytest.MonkeyPatch, caplog: 
     assert not downgrade_logs
 
 
+def test_managed_secrets_backend_defers_missing_creds_downgrade_log(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """AWS-managed secrets hydrate after import, so startup should not emit a false downgrade."""
+
+    monkeypatch.setenv("AI_TRADING_SECRETS_BACKEND", "aws-secrets-manager")
+
+    caplog.set_level(logging.INFO)
+    importlib.import_module("ai_trading.data.fetch")
+
+    downgrade_logs = [record for record in caplog.records if record.message == "DATA_PROVIDER_DOWNGRADED"]
+    assert not downgrade_logs
+    assert env_utils.is_data_feed_downgraded()
+
+
 def test_resolve_feed_cache_tracks_env_changes(monkeypatch: pytest.MonkeyPatch) -> None:
     """Changing credentials should update the cached feed override automatically."""
 

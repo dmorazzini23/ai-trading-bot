@@ -197,7 +197,10 @@ def resolve_launch_profile(name: str | None = None) -> LaunchProfile:
             f"{prefix}_MAX_NOTIONAL_PER_ORDER",
             base.max_notional_per_order,
         ),
-        shorts_allowed=_bool_env(f"{prefix}_ALLOW_SHORTS", base.shorts_allowed),
+        shorts_allowed=_bool_env(
+            f"{prefix}_ALLOW_SHORTS",
+            _bool_env("TRADING__ALLOW_SHORTS", base.shorts_allowed),
+        ),
         allowed_symbols=_csv_symbols(allowed_raw) or base.allowed_symbols,
         promotion_required=_bool_env(f"{prefix}_PROMOTION_REQUIRED", base.promotion_required),
         provider_policy=_text_env(

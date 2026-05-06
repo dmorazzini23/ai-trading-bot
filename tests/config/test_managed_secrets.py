@@ -9,6 +9,7 @@ from ai_trading.config.management import (
     clear_runtime_env_overrides,
     get_env,
 )
+from ai_trading.utils import env as env_utils
 
 
 def test_hydrate_managed_secrets_noops_when_backend_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -44,8 +45,10 @@ def test_hydrate_managed_secrets_sets_runtime_overrides_without_os_environ(
     assert summary["hydrated_count"] == 3
     assert get_env("ALPACA_API_KEY", "", resolve_aliases=False) == "remote-key"
     assert "ALPACA_API_KEY" not in os.environ
+    assert env_utils.resolve_alpaca_feed(None) == "iex"
 
     clear_runtime_env_overrides(("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "WEBHOOK_SECRET"))
+    env_utils.refresh_alpaca_credentials_cache()
 
 
 def test_hydrate_managed_secrets_fails_when_required_payload_key_missing(

@@ -8,6 +8,7 @@ import pwd
 import re
 import shutil
 import subprocess
+import sys
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -251,6 +252,15 @@ def hydrate_managed_secrets(*, required_keys: Iterable[str] = ()) -> dict[str, A
             continue
         set_runtime_env_override(key, value)
         hydrated.append(key)
+
+    if {"ALPACA_API_KEY", "ALPACA_SECRET_KEY"} & set(hydrated):
+        from ai_trading.utils.env import refresh_alpaca_credentials_cache
+
+        refresh_alpaca_credentials_cache()
+        data_fetch = sys.modules.get("ai_trading.data.fetch")
+        refresh_default_feed = getattr(data_fetch, "refresh_default_feed", None)
+        if callable(refresh_default_feed):
+            refresh_default_feed()
 
     logger.info(
         "MANAGED_SECRETS_HYDRATED",
