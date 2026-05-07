@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -78,8 +79,174 @@ def _float(value: Any) -> float | None:
     return parsed if parsed == parsed and parsed not in {float("inf"), float("-inf")} else None
 
 
-def _side_is_short(side: Any) -> bool:
-    return str(side or "").strip().lower().replace("-", "_") in {"sell", "short", "sell_short"}
+def _extract_value(payload: Any, *keys: str) -> Any:
+    if isinstance(payload, Mapping):
+        for key in keys:
+            value = payload.get(key)
+            if value not in (None, ""):
+                return value
+        return None
+    for key in keys:
+        value = getattr(payload, key, None)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _side_token(side: Any) -> str:
+    return str(side or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _position_qty(position: Any) -> float | None:
+    raw_qty = _extract_value(position, "qty", "quantity", "position", "current_qty")
+    qty = _float(raw_qty)
+    if qty is None:
+        return None
+    side = _side_token(_extract_value(position, "side"))
+    if side in {"short", "sell_short", "sellshort"}:
+        return -abs(qty)
+    if side in {"long", "buy"}:
+        return abs(qty)
+    return qty
+
+
+def _position_market_value(position: Any, *, fallback_price: float | None) -> float | None:
+    market_value = _float(_extract_value(position, "market_value", "notional"))
+    if market_value is not None:
+        return abs(market_value)
+    qty = _position_qty(position)
+    price = _float(_extract_value(position, "market_price", "current_price", "avg_entry_price"))
+    if price is None:
+        price = fallback_price
+    if qty is None or price is None or price <= 0.0:
+        return None
+    return abs(qty) * float(price)
+
+
+def _current_symbol_qty(order: Mapping[str, Any], symbol: str) -> float | None:
+    direct_raw = (
+        order.get("position_qty")
+        if order.get("position_qty") not in (None, "")
+        else order.get("current_position_qty")
+    )
+    direct_qty = _float(direct_raw)
+    if direct_qty is not None:
+        return direct_qty
+    positions = order.get("positions")
+    if not isinstance(positions, Iterable) or isinstance(positions, (str, bytes, Mapping)):
+        return None
+    for position in positions:
+        pos_symbol = str(_extract_value(position, "symbol") or "").strip().upper()
+        if pos_symbol == symbol:
+            return _position_qty(position)
+    return None
+
+
+def _order_closes_position(order: Mapping[str, Any], side: str, symbol: str) -> bool:
+    if _truthy(order.get("closing_position")) or _truthy(order.get("reduce_only")):
+        return True
+    current_qty = _current_symbol_qty(order, symbol)
+    if current_qty is None:
+        return False
+    if side == "sell" and current_qty > 0.0:
+        return True
+    if side in {"buy", "cover", "buy_to_cover"} and current_qty < 0.0:
+        return True
+    return False
+
+
+def _order_is_short_intent(order: Mapping[str, Any], side: str, symbol: str) -> bool:
+    if side in {"short", "sell_short", "sellshort"}:
+        return True
+    if side != "sell":
+        return False
+    return not _order_closes_position(order, side, symbol)
+
+
+def _exposure_gate_reasons(
+    order: Mapping[str, Any],
+    *,
+    profile: LaunchProfile,
+    symbol: str,
+    side: str,
+    notional: float,
+    price_hint: float | None,
+) -> tuple[list[str], dict[str, Any]]:
+    account = order.get("account_snapshot") or order.get("account")
+    equity = _float(_extract_value(account, "equity", "last_equity", "portfolio_value"))
+    context: dict[str, Any] = {
+        "max_gross_exposure": float(profile.max_gross_exposure),
+        "max_symbol_exposure": float(profile.max_symbol_exposure),
+        "equity": equity,
+        "evaluated": False,
+    }
+    if equity is None or equity <= 0.0:
+        return [], context
+
+    gross_notional = 0.0
+    symbol_notional = 0.0
+    positions = order.get("positions")
+    if isinstance(positions, Iterable) and not isinstance(positions, (str, bytes, Mapping)):
+        for position in positions:
+            market_value = _position_market_value(position, fallback_price=price_hint)
+            if market_value is None:
+                continue
+            gross_notional += market_value
+            pos_symbol = str(_extract_value(position, "symbol") or "").strip().upper()
+            if pos_symbol == symbol:
+                symbol_notional += market_value
+
+    open_orders = order.get("open_orders")
+    if isinstance(open_orders, Iterable) and not isinstance(open_orders, (str, bytes, Mapping)):
+        for open_order in open_orders:
+            open_qty = _float(
+                _extract_value(open_order, "remaining_qty", "unfilled_qty", "qty", "quantity")
+            )
+            if open_qty is None or open_qty <= 0.0:
+                continue
+            open_price = _float(
+                _extract_value(open_order, "price_hint", "limit_price", "price")
+            )
+            if open_price is None:
+                open_price = price_hint
+            if open_price is None or open_price <= 0.0:
+                continue
+            open_notional = abs(open_qty) * float(open_price)
+            gross_notional += open_notional
+            open_symbol = str(_extract_value(open_order, "symbol") or "").strip().upper()
+            if open_symbol == symbol:
+                symbol_notional += open_notional
+
+    exposure_delta = max(float(notional), 0.0)
+    if exposure_delta > 0.0 and _order_closes_position(order, side, symbol):
+        exposure_delta = -min(symbol_notional, exposure_delta)
+
+    projected_gross = max(0.0, gross_notional + exposure_delta)
+    projected_symbol = max(0.0, symbol_notional + exposure_delta)
+    gross_ratio = projected_gross / float(equity)
+    symbol_ratio = projected_symbol / float(equity)
+    context.update(
+        {
+            "evaluated": True,
+            "gross_notional": gross_notional,
+            "symbol_notional": symbol_notional,
+            "order_notional": notional if notional > 0.0 else None,
+            "projected_gross_exposure": gross_ratio,
+            "projected_symbol_exposure": symbol_ratio,
+        }
+    )
+    reasons: list[str] = []
+    if gross_ratio > float(profile.max_gross_exposure):
+        reasons.append("max_gross_exposure_exceeded")
+    if symbol_ratio > float(profile.max_symbol_exposure):
+        reasons.append("max_symbol_exposure_exceeded")
+    return reasons, context
 
 
 def _append_event(payload: Mapping[str, Any], *, profile_name: str = "live_canary") -> None:
@@ -199,7 +366,7 @@ def evaluate_launch_profile_order(
     live_capital_active = mode == "live"
 
     symbol = str(order.get("symbol") or "").strip().upper()
-    side = str(order.get("side") or "").strip().lower()
+    side = _side_token(order.get("side"))
     quantity = _float(order.get("quantity") if order.get("quantity") not in (None, "") else order.get("qty"))
     explicit_notional = _float(order.get("notional"))
     price_hint = _float(order.get("price_hint") or order.get("limit_price") or order.get("price"))
@@ -262,7 +429,7 @@ def evaluate_launch_profile_order(
     reasons: list[str] = []
     if resolved.allowed_symbols and symbol not in resolved.allowed_symbols:
         reasons.append("symbol_not_allowlisted")
-    if not resolved.shorts_allowed and _side_is_short(side):
+    if not resolved.shorts_allowed and _order_is_short_intent(order, side, symbol):
         reasons.append("shorts_disabled")
     if resolved.max_notional_per_order is not None and notional > float(resolved.max_notional_per_order):
         reasons.append("notional_cap_exceeded")
@@ -279,6 +446,15 @@ def evaluate_launch_profile_order(
         reasons.append("quote_age_cap_exceeded")
     if resolved.max_spread_bps is not None and spread_bps is not None and spread_bps > float(resolved.max_spread_bps):
         reasons.append("spread_cap_exceeded")
+    exposure_reasons, exposure_context = _exposure_gate_reasons(
+        order,
+        profile=resolved,
+        symbol=symbol,
+        side=side,
+        notional=notional,
+        price_hint=price_hint,
+    )
+    reasons.extend(exposure_reasons)
     if not provider_ok:
         reasons.extend(str(reason) for reason in provider_context.get("reasons", []))
     if resolved.promotion_required and not readiness_ok:
@@ -297,6 +473,7 @@ def evaluate_launch_profile_order(
         "allowed": allowed,
         "reasons": reasons,
         "provider_authority": provider_context,
+        "exposure": exposure_context,
         "live_capital_readiness": readiness_context,
         "operator_approval_required": bool(resolved.manual_approval_required),
     }

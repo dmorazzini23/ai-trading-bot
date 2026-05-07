@@ -291,13 +291,15 @@ def test_safe_column_helpers_and_basic_ohlcv_validation():
 
 
 def test_price_feature_helpers_use_minute_data(monkeypatch):
+    idx = pd.date_range(pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=29), periods=30, freq="min")
     data = pd.DataFrame(
         {
             "high": list(range(30, 60)),
             "low": list(range(20, 50)),
             "close": list(range(25, 55)),
             "volume": [100] * 29 + [500],
-        }
+        },
+        index=idx,
     )
     monkeypatch.setattr(
         "ai_trading.core.bot_engine.fetch_minute_df_safe",
@@ -310,6 +312,27 @@ def test_price_feature_helpers_use_minute_data(monkeypatch):
 
     monkeypatch.setattr("ai_trading.core.bot_engine.fetch_minute_df_safe", lambda _symbol: None)
     assert base.get_rolling_atr("SPY") == 0.0
+    assert base.get_current_vwap("SPY") == 0.0
+    assert base.get_volume_spike_factor("SPY") == 1.0
+
+
+def test_price_feature_helpers_fail_closed_on_stale_minute_data(monkeypatch):
+    idx = pd.date_range("2020-01-02 14:30:00+00:00", periods=30, freq="min")
+    stale = pd.DataFrame(
+        {
+            "high": list(range(30, 60)),
+            "low": list(range(20, 50)),
+            "close": list(range(25, 55)),
+            "volume": [100] * 29 + [500],
+        },
+        index=idx,
+    )
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine.fetch_minute_df_safe",
+        lambda _symbol: stale,
+    )
+
+    assert base.get_rolling_atr("SPY", window=3) == 0.0
     assert base.get_current_vwap("SPY") == 0.0
     assert base.get_volume_spike_factor("SPY") == 1.0
 

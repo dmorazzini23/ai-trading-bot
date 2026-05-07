@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: T201
 """
 Secret Scanner Hook
 Detects hardcoded secrets before git commits
@@ -181,7 +182,7 @@ def should_skip_file(file_path):
             chunk = f.read(1024)
             if b'\0' in chunk:
                 return True
-    except:
+    except OSError:
         return True
 
     return False

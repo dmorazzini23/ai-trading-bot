@@ -169,6 +169,10 @@ def _tighten_float(default: float | None, override: float | None) -> float | Non
     return min(float(default), float(override))
 
 
+def _coalesce_float(value: float | None, default: float) -> float:
+    return default if value is None else float(value)
+
+
 def _tighten_symbols(default: tuple[str, ...], override: tuple[str, ...]) -> tuple[str, ...]:
     if not default:
         return override
@@ -235,8 +239,8 @@ def resolve_launch_profile(name: str | None = None) -> LaunchProfile:
         allowed_symbols = _tighten_symbols(base.allowed_symbols, allowed_symbols)
     return LaunchProfile(
         name=base.name,
-        max_gross_exposure=max_gross_exposure or base.max_gross_exposure,
-        max_symbol_exposure=max_symbol_exposure or base.max_symbol_exposure,
+        max_gross_exposure=_coalesce_float(max_gross_exposure, base.max_gross_exposure),
+        max_symbol_exposure=_coalesce_float(max_symbol_exposure, base.max_symbol_exposure),
         max_order_count=max_order_count,
         max_daily_loss=max_daily_loss,
         max_notional_per_order=max_notional_per_order,

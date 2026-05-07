@@ -61,6 +61,17 @@ from ai_trading.meta_learning.persistence import record_trade_fill
 
 logger = get_logger(__name__)
 ORDER_STALE_AFTER_S = 8 * 60
+_STALE_ORDER_CANCELABLE_STATUSES = frozenset(
+    {
+        "new",
+        "accepted",
+        "accepted_for_bidding",
+        "pending",
+        "pending_new",
+        "pending_replace",
+        "partially_filled",
+    }
+)
 
 
 @dataclass
@@ -230,7 +241,11 @@ def _cleanup_stale_orders(now: float | None = None, max_age_s: int | None = None
     removed = 0
     with _order_tracking_lock:
         for oid, info in list(_active_orders.items()):
-            if now_s - info.submitted_time >= max_age:
+            status = str(getattr(info, "last_status", "") or "").strip().lower()
+            if (
+                now_s - info.submitted_time >= max_age
+                and status not in _STALE_ORDER_CANCELABLE_STATUSES
+            ):
                 _active_orders.pop(oid, None)
                 removed += 1
     return removed
@@ -3095,9 +3110,10 @@ class ExecutionEngine:
             return False
         try:
             ord_obj = self.broker_interface.get_order(order_id)
-            if getattr(ord_obj, "status", "").lower() == "new":
+            if str(getattr(ord_obj, "status", "") or "").strip().lower() in _STALE_ORDER_CANCELABLE_STATUSES:
                 self.broker_interface.cancel_order(order_id)
-            return True
+                return True
+            return False
         except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - broker interface may vary
             logger.debug("Failed to cancel stale order %s: %s", order_id, exc)
             return False
@@ -3135,9 +3151,14 @@ class ExecutionEngine:
         max_age = max_age_seconds if max_age_seconds is not None else ORDER_STALE_AFTER_S
         with _order_tracking_lock:
             stale_ids = [oid for oid, info in _active_orders.items() if now_s - info.submitted_time >= max_age]
+        removed = 0
         for oid in stale_ids:
-            self._cancel_stale_order(oid)
-        return _cleanup_stale_orders(now_s, max_age)
+            if self._cancel_stale_order(oid):
+                with _order_tracking_lock:
+                    if _active_orders.pop(oid, None) is not None:
+                        removed += 1
+        removed += _cleanup_stale_orders(now_s, max_age)
+        return removed
 
     def check_stops(self) -> None:
         """

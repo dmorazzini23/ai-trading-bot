@@ -119,6 +119,7 @@ class ReplayModelContext:
     positive_class_index: int
     orientation_inverse: bool
     symbol_penalties: dict[str, dict[str, float]]
+    supports_short_scores: bool = False
 
 
 @dataclass(frozen=True)
@@ -301,6 +302,9 @@ def _policy_finalize_diagnostics(
         "gate_bind_ranked": gate_bind_ranked,
         "bandit_shadow_candidates": int(counters.get("bandit_shadow_candidates", 0)),
         "bandit_applied": int(counters.get("bandit_applied", 0)),
+        "opportunity_openings_only_skipped": int(
+            counters.get("opportunity_openings_only_skipped", 0)
+        ),
     }
 
 
@@ -391,6 +395,15 @@ def _load_replay_model_context(args: argparse.Namespace) -> ReplayModelContext |
         "rsi_centered",
     )
     orientation_raw = str(getattr(model, "edge_score_orientation_", "direct") or "").strip().lower()
+    label_sides_raw = getattr(model, "replay_label_sides_", ())
+    try:
+        label_sides = {str(item).strip().lower() for item in label_sides_raw}
+    except TypeError:
+        label_sides = set()
+    semantics = str(getattr(model, "edge_score_semantics_", "") or "").strip().lower()
+    supports_short_scores = bool(getattr(model, "supports_short_scores_", False)) or bool(
+        label_sides.intersection({"sell", "short", "sell_short"})
+    ) or semantics in {"directional", "long_short_probability", "signed_edge"}
     classes = getattr(model, "classes_", None)
     try:
         class_count = len(list(classes)) if classes is not None else 2
@@ -408,6 +421,7 @@ def _load_replay_model_context(args: argparse.Namespace) -> ReplayModelContext |
         symbol_penalties=_extract_symbol_penalties(
             getattr(model, "edge_negative_symbol_penalties_", None)
         ),
+        supports_short_scores=supports_short_scores,
     )
     logger.info(
         "OFFLINE_REPLAY_MODEL_SCORING_ENABLED",
@@ -416,6 +430,7 @@ def _load_replay_model_context(args: argparse.Namespace) -> ReplayModelContext |
             "feature_count": len(context.feature_names),
             "orientation": "inverse" if context.orientation_inverse else "direct",
             "symbol_penalty_count": len(context.symbol_penalties),
+            "supports_short_scores": bool(context.supports_short_scores),
         },
     )
     return context
@@ -2081,6 +2096,7 @@ def _run_parity_simulation(
     markout_veto_counters: Counter[str] = Counter()
     markout_veto_config = _resolve_markout_veto_config(args)
     markout_veto_history: dict[str, deque[float]] = {}
+    opportunity_opened_symbols: set[str] = set()
     synthetic_index = 0
     for symbol, csv_path in symbol_paths.items():
         frame, load_report = load_historical_bars(csv_path, timestamp_col=args.timestamp_col)
@@ -2138,7 +2154,11 @@ def _run_parity_simulation(
         side: str | None = None
         if score >= entry_score_threshold:
             side = "buy"
-        elif cfg.allow_shorts and score <= -entry_score_threshold:
+        elif (
+            cfg.allow_shorts
+            and (model_context is None or model_context.supports_short_scores)
+            and score <= -entry_score_threshold
+        ):
             side = "sell"
         if side is None:
             return None
@@ -2157,6 +2177,7 @@ def _run_parity_simulation(
         adjusted_capture = float(expected_capture_proxy)
         replay_adjustment = 0.0
         bandit_adjustment = 0.0
+        opportunity_gate_skipped = False
 
         next_close_raw = bar.get("next_close")
         next_close = None
@@ -2170,14 +2191,22 @@ def _run_parity_simulation(
 
         if policy_profile is not None:
             policy_counters["candidates"] += 1
-            keep_count = _policy_keep_count(
-                group_size=group_size,
-                top_quantile=policy_profile.opportunity_top_quantile,
-                min_symbols=policy_profile.opportunity_min_symbols,
+            opportunity_gate_applied = not (
+                policy_profile.opportunity_openings_only
+                and symbol in opportunity_opened_symbols
             )
-            if rank_index >= keep_count:
-                policy_counters["reject_opportunity_quantile"] += 1
-                return None
+            if opportunity_gate_applied:
+                keep_count = _policy_keep_count(
+                    group_size=group_size,
+                    top_quantile=policy_profile.opportunity_top_quantile,
+                    min_symbols=policy_profile.opportunity_min_symbols,
+                )
+                if rank_index >= keep_count:
+                    policy_counters["reject_opportunity_quantile"] += 1
+                    return None
+            else:
+                policy_counters["opportunity_openings_only_skipped"] += 1
+                opportunity_gate_skipped = True
             if fill_prob_proxy < policy_profile.expected_capture_fill_prob_floor:
                 policy_counters["reject_fill_prob_floor"] += 1
                 return None
@@ -2232,6 +2261,7 @@ def _run_parity_simulation(
                     return None
         if policy_profile is not None:
             policy_counters["accepted"] += 1
+            opportunity_opened_symbols.add(symbol)
 
         entry_side = side if side == "buy" else "sell_short"
         entry_slippage_bps = _replay_slippage_bps(
@@ -2282,6 +2312,7 @@ def _run_parity_simulation(
             "rank_score_baseline": float(expected_capture_proxy),
             "rank_score_post_adjustments": float(adjusted_capture),
             "accepted_reason": "policy_controls" if policy_profile is not None else "thresholds",
+            "opportunity_openings_only_skip": bool(opportunity_gate_skipped),
             "veto_shadow_reason": veto_shadow_reason,
             "veto_bucket": veto_bucket,
             "size_multiplier": float(size_multiplier),
@@ -2379,6 +2410,7 @@ def _run_parity_simulation(
             "orientation": "inverse" if model_context.orientation_inverse else "direct",
             "symbol_penalty_count": len(model_context.symbol_penalties),
             "feature_count": len(model_context.feature_names),
+            "supports_short_scores": bool(model_context.supports_short_scores),
         }
     else:
         aggregate["model_score"] = {"enabled": False}

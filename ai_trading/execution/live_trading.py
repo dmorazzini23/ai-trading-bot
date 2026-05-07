@@ -29951,6 +29951,18 @@ class ExecutionEngine:
             account_snapshot = self._get_account_snapshot()
             if isinstance(order, dict):
                 order["account_snapshot"] = account_snapshot
+        if isinstance(order, dict) and not closing_position:
+            broker_snapshot = getattr(self, "_broker_sync", None)
+            if broker_snapshot is None:
+                sync_fn = getattr(self, "synchronize_broker_state", None)
+                if callable(sync_fn):
+                    try:
+                        broker_snapshot = sync_fn()
+                    except LIVE_TRADING_FALLBACK_EXC:
+                        broker_snapshot = None
+            if broker_snapshot is not None:
+                order.setdefault("positions", tuple(getattr(broker_snapshot, "positions", ()) or ()))
+                order.setdefault("open_orders", tuple(getattr(broker_snapshot, "open_orders", ()) or ()))
 
         if not closing_position:
             exposure_settings = self._resolve_exposure_normalization_settings()

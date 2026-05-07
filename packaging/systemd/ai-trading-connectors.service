@@ -14,6 +14,8 @@ Environment=AI_TRADING_RUNTIME_ENV_DST=/run/ai-trading-bot/ai-trading-runtime.en
 Environment=AI_TRADING_RUNTIME_ENV_PATH=/run/ai-trading-bot/ai-trading-runtime.env
 EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env
 Environment=AI_TRADING_DOTENV_RUNTIME_OVERRIDE=1
+Environment=API_PORT=9001
+Environment=HEALTHCHECK_PORT=9001
 ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh
 ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python /home/aiuser/ai-trading-bot/scripts/connector_incident_dispatch.py
 StandardOutput=journal

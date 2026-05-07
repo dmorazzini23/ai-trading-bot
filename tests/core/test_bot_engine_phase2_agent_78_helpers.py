@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from ai_trading.core import bot_engine
@@ -47,6 +48,41 @@ def test_order_normalizers_cover_enum_bad_values_and_nested_fill_timestamp() -> 
     fill_ts = bot_engine._extract_order_fill_timestamp(nested)
 
     assert fill_ts == naive_fill.replace(tzinfo=UTC)
+
+
+def test_live_entry_deferred_when_account_snapshot_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+
+    def fake_get_env(key: str, default: Any = None, *, cast: Any = None, **_kwargs: Any) -> Any:
+        _ = cast
+        return "live" if key == "EXECUTION_MODE" else default
+
+    monkeypatch.setattr(bot_engine, "get_env", fake_get_env)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class Recorder:
+        def record(self, **kwargs: Any) -> None:
+            calls.append(("record", kwargs))
+
+    class Api:
+        @staticmethod
+        def get_account() -> Any:
+            raise ConnectionError("account unavailable")
+
+    ctx = SimpleNamespace(api=Api(), execution_mode="live")
+    state = SimpleNamespace(_decision_journal_recorder=Recorder())
+    frame = pd.DataFrame(
+        {"atr": [1.0], "close": [100.0]},
+        index=[datetime.now(UTC)],
+    )
+
+    assert bot_engine._enter_long(ctx, state, "AAPL", 1000.0, frame, 0.5, 0.8, "test") is True
+    assert bot_engine._enter_short(ctx, state, "AAPL", frame, -0.5, 0.8, "test") is True
+    assert [call[1]["gates"] for call in calls] == [
+        ["ACCOUNT_UNAVAILABLE"],
+        ["ACCOUNT_UNAVAILABLE"],
+    ]
+    assert all(call[1]["accepted"] is False for call in calls)
 
 
 def test_sparse_and_quote_source_helpers_cover_error_fallbacks(

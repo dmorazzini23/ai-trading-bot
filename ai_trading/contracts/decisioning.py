@@ -30,6 +30,14 @@ def _safe_float(value: Any) -> float | None:
     return parsed
 
 
+def _first_safe_float(*values: Any) -> float | None:
+    for value in values:
+        parsed = _safe_float(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
 def _safe_text(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
@@ -550,8 +558,10 @@ def _derive_broker_result(
         or (order_intent.side if order_intent is not None else None),
         qty=_safe_float(payload_map.get("qty") or payload_map.get("shares"))
         or (order_intent.qty if order_intent is not None else None),
-        filled_qty=_safe_float(payload_map.get("filled_qty"))
-        or _safe_float(tca_map.get("total_qty")),
+        filled_qty=_first_safe_float(
+            payload_map.get("filled_qty"),
+            tca_map.get("total_qty"),
+        ),
         limit_price=_safe_float(payload_map.get("price") or payload_map.get("limit_price"))
         or (order_intent.limit_price if order_intent is not None else None),
         fill_price=_safe_float(tca_map.get("fill_price") or tca_map.get("fill_vwap")),

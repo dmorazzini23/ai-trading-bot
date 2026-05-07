@@ -19442,7 +19442,7 @@ def check_daily_loss(ctx: BotContext, state: BotState) -> bool:
     acct = safe_alpaca_get_account(ctx)
     if acct is None:
         logger.warning("Daily loss check skipped - Alpaca account unavailable")
-        return False
+        return _entry_requires_account_snapshot(ctx)
     equity = float(acct.equity)
     today_date = date.today()
     try:
@@ -19474,7 +19474,7 @@ def check_weekly_loss(ctx: BotContext, state: BotState) -> bool:
     acct = safe_alpaca_get_account(ctx)
     if acct is None:
         logger.warning("Weekly loss check skipped - Alpaca account unavailable")
-        return False
+        return _entry_requires_account_snapshot(ctx)
     equity = float(acct.equity)
     today_date = date.today()
     week_start = today_date - timedelta(days=today_date.weekday())
@@ -19610,7 +19610,7 @@ def too_many_positions(ctx: Any, symbol: str | None = None) -> bool:
 
     except AttributeError as e:
         logger.warning(f"[too_many_positions] Positions API unavailable: {e}")
-        return False
+        return _entry_requires_account_snapshot(ctx)
     except (
         FileNotFoundError,
         PermissionError,
@@ -19623,7 +19623,7 @@ def too_many_positions(ctx: Any, symbol: str | None = None) -> bool:
         APIError,
     ) as e:  # AI-AGENT-REF: narrow exception
         logger.warning(f"[too_many_positions] Could not fetch positions: {e}")
-        return False
+        return _entry_requires_account_snapshot(ctx)
 
 
 def too_correlated(ctx: Any, sym: str) -> bool:
@@ -20241,6 +20241,8 @@ def _enforce_buying_power_limit(
                 acct = None
 
     if acct is None:
+        if _entry_requires_account_snapshot(ctx):
+            return 0, None
         return qty, None
 
     available: float | None = None
@@ -20268,6 +20270,14 @@ def _enforce_buying_power_limit(
     if max_qty >= qty:
         return qty, available
     return max_qty, available
+
+
+def _entry_requires_account_snapshot(ctx: Any) -> bool:
+    execution_mode = str(
+        getattr(ctx, "execution_mode", get_env("EXECUTION_MODE", "paper", cast=str))
+        or "paper"
+    ).strip().lower()
+    return execution_mode == "live"
 
 
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
@@ -25626,6 +25636,17 @@ def _enter_long(
             account_obj = get_account()
         except (APIError, TimeoutError, ConnectionError, RequestException, AttributeError, ValueError):
             account_obj = None
+    if account_obj is None and _entry_requires_account_snapshot(ctx):
+        logger.warning(
+            "ORDER_DEFERRED_ACCOUNT_UNAVAILABLE",
+            extra={"symbol": symbol, "side": "buy"},
+        )
+        _record_order_journal(
+            accepted=False,
+            gates=["ACCOUNT_UNAVAILABLE"],
+            event="account_unavailable_defer",
+        )
+        return True
     strategy_label = str(strat or "").strip().lower()
     feed_reliability = _get_symbol_feed_reliability(symbol)
     primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
@@ -26655,7 +26676,6 @@ def _enter_short(
             logger.debug("ORDER_DECISION_RECORD_FAILED", exc_info=True)
 
     prefer_backup_quote = bool(getattr(state, "prefer_backup_quotes", False))
-    feed_reliability = _get_symbol_feed_reliability(symbol)
     account_obj: Any | None = None
     api_obj = getattr(ctx, "api", None)
     get_account = getattr(api_obj, "get_account", None)
@@ -26664,6 +26684,18 @@ def _enter_short(
             account_obj = get_account()
         except (APIError, TimeoutError, ConnectionError, RequestException, AttributeError, ValueError):
             account_obj = None
+    if account_obj is None and _entry_requires_account_snapshot(ctx):
+        logger.warning(
+            "ORDER_DEFERRED_ACCOUNT_UNAVAILABLE",
+            extra={"symbol": symbol, "side": "sell_short"},
+        )
+        _record_order_journal(
+            accepted=False,
+            gates=["ACCOUNT_UNAVAILABLE"],
+            event="account_unavailable_defer",
+        )
+        return True
+    feed_reliability = _get_symbol_feed_reliability(symbol)
 
     if account_obj is not None:
         shorting_power = _safe_float(getattr(account_obj, "shorting_power", None))

@@ -255,3 +255,54 @@ def test_launch_profile_gate_skips_non_runtime_execution_modes(monkeypatch):
     assert allowed is True
     assert context["enabled"] is False
     assert context["reason"] == "execution_mode_not_enforced"
+
+
+def test_live_canary_blocks_projected_gross_and_symbol_exposure(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+
+    allowed, context = evaluate_canary_order(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 1,
+            "price_hint": 60.0,
+            "quote_age_ms": 100.0,
+            "spread_bps": 2.0,
+            "account_snapshot": {"equity": 1000.0},
+            "positions": [{"symbol": "MSFT", "qty": 20, "market_price": 1.0}],
+        },
+        execution_mode="live",
+    )
+
+    assert allowed is False
+    assert "max_gross_exposure_exceeded" in context["reasons"]
+    assert "max_symbol_exposure_exceeded" in context["reasons"]
+    assert context["exposure"]["evaluated"] is True
+
+
+def test_live_canary_sell_to_close_is_not_short_and_reduces_exposure(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+
+    allowed, context = evaluate_canary_order(
+        {
+            "symbol": "AAPL",
+            "side": "sell",
+            "quantity": 3,
+            "price_hint": 10.0,
+            "quote_age_ms": 100.0,
+            "spread_bps": 2.0,
+            "closing_position": True,
+            "account_snapshot": {"equity": 1000.0},
+            "positions": [{"symbol": "AAPL", "qty": 4, "market_price": 10.0}],
+        },
+        execution_mode="live",
+    )
+
+    assert allowed is True
+    assert "shorts_disabled" not in context["reasons"]
+    assert "max_gross_exposure_exceeded" not in context["reasons"]
+    assert "max_symbol_exposure_exceeded" not in context["reasons"]

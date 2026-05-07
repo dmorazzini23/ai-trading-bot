@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from ai_trading.models.artifacts import write_artifact_manifest
+from ai_trading.tools import offline_replay as replay_tool
 from ai_trading.tools.offline_replay import (
     _accepted_candidate_row,
     _resolve_markout_veto_config,
@@ -783,6 +784,90 @@ def test_offline_replay_apply_policy_controls_changes_simulation_outcome(
     ) > 0
 
 
+def test_offline_replay_opportunity_openings_only_skips_quantile_after_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    low_idx = pd.date_range("2026-01-02 14:30:00+00:00", periods=3, freq="min")
+    high_idx = pd.date_range("2026-01-02 14:31:00+00:00", periods=2, freq="min")
+    for symbol, idx, close in (
+        ("LOW", low_idx, [100.0, 100.2, 100.4]),
+        ("HIGH", high_idx, [101.0, 101.2]),
+    ):
+        pd.DataFrame(
+            {
+                "timestamp": idx,
+                "open": close,
+                "high": [value + 0.1 for value in close],
+                "low": [value - 0.1 for value in close],
+                "close": close,
+                "volume": [10_000.0] * len(close),
+            }
+        ).to_csv(data_dir / f"{symbol}.csv", index=False)
+
+    def _constant_signal(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+        return (
+            pd.Series([1.0] * len(frame), index=frame.index),
+            pd.Series([1.0] * len(frame), index=frame.index),
+        )
+
+    def _rank_low_second_after_first_open(bars: list[dict[str, Any]]) -> None:
+        for bar in bars:
+            symbol = str(bar["symbol"])
+            ts = pd.Timestamp(str(bar["ts"]))
+            if symbol == "LOW" and ts.minute == 30:
+                rank_index = 0
+                group_size = 1
+            elif symbol == "LOW":
+                rank_index = 1
+                group_size = 2
+            else:
+                rank_index = 0
+                group_size = 2
+            bar["policy_fill_prob_proxy"] = 1.0
+            bar["policy_expected_capture_proxy_bps"] = 10.0
+            bar["policy_replay_quality_proxy_bps"] = 0.0
+            bar["policy_bandit_proxy_bps"] = 0.0
+            bar["policy_bandit_samples"] = 0
+            bar["policy_bar_age_hours"] = 0.0
+            bar["policy_rank_index"] = rank_index
+            bar["policy_group_size"] = group_size
+
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MIN_DELAY_MS", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MAX_DELAY_MS", "0")
+    monkeypatch.setenv("AI_TRADING_EXEC_OPPORTUNITY_TOP_QUANTILE", "0.99")
+    monkeypatch.setenv("AI_TRADING_EXEC_OPPORTUNITY_MIN_SYMBOLS", "1")
+    monkeypatch.setenv("AI_TRADING_EXEC_EXPECTED_CAPTURE_FILL_PROB_FLOOR", "0.1")
+    monkeypatch.setenv("AI_TRADING_EXEC_EXPECTED_CAPTURE_FLOOR_BPS", "0.0")
+    monkeypatch.setattr(replay_tool, "_compute_signal", _constant_signal)
+    monkeypatch.setattr(replay_tool, "_attach_policy_context", _rank_low_second_after_first_open)
+
+    out_path = tmp_path / "openings_only.json"
+    assert main(
+        [
+            "--data-dir",
+            str(data_dir),
+            "--simulation-mode",
+            "--apply-policy-controls",
+            "--confidence-threshold",
+            "0.0",
+            "--entry-score-threshold",
+            "0.01",
+            "--output-json",
+            str(out_path),
+        ]
+    ) == 0
+
+    aggregate = _load_json(out_path)["aggregate"]
+    diagnostics = aggregate["policy_diagnostics"]
+    assert diagnostics["opportunity_openings_only_skipped"] == 3
+    assert int(aggregate["accepted_candidate_count"]) == 5
+
+
 def test_offline_replay_exports_accepted_candidate_components(
     tmp_path: Path,
     monkeypatch,
@@ -1116,6 +1201,48 @@ def test_offline_replay_model_scoring_respects_inverse_orientation(
     assert int(inverse_payload["aggregate"]["total_trades"]) == 0
     assert direct_payload["aggregate"]["model_score"]["enabled"] is True
     assert inverse_payload["aggregate"]["model_score"]["orientation"] == "inverse"
+
+
+def test_offline_replay_long_only_model_probabilities_do_not_create_shorts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    csv_path = tmp_path / "LONGONLY.csv"
+    model_path = tmp_path / "long_only_model.joblib"
+    out_path = tmp_path / "long_only.json"
+    _write_synthetic_bars(csv_path, periods=80)
+    _write_model(model_path, p_edge=0.1, orientation="direct")
+
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MIN_DELAY_MS", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MAX_DELAY_MS", "0")
+
+    rc = main(
+        [
+            "--csv",
+            str(csv_path),
+            "--simulation-mode",
+            "--allow-shorts",
+            "--model-path",
+            str(model_path),
+            "--confidence-threshold",
+            "0.0",
+            "--entry-score-threshold",
+            "0.05",
+            "--output-json",
+            str(out_path),
+        ]
+    )
+
+    assert rc == 0
+    payload = _load_json(out_path)
+    assert payload["aggregate"]["model_score"]["supports_short_scores"] is False
+    assert int(payload["aggregate"]["total_trades"]) == 0
+    assert not any(
+        intent["side"] in {"sell", "sell_short"}
+        for intent in payload["replay"]["intents"]
+    )
 
 
 def test_offline_replay_model_scoring_applies_negative_symbol_penalties(

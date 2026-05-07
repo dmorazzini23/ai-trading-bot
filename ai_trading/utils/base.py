@@ -161,6 +161,54 @@ def should_log_stale(symbol: str, last_ts: Timestamp, *, ttl: int = 300) -> bool
         return True
 
 
+def _minute_frame_latest_timestamp(df: DataFrame) -> Timestamp | None:
+    try:
+        import pandas as pd  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - pandas missing
+        raise ImportError(
+            "pandas is required for minute data freshness checks. Install with `pip install ai-trading-bot[pandas]`."
+        ) from exc
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return None
+    if isinstance(df.index, pd.DatetimeIndex):
+        latest = pd.to_datetime(df.index, errors="coerce", utc=True).max()
+        return None if pd.isna(latest) else cast(Timestamp, latest)
+    for column in ("timestamp", "ts", "datetime", "date"):
+        if column not in df.columns:
+            continue
+        latest = pd.to_datetime(df[column], errors="coerce", utc=True).max()
+        if not pd.isna(latest):
+            return cast(Timestamp, latest)
+    return None
+
+
+def _fresh_minute_frame_or_none(df: DataFrame | None, *, symbol: str) -> DataFrame | None:
+    if df is None:
+        return None
+    latest = _minute_frame_latest_timestamp(df)
+    if latest is None:
+        logger.warning(
+            "MINUTE_DATA_DIRECT_CONSUMER_STALE",
+            extra={"symbol": symbol, "reason": "missing_timestamp"},
+        )
+        return None
+    tolerance_seconds = max(0, int(get_settings().minute_data_freshness_tolerance_seconds))
+    age_seconds = max(0.0, (dt.datetime.now(dt.UTC) - latest.to_pydatetime()).total_seconds())
+    if age_seconds > tolerance_seconds:
+        if should_log_stale(symbol, latest, ttl=tolerance_seconds or 300):
+            logger.warning(
+                "MINUTE_DATA_DIRECT_CONSUMER_STALE",
+                extra={
+                    "symbol": symbol,
+                    "age_seconds": float(age_seconds),
+                    "tolerance_seconds": int(tolerance_seconds),
+                    "latest_timestamp": str(latest),
+                },
+            )
+        return None
+    return df
+
+
 def get_trading_calendar(name: str = "XNYS"):
     """Return a trading calendar for the given exchange."""
     try:
@@ -607,7 +655,7 @@ def get_rolling_atr(symbol: str, window: int = 14) -> float:
     """Return normalized ATR over ``window`` days."""
     from ai_trading.core.bot_engine import fetch_minute_df_safe
 
-    df = fetch_minute_df_safe(symbol)
+    df = _fresh_minute_frame_or_none(fetch_minute_df_safe(symbol), symbol=symbol)
     if df is None or df.empty:
         return 0.0
     try:
@@ -636,7 +684,7 @@ def get_current_vwap(symbol: str) -> float:
     """Return simple intraday VWAP for ``symbol``."""
     from ai_trading.core.bot_engine import fetch_minute_df_safe
 
-    df = fetch_minute_df_safe(symbol)
+    df = _fresh_minute_frame_or_none(fetch_minute_df_safe(symbol), symbol=symbol)
     if df is None or df.empty:
         return 0.0
     pv = (df["close"] * df["volume"]).sum()
@@ -650,7 +698,7 @@ def get_volume_spike_factor(symbol: str) -> float:
     """Return last minute volume over 20-period average."""
     from ai_trading.core.bot_engine import fetch_minute_df_safe
 
-    df = fetch_minute_df_safe(symbol)
+    df = _fresh_minute_frame_or_none(fetch_minute_df_safe(symbol), symbol=symbol)
     if df is None or len(df) < 21:
         return 1.0
     last_vol = df["volume"].iloc[-1]

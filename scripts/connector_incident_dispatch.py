@@ -89,6 +89,7 @@ _SEVERITY_RANKS = {
     "error": 2,
     "critical": 3,
 }
+_DEFAULT_CONNECTOR_HEALTH_PORT = 9001
 
 
 def _normalize_severity(value: Any, *, default: str = "warning") -> str:
@@ -100,6 +101,18 @@ def _severity_at_least(severity: str, minimum: str) -> bool:
     return _SEVERITY_RANKS[severity] >= _SEVERITY_RANKS[minimum]
 
 
+def _connector_health_port(env_map: Mapping[str, str]) -> int:
+    for key in (
+        "AI_TRADING_CONNECTOR_HEALTH_PORT",
+        "HEALTHCHECK_PORT",
+        "API_PORT",
+    ):
+        parsed = _int_env(env_map.get(key))
+        if parsed is not None and parsed > 0:
+            return parsed
+    return _DEFAULT_CONNECTOR_HEALTH_PORT
+
+
 def _resolve_runtime_env_path(*, env: Mapping[str, str], repo_root: Path) -> Path:
     raw = str(env.get("AI_TRADING_RUNTIME_ENV_PATH") or "").strip()
     if raw:
@@ -107,10 +120,13 @@ def _resolve_runtime_env_path(*, env: Mapping[str, str], repo_root: Path) -> Pat
         if not candidate.is_absolute():
             candidate = (repo_root / candidate).resolve()
         return candidate
+    repo_runtime = (repo_root / "runtime" / "ai-trading-runtime.env").resolve()
+    if repo_root != REPO_ROOT and repo_runtime.exists():
+        return repo_runtime
     packaged_runtime = Path("/run/ai-trading-bot/ai-trading-runtime.env")
     if packaged_runtime.exists():
         return packaged_runtime
-    return (repo_root / "runtime" / "ai-trading-runtime.env").resolve()
+    return repo_runtime
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:
@@ -880,6 +896,7 @@ def run_dispatch(
     }
 
     webhook = (env_map.get("AI_TRADING_SLACK_WEBHOOK_URL") or env_map.get("SLACK_WEBHOOK_URL") or "").strip()
+    health_port = _connector_health_port(env_map)
 
     slack_enabled = _bool_env(env_map.get("AI_TRADING_CONNECTOR_SLACK_ENABLED"), default=True)
     summary["slack"]["enabled"] = slack_enabled
@@ -887,6 +904,7 @@ def run_dispatch(
         if webhook:
             slack_args: dict[str, Any] = {
                 "webhook_url": webhook,
+                "health_port": health_port,
                 "on_change_only": _bool_env(
                     env_map.get("AI_TRADING_CONNECTOR_SLACK_ON_CHANGE_ONLY"),
                     default=True,
@@ -965,6 +983,7 @@ def run_dispatch(
                 default=True,
             ),
             "repeat_cooldown_minutes": _DEFAULT_INCIDENT_REPEAT_COOLDOWN_MINUTES,
+            "health_port": health_port,
             "env": env_map,
         }
         health_timeout_s = _float_env(
@@ -1113,6 +1132,7 @@ def run_dispatch(
         if webhook:
             slack_eod_args: dict[str, Any] = {
                 "webhook_url": webhook,
+                "health_port": health_port,
                 "require_market_closed": _bool_env(
                     env_map.get("AI_TRADING_SLACK_EOD_REQUIRE_MARKET_CLOSED"),
                     default=True,

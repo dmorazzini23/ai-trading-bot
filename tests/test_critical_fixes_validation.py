@@ -267,6 +267,11 @@ class TestCriticalFixes(unittest.TestCase):
             self.assertLess(runtime_idx, override_idx, f"{service_name} should let fresh runtime env win")
             self.assertLess(sync_idx, exec_idx, f"{service_name} should sync runtime env before start")
             self.assertNotIn("/etc/ai-trading-bot/ai-trading.env", content)
+            if service_name == "ai-trading-connectors.service":
+                self.assertIn("Environment=API_PORT=9001", content)
+                self.assertIn("Environment=HEALTHCHECK_PORT=9001", content)
+                self.assertLess(runtime_idx, content.index("Environment=API_PORT=9001"))
+                self.assertLess(runtime_idx, content.index("Environment=HEALTHCHECK_PORT=9001"))
 
         timer_content = (systemd_dir / "ai-trading.timer").read_text(encoding="utf-8")
         self.assertNotIn("Timezone=", timer_content)

@@ -30,11 +30,12 @@ def test_order_validation_helpers_and_stale_cleanup(monkeypatch):
         eng._ensure_valid_price(float("nan"))
 
     monkeypatch.setattr(eng, "_active_orders", {}, raising=False)
-    eng._active_orders["old"] = OrderInfo("old", "AAPL", "buy", 1, 10.0, "new")
+    eng._active_orders["old"] = OrderInfo("old", "AAPL", "buy", 1, 10.0, "filled")
     eng._active_orders["new"] = OrderInfo("new", "MSFT", "sell", 1, 98.0, "new")
+    eng._active_orders["pending"] = OrderInfo("pending", "AMZN", "sell", 1, 98.0, "accepted")
 
     assert eng._cleanup_stale_orders(now=100.0, max_age_s=50) == 1
-    assert set(eng._active_orders) == {"new"}
+    assert set(eng._active_orders) == {"new", "pending"}
 
 
 def test_safe_counter_increment_and_deterministic_jitter(monkeypatch):
@@ -232,3 +233,24 @@ def test_broker_snapshot_positions_and_parent_scope_summaries(monkeypatch):
     assert summaries[0]["avg_success_ratio"] == pytest.approx(0.75)
     assert summaries[0]["avg_fill_ratio"] == pytest.approx(((8 / 10) + (5 / 5)) / 2)
     assert summaries[1]["symbol"] == "MSFT"
+
+
+def test_cleanup_stale_orders_keeps_active_order_when_cancel_fails():
+    eng._active_orders.clear()
+    eng._active_orders["partial"] = OrderInfo(
+        "partial",
+        "AAPL",
+        "sell",
+        1,
+        10.0,
+        "partially_filled",
+    )
+    engine = object.__new__(eng.ExecutionEngine)
+    engine.broker_interface = SimpleNamespace(
+        get_order=lambda order_id: SimpleNamespace(status="partially_filled", id=order_id),
+        cancel_order=lambda _order_id: (_ for _ in ()).throw(RuntimeError("cancel failed")),
+    )
+
+    assert engine.cleanup_stale_orders(now=100.0, max_age_seconds=60) == 0
+    assert set(eng._active_orders) == {"partial"}
+    eng._active_orders.clear()

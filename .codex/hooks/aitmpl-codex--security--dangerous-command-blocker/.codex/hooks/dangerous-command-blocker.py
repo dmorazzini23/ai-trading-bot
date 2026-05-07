@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: T201
 """
 Dangerous Command Blocker Hook
 Multi-level security system for blocking dangerous shell commands

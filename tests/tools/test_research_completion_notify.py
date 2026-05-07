@@ -74,6 +74,38 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
     assert "desired=3" in field_text
 
 
+def test_research_completion_payload_marks_failed_exit_code_failed(tmp_path: Path) -> None:
+    root = tmp_path / "reports"
+    _write_json(
+        root / "latest" / "daily_research_latest.json",
+        {
+            "status": "complete",
+            "paths": {"report": "/runtime/research/stale_complete.json"},
+        },
+    )
+    _write_json(
+        root / "latest" / "daily_operator_summary.json",
+        {"operator_action": "review_prior_report"},
+    )
+
+    payload = research_completion_notify.build_research_completion_payload(
+        cadence="daily",
+        workflow="daily",
+        exit_code=1,
+        report_root=root,
+        channel="#all-beatwallstreet",
+    )
+
+    assert payload["text"].startswith("ai-trading research daily finished: failed")
+    field_text = "\n".join(
+        field["text"]
+        for block in payload["blocks"]
+        if block.get("type") == "section"
+        for field in block.get("fields", [])
+    )
+    assert "*Report status*\ncomplete" in field_text
+
+
 def test_research_completion_notify_dry_run_does_not_post(tmp_path: Path, capsys) -> None:
     rc = research_completion_notify.main(
         [

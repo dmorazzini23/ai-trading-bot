@@ -52,10 +52,13 @@ def test_run_dispatch_calls_active_connectors() -> None:
     assert payload["slack_eod"]["attempted"] is True
     assert payload["openclaw"]["attempted"] is True
     assert calls["slack"]["webhook_url"] == "https://hooks.slack.test/abc"
+    assert calls["slack"]["health_port"] == 9001
     assert calls["slack_eod"]["webhook_url"] == "https://hooks.slack.test/abc"
+    assert calls["slack_eod"]["health_port"] == 9001
     assert calls["slack_eod"]["require_after_hours_training"] is True
     assert calls["slack_eod"]["block_on_training_gate"] is False
     assert calls["incident_snapshot"]["repeat_cooldown_minutes"] == 45
+    assert calls["incident_snapshot"]["health_port"] == 9001
     assert "health_timeout_s" not in calls["incident_snapshot"]
 
 
@@ -292,6 +295,59 @@ def test_run_dispatch_forwards_shared_health_timeout() -> None:
     assert calls["slack"]["health_timeout_s"] == 5.5
     assert calls["slack_eod"]["health_timeout_s"] == 5.5
     assert calls["incident_snapshot"]["health_timeout_s"] == 5.5
+
+
+def test_run_dispatch_forwards_packaged_connector_health_port_default() -> None:
+    calls: dict[str, dict[str, Any]] = {}
+
+    def _slack(args: dict[str, Any]) -> dict[str, Any]:
+        calls["slack"] = args
+        return {"sent": False, "reason": "no_incident_triggered"}
+
+    def _slack_eod(args: dict[str, Any]) -> dict[str, Any]:
+        calls["slack_eod"] = args
+        return {"sent": False, "reason": "market_not_closed"}
+
+    def _incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
+        calls["incident_snapshot"] = args
+        return {"should_alert": False, "fingerprint": "fp-1", "snapshot": {}, "triggers": []}
+
+    payload = dispatch.run_dispatch(
+        env={"AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc"},
+        slack_notifier=_slack,
+        slack_eod_notifier=_slack_eod,
+        openclaw_notifier=lambda args: {"sent": False, "reason": "no_incident_triggered"},
+        incident_snapshot_builder=_incident_snapshot,
+    )
+
+    assert payload["ok"] is True
+    assert calls["slack"]["health_port"] == 9001
+    assert calls["slack_eod"]["health_port"] == 9001
+    assert calls["incident_snapshot"]["health_port"] == 9001
+
+
+def test_run_dispatch_allows_explicit_connector_health_port_override() -> None:
+    calls: dict[str, dict[str, Any]] = {}
+
+    def _incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
+        calls["incident_snapshot"] = args
+        return {"should_alert": False, "fingerprint": "fp-1", "snapshot": {}, "triggers": []}
+
+    payload = dispatch.run_dispatch(
+        env={
+            "AI_TRADING_CONNECTOR_OPENCLAW_ENABLED": "1",
+            "AI_TRADING_CONNECTOR_SLACK_ENABLED": "0",
+            "AI_TRADING_CONNECTOR_SLACK_EOD_ENABLED": "0",
+            "AI_TRADING_CONNECTOR_HEALTH_PORT": "19001",
+        },
+        slack_notifier=lambda args: {"unused": args},
+        slack_eod_notifier=lambda args: {"unused": args},
+        openclaw_notifier=lambda args: {"sent": False, "reason": "no_incident_triggered"},
+        incident_snapshot_builder=_incident_snapshot,
+    )
+
+    assert payload["ok"] is True
+    assert calls["incident_snapshot"]["health_port"] == 19001
 
 
 def test_run_dispatch_forwards_slack_eod_block_on_training_gate() -> None:

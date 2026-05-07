@@ -94,9 +94,10 @@ def build_research_completion_payload(
     readiness = _read_json(readiness_path)
     failed, skipped, blocked_steps = _step_statuses(report)
     trading_day = _read_json(_latest_path(report_root, cadence, "trading_day_latest.json")) if cadence == "daily" else {}
-    status = str(report.get("status") or summary.get("status") or "unknown")
+    report_status = str(report.get("status") or summary.get("status") or "unknown")
+    status = report_status
     if exit_code != 0:
-        status = "failed" if status == "unknown" else status
+        status = "failed"
     failed_text = ", ".join(failed) if failed else "none"
     skipped_text = ", ".join(skipped) if skipped else "none"
     blocked_steps_text = ", ".join(blocked_steps) if blocked_steps else "none"
@@ -130,6 +131,7 @@ def build_research_completion_payload(
                 "fields": [
                     _field("Workflow", workflow),
                     _field("Exit code", exit_code),
+                    _field("Report status", report_status),
                     _field("Operator action", summary.get("operator_action")),
                     _field("Blocked reasons", blocked_text),
                     _field("Failed steps", failed_text),

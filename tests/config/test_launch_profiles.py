@@ -107,3 +107,14 @@ def test_live_profile_overrides_cannot_loosen_hard_caps(monkeypatch):
     assert profile.max_quote_age_ms == 1000.0
     assert profile.shorts_allowed is False
     assert profile.allowed_symbols == ("AAPL",)
+
+
+def test_live_profile_honors_zero_exposure_overrides(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_GROSS_EXPOSURE", "0.0")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_SYMBOL_EXPOSURE", "0.0")
+
+    profile = resolve_launch_profile()
+
+    assert profile.max_gross_exposure == 0.0
+    assert profile.max_symbol_exposure == 0.0

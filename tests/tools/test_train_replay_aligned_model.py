@@ -13,6 +13,8 @@ from ai_trading.models.artifacts import verify_artifact
 from ai_trading.tools.train_replay_aligned_model import (
     REPLAY_ALIGNED_FEATURE_COLUMNS,
     build_training_dataset,
+    _split_train_validation_with_purge,
+    _threshold_report,
     train_replay_aligned_model,
 )
 from ai_trading.tools import train_replay_aligned_model as trainer
@@ -62,6 +64,49 @@ def test_build_training_dataset_uses_future_net_markout_target(tmp_path: Path) -
     assert dataset["target"].nunique() == 2
     assert set(dataset["target"].unique()).issubset({0, 1})
     assert bool((dataset["target"] == (dataset["net_long_bps"] > 0.0).astype(int)).all())
+    assert "label_end_timestamp" in dataset.columns
+    assert bool(dataset["label_end_timestamp"].ge(dataset["timestamp"]).all())
+
+
+def test_split_train_validation_purges_overlapping_label_horizon() -> None:
+    timestamps = pd.date_range("2026-01-02 14:30:00+00:00", periods=10, freq="min")
+    dataset = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "label_end_timestamp": timestamps + pd.Timedelta(minutes=3),
+            "symbol": ["AAPL"] * 10,
+            "target": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+        }
+    )
+
+    train, validation, diagnostics = _split_train_validation_with_purge(
+        dataset,
+        train_fraction=0.6,
+        horizon_bars=3,
+    )
+
+    assert diagnostics["purged_train_rows"] == 3
+    assert not train.empty
+    assert not validation.empty
+    assert train["target"].nunique() == 2
+    assert validation["target"].nunique() == 2
+    assert train["label_end_timestamp"].max() < validation["timestamp"].min()
+
+
+def test_threshold_report_does_not_turn_long_probabilities_into_shorts() -> None:
+    dataset = pd.DataFrame({"net_long_bps": [-10.0, -20.0, -30.0]})
+    long_only = _threshold_report(dataset, np.asarray([0.1, 0.2, 0.3]))
+    directional = _threshold_report(
+        dataset,
+        np.asarray([0.1, 0.2, 0.3]),
+        allow_short_labels=True,
+    )
+
+    assert all(row["candidates"] == 0 for row in long_only)
+    assert any(
+        row["candidates"] > 0 and float(row["total_net_markout_bps"]) > 0.0
+        for row in directional
+    )
 
 
 def test_build_training_dataset_supports_risk_adjusted_excursion_labels(tmp_path: Path) -> None:

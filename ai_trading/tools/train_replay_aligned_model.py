@@ -324,6 +324,8 @@ def _build_symbol_dataset(
     out = features.copy()
     out["symbol"] = symbol
     out["timestamp"] = frame.index
+    label_end_timestamp = pd.Series(frame.index, index=frame.index).shift(-int(horizon_bars))
+    out["label_end_timestamp"] = label_end_timestamp.to_numpy()
     out["session_regime"] = [_replay_session_regime(ts) for ts in frame.index]
     out["gross_long_bps"] = gross_long_bps.to_numpy(dtype=float)
     out["entry_slippage_bps"] = entry_slippage.to_numpy(dtype=float)
@@ -381,7 +383,12 @@ def build_training_dataset(
         return pd.DataFrame()
     dataset = pd.concat(rows, axis=0, ignore_index=True)
     dataset["timestamp"] = pd.to_datetime(dataset["timestamp"], errors="coerce", utc=True)
-    dataset = dataset.dropna(subset=["timestamp"]).sort_values(["timestamp", "symbol"]).reset_index(drop=True)
+    dataset["label_end_timestamp"] = pd.to_datetime(
+        dataset["label_end_timestamp"],
+        errors="coerce",
+        utc=True,
+    )
+    dataset = dataset.dropna(subset=["timestamp", "label_end_timestamp"]).sort_values(["timestamp", "symbol"]).reset_index(drop=True)
     return cast(pd.DataFrame, dataset)
 
 
@@ -454,21 +461,29 @@ def _evaluate_probabilities(y_true: pd.Series, probabilities: np.ndarray) -> dic
     return out
 
 
-def _threshold_report(dataset: pd.DataFrame, probabilities: np.ndarray) -> list[dict[str, Any]]:
+def _threshold_report(
+    dataset: pd.DataFrame,
+    probabilities: np.ndarray,
+    *,
+    allow_short_labels: bool = False,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     p = np.clip(np.asarray(probabilities, dtype=float), 0.0, 1.0)
     score = (2.0 * p) - 1.0
-    confidence = np.maximum(p, 1.0 - p)
+    confidence = np.maximum(p, 1.0 - p) if allow_short_labels else p
     net = pd.to_numeric(dataset["net_long_bps"], errors="coerce").to_numpy(dtype=float)
     for confidence_threshold in (0.52, 0.58, 0.62, 0.66):
         for entry_threshold in (0.05, 0.10, 0.15, 0.20):
-            mask = (confidence >= confidence_threshold) & (np.abs(score) >= entry_threshold)
+            if allow_short_labels:
+                mask = (confidence >= confidence_threshold) & (np.abs(score) >= entry_threshold)
+            else:
+                mask = (confidence >= confidence_threshold) & (score >= entry_threshold)
             if not bool(mask.any()):
                 mean_net = None
                 total_net = 0.0
                 positive_rate = None
             else:
-                signed_net = np.where(score[mask] >= 0.0, net[mask], -net[mask])
+                signed_net = np.where(score[mask] >= 0.0, net[mask], -net[mask]) if allow_short_labels else net[mask]
                 mean_net = float(np.nanmean(signed_net))
                 total_net = float(np.nansum(signed_net))
                 positive_rate = float(np.nanmean(signed_net > 0.0))
@@ -491,6 +506,7 @@ def _threshold_report_by_regime(
     probabilities: np.ndarray,
     *,
     min_samples: int = 25,
+    allow_short_labels: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
     if "session_regime" not in dataset.columns:
         return {}
@@ -500,7 +516,11 @@ def _threshold_report_by_regime(
         mask = regimes == regime
         if int(mask.sum()) < int(min_samples):
             continue
-        reports[regime] = _threshold_report(dataset.loc[mask].copy(), probabilities[mask.to_numpy()])
+        reports[regime] = _threshold_report(
+            dataset.loc[mask].copy(),
+            probabilities[mask.to_numpy()],
+            allow_short_labels=allow_short_labels,
+        )
     return reports
 
 
@@ -538,7 +558,10 @@ def _attach_model_metadata(
 ) -> None:
     for name, value in (
         ("edge_score_orientation_", "direct"),
+        ("edge_score_semantics_", "long_probability"),
         ("replay_aligned_objective_", "one_bar_net_markout"),
+        ("replay_label_sides_", np.asarray(["buy"], dtype=object)),
+        ("supports_short_scores_", False),
         ("feature_names_in_", np.asarray(REPLAY_ALIGNED_FEATURE_COLUMNS, dtype=object)),
         ("classes_", np.asarray(getattr(model, "classes_", np.asarray([0, 1])), dtype=int)),
     ):
@@ -573,6 +596,32 @@ def _attach_model_metadata(
             )
 
 
+def _split_train_validation_with_purge(
+    dataset: pd.DataFrame,
+    *,
+    train_fraction: float,
+    horizon_bars: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    cutoff_idx = max(1, min(len(dataset) - 1, int(len(dataset) * float(train_fraction))))
+    train = dataset.iloc[:cutoff_idx].copy()
+    validation = dataset.iloc[cutoff_idx:].copy()
+    validation_start = pd.to_datetime(validation["timestamp"], errors="coerce", utc=True).min()
+    purged_train_rows = 0
+    if not pd.isna(validation_start) and "label_end_timestamp" in train.columns:
+        label_end = pd.to_datetime(train["label_end_timestamp"], errors="coerce", utc=True)
+        keep_mask = label_end < validation_start
+        purged_train_rows = int((~keep_mask).sum())
+        train = train.loc[keep_mask].copy()
+    diagnostics = {
+        "initial_train_rows": int(cutoff_idx),
+        "initial_validation_rows": int(len(dataset) - cutoff_idx),
+        "purged_train_rows": int(purged_train_rows),
+        "horizon_bars": int(horizon_bars),
+        "validation_start": None if pd.isna(validation_start) else str(validation_start),
+    }
+    return train, validation, diagnostics
+
+
 def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
     data_dir = Path(args.data_dir)
     output_dir = Path(args.output_dir)
@@ -605,9 +654,13 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
     if dataset["target"].nunique() < 2:
         raise RuntimeError("Replay-aligned target has fewer than two classes")
 
-    cutoff_idx = max(1, min(len(dataset) - 1, int(len(dataset) * float(args.train_fraction))))
-    train = dataset.iloc[:cutoff_idx].copy()
-    validation = dataset.iloc[cutoff_idx:].copy()
+    train, validation, split_diagnostics = _split_train_validation_with_purge(
+        dataset,
+        train_fraction=float(args.train_fraction),
+        horizon_bars=int(args.horizon_bars),
+    )
+    if train.empty or validation.empty:
+        raise RuntimeError("Train/validation split is empty after horizon purge")
     if train["target"].nunique() < 2 or validation["target"].nunique() < 2:
         raise RuntimeError("Train/validation split must contain both target classes")
 
@@ -699,6 +752,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "mean_max_favorable_excursion_bps": float(dataset["max_favorable_excursion_bps"].mean()),
             "mean_risk_adjusted_net_bps": float(dataset["risk_adjusted_net_bps"].mean()),
             "mean_label_score_bps": float(dataset["label_score_bps"].mean()),
+            "split_purge": split_diagnostics,
         },
         "live_cost_model": {
             "enabled": live_cost_model is not None,

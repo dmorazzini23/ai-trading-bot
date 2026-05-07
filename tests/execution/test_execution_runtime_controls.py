@@ -1584,6 +1584,49 @@ def test_pre_execution_order_checks_blocks_openings_on_launch_profile_gate(monke
     assert engine.stats["skipped_orders"] == 1
 
 
+def test_pre_execution_order_checks_passes_broker_exposure_to_launch_profile_gate(monkeypatch):
+    engine = _engine_stub()
+    engine._broker_sync = SimpleNamespace(
+        positions=(SimpleNamespace(symbol="AAPL", qty="3", market_price="100"),),
+        open_orders=(SimpleNamespace(symbol="MSFT", qty="1", limit_price="50"),),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_enforce_opposite_side_policy",
+        lambda *_args, **_kwargs: (True, None),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_resolve_exposure_normalization_settings",
+        lambda: {"block_openings": False},
+    )
+    monkeypatch.setattr(engine, "_exposure_normalization_context", lambda _account: None)
+    monkeypatch.setattr(engine, "_get_account_snapshot", lambda: {"equity": 1000})
+    monkeypatch.setattr(engine, "_runtime_gonogo_openings_allowed", lambda: (True, {}))
+    captured: dict[str, Any] = {}
+
+    def _capture_launch_profile_order(order, **_kwargs):
+        captured.update(dict(order))
+        return False, {"profile": "live_canary", "reasons": ["max_gross_exposure_exceeded"]}
+
+    monkeypatch.setattr(lt, "evaluate_launch_profile_order", _capture_launch_profile_order)
+    order = {
+        "symbol": "AAPL",
+        "side": "buy",
+        "quantity": 1,
+        "price_hint": 100.0,
+        "client_order_id": "cid-launch-profile-exposure",
+        "closing_position": False,
+    }
+
+    allowed = engine._pre_execution_order_checks(order)
+
+    assert allowed is False
+    assert captured["account_snapshot"] == {"equity": 1000}
+    assert captured["positions"] == engine._broker_sync.positions
+    assert captured["open_orders"] == engine._broker_sync.open_orders
+
+
 def test_pre_execution_order_checks_blocks_openings_for_symbol_reentry_cooldown(monkeypatch):
     engine = _engine_stub()
     clock = {"value": 100.0}
