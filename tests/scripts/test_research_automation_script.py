@@ -27,7 +27,7 @@ def test_research_automation_script_delegates_plan_only(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     payload = json.loads(
-        (report_root / "latest" / "daily_research_latest.json").read_text(
+        (report_root / "latest" / "daily_research_automation_latest.json").read_text(
             encoding="utf-8"
         )
     )

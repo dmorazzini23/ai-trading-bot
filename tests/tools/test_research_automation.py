@@ -28,7 +28,7 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
 
     assert exit_code == 0
     report_path = report_root / "daily" / "daily-test" / "research_automation_report.json"
-    latest_path = report_root / "latest" / "daily_research_latest.json"
+    latest_path = report_root / "latest" / "daily_research_automation_latest.json"
     summary_path = report_root / "latest" / "daily_operator_summary.json"
     assert report_path.is_file()
     assert latest_path.is_file()
@@ -345,3 +345,97 @@ def test_authority_artifact_copy_writes_live_readiness_latest(tmp_path: Path) ->
 
     assert "live_capital_readiness" in copied
     assert (report_root / "latest" / "live_capital_readiness_latest.json").is_file()
+
+
+def test_authority_artifact_copy_writes_daily_evidence_latest_paths(tmp_path: Path) -> None:
+    report_root = tmp_path / "reports"
+    run_dir = report_root / "daily" / "run"
+    run_dir.mkdir(parents=True)
+    sources = {
+        "live_cost_model": run_dir / "live_cost_model.json",
+        "ml_shadow_report": run_dir / "ml_shadow_report.json",
+        "replay_governance_refresh": run_dir / "replay_governance_summary.json",
+        "daily_research_pipeline": run_dir / "daily_research_report.json",
+    }
+    for name, source in sources.items():
+        source.write_text(json.dumps({"artifact": name}), encoding="utf-8")
+    config = research_automation.ResearchConfig(
+        cadence="daily",
+        workflow="daily",
+        report_root=report_root,
+        run_dir=run_dir,
+        run_id="run",
+        symbols="AAPL",
+        data_dir=None,
+        shadow_jsonl=tmp_path / "shadow.jsonl",
+        accepted_candidates_jsonl=None,
+        model_path=None,
+        manifest_path=None,
+        current_champion_path="",
+        report_date="2026-05-05",
+        plan_only=False,
+        dry_run=False,
+    )
+
+    copied = research_automation._copy_authority_artifacts(
+        config=config,
+        step_results=[
+            {"name": name, "status": "passed", "output_path": str(path)}
+            for name, path in sources.items()
+        ],
+    )
+
+    assert set(sources).issubset(copied)
+    assert json.loads((report_root / "latest" / "live_cost_model_latest.json").read_text()) == {
+        "artifact": "live_cost_model"
+    }
+    assert json.loads((report_root / "latest" / "ml_shadow_report_latest.json").read_text()) == {
+        "artifact": "ml_shadow_report"
+    }
+    assert json.loads((report_root / "latest" / "replay_governance_refresh_latest.json").read_text()) == {
+        "artifact": "replay_governance_refresh"
+    }
+    assert json.loads((report_root / "latest" / "daily_research_latest.json").read_text()) == {
+        "artifact": "daily_research_pipeline"
+    }
+
+
+def test_run_research_automation_keeps_daily_report_latest_for_daily_pipeline(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = research_automation.ResearchConfig(
+        cadence="daily",
+        workflow="daily",
+        report_root=tmp_path / "reports",
+        run_dir=tmp_path / "run",
+        run_id="run",
+        symbols="AAPL",
+        data_dir=None,
+        shadow_jsonl=tmp_path / "shadow.jsonl",
+        accepted_candidates_jsonl=None,
+        model_path=None,
+        manifest_path=None,
+        current_champion_path="",
+        report_date="2026-05-05",
+        plan_only=False,
+        dry_run=False,
+    )
+    daily_source = config.run_dir / "daily_research_report.json"
+    step = research_automation.ResearchStep(
+        name="daily_research_pipeline",
+        command=("bash", "-lc", f"printf '{{\"trade_allowed\":false}}' > {daily_source}"),
+        purpose="write daily report",
+        output_path=daily_source,
+    )
+    monkeypatch.setattr(research_automation, "build_research_steps", lambda _config: ([step], []))
+
+    report = research_automation.run_research_automation(config)
+
+    assert report["status"] == "complete"
+    assert json.loads(
+        (config.report_root / "latest" / "daily_research_latest.json").read_text()
+    ) == {"trade_allowed": False}
+    automation_latest = json.loads(
+        (config.report_root / "latest" / "daily_research_automation_latest.json").read_text()
+    )
+    assert automation_latest["artifact_type"] == "research_automation_report"

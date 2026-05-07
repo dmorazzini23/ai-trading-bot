@@ -15,7 +15,7 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
 def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> None:
     root = tmp_path / "reports"
     _write_json(
-        root / "latest" / "daily_research_latest.json",
+        root / "latest" / "daily_research_automation_latest.json",
         {
             "status": "complete",
             "paths": {"report": "/runtime/research/research_automation_report.json"},
@@ -61,6 +61,13 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
 
     assert payload["channel"] == "#all-beatwallstreet"
     assert payload["text"].startswith("ai-trading research daily finished: complete")
+    section_field_counts = [
+        len(block.get("fields", []))
+        for block in payload["blocks"]
+        if block.get("type") == "section"
+    ]
+    assert section_field_counts
+    assert max(section_field_counts) <= 10
     field_text = "\n".join(
         field["text"]
         for block in payload["blocks"]
@@ -77,7 +84,7 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
 def test_research_completion_payload_marks_failed_exit_code_failed(tmp_path: Path) -> None:
     root = tmp_path / "reports"
     _write_json(
-        root / "latest" / "daily_research_latest.json",
+        root / "latest" / "daily_research_automation_latest.json",
         {
             "status": "complete",
             "paths": {"report": "/runtime/research/stale_complete.json"},
@@ -104,6 +111,34 @@ def test_research_completion_payload_marks_failed_exit_code_failed(tmp_path: Pat
         for field in block.get("fields", [])
     )
     assert "*Report status*\ncomplete" in field_text
+
+
+def test_research_completion_payload_preserves_blocked_status_on_blocked_exit(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "reports"
+    _write_json(
+        root / "latest" / "daily_research_automation_latest.json",
+        {
+            "status": "blocked",
+            "paths": {"report": "/runtime/research/blocked.json"},
+            "step_results": [{"name": "runtime_gonogo_status", "status": "blocked"}],
+        },
+    )
+    _write_json(
+        root / "latest" / "daily_operator_summary.json",
+        {"operator_action": "resolve_blocked_reasons_then_rerun"},
+    )
+
+    payload = research_completion_notify.build_research_completion_payload(
+        cadence="daily",
+        workflow="daily",
+        exit_code=2,
+        report_root=root,
+        channel="#all-beatwallstreet",
+    )
+
+    assert payload["text"].startswith("ai-trading research daily finished: blocked")
 
 
 def test_research_completion_notify_dry_run_does_not_post(tmp_path: Path, capsys) -> None:
@@ -155,3 +190,42 @@ def test_research_completion_notify_posts_when_webhook_present(monkeypatch, tmp_
     assert calls[0][0] == "https://hooks.slack.test/research"
     assert calls[0][1]["channel"] == "#all-beatwallstreet"
     assert calls[0][2] == 1.5
+
+
+def test_research_completion_notify_hydrates_managed_webhook(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, Mapping[str, Any], float]] = []
+
+    def _fake_hydrate():
+        monkeypatch.setattr(
+            research_completion_notify,
+            "_env_text",
+            lambda name, default="": "https://hooks.slack.test/managed"
+            if name == "AI_TRADING_SLACK_WEBHOOK_URL"
+            else default,
+        )
+        return {"hydrated_count": 1}
+
+    def _fake_post(webhook_url: str, payload: Mapping[str, Any], timeout_s: float) -> int:
+        calls.append((webhook_url, payload, timeout_s))
+        return 200
+
+    monkeypatch.setattr(research_completion_notify, "hydrate_managed_secrets", _fake_hydrate)
+    monkeypatch.setattr(research_completion_notify, "_post_slack_message", _fake_post)
+    monkeypatch.setattr(research_completion_notify, "_env_text", lambda _name, default="": default)
+
+    rc = research_completion_notify.main(
+        [
+            "--cadence",
+            "daily",
+            "--report-root",
+            str(tmp_path / "reports"),
+            "--channel",
+            "#all-beatwallstreet",
+        ]
+    )
+
+    assert rc == 0
+    assert calls
+    assert calls[0][0] == "https://hooks.slack.test/managed"

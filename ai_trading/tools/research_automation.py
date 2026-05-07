@@ -762,9 +762,9 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     tmp_path.replace(path)
 
 
-def _copy_latest(report: Mapping[str, Any], config: ResearchConfig) -> Path:
+def _copy_automation_latest(report: Mapping[str, Any], config: ResearchConfig) -> Path:
     latest_dir = config.report_root / "latest"
-    latest_path = latest_dir / f"{config.cadence}_research_latest.json"
+    latest_path = latest_dir / f"{config.cadence}_research_automation_latest.json"
     _write_json(latest_path, report)
     return latest_path
 
@@ -872,7 +872,80 @@ def _copy_authority_artifacts(
         if not source.exists():
             continue
         targets: list[Path] = []
-        if name == "live_capital_readiness":
+        if name == "live_cost_model":
+            targets.extend(
+                [
+                    latest_dir / "live_cost_model_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/live_cost_model_latest.json",
+                        default_relative="runtime/live_cost_model_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "ml_shadow_report":
+            targets.extend(
+                [
+                    latest_dir / "ml_shadow_report_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/ml_shadow_report_latest.json",
+                        default_relative="runtime/ml_shadow_report_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "replay_governance_refresh":
+            targets.extend(
+                [
+                    latest_dir / "replay_governance_refresh_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/replay_governance_refresh_latest.json",
+                        default_relative="runtime/replay_governance_refresh_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "symbol_universe_scorecard":
+            targets.extend(
+                [
+                    latest_dir / "symbol_universe_scorecard_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/symbol_universe_scorecard_latest.json",
+                        default_relative="runtime/symbol_universe_scorecard_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "runtime_decay_controls":
+            targets.extend(
+                [
+                    latest_dir / "runtime_decay_controls_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/runtime_decay_controls_latest.json",
+                        default_relative="runtime/runtime_decay_controls_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "trading_day_report":
+            targets.extend(
+                [
+                    latest_dir / "trading_day_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/reports/trading_day_latest.json",
+                        default_relative="runtime/reports/trading_day_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "daily_research_pipeline":
+            targets.extend(
+                [
+                    latest_dir / "daily_research_latest.json",
+                    latest_dir / "daily_readiness_latest.json",
+                ]
+            )
+        elif name == "live_capital_readiness":
             targets.extend(
                 [
                     latest_dir / "live_capital_readiness_latest.json",
@@ -961,7 +1034,7 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
     }
     report_path = config.run_dir / "research_automation_report.json"
     _write_json(report_path, report)
-    latest_path = _copy_latest(report, config)
+    latest_path = _copy_automation_latest(report, config)
     authority_copies = _copy_authority_artifacts(config=config, step_results=step_results)
     summary = _operator_summary(
         config=config,
@@ -980,7 +1053,7 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
         "authority_copies": authority_copies,
     }
     _write_json(report_path, report)
-    _copy_latest(report, config)
+    _copy_automation_latest(report, config)
     logger.info(
         "RESEARCH_AUTOMATION_COMPLETE",
         extra={

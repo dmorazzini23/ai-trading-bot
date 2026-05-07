@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ai_trading.config.management import get_env
+from ai_trading.config.managed_secrets import hydrate_managed_secrets
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 
@@ -40,6 +41,13 @@ def _report_root(raw: str | Path | None = None) -> Path:
 
 def _latest_path(report_root: Path, cadence: str, filename: str) -> Path:
     return report_root / "latest" / filename.format(cadence=cadence)
+
+
+def _latest_research_automation_report(report_root: Path, cadence: str) -> dict[str, Any]:
+    report = _read_json(_latest_path(report_root, cadence, "{cadence}_research_automation_latest.json"))
+    if report:
+        return report
+    return _read_json(_latest_path(report_root, cadence, "{cadence}_research_latest.json"))
 
 
 def _step_output(report: Mapping[str, Any], step_name: str) -> Path | None:
@@ -77,6 +85,13 @@ def _field(label: str, value: Any) -> dict[str, Any]:
     return {"type": "mrkdwn", "text": f"*{label}*\n{text[:1800]}"}
 
 
+def _field_sections(fields: list[dict[str, Any]], *, chunk_size: int = 10) -> list[dict[str, Any]]:
+    return [
+        {"type": "section", "fields": fields[index : index + chunk_size]}
+        for index in range(0, len(fields), chunk_size)
+    ]
+
+
 def build_research_completion_payload(
     *,
     cadence: str,
@@ -87,7 +102,7 @@ def build_research_completion_payload(
 ) -> dict[str, Any]:
     cadence = str(cadence or "daily").strip().lower()
     workflow = str(workflow or cadence).strip().lower()
-    report = _read_json(_latest_path(report_root, cadence, "{cadence}_research_latest.json"))
+    report = _latest_research_automation_report(report_root, cadence)
     summary = _read_json(_latest_path(report_root, cadence, "{cadence}_operator_summary.json"))
     daily = _read_json(_latest_path(report_root, cadence, "daily_readiness_latest.json")) if cadence == "daily" else {}
     readiness_path = _step_output(report, "live_capital_readiness")
@@ -96,7 +111,7 @@ def build_research_completion_payload(
     trading_day = _read_json(_latest_path(report_root, cadence, "trading_day_latest.json")) if cadence == "daily" else {}
     report_status = str(report.get("status") or summary.get("status") or "unknown")
     status = report_status
-    if exit_code != 0:
+    if exit_code != 0 and report_status not in {"blocked", "failed"}:
         status = "failed"
     failed_text = ", ".join(failed) if failed else "none"
     skipped_text = ", ".join(skipped) if skipped else "none"
@@ -122,28 +137,26 @@ def build_research_completion_payload(
         f"Live-capital readiness: {readiness_status}\n"
         f"Recommended mode: {recommended_mode}"
     )
+    fields = [
+        _field("Workflow", workflow),
+        _field("Exit code", exit_code),
+        _field("Report status", report_status),
+        _field("Operator action", summary.get("operator_action")),
+        _field("Blocked reasons", blocked_text),
+        _field("Failed steps", failed_text),
+        _field("Blocked steps", blocked_steps_text),
+        _field("Skipped steps", skipped_text),
+        _field("Recommended mode", recommended_mode),
+        _field("Live readiness", readiness_status),
+        _field("Trade allowed", str(trade_allowed).lower() if trade_allowed is not None else "n/a"),
+        _field("Trading day", trading_counts),
+        _field("Run report", report.get("paths", {}).get("report") if isinstance(report.get("paths"), Mapping) else None),
+    ]
     payload: dict[str, Any] = {
         "text": text,
         "blocks": [
             {"type": "header", "text": {"type": "plain_text", "text": title[:150], "emoji": True}},
-            {
-                "type": "section",
-                "fields": [
-                    _field("Workflow", workflow),
-                    _field("Exit code", exit_code),
-                    _field("Report status", report_status),
-                    _field("Operator action", summary.get("operator_action")),
-                    _field("Blocked reasons", blocked_text),
-                    _field("Failed steps", failed_text),
-                    _field("Blocked steps", blocked_steps_text),
-                    _field("Skipped steps", skipped_text),
-                    _field("Recommended mode", recommended_mode),
-                    _field("Live readiness", readiness_status),
-                    _field("Trade allowed", str(trade_allowed).lower() if trade_allowed is not None else "n/a"),
-                    _field("Trading day", trading_counts),
-                    _field("Run report", report.get("paths", {}).get("report") if isinstance(report.get("paths"), Mapping) else None),
-                ],
-            },
+            *_field_sections(fields),
             {
                 "type": "context",
                 "elements": [
@@ -170,6 +183,14 @@ def _webhook_url(raw: str = "") -> str:
         or _env_text("AI_TRADING_SLACK_WEBHOOK_URL")
         or _env_text("SLACK_WEBHOOK_URL")
     )
+
+
+def _hydrate_webhook_secret() -> str:
+    try:
+        hydrate_managed_secrets()
+    except RuntimeError as exc:  # pragma: no cover - environment/backend specific
+        return f"{type(exc).__name__}: {exc}"
+    return ""
 
 
 def _post_slack_message(webhook_url: str, payload: Mapping[str, Any], timeout_s: float) -> int:
@@ -209,11 +230,19 @@ def main(argv: list[str] | None = None) -> int:
         channel=channel,
     )
     webhook_url = _webhook_url(str(args.webhook_url))
+    hydration_error = ""
+    if not webhook_url and not str(args.webhook_url or "").strip():
+        hydration_error = _hydrate_webhook_secret()
+        webhook_url = _webhook_url()
     if args.dry_run:
         sys.stdout.write(json.dumps({"sent": False, "reason": "dry_run", "payload": payload}, sort_keys=True) + "\n")
         return 0
     if not webhook_url:
-        sys.stdout.write(json.dumps({"sent": False, "reason": "missing_webhook", "channel": channel}, sort_keys=True) + "\n")
+        reason = "secret_hydration_failed" if hydration_error else "missing_webhook"
+        payload = {"sent": False, "reason": reason, "channel": channel}
+        if hydration_error:
+            payload["error"] = hydration_error
+        sys.stdout.write(json.dumps(payload, sort_keys=True) + "\n")
         return 0
     status_code = _post_slack_message(webhook_url, payload, timeout_s=float(args.timeout_s))
     sys.stdout.write(json.dumps({"sent": True, "status_code": status_code, "channel": channel}, sort_keys=True) + "\n")
