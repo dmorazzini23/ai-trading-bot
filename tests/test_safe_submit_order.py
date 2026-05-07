@@ -186,6 +186,39 @@ def test_safe_submit_order_defaults_missing_fields(monkeypatch):
     assert order.filled_qty == 0
 
 
+def test_safe_submit_order_sell_uses_alpaca_py_positions(monkeypatch):
+    from ai_trading.core import bot_engine
+
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "check_alpaca_available", lambda _api: True)
+
+    submitted: list[dict[str, Any]] = []
+
+    class AlpacaPyAPI:
+        get_account = lambda self: types.SimpleNamespace(buying_power="1000")
+        get_all_positions = lambda self: [
+            types.SimpleNamespace(symbol="AAPL", qty="1", side="long")
+        ]
+        get_order = lambda self, _order_id: types.SimpleNamespace(
+            id="order-1", status="filled", filled_qty=1, qty=1, symbol="AAPL"
+        )
+
+        def submit_order(self, **kwargs: Any) -> types.SimpleNamespace:
+            submitted.append(dict(kwargs))
+            return types.SimpleNamespace(
+                id="order-1", status="filled", filled_qty=1, qty=1, symbol="AAPL"
+            )
+
+    req = types.SimpleNamespace(symbol="AAPL", qty=1, side="sell")
+
+    order = bot_engine.safe_submit_order(AlpacaPyAPI(), req)
+
+    assert order is not None
+    assert order.status == "filled"
+    assert submitted
+    assert submitted[0]["side"] == "sell"
+
+
 class NonNumericAPI(DummyAPI):
     def __init__(self) -> None:
         super().__init__()

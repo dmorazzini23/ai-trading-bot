@@ -21343,7 +21343,9 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> An
             avail = 0.0
             if order_args.get("side") == "sell":
                 try:
-                    if hasattr(api, "list_positions") and callable(getattr(api, "list_positions")):
+                    if hasattr(api, "get_all_positions") and callable(getattr(api, "get_all_positions")):
+                        positions = api.get_all_positions()
+                    elif hasattr(api, "list_positions") and callable(getattr(api, "list_positions")):
                         positions = api.list_positions()
                     elif hasattr(api, "get_position") and callable(getattr(api, "get_position")):
                         pos = api.get_position(order_args.get("symbol"))
