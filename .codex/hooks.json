@@ -1,0 +1,83 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--automation--agents-md-loader\" && ./.codex/hooks/automation-agents-md-loader-sessionstart-sessionstart-1-1.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--security--secret-scanner\" && ./.codex/hooks/security-secret-scanner-pretooluse-pretooluse-1-1.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--security--dangerous-command-blocker\" && ./.codex/hooks/security-dangerous-command-blocker-pretooluse-pretooluse-1-1.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--development-tools--command-logger\" && ./.codex/hooks/development-tools-command-logger-pretooluse-pretooluse-1-1.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--automation--change-logger\" && ./.codex/hooks/automation-change-logger-posttooluse-posttooluse-1-1.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--automation--change-logger\" && ./.codex/hooks/automation-change-logger-posttooluse-posttooluse-2-1.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--automation--change-logger\" && ./.codex/hooks/automation-change-logger-posttooluse-posttooluse-3-1.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--automation--change-logger\" && ./.codex/hooks/automation-change-logger-posttooluse-posttooluse-4-1.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

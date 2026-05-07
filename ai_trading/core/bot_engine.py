@@ -2014,6 +2014,11 @@ def _record_prerank_shadow_snapshot(
         "ranked": ranked_payload,
         "provider": _ml_shadow_provider_snapshot(),
         "quote_status": _ml_shadow_quote_snapshot(),
+        "session_regime": _session_bucket_from_ts(datetime.now(UTC)),
+        "regime_profile": get_regime_signal_profile(),
+        "market_regime": _normalize_regime_name(
+            getattr(getattr(runtime, "state", None), "current_regime", "sideways")
+        ),
     }
     _record_shadow_prediction(payload)
 
@@ -6763,14 +6768,17 @@ def _ml_shadow_market_snapshot(
                 )
         except (TypeError, ValueError, OverflowError):
             quote_age_ms = None
+    bar_timestamp = _latest_timestamp_column(frame, ("timestamp", "ts", "time"))
+    session_regime = _session_bucket_from_ts(_parse_iso_timestamp(bar_timestamp))
     return {
-        "bar_timestamp": _latest_timestamp_column(frame, ("timestamp", "ts", "time")),
+        "bar_timestamp": bar_timestamp,
         "entry_close": close,
         "bid": bid,
         "ask": ask,
         "spread_bps": spread_bps,
         "quote_timestamp": quote_ts,
         "quote_age_ms": quote_age_ms,
+        "session_regime": session_regime,
     }
 
 
@@ -17160,6 +17168,9 @@ class SignalManager:
                     "provider": _ml_shadow_provider_snapshot(),
                     "quote_status": quote_snapshot,
                     "cost": _ml_shadow_cost_snapshot(market_snapshot, quote_snapshot),
+                    "session_regime": market_snapshot.get("session_regime"),
+                    "regime_profile": get_regime_signal_profile(),
+                    "market_regime": regime_label,
                 }
                 if isinstance(skew_payload, Mapping):
                     shadow_payload["skew"] = dict(skew_payload)

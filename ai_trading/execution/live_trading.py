@@ -38,7 +38,7 @@ from ai_trading.config.settings import get_settings
 from ai_trading.config import EXECUTION_MODE, SAFE_MODE_ALLOW_PAPER, get_trading_config
 from ai_trading.broker.adapters import build_broker_adapter, list_alpaca_orders
 from ai_trading.runtime.atomic_io import atomic_write_text
-from ai_trading.runtime.live_canary import evaluate_canary_order
+from ai_trading.runtime.live_canary import evaluate_launch_profile_order
 from ai_trading.execution.guards import (
     can_execute,
     quote_fresh_enough,
@@ -15747,6 +15747,10 @@ class ExecutionEngine:
         model_artifact_hash: str | None,
         policy_hash: str | None,
         decision_trace_id: str | None,
+        session_regime: str | None = None,
+        market_regime: str | None = None,
+        volatility_regime: str | None = None,
+        trend_regime: str | None = None,
     ) -> str | None:
         """Create and claim the canonical durable OMS intent for a live submit."""
 
@@ -15778,6 +15782,14 @@ class ExecutionEngine:
             metadata["policy_hash"] = str(policy_hash)
         if decision_trace_id is not None:
             metadata["decision_trace_id"] = str(decision_trace_id)
+        if session_regime is not None:
+            metadata["session_regime"] = str(session_regime).strip().lower()
+        if market_regime is not None:
+            metadata["market_regime"] = str(market_regime).strip().lower()
+        if volatility_regime is not None:
+            metadata["volatility_regime"] = str(volatility_regime).strip().lower()
+        if trend_regime is not None:
+            metadata["trend_regime"] = str(trend_regime).strip().lower()
         metadata = {
             key: value for key, value in metadata.items() if value not in (None, "")
         }
@@ -15791,6 +15803,7 @@ class ExecutionEngine:
                 decision_ts=datetime.now(UTC).isoformat(),
                 expected_edge_bps=expected_edge_bps,
                 metadata=metadata,
+                regime=metadata.get("market_regime") or metadata.get("session_regime"),
             )
             parsed_intent_id = str(created_intent_id or "").strip()
             return parsed_intent_id or None
@@ -22223,6 +22236,26 @@ class ExecutionEngine:
             model_artifact_hash=model_artifact_hash_hint,
             policy_hash=policy_hash_hint,
             decision_trace_id=decision_trace_id_hint,
+            session_regime=(
+                str(execution_profile_context.get("session_regime") or "")
+                if isinstance(execution_profile_context, Mapping)
+                else None
+            ),
+            market_regime=(
+                str(metadata_raw.get("market_regime") or "")
+                if isinstance(metadata_raw, Mapping)
+                else None
+            ),
+            volatility_regime=(
+                str(metadata_raw.get("volatility_regime") or "")
+                if isinstance(metadata_raw, Mapping)
+                else None
+            ),
+            trend_regime=(
+                str(metadata_raw.get("trend_regime") or "")
+                if isinstance(metadata_raw, Mapping)
+                else None
+            ),
         )
         try:
             if order_type_submitted == "market":
@@ -29978,11 +30011,11 @@ class ExecutionEngine:
                 )
                 _mark_precheck_failure("runtime_gonogo_gate", gonogo_context)
                 return False
-            canary_allowed, canary_context = evaluate_canary_order(
+            launch_profile_allowed, launch_profile_context = evaluate_launch_profile_order(
                 order,
                 execution_mode=str(EXECUTION_MODE or ""),
             )
-            if not canary_allowed:
+            if not launch_profile_allowed:
                 self.stats.setdefault("capacity_skips", 0)
                 self.stats.setdefault("skipped_orders", 0)
                 self.stats["capacity_skips"] += 1
@@ -29996,18 +30029,18 @@ class ExecutionEngine:
                     "price_hint": order.get("price_hint"),
                     "order_type": order.get("order_type", "unknown"),
                     "using_fallback_price": bool(order.get("using_fallback_price")),
-                    "reason": "live_canary_gate",
-                    "context": canary_context,
+                    "reason": "launch_profile_gate",
+                    "context": launch_profile_context,
                 }
-                logger.warning("ENTRY_CONSTRAINED_LIVE_CANARY", extra=skip_payload)
+                logger.warning("ENTRY_CONSTRAINED_LAUNCH_PROFILE", extra=skip_payload)
                 logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
                 logger.warning(
                     "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
-                    "live_canary_gate",
-                    canary_context,
-                    extra=skip_payload | {"detail": "live_canary_gate"},
+                    "launch_profile_gate",
+                    launch_profile_context,
+                    extra=skip_payload | {"detail": "launch_profile_gate"},
                 )
-                _mark_precheck_failure("live_canary_gate", canary_context)
+                _mark_precheck_failure("launch_profile_gate", launch_profile_context)
                 return False
             reconciliation_allowed, reconciliation_context = (
                 self._reconciliation_openings_guard_allows_openings()

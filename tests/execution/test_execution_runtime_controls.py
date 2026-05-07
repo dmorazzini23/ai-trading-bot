@@ -1543,6 +1543,47 @@ def test_pre_execution_order_checks_blocks_openings_when_exposure_overloaded(mon
     assert engine.stats["skipped_orders"] == 1
 
 
+def test_pre_execution_order_checks_blocks_openings_on_launch_profile_gate(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setattr(
+        engine,
+        "_enforce_opposite_side_policy",
+        lambda *_args, **_kwargs: (True, None),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_resolve_exposure_normalization_settings",
+        lambda: {"block_openings": False},
+    )
+    monkeypatch.setattr(engine, "_exposure_normalization_context", lambda _account: None)
+    monkeypatch.setattr(engine, "_runtime_gonogo_openings_allowed", lambda: (True, {}))
+    monkeypatch.setattr(
+        lt,
+        "evaluate_launch_profile_order",
+        lambda *_args, **_kwargs: (
+            False,
+            {"profile": "live_restricted", "reasons": ["notional_cap_exceeded"]},
+        ),
+    )
+    order = {
+        "symbol": "AAPL",
+        "side": "buy",
+        "quantity": 5,
+        "client_order_id": "cid-launch-profile",
+        "closing_position": False,
+        "account_snapshot": {"equity": 100000, "buying_power": 100000},
+    }
+
+    allowed = engine._pre_execution_order_checks(order)
+
+    assert allowed is False
+    failure = engine._last_pre_execution_order_check_failure
+    assert failure["reason"] == "launch_profile_gate"
+    assert failure["context"]["profile"] == "live_restricted"
+    assert engine.stats["capacity_skips"] == 1
+    assert engine.stats["skipped_orders"] == 1
+
+
 def test_pre_execution_order_checks_blocks_openings_for_symbol_reentry_cooldown(monkeypatch):
     engine = _engine_stub()
     clock = {"value": 100.0}

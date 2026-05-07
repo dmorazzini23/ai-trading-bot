@@ -51,6 +51,7 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "trading_day_report" in step_names
     assert "daily_research_pipeline" in step_names
     assert "live_capital_readiness" in step_names
+    assert "evidence_manifest" in payload
     readiness = next(step for step in payload["steps"] if step["name"] == "live_capital_readiness")  # type: ignore[index]
     assert readiness["metadata"]["live_money_authority"] is False
     retention = next(step for step in payload["steps"] if step["name"] == "runtime_artifact_retention_plan")  # type: ignore[index]
@@ -99,6 +100,7 @@ def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(
     )
     step_names = {str(step["name"]) for step in payload["steps"]}  # type: ignore[index]
     assert "multi_horizon_objective_search" in step_names
+    assert "training_accelerator_weekly" in step_names
     assert "microstructure_replay_bridge" in step_names
     bridge = next(step for step in payload["steps"] if step["name"] == "microstructure_replay_bridge")  # type: ignore[index]
     assert bridge["metadata"]["enforcement_authority"] is False
@@ -304,3 +306,42 @@ def test_run_status_is_blocked_when_any_step_blocks(tmp_path: Path, monkeypatch)
 
     assert report["status"] == "blocked"
     assert report["step_results"][0]["status"] == "blocked"
+
+
+def test_authority_artifact_copy_writes_live_readiness_latest(tmp_path: Path) -> None:
+    report_root = tmp_path / "reports"
+    run_dir = report_root / "daily" / "run"
+    source = run_dir / "live_capital_readiness.json"
+    source.parent.mkdir(parents=True)
+    source.write_text(json.dumps({"status": "blocked"}), encoding="utf-8")
+    config = research_automation.ResearchConfig(
+        cadence="daily",
+        workflow="daily",
+        report_root=report_root,
+        run_dir=run_dir,
+        run_id="run",
+        symbols="AAPL",
+        data_dir=None,
+        shadow_jsonl=tmp_path / "shadow.jsonl",
+        accepted_candidates_jsonl=None,
+        model_path=None,
+        manifest_path=None,
+        current_champion_path="",
+        report_date="2026-05-05",
+        plan_only=False,
+        dry_run=False,
+    )
+
+    copied = research_automation._copy_authority_artifacts(
+        config=config,
+        step_results=[
+            {
+                "name": "live_capital_readiness",
+                "status": "blocked",
+                "output_path": str(source),
+            }
+        ],
+    )
+
+    assert "live_capital_readiness" in copied
+    assert (report_root / "latest" / "live_capital_readiness_latest.json").is_file()

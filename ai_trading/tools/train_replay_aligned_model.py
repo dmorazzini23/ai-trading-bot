@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -29,6 +30,8 @@ from ai_trading.features.indicators import (
 )
 from ai_trading.logging import get_logger
 from ai_trading.models.artifacts import write_artifact_manifest
+from ai_trading.config.management import get_env
+from ai_trading.paths import CACHE_DIR
 from ai_trading.tools.offline_replay import (
     LiveCostReplayModel,
     _augment_model_features,
@@ -55,6 +58,7 @@ REPLAY_ALIGNED_FEATURE_COLUMNS: tuple[str, ...] = (
     "macd_signal_gap",
     "rsi_centered",
 )
+_FEATURE_CACHE_SCHEMA_VERSION = "replay_aligned_features_v1"
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,8 @@ class ReplayAlignedTrainingConfig:
     model_type: str
     edge_global_threshold: float | None
     live_cost_model_path: str | None = None
+    training_cache_enabled: bool = True
+    training_cache_dir: str | None = None
 
 
 def _resolve_symbol_paths(data_dir: Path, symbols: str) -> dict[str, Path]:
@@ -100,6 +106,77 @@ def _feature_frame(frame: pd.DataFrame, *, symbol: str) -> pd.DataFrame:
             work[name] = np.nan
     features = work[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].apply(pd.to_numeric, errors="coerce")
     return cast(pd.DataFrame, features.replace([np.inf, -np.inf], np.nan).ffill().fillna(0.0))
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = get_env(name, None, cast=str, resolve_aliases=False)
+    if raw in (None, ""):
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _training_cache_dir(raw: str | Path | None = None) -> Path:
+    configured = str(raw or "").strip() or str(
+        get_env(
+            "AI_TRADING_REPLAY_ALIGNED_TRAINING_CACHE_DIR",
+            "",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or ""
+    ).strip()
+    return Path(configured).expanduser() if configured else CACHE_DIR / "training" / "replay_aligned"
+
+
+def _symbol_feature_cache_key(csv_path: Path, *, timestamp_col: str, symbol: str) -> str:
+    stat = csv_path.stat()
+    payload = {
+        "schema": _FEATURE_CACHE_SCHEMA_VERSION,
+        "path": str(csv_path.resolve()),
+        "symbol": symbol,
+        "timestamp_col": timestamp_col,
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+        "feature_columns": list(REPLAY_ALIGNED_FEATURE_COLUMNS),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _load_or_build_symbol_features(
+    symbol: str,
+    csv_path: Path,
+    *,
+    timestamp_col: str,
+    use_training_cache: bool,
+    training_cache_dir: Path | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    cache_dir = training_cache_dir or _training_cache_dir()
+    cache_path = cache_dir / f"{symbol}_{_symbol_feature_cache_key(csv_path, timestamp_col=timestamp_col, symbol=symbol)}.pkl"
+    if use_training_cache and cache_path.exists():
+        try:
+            cached = pd.read_pickle(cache_path)
+        except (OSError, ValueError, TypeError, AttributeError):
+            cached = None
+        if isinstance(cached, dict):
+            frame = cached.get("frame")
+            features = cached.get("features")
+            if isinstance(frame, pd.DataFrame) and isinstance(features, pd.DataFrame):
+                return frame, features
+    frame, _report = load_historical_bars(csv_path, timestamp_col=timestamp_col)
+    if frame.empty:
+        return frame, pd.DataFrame()
+    features = _feature_frame(frame, symbol=symbol)
+    if use_training_cache:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            pd.to_pickle({"frame": frame, "features": features}, cache_path)
+        except (OSError, ValueError, TypeError):
+            logger.debug(
+                "REPLAY_ALIGNED_TRAINING_CACHE_WRITE_FAILED",
+                extra={"path": str(cache_path), "symbol": symbol},
+                exc_info=True,
+            )
+    return frame, features
 
 
 def _normalize_label_objective(value: str) -> str:
@@ -171,11 +248,18 @@ def _build_symbol_dataset(
     slippage_bps: float,
     min_net_edge_bps: float,
     live_cost_model: LiveCostReplayModel | None = None,
+    use_training_cache: bool = True,
+    training_cache_dir: Path | None = None,
 ) -> pd.DataFrame:
-    frame, _report = load_historical_bars(csv_path, timestamp_col=timestamp_col)
+    frame, features = _load_or_build_symbol_features(
+        symbol,
+        csv_path,
+        timestamp_col=timestamp_col,
+        use_training_cache=use_training_cache,
+        training_cache_dir=training_cache_dir,
+    )
     if frame.empty:
         return pd.DataFrame()
-    features = _feature_frame(frame, symbol=symbol)
     close = pd.to_numeric(frame["close"], errors="coerce").astype(float)
     future_close = close.shift(-int(horizon_bars))
     gross_long_bps = ((future_close / close.replace(0.0, np.nan)) - 1.0) * 10000.0
@@ -269,8 +353,14 @@ def build_training_dataset(
     slippage_bps: float = 2.0,
     min_net_edge_bps: float = 0.0,
     live_cost_model: LiveCostReplayModel | None = None,
+    use_training_cache: bool | None = None,
+    training_cache_dir: Path | None = None,
 ) -> pd.DataFrame:
     rows: list[pd.DataFrame] = []
+    cache_enabled = _env_bool(
+        "AI_TRADING_REPLAY_ALIGNED_TRAINING_CACHE_ENABLED",
+        True,
+    ) if use_training_cache is None else bool(use_training_cache)
     for symbol, csv_path in _resolve_symbol_paths(data_dir, symbols).items():
         symbol_rows = _build_symbol_dataset(
             symbol,
@@ -282,6 +372,8 @@ def build_training_dataset(
             slippage_bps=slippage_bps,
             min_net_edge_bps=min_net_edge_bps,
             live_cost_model=live_cost_model,
+            use_training_cache=cache_enabled,
+            training_cache_dir=training_cache_dir,
         )
         if not symbol_rows.empty:
             rows.append(symbol_rows)
@@ -501,6 +593,12 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         slippage_bps=float(args.slippage_bps),
         min_net_edge_bps=float(args.min_net_edge_bps),
         live_cost_model=live_cost_model,
+        use_training_cache=getattr(args, "training_cache", None),
+        training_cache_dir=(
+            _training_cache_dir(getattr(args, "training_cache_dir", None))
+            if getattr(args, "training_cache_dir", None)
+            else None
+        ),
     )
     if dataset.empty:
         raise RuntimeError("Replay-aligned training dataset is empty")
@@ -550,6 +648,12 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         model_type=str(args.model_type),
         edge_global_threshold=edge_global_threshold,
         live_cost_model_path=live_cost_model.path if live_cost_model is not None else None,
+        training_cache_enabled=bool(
+            _env_bool("AI_TRADING_REPLAY_ALIGNED_TRAINING_CACHE_ENABLED", True)
+            if getattr(args, "training_cache", None) is None
+            else getattr(args, "training_cache", True)
+        ),
+        training_cache_dir=str(_training_cache_dir(getattr(args, "training_cache_dir", None))),
     )
     manifest_path = write_artifact_manifest(
         model_path=model_path,
@@ -671,6 +775,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional model-carried minimum live confidence threshold.",
     )
     parser.add_argument("--random-state", type=int, default=42)
+    parser.add_argument(
+        "--training-cache",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Cache replay-aligned feature frames across horizon/objective training runs.",
+    )
+    parser.add_argument("--training-cache-dir", type=Path, default=None)
     return parser
 
 

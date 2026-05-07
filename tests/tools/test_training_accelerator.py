@@ -1,0 +1,83 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+from ai_trading.tools import training_accelerator
+
+
+def test_training_accelerator_plan_writes_report(tmp_path: Path) -> None:
+    report = training_accelerator.run_training_accelerator(
+        argparse.Namespace(
+            cadence="daily",
+            data_dir=tmp_path / "bars",
+            symbols="AAPL,AMZN",
+            output_dir=tmp_path / "out",
+            training_cache_dir=tmp_path / "cache",
+            horizons="",
+            label_objectives="",
+            lead_horizon_bars=0,
+            model_type="logistic",
+            plan_only=True,
+            max_replay_candidates=None,
+        )
+    )
+
+    assert report["status"] == "planned"
+    assert report["promotion_authority"] is False
+    payload = json.loads((tmp_path / "out" / "training_accelerator_report.json").read_text(encoding="utf-8"))
+    assert payload["config"]["training_cache_dir"] == str(tmp_path / "cache")
+
+
+def test_training_accelerator_invokes_multi_horizon_with_cache(tmp_path: Path, monkeypatch) -> None:
+    calls: list[argparse.Namespace] = []
+
+    def _fake_pipeline(args: argparse.Namespace) -> dict[str, Any]:
+        calls.append(args)
+        output = Path(args.output_dir)
+        output.mkdir(parents=True)
+        (output / "multi_horizon_research_report.json").write_text("{}", encoding="utf-8")
+        return {"ranked_candidates": [{"model_path": "m"}], "lead_candidates": [{"model_path": "m"}]}
+
+    monkeypatch.setattr(training_accelerator, "run_multi_horizon_pipeline", _fake_pipeline)
+
+    report = training_accelerator.run_training_accelerator(
+        argparse.Namespace(
+            cadence="weekly",
+            data_dir=tmp_path,
+            symbols="AAPL",
+            timestamp_col="timestamp",
+            output_dir=tmp_path / "out",
+            training_cache_dir=tmp_path / "cache",
+            horizons="1,3",
+            label_objectives="risk_adjusted",
+            lead_horizon_bars=3,
+            model_prefix="candidate",
+            model_type="logistic",
+            fee_bps=0.0,
+            slippage_bps=0.0,
+            live_cost_model_json=None,
+            use_live_cost_model=None,
+            min_net_edge_bps=0.0,
+            train_fraction=0.7,
+            edge_global_threshold=0.66,
+            random_state=1,
+            replay_confidence_threshold=0.66,
+            replay_entry_score_threshold=0.05,
+            min_hold_bars=3,
+            max_hold_bars=45,
+            stop_loss_bps=20.0,
+            take_profit_bps=50.0,
+            trailing_stop_bps=15.0,
+            max_replay_candidates=3,
+            plan_only=False,
+        )
+    )
+
+    assert report["status"] == "complete"
+    assert calls[0].training_cache is True
+    assert calls[0].training_cache_dir == tmp_path / "cache"
+    assert calls[0].horizons == "1,3"
+    assert calls[0].max_replay_candidates == 3

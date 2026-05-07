@@ -27,6 +27,7 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
             ],
             "step_results": [
                 {"name": "live_cost_model", "status": "passed"},
+                {"name": "runtime_gonogo_status", "status": "blocked"},
                 {"name": "multi_horizon_lightweight", "status": "skipped"},
             ],
         },
@@ -38,6 +39,15 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
     _write_json(
         root / "latest" / "daily_readiness_latest.json",
         {"recommended_next_session_mode": "paper_trade", "trade_allowed": True},
+    )
+    _write_json(
+        root / "latest" / "trading_day_latest.json",
+        {
+            "desired_trades": {"count": 3},
+            "submitted_trades": {"count": 2},
+            "rejected_trades": {"count": 1},
+            "realized_fills": {"count": 2},
+        },
     )
     _write_json(root / "daily" / "run" / "live_capital_readiness.json", {"status": "blocked"})
 
@@ -60,6 +70,8 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
     assert "paper_trade" in field_text
     assert "blocked" in field_text
     assert "multi_horizon_lightweight" in field_text
+    assert "runtime_gonogo_status" in field_text
+    assert "desired=3" in field_text
 
 
 def test_research_completion_notify_dry_run_does_not_post(tmp_path: Path, capsys) -> None:

@@ -44,7 +44,7 @@ def test_live_capital_readiness_allows_explicit_tiny_canary(monkeypatch):
 
     report = live_capital_readiness.build_live_capital_readiness(
         health=_healthy_payload(),
-        live_cost_model={"generated_at": now, "status": {"available": True, "breach_count": 0}},
+        live_cost_model={"generated_at": now, "status": {"available": True, "status": "ready", "breach_count": 0}},
         promotion_report={"generated_at": now, "promotion_ready": True},
         validation={"generated_at": now, "full_validation_green": True},
         canary_plan={"generated_at": now, "paper_vs_live_canary_plan": "ready"},
@@ -73,6 +73,50 @@ def test_live_capital_readiness_blocks_stale_live_cost_evidence(monkeypatch):
     assert report["status"] == "blocked"
     assert "live_cost_model_stale" in report["reasons"]
     assert report["freshness"]["live_cost_model"]["fresh"] is False
+
+
+def test_live_capital_readiness_blocks_provider_authority_and_daily_research(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", "1")
+    monkeypatch.setenv("AI_TRADING_LIVE_MAX_DAILY_LOSS", "25")
+    fresh = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    health = _healthy_payload()
+    health["provider_authority"] = {"ok": False, "reasons": ["quote_source_unknown"]}
+
+    report = live_capital_readiness.build_live_capital_readiness(
+        health=health,
+        live_cost_model={"generated_at": fresh, "status": {"available": True, "status": "ready", "breach_count": 0}},
+        promotion_report={"generated_at": fresh, "promotion_ready": True},
+        validation={"generated_at": fresh, "full_validation_green": True},
+        canary_plan={
+            "generated_at": fresh,
+            "trade_allowed": False,
+            "runtime_gonogo": {"gate_passed": False},
+        },
+    )
+
+    assert report["status"] == "blocked"
+    assert "provider_authority_not_ok" in report["reasons"]
+    assert "daily_research_trade_not_allowed" in report["reasons"]
+    assert "runtime_gonogo_failed" in report["reasons"]
+
+
+def test_live_capital_readiness_blocks_insufficient_cost_samples(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", "1")
+    monkeypatch.setenv("AI_TRADING_LIVE_MAX_DAILY_LOSS", "25")
+    fresh = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    report = live_capital_readiness.build_live_capital_readiness(
+        health=_healthy_payload(),
+        live_cost_model={"generated_at": fresh, "status": {"available": True, "status": "warming_up", "breach_count": 0}},
+        promotion_report={"generated_at": fresh, "promotion_ready": True},
+        validation={"generated_at": fresh, "full_validation_green": True},
+        canary_plan={"generated_at": fresh, "trade_allowed": True},
+    )
+
+    assert report["status"] == "blocked"
+    assert "live_cost_model_not_ready" in report["reasons"]
 
 
 def test_live_capital_readiness_cli_writes_blocked_artifact_with_success_override(

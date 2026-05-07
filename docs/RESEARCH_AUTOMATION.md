@@ -19,14 +19,18 @@ Daily after market close:
 - generate the trading-day attribution report
 - generate the daily research/readiness report
 - generate the live-capital readiness gate artifact
-- optionally train lightweight 1-bar and 15-bar risk-adjusted candidates when a
-  research data directory is configured
+- optionally run the training accelerator when a research data directory is
+  configured. The accelerator caches replay-aligned feature frames and trains
+  lightweight 1-bar and 15-bar risk-adjusted candidates with no promotion
+  authority.
 
 Weekly:
 
 - pin the current live cost model
 - train/evaluate 1/3/5/15-bar candidates across net, spread-adjusted,
   risk-adjusted, and MAE/MFE objectives
+- use the same cached training accelerator for the broader weekly candidate
+  refresh
 - optionally join shadow quote telemetry to replay candidates with the
   microstructure bridge
 
@@ -65,6 +69,8 @@ Important files:
 - `daily_research_report.json`
 - `trading_day_report.json`
 - `live_capital_readiness.json`
+- `training_accelerator/training_accelerator_report.json`
+- `evidence_manifest` inside `research_automation_report.json`
 - `<cadence>_research_latest.json`
 - `<cadence>_operator_summary.json`
 - `latest/daily_readiness_latest.json`
@@ -172,6 +178,22 @@ Smoke-test the completion notification without sending:
   --channel '#all-beatwallstreet' \
   --dry-run
 ```
+
+Run the training accelerator directly in plan mode:
+
+```bash
+./venv/bin/python -m ai_trading.tools.training_accelerator \
+  --cadence daily \
+  --data-dir /path/to/research/bars \
+  --symbols AAPL,AMZN \
+  --plan-only
+```
+
+Non-plan accelerator runs use cached feature frames and a bounded
+successive-halving style replay pass. Daily runs replay only the strongest small
+candidate set by default; weekly/monthly runs search more broadly while still
+keeping expensive replay bounded. Override with `--max-replay-candidates` when
+running an explicit research experiment.
 
 Run a manual workflow through systemd:
 

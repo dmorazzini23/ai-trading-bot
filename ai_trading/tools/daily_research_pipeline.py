@@ -75,19 +75,43 @@ def _trade_allowed(report: Mapping[str, Any]) -> tuple[bool, list[str]]:
     runtime_health = _nested(report, "runtime_health")
     if not bool(runtime_health.get("ok")):
         reasons.append("runtime_health_not_ok")
+    broker = _nested(runtime_health, "broker")
+    if broker and broker.get("connected") is False:
+        reasons.append("broker_not_connected")
+    database = _nested(runtime_health, "database")
+    if database and database.get("ok") is False:
+        reasons.append("database_not_ok")
+    for gate_name in ("oms_invariants", "oms_lifecycle_parity"):
+        gate = _nested(runtime_health, gate_name)
+        if gate and gate.get("ok") is False:
+            reasons.append(f"{gate_name}_not_ok")
+    attention_flags = report.get("runtime_attention_flags")
+    if isinstance(attention_flags, list) and "market_closed_non_flat_positions" in {
+        str(flag) for flag in attention_flags
+    }:
+        reasons.append("market_closed_non_flat_positions")
+    provider_authority = _nested(report, "provider_authority")
+    if provider_authority and provider_authority.get("ok") is False:
+        reasons.append("provider_authority_not_ok")
     if str(_nested(report, "data_provider_health").get("status") or "").lower() not in {
         "healthy",
         "ready",
         "warming_up",
     }:
         reasons.append("data_provider_not_healthy")
-    if _nested(report, "live_cost_status").get("available") is False:
+    live_cost_status = _nested(report, "live_cost_status")
+    if not bool(live_cost_status.get("available")):
         reasons.append("live_cost_unavailable")
-    if int(_nested(report, "live_cost_status").get("breach_count") or 0) > 0:
+    elif str(live_cost_status.get("status") or "").lower() not in {"ready", "ok"}:
+        reasons.append("live_cost_not_ready")
+    if int(live_cost_status.get("breach_count") or 0) > 0:
         reasons.append("live_cost_breach")
     replay_status = _nested(report, "replay_status")
     if replay_status and replay_status.get("ok") is False:
         reasons.append("replay_governance_failed")
+    runtime_gonogo = _nested(report, "runtime_gonogo")
+    if bool(runtime_gonogo.get("available")) and runtime_gonogo.get("gate_passed") is False:
+        reasons.append("runtime_gonogo_failed")
     launch_profile = _nested(report, "launch_profile")
     if str(launch_profile.get("name") or "").startswith("live_"):
         promotion_status = _nested(report, "promotion_status")
@@ -118,6 +142,7 @@ def build_daily_research_report(
     symbol_scorecard = symbol_scorecard or {}
     promotion_report = promotion_report or {}
     runtime_gonogo = runtime_gonogo or {}
+    runtime_gonogo_payload = _nested(runtime_gonogo, "go_no_go") or runtime_gonogo
     memory_audit = memory_audit or {}
     artifact_retention = artifact_retention or {}
     report: dict[str, Any] = {
@@ -134,6 +159,9 @@ def build_daily_research_report(
             "oms_invariants": _nested(health, "oms_invariants"),
             "oms_lifecycle_parity": _nested(health, "oms_lifecycle_parity"),
         },
+        "runtime_attention_flags": list(health.get("attention_flags", []))
+        if isinstance(health.get("attention_flags"), list)
+        else [],
         "data_provider_health": _nested(health, "data_provider"),
         "provider_authority": _nested(health, "provider_authority"),
         "launch_profile": launch_profile_payload(resolve_launch_profile()),
@@ -151,9 +179,12 @@ def build_daily_research_report(
             "gates": _nested(promotion_report, "gates"),
         },
         "runtime_gonogo": {
-            "gate_passed": bool(runtime_gonogo.get("gate_passed")),
-            "failed_checks": list(runtime_gonogo.get("failed_checks", []))
-            if isinstance(runtime_gonogo.get("failed_checks"), list)
+            "available": bool(runtime_gonogo_payload),
+            "gate_passed": bool(runtime_gonogo_payload.get("gate_passed"))
+            if runtime_gonogo_payload
+            else None,
+            "failed_checks": list(runtime_gonogo_payload.get("failed_checks", []))
+            if isinstance(runtime_gonogo_payload.get("failed_checks"), list)
             else [],
         },
         "memory_status": {
@@ -183,6 +214,19 @@ def build_daily_research_report(
     report["recommended_next_session_mode"] = (
         profile_name if allowed else ("paper_only" if profile_name.startswith("live_") else "observe")
     )
+    report["next_session_limits"] = {
+        "profile": profile_name,
+        "allowed_symbols": _nested(report, "launch_profile").get("allowed_symbols", []),
+        "max_order_count": _nested(report, "launch_profile").get("max_order_count"),
+        "max_notional_per_order": _nested(report, "launch_profile").get("max_notional_per_order"),
+        "max_daily_loss": _nested(report, "launch_profile").get("max_daily_loss"),
+        "max_quote_age_ms": _nested(report, "launch_profile").get("max_quote_age_ms"),
+        "max_spread_bps": _nested(report, "launch_profile").get("max_spread_bps"),
+        "shorts_allowed": _nested(report, "launch_profile").get("shorts_allowed"),
+        "execution_quote_authority": _nested(report, "launch_profile").get("execution_quote_authority"),
+        "backup_provider_live_policy": _nested(report, "launch_profile").get("backup_provider_live_policy"),
+        "provider_authority_ok": _nested(report, "provider_authority").get("ok"),
+    }
     return report
 
 
@@ -206,6 +250,10 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Trade allowed: `{str(report.get('trade_allowed')).lower()}`",
             f"- Recommended next session mode: `{report.get('recommended_next_session_mode')}`",
             f"- Blockers: {', '.join(str(item) for item in reasons) if reasons else 'none'}",
+            f"- Limits: `{_nested(report, 'next_session_limits').get('profile')}` "
+            f"orders={_nested(report, 'next_session_limits').get('max_order_count')} "
+            f"notional={_nested(report, 'next_session_limits').get('max_notional_per_order')} "
+            f"symbols={_nested(report, 'next_session_limits').get('allowed_symbols')}",
             f"- Runtime health: `{_nested(report, 'runtime_health').get('status')}`",
             f"- Data provider: `{_nested(report, 'data_provider_health').get('status')}`",
             f"- Live cost: `{_nested(report, 'live_cost_status').get('status', 'missing')}`",

@@ -15,6 +15,7 @@ from ai_trading.tools.train_replay_aligned_model import (
     build_training_dataset,
     train_replay_aligned_model,
 )
+from ai_trading.tools import train_replay_aligned_model as trainer
 
 
 def _write_cycle_bars(csv_path: Path, *, periods: int = 260, phase: float = 0.0) -> None:
@@ -138,6 +139,37 @@ def test_build_training_dataset_can_use_live_cost_model_labels(tmp_path: Path) -
     assert cost_dataset["net_long_bps"].mean() < static_dataset["net_long_bps"].mean()
 
 
+def test_build_training_dataset_reuses_feature_cache(tmp_path: Path, monkeypatch) -> None:
+    _write_cycle_bars(tmp_path / "AAPL.csv", periods=120)
+    calls = {"count": 0}
+    original = trainer._feature_frame
+
+    def _counting_feature_frame(frame: pd.DataFrame, *, symbol: str) -> pd.DataFrame:
+        calls["count"] += 1
+        return original(frame, symbol=symbol)
+
+    monkeypatch.setattr(trainer, "_feature_frame", _counting_feature_frame)
+
+    first = build_training_dataset(
+        data_dir=tmp_path,
+        horizon_bars=1,
+        fee_bps=0.0,
+        slippage_bps=0.0,
+        training_cache_dir=tmp_path / "cache",
+    )
+    second = build_training_dataset(
+        data_dir=tmp_path,
+        horizon_bars=5,
+        fee_bps=0.0,
+        slippage_bps=0.0,
+        training_cache_dir=tmp_path / "cache",
+    )
+
+    assert not first.empty
+    assert not second.empty
+    assert calls["count"] == 1
+
+
 def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     output_dir = tmp_path / "out"
@@ -159,6 +191,8 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
         train_fraction=0.65,
         edge_global_threshold=0.66,
         random_state=7,
+        training_cache=True,
+        training_cache_dir=tmp_path / "cache",
     )
 
     report = train_replay_aligned_model(args)

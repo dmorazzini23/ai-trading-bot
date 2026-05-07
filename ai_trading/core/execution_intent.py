@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo
 
 from ai_trading.oms.ledger import deterministic_client_order_id
 from ai_trading.oms.pretrade import OrderIntent as PretradeOrderIntent
@@ -14,6 +15,59 @@ def _safe_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _safe_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _session_regime_from_ts(value: datetime | None) -> str:
+    if value is None:
+        return "offhours"
+    ts = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    eastern = ts.astimezone(ZoneInfo("America/New_York"))
+    minute = eastern.hour * 60 + eastern.minute
+    if eastern.weekday() >= 5 or minute < (9 * 60 + 30) or minute >= (16 * 60):
+        return "offhours"
+    if minute < (10 * 60 + 15):
+        return "opening"
+    if minute >= (15 * 60 + 15):
+        return "closing"
+    return "midday"
+
+
+def _regime_context_from_snapshot(
+    config_snapshot: Mapping[str, Any],
+    *,
+    bar_ts: datetime | None,
+) -> dict[str, str]:
+    session_regime = (
+        _safe_text(config_snapshot.get("session_regime"))
+        or _safe_text(config_snapshot.get("session_bucket"))
+        or _session_regime_from_ts(bar_ts)
+    )
+    regime_profile = (
+        _safe_text(config_snapshot.get("regime_profile"))
+        or _safe_text(config_snapshot.get("regime_signal_profile"))
+    )
+    market_regime = (
+        _safe_text(config_snapshot.get("market_regime"))
+        or _safe_text(config_snapshot.get("current_regime"))
+        or regime_profile
+    )
+    volatility_regime = _safe_text(config_snapshot.get("volatility_regime"))
+    trend_regime = _safe_text(config_snapshot.get("trend_regime"))
+    context = {"session_regime": session_regime}
+    if market_regime:
+        context["market_regime"] = market_regime
+    if regime_profile:
+        context["regime_profile"] = regime_profile
+    if volatility_regime:
+        context["volatility_regime"] = volatility_regime
+    if trend_regime:
+        context["trend_regime"] = trend_regime
+    return context
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +144,7 @@ def build_execution_intent_context(
             derived_spread = spread_candidate
     if derived_spread is None:
         derived_spread = (float(spread_bps) / 10_000.0) * float(price)
+    regime_context = _regime_context_from_snapshot(config_snapshot, bar_ts=bar_ts)
 
     pretrade_intent = PretradeOrderIntent(
         symbol=symbol,
@@ -124,6 +179,7 @@ def build_execution_intent_context(
             _safe_float(slo_derisk_details.get("execution_drift_bps")) or 0.0
         ),
         reject_rate_pct=float(_safe_float(slo_derisk_details.get("reject_rate_pct")) or 0.0),
+        session_regime=regime_context.get("session_regime"),
         opening_trade=bool(opening_trade),
         require_realtime_nbbo=bool(require_realtime_nbbo),
         kill_switch_active=bool(kill_switch_active),
@@ -155,6 +211,7 @@ def build_execution_intent_context(
         order_lineage_metadata["decision_trace_id"] = decision_trace_id
     if submit_quote_source:
         order_lineage_metadata["price_source"] = submit_quote_source
+    order_lineage_metadata.update(regime_context)
 
     order_annotations: dict[str, Any] = {}
     if submit_quote_source:
@@ -163,6 +220,7 @@ def build_execution_intent_context(
         order_annotations["policy_hash"] = policy_hash
     if decision_trace_id:
         order_annotations["decision_trace_id"] = decision_trace_id
+    order_annotations.update(regime_context)
     if (
         submit_bid_at_arrival is not None
         and submit_ask_at_arrival is not None

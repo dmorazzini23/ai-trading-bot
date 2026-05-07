@@ -157,10 +157,17 @@ def build_live_capital_readiness(
         reasons.append("broker_not_connected")
     if not bool(_nested(health, "database").get("ok")):
         reasons.append("database_not_ok")
+    if "market_closed_non_flat_positions" in {
+        str(flag) for flag in health.get("attention_flags", []) if flag is not None
+    }:
+        reasons.append("surprise_non_flat_positions")
     for gate_name in ("oms_invariants", "oms_lifecycle_parity"):
         gate = _nested(health, gate_name)
         if gate and not bool(gate.get("ok", True)):
             reasons.append(f"{gate_name}_not_ok")
+    provider_authority = _nested(health, "provider_authority")
+    if provider_authority and provider_authority.get("ok") is False:
+        reasons.append("provider_authority_not_ok")
     replay_gate = _nested(health, "replay_live_parity_gate")
     if replay_gate and not bool(replay_gate.get("ok", True)):
         reasons.append("replay_governance_not_ok")
@@ -173,6 +180,8 @@ def build_live_capital_readiness(
         reasons.append("live_cost_model_unavailable")
     elif not freshness["live_cost_model"]["fresh"]:
         reasons.append("live_cost_model_stale")
+    elif str(live_status.get("status") or "").lower() not in {"ready", "ok"}:
+        reasons.append("live_cost_model_not_ready")
     if int(live_status.get("breach_count") or 0) > 0:
         reasons.append("live_cost_breaches_present")
     provider = _nested(health, "data_provider")
@@ -189,6 +198,11 @@ def build_live_capital_readiness(
         reasons.append("paper_vs_live_canary_plan_missing")
     elif profile.name == "live_canary" and not freshness["canary_plan"]["fresh"]:
         reasons.append("paper_vs_live_canary_plan_stale")
+    if profile.name == "live_canary" and canary_plan.get("trade_allowed") is False:
+        reasons.append("daily_research_trade_not_allowed")
+    runtime_gonogo = _nested(canary_plan, "runtime_gonogo")
+    if profile.name == "live_canary" and runtime_gonogo.get("gate_passed") is False:
+        reasons.append("runtime_gonogo_failed")
     if profile.name == "live_canary" and (
         profile.max_notional_per_order is None or float(profile.max_notional_per_order) > 250.0
     ):

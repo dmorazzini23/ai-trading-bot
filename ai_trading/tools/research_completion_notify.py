@@ -54,9 +54,10 @@ def _step_output(report: Mapping[str, Any], step_name: str) -> Path | None:
     return None
 
 
-def _step_statuses(report: Mapping[str, Any]) -> tuple[list[str], list[str]]:
+def _step_statuses(report: Mapping[str, Any]) -> tuple[list[str], list[str], list[str]]:
     failed: list[str] = []
     skipped: list[str] = []
+    blocked: list[str] = []
     for row in list(report.get("step_results") or []):
         if not isinstance(row, Mapping):
             continue
@@ -66,7 +67,9 @@ def _step_statuses(report: Mapping[str, Any]) -> tuple[list[str], list[str]]:
             failed.append(name)
         elif status == "skipped":
             skipped.append(name)
-    return failed, skipped
+        elif status == "blocked":
+            blocked.append(name)
+    return failed, skipped, blocked
 
 
 def _field(label: str, value: Any) -> dict[str, Any]:
@@ -89,17 +92,27 @@ def build_research_completion_payload(
     daily = _read_json(_latest_path(report_root, cadence, "daily_readiness_latest.json")) if cadence == "daily" else {}
     readiness_path = _step_output(report, "live_capital_readiness")
     readiness = _read_json(readiness_path)
-    failed, skipped = _step_statuses(report)
+    failed, skipped, blocked_steps = _step_statuses(report)
+    trading_day = _read_json(_latest_path(report_root, cadence, "trading_day_latest.json")) if cadence == "daily" else {}
     status = str(report.get("status") or summary.get("status") or "unknown")
     if exit_code != 0:
         status = "failed" if status == "unknown" else status
     failed_text = ", ".join(failed) if failed else "none"
     skipped_text = ", ".join(skipped) if skipped else "none"
+    blocked_steps_text = ", ".join(blocked_steps) if blocked_steps else "none"
     blocked = list(summary.get("blocked_reasons") or report.get("blocked_reasons") or [])
+    if cadence == "daily" and isinstance(daily.get("blocked_reasons"), list):
+        blocked.extend(str(item) for item in daily.get("blocked_reasons", []))
     blocked_text = ", ".join(str(item) for item in blocked) if blocked else "none"
     readiness_status = str(readiness.get("status") or "n/a")
     recommended_mode = str(daily.get("recommended_next_session_mode") or "n/a")
     trade_allowed = daily.get("trade_allowed")
+    trading_counts = (
+        f"desired={trading_day.get('desired_trades', {}).get('count', 'n/a')}, "
+        f"submitted={trading_day.get('submitted_trades', {}).get('count', 'n/a')}, "
+        f"rejected={trading_day.get('rejected_trades', {}).get('count', 'n/a')}, "
+        f"fills={trading_day.get('realized_fills', {}).get('count', 'n/a')}"
+    )
     title = f"ai-trading research {cadence} finished: {status}"
     text = (
         f"{title}\n"
@@ -120,10 +133,12 @@ def build_research_completion_payload(
                     _field("Operator action", summary.get("operator_action")),
                     _field("Blocked reasons", blocked_text),
                     _field("Failed steps", failed_text),
+                    _field("Blocked steps", blocked_steps_text),
                     _field("Skipped steps", skipped_text),
                     _field("Recommended mode", recommended_mode),
                     _field("Live readiness", readiness_status),
                     _field("Trade allowed", str(trade_allowed).lower() if trade_allowed is not None else "n/a"),
+                    _field("Trading day", trading_counts),
                     _field("Run report", report.get("paths", {}).get("report") if isinstance(report.get("paths"), Mapping) else None),
                 ],
             },

@@ -27,6 +27,14 @@ def test_trading_day_report_attributes_rejections_and_symbol_pnl():
                 "slippage_bps": "0.5",
             },
             {
+                "ts": "2026-05-05T14:01:30Z",
+                "symbol": "AAPL",
+                "realized_pnl": "1.75",
+                "realized_net_edge_bps": "2.5",
+                "expected_net_edge_bps": "4.0",
+                "slippage_bps": "1.5",
+            },
+            {
                 "ts": "2026-05-05T14:02:00Z",
                 "symbol": "AMZN",
                 "pnl": "-1.0",
@@ -38,13 +46,14 @@ def test_trading_day_report_attributes_rejections_and_symbol_pnl():
         shadow_rows=[
             {
                 "ts": "2026-05-05T14:00:00Z",
+                "symbol": "MSFT",
                 "challenger_would_trade": True,
                 "champion_would_trade": False,
             }
         ],
         gate_rows=[
-            {"ts": "2026-05-05T14:00:01Z", "status": "blocked", "reason": "spread_cap"},
-            {"ts": "2026-05-05T14:00:02Z", "action": "reject", "gate": "quote_age"},
+            {"ts": "2026-05-05T14:00:01Z", "symbol": "AAPL", "status": "blocked", "reason": "spread_cap"},
+            {"ts": "2026-05-05T14:00:02Z", "symbol": "AMZN", "action": "reject", "gate": "quote_age"},
         ],
         live_cost_model={"status": {"status": "ready"}},
         symbol_scorecard={"summary": {"allow": 2}, "symbols": []},
@@ -53,11 +62,19 @@ def test_trading_day_report_attributes_rejections_and_symbol_pnl():
     assert report["desired_trades"]["count"] == 1
     assert report["submitted_trades"]["count"] == 1
     assert report["rejected_trades"]["reasons"] == {"quote_age": 1, "spread_cap": 1}
-    assert report["symbol_contribution"] == {"AAPL": 3.25, "AMZN": -1.0}
-    assert report["symbol_realized_edge_bps"] == {"AAPL": 1.5, "AMZN": -3.0}
-    assert report["symbol_expected_edge_bps"] == {"AAPL": 2.0, "AMZN": 1.0}
-    assert report["symbol_slippage_bps"] == {"AAPL": 0.5, "AMZN": 3.0}
+    assert report["symbol_contribution"] == {"AAPL": 5.0, "AMZN": -1.0}
+    assert report["symbol_realized_edge_bps"] == {"AAPL": 2.0, "AMZN": -3.0}
+    assert report["symbol_expected_edge_bps"] == {"AAPL": 3.0, "AMZN": 1.0}
+    assert report["symbol_slippage_bps"] == {"AAPL": 1.0, "AMZN": 3.0}
+    assert report["edge_quality"]["mean_realized_edge_bps"] == 1 / 3
+    assert report["symbol_trade_flow"]["AAPL"] == {
+        "desired": 1,
+        "submitted": 1,
+        "rejected": 1,
+        "fills": 2,
+    }
     assert report["missed_opportunities"]["shadow_only_count"] == 1
+    assert report["missed_opportunities"]["symbols"] == {"MSFT": 1}
 
 
 def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):

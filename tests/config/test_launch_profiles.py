@@ -16,7 +16,7 @@ def test_resolve_launch_profile_applies_profile_scoped_overrides(monkeypatch):
     profile = resolve_launch_profile()
 
     assert profile.name == "live_canary"
-    assert profile.allowed_symbols == ("AAPL", "NVDA")
+    assert profile.allowed_symbols == ("AAPL",)
     assert profile.max_order_count == 2
     assert profile.max_daily_loss == 12.5
     assert profile.shorts_allowed is False
@@ -72,3 +72,38 @@ def test_provider_authority_allows_healthy_alpaca_quotes_for_paper_trade(monkeyp
 
     assert allowed is True
     assert context["reasons"] == []
+
+
+def test_provider_authority_strict_live_fails_closed_on_unknown_state(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    profile = resolve_launch_profile()
+
+    allowed, context = provider_authority_allows(
+        profile=profile,
+        provider_state={},
+        quote_state={},
+        execution_mode="live",
+    )
+
+    assert allowed is False
+    assert "provider_unknown" in context["reasons"]
+    assert "quote_source_unknown" in context["reasons"]
+
+
+def test_live_profile_overrides_cannot_loosen_hard_caps(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_ORDER_COUNT", "99")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_NOTIONAL_PER_ORDER", "10000")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_SPREAD_BPS", "250")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_QUOTE_AGE_MS", "10000")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_ALLOW_SHORTS", "1")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_SYMBOLS", "AAPL,MSFT,NVDA")
+
+    profile = resolve_launch_profile()
+
+    assert profile.max_order_count == 3
+    assert profile.max_notional_per_order == 100.0
+    assert profile.max_spread_bps == 15.0
+    assert profile.max_quote_age_ms == 1000.0
+    assert profile.shorts_allowed is False
+    assert profile.allowed_symbols == ("AAPL",)

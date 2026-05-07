@@ -175,6 +175,31 @@ def test_symbol_universe_scorecard_suggests_shadow_promotion() -> None:
     )
 
 
+def test_symbol_universe_scorecard_flags_universe_mismatch_and_starvation() -> None:
+    report = symbol_universe_scorecard.build_symbol_universe_scorecard(
+        replay_report={
+            "replay_symbol_summary": {
+                "AAPL": {
+                    "sample_count": 100,
+                    "net_edge_bps": 2.0,
+                    "win_rate": 0.55,
+                }
+            }
+        },
+        executable_symbols={"AAPL", "AMZN"},
+        shadow_symbols={"MSFT"},
+        min_samples=25,
+        starvation_threshold=0.95,
+        now=datetime(2026, 5, 1, 15, 0, tzinfo=UTC),
+    )
+
+    diagnostics = report["diagnostics"]
+    assert diagnostics["universe_mismatch"] is True
+    assert diagnostics["configured_without_evidence"] == ["AMZN", "MSFT"]
+    assert diagnostics["symbol_starvation"] is True
+    assert diagnostics["dominant_symbol"] == "AAPL"
+
+
 def test_symbol_universe_scorecard_cli_writes_artifact(tmp_path: Path) -> None:
     live_cost_path = tmp_path / "live_cost_model_latest.json"
     output_path = tmp_path / "symbol_universe_scorecard_latest.json"

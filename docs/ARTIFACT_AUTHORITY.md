@@ -13,8 +13,14 @@ Use these latest pointers for current operational decisions:
 - Trading-day attribution:
   `/var/lib/ai-trading-bot/runtime/research_reports/latest/trading_day_latest.json`
 - Live-capital readiness:
-  `/var/lib/ai-trading-bot/runtime/live_capital_readiness_latest.json`, or the
-  latest daily bundle's `live_capital_readiness.json`
+  `/var/lib/ai-trading-bot/runtime/live_capital_readiness_latest.json`. The
+  latest daily bundle also keeps its run-local `live_capital_readiness.json`,
+  but the stable runtime pointer is the authority.
+- Launch-profile runtime gate state:
+  `/var/lib/ai-trading-bot/runtime/live_canary_state_latest.json` for
+  `live_canary`, and `/var/lib/ai-trading-bot/runtime/launch_profile_state_latest.json`
+  for other enforced launch profiles. These artifacts are submit-time guard
+  evidence, not permission to bypass live-capital readiness.
 - Live cost model:
   `/var/lib/ai-trading-bot/runtime/live_cost_model_latest.json`, or the current
   daily bundle's `live_cost_model.json`
@@ -23,6 +29,10 @@ Use these latest pointers for current operational decisions:
   `replay_live_parity_gate`
 - Promotion reports:
   `artifacts/promotion/promotion_report_latest.json` when generated manually
+- Training accelerator:
+  `/var/lib/ai-trading-bot/runtime/training_accelerator_<cadence>_latest.json`
+  for cached candidate research status. These reports have no promotion
+  authority.
 - Research automation summary:
   `/var/lib/ai-trading-bot/runtime/research_reports/latest/daily_operator_summary.json`
 

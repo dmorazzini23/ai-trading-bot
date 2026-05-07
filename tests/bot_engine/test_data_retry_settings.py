@@ -271,6 +271,9 @@ def test_pre_rank_execution_candidates_records_shadow_snapshot_when_enabled(monk
     assert latest["selected"] == 2
     assert "provider" in latest
     assert "quote_status" in latest
+    assert latest["session_regime"] in {"opening", "midday", "closing", "offhours"}
+    assert latest["regime_profile"]
+    assert latest["market_regime"]
     assert latest["top_n"] == 2
     assert [entry["symbol"] for entry in latest["ranked"]] == ["AAPL", "GOOG"]
 

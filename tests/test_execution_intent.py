@@ -6,7 +6,7 @@ from ai_trading.core.execution_intent import build_execution_intent_context
 
 
 def test_build_execution_intent_context_builds_intent_and_annotations() -> None:
-    bar_ts = datetime(2026, 4, 19, 14, 30, tzinfo=UTC)
+    bar_ts = datetime(2026, 4, 20, 13, 45, tzinfo=UTC)
 
     context = build_execution_intent_context(
         now=bar_ts,
@@ -29,6 +29,9 @@ def test_build_execution_intent_context_builds_intent_and_annotations() -> None:
         config_snapshot={
             "config_snapshot_hash": "cfg-1",
             "effective_policy_hash": "policy-1",
+            "regime_signal_profile": "trend",
+            "volatility_regime": "normal",
+            "trend_regime": "up",
         },
         execution_model_lineage={
             "model_id": "ml-main",
@@ -58,10 +61,17 @@ def test_build_execution_intent_context_builds_intent_and_annotations() -> None:
     assert context.pretrade_intent.event_type == "earnings"
     assert context.pretrade_intent.quote_quality_ok is True
     assert context.pretrade_intent.quote_age_ms == 0.0
+    assert context.pretrade_intent.session_regime == "opening"
     assert context.pretrade_intent.opening_trade is True
     assert context.order_lineage_metadata["model_id"] == "ml-main"
     assert context.order_lineage_metadata["policy_hash"] == "policy-1"
     assert context.order_lineage_metadata["price_source"] == "iex"
+    assert context.order_lineage_metadata["session_regime"] == "opening"
+    assert context.order_lineage_metadata["market_regime"] == "trend"
+    assert context.order_lineage_metadata["regime_profile"] == "trend"
+    assert context.order_lineage_metadata["volatility_regime"] == "normal"
+    assert context.order_lineage_metadata["trend_regime"] == "up"
     assert context.order_annotations["decision_trace_id"] == context.client_order_id
+    assert context.order_annotations["session_regime"] == "opening"
     assert context.order_annotations["quote_source"] == "broker_nbbo"
     assert context.order_annotations["quote"]["midpoint"] == 100.0

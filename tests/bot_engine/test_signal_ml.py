@@ -292,6 +292,10 @@ def test_signal_ml_shadow_logs_predictions(monkeypatch, tmp_path):
     assert payload["features"]["rsi"] == pytest.approx(30.0, abs=1e-6)
     assert payload["market"]["entry_close"] == pytest.approx(1.0, abs=1e-6)
     assert payload["market"]["bar_timestamp"] == "2026-05-01T14:30:00+00:00"
+    assert payload["market"]["session_regime"] == "midday"
+    assert payload["session_regime"] == "midday"
+    assert payload["regime_profile"]
+    assert payload["market_regime"]
     assert payload["market"]["quote_age_ms"] is None
     assert payload["market"]["quote_timestamp"] is None
     assert "provider" in payload

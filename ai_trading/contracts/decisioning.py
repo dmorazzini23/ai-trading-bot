@@ -233,6 +233,9 @@ class OrderIntent:
                 "quote_age_ms": _safe_float(getattr(intent, "quote_age_ms", None)),
                 "submit_quote_source": _safe_text(getattr(intent, "submit_quote_source", None)),
                 "quote_quality_ok": getattr(intent, "quote_quality_ok", None),
+                "session_regime": _safe_text(getattr(intent, "session_regime", None)),
+                "market_regime": _safe_text(getattr(intent, "market_regime", None)),
+                "regime_profile": _safe_text(getattr(intent, "regime_profile", None)),
                 "opening_trade": getattr(intent, "opening_trade", None),
                 "require_realtime_nbbo": getattr(intent, "require_realtime_nbbo", None),
                 "kill_switch_active": getattr(intent, "kill_switch_active", None),
@@ -615,6 +618,28 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
     market_bar = metrics_map.get("market_bar")
     if isinstance(market_bar, Mapping):
         metadata["market_bar"] = dict(market_bar)
+    order_intent_metadata = (
+        order_intent.metadata
+        if order_intent is not None and isinstance(order_intent.metadata, Mapping)
+        else {}
+    )
+    for target_key, source_keys in {
+        "session_regime": ("session_regime", "session_bucket"),
+        "market_regime": ("market_regime", "current_regime", "regime_profile"),
+        "regime_profile": ("regime_profile", "regime_signal_profile"),
+        "volatility_regime": ("volatility_regime",),
+        "trend_regime": ("trend_regime",),
+    }.items():
+        for source in source_keys:
+            value = (
+                _safe_text(tca_map.get(source))
+                or _safe_text(config_map.get(source))
+                or _safe_text(order_intent_metadata.get(source))
+                or _safe_text(order_map.get(source))
+            )
+            if value:
+                metadata[target_key] = value
+                break
     return DecisionJournalEntry(
         event=_derive_event(record),
         symbol=signal.symbol,

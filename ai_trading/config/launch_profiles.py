@@ -161,6 +161,23 @@ def _text_env(name: str, default: str) -> str:
     return str(get_env(name, default, cast=str, resolve_aliases=False) or default).strip()
 
 
+def _tighten_float(default: float | None, override: float | None) -> float | None:
+    if default is None:
+        return override
+    if override is None:
+        return default
+    return min(float(default), float(override))
+
+
+def _tighten_symbols(default: tuple[str, ...], override: tuple[str, ...]) -> tuple[str, ...]:
+    if not default:
+        return override
+    if not override:
+        return default
+    allowed = set(default)
+    return tuple(symbol for symbol in override if symbol in allowed)
+
+
 def active_launch_profile_name() -> str:
     raw = _text_env("AI_TRADING_LAUNCH_PROFILE", "")
     if raw:
@@ -182,26 +199,49 @@ def resolve_launch_profile(name: str | None = None) -> LaunchProfile:
         f"{prefix}_MAX_DAILY_LOSS",
         _float_env("AI_TRADING_LIVE_MAX_DAILY_LOSS", base.max_daily_loss),
     )
+    live_profile = base.name.startswith("live_")
+    max_gross_exposure = _float_env(
+        f"{prefix}_MAX_GROSS_EXPOSURE",
+        base.max_gross_exposure,
+    )
+    max_symbol_exposure = _float_env(
+        f"{prefix}_MAX_SYMBOL_EXPOSURE",
+        base.max_symbol_exposure,
+    )
+    max_notional_per_order = _float_env(
+        f"{prefix}_MAX_NOTIONAL_PER_ORDER",
+        base.max_notional_per_order,
+    )
+    max_quote_age_ms = _float_env(f"{prefix}_MAX_QUOTE_AGE_MS", base.max_quote_age_ms)
+    max_spread_bps = _float_env(f"{prefix}_MAX_SPREAD_BPS", base.max_spread_bps)
+    max_order_count = max(0, _int_env(f"{prefix}_MAX_ORDER_COUNT", base.max_order_count))
+    shorts_allowed = _bool_env(
+        f"{prefix}_ALLOW_SHORTS",
+        _bool_env("TRADING__ALLOW_SHORTS", base.shorts_allowed),
+    )
+    allowed_symbols = _csv_symbols(allowed_raw)
+    if live_profile:
+        max_gross_exposure = _tighten_float(base.max_gross_exposure, max_gross_exposure)
+        max_symbol_exposure = _tighten_float(base.max_symbol_exposure, max_symbol_exposure)
+        max_daily_loss = _tighten_float(base.max_daily_loss, max_daily_loss)
+        max_notional_per_order = _tighten_float(
+            base.max_notional_per_order,
+            max_notional_per_order,
+        )
+        max_quote_age_ms = _tighten_float(base.max_quote_age_ms, max_quote_age_ms)
+        max_spread_bps = _tighten_float(base.max_spread_bps, max_spread_bps)
+        max_order_count = min(max_order_count, base.max_order_count)
+        shorts_allowed = bool(base.shorts_allowed and shorts_allowed)
+        allowed_symbols = _tighten_symbols(base.allowed_symbols, allowed_symbols)
     return LaunchProfile(
         name=base.name,
-        max_gross_exposure=_float_env(f"{prefix}_MAX_GROSS_EXPOSURE", base.max_gross_exposure)
-        or base.max_gross_exposure,
-        max_symbol_exposure=_float_env(
-            f"{prefix}_MAX_SYMBOL_EXPOSURE",
-            base.max_symbol_exposure,
-        )
-        or base.max_symbol_exposure,
-        max_order_count=max(0, _int_env(f"{prefix}_MAX_ORDER_COUNT", base.max_order_count)),
+        max_gross_exposure=max_gross_exposure or base.max_gross_exposure,
+        max_symbol_exposure=max_symbol_exposure or base.max_symbol_exposure,
+        max_order_count=max_order_count,
         max_daily_loss=max_daily_loss,
-        max_notional_per_order=_float_env(
-            f"{prefix}_MAX_NOTIONAL_PER_ORDER",
-            base.max_notional_per_order,
-        ),
-        shorts_allowed=_bool_env(
-            f"{prefix}_ALLOW_SHORTS",
-            _bool_env("TRADING__ALLOW_SHORTS", base.shorts_allowed),
-        ),
-        allowed_symbols=_csv_symbols(allowed_raw) or base.allowed_symbols,
+        max_notional_per_order=max_notional_per_order,
+        shorts_allowed=shorts_allowed,
+        allowed_symbols=allowed_symbols or base.allowed_symbols,
         promotion_required=_bool_env(f"{prefix}_PROMOTION_REQUIRED", base.promotion_required),
         provider_policy=_text_env(
             "AI_TRADING_PROVIDER_AUTHORITY_POLICY",
@@ -220,8 +260,8 @@ def resolve_launch_profile(name: str | None = None) -> LaunchProfile:
             f"{prefix}_MANUAL_APPROVAL_REQUIRED",
             base.manual_approval_required,
         ),
-        max_quote_age_ms=_float_env(f"{prefix}_MAX_QUOTE_AGE_MS", base.max_quote_age_ms),
-        max_spread_bps=_float_env(f"{prefix}_MAX_SPREAD_BPS", base.max_spread_bps),
+        max_quote_age_ms=max_quote_age_ms,
+        max_spread_bps=max_spread_bps,
     )
 
 
@@ -271,9 +311,13 @@ def provider_authority_allows(
         if "alpaca" not in source_text:
             reasons.append("execution_quote_not_alpaca")
     if mode == "live" or resolved.name.startswith("live_"):
+        if resolved.provider_policy == "strict_live" and not active:
+            reasons.append("provider_unknown")
+        if resolved.provider_policy == "strict_live" and not quote_source:
+            reasons.append("quote_source_unknown")
         if using_backup and resolved.backup_provider_live_policy == "research_only":
             reasons.append("backup_provider_research_only")
-        if provider_status in {"degraded", "unhealthy", "down", "error"}:
+        if provider_status in {"unknown", "degraded", "unhealthy", "down", "error"}:
             reasons.append(f"provider_{provider_status}")
         if synthetic:
             reasons.append("synthetic_quote")

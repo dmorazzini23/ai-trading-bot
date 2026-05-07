@@ -284,6 +284,8 @@ def build_order_metrics_and_tca(
     tca_record["liquidity_role"] = str(liquidity_role_token)
     tca_record["venue"] = str(venue_token)
     tca_record["session_regime"] = str(session_regime_token)
+    if tca_record.get("market_regime") in (None, "") and tca_record.get("regime_profile") not in (None, ""):
+        tca_record["market_regime"] = str(tca_record.get("regime_profile"))
     tca_record["venue_session"] = f"{venue_token}:{session_regime_token}"
     expected_edge_for_tca = safe_float(candidate_expected_net_edge.get(symbol))
     if expected_edge_for_tca is not None:

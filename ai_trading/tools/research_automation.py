@@ -169,6 +169,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     memory_audit = config.run_dir / "memory_hotspot_audit.json"
     artifact_retention = config.run_dir / "runtime_artifact_retention.json"
     multi_horizon_dir = config.run_dir / "multi_horizon_lightweight"
+    training_accelerator = config.run_dir / "training_accelerator" / "training_accelerator_report.json"
     steps = [
         ResearchStep(
             name="refresh_runtime_reports",
@@ -366,6 +367,29 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     if config.data_dir is not None:
         steps.append(
             ResearchStep(
+                name="training_accelerator_daily",
+                command=_python_module(
+                    "ai_trading.tools.training_accelerator",
+                    "--cadence",
+                    "daily",
+                    "--data-dir",
+                    config.data_dir,
+                    "--symbols",
+                    config.symbols,
+                    "--output-dir",
+                    config.run_dir / "training_accelerator",
+                    "--live-cost-model-json",
+                    live_cost,
+                    "--use-live-cost-model",
+                ),
+                purpose="Refresh cached lightweight replay-aligned training candidates.",
+                output_path=training_accelerator,
+                skip_if_missing=(config.data_dir,),
+                metadata={"promotion_authority": False, "uses_cached_training_features": True},
+            )
+        )
+        steps.append(
+            ResearchStep(
                 name="multi_horizon_lightweight",
                 command=_python_module(
                     "ai_trading.tools.multi_horizon_research_pipeline",
@@ -397,6 +421,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
 def _weekly_steps(config: ResearchConfig) -> list[ResearchStep]:
     live_cost = config.run_dir / "live_cost_model.json"
     multi_horizon_dir = config.run_dir / "multi_horizon_weekly"
+    training_accelerator = config.run_dir / "training_accelerator" / "training_accelerator_report.json"
     bridge = config.run_dir / "microstructure_replay_bridge.json"
     steps = [
         ResearchStep(
@@ -407,6 +432,29 @@ def _weekly_steps(config: ResearchConfig) -> list[ResearchStep]:
         ),
     ]
     if config.data_dir is not None:
+        steps.append(
+            ResearchStep(
+                name="training_accelerator_weekly",
+                command=_python_module(
+                    "ai_trading.tools.training_accelerator",
+                    "--cadence",
+                    "weekly",
+                    "--data-dir",
+                    config.data_dir,
+                    "--symbols",
+                    config.symbols,
+                    "--output-dir",
+                    config.run_dir / "training_accelerator",
+                    "--live-cost-model-json",
+                    live_cost,
+                    "--use-live-cost-model",
+                ),
+                purpose="Run the broader cached weekly horizon/objective candidate refresh.",
+                output_path=training_accelerator,
+                skip_if_missing=(config.data_dir,),
+                metadata={"promotion_authority": False, "uses_cached_training_features": True},
+            )
+        )
         steps.append(
             ResearchStep(
                 name="multi_horizon_objective_search",
@@ -767,6 +815,95 @@ def _operator_action(status: str, cadence: str, workflow: str) -> str:
     return "inspect_failed_steps_before_restarting_automation"
 
 
+def _artifact_generated_at(path: Path | None) -> str | None:
+    if path is None or not path.exists():
+        return None
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, Mapping):
+        return None
+    value = parsed.get("generated_at") or parsed.get("timestamp") or parsed.get("as_of")
+    return str(value) if value not in (None, "") else None
+
+
+def _step_result_by_name(step_results: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+    return {str(row.get("name") or ""): row for row in step_results}
+
+
+def _evidence_manifest(
+    steps: Sequence[ResearchStep],
+    step_results: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    by_name = _step_result_by_name(step_results)
+    manifest: list[dict[str, Any]] = []
+    for step in steps:
+        path = step.output_path or step.stdout_path
+        result = by_name.get(step.name, {})
+        manifest.append(
+            {
+                "step": step.name,
+                "required": bool(step.required),
+                "status": result.get("status", "planned"),
+                "path": str(path) if path is not None else None,
+                "exists": bool(path is not None and path.exists()),
+                "generated_at": _artifact_generated_at(path),
+            }
+        )
+    return manifest
+
+
+def _copy_authority_artifacts(
+    *,
+    config: ResearchConfig,
+    step_results: Sequence[Mapping[str, Any]],
+) -> dict[str, str]:
+    copied: dict[str, str] = {}
+    latest_dir = config.report_root / "latest"
+    for row in step_results:
+        if row.get("status") not in {"passed", "blocked"}:
+            continue
+        name = str(row.get("name") or "")
+        raw_path = str(row.get("output_path") or row.get("stdout_path") or "").strip()
+        if not raw_path:
+            continue
+        source = Path(raw_path)
+        if not source.exists():
+            continue
+        targets: list[Path] = []
+        if name == "live_capital_readiness":
+            targets.extend(
+                [
+                    latest_dir / "live_capital_readiness_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/live_capital_readiness_latest.json",
+                        default_relative="runtime/live_capital_readiness_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "manual_promotion_report":
+            targets.extend(
+                [
+                    latest_dir / "promotion_report_latest.json",
+                    Path("artifacts/promotion/promotion_report_latest.json"),
+                ]
+            )
+        for target in targets:
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            except OSError:
+                logger.warning(
+                    "RESEARCH_AUTHORITY_ARTIFACT_COPY_FAILED",
+                    extra={"source": str(source), "target": str(target), "step": name},
+                )
+                continue
+            copied[name] = str(target)
+    return copied
+
+
 def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
     steps, blocked_reasons = build_research_steps(config)
     config.run_dir.mkdir(parents=True, exist_ok=True)
@@ -820,10 +957,12 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
         },
         "steps": [step.to_plan() for step in steps],
         "step_results": step_results,
+        "evidence_manifest": _evidence_manifest(steps, step_results),
     }
     report_path = config.run_dir / "research_automation_report.json"
     _write_json(report_path, report)
     latest_path = _copy_latest(report, config)
+    authority_copies = _copy_authority_artifacts(config=config, step_results=step_results)
     summary = _operator_summary(
         config=config,
         status=status,
@@ -838,6 +977,7 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
         "report": str(report_path),
         "operator_summary": str(summary_path),
         "latest_report": str(latest_path),
+        "authority_copies": authority_copies,
     }
     _write_json(report_path, report)
     _copy_latest(report, config)

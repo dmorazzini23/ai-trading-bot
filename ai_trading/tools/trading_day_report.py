@@ -70,12 +70,22 @@ def build_trading_day_report(
     gates = [row for row in gate_rows if _date_match(row, report_date)]
     rejected = [row for row in gates if str(row.get("action") or row.get("status") or "").lower() in {"reject", "rejected", "blocked"}]
     reject_reasons = Counter(str(row.get("reason") or row.get("gate") or "unknown") for row in rejected)
+    symbol_trade_flow: dict[str, Counter[str]] = defaultdict(Counter)
+    for row in intents:
+        symbol = str(row.get("symbol") or "").upper() or "UNKNOWN"
+        symbol_trade_flow[symbol]["desired"] += 1
+        if str(row.get("status") or "").upper() in {"SUBMITTED", "FILLED"}:
+            symbol_trade_flow[symbol]["submitted"] += 1
+    for row in rejected:
+        symbol = str(row.get("symbol") or "").upper() or "UNKNOWN"
+        symbol_trade_flow[symbol]["rejected"] += 1
     symbol_pnl: dict[str, float] = defaultdict(float)
-    symbol_realized_edge_bps: dict[str, float] = defaultdict(float)
-    symbol_expected_edge_bps: dict[str, float] = defaultdict(float)
-    symbol_slippage_bps: dict[str, float] = defaultdict(float)
+    symbol_realized_edge_bps: dict[str, list[float]] = defaultdict(list)
+    symbol_expected_edge_bps: dict[str, list[float]] = defaultdict(list)
+    symbol_slippage_bps: dict[str, list[float]] = defaultdict(list)
     for row in fill_rows:
         symbol = str(row.get("symbol") or "").upper() or "UNKNOWN"
+        symbol_trade_flow[symbol]["fills"] += 1
         pnl = row.get("pnl") if row.get("pnl") is not None else row.get("realized_pnl")
         try:
             symbol_pnl[symbol] += float(pnl or 0.0)
@@ -87,9 +97,26 @@ def build_trading_day_report(
             ("slippage_bps", symbol_slippage_bps),
         ):
             try:
-                target[symbol] += float(row.get(source_key) or 0.0)
+                target[symbol].append(float(row.get(source_key) or 0.0))
             except (TypeError, ValueError):
                 pass
+    missed_symbols = Counter(
+        str(row.get("symbol") or "").upper() or "UNKNOWN"
+        for row in shadows
+        if bool(row.get("challenger_would_trade")) and not bool(row.get("champion_would_trade"))
+    )
+
+    def _mean_by_symbol(values: Mapping[str, list[float]]) -> dict[str, float]:
+        return {
+            symbol: float(sum(rows) / len(rows))
+            for symbol, rows in sorted(values.items())
+            if rows
+        }
+
+    def _mean_all(values: Mapping[str, list[float]]) -> float | None:
+        rows = [item for symbol_rows in values.values() for item in symbol_rows]
+        return float(sum(rows) / len(rows)) if rows else None
+
     return {
         "schema_version": "1.0.0",
         "artifact_type": "trading_day_report",
@@ -111,12 +138,27 @@ def build_trading_day_report(
             "fill_rows": len(fill_rows),
         },
         "symbol_contribution": dict(sorted(symbol_pnl.items())),
-        "symbol_realized_edge_bps": dict(sorted(symbol_realized_edge_bps.items())),
-        "symbol_expected_edge_bps": dict(sorted(symbol_expected_edge_bps.items())),
-        "symbol_slippage_bps": dict(sorted(symbol_slippage_bps.items())),
+        "symbol_trade_flow": {
+            symbol: {
+                "desired": int(counts.get("desired", 0)),
+                "submitted": int(counts.get("submitted", 0)),
+                "rejected": int(counts.get("rejected", 0)),
+                "fills": int(counts.get("fills", 0)),
+            }
+            for symbol, counts in sorted(symbol_trade_flow.items())
+        },
+        "symbol_realized_edge_bps": _mean_by_symbol(symbol_realized_edge_bps),
+        "symbol_expected_edge_bps": _mean_by_symbol(symbol_expected_edge_bps),
+        "symbol_slippage_bps": _mean_by_symbol(symbol_slippage_bps),
+        "edge_quality": {
+            "mean_realized_edge_bps": _mean_all(symbol_realized_edge_bps),
+            "mean_expected_edge_bps": _mean_all(symbol_expected_edge_bps),
+            "mean_slippage_bps": _mean_all(symbol_slippage_bps),
+        },
         "gate_effectiveness": {"rejected_by_gate": dict(reject_reasons)},
         "missed_opportunities": {
-            "shadow_only_count": sum(1 for row in shadows if bool(row.get("challenger_would_trade")) and not bool(row.get("champion_would_trade"))),
+            "shadow_only_count": int(sum(missed_symbols.values())),
+            "symbols": dict(sorted(missed_symbols.items())),
         },
         "symbol_scorecard": {
             "summary": symbol_scorecard.get("summary", {}),

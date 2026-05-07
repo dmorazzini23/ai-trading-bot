@@ -50,6 +50,106 @@ def test_daily_research_report_blocks_on_critical_memory(monkeypatch):
     assert "memory_status_critical" in report["blocked_reasons"]
 
 
+def test_daily_research_report_blocks_on_runtime_gonogo_failure(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+
+    report = daily_research_pipeline.build_daily_research_report(
+        report_date="2026-05-05",
+        health={"ok": True, "status": "ready", "data_provider": {"status": "healthy"}},
+        live_cost_model={"status": {"available": True, "breach_count": 0, "status": "ready"}},
+        replay_governance={"replay_live_parity_gate": {"ok": True}},
+        runtime_gonogo={"gate_passed": False, "failed_checks": ["win_rate"]},
+        memory_audit={"status": "ok"},
+    )
+
+    assert report["trade_allowed"] is False
+    assert "runtime_gonogo_failed" in report["blocked_reasons"]
+
+
+def test_daily_research_report_blocks_on_provider_authority_failure(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+
+    report = daily_research_pipeline.build_daily_research_report(
+        report_date="2026-05-05",
+        health={
+            "ok": True,
+            "status": "ready",
+            "data_provider": {"status": "healthy"},
+            "provider_authority": {"ok": False, "reasons": ["synthetic_quote"]},
+        },
+        live_cost_model={"status": {"available": True, "breach_count": 0, "status": "ready"}},
+        promotion_report={"status": "ready_for_approval", "promotion_ready": True},
+        runtime_gonogo={"gate_passed": True, "failed_checks": []},
+        memory_audit={"status": "ok"},
+    )
+
+    assert report["trade_allowed"] is False
+    assert "provider_authority_not_ok" in report["blocked_reasons"]
+    assert report["next_session_limits"]["profile"] == "live_canary"
+    assert report["next_session_limits"]["provider_authority_ok"] is False
+
+
+def test_daily_research_report_blocks_missing_live_cost(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+
+    report = daily_research_pipeline.build_daily_research_report(
+        report_date="2026-05-05",
+        health={"ok": True, "status": "ready", "data_provider": {"status": "healthy"}},
+        live_cost_model={},
+        memory_audit={"status": "ok"},
+    )
+
+    assert report["trade_allowed"] is False
+    assert "live_cost_unavailable" in report["blocked_reasons"]
+
+
+def test_daily_research_report_reads_nested_runtime_gonogo_payload(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+
+    report = daily_research_pipeline.build_daily_research_report(
+        report_date="2026-05-05",
+        health={"ok": True, "status": "ready", "data_provider": {"status": "healthy"}},
+        live_cost_model={"status": {"available": True, "breach_count": 0, "status": "ready"}},
+        replay_governance={"replay_live_parity_gate": {"ok": True}},
+        runtime_gonogo={
+            "generated_at": "2026-05-05T20:00:00Z",
+            "go_no_go": {
+                "gate_passed": False,
+                "failed_checks": ["win_rate", "live_samples_sufficient"],
+            },
+        },
+        memory_audit={"status": "ok"},
+    )
+
+    assert report["trade_allowed"] is False
+    assert report["runtime_gonogo"]["failed_checks"] == [
+        "win_rate",
+        "live_samples_sufficient",
+    ]
+
+
+def test_daily_research_report_blocks_on_market_closed_non_flat_position(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+
+    report = daily_research_pipeline.build_daily_research_report(
+        report_date="2026-05-05",
+        health={
+            "ok": True,
+            "status": "healthy",
+            "attention_flags": ["market_closed_non_flat_positions"],
+            "data_provider": {"status": "warming_up"},
+        },
+        live_cost_model={"status": {"available": True, "breach_count": 0, "status": "ready"}},
+        replay_governance={"replay_live_parity_gate": {"ok": True}},
+        runtime_gonogo={"gate_passed": True, "failed_checks": []},
+        memory_audit={"status": "ok"},
+    )
+
+    assert report["trade_allowed"] is False
+    assert "market_closed_non_flat_positions" in report["blocked_reasons"]
+    assert report["runtime_attention_flags"] == ["market_closed_non_flat_positions"]
+
+
 def test_daily_research_report_surfaces_shadow_promotion(monkeypatch):
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
 

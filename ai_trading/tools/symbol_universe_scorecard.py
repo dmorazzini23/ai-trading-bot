@@ -320,6 +320,52 @@ def _shadow_promotion_suggestions(
     }
 
 
+def _universe_diagnostics(
+    rows: list[dict[str, Any]],
+    *,
+    executable_symbols: set[str],
+    shadow_symbols: set[str],
+    starvation_threshold: float,
+) -> dict[str, Any]:
+    evidence_symbols = {
+        str(row.get("symbol") or "").strip().upper()
+        for row in rows
+        if str(row.get("symbol") or "").strip()
+    }
+    configured_symbols = set(executable_symbols) | set(shadow_symbols)
+    row_samples = {
+        str(row.get("symbol") or "").strip().upper(): _to_int(row.get("sample_count"))
+        for row in rows
+        if str(row.get("symbol") or "").strip()
+    }
+    total_samples = sum(row_samples.values())
+    dominant_symbol = None
+    dominant_share = 0.0
+    if total_samples > 0 and row_samples:
+        dominant_symbol, dominant_samples = max(row_samples.items(), key=lambda item: item[1])
+        dominant_share = float(dominant_samples / total_samples)
+    executable_without_evidence = sorted(executable_symbols - evidence_symbols)
+    configured_without_evidence = sorted(configured_symbols - evidence_symbols)
+    diagnostics = {
+        "universe_mismatch": bool(configured_without_evidence),
+        "configured_symbols": sorted(configured_symbols),
+        "evidence_symbols": sorted(evidence_symbols),
+        "executable_symbols": sorted(executable_symbols),
+        "shadow_symbols": sorted(shadow_symbols),
+        "configured_without_evidence": configured_without_evidence,
+        "executable_without_evidence": executable_without_evidence,
+        "symbol_starvation": bool(
+            dominant_symbol is not None
+            and len(configured_symbols) > 1
+            and dominant_share >= float(starvation_threshold)
+        ),
+        "dominant_symbol": dominant_symbol,
+        "dominant_sample_share": dominant_share,
+        "starvation_threshold": float(starvation_threshold),
+    }
+    return diagnostics
+
+
 def build_symbol_universe_scorecard(
     *,
     live_cost_model: Mapping[str, Any] | None = None,
@@ -339,6 +385,7 @@ def build_symbol_universe_scorecard(
     shadow_symbols: Iterable[str] | None = None,
     shadow_promotion_min_score_delta: float = 0.5,
     shadow_promotion_min_samples: int = 10,
+    starvation_threshold: float = 0.95,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return a symbol universe scorecard from recent runtime artifacts."""
@@ -489,6 +536,12 @@ def build_symbol_universe_scorecard(
             min_score_delta=float(shadow_promotion_min_score_delta),
             min_samples=int(shadow_promotion_min_samples),
         ),
+        "diagnostics": _universe_diagnostics(
+            rows,
+            executable_symbols=executable_set,
+            shadow_symbols=shadow_set,
+            starvation_threshold=float(starvation_threshold),
+        ),
         "symbols": rows,
     }
 
@@ -513,6 +566,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--shadow-symbols", default="")
     parser.add_argument("--shadow-promotion-min-score-delta", type=float, default=0.5)
     parser.add_argument("--shadow-promotion-min-samples", type=int, default=10)
+    parser.add_argument("--starvation-threshold", type=float, default=0.95)
     args = parser.parse_args(argv)
 
     live_cost_path = _path_arg(
@@ -561,6 +615,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
         shadow_promotion_min_score_delta=float(args.shadow_promotion_min_score_delta),
         shadow_promotion_min_samples=max(1, int(args.shadow_promotion_min_samples)),
+        starvation_threshold=float(args.starvation_threshold),
     )
     report["paths"] = {
         "live_cost_model": str(live_cost_path),

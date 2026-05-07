@@ -56,6 +56,9 @@ Watch:
   `/var/lib/ai-trading-bot/runtime/live_canary_events.jsonl`
 - live canary state:
   `/var/lib/ai-trading-bot/runtime/live_canary_state_latest.json`
+- other enforced launch-profile events/state:
+  `/var/lib/ai-trading-bot/runtime/launch_profile_events.jsonl` and
+  `/var/lib/ai-trading-bot/runtime/launch_profile_state_latest.json`
 
 ## Emergency Stop
 

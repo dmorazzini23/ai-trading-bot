@@ -127,6 +127,12 @@ Use these stable strings to anchor surgical edits:
   `/run/ai-trading-bot/ai-trading-runtime.env` on service start. Do not add a
   second packaged source of truth under `/etc/ai-trading-bot`; after unit
   deployment, editing `.env` plus restarting the service refreshes runtime env.
+- Project-scoped Codex Marketplace guardrails live under `.codex/` and
+  `.agents/`; see `docs/CODEX_MARKETPLACE_GUARDRAILS.md`. Keep secret scanning,
+  dangerous-command blocking, AGENTS.md loading, command logging, and change
+  logging enabled. Do not install auto-git-add, smart-commit, auto-push,
+  auto-format, broad auto-test, deployment, or Slack notification hooks in this
+  repository.
 - Validate the surface that matches the deployment mode:
   - packaged main service: `curl -sS http://127.0.0.1:9001/healthz`
   - standalone health app: `curl -sS http://127.0.0.1:${HEALTHCHECK_PORT}/healthz`

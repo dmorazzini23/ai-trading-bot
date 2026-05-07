@@ -1,0 +1,20 @@
+{
+  "name": "codex-marketplace-ai-trading-bot-036ee271",
+  "interface": {
+    "displayName": "Codex Plugins (ai-trading-bot)"
+  },
+  "plugins": [
+    {
+      "name": "sentry",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sentry"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

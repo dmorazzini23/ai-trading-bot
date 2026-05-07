@@ -79,6 +79,30 @@ def _candidate_rank_key(record: Mapping[str, Any]) -> tuple[float, float, int]:
     return (expectancy, auc, trades)
 
 
+def _candidate_training_rank_key(record: Mapping[str, Any]) -> tuple[float, int, float]:
+    validation = record.get("validation")
+    threshold_sweep = record.get("threshold_sweep")
+    auc = 0.0
+    horizon = int(record.get("horizon_bars", 0) or 0)
+    sweep_edge = 0.0
+    if isinstance(validation, Mapping):
+        raw_auc = validation.get("roc_auc")
+        auc = float(raw_auc) if raw_auc is not None else 0.0
+    if isinstance(threshold_sweep, list):
+        for row in threshold_sweep:
+            if not isinstance(row, Mapping):
+                continue
+            for key in ("net_edge_bps", "mean_net_markout_bps", "expectancy_bps"):
+                raw = row.get(key)
+                if raw is None:
+                    continue
+                try:
+                    sweep_edge = max(sweep_edge, float(raw))
+                except (TypeError, ValueError):
+                    continue
+    return (auc, horizon, sweep_edge)
+
+
 def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -87,6 +111,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     horizons = _parse_int_list(str(args.horizons), default=(1, 3, 5, 15))
     objectives = _parse_objectives(str(args.label_objectives))
     candidates: list[dict[str, Any]] = []
+    replay_errors: list[dict[str, Any]] = []
     for objective in objectives:
         for horizon in horizons:
             model_name = f"{args.model_prefix}_h{horizon}_{objective}"
@@ -114,43 +139,11 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                         train_fraction=float(args.train_fraction),
                         edge_global_threshold=getattr(args, "edge_global_threshold", None),
                         random_state=int(args.random_state) + int(horizon),
+                        training_cache=getattr(args, "training_cache", None),
+                        training_cache_dir=getattr(args, "training_cache_dir", None),
                     )
                 )
                 model_path = str(training_report["model_path"])
-                replay_path = output_dir / f"{model_name}_replay.json"
-                replay_argv = [
-                    "--data-dir",
-                    str(args.data_dir),
-                    "--symbols",
-                    str(args.symbols or ""),
-                    "--simulation-mode",
-                    "--use-model-score",
-                    "--model-path",
-                    model_path,
-                    "--confidence-threshold",
-                    str(args.replay_confidence_threshold),
-                    "--entry-score-threshold",
-                    str(args.replay_entry_score_threshold),
-                    "--min-hold-bars",
-                    str(args.min_hold_bars),
-                    "--max-hold-bars",
-                    str(args.max_hold_bars),
-                    "--stop-loss-bps",
-                    str(args.stop_loss_bps),
-                    "--take-profit-bps",
-                    str(args.take_profit_bps),
-                    "--trailing-stop-bps",
-                    str(args.trailing_stop_bps),
-                    "--fee-bps",
-                    str(args.fee_bps),
-                    "--slippage-bps",
-                    str(args.slippage_bps),
-                    "--output-json",
-                    str(replay_path),
-                ]
-                if getattr(args, "live_cost_model_json", None) is not None:
-                    replay_argv.extend(["--live-cost-model-json", str(args.live_cost_model_json)])
-                replay_payload = run_replay(replay_argv)
                 record.update(
                     {
                         "model_path": model_path,
@@ -160,15 +153,86 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                         "validation": training_report.get("validation"),
                         "threshold_sweep": training_report.get("threshold_sweep", [])[:10],
                         "threshold_sweep_by_regime": training_report.get("threshold_sweep_by_regime"),
-                        "replay_output": str(replay_path),
-                        "replay": _slim_replay_summary(replay_payload),
+                        "replay_status": "pending_selection",
                     }
                 )
             except (OSError, ValueError, RuntimeError, TypeError) as exc:
                 record["error"] = {"type": type(exc).__name__, "message": str(exc)}
             candidates.append(record)
+    valid_trained = [record for record in candidates if "error" not in record]
+    max_replay_candidates = int(getattr(args, "max_replay_candidates", 0) or 0)
+    if max_replay_candidates <= 0:
+        replay_selected = list(valid_trained)
+    else:
+        replay_selected = sorted(
+            valid_trained,
+            key=_candidate_training_rank_key,
+            reverse=True,
+        )[:max(1, max_replay_candidates)]
+    selected_ids = {
+        (int(record.get("horizon_bars", 0) or 0), str(record.get("label_objective") or ""))
+        for record in replay_selected
+    }
+    for record in valid_trained:
+        record_id = (int(record.get("horizon_bars", 0) or 0), str(record.get("label_objective") or ""))
+        if record_id not in selected_ids:
+            record["replay_status"] = "skipped_successive_halving"
+            continue
+        model_path = str(record.get("model_path") or "")
+        model_name = str(record.get("model_name") or f"candidate_h{record_id[0]}_{record_id[1]}")
+        replay_path = output_dir / f"{model_name}_replay.json"
+        replay_argv = [
+            "--data-dir",
+            str(args.data_dir),
+            "--symbols",
+            str(args.symbols or ""),
+            "--simulation-mode",
+            "--use-model-score",
+            "--model-path",
+            model_path,
+            "--confidence-threshold",
+            str(args.replay_confidence_threshold),
+            "--entry-score-threshold",
+            str(args.replay_entry_score_threshold),
+            "--min-hold-bars",
+            str(args.min_hold_bars),
+            "--max-hold-bars",
+            str(args.max_hold_bars),
+            "--stop-loss-bps",
+            str(args.stop_loss_bps),
+            "--take-profit-bps",
+            str(args.take_profit_bps),
+            "--trailing-stop-bps",
+            str(args.trailing_stop_bps),
+            "--fee-bps",
+            str(args.fee_bps),
+            "--slippage-bps",
+            str(args.slippage_bps),
+            "--output-json",
+            str(replay_path),
+        ]
+        if getattr(args, "live_cost_model_json", None) is not None:
+            replay_argv.extend(["--live-cost-model-json", str(args.live_cost_model_json)])
+        try:
+            replay_payload = run_replay(replay_argv)
+        except (OSError, ValueError, RuntimeError, TypeError) as exc:
+            record["replay_status"] = "error"
+            record["replay_error"] = {"type": type(exc).__name__, "message": str(exc)}
+            replay_errors.append(dict(record["replay_error"]) | {"model_name": model_name})
+            continue
+        record.update(
+            {
+                "replay_status": "complete",
+                "replay_output": str(replay_path),
+                "replay": _slim_replay_summary(replay_payload),
+            }
+        )
     ranked = sorted(
-        [record for record in candidates if "error" not in record],
+        [
+            record
+            for record in candidates
+            if "error" not in record and str(record.get("replay_status") or "") == "complete"
+        ],
         key=_candidate_rank_key,
         reverse=True,
     )
@@ -185,8 +249,33 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             "live_cost_model_json": (
                 str(args.live_cost_model_json) if args.live_cost_model_json else None
             ),
+            "training_cache": getattr(args, "training_cache", None),
+            "training_cache_dir": (
+                str(args.training_cache_dir) if getattr(args, "training_cache_dir", None) else None
+            ),
+            "max_replay_candidates": max_replay_candidates,
         },
         "candidates": candidates,
+        "replay_selection": {
+            "strategy": "successive_halving_top_n" if max_replay_candidates > 0 else "all_candidates",
+            "max_replay_candidates": max_replay_candidates,
+            "trained_candidate_count": len(valid_trained),
+            "replayed_candidate_count": len(
+                [
+                    record
+                    for record in valid_trained
+                    if str(record.get("replay_status") or "") == "complete"
+                ]
+            ),
+            "skipped_candidate_count": len(
+                [
+                    record
+                    for record in valid_trained
+                    if str(record.get("replay_status") or "") == "skipped_successive_halving"
+                ]
+            ),
+            "errors": replay_errors,
+        },
         "ranked_candidates": ranked,
         "lead_candidates": [
             record
@@ -232,6 +321,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train-fraction", type=float, default=0.70)
     parser.add_argument("--edge-global-threshold", type=float, default=0.66)
     parser.add_argument("--random-state", type=int, default=42)
+    parser.add_argument("--training-cache", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--training-cache-dir", type=Path, default=None)
+    parser.add_argument("--max-replay-candidates", type=int, default=0)
     parser.add_argument("--replay-confidence-threshold", type=float, default=0.66)
     parser.add_argument("--replay-entry-score-threshold", type=float, default=0.05)
     parser.add_argument("--min-hold-bars", type=int, default=3)
