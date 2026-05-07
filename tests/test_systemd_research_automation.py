@@ -21,19 +21,28 @@ def test_research_automation_units_follow_runtime_safety_contract() -> None:
         assert "EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env" in content
         assert "Environment=AI_TRADING_DOTENV_RUNTIME_OVERRIDE=1" in content
         assert "ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh" in content
-        assert "ExecStart=/home/aiuser/ai-trading-bot/scripts/run_research_automation.sh" in content
+        assert "ExecStart=/bin/bash -lc 'set -a; source /run/ai-trading-bot/ai-trading-runtime.env" in content
+        assert "exec /home/aiuser/ai-trading-bot/scripts/run_research_automation.sh" in content
         assert "NoNewPrivileges=true" in content
         assert "ProtectSystem=strict" in content
         assert "RuntimeDirectory=ai-trading-bot" in content
+        assert "RuntimeDirectoryPreserve=yes" in content
         assert "ReadWritePaths=/var/lib/ai-trading-bot" in content
         env_src_idx = content.index("Environment=AI_TRADING_ENV_SRC=/home/aiuser/ai-trading-bot/.env")
         runtime_idx = content.index("EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env")
         override_idx = content.index("Environment=AI_TRADING_DOTENV_RUNTIME_OVERRIDE=1")
         sync_idx = content.index("ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh")
         exec_idx = content.index("ExecStart=")
+        source_idx = content.index("source /run/ai-trading-bot/ai-trading-runtime.env", exec_idx)
+        research_idx = content.index(
+            "exec /home/aiuser/ai-trading-bot/scripts/run_research_automation.sh",
+            exec_idx,
+        )
         assert env_src_idx < runtime_idx
         assert runtime_idx < override_idx
         assert sync_idx < exec_idx
+        assert sync_idx < source_idx
+        assert source_idx < research_idx
         assert "/etc/ai-trading-bot/ai-trading.env" not in content
 
 

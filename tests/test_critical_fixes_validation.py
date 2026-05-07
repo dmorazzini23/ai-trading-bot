@@ -277,9 +277,15 @@ class TestCriticalFixes(unittest.TestCase):
             override_idx = content.index("Environment=AI_TRADING_DOTENV_RUNTIME_OVERRIDE=1")
             sync_idx = content.index("ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh")
             exec_idx = content.index("ExecStart=")
+            source_idx = content.index(
+                "source /run/ai-trading-bot/ai-trading-runtime.env",
+                exec_idx,
+            )
             self.assertLess(env_src_idx, runtime_idx, f"{service_name} should sync from repo .env")
             self.assertLess(runtime_idx, override_idx, f"{service_name} should let fresh runtime env win")
             self.assertLess(sync_idx, exec_idx, f"{service_name} should sync runtime env before start")
+            self.assertLess(sync_idx, source_idx, f"{service_name} should source regenerated runtime env")
+            self.assertIn("RuntimeDirectoryPreserve=yes", content)
             self.assertNotIn("/etc/ai-trading-bot/ai-trading.env", content)
             if service_name == "ai-trading-connectors.service":
                 self.assertIn("Environment=API_PORT=9001", content)
