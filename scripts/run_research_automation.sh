@@ -7,12 +7,20 @@ cd "${ROOT_DIR}"
 CADENCE="${1:-daily}"
 WORKFLOW="${2:-}"
 
-if [[ ! -x "${ROOT_DIR}/venv/bin/python" ]]; then
-  echo "missing virtualenv python: ${ROOT_DIR}/venv/bin/python" >&2
+PYTHON_BIN="${AI_TRADING_PYTHON:-}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+  if [[ -x "${ROOT_DIR}/venv/bin/python" ]]; then
+    PYTHON_BIN="${ROOT_DIR}/venv/bin/python"
+  else
+    PYTHON_BIN="$(command -v python3 || true)"
+  fi
+fi
+if [[ -z "${PYTHON_BIN}" || ! -x "${PYTHON_BIN}" ]]; then
+  echo "missing python executable; set AI_TRADING_PYTHON or create ${ROOT_DIR}/venv/bin/python" >&2
   exit 1
 fi
 
-PY_VERSION="$("${ROOT_DIR}/venv/bin/python" - <<'PY'
+PY_VERSION="$("${PYTHON_BIN}" - <<'PY'
 import sys
 print(f"{sys.version_info.major}.{sys.version_info.minor}")
 PY
@@ -39,13 +47,13 @@ fi
 
 set +e
 flock -n "${LOCK_PATH}" \
-  "${ROOT_DIR}/venv/bin/python" -m ai_trading.tools.research_automation "${ARGS[@]}"
+  "${PYTHON_BIN}" -m ai_trading.tools.research_automation "${ARGS[@]}"
 STATUS=$?
 set -e
 
 if [[ "${AI_TRADING_RESEARCH_NOTIFY_SLACK:-1}" == "1" ]]; then
   if [[ "${AI_TRADING_RESEARCH_PLAN_ONLY:-0}" != "1" || "${AI_TRADING_RESEARCH_NOTIFY_PLAN_ONLY:-0}" == "1" ]]; then
-    "${ROOT_DIR}/venv/bin/python" -m ai_trading.tools.research_completion_notify \
+    "${PYTHON_BIN}" -m ai_trading.tools.research_completion_notify \
       --cadence "${CADENCE}" \
       --workflow "${WORKFLOW:-${CADENCE}}" \
       --exit-code "${STATUS}" \
