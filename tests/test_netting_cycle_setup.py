@@ -288,6 +288,51 @@ def test_universe_mismatch_alert_when_research_symbols_are_not_executable(
     assert mismatch["missing_executable_symbols"] == ["AMZN"]
 
 
+def test_explicit_canary_symbols_extend_runtime_universe_before_prerank() -> None:
+    state = SimpleNamespace(
+        canary_mode_logged=False,
+        last_loop_duration=0.0,
+        netting_symbol_budget_cursor=0,
+    )
+    runtime = SimpleNamespace(tickers=["AAPL"], execution_engine=None)
+    logger = _Logger()
+    pre_rank_calls: list[list[str]] = []
+
+    result = prepare_netting_cycle_inputs(
+        **_prepare_kwargs(
+            state=state,
+            runtime=runtime,
+            logger=logger,
+            env={
+                "AI_TRADING_CANARY_SYMBOLS": "AAPL,AMZN",
+                "AI_TRADING_CANARY_PERCENT": 0.0,
+                "AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS": "MSFT",
+                "AI_TRADING_UNIVERSE_MISMATCH_ALERT_ENABLED": True,
+                "AI_TRADING_SYMBOL_UNIVERSE_SCORECARD_ENABLED": False,
+            },
+            pre_rank_calls=pre_rank_calls,
+        )
+    )
+
+    assert result is not None
+    assert pre_rank_calls == [["AAPL", "AMZN"]]
+    assert result.symbols == ["AAPL", "AMZN"]
+    assert any(
+        event == "CANARY_SYMBOLS_ADDED_TO_RUNTIME_UNIVERSE"
+        and extra == {
+            "added": ["AMZN"],
+            "runtime_symbols_before": 1,
+            "runtime_symbols_after": 2,
+        }
+        for event, extra in logger.events
+    )
+    assert not any(
+        event == "UNIVERSE_MISMATCH_ALERT"
+        and "AMZN" in (extra or {}).get("missing_executable_symbols", [])
+        for event, extra in logger.events
+    )
+
+
 def test_prepare_netting_cycle_inputs_raises_preparation_error_on_position_failure() -> None:
     state = SimpleNamespace(canary_mode_logged=False, last_loop_duration=0.0)
     runtime = SimpleNamespace(tickers=["AAPL"], execution_engine=None)

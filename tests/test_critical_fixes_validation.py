@@ -224,7 +224,18 @@ class TestCriticalFixes(unittest.TestCase):
             "source /run/ai-trading-bot/ai-trading-runtime.env"
         )
         sync_idx = main_content.index("ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh")
-        exec_start_idx = main_content.index("ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading")
+        exec_start_idx = main_content.index("ExecStart=/bin/bash -lc")
+        exec_start_sync_idx = main_content.index(
+            "ExecStart=/bin/bash -lc '/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh"
+        )
+        exec_start_source_idx = main_content.index(
+            "source /run/ai-trading-bot/ai-trading-runtime.env",
+            exec_start_idx,
+        )
+        exec_start_python_idx = main_content.index(
+            "exec /home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading",
+            exec_start_idx,
+        )
         self.assertLess(paper_url_idx, env_src_idx)
         self.assertLess(env_src_idx, runtime_env_file_idx)
         self.assertLess(runtime_env_file_idx, runtime_override_idx)
@@ -236,6 +247,9 @@ class TestCriticalFixes(unittest.TestCase):
         self.assertLess(sync_idx, alembic_source_idx)
         self.assertLess(alembic_source_idx, alembic_idx)
         self.assertLess(alembic_idx, exec_start_idx)
+        self.assertLess(exec_start_sync_idx, exec_start_source_idx)
+        self.assertLess(exec_start_source_idx, exec_start_python_idx)
+        self.assertIn("RuntimeDirectoryPreserve=yes", main_content)
         self.assertNotIn("startup migration skipped", main_content)
         self.assertNotIn("/etc/ai-trading-bot/ai-trading.env", main_content)
 

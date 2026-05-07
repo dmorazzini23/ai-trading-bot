@@ -38,6 +38,18 @@ def _symbol_set(raw_value: Any) -> set[str]:
     }
 
 
+def _ordered_symbol_tokens(raw_value: Any) -> list[str]:
+    symbols: list[str] = []
+    seen: set[str] = set()
+    for token in str(raw_value or "").split(","):
+        symbol = token.strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        symbols.append(symbol)
+    return symbols
+
+
 def _read_json_mapping(path: Any) -> Mapping[str, Any]:
     try:
         payload = json.loads(resolve_runtime_artifact_path(
@@ -344,12 +356,27 @@ def prepare_netting_cycle_inputs(
     if canary_raw or (0.0 < canary_percent < 1.0):
         selected_symbols = list(symbols)
         if canary_raw:
-            canary_symbols = {
-                token.strip().upper()
-                for token in canary_raw.split(",")
-                if token and token.strip()
-            }
+            canary_symbol_order = _ordered_symbol_tokens(canary_raw)
+            canary_symbols = set(canary_symbol_order)
             active_canary_symbols = set(canary_symbols)
+            existing_symbols = {
+                str(symbol).strip().upper()
+                for symbol in selected_symbols
+                if str(symbol).strip()
+            }
+            added_canary_symbols = [
+                symbol for symbol in canary_symbol_order if symbol not in existing_symbols
+            ]
+            if added_canary_symbols:
+                selected_symbols.extend(added_canary_symbols)
+                logger.info(
+                    "CANARY_SYMBOLS_ADDED_TO_RUNTIME_UNIVERSE",
+                    extra={
+                        "added": added_canary_symbols,
+                        "runtime_symbols_before": len(existing_symbols),
+                        "runtime_symbols_after": len(existing_symbols) + len(added_canary_symbols),
+                    },
+                )
             selected_symbols = [
                 symbol for symbol in selected_symbols if str(symbol).upper() in canary_symbols
             ]
