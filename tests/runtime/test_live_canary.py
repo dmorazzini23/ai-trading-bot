@@ -57,6 +57,7 @@ def test_live_canary_allows_tightly_bounded_allowlisted_order(monkeypatch, tmp_p
             "price_hint": 50.0,
             "quote_age_ms": 100.0,
             "spread_bps": 5.0,
+            "daily_loss_state": {"daily_loss_abs": 0.0},
         },
         execution_mode="live",
     )
@@ -121,6 +122,7 @@ def test_live_canary_blocks_after_daily_order_cap(monkeypatch, tmp_path: Path):
         "price_hint": 10.0,
         "quote_age_ms": 100.0,
         "spread_bps": 2.0,
+        "daily_loss_state": {"daily_loss_abs": 0.0},
     }
 
     first_allowed, _ = evaluate_canary_order(order, execution_mode="live")
@@ -129,6 +131,31 @@ def test_live_canary_blocks_after_daily_order_cap(monkeypatch, tmp_path: Path):
     assert first_allowed is True
     assert second_allowed is False
     assert "daily_order_count_cap_exceeded" in second_context["reasons"]
+
+
+def test_live_canary_blocks_missing_or_exceeded_daily_loss(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+    order = {
+        "symbol": "AAPL",
+        "side": "buy",
+        "quantity": 1,
+        "price_hint": 10.0,
+        "quote_age_ms": 100.0,
+        "spread_bps": 2.0,
+    }
+
+    missing_allowed, missing_context = evaluate_canary_order(order, execution_mode="live")
+    exceeded_allowed, exceeded_context = evaluate_canary_order(
+        order | {"daily_loss_state": {"daily_loss_abs": 25.0}},
+        execution_mode="live",
+    )
+
+    assert missing_allowed is False
+    assert "daily_loss_state_missing" in missing_context["reasons"]
+    assert exceeded_allowed is False
+    assert "max_daily_loss_exceeded" in exceeded_context["reasons"]
 
 
 def test_live_canary_derives_quote_age_and_spread_from_runtime_state(monkeypatch, tmp_path: Path):
@@ -178,6 +205,7 @@ def test_live_canary_writes_state_and_event_artifacts(monkeypatch, tmp_path: Pat
             "price_hint": 10.0,
             "quote_age_ms": 100.0,
             "spread_bps": 2.0,
+            "daily_loss_state": {"daily_loss_abs": 0.0},
         },
         execution_mode="live",
     )
@@ -296,6 +324,7 @@ def test_live_canary_sell_to_close_is_not_short_and_reduces_exposure(monkeypatch
             "quote_age_ms": 100.0,
             "spread_bps": 2.0,
             "closing_position": True,
+            "daily_loss_state": {"daily_loss_abs": 0.0},
             "account_snapshot": {"equity": 1000.0},
             "positions": [{"symbol": "AAPL", "qty": 4, "market_price": 10.0}],
         },

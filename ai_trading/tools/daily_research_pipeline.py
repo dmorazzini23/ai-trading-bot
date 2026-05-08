@@ -70,6 +70,25 @@ def _promotion_ok(payload: Mapping[str, Any]) -> bool:
     return bool(payload.get("promotion_ready") or payload.get("status") == "ready_for_approval")
 
 
+def _replay_status(payload: Mapping[str, Any]) -> dict[str, Any]:
+    gate_raw = payload.get("replay_live_parity_gate")
+    gate = dict(gate_raw) if isinstance(gate_raw, Mapping) else {}
+    status = str(payload.get("status") or "").strip().lower()
+    if not status:
+        return gate
+    ok_statuses = {"ok", "pass", "passed", "ready", "complete", "completed", "success"}
+    blocked_statuses = {"blocked", "failed", "fail", "error", "not_ok", "non_ok"}
+    top_level_ok = status in ok_statuses
+    if status in blocked_statuses or not top_level_ok:
+        gate["ok"] = False
+        gate["reason"] = gate.get("reason") or payload.get("reason") or "replay_governance_failed"
+    elif "ok" not in gate:
+        gate["ok"] = True
+    gate["status"] = str(gate.get("status") or status)
+    gate["tool_status"] = status
+    return gate
+
+
 def _trade_allowed(report: Mapping[str, Any]) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     runtime_health = _nested(report, "runtime_health")
@@ -108,6 +127,13 @@ def _trade_allowed(report: Mapping[str, Any]) -> tuple[bool, list[str]]:
         reasons.append("live_cost_breach")
     replay_status = _nested(report, "replay_status")
     if replay_status and replay_status.get("ok") is False:
+        reasons.append("replay_governance_failed")
+    elif replay_status and str(replay_status.get("status") or "").lower() in {
+        "blocked",
+        "failed",
+        "fail",
+        "error",
+    }:
         reasons.append("replay_governance_failed")
     runtime_gonogo = _nested(report, "runtime_gonogo")
     if bool(runtime_gonogo.get("available")) and runtime_gonogo.get("gate_passed") is False:
@@ -171,8 +197,7 @@ def build_daily_research_report(
             "decision_summary": _nested(shadow_report, "decision_summary"),
             "sample_gate": _nested(shadow_report, "sample_gate"),
         },
-        "replay_status": _nested(replay_governance, "replay_live_parity_gate")
-        or _nested(replay_governance, "status"),
+        "replay_status": _replay_status(replay_governance),
         "promotion_status": {
             "status": promotion_report.get("status", "missing"),
             "promotion_ready": _promotion_ok(promotion_report),

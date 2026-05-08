@@ -67,3 +67,26 @@ def test_leakage_guard_fails_on_future_features() -> None:
             horizon_days=1,
             embargo_days=1,
         )
+
+
+def test_leakage_guard_does_not_double_count_label_horizon() -> None:
+    ts = pd.date_range("2024-01-01", periods=20, freq="D", tz="UTC")
+
+    run_leakage_guards(
+        feature_timestamps=ts[:4],
+        label_timestamps=ts[5:9],
+        train_label_times=[ts[8]],
+        test_label_times=[ts[10]],
+        horizon_days=5,
+        embargo_days=2,
+    )
+
+    with pytest.raises(AssertionError):
+        run_leakage_guards(
+            feature_timestamps=ts[:4],
+            label_timestamps=ts[5:9],
+            train_label_times=[ts[8]],
+            test_label_times=[ts[9]],
+            horizon_days=5,
+            embargo_days=2,
+        )

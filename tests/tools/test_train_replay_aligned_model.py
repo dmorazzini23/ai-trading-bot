@@ -13,6 +13,7 @@ from ai_trading.models.artifacts import verify_artifact
 from ai_trading.tools.train_replay_aligned_model import (
     REPLAY_ALIGNED_FEATURE_COLUMNS,
     build_training_dataset,
+    _best_thresholds_by_regime,
     _split_train_validation_with_purge,
     _threshold_report,
     train_replay_aligned_model,
@@ -107,6 +108,27 @@ def test_threshold_report_does_not_turn_long_probabilities_into_shorts() -> None
         row["candidates"] > 0 and float(row["total_net_markout_bps"]) > 0.0
         for row in directional
     )
+
+
+def test_best_thresholds_ignore_zero_candidate_rows() -> None:
+    reports = {
+        "regular": [
+            {
+                "confidence_threshold": 0.95,
+                "entry_score_threshold": 0.20,
+                "candidates": 0,
+                "mean_net_markout_bps": None,
+            },
+            {
+                "confidence_threshold": 0.58,
+                "entry_score_threshold": 0.05,
+                "candidates": 7,
+                "mean_net_markout_bps": 2.5,
+            },
+        ]
+    }
+
+    assert _best_thresholds_by_regime(reports) == {"regular": 0.58}
 
 
 def test_build_training_dataset_supports_risk_adjusted_excursion_labels(tmp_path: Path) -> None:

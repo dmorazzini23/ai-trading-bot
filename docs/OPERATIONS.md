@@ -143,6 +143,10 @@ Recurring research is orchestrated by
 dated bundles under `/var/lib/ai-trading-bot/runtime/research_reports/` and
 stable latest summaries under
 `/var/lib/ai-trading-bot/runtime/research_reports/latest/`.
+For daily runs, `daily_readiness_latest.json` is the canonical operator answer;
+`daily_research_latest.json` is a compatibility alias. The automation report
+itself is `daily_research_automation_latest.json` and is the only latest pointer
+used to decide whether a completion notification describes the current run.
 
 Daily automation refreshes evidence and lightweight candidates. Weekly
 automation searches horizons, objectives, symbol expansion, exits, and sizing.
@@ -155,6 +159,11 @@ OpenClaw summaries should read the generated artifacts instead of running heavy
 training directly. See
 [docs/RESEARCH_AUTOMATION.md](/home/aiuser/ai-trading-bot/docs/RESEARCH_AUTOMATION.md)
 for commands and timer installation.
+Research dry-runs intentionally skip Slack/OpenClaw completion notifications.
+An evidence no-go exits with status `2` and is treated as a successful oneshot
+timer result for operator visibility; lock contention exits `75`, and
+infrastructure failures exit `1`. Notification delivery failures are logged by
+the wrapper without changing the research run exit code.
 
 ### Launch Profiles And Live-Readiness
 
@@ -178,7 +187,7 @@ Useful manual checks:
 
 ```bash
 ./venv/bin/python -m ai_trading.tools.daily_research_pipeline \
-  --output-json /var/lib/ai-trading-bot/runtime/research_reports/daily_research_latest.json
+  --output-json /var/lib/ai-trading-bot/runtime/research_reports/latest/daily_readiness_latest.json
 
 ./venv/bin/python -m ai_trading.tools.live_capital_readiness \
   --output-json /var/lib/ai-trading-bot/runtime/live_capital_readiness_latest.json \

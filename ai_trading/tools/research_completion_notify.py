@@ -44,10 +44,7 @@ def _latest_path(report_root: Path, cadence: str, filename: str) -> Path:
 
 
 def _latest_research_automation_report(report_root: Path, cadence: str) -> dict[str, Any]:
-    report = _read_json(_latest_path(report_root, cadence, "{cadence}_research_automation_latest.json"))
-    if report:
-        return report
-    return _read_json(_latest_path(report_root, cadence, "{cadence}_research_latest.json"))
+    return _read_json(_latest_path(report_root, cadence, "{cadence}_research_automation_latest.json"))
 
 
 def _step_output(report: Mapping[str, Any], step_name: str) -> Path | None:
@@ -99,20 +96,40 @@ def build_research_completion_payload(
     exit_code: int,
     report_root: Path,
     channel: str,
+    run_status: str = "",
 ) -> dict[str, Any]:
     cadence = str(cadence or "daily").strip().lower()
     workflow = str(workflow or cadence).strip().lower()
-    report = _latest_research_automation_report(report_root, cadence)
-    summary = _read_json(_latest_path(report_root, cadence, "{cadence}_operator_summary.json"))
-    daily = _read_json(_latest_path(report_root, cadence, "daily_readiness_latest.json")) if cadence == "daily" else {}
+    run_status = str(run_status or "").strip().lower()
+    candidate_report = _latest_research_automation_report(report_root, cadence)
+    candidate_report_status = str(candidate_report.get("status") or "unknown")
+    suppress_stale = (
+        run_status in {"locked", "infrastructure_failed"}
+        or (exit_code != 0 and candidate_report_status not in {"blocked", "failed"})
+    )
+    report = {} if suppress_stale else candidate_report
+    summary = (
+        {}
+        if suppress_stale
+        else _read_json(_latest_path(report_root, cadence, "{cadence}_operator_summary.json"))
+    )
+    daily = (
+        _read_json(_latest_path(report_root, cadence, "daily_readiness_latest.json"))
+        if cadence == "daily" and not suppress_stale
+        else {}
+    )
     readiness_path = _step_output(report, "live_capital_readiness")
     readiness = _read_json(readiness_path)
     failed, skipped, blocked_steps = _step_statuses(report)
-    trading_day = _read_json(_latest_path(report_root, cadence, "trading_day_latest.json")) if cadence == "daily" else {}
+    trading_day = (
+        _read_json(_latest_path(report_root, cadence, "trading_day_latest.json"))
+        if cadence == "daily" and not suppress_stale
+        else {}
+    )
     report_status = str(report.get("status") or summary.get("status") or "unknown")
-    status = report_status
+    status = run_status or report_status
     if exit_code != 0 and report_status not in {"blocked", "failed"}:
-        status = "failed"
+        status = run_status or "failed"
     failed_text = ", ".join(failed) if failed else "none"
     skipped_text = ", ".join(skipped) if skipped else "none"
     blocked_steps_text = ", ".join(blocked_steps) if blocked_steps else "none"
@@ -139,8 +156,10 @@ def build_research_completion_payload(
     )
     fields = [
         _field("Workflow", workflow),
+        _field("Run status", run_status or "n/a"),
         _field("Exit code", exit_code),
         _field("Report status", report_status),
+        _field("Artifact freshness", "stale_latest_suppressed" if suppress_stale else "current_latest"),
         _field("Operator action", summary.get("operator_action")),
         _field("Blocked reasons", blocked_text),
         _field("Failed steps", failed_text),
@@ -220,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--channel", default="")
     parser.add_argument("--timeout-s", type=float, default=5.0)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--run-status", default="")
     args = parser.parse_args(argv)
     channel = str(args.channel or _env_text("AI_TRADING_RESEARCH_SLACK_CHANNEL", "#all-beatwallstreet")).strip()
     payload = build_research_completion_payload(
@@ -228,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
         exit_code=int(args.exit_code),
         report_root=_report_root(args.report_root),
         channel=channel,
+        run_status=str(args.run_status),
     )
     webhook_url = _webhook_url(str(args.webhook_url))
     hydration_error = ""

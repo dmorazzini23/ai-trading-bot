@@ -92,6 +92,7 @@ def _normalize_backtester_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_offline_replay_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = json.loads(json.dumps(payload))
+    normalized.pop("generated_at", None)
     artifacts = normalized.get("artifacts", {})
     if isinstance(artifacts, dict):
         normalized["artifacts"] = {

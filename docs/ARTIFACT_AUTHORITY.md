@@ -10,6 +10,9 @@ Use these latest pointers for current operational decisions:
 - Runtime health: `http://127.0.0.1:9001/healthz`
 - Daily research answer:
   `/var/lib/ai-trading-bot/runtime/research_reports/latest/daily_readiness_latest.json`
+  is the canonical daily operator answer. The automation also writes
+  `daily_research_latest.json` as a compatibility alias for older readers, but
+  new operator workflows should read `daily_readiness_latest.json`.
 - Trading-day attribution:
   `/var/lib/ai-trading-bot/runtime/research_reports/latest/trading_day_latest.json`
 - Live-capital readiness:
@@ -35,6 +38,11 @@ Use these latest pointers for current operational decisions:
   authority.
 - Research automation summary:
   `/var/lib/ai-trading-bot/runtime/research_reports/latest/daily_operator_summary.json`
+  plus
+  `/var/lib/ai-trading-bot/runtime/research_reports/latest/daily_research_automation_latest.json`.
+  Completion notifications must use the automation latest pointer for run
+  status and must not substitute stale daily readiness aliases after failed or
+  locked launches.
 
 ## Research Artifacts
 

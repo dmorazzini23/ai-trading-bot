@@ -190,6 +190,21 @@ def _cap_final_position_size(
 
     side = str(getattr(signal, "side", "buy")).strip().lower()
     if _opens_gross_exposure(side):
+        max_symbol_exposure = getattr(engine.config, "max_symbol_exposure", None)
+        if max_symbol_exposure is not None:
+            try:
+                symbol_key = str(symbol or "").strip().upper()
+                symbol_exposure_map = getattr(engine, "symbol_exposure", {})
+                if not isinstance(symbol_exposure_map, Mapping):
+                    symbol_exposure_map = {}
+                current_symbol_exposure = float(symbol_exposure_map.get(symbol_key, 0.0))
+                available_symbol_weight = max(0.0, float(max_symbol_exposure) - current_symbol_exposure)
+                symbol_exposure_cap = int(
+                    available_symbol_weight * max(float(total_equity), 0.0) / price
+                )
+            except (TypeError, ValueError, ZeroDivisionError):
+                symbol_exposure_cap = 0
+            caps.append(max(symbol_exposure_cap, 0))
         if _opens_short_exposure(side):
             if buying_power is not None:
                 try:

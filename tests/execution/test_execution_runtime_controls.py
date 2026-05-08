@@ -1387,6 +1387,18 @@ def test_execution_phase_gate_allows_closing_orders_during_eod_flatten_window(mo
     assert detail is None
 
 
+def test_live_eod_flatten_window_uses_early_close_calendar(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_EOD_FLATTEN_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EOD_FLATTEN_LEAD_SECONDS", "300")
+    now_et = datetime(2025, 11, 28, 12, 56, tzinfo=ZoneInfo("America/New_York"))
+
+    active, context = lt._eod_flatten_window_active(now_et)
+
+    assert active is True
+    assert context["reason"] == "session_close_window"
+    assert context["session_close"].startswith("2025-11-28T13:00:00")
+
+
 def test_opening_provider_guard_blocks_openings_when_provider_degraded(monkeypatch):
     engine = _engine_stub()
     engine.ctx = SimpleNamespace(state={"service_phase": "active"})

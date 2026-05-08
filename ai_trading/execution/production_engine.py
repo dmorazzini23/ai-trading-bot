@@ -213,8 +213,20 @@ class ProductionExecutionCoordinator:
             sizing_result = self.position_sizer.calculate_optimal_position(order.symbol, self.account_equity, market_data['current_price'], market_data, historical_data)
             halt_status = self.halt_manager.is_trading_allowed()
             position_multiplier = halt_status.get('position_size_multiplier', 1.0)
+            sizing_warnings = [
+                str(warning)
+                for warning in sizing_result.get('warnings', [])
+                if warning is not None
+            ]
+            weak_evidence_warning = any(
+                token in warning.lower()
+                for warning in sizing_warnings
+                for token in ("weak evidence", "insufficient evidence", "no valid position size")
+            )
             final_quantity = min(order.quantity, sizing_result['recommended_size'], int(order.quantity * position_multiplier))
-            return {'original_quantity': order.quantity, 'recommended_quantity': sizing_result['recommended_size'], 'final_quantity': max(0, final_quantity), 'position_multiplier': position_multiplier, 'sizing_warnings': sizing_result.get('warnings', [])}
+            if weak_evidence_warning:
+                final_quantity = 0
+            return {'original_quantity': order.quantity, 'recommended_quantity': sizing_result['recommended_size'], 'final_quantity': max(0, final_quantity), 'position_multiplier': position_multiplier, 'sizing_warnings': sizing_warnings}
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error('ORDER_SIZING_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return {'final_quantity': 0}
@@ -321,16 +333,24 @@ class ProductionExecutionCoordinator:
         )
         filled_qty = self._broker_response_value(response, "filled_qty", "filled_quantity")
         fill_price = self._broker_response_value(response, "filled_avg_price", "average_fill_price")
+        try:
+            filled_qty_value = float(filled_qty) if filled_qty not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            filled_qty_value = 0.0
         self.pending_orders.pop(local_order_id, None)
         order.id = broker_order_id
         if status_token == "filled":
             order.status = OrderStatus.FILLED
-            order.filled_quantity = int(float(filled_qty or order.quantity))
+            order.filled_quantity = cast(Any, filled_qty_value or float(order.quantity))
             order.average_fill_price = cast(Any, float(fill_price or order.price or 0.0))
             order.executed_at = datetime.now(UTC)
             self.completed_orders[order.id] = order
             self._update_position_tracking(order)
         else:
+            if status_token == "partially_filled":
+                order.filled_quantity = cast(Any, filled_qty_value)
+                if fill_price not in (None, ""):
+                    order.average_fill_price = cast(Any, float(fill_price))
             order.status = OrderStatus.PENDING
             self.pending_orders[order.id] = order
 
@@ -342,6 +362,7 @@ class ProductionExecutionCoordinator:
             symbol=order.symbol,
             side=order.side.value if isinstance(order.side, OrderSide) else order.side,
             quantity=order.quantity,
+            filled_qty=filled_qty_value,
             fill_price=float(fill_price) if fill_price not in (None, "") else None,
             execution_time=datetime.now(UTC),
             message=f"Order submitted to {provider}: {status_token or 'accepted'}",

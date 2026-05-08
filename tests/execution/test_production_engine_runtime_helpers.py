@@ -269,6 +269,25 @@ def test_optimize_order_size_applies_position_multiplier(monkeypatch) -> None:
     assert result["sizing_warnings"] == ["cap"]
 
 
+def test_optimize_order_size_blocks_weak_evidence_warning(monkeypatch) -> None:
+    coordinator = _coordinator(monkeypatch)
+    monkeypatch.setattr(
+        coordinator.position_sizer,
+        "calculate_optimal_position",
+        lambda *_args: {"recommended_size": 8, "warnings": ["weak evidence sizing"]},
+    )
+    monkeypatch.setattr(
+        coordinator.halt_manager,
+        "is_trading_allowed",
+        lambda: {"trading_allowed": True, "position_size_multiplier": 1.0},
+    )
+
+    result = _run(coordinator._optimize_order_size(_order(quantity=10)))
+
+    assert result["final_quantity"] == 0
+    assert result["sizing_warnings"] == ["weak evidence sizing"]
+
+
 def test_market_impact_and_execution_monitoring(monkeypatch) -> None:
     coordinator = _coordinator(monkeypatch)
 
@@ -333,6 +352,34 @@ def test_live_execution_uses_broker_adapter(monkeypatch) -> None:
     assert adapter.payload is not None
     assert adapter.payload["symbol"] == "AAPL"
     assert order.status is OrderStatus.PENDING
+
+
+def test_live_execution_preserves_partial_fill_quantity(monkeypatch) -> None:
+    class Adapter:
+        provider = "alpaca"
+
+        def submit_order(self, payload):
+            return {
+                "id": "broker-partial-1",
+                "status": "partially_filled",
+                "client_order_id": payload["client_order_id"],
+                "filled_qty": "2.5",
+                "filled_avg_price": "101.25",
+            }
+
+    coordinator = _coordinator(monkeypatch)
+    coordinator.execution_mode = "live"
+    coordinator.broker_adapter = Adapter()
+    order = _order(quantity=10, price=100.0)
+
+    result = _run(coordinator._execute_order_with_monitoring(order, {"estimated_slippage_bps": 5}))
+
+    assert result.status == "partially_filled"
+    assert result.quantity == 10
+    assert result.filled_qty == pytest.approx(2.5)
+    assert result.to_dict()["filled_qty"] == pytest.approx(2.5)
+    assert order.filled_quantity == pytest.approx(2.5)
+    assert coordinator.pending_orders["broker-partial-1"].filled_quantity == pytest.approx(2.5)
 
 
 def test_post_execution_processing_alert_paths(monkeypatch) -> None:

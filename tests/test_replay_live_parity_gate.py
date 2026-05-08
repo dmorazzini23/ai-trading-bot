@@ -78,6 +78,44 @@ def test_replay_live_parity_gate_fails_on_stale_replay(monkeypatch, tmp_path: Pa
     assert payload["status"] == "fail"
 
 
+def test_replay_live_parity_gate_rejects_mtime_only_freshness(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data-root"
+    artifact = data_root / "runtime" / "replay_outputs" / "replay_hash_missing_ts.json"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(
+        json.dumps(
+            {
+                "rows": 12,
+                "orders_submitted": 8,
+                "fill_events": 7,
+                "violations": [],
+                "counterfactual": {"passed": True},
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_root))
+
+    payload = summarize_replay_live_parity_gate(
+        oms_lifecycle_parity={
+            "enabled": True,
+            "available": True,
+            "ok": True,
+            "total_violations": 0,
+        }
+    )
+
+    assert payload["ok"] is False
+    assert "replay_fresh" in payload["failed_checks"]
+    assert payload["replay_governance"]["ts_source"] is None
+    assert payload["replay_governance"]["reason"] == "replay_governance_artifact_missing_payload_ts"
+
+
 def test_replay_live_parity_gate_fails_on_future_dated_replay(
     monkeypatch,
     tmp_path: Path,

@@ -80,6 +80,30 @@ def test_minute_source_override_yahoo(monkeypatch):
     assert fetch_calls["count"] == 0
 
 
+def test_live_minute_source_override_yahoo_is_blocked(monkeypatch):
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("MINUTE_SOURCE", "yahoo")
+    monkeypatch.setenv("BACKUP_DATA_PROVIDER", "yahoo")
+    monkeypatch.setattr(data_fetcher, "_has_alpaca_keys", lambda: False)
+    monkeypatch.setattr(data_fetcher, "_window_has_trading_session", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        data_fetcher,
+        "_last_complete_minute",
+        lambda _pd=None: datetime.now(UTC) - timedelta(minutes=1),
+    )
+
+    def fail_yahoo(*_args, **_kwargs):
+        raise AssertionError("Yahoo must not be used for live minute recovery")
+
+    monkeypatch.setattr(data_fetcher, "_yahoo_get_bars", fail_yahoo)
+    monkeypatch.setattr(data_fetcher, "_safe_backup_get_bars", fail_yahoo)
+
+    start = datetime.now(UTC) - timedelta(minutes=3)
+    end = datetime.now(UTC) - timedelta(minutes=1)
+    with pytest.raises(data_fetcher.EmptyBarsError):
+        data_fetcher.get_minute_df("AAPL", start, end)
+
+
 def test_minute_source_override_finnhub(monkeypatch):
     monkeypatch.setenv("MINUTE_SOURCE", "finnhub")
     fetch_calls = {"count": 0}

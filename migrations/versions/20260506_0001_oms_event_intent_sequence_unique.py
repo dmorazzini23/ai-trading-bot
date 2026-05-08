@@ -18,6 +18,10 @@ depends_on = None
 
 
 _UNIQUE_INDEX_NAME = "uq_oms_events_intent_sequence"
+_OMS_APPEND_ONLY_TRIGGER_NAMES = (
+    "trg_oms_events_no_update",
+    "trg_oms_events_no_delete",
+)
 
 
 def _table_exists(table_name: str) -> bool:
@@ -76,10 +80,87 @@ def _dedupe_intent_sequences() -> None:
     )
 
 
+def _drop_oms_append_only_guards() -> None:
+    bind = op.get_bind()
+    dialect_name = str(getattr(getattr(bind, "dialect", None), "name", "") or "")
+    for trigger_name in _OMS_APPEND_ONLY_TRIGGER_NAMES:
+        if dialect_name.startswith("postgres"):
+            op.execute(sa.text(f"DROP TRIGGER IF EXISTS {trigger_name} ON oms_events"))
+        else:
+            op.execute(sa.text(f"DROP TRIGGER IF EXISTS {trigger_name}"))
+
+
+def _restore_oms_append_only_guards() -> None:
+    bind = op.get_bind()
+    dialect_name = str(getattr(getattr(bind, "dialect", None), "name", "") or "")
+    if dialect_name.startswith("postgres"):
+        op.execute(
+            sa.text(
+                """
+                CREATE OR REPLACE FUNCTION ai_trading_prevent_append_only_mutation()
+                RETURNS trigger
+                LANGUAGE plpgsql
+                AS $$
+                BEGIN
+                  RAISE EXCEPTION '% is append-only', TG_TABLE_NAME;
+                END;
+                $$;
+                """
+            )
+        )
+        op.execute(
+            sa.text(
+                """
+                CREATE TRIGGER trg_oms_events_no_update
+                BEFORE UPDATE ON oms_events
+                FOR EACH ROW
+                EXECUTE FUNCTION ai_trading_prevent_append_only_mutation()
+                """
+            )
+        )
+        op.execute(
+            sa.text(
+                """
+                CREATE TRIGGER trg_oms_events_no_delete
+                BEFORE DELETE ON oms_events
+                FOR EACH ROW
+                EXECUTE FUNCTION ai_trading_prevent_append_only_mutation()
+                """
+            )
+        )
+        return
+    op.execute(
+        sa.text(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_oms_events_no_update
+            BEFORE UPDATE ON oms_events
+            BEGIN
+              SELECT RAISE(ABORT, 'oms_events is append-only');
+            END
+            """
+        )
+    )
+    op.execute(
+        sa.text(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_oms_events_no_delete
+            BEFORE DELETE ON oms_events
+            BEGIN
+              SELECT RAISE(ABORT, 'oms_events is append-only');
+            END
+            """
+        )
+    )
+
+
 def upgrade() -> None:
     if not _table_exists("oms_events"):
         return
-    _dedupe_intent_sequences()
+    _drop_oms_append_only_guards()
+    try:
+        _dedupe_intent_sequences()
+    finally:
+        _restore_oms_append_only_guards()
     if not _index_exists("oms_events", _UNIQUE_INDEX_NAME):
         op.create_index(
             _UNIQUE_INDEX_NAME,

@@ -164,7 +164,7 @@ def test_resolve_openclaw_runtime_target_accepts_explicit_token_without_config(
     )
 
     assert target == {
-        "url": "http://gateway.test/hooks/runtime",
+        "url": "http://gateway.test/hooks/ai-trading-bot/runtime",
         "token": "explicit-token",
     }
 
@@ -450,6 +450,124 @@ def test_notify_openclaw_incident_suppresses_duplicate_without_send(
     assert result["sent"] is False
     assert result["reason"] == "repeat_cooldown_active"
     assert result["incident_signature"] == "stable-health-degraded"
+
+
+def test_notify_openclaw_incident_min_interval_allows_severity_escalation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "openclaw_incident_state.json"
+    state_path.write_text(
+        dispatch.json.dumps(
+            {
+                "fingerprint": "old-fingerprint",
+                "incident_signature": "stable-runtime-incident",
+                "sent_at": dispatch._utc_now_iso(),
+                "severity": "error",
+                "triggers": ["health_degraded"],
+                "snapshot": {
+                    "health_status": "degraded",
+                    "health_ok": False,
+                    "broker_status": "connected",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    posts: list[dict[str, Any]] = []
+
+    def _fake_post(**kwargs: Any) -> dict[str, Any]:
+        posts.append(kwargs)
+        return {"status_code": 202}
+
+    monkeypatch.setattr(dispatch, "_post_openclaw_runtime_event", _fake_post)
+
+    result = dispatch._notify_openclaw_incident(
+        {
+            "state_path": str(state_path),
+            "env": {
+                "AI_TRADING_OPENCLAW_RUNTIME_WEBHOOK_URL": "https://openclaw.test/runtime",
+                "AI_TRADING_OPENCLAW_HOOK_TOKEN": "token",
+            },
+            "min_interval_minutes": 60,
+            "repeat_cooldown_minutes": 60,
+            "snapshot_result": {
+                "should_alert": True,
+                "fingerprint": "new-critical-fingerprint",
+                "incident_signature": "stable-runtime-incident",
+                "snapshot": {
+                    "health_status": "degraded",
+                    "health_ok": False,
+                    "broker_status": "disconnected",
+                },
+                "triggers": ["health_degraded"],
+            },
+        }
+    )
+
+    assert result["sent"] is True
+    assert result["severity"] == "critical"
+    assert posts
+
+
+def test_notify_openclaw_incident_min_interval_allows_blocker_change(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "openclaw_incident_state.json"
+    state_path.write_text(
+        dispatch.json.dumps(
+            {
+                "fingerprint": "old-fingerprint",
+                "incident_signature": "stable-runtime-incident",
+                "sent_at": dispatch._utc_now_iso(),
+                "severity": "error",
+                "triggers": ["rejection_concentration_high"],
+                "snapshot": {
+                    "health_status": "healthy",
+                    "health_ok": True,
+                    "broker_status": "connected",
+                    "top_rejection_concentration_gate": "OLD_GATE",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    posts: list[dict[str, Any]] = []
+
+    def _fake_post(**kwargs: Any) -> dict[str, Any]:
+        posts.append(kwargs)
+        return {"status_code": 202}
+
+    monkeypatch.setattr(dispatch, "_post_openclaw_runtime_event", _fake_post)
+
+    result = dispatch._notify_openclaw_incident(
+        {
+            "state_path": str(state_path),
+            "env": {
+                "AI_TRADING_OPENCLAW_RUNTIME_WEBHOOK_URL": "https://openclaw.test/runtime",
+                "AI_TRADING_OPENCLAW_HOOK_TOKEN": "token",
+            },
+            "min_interval_minutes": 60,
+            "repeat_cooldown_minutes": 60,
+            "snapshot_result": {
+                "should_alert": True,
+                "fingerprint": "new-blocker-fingerprint",
+                "incident_signature": "stable-runtime-incident",
+                "snapshot": {
+                    "health_status": "healthy",
+                    "health_ok": True,
+                    "broker_status": "connected",
+                    "top_rejection_concentration_gate": "NEW_GATE",
+                },
+                "triggers": ["rejection_concentration_high"],
+            },
+        }
+    )
+
+    assert result["sent"] is True
+    assert result["material"]["top_rejection_concentration_gate"] == "NEW_GATE"
+    assert posts
 
 
 def test_run_dispatch_openclaw_min_severity_suppresses_noncritical() -> None:

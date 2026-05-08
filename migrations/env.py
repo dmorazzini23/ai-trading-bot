@@ -9,12 +9,16 @@ from pathlib import Path
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from ai_trading.config.management import get_env
+from ai_trading.config.managed_secrets import hydrate_managed_secrets
+
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = None
+hydrate_managed_secrets()
 try:
     from ai_trading.oms.intent_store import _METADATA as _INTENT_METADATA
 except Exception:
@@ -36,12 +40,13 @@ def _normalize_database_url(raw: str) -> str:
 
 
 def _resolve_sqlalchemy_url() -> str:
-    database_url = _normalize_database_url(os.getenv("DATABASE_URL", ""))
+    database_url = _normalize_database_url(str(get_env("DATABASE_URL", "", cast=str) or ""))
     if database_url:
         return database_url
 
     store_path = str(
-        os.getenv("AI_TRADING_OMS_INTENT_STORE_PATH", "runtime/oms_intents.db")
+        get_env("AI_TRADING_OMS_INTENT_STORE_PATH", "runtime/oms_intents.db", cast=str)
+        or "runtime/oms_intents.db"
     ).strip()
     if "://" in store_path:
         return _normalize_database_url(store_path)

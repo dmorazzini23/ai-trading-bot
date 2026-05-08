@@ -316,7 +316,7 @@ def _resolve_openclaw_runtime_target(env_map: Mapping[str, str]) -> dict[str, st
     cfg = _read_json_file(cfg_path)
     hooks = cfg.get("hooks") if isinstance(cfg.get("hooks"), dict) else {}
     token = explicit_token or str(hooks.get("token") or "").strip()
-    hook_path = str(hooks.get("path") or "/hooks").strip() or "/hooks"
+    hook_path = str(hooks.get("path") or "/hooks/ai-trading-bot").strip() or "/hooks/ai-trading-bot"
     if not token:
         return None
     if explicit_url:
@@ -435,6 +435,88 @@ def _openclaw_incident_severity(snapshot_result: dict[str, Any]) -> str:
     )
 
 
+def _openclaw_prior_severity(prior: Mapping[str, Any]) -> str:
+    severity = str(prior.get("severity") or "").strip().lower()
+    if severity in _SEVERITY_RANKS:
+        return severity
+    snapshot = prior.get("snapshot") if isinstance(prior.get("snapshot"), Mapping) else {}
+    broker_status = str(snapshot.get("broker_status") or "unknown").strip().lower()
+    health_status = str(snapshot.get("health_status") or "unknown").strip().lower()
+    health_ok = bool(snapshot.get("health_ok", False))
+    failed_checks = snapshot.get("go_no_go_failed_checks")
+    failed_checks_list = failed_checks if isinstance(failed_checks, list) else []
+    if broker_status in {"down", "disconnected", "unreachable"}:
+        return "critical"
+    if not health_ok or failed_checks_list or health_status not in {"ready", "ok", "healthy", "unknown"}:
+        return "error"
+    return "warning"
+
+
+def _openclaw_blocker_material(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    precheck_raw = snapshot.get("precheck_failure_top_actionable_details")
+    if not isinstance(precheck_raw, list):
+        precheck_raw = snapshot.get("precheck_failure_top_details")
+    precheck_details: list[dict[str, Any]] = []
+    if isinstance(precheck_raw, list):
+        for item in precheck_raw[:5]:
+            if not isinstance(item, Mapping):
+                continue
+            detail = str(item.get("detail") or "").strip()
+            if not detail:
+                continue
+            precheck_details.append(
+                {
+                    "detail": detail,
+                    "count": _int_value(item.get("count")) or 0,
+                }
+            )
+    failed_checks = snapshot.get("go_no_go_failed_checks")
+    failed_checks_list = (
+        sorted({str(item).strip() for item in failed_checks if str(item).strip()})
+        if isinstance(failed_checks, list)
+        else []
+    )
+    return {
+        "go_no_go_failed_checks": failed_checks_list,
+        "top_rejection_concentration_gate": str(
+            snapshot.get("top_rejection_concentration_gate") or ""
+        ).strip(),
+        "precheck_failure_top_details": precheck_details,
+        "health_reason": str(snapshot.get("health_reason") or "").strip(),
+        "provider_reason": str(snapshot.get("provider_reason") or "").strip(),
+        "broker_status": str(snapshot.get("broker_status") or "").strip(),
+    }
+
+
+def _openclaw_material_change(
+    *,
+    prior: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    triggers: list[str],
+    signature: str,
+    severity: str,
+) -> bool:
+    prior_signature = str(prior.get("incident_signature") or "").strip()
+    if prior_signature and prior_signature != signature:
+        return True
+    prior_triggers_raw = prior.get("triggers")
+    prior_triggers = (
+        {str(item).strip() for item in prior_triggers_raw if str(item).strip()}
+        if isinstance(prior_triggers_raw, list)
+        else set()
+    )
+    if prior_triggers and prior_triggers != set(triggers):
+        return True
+    prior_severity = _openclaw_prior_severity(prior)
+    if _SEVERITY_RANKS[severity] > _SEVERITY_RANKS[prior_severity]:
+        return True
+    prior_material = prior.get("material")
+    if not isinstance(prior_material, Mapping):
+        prior_snapshot = prior.get("snapshot") if isinstance(prior.get("snapshot"), Mapping) else {}
+        prior_material = _openclaw_blocker_material(prior_snapshot)
+    return dict(prior_material) != _openclaw_blocker_material(snapshot)
+
+
 def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
     snapshot_result = args.get("snapshot_result")
     if not isinstance(snapshot_result, dict):
@@ -449,6 +531,7 @@ def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
     fingerprint = str(snapshot_result.get("fingerprint") or "").strip()
     signature = str(snapshot_result.get("incident_signature") or fingerprint)
     snapshot = snapshot_result.get("snapshot") if isinstance(snapshot_result.get("snapshot"), dict) else {}
+    severity = _openclaw_incident_severity(snapshot_result)
     if not should_alert:
         return {
             "sent": False,
@@ -465,6 +548,13 @@ def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
     prior_fp = str(prior.get("fingerprint") or "").strip()
     prior_signature = str(prior.get("incident_signature") or "").strip()
     prior_sent_at = _parse_iso_ts(prior.get("sent_at"))
+    material_change = _openclaw_material_change(
+        prior=prior,
+        snapshot=snapshot,
+        triggers=triggers,
+        signature=signature,
+        severity=severity,
+    )
     on_change_only = bool(args.get("on_change_only", True))
     repeat_cooldown_minutes = int(
         args.get("repeat_cooldown_minutes") or _DEFAULT_INCIDENT_REPEAT_COOLDOWN_MINUTES
@@ -475,6 +565,7 @@ def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
         min_interval_minutes > 0
         and prior_sent_at is not None
         and not force
+        and not material_change
     ):
         elapsed = now - prior_sent_at
         min_interval = timedelta(minutes=min_interval_minutes)
@@ -488,7 +579,7 @@ def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
                 "triggers": triggers,
                 "next_eligible_at": (prior_sent_at + min_interval).isoformat().replace("+00:00", "Z"),
             }
-    if on_change_only and prior_signature and prior_signature == signature and not force:
+    if on_change_only and prior_signature and prior_signature == signature and not force and not material_change:
         if repeat_cooldown_minutes > 0 and prior_sent_at is not None:
             elapsed = now - prior_sent_at
             cooldown = timedelta(minutes=repeat_cooldown_minutes)
@@ -511,7 +602,7 @@ def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
                 "snapshot": snapshot,
                 "triggers": triggers,
             }
-    if on_change_only and prior_fp == fingerprint and not force:
+    if on_change_only and prior_fp == fingerprint and not force and not material_change:
         return {
             "sent": False,
             "reason": "duplicate_fingerprint",
@@ -545,6 +636,8 @@ def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
         "sent_at": _utc_now_iso(),
         "triggers": triggers,
         "snapshot": snapshot,
+        "severity": severity,
+        "material": _openclaw_blocker_material(snapshot),
         "status_code": post_result["status_code"],
     }
     _save_state(state_path, state_payload)
@@ -554,6 +647,8 @@ def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
         "incident_signature": signature,
         "snapshot": snapshot,
         "triggers": triggers,
+        "severity": severity,
+        "material": _openclaw_blocker_material(snapshot),
         "status_code": post_result["status_code"],
         "state_path": str(state_path),
         "target_url": target["url"],

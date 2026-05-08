@@ -112,28 +112,25 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
     ranked_candidates: list[
         tuple[datetime, str, Path, dict[str, Any] | None, str | None]
     ] = []
+    missing_ts = datetime.fromtimestamp(0.0, UTC)
     for path in candidates:
-        try:
-            mtime_ts = datetime.fromtimestamp(path.stat().st_mtime, UTC)
-        except OSError:
-            mtime_ts = datetime.fromtimestamp(0.0, UTC)
         try:
             raw_payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError, json.JSONDecodeError):
             ranked_candidates.append(
-                (mtime_ts, str(path), path, None, "replay_governance_artifact_invalid")
+                (missing_ts, str(path), path, None, "replay_governance_artifact_invalid")
             )
             continue
         if not isinstance(raw_payload, Mapping):
             ranked_candidates.append(
-                (mtime_ts, str(path), path, None, "replay_governance_artifact_invalid")
+                (missing_ts, str(path), path, None, "replay_governance_artifact_invalid")
             )
             continue
         payload = dict(raw_payload)
         payload_ts = _parse_ts(payload.get("ts"))
         ranked_candidates.append(
             (
-                payload_ts if payload_ts is not None else mtime_ts,
+                payload_ts if payload_ts is not None else missing_ts,
                 str(path),
                 path,
                 payload,
@@ -156,11 +153,6 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         }
 
     ts = _parse_ts(payload.get("ts"))
-    if ts is None:
-        try:
-            ts = datetime.fromtimestamp(candidate.stat().st_mtime, UTC)
-        except OSError:
-            ts = None
     age_hours: float | None = None
     future_skew_seconds = 0.0
     future_dated = False
@@ -201,12 +193,16 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         "fresh": bool(fresh),
         "path": str(candidate),
         "ts": ts.isoformat() if ts is not None else None,
-        "ts_source": "payload" if _parse_ts(payload.get("ts")) is not None else "mtime",
+        "ts_source": "payload" if ts is not None else None,
         "age_hours": float(age_hours) if age_hours is not None else None,
         "future_dated": bool(future_dated),
         "future_skew_seconds": float(future_skew_seconds),
         "max_future_skew_seconds": float(max_future_skew_seconds),
-        "reason": "replay_governance_artifact_future_dated" if future_dated else None,
+        "reason": (
+            "replay_governance_artifact_missing_payload_ts"
+            if ts is None
+            else ("replay_governance_artifact_future_dated" if future_dated else None)
+        ),
         "max_age_hours": float(max_age_hours),
         "rows": _as_int(payload.get("rows"), 0),
         "orders_submitted": _as_int(payload.get("orders_submitted"), 0),
@@ -215,6 +211,7 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         "violations_by_code": violations_by_code,
         "cap_adjustments_count": int(max(0, cap_adjustments_count)),
         "counterfactual_passed": bool(counterfactual_passed),
+        "counterfactual_available": "passed" in counterfactual,
         "counterfactual": counterfactual,
     }
 
@@ -292,9 +289,13 @@ def summarize_replay_live_parity_gate(
         _as_int(replay_snapshot.get("violations_count"), 0),
     )
     counterfactual_raw = replay_snapshot.get("counterfactual_passed")
+    replay_counterfactual_available = replay_snapshot.get("counterfactual_available")
     if counterfactual_raw is None and isinstance(replay_snapshot.get("counterfactual"), Mapping):
-        counterfactual_raw = dict(replay_snapshot.get("counterfactual", {})).get("passed")
+        counterfactual_payload = dict(replay_snapshot.get("counterfactual", {}))
+        counterfactual_raw = counterfactual_payload.get("passed")
+        replay_counterfactual_available = "passed" in counterfactual_payload
     replay_counterfactual_passed = counterfactual_raw is True
+    replay_counterfactual_available = bool(replay_counterfactual_available)
 
     lifecycle_enabled = bool(
         lifecycle_snapshot.get("enabled", bool(lifecycle_snapshot))
@@ -399,6 +400,10 @@ def summarize_replay_live_parity_gate(
                 max(0, _as_int(replay_snapshot.get("cap_adjustments_count"), 0))
             ),
             "replay_counterfactual_passed": bool(replay_counterfactual_passed),
+            "replay_counterfactual_available": bool(replay_counterfactual_available),
+            "replay_counterfactual_waived": bool(
+                not require_counterfactual_passed and not replay_counterfactual_passed
+            ),
             "oms_lifecycle_parity_enabled": bool(lifecycle_enabled),
             "oms_lifecycle_parity_available": bool(lifecycle_available),
             "oms_lifecycle_parity_ok": bool(lifecycle_ok),

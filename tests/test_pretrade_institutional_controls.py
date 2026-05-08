@@ -773,6 +773,45 @@ def test_pretrade_runtime_decay_blocks_opening_but_allows_reduction(
     assert reason == "OK"
 
 
+def test_pretrade_runtime_decay_reduce_size_fails_closed_when_unconsumed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "runtime_decay_controls_latest.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "artifact_type": "runtime_decay_controls",
+                "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "status": {"available": True, "status": "ready"},
+                "actions": {
+                    "max_action": "reduce_size",
+                    "entries_allowed": True,
+                    "size_scale": 0.5,
+                    "reasons": ["runtime_gonogo_failed"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_RUNTIME_DECAY_CONTROLS_PATH", str(artifact))
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(
+        _intent(symbol="MSFT", side="buy", qty=2, price=100.0),
+        cfg=cfg,
+        ledger=_ExposureLedger(),
+        rate_limiter=limiter,
+    )
+
+    assert allowed is False
+    assert reason == "RUNTIME_DECAY_CONTROL_BLOCK"
+    assert details["action"] == "reduce_size"
+    assert details["size_scale"] == 0.5
+    assert details["fail_safe"] is True
+
+
 def test_pretrade_symbol_universe_gate_blocks_opening_but_allows_reduction(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -244,6 +244,37 @@ def test_execute_order_propagates_notional_market_order(engine_factory):
     assert captured["kwargs"]["notional"] == "100.25"
 
 
+def test_execute_order_live_blocks_before_broker_submit_without_durable_intent(
+    engine_factory,
+):
+    calls: list[tuple[Any, ...]] = []
+
+    def _submit_market_stub(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {
+            "id": "should-not-submit",
+            "symbol": args[0],
+            "side": args[1],
+            "status": "accepted",
+            "qty": args[2],
+            "filled_qty": "0",
+        }
+
+    engine = engine_factory()
+    engine.execution_mode = "live"
+    engine.order_manager = SimpleNamespace(
+        begin_external_order_lifecycle=lambda **_: None,
+    )
+    engine.submit_market_order = _submit_market_stub
+
+    result = engine.execute_order("AAPL", "buy", 1, order_type="market")
+
+    assert result is None
+    assert calls == []
+    assert engine._last_submit_outcome["status"] == "skipped"
+    assert engine._last_submit_outcome["reason"] == "durable_oms_unavailable"
+
+
 def test_execute_order_marks_buy_over_short_as_closing(engine_factory):
     captured: dict[str, Any] = {}
 
@@ -811,6 +842,35 @@ def test_execute_order_propagates_precheck_failure_detail(engine_factory):
     assert synced_states[-1]["error"] == (
         "pre_execution_order_checks_failed:symbol_reentry_cooldown"
     )
+
+
+def test_execute_order_fails_closed_when_durable_lifecycle_creation_fails(engine_factory):
+    engine = engine_factory()
+    engine.execution_mode = "live"
+    submit_calls: list[dict[str, Any]] = []
+
+    class DurableManager:
+        def begin_external_order_lifecycle(self, **_kwargs):
+            raise RuntimeError("intent store unavailable")
+
+    engine.order_manager = DurableManager()
+    engine._submit_order_to_alpaca = lambda order_data: submit_calls.append(dict(order_data)) or {
+        "id": "should-not-submit",
+        "status": "accepted",
+    }
+
+    result = engine.execute_order(
+        "AAPL",
+        "buy",
+        1,
+        order_type="market",
+        client_order_id="cid-durable-fail",
+    )
+
+    assert result is None
+    assert submit_calls == []
+    assert engine._last_submit_outcome.get("status") == "skipped"
+    assert engine._last_submit_outcome.get("reason") == "durable_oms_unavailable"
 
 
 def test_execute_order_records_skip_outcome_for_cycle_duplicate_intent(engine_factory, caplog):

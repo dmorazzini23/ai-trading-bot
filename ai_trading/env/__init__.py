@@ -53,6 +53,10 @@ def _resolve_runtime_dotenv_path(dotenv_path: str) -> str:
     local_runtime_path = env_path.parent / "runtime" / "ai-trading-runtime.env"
     if local_runtime_path.exists():
         return str(local_runtime_path)
+    repo_env_path = Path(__file__).resolve().parents[2] / ".env"
+    default_path_requested = str(env_path) == ".env" or env_path.resolve() == repo_env_path.resolve()
+    if not default_path_requested:
+        return str(local_runtime_path)
     packaged_runtime_path = Path("/run/ai-trading-bot/ai-trading-runtime.env")
     if packaged_runtime_path.exists():
         return str(packaged_runtime_path)

@@ -90,6 +90,44 @@ def test_liquidate_positions_if_needed_exits_active_positions(monkeypatch: pytes
     assert runtime._last_eod_flatten_attempt_mono == 500.0
 
 
+def test_exit_all_positions_routes_eod_flatten_through_canonical_execution() -> None:
+    calls: list[dict[str, object]] = []
+    runtime = SimpleNamespace(
+        api=SimpleNamespace(
+            list_positions=lambda: [
+                SimpleNamespace(symbol="AAPL", qty="3"),
+                SimpleNamespace(symbol="MSFT", qty="-2"),
+            ]
+        ),
+        execute_order=lambda symbol, side, qty, **kwargs: calls.append(
+            {"symbol": symbol, "side": side, "qty": qty, **kwargs}
+        ),
+    )
+
+    execution_flow.exit_all_positions(runtime)
+
+    assert calls == [
+        {
+            "symbol": "AAPL",
+            "side": "sell",
+            "qty": 3,
+            "order_type": "market",
+            "closing_position": True,
+            "reduce_only": True,
+            "metadata": {"reason": "eod_exit"},
+        },
+        {
+            "symbol": "MSFT",
+            "side": "buy",
+            "qty": 2,
+            "order_type": "market",
+            "closing_position": True,
+            "reduce_only": True,
+            "metadata": {"reason": "eod_exit"},
+        },
+    ]
+
+
 def test_liquidate_positions_if_needed_respects_halt_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bot_engine, "check_halt_flag", lambda _runtime: True)
     monkeypatch.setattr(

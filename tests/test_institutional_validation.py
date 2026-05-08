@@ -41,6 +41,29 @@ def test_purged_walk_forward_validation_runs() -> None:
     assert 0.0 <= report["pass_ratio"] <= 1.0
 
 
+def test_purged_walk_forward_validation_requires_profitable_test_folds() -> None:
+    ts = pd.date_range("2024-01-01", periods=260, freq="D", tz="UTC")
+    frame = pd.DataFrame(
+        {
+            "timestamp": ts,
+            "ret": [-0.001] * len(ts),
+        }
+    )
+
+    report = run_purged_walk_forward_validation(
+        frame,
+        return_col="ret",
+        timestamp_col="timestamp",
+        n_splits=4,
+        min_fold_samples=15,
+        min_test_expectancy_bps=0.0,
+    )
+
+    assert report["fold_count"] >= 1
+    assert report["passed_folds"] == 0
+    assert all(fold["profitability_ok"] is False for fold in report["folds"])
+
+
 def test_regime_split_validation_reports_pass_ratio() -> None:
     frame = pd.DataFrame(
         {

@@ -558,6 +558,19 @@ class EventStore:
         if intent_id in (None, ""):
             return 0
         assert _OMS_EVENTS_TABLE is not None
+        if session is not None:
+            try:
+                bind = session.get_bind()
+                dialect_name = str(getattr(getattr(bind, "dialect", None), "name", "") or "")
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
+                dialect_name = ""
+            if dialect_name.startswith("postgres"):
+                session.execute(
+                    text(
+                        "SELECT pg_advisory_xact_lock(hashtext(:intent_id)::bigint)"
+                    ),
+                    {"intent_id": str(intent_id)},
+                )
         stmt = select(func.max(_OMS_EVENTS_TABLE.c.sequence_no)).where(
             _OMS_EVENTS_TABLE.c.intent_id == str(intent_id)
         )
@@ -587,6 +600,37 @@ class EventStore:
         except (TypeError, ValueError):
             return 1
 
+    def _oms_idempotency_duplicate_exists(
+        self,
+        *,
+        event_source: str,
+        idempotency_key: str,
+    ) -> bool:
+        """Return True when an OMS insert failed because the idempotency row exists."""
+
+        assert _OMS_EVENTS_TABLE is not None
+        stmt = (
+            select(_OMS_EVENTS_TABLE.c.event_id)
+            .where(_OMS_EVENTS_TABLE.c.event_source == str(event_source))
+            .where(_OMS_EVENTS_TABLE.c.idempotency_key == str(idempotency_key))
+            .limit(1)
+        )
+        try:
+            with self._engine.connect() as conn:
+                result = conn.execute(stmt)
+                try:
+                    return result.first() is not None
+                finally:
+                    result.close()
+                    conn.rollback()
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            logger.debug(
+                "OMS_EVENT_IDEMPOTENCY_DUPLICATE_LOOKUP_FAILED",
+                extra={"event_source": event_source, "idempotency_key": idempotency_key},
+                exc_info=True,
+            )
+            return False
+
     def append_oms_event(self, event: OmsEvent) -> bool:
         """Append OMS event. Returns False on duplicate idempotency."""
 
@@ -610,19 +654,55 @@ class EventStore:
             "created_at": created_at,
         }
         db_persisted = False
+        auto_sequence = normalized.sequence_no is None
+        max_attempts = 3 if auto_sequence and normalized.intent_id not in (None, "") else 1
         with self._lock:
             try:
-                with self._session_factory.begin() as session:
-                    sequence_no = (
-                        int(normalized.sequence_no)
-                        if normalized.sequence_no is not None
-                        else self._next_sequence_no(normalized.intent_id, session=session)
-                    )
-                    payload_dict["sequence_no"] = max(0, int(sequence_no))
-                    session.execute(insert(_OMS_EVENTS_TABLE).values(**payload_dict))
-                db_persisted = True
-            except IntegrityError:
-                db_persisted = False
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        with self._session_factory.begin() as session:
+                            sequence_no = (
+                                int(normalized.sequence_no)
+                                if normalized.sequence_no is not None
+                                else self._next_sequence_no(normalized.intent_id, session=session)
+                            )
+                            payload_dict["sequence_no"] = max(0, int(sequence_no))
+                            session.execute(insert(_OMS_EVENTS_TABLE).values(**payload_dict))
+                        db_persisted = True
+                        break
+                    except IntegrityError as exc:
+                        if self._oms_idempotency_duplicate_exists(
+                            event_source=normalized.event_source,
+                            idempotency_key=normalized.idempotency_key,
+                        ):
+                            db_persisted = False
+                            break
+                        if attempt < max_attempts:
+                            logger.info(
+                                "OMS_EVENT_SEQUENCE_COLLISION_RETRY",
+                                extra={
+                                    "intent_id": normalized.intent_id,
+                                    "event_type": normalized.event_type,
+                                    "event_source": normalized.event_source,
+                                    "idempotency_key": normalized.idempotency_key,
+                                    "attempt": attempt,
+                                },
+                            )
+                            continue
+                        logger.error(
+                            "OMS_EVENT_SEQUENCE_COLLISION",
+                            extra={
+                                "intent_id": normalized.intent_id,
+                                "event_type": normalized.event_type,
+                                "event_source": normalized.event_source,
+                                "idempotency_key": normalized.idempotency_key,
+                                "sequence_no": payload_dict.get("sequence_no"),
+                                "auto_sequence": auto_sequence,
+                            },
+                        )
+                        raise RuntimeError("OMS event sequence collision") from exc
+            except RuntimeError:
+                raise
             except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                 logger.warning(
                     "OMS_EVENT_DB_WRITE_FAILED",

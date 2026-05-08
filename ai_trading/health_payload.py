@@ -1233,6 +1233,7 @@ def build_runtime_health_payload(
     offhours_market_closed_ready = (
         market_closed_mode
         and broker_healthy
+        and not provider_unknown
         and not broker_down
         and not broker_degraded
         and not service_degraded
@@ -1260,6 +1261,7 @@ def build_runtime_health_payload(
         and service_reason_normalized == "warmup_cycle"
         and (market_closed_mode or _market_is_closed_now())
         and not provider_disabled
+        and not provider_unknown
         and not data_degraded
         and not bool(provider_payload.get("using_backup"))
         and not broker_down
@@ -1427,6 +1429,8 @@ def build_runtime_health_payload(
         payload["reason"] = readiness_failures[0]
     elif broker_unknown and service_phase_normalized == "warmup":
         payload["reason"] = "broker_status_unknown"
+    elif provider_unknown:
+        payload["reason"] = "provider_status_unknown"
     elif service_reason and not (
         broker_unknown and service_reason_normalized == "warmup_cycle"
     ):
@@ -1440,8 +1444,6 @@ def build_runtime_health_payload(
         payload["reason"] = "data_unavailable"
     if broker_down and not payload.get("reason"):
         payload["reason"] = broker_state.get("last_error") or "broker_unreachable"
-    if provider_unknown and not payload.get("reason"):
-        payload["reason"] = "provider_status_unknown"
     if broker_unknown and not payload.get("reason"):
         payload["reason"] = "broker_status_unknown"
     if service_degraded and not payload.get("reason"):

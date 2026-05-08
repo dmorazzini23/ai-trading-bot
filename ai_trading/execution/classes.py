@@ -31,6 +31,7 @@ class ExecutionResult(Mapping[str, Any]):
     symbol: str
     side: str | None = None
     quantity: int | None = None
+    filled_qty: float | None = None
     fill_price: float | None = None
     message: str = ""
     execution_time: datetime | None = None
@@ -72,6 +73,7 @@ class ExecutionResult(Mapping[str, Any]):
             "symbol": self.symbol,
             "side": self.side,
             "quantity": self.quantity,
+            "filled_qty": self.filled_qty,
             "fill_price": self.fill_price,
             "message": self.message,
             "execution_time": self.execution_time.isoformat()

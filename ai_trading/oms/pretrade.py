@@ -907,7 +907,17 @@ def _runtime_decay_pretrade_gate(
     if payload is None or not _runtime_decay_controls_usable(payload):
         return None
     actions = payload.get("actions")
-    if not isinstance(actions, Mapping) or bool(actions.get("entries_allowed", True)):
+    if not isinstance(actions, Mapping):
+        return None
+    size_scale = _finite_float(actions.get("size_scale"))
+    max_action = str(actions.get("max_action") or "normal").strip().lower()
+    entries_allowed = bool(actions.get("entries_allowed", True))
+    reduce_size_unconsumed = (
+        max_action == "reduce_size"
+        and size_scale is not None
+        and 0.0 <= float(size_scale) < 1.0
+    )
+    if entries_allowed and not reduce_size_unconsumed:
         return None
     reasons_raw = actions.get("reasons")
     reasons = list(reasons_raw) if isinstance(reasons_raw, list) else []
@@ -915,10 +925,11 @@ def _runtime_decay_pretrade_gate(
         False,
         "RUNTIME_DECAY_CONTROL_BLOCK",
         {
-            "action": str(actions.get("max_action") or "disable_new_entries"),
-            "size_scale": _finite_float(actions.get("size_scale")),
+            "action": max_action or "disable_new_entries",
+            "size_scale": size_scale,
             "reasons": reasons,
             "generated_at": payload.get("generated_at"),
+            "fail_safe": bool(entries_allowed and reduce_size_unconsumed),
         },
     )
 

@@ -58,3 +58,28 @@ prune_jsonl_file \
   "${RUNTIME_DIR}/ml_shadow_predictions.jsonl" \
   "${AI_TRADING_ML_SHADOW_PREDICTIONS_MAX_BYTES:-268435456}" \
   "${AI_TRADING_ML_SHADOW_PREDICTIONS_KEEP_LINES:-100000}"
+
+prune_jsonl_file \
+  "${RUNTIME_DIR}/order_events.jsonl" \
+  "${AI_TRADING_ORDER_EVENTS_MAX_BYTES:-134217728}" \
+  "${AI_TRADING_ORDER_EVENTS_KEEP_LINES:-150000}"
+
+prune_jsonl_file \
+  "${RUNTIME_DIR}/fill_events.jsonl" \
+  "${AI_TRADING_FILL_EVENTS_MAX_BYTES:-134217728}" \
+  "${AI_TRADING_FILL_EVENTS_KEEP_LINES:-150000}"
+
+prune_jsonl_file \
+  "${RUNTIME_DIR}/tca_records.jsonl" \
+  "${AI_TRADING_TCA_RECORDS_MAX_BYTES:-134217728}" \
+  "${AI_TRADING_TCA_RECORDS_KEEP_LINES:-150000}"
+
+prune_jsonl_file \
+  "${RUNTIME_DIR}/oms_events.jsonl" \
+  "${AI_TRADING_OMS_EVENTS_MAX_BYTES:-67108864}" \
+  "${AI_TRADING_OMS_EVENTS_KEEP_LINES:-100000}"
+
+prune_jsonl_file \
+  "${RUNTIME_DIR}/memory_samples.jsonl" \
+  "${AI_TRADING_MEMORY_SAMPLES_MAX_BYTES:-5000000}" \
+  "${AI_TRADING_MEMORY_SAMPLES_KEEP_LINES:-20000}"

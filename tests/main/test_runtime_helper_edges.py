@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -46,6 +47,9 @@ def test_market_close_date_key_business_day_and_catchup(monkeypatch) -> None:
     assert main._resolve_market_close_training_date_key(
         datetime(2026, 1, 7, 16, 0),
     ) == "2026-01-07"
+    assert main._resolve_market_close_training_date_key(
+        datetime(2025, 11, 28, 13, 0, tzinfo=ZoneInfo("America/New_York")),
+    ) == "2025-11-28"
 
     monkeypatch.setattr(main, "get_env", lambda *_args, **_kwargs: False)
     assert main._resolve_market_close_training_date_key(datetime(2026, 1, 7, 8, 0)) is None

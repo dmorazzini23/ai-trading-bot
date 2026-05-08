@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from datetime import UTC, datetime, time
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -124,10 +125,10 @@ def test_pov_submit_records_partial_fill_summary(monkeypatch):
 @pytest.mark.parametrize(
     ("now_et", "expected_allowed", "expected_reason"),
     [
-        (datetime(2026, 4, 25, 15, 55, tzinfo=UTC), False, "weekend"),
-        (datetime(2026, 4, 24, 15, 40, tzinfo=UTC), False, "before_window"),
-        (datetime(2026, 4, 24, 16, 0, tzinfo=UTC), False, "after_close"),
-        (datetime(2026, 4, 24, 15, 56, tzinfo=UTC), True, "session_close_window"),
+        (datetime(2026, 4, 25, 15, 55, tzinfo=ZoneInfo("America/New_York")), False, "weekend"),
+        (datetime(2026, 4, 24, 15, 40, tzinfo=ZoneInfo("America/New_York")), False, "before_window"),
+        (datetime(2026, 4, 24, 16, 0, tzinfo=ZoneInfo("America/New_York")), False, "after_close"),
+        (datetime(2026, 4, 24, 15, 56, tzinfo=ZoneInfo("America/New_York")), True, "session_close_window"),
     ],
 )
 def test_should_trigger_eod_flatten_resolves_session_window(
@@ -145,6 +146,18 @@ def test_should_trigger_eod_flatten_resolves_session_window(
     assert context["reason"] == expected_reason
     assert context["enabled"] is True
     assert context["lead_seconds"] == 300
+
+
+def test_should_trigger_eod_flatten_uses_early_close_calendar(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_EOD_FLATTEN_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EOD_FLATTEN_LEAD_SECONDS", "300")
+    early_close = datetime(2025, 11, 28, 12, 56, tzinfo=ZoneInfo("America/New_York"))
+
+    allowed, context = execution_flow._should_trigger_eod_flatten(early_close)  # noqa: SLF001
+
+    assert allowed is True
+    assert context["reason"] == "session_close_window"
+    assert context["session_close"].startswith("2025-11-28T13:00:00")
 
 
 def test_liquidate_positions_if_needed_skips_missing_api(monkeypatch):

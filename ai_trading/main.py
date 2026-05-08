@@ -271,8 +271,17 @@ def _previous_business_day(d: dt_date) -> dt_date:
 def _resolve_market_close_training_date_key(now_local: datetime) -> str | None:
     """Return session key eligible for market-close training trigger."""
 
+    if now_local.tzinfo is None:
+        now_local = now_local.replace(tzinfo=ZoneInfo("America/New_York"))
     minutes = (int(now_local.hour) * 60) + int(now_local.minute)
-    close_minutes = 16 * 60
+    try:
+        from ai_trading.utils.market_calendar import session_info
+
+        session_close = session_info(now_local.date()).end_utc.astimezone(now_local.tzinfo)
+        close_minutes = (int(session_close.hour) * 60) + int(session_close.minute)
+    except MAIN_FALLBACK_EXC:
+        logger.debug("MARKET_CLOSE_TRAINING_CLOSE_LOOKUP_FAILED", exc_info=True)
+        close_minutes = 16 * 60
     catchup_end_minutes = (9 * 60) + 30
     if minutes >= close_minutes:
         return now_local.date().isoformat()

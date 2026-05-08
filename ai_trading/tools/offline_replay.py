@@ -2261,7 +2261,6 @@ def _run_parity_simulation(
                     return None
         if policy_profile is not None:
             policy_counters["accepted"] += 1
-            opportunity_opened_symbols.add(symbol)
 
         entry_side = side if side == "buy" else "sell_short"
         entry_slippage_bps = _replay_slippage_bps(
@@ -2329,11 +2328,30 @@ def _run_parity_simulation(
             "client_order_id": intent_key,
         }
 
+    def on_replay_events(replay_events: list[dict[str, Any]]) -> None:
+        for event in replay_events:
+            if str(event.get("event_type", "")).strip().lower() != "fill":
+                continue
+            try:
+                fill_qty = float(event.get("fill_qty", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                fill_qty = 0.0
+            if fill_qty <= 0.0:
+                continue
+            client_order_id = str(event.get("client_order_id", "")).strip()
+            context = order_context_by_client_id.get(client_order_id)
+            if not context:
+                continue
+            symbol_value = str(context.get("symbol") or event.get("symbol") or "").strip().upper()
+            if symbol_value:
+                opportunity_opened_symbols.add(symbol_value)
+
     replay = ReplayEventLoop(
         strategy=strategy,
         seed=int(args.replay_seed),
         max_symbol_notional=args.max_symbol_notional,
         max_gross_notional=args.max_gross_notional,
+        event_callback=on_replay_events if policy_profile is not None else None,
     ).run(bars)
 
     events = list(replay.get("events", []))
@@ -2475,6 +2493,7 @@ def _run_parity_simulation(
     return {
         "schema_version": OFFLINE_REPLAY_SCHEMA_VERSION,
         "artifact_type": "offline_replay_summary",
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "aggregate": aggregate,
         "inputs": {"symbols": _input_report_payload(load_reports)},
         "symbols": per_symbol,
@@ -3016,6 +3035,7 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "schema_version": OFFLINE_REPLAY_SCHEMA_VERSION,
         "artifact_type": "offline_replay_summary",
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "aggregate": aggregate,
         "inputs": {"symbols": _input_report_payload(load_reports)},
         "symbols": per_symbol,

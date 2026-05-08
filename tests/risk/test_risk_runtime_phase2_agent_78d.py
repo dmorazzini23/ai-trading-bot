@@ -523,7 +523,7 @@ def test_check_max_drawdown_and_position_size_guards(monkeypatch: pytest.MonkeyP
 
 
 def test_position_size_atr_fallback_and_final_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    engine = _bare_engine(position_size_min_usd=100.0)
+    engine = _bare_engine(position_size_min_usd=100.0, max_symbol_exposure=1.0)
     monkeypatch.setattr(engine, "can_trade", lambda _signal: True)
     monkeypatch.setattr(engine, "_get_atr_data", lambda _symbol: 2.0)
     assert engine.position_size(_signal(), 10_000.0, 100.0) == 25

@@ -1891,6 +1891,38 @@ DATA_HTTP_FALLBACK_OUT_OF_SESSION = _env_flag_enabled("DATA_HTTP_FALLBACK_OUT_OF
 _INTRADAY_TIMEFRAMES = frozenset({"1Min", "5Min", "15Min", "1Hour"})
 
 
+def _live_execution_mode_active() -> bool:
+    try:
+        mode = str(get_env("EXECUTION_MODE", "paper", cast=str) or "paper").strip().lower()
+    except FETCH_FALLBACK_EXCEPTIONS:
+        mode = "paper"
+    if mode == "live":
+        return True
+    try:
+        profile = str(get_env("AI_TRADING_LAUNCH_PROFILE", "", cast=str) or "").strip().lower()
+    except FETCH_FALLBACK_EXCEPTIONS:
+        profile = ""
+    return profile.startswith("live_")
+
+
+def _provider_is_yahoo(provider: Any | None) -> bool:
+    token = str(provider or "").strip().lower()
+    return token in {"yahoo", "yfinance", "yf"}
+
+
+def _yahoo_live_minute_recovery_allowed() -> bool:
+    if not _live_execution_mode_active():
+        return True
+    return bool(
+        get_env(
+            "AI_TRADING_ALLOW_YAHOO_LIVE_MINUTE_RECOVERY",
+            False,
+            cast=bool,
+            resolve_aliases=False,
+        )
+    )
+
+
 def _http_fallback_permitted(
     timeframe: str | None,
     *,
@@ -1917,6 +1949,8 @@ def _http_fallback_permitted(
     if not tf_norm:
         return global_enabled
     if tf_norm in _INTRADAY_TIMEFRAMES:
+        if tf_norm == "1Min" and feed is not None and _provider_is_yahoo(feed):
+            return _yahoo_live_minute_recovery_allowed()
         if not DATA_HTTP_FALLBACK_INTRADAY:
             return False
         if window_has_session is False and tf_norm == "1Min":
@@ -6455,6 +6489,9 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
         finnhub_env = get_env("ENABLE_FINNHUB", resolve_aliases=False)
         if finnhub_env is not None and finnhub_env.strip().lower() in {"0", "false", "no", "off"}:
             fallback_order.demote_provider(symbol, provider_str)
+            if not _yahoo_live_minute_recovery_allowed():
+                pd_local = _ensure_pandas()
+                return pd_local.DataFrame() if pd_local is not None else []  # type: ignore[return-value]
             provider_str = "yahoo"
             normalized = "yahoo"
     if normalized in {"finnhub", "finnhub_low_latency"}:
@@ -6471,9 +6508,15 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
             extra={"provider": provider, "symbol": symbol, "interval": interval},
         )
         fallback_order.demote_provider(symbol, provider_str)
+        if not _yahoo_live_minute_recovery_allowed():
+            pd_local = _ensure_pandas()
+            return pd_local.DataFrame() if pd_local is not None else []  # type: ignore[return-value]
         provider_str = "yahoo"
         normalized = "yahoo"
     if normalized == "yahoo":
+        if not _yahoo_live_minute_recovery_allowed():
+            pd_local = _ensure_pandas()
+            return pd_local.DataFrame() if pd_local is not None else []  # type: ignore[return-value]
         pd_local = _ensure_pandas()
         start_dt = ensure_datetime(start)
         end_dt = ensure_datetime(end)
@@ -8266,6 +8309,18 @@ def _fetch_bars(
         candidate = (override_forced[0] or "").strip().lower()
         if candidate and not candidate.startswith("alpaca_"):
             forced_provider_label = candidate
+    if forced_provider_label == "yahoo" and not _yahoo_live_minute_recovery_allowed():
+        logger.warning(
+            "YAHOO_LIVE_MINUTE_RECOVERY_BLOCKED",
+            extra=_norm_extra(
+                {
+                    "symbol": symbol,
+                    "timeframe": tf_norm,
+                    "reason": "forced_source_override",
+                },
+            ),
+        )
+        forced_provider_label = None
     force_no_session_attempts = False
     prelogged_empty_metric = False
     no_session_feeds: tuple[str, ...] = ()
@@ -8441,6 +8496,18 @@ def _fetch_bars(
         resolved_provider = normalized_provider or provider_str
         feed_tag = normalized_provider or provider_str
         normalized_provider_lower = (normalized_provider or provider_str or "").strip().lower()
+        if _provider_is_yahoo(normalized_provider_lower) and not _yahoo_live_minute_recovery_allowed():
+            logger.warning(
+                "YAHOO_LIVE_MINUTE_RECOVERY_BLOCKED",
+                extra=_norm_extra(
+                    {
+                        "symbol": symbol,
+                        "timeframe": _interval,
+                        "reason": "backup_provider",
+                    },
+                ),
+            )
+            return _empty_ohlcv_frame(pd)
         if _pytest_active():
             fallback_reason = _state.get("fallback_reason")
             if fallback_reason in {"alpaca_sip_unauthorized", "sip_unauthorized"}:
@@ -8675,6 +8742,18 @@ def _fetch_bars(
             _state["resolve_feed_none"] = True
             if downgrade_reason == "missing_credentials" and _pytest_active():
                 resolved_feed = _feed
+            elif not _yahoo_live_minute_recovery_allowed():
+                logger.warning(
+                    "YAHOO_LIVE_MINUTE_RECOVERY_BLOCKED",
+                    extra=_norm_extra(
+                        {
+                            "symbol": symbol,
+                            "timeframe": _interval,
+                            "reason": "resolve_feed_none",
+                        },
+                    ),
+                )
+                resolved_feed = _feed
             else:
                 provider_fallback.labels(
                     from_provider=f"alpaca_{_feed}", to_provider="yahoo",
@@ -8830,6 +8909,18 @@ def _fetch_bars(
 
     if forced_provider_label in {"yahoo", "finnhub"}:
         if forced_provider_label == "yahoo":
+            if not _yahoo_live_minute_recovery_allowed():
+                logger.warning(
+                    "YAHOO_LIVE_MINUTE_RECOVERY_BLOCKED",
+                    extra=_norm_extra(
+                        {
+                            "symbol": symbol,
+                            "timeframe": _interval,
+                            "reason": "forced_source_override",
+                        },
+                    ),
+                )
+                return _empty_ohlcv_frame(pd)
             interval_code = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
             try:
                 yahoo_df = _yahoo_get_bars(symbol, _start, _end, interval=interval_code)
@@ -11630,6 +11721,8 @@ def _fetch_bars(
     allow_sip = _sip_allowed()
     if not allow_sip:
         priority = [p for p in priority if p != "alpaca_sip"]
+    if not _yahoo_live_minute_recovery_allowed():
+        priority = [p for p in priority if not _provider_is_yahoo(p)]
     if _max_fallbacks_config is not None:
         max_fb = _max_fallbacks_config
     else:
@@ -11871,8 +11964,12 @@ def _fetch_bars(
             _state.get("last_fallback_provider") == "yahoo"
         )
         if forced_yahoo:
-            yahoo_allowed = True
-            force_yahoo = True
+            if _yahoo_live_minute_recovery_allowed():
+                yahoo_allowed = True
+                force_yahoo = True
+            else:
+                yahoo_allowed = False
+                force_yahoo = False
         if y_int and yahoo_allowed and ("yahoo" in priority or force_yahoo):
             tags = _tags(provider="yahoo", feed="yahoo")
             _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
@@ -12080,6 +12177,19 @@ def get_minute_df(
             forced_feed = forced_provider.split("_", 1)[1] or "iex"
         else:
             forced_provider_label = forced_provider
+    if forced_provider_label == "yahoo" and not _yahoo_live_minute_recovery_allowed():
+        logger.warning(
+            "YAHOO_LIVE_MINUTE_RECOVERY_BLOCKED",
+            extra=_norm_extra(
+                {
+                    "symbol": symbol,
+                    "timeframe": "1Min",
+                    "reason": "forced_source_override",
+                },
+            ),
+        )
+        forced_provider = None
+        forced_provider_label = None
     if forced_feed:
         feed = forced_feed
     tf_key = (symbol, "1Min")
@@ -12208,7 +12318,18 @@ def get_minute_df(
         elif backup_env_value in {"yahoo", "finnhub"}:
             fallback_allowed_flag = True
             _state["backup_env_forced"] = backup_env_value
+    if (
+        _provider_is_yahoo(backup_provider_normalized or backup_provider_str or backup_env_value)
+        and not _yahoo_live_minute_recovery_allowed()
+    ):
+        fallback_allowed_flag = False
+        _state["yahoo_live_recovery_blocked"] = True
 
+    if forced_provider_label:
+        if _provider_is_yahoo(forced_provider_label) and not _yahoo_live_minute_recovery_allowed():
+            forced_provider_label = ""
+            fallback_allowed_flag = False
+            _state["yahoo_live_recovery_blocked"] = True
     if forced_provider_label:
         backup_provider_str = forced_provider_label
         backup_provider_normalized = forced_provider_label

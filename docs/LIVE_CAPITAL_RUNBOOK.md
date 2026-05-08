@@ -17,6 +17,8 @@ It does not grant live authority by itself.
 6. Review live-capital readiness:
    `jq . /var/lib/ai-trading-bot/runtime/live_capital_readiness_latest.json`
 7. Confirm Slack/OpenClaw received the latest after-hours summary.
+   Research dry-runs do not send completion notifications; a missing dry-run
+   notification is expected.
 
 ## Live Canary Requirements
 
@@ -84,6 +86,8 @@ jq . /var/lib/ai-trading-bot/runtime/research_reports/latest/daily_readiness_lat
 
 Use the generated trading-day report to review what the bot wanted, submitted,
 rejected, filled, and missed.
+Treat `daily_readiness_latest.json` as the canonical daily answer. The
+`daily_research_latest.json` alias exists for older readers only.
 
 ## Escalation Rules
 

@@ -274,10 +274,16 @@ def log_health_summary() -> None:
                     logger.error('Health critical - %s: %s', name, check['message'])
     except (ValueError, TypeError) as e:
         logger.error('Failed to run health check: %s', e)
-if __name__ == '__main__':
-    import json
+def main() -> int:
+    """Run the legacy health check and return a truthful process status."""
+
     status = get_health_status()
     logging.info(str(json.dumps(status, indent=2)))
+    return 1 if str(status.get("overall_status") or "").lower() == "critical" else 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
 
 def _check_trading_system(self: HealthMonitor) -> HealthCheckResult:
     """Check trading system health and status."""

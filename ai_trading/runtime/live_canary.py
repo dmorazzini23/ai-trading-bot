@@ -322,6 +322,49 @@ def _price_hint_from_quote(side: str, quote_state: Mapping[str, Any]) -> float |
     return last_price if last_price is not None and last_price > 0.0 else None
 
 
+def _daily_loss_gate_reasons(
+    order: Mapping[str, Any],
+    *,
+    profile: LaunchProfile,
+    live_capital_active: bool,
+) -> tuple[list[str], dict[str, Any]]:
+    limit = _float(profile.max_daily_loss)
+    context: dict[str, Any] = {
+        "required": bool(profile.name.startswith("live_") and live_capital_active),
+        "max_daily_loss": limit,
+        "evaluated": False,
+    }
+    if limit is None or limit <= 0.0:
+        return [], context
+    if not profile.name.startswith("live_") or not live_capital_active:
+        return [], context
+
+    loss_payload = order.get("daily_loss_state") or order.get("loss_state")
+    if not isinstance(loss_payload, Mapping):
+        account = order.get("account_snapshot") or order.get("account")
+        loss_payload = account if isinstance(account, Mapping) else None
+    if not isinstance(loss_payload, Mapping):
+        return ["daily_loss_state_missing"], context
+
+    raw_loss = _extract_value(
+        loss_payload,
+        "daily_loss",
+        "daily_loss_abs",
+        "loss_abs",
+        "realized_loss",
+        "realized_pnl",
+        "pnl",
+    )
+    parsed = _float(raw_loss)
+    if parsed is None:
+        return ["daily_loss_state_missing"], context
+    loss_abs = abs(parsed) if parsed < 0.0 else parsed
+    context.update({"evaluated": True, "daily_loss": loss_abs})
+    if loss_abs >= float(limit):
+        return ["max_daily_loss_exceeded"], context
+    return [], context
+
+
 def observe_launch_profile_state(profile: LaunchProfile | None = None) -> dict[str, Any]:
     resolved = profile or resolve_launch_profile()
     state = _load_state(profile_name=resolved.name)
@@ -455,6 +498,12 @@ def evaluate_launch_profile_order(
         price_hint=price_hint,
     )
     reasons.extend(exposure_reasons)
+    loss_reasons, loss_context = _daily_loss_gate_reasons(
+        order,
+        profile=resolved,
+        live_capital_active=live_capital_active,
+    )
+    reasons.extend(loss_reasons)
     if not provider_ok:
         reasons.extend(str(reason) for reason in provider_context.get("reasons", []))
     if resolved.promotion_required and not readiness_ok:
@@ -474,6 +523,7 @@ def evaluate_launch_profile_order(
         "reasons": reasons,
         "provider_authority": provider_context,
         "exposure": exposure_context,
+        "daily_loss": loss_context,
         "live_capital_readiness": readiness_context,
         "operator_approval_required": bool(resolved.manual_approval_required),
     }

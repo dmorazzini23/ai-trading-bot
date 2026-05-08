@@ -35,7 +35,81 @@ def _read_json_mapping(path: Path | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _parse_ts(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    token = str(value).strip()
+    if not token:
+        return None
+    if token.endswith("Z"):
+        token = token[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(token)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _freshness_gate(
+    payload: Mapping[str, Any],
+    *,
+    label: str,
+    now: datetime,
+    max_age_hours: float,
+) -> dict[str, Any]:
+    for key in ("generated_at", "as_of", "ts", "timestamp", "created_at"):
+        parsed = _parse_ts(payload.get(key))
+        if parsed is None:
+            continue
+        age_hours = max(0.0, (now - parsed).total_seconds() / 3600.0)
+        future_dated = parsed > now
+        ok = bool(age_hours <= max_age_hours and not future_dated)
+        return {
+            "ok": ok,
+            "label": label,
+            "timestamp": parsed.isoformat().replace("+00:00", "Z"),
+            "age_hours": age_hours,
+            "max_age_hours": max_age_hours,
+            "reason": "ok" if ok else ("evidence_future_dated" if future_dated else "evidence_stale"),
+        }
+    nested_replay = payload.get("replay")
+    if isinstance(nested_replay, Mapping):
+        return _freshness_gate(
+            nested_replay,
+            label=label,
+            now=now,
+            max_age_hours=max_age_hours,
+        )
+    return {
+        "ok": False,
+        "label": label,
+        "timestamp": None,
+        "age_hours": None,
+        "max_age_hours": max_age_hours,
+        "reason": "evidence_timestamp_missing",
+    }
+
+
 def _replay_gate(payload: Mapping[str, Any], *, label: str) -> dict[str, Any]:
+    if not payload:
+        return {"ok": False, "label": label, "reason": "replay_evidence_missing"}
+    artifact_type = str(payload.get("artifact_type") or "").strip()
+    if artifact_type and artifact_type != "offline_replay_summary":
+        return {
+            "ok": False,
+            "label": label,
+            "reason": "unsupported_replay_schema",
+            "artifact_type": artifact_type,
+        }
+    if "replay" in payload and "aggregate" not in payload:
+        return {
+            "ok": False,
+            "label": label,
+            "reason": "unsupported_replay_schema",
+            "artifact_type": artifact_type or "replay_governance_summary",
+        }
     aggregate_raw = payload.get("aggregate")
     aggregate = aggregate_raw if isinstance(aggregate_raw, Mapping) else payload
     net_edge = _as_float(
@@ -98,13 +172,16 @@ def _live_cost_gate(payload: Mapping[str, Any]) -> dict[str, Any]:
     status = status_raw if isinstance(status_raw, Mapping) else {}
     breach_count = int(_as_float(status.get("breach_count")) or 0.0)
     available = bool(status.get("available", bool(payload)))
-    ok = bool(available and breach_count == 0)
+    status_token = str(status.get("status") or payload.get("status") or "").strip().lower()
+    status_ready = status_token in {"ready", "ok"}
+    ok = bool(available and status_ready and breach_count == 0)
     return {
         "ok": ok,
         "reason": "ok" if ok else "live_cost_gate_failed",
         "status": status.get("status"),
         "breach_count": breach_count,
         "available": available,
+        "status_ready": status_ready,
     }
 
 
@@ -161,16 +238,69 @@ def build_promotion_report(
     current_champion_path: str | None = None,
     rollback_command: str | None = None,
     generated_at: datetime | None = None,
+    max_evidence_age_hours: float | None = None,
 ) -> dict[str, Any]:
     """Return a promotion report with hard gates and rollback notes."""
 
     model_path = model_path.expanduser()
     resolved_manifest = manifest_path.expanduser() if manifest_path else default_manifest_path(model_path)
+    generated = generated_at.astimezone(UTC) if generated_at else datetime.now(UTC)
+    max_age_hours = (
+        float(max_evidence_age_hours)
+        if max_evidence_age_hours is not None
+        else float(
+            get_env(
+                "AI_TRADING_PROMOTION_MAX_EVIDENCE_AGE_HOURS",
+                "96",
+                cast=float,
+                resolve_aliases=False,
+            )
+            or 96.0
+        )
+    )
     manifest_gate = _manifest_payload(model_path, resolved_manifest)
     replay_gates = {
         "full": _replay_gate(full_replay or {}, label="full"),
         "tail": _replay_gate(tail_replay or full_replay or {}, label="tail"),
         "recent": _replay_gate(recent_replay or tail_replay or full_replay or {}, label="recent"),
+    }
+    freshness_gates = {
+        "full_replay": _freshness_gate(
+            full_replay or {},
+            label="full_replay",
+            now=generated,
+            max_age_hours=max_age_hours,
+        ),
+        "tail_replay": _freshness_gate(
+            tail_replay or full_replay or {},
+            label="tail_replay",
+            now=generated,
+            max_age_hours=max_age_hours,
+        ),
+        "recent_replay": _freshness_gate(
+            recent_replay or tail_replay or full_replay or {},
+            label="recent_replay",
+            now=generated,
+            max_age_hours=max_age_hours,
+        ),
+        "shadow_report": _freshness_gate(
+            shadow_report or {},
+            label="shadow_report",
+            now=generated,
+            max_age_hours=max_age_hours,
+        ),
+        "live_cost_model": _freshness_gate(
+            live_cost_model or {},
+            label="live_cost_model",
+            now=generated,
+            max_age_hours=max_age_hours,
+        ),
+        "runtime_decay_controls": _freshness_gate(
+            runtime_decay_controls or {},
+            label="runtime_decay_controls",
+            now=generated,
+            max_age_hours=max_age_hours,
+        ),
     }
     shadow_gate = _shadow_gate(shadow_report or {})
     live_cost_gate = _live_cost_gate(live_cost_model or {})
@@ -183,9 +313,9 @@ def build_promotion_report(
         "shadow_telemetry_acceptable": bool(shadow_gate.get("ok")),
         "live_cost_model_acceptable": bool(live_cost_gate.get("ok")),
         "runtime_decay_controls_acceptable": bool(decay_gate.get("ok")),
+        "evidence_fresh": all(bool(gate.get("ok")) for gate in freshness_gates.values()),
     }
     promotion_ready = all(gates.values())
-    generated = generated_at.astimezone(UTC) if generated_at else datetime.now(UTC)
     rollback = rollback_command or (
         f"AI_TRADING_MODEL_PATH={current_champion_path}"
         if current_champion_path
@@ -203,6 +333,7 @@ def build_promotion_report(
         },
         "manifest": manifest_gate,
         "replay": replay_gates,
+        "evidence_freshness": freshness_gates,
         "shadow": shadow_gate,
         "live_cost_model": live_cost_gate,
         "runtime_decay_controls": decay_gate,

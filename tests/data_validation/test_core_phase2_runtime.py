@@ -96,6 +96,26 @@ def test_freshness_uses_timestamp_column_when_index_is_range(monkeypatch: pytest
     assert info["minutes_stale"] == pytest.approx(1.0)
 
 
+def test_freshness_rejects_future_dated_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 4, 24, 15, 0, tzinfo=UTC)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
+            return now if tz is not None else now.replace(tzinfo=None)
+
+    monkeypatch.setattr(core, "datetime", FixedDatetime)
+    frame = _ohlcv().assign(
+        timestamp=[now - timedelta(minutes=1), now + timedelta(minutes=2)],
+    )
+
+    info = core.check_data_freshness(frame, "AAPL", max_staleness_minutes=5)
+
+    assert info["is_fresh"] is False
+    assert info["reason"] == "future_timestamp"
+    assert info["minutes_stale"] < 0
+
+
 def test_emergency_data_check_and_market_data_validator() -> None:
     good = pd.DataFrame({"close": [1.0, 2.0]})
     bad = pd.DataFrame({"close": [1.0, -2.0]})

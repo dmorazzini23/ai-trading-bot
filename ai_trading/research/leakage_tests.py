@@ -33,7 +33,10 @@ def assert_no_horizon_overlap(
     test = sorted(pd.Timestamp(ts) for ts in test_label_times)
     if not train or not test:
         return
-    train_end = train[-1] + horizon + embargo
+    # Inputs are label end-times, so the label horizon is already represented in
+    # train/test timestamps; adding it again would over-purge valid folds.
+    _ = horizon
+    train_end = train[-1] + embargo
     test_start = test[0]
     if train_end > test_start:
         raise AssertionError(

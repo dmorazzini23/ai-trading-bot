@@ -41,6 +41,7 @@ class ReplayEventLoop:
         max_gross_notional: float | None = None,
         initial_positions: Mapping[str, float] | None = None,
         clip_intents_to_caps: bool | None = None,
+        event_callback: Callable[[list[dict[str, Any]]], None] | None = None,
     ) -> None:
         replay_seed = int(seed if seed is not None else get_env("REPLAY_SEED", "42", cast=int))
         self.strategy = strategy
@@ -85,6 +86,7 @@ class ReplayEventLoop:
                 get_env("AI_TRADING_REPLAY_CLIP_INTENTS_TO_CAPS", True, cast=bool)
             )
         self.clip_intents_to_caps = bool(clip_intents_to_caps)
+        self.event_callback = event_callback
         self._seen_intent_keys: set[str] = set()
         self._positions: dict[str, float] = {}
         if isinstance(initial_positions, Mapping):
@@ -137,6 +139,8 @@ class ReplayEventLoop:
                 self._positions[fill_symbol] = self._positions.get(fill_symbol, 0.0) + signed_qty
                 if abs(self._positions[fill_symbol]) < 1e-9:
                     self._positions.pop(fill_symbol, None)
+            if fill_events and self.event_callback is not None:
+                self.event_callback([dict(event) for event in fill_events])
 
             proposal = self.strategy(bar)
             if proposal is None:
@@ -234,6 +238,8 @@ class ReplayEventLoop:
                 self._positions[fill_symbol] = self._positions.get(fill_symbol, 0.0) + signed_qty
                 if abs(self._positions[fill_symbol]) < 1e-9:
                     self._positions.pop(fill_symbol, None)
+            if trailing_events and self.event_callback is not None:
+                self.event_callback([dict(event) for event in trailing_events])
 
         return {
             "seed": self.seed,

@@ -51,6 +51,8 @@ def run_purged_walk_forward_validation(
     embargo_pct: float = 0.01,
     purge_pct: float = 0.02,
     min_fold_samples: int = 20,
+    min_test_expectancy_bps: float = 0.0,
+    min_test_hit_rate: float = 0.0,
 ) -> dict[str, Any]:
     """Run purged walk-forward validation with embargo and leakage checks."""
 
@@ -90,12 +92,23 @@ def run_purged_walk_forward_validation(
         test_df = data.iloc[test_idx]
         leakage_ok = bool(validate_no_leakage(train_idx, test_idx, timeline.to_numpy(), t1=None))
         enough_samples = len(train_df) >= int(min_fold_samples) and len(test_df) >= int(min_fold_samples)
-        fold_pass = bool(leakage_ok and enough_samples)
+        train_returns = _clean_returns(train_df[return_col].tolist())
+        test_returns = _clean_returns(test_df[return_col].tolist())
+        test_expectancy_bps = float(mean(test_returns) * 10000.0) if test_returns else 0.0
+        test_hit_rate = (
+            float(sum(1 for value in test_returns if value > 0.0) / len(test_returns))
+            if test_returns
+            else 0.0
+        )
+        profitability_ok = bool(
+            test_returns
+            and test_expectancy_bps >= float(min_test_expectancy_bps)
+            and test_hit_rate >= float(min_test_hit_rate)
+        )
+        fold_pass = bool(leakage_ok and enough_samples and profitability_ok)
         if fold_pass:
             passed += 1
 
-        train_returns = _clean_returns(train_df[return_col].tolist())
-        test_returns = _clean_returns(test_df[return_col].tolist())
         folds.append(
             {
                 "fold": fold_idx,
@@ -103,10 +116,9 @@ def run_purged_walk_forward_validation(
                 "test_samples": len(test_df),
                 "leakage_ok": leakage_ok,
                 "train_expectancy_bps": float(mean(train_returns) * 10000.0) if train_returns else 0.0,
-                "test_expectancy_bps": float(mean(test_returns) * 10000.0) if test_returns else 0.0,
-                "test_hit_rate": float(sum(1 for value in test_returns if value > 0.0) / len(test_returns))
-                if test_returns
-                else 0.0,
+                "test_expectancy_bps": test_expectancy_bps,
+                "test_hit_rate": test_hit_rate,
+                "profitability_ok": profitability_ok,
                 "passed": fold_pass,
             }
         )

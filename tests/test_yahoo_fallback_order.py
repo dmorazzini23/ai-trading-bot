@@ -81,6 +81,46 @@ def test_yahoo_used_after_two_alpaca_failures(monkeypatch):
     assert fo.FALLBACK_SYMBOLS and fo.FALLBACK_SYMBOLS[-1] == symbol
 
 
+def test_yahoo_live_recovery_blocked_even_when_priority_or_forced(monkeypatch):
+    symbol = "AAPL"
+    start = dt.datetime(2024, 1, 1, tzinfo=dt.UTC)
+    end = start + dt.timedelta(minutes=1)
+
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setenv("ENABLE_HTTP_FALLBACK", "1")
+    monkeypatch.setenv("BACKUP_DATA_PROVIDER", "yahoo")
+    monkeypatch.delenv("AI_TRADING_ALLOW_YAHOO_LIVE_MINUTE_RECOVERY", raising=False)
+    monkeypatch.setattr(fetch, "provider_priority", lambda: ["alpaca_iex", "alpaca_sip", "yahoo"])
+    fetch._ENABLE_HTTP_FALLBACK = True
+    fetch._SIP_UNAUTHORIZED = False
+    fetch._ALLOW_SIP = True
+
+    class StubSession:
+        def get(self, url, params=None, headers=None, timeout=None):
+            payload: dict[str, Any] = {"bars": []}
+            return types.SimpleNamespace(
+                status_code=200,
+                text=json.dumps(payload),
+                headers={"Content-Type": "application/json"},
+                json=lambda: payload,
+            )
+
+    monkeypatch.setattr(fetch, "_HTTP_SESSION", StubSession())
+
+    def fail_yahoo(*args, **kwargs):  # pragma: no cover - should stay blocked
+        raise AssertionError("Yahoo fallback must not run in live mode")
+
+    monkeypatch.setattr(fetch, "_yahoo_get_bars", fail_yahoo)
+    fo.reset()
+
+    df = fetch._fetch_bars(symbol, start, end, "1Min", feed="iex")
+
+    assert df is None or getattr(df, "empty", True)
+    assert "yahoo" not in fo.FALLBACK_ORDER
+
+
 def test_yahoo_fallback_suppressed_until_threshold(monkeypatch):
     symbol = "MSFT"
     start = dt.datetime(2024, 2, 1, 14, 30, tzinfo=dt.UTC)

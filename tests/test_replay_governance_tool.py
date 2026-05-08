@@ -131,6 +131,29 @@ def test_replay_governance_main_returns_nonzero_without_fresh_artifact(
     assert exit_code == 1
 
 
+def test_collect_replay_snapshot_does_not_default_missing_counterfactual_to_passed(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "replay_hash_20260505.json"
+    path.write_text(
+        json.dumps(
+            {
+                "ts": "2026-05-05T20:00:00Z",
+                "rows": 1,
+                "orders_submitted": 1,
+                "fill_events": 1,
+                "violations": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = tool._collect_replay_snapshot(path)
+
+    assert snapshot["counterfactual_passed"] is False
+    assert snapshot["counterfactual_available"] is False
+
+
 def test_replay_governance_policy_regression_writes_blocked_summary(
     tmp_path: Path,
     monkeypatch,

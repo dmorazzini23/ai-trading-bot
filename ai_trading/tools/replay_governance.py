@@ -119,6 +119,9 @@ def _collect_replay_snapshot(path: Path) -> dict[str, Any]:
         return snapshot
     payload = json.loads(path.read_text(encoding="utf-8"))
     violations = payload.get("violations", [])
+    counterfactual = payload.get("counterfactual")
+    counterfactual_mapping = counterfactual if isinstance(counterfactual, dict) else {}
+    counterfactual_passed = counterfactual_mapping.get("passed")
     snapshot.update(
         {
             "ts": payload.get("ts"),
@@ -128,9 +131,8 @@ def _collect_replay_snapshot(path: Path) -> dict[str, Any]:
             "cap_adjustments_count": int(payload.get("cap_adjustments_count", 0) or 0),
             "violations_count": int(len(violations) if isinstance(violations, list) else 0),
             "violations_by_code": dict(payload.get("violations_by_code", {}) or {}),
-            "counterfactual_passed": bool(
-                ((payload.get("counterfactual") or {}).get("passed", True))
-            ),
+            "counterfactual_passed": counterfactual_passed is True,
+            "counterfactual_available": "passed" in counterfactual_mapping,
         }
     )
     return snapshot

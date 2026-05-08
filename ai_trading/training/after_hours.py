@@ -1287,7 +1287,7 @@ def _evaluate_candidate(
     regimes = dataset["regime"].astype(str).to_numpy()
     horizon_days = int(get_env("AI_TRADING_AFTER_HOURS_HORIZON_DAYS", 1, cast=int))
     embargo_days = int(get_env("AI_TRADING_AFTER_HOURS_EMBARGO_DAYS", 1, cast=int))
-    fold_gap_days = max(1, horizon_days + embargo_days)
+    fold_gap_days = max(0, embargo_days)
     split_count = int(get_env("AI_TRADING_AFTER_HOURS_CV_SPLITS", 5, cast=int))
     split_count = max(2, min(split_count, max(2, len(dataset) // 80)))
     splitter = PurgedGroupTimeSeriesSplit(
@@ -1368,11 +1368,17 @@ def _evaluate_candidate(
     if valid_folds <= 0:
         return None
     oriented_probs, orientation_report = _orient_probabilities_for_edge(oof_probs, edge)
+    oriented_fold_predictions = list(fold_predictions)
+    if str(orientation_report.get("orientation") or "direct") == "inverse":
+        oriented_fold_predictions = [
+            (idx, 1.0 - np.asarray(probs, dtype=float))
+            for idx, probs in fold_predictions
+        ]
     valid_probs_mask = np.isfinite(oriented_probs)
     selected_metrics = _select_candidate_threshold(
         dataset=dataset,
         oof_probabilities=oriented_probs,
-        fold_predictions=fold_predictions,
+        fold_predictions=oriented_fold_predictions,
         default_threshold=threshold,
     )
     if not selected_metrics:
@@ -2491,6 +2497,13 @@ def _fold_oof_threshold_metrics(
             fold_dd.append(0.0)
             continue
         selected_edge = edge[idx][selected]
+        selected_edge = selected_edge[np.isfinite(selected_edge)]
+        if selected_edge.size <= 0:
+            fold_edges.append(0.0)
+            fold_turnover.append(0.0)
+            fold_hits.append(0.0)
+            fold_dd.append(0.0)
+            continue
         fold_edges.append(float(np.mean(selected_edge)))
         fold_turnover.append(float(np.mean(selected)))
         fold_hits.append(float(np.mean(selected_edge > 0)))
@@ -2528,11 +2541,14 @@ def _candidate_threshold_selection_score(metrics: Mapping[str, Any]) -> float:
     profitable_fold_ratio = float(metrics.get("profitable_fold_ratio", 0.0) or 0.0)
     hit_rate_stability = float(metrics.get("hit_rate_stability", 0.0) or 0.0)
     support = int(metrics.get("support", 0) or 0)
-    fold_expectancy_values = [
-        float(value)
-        for value in list(metrics.get("fold_expectancy_bps", []) or [])
-        if math.isfinite(float(value))
-    ]
+    fold_expectancy_values: list[float] = []
+    for value in list(metrics.get("fold_expectancy_bps", []) or []):
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(parsed):
+            fold_expectancy_values.append(parsed)
     worst_fold_expectancy_bps = (
         float(min(fold_expectancy_values)) if fold_expectancy_values else float(expectancy_bps)
     )
@@ -2698,6 +2714,10 @@ def _select_candidate_threshold(
             fold_predictions=fold_predictions,
             threshold=float(candidate_threshold),
         )
+        if int(metrics.get("support", 0) or 0) <= 0:
+            continue
+        if not math.isfinite(float(metrics.get("mean_expectancy_bps", 0.0) or 0.0)):
+            continue
         objective = _candidate_threshold_selection_score(metrics)
         comparison_key = (
             float(objective),
@@ -6157,7 +6177,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     if split_idx < len(dataset):
         test_label_times = label_ts_series.iloc[split_idx:]
         if not test_label_times.empty:
-            global_gap_days = max(1, horizon_days + embargo_days)
+            global_gap_days = max(0, embargo_days)
             cutoff = test_label_times.min() - pd.Timedelta(days=global_gap_days)
             train_label_times = label_ts_series[label_ts_series <= cutoff]
             if train_label_times.empty:

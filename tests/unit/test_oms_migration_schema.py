@@ -118,6 +118,24 @@ def test_oms_intent_sequence_migration_dedupes_before_unique_index(
                 ),
             ],
         )
+        conn.execute(
+            """
+            CREATE TRIGGER trg_oms_events_no_update
+            BEFORE UPDATE ON oms_events
+            BEGIN
+              SELECT RAISE(ABORT, 'oms_events is append-only');
+            END
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER trg_oms_events_no_delete
+            BEFORE DELETE ON oms_events
+            BEGIN
+              SELECT RAISE(ABORT, 'oms_events is append-only');
+            END
+            """
+        )
 
     command.upgrade(config, "head")
 
@@ -141,6 +159,16 @@ def test_oms_intent_sequence_migration_dedupes_before_unique_index(
             row[1]: row
             for row in conn.execute("PRAGMA index_list(oms_events)").fetchall()
         }
+        triggers = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='oms_events'"
+            ).fetchall()
+        }
+        with pytest.raises(sqlite3.DatabaseError):
+            conn.execute(
+                "UPDATE oms_events SET sequence_no = sequence_no WHERE event_uuid='event-1'"
+            )
 
     assert rows == [
         ("event-1", 1),
@@ -150,3 +178,4 @@ def test_oms_intent_sequence_migration_dedupes_before_unique_index(
     ]
     assert duplicate_count == (0,)
     assert indexes["uq_oms_events_intent_sequence"][2] == 1
+    assert {"trg_oms_events_no_update", "trg_oms_events_no_delete"} <= triggers

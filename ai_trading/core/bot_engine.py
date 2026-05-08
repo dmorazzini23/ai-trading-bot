@@ -31483,14 +31483,9 @@ def _quote_to_mid(quote: Any | None) -> tuple[float | None, float, float]:
 
     if quote is None:
         return None, 0.0, 0.0
-    try:
-        bid = float(getattr(quote, "bid_price", 0) or 0)
-    except COMMON_EXC:
-        bid = 0.0
-    try:
-        ask = float(getattr(quote, "ask_price", 0) or 0)
-    except COMMON_EXC:
-        ask = 0.0
+    bid_value, ask_value = _extract_quote_bid_ask(quote)
+    bid = float(bid_value) if bid_value is not None else 0.0
+    ask = float(ask_value) if ask_value is not None else 0.0
     if bid > 0 and ask > 0:
         return (bid + ask) / 2.0, bid, ask
     return None, bid, ask

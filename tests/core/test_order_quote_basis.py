@@ -51,6 +51,29 @@ def test_resolve_order_quote_basis_prefers_nbbo_for_sell(monkeypatch) -> None:
     assert quote_ts is None
 
 
+def test_resolve_order_quote_basis_accepts_dict_bp_ap(monkeypatch) -> None:
+    monkeypatch.setattr(
+        bot_engine,
+        "_fetch_quote",
+        lambda *_a, **_k: {"bp": "10.00", "ap": "10.10", "t": "2026-04-24T15:00:00Z"},
+    )
+    monkeypatch.setattr(bot_engine, "get_price_source", lambda _symbol: "alpaca_last")
+
+    source, bid, ask, mid, arrival, quote_ts = bot_engine._resolve_order_quote_basis(  # type: ignore[attr-defined]
+        types.SimpleNamespace(),
+        symbol="AAPL",
+        side="buy",
+        fallback_price=9.9,
+    )
+
+    assert source == "broker_nbbo"
+    assert bid == 10.0
+    assert ask == 10.1
+    assert mid == 10.05
+    assert arrival == 10.1
+    assert quote_ts is not None
+
+
 def test_resolve_order_quote_basis_falls_back_to_price_source(monkeypatch) -> None:
     monkeypatch.setattr(bot_engine, "_fetch_quote", lambda *_a, **_k: None)
     monkeypatch.setattr(bot_engine, "get_price_source", lambda _symbol: "last_trade")

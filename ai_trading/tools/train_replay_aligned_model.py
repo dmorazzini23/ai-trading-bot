@@ -497,7 +497,14 @@ def _threshold_report(
                     "positive_rate": positive_rate,
                 }
             )
-    rows.sort(key=lambda item: (item["mean_net_markout_bps"] is None, item["mean_net_markout_bps"] or -1e9), reverse=True)
+    rows.sort(
+        key=lambda item: (
+            item["mean_net_markout_bps"] is not None and int(item.get("candidates", 0) or 0) > 0,
+            float(item["mean_net_markout_bps"] or -1e9),
+            int(item.get("candidates", 0) or 0),
+        ),
+        reverse=True,
+    )
     return rows
 
 
@@ -531,7 +538,17 @@ def _best_thresholds_by_regime(
     for regime, rows in reports.items():
         if not rows:
             continue
-        best = rows[0]
+        best = next(
+            (
+                row
+                for row in rows
+                if int(row.get("candidates", 0) or 0) > 0
+                and row.get("mean_net_markout_bps") is not None
+            ),
+            None,
+        )
+        if best is None:
+            continue
         value = best.get("confidence_threshold")
         try:
             parsed = float(value)

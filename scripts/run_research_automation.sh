@@ -46,18 +46,47 @@ if [[ "${AI_TRADING_RESEARCH_DRY_RUN:-0}" == "1" ]]; then
 fi
 
 set +e
-flock -n "${LOCK_PATH}" \
+flock -E 75 -n "${LOCK_PATH}" \
   "${PYTHON_BIN}" -m ai_trading.tools.research_automation "${ARGS[@]}"
 STATUS=$?
 set -e
 
+RUN_STATUS="infrastructure_failed"
+case "${STATUS}" in
+  0)
+    if [[ "${AI_TRADING_RESEARCH_PLAN_ONLY:-0}" == "1" ]]; then
+      RUN_STATUS="planned"
+    elif [[ "${AI_TRADING_RESEARCH_DRY_RUN:-0}" == "1" ]]; then
+      RUN_STATUS="dry_run"
+    else
+      RUN_STATUS="complete"
+    fi
+    ;;
+  2)
+    RUN_STATUS="blocked"
+    ;;
+  75)
+    RUN_STATUS="locked"
+    echo "research automation ${CADENCE} run is already locked at ${LOCK_PATH}" >&2
+    ;;
+esac
+
 if [[ "${AI_TRADING_RESEARCH_NOTIFY_SLACK:-1}" == "1" ]]; then
-  if [[ "${AI_TRADING_RESEARCH_PLAN_ONLY:-0}" != "1" || "${AI_TRADING_RESEARCH_NOTIFY_PLAN_ONLY:-0}" == "1" ]]; then
+  if [[ "${AI_TRADING_RESEARCH_DRY_RUN:-0}" == "1" ]]; then
+    echo "research automation ${CADENCE} dry-run completed; skipping Slack/OpenClaw completion notification" >&2
+  elif [[ "${AI_TRADING_RESEARCH_PLAN_ONLY:-0}" != "1" || "${AI_TRADING_RESEARCH_NOTIFY_PLAN_ONLY:-0}" == "1" ]]; then
+    set +e
     "${PYTHON_BIN}" -m ai_trading.tools.research_completion_notify \
       --cadence "${CADENCE}" \
       --workflow "${WORKFLOW:-${CADENCE}}" \
       --exit-code "${STATUS}" \
-      --channel "${AI_TRADING_RESEARCH_SLACK_CHANNEL:-#all-beatwallstreet}" || true
+      --run-status "${RUN_STATUS}" \
+      --channel "${AI_TRADING_RESEARCH_SLACK_CHANNEL:-#all-beatwallstreet}"
+    NOTIFY_STATUS=$?
+    set -e
+    if [[ "${NOTIFY_STATUS}" != "0" ]]; then
+      echo "research automation ${CADENCE} completion notification failed with exit ${NOTIFY_STATUS}; preserving run exit ${STATUS}" >&2
+    fi
   fi
 fi
 

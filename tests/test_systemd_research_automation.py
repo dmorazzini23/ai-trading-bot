@@ -14,6 +14,7 @@ def test_research_automation_units_follow_runtime_safety_contract() -> None:
         "ai-trading-research-manual@.service",
     ):
         content = (SYSTEMD_DIR / service_name).read_text(encoding="utf-8")
+        assert "SuccessExitStatus=2" in content
         assert "User=aiuser" in content
         assert "Group=aiuser" in content
         assert "WorkingDirectory=/home/aiuser/ai-trading-bot" in content

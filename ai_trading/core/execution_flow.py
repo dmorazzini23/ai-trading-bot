@@ -806,9 +806,30 @@ def execute_exit(ctx: Any, state: Any, symbol: str, qty: int) -> None:
 def exit_all_positions(ctx: Any) -> None:
     raw_positions = _list_positions_compat(ctx.api)
     for pos in raw_positions:
-        qty = abs(_signed_position_qty(pos))
+        signed_qty = _signed_position_qty(pos)
+        qty = abs(signed_qty)
         if qty:
-            send_exit_order(ctx, pos.symbol, qty, 0.0, "eod_exit", raw_positions=raw_positions)
+            execute_order = getattr(ctx, "execute_order", None)
+            if callable(execute_order):
+                side = "sell" if signed_qty > 0 else "buy"
+                execute_order(
+                    pos.symbol,
+                    side,
+                    qty,
+                    order_type="market",
+                    closing_position=True,
+                    reduce_only=True,
+                    metadata={"reason": "eod_exit"},
+                )
+            else:
+                send_exit_order(
+                    ctx,
+                    pos.symbol,
+                    qty,
+                    0.0,
+                    "eod_exit",
+                    raw_positions=raw_positions,
+                )
             logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
 
 
@@ -832,7 +853,13 @@ def _should_trigger_eod_flatten(now_et: datetime | None = None) -> tuple[bool, d
     if int(current_et.weekday()) >= 5:
         return False, {"enabled": True, "reason": "weekend", "lead_seconds": lead_seconds}
 
-    session_close_et = current_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    try:
+        from ai_trading.utils.market_calendar import session_info
+
+        session_close_et = session_info(current_et.date()).end_utc.astimezone(current_et.tzinfo)
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        logger.debug("EOD_FLATTEN_SESSION_CLOSE_LOOKUP_FAILED", exc_info=True)
+        session_close_et = current_et.replace(hour=16, minute=0, second=0, microsecond=0)
     trigger_at = session_close_et - timedelta(seconds=lead_seconds)
     if current_et < trigger_at:
         return False, {
@@ -895,7 +922,7 @@ def liquidate_positions_if_needed(runtime: Any) -> None:
     active_positions = [
         pos
         for pos in raw_positions
-        if abs(float(getattr(pos, "qty", 0) or 0.0)) > 0.0
+        if abs(_signed_position_qty(pos)) > 0.0
     ]
     if not active_positions:
         return

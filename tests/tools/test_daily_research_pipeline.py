@@ -66,6 +66,28 @@ def test_daily_research_report_blocks_on_runtime_gonogo_failure(monkeypatch):
     assert "runtime_gonogo_failed" in report["blocked_reasons"]
 
 
+def test_daily_research_report_blocks_on_top_level_replay_governance_status(
+    monkeypatch,
+):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+
+    report = daily_research_pipeline.build_daily_research_report(
+        report_date="2026-05-05",
+        health={"ok": True, "status": "ready", "data_provider": {"status": "healthy"}},
+        live_cost_model={"status": {"available": True, "breach_count": 0, "status": "ready"}},
+        replay_governance={
+            "status": "blocked",
+            "reason": "REPLAY_POLICY_NON_REGRESSION_FAILED",
+        },
+        runtime_gonogo={"gate_passed": True, "failed_checks": []},
+        memory_audit={"status": "ok"},
+    )
+
+    assert report["replay_status"]["status"] == "blocked"
+    assert report["trade_allowed"] is False
+    assert "replay_governance_failed" in report["blocked_reasons"]
+
+
 def test_daily_research_report_blocks_on_provider_authority_failure(monkeypatch):
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
 

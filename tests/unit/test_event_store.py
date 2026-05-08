@@ -87,20 +87,53 @@ def test_event_store_enforces_intent_sequence_uniqueness(tmp_path: Path) -> None
         sequence_no=1,
         payload={"symbol": "AAPL"},
     )
-    inserted_second = store.append_oms_event_payload(
-        event_type="ORDER_SUBMITTED",
-        event_source="unit_test",
-        idempotency_key="sequence-key-2",
-        intent_id="intent-sequence-1",
-        sequence_no=1,
-        payload={"symbol": "AAPL"},
-    )
+    with pytest.raises(RuntimeError, match="sequence collision"):
+        store.append_oms_event_payload(
+            event_type="ORDER_SUBMITTED",
+            event_source="unit_test",
+            idempotency_key="sequence-key-2",
+            intent_id="intent-sequence-1",
+            sequence_no=1,
+            payload={"symbol": "AAPL"},
+        )
     rows = store.list_oms_events(intent_id="intent-sequence-1")
 
     assert inserted_first is True
-    assert inserted_second is False
     assert len(rows) == 1
     assert rows[0]["event_type"] == "INTENT_CREATED"
+
+
+def test_event_store_retries_auto_sequence_collision(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    store = EventStore(url=f"sqlite:///{tmp_path / 'oms_events_sequence_retry.db'}")
+    assert store.append_oms_event_payload(
+        event_type="INTENT_CREATED",
+        event_source="unit_test",
+        idempotency_key="sequence-retry-key-1",
+        intent_id="intent-sequence-retry-1",
+        sequence_no=1,
+        payload={"symbol": "AAPL"},
+    )
+    sequence_values = iter([1, 2])
+    monkeypatch.setattr(
+        store,
+        "_next_sequence_no",
+        lambda _intent_id, session=None: next(sequence_values),
+    )
+
+    inserted = store.append_oms_event_payload(
+        event_type="ORDER_SUBMITTED",
+        event_source="unit_test",
+        idempotency_key="sequence-retry-key-2",
+        intent_id="intent-sequence-retry-1",
+        payload={"symbol": "AAPL"},
+    )
+
+    rows = store.list_oms_events(intent_id="intent-sequence-retry-1")
+    assert inserted is True
+    assert [row["sequence_no"] for row in rows] == [1, 2]
 
 
 def test_event_store_enforces_decision_idempotency(tmp_path: Path) -> None:

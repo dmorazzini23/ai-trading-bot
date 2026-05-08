@@ -71,7 +71,7 @@ def test_calculate_position_size_normalizes_edge_quantities(raw_qty: float, expe
 
 
 def test_final_position_size_uses_buying_power_for_short_cash_cap() -> None:
-    engine = _bare_risk_engine()
+    engine = _bare_risk_engine(max_symbol_exposure=1.0)
     signal = SimpleNamespace(symbol="MSFT", side="sell_short", asset_class="equity", strategy="momentum")
 
     capped = risk_engine._cap_final_position_size(
@@ -88,7 +88,7 @@ def test_final_position_size_uses_buying_power_for_short_cash_cap() -> None:
 
 
 def test_final_position_size_skips_cash_cap_for_short_without_buying_power() -> None:
-    engine = _bare_risk_engine()
+    engine = _bare_risk_engine(max_symbol_exposure=1.0)
     signal = SimpleNamespace(symbol="MSFT", side="sell_short", asset_class="equity", strategy="momentum")
 
     capped = risk_engine._cap_final_position_size(
@@ -102,6 +102,23 @@ def test_final_position_size_skips_cash_cap_for_short_without_buying_power() -> 
     )
 
     assert capped == 20
+
+
+def test_final_position_size_enforces_symbol_exposure_cap() -> None:
+    engine = _bare_risk_engine(max_symbol_exposure=0.10)
+    engine.symbol_exposure = {"AAPL": 0.08}
+    signal = SimpleNamespace(symbol="AAPL", side="buy", asset_class="equity", strategy="momentum")
+
+    capped = risk_engine._cap_final_position_size(
+        engine,
+        qty=10,
+        price=100.0,
+        signal=signal,
+        cash=10_000.0,
+        total_equity=10_000.0,
+    )
+
+    assert capped == 2
 
 
 def test_apply_weight_limits_clamps_to_most_constrained_capacity() -> None:

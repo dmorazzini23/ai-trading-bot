@@ -269,6 +269,51 @@ def test_model_signal_fallbacks_and_simulate_symbol_max_hold(monkeypatch: pytest
     assert skipped_first["trades"] == 1
 
 
+def test_opportunity_openings_only_waits_for_confirmed_fill(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "0")
+    frame = _frame([100.0, 101.0, 102.0])
+    monkeypatch.setattr(replay, "load_historical_bars", lambda *_args, **_kwargs: (frame, _Report()))
+    monkeypatch.setattr(
+        replay,
+        "_compute_signal",
+        lambda df: (
+            pd.Series([1.0] * len(df), index=df.index),
+            pd.Series([1.0] * len(df), index=df.index),
+        ),
+    )
+    profile = replay.PolicyReplayProfile(
+        opportunity_top_quantile=0.05,
+        opportunity_min_symbols=1,
+        opportunity_openings_only=True,
+        expected_capture_fill_prob_floor=0.01,
+        expected_capture_floor_bps=-1_000.0,
+        expected_capture_constraint_weight=0.0,
+        replay_quality_weight=0.0,
+        replay_quality_max_rank_uplift_abs=0.0,
+        replay_quality_max_rank_uplift_frac=0.0,
+        replay_quality_max_age_hours=24.0,
+        bandit_score_weight=0.0,
+        bandit_min_samples=1,
+        bandit_shadow_only=True,
+        bandit_auto_promote=False,
+    )
+
+    payload = replay._run_parity_simulation(
+        args=_args(simulation_mode=True, replay_seed=1),
+        cfg=_cfg(allow_shorts=False),
+        symbol_paths={"AAPL": tmp_path / "AAPL.csv"},
+        policy_profile=profile,
+    )
+
+    diagnostics = payload["aggregate"]["policy_diagnostics"]
+    assert diagnostics["accepted"] == 3
+    assert diagnostics["opportunity_openings_only_skipped"] == 0
+    assert payload["aggregate"]["fill_events"] == 0
+
+
 def test_input_resolution_normalization_and_run_replay_guard_branches(tmp_path: Path) -> None:
     parser = replay._build_parser()
 

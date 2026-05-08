@@ -101,16 +101,19 @@ def test_research_completion_payload_marks_failed_exit_code_failed(tmp_path: Pat
         exit_code=1,
         report_root=root,
         channel="#all-beatwallstreet",
+        run_status="infrastructure_failed",
     )
 
-    assert payload["text"].startswith("ai-trading research daily finished: failed")
+    assert payload["text"].startswith("ai-trading research daily finished: infrastructure_failed")
     field_text = "\n".join(
         field["text"]
         for block in payload["blocks"]
         if block.get("type") == "section"
         for field in block.get("fields", [])
     )
-    assert "*Report status*\ncomplete" in field_text
+    assert "*Report status*\nunknown" in field_text
+    assert "*Artifact freshness*\nstale_latest_suppressed" in field_text
+    assert "stale_complete.json" not in field_text
 
 
 def test_research_completion_payload_preserves_blocked_status_on_blocked_exit(
@@ -139,6 +142,41 @@ def test_research_completion_payload_preserves_blocked_status_on_blocked_exit(
     )
 
     assert payload["text"].startswith("ai-trading research daily finished: blocked")
+
+
+def test_research_completion_payload_suppresses_locked_stale_latest(tmp_path: Path) -> None:
+    root = tmp_path / "reports"
+    _write_json(
+        root / "latest" / "daily_research_automation_latest.json",
+        {
+            "status": "complete",
+            "paths": {"report": "/runtime/research/old_complete.json"},
+        },
+    )
+    _write_json(
+        root / "latest" / "daily_operator_summary.json",
+        {"operator_action": "review_prior_report"},
+    )
+
+    payload = research_completion_notify.build_research_completion_payload(
+        cadence="daily",
+        workflow="daily",
+        exit_code=75,
+        report_root=root,
+        channel="#all-beatwallstreet",
+        run_status="locked",
+    )
+
+    assert payload["text"].startswith("ai-trading research daily finished: locked")
+    field_text = "\n".join(
+        field["text"]
+        for block in payload["blocks"]
+        if block.get("type") == "section"
+        for field in block.get("fields", [])
+    )
+    assert "*Report status*\nunknown" in field_text
+    assert "*Artifact freshness*\nstale_latest_suppressed" in field_text
+    assert "old_complete.json" not in field_text
 
 
 def test_research_completion_notify_dry_run_does_not_post(tmp_path: Path, capsys) -> None:

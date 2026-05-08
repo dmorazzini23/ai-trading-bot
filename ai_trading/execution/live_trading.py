@@ -648,7 +648,13 @@ def _eod_flatten_window_active(now_et: datetime | None = None) -> tuple[bool, di
     if int(current_et.weekday()) >= 5:
         return False, {"enabled": True, "reason": "weekend", "lead_seconds": lead_seconds}
 
-    session_close_et = current_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    try:
+        from ai_trading.utils.market_calendar import session_info
+
+        session_close_et = session_info(current_et.date()).end_utc.astimezone(current_et.tzinfo)
+    except LIVE_TRADING_FALLBACK_EXC:
+        logger.debug("EOD_FLATTEN_SESSION_CLOSE_LOOKUP_FAILED", exc_info=True)
+        session_close_et = current_et.replace(hour=16, minute=0, second=0, microsecond=0)
     trigger_at = session_close_et - timedelta(seconds=lead_seconds)
     if current_et < trigger_at:
         return False, {
@@ -15806,10 +15812,38 @@ class ExecutionEngine:
                 regime=metadata.get("market_regime") or metadata.get("session_regime"),
             )
             parsed_intent_id = str(created_intent_id or "").strip()
-            return parsed_intent_id or None
+            if parsed_intent_id:
+                return parsed_intent_id
+            if self._durable_order_lifecycle_required():
+                raise RuntimeError("durable OMS lifecycle creation returned no intent_id")
+            return None
         except LIVE_TRADING_FALLBACK_EXC:
+            if self._durable_order_lifecycle_required():
+                logger.warning("OMS_EXTERNAL_INTENT_CREATE_FAILED", exc_info=True)
+                raise RuntimeError("durable OMS lifecycle creation failed")
             logger.debug("OMS_EXTERNAL_INTENT_CREATE_FAILED", exc_info=True)
             return None
+
+    def _durable_order_lifecycle_required(self) -> bool:
+        """Return whether broker submit must have a durable OMS intent first."""
+
+        execution_mode = str(getattr(self, "execution_mode", "") or "").strip().lower()
+        if execution_mode == "live":
+            return True
+        raw: Any = None
+        if _config_get_env is not None:
+            try:
+                raw = _config_get_env(
+                    "AI_TRADING_REQUIRE_DURABLE_ORDER_LIFECYCLE",
+                    None,
+                    cast=str,
+                )
+            except LIVE_TRADING_FALLBACK_EXC:
+                raw = None
+        if raw in (None, ""):
+            raw = _runtime_env("AI_TRADING_REQUIRE_DURABLE_ORDER_LIFECYCLE")
+        token = str(raw or "").strip().lower()
+        return token in {"1", "true", "yes", "on", "y"}
 
     def _record_durable_submit_error(
         self,
@@ -22213,50 +22247,100 @@ class ExecutionEngine:
 
         order_type_submitted = order_type_normalized
         order: Any | None = None
-        durable_intent_id = self._begin_durable_order_lifecycle(
-            client_order_id=client_order_id,
-            symbol=symbol,
-            side=mapped_side,
-            quantity=qty,
-            order_type=order_type_submitted,
-            expected_price=(
-                price_for_limit
-                if price_for_limit is not None
-                else resolved_limit_price
-            ),
-            expected_edge_bps=(
-                float(expected_edge_hint) if expected_edge_hint is not None else None
-            ),
-            closing_position=bool(closing_position),
-            model_id=model_id_hint,
-            model_version=model_version_hint,
-            config_snapshot_hash=config_snapshot_hash_hint,
-            dataset_hash=dataset_hash_hint,
-            feature_version=feature_version_hint,
-            model_artifact_hash=model_artifact_hash_hint,
-            policy_hash=policy_hash_hint,
-            decision_trace_id=decision_trace_id_hint,
-            session_regime=(
-                str(execution_profile_context.get("session_regime") or "")
-                if isinstance(execution_profile_context, Mapping)
-                else None
-            ),
-            market_regime=(
-                str(metadata_raw.get("market_regime") or "")
-                if isinstance(metadata_raw, Mapping)
-                else None
-            ),
-            volatility_regime=(
-                str(metadata_raw.get("volatility_regime") or "")
-                if isinstance(metadata_raw, Mapping)
-                else None
-            ),
-            trend_regime=(
-                str(metadata_raw.get("trend_regime") or "")
-                if isinstance(metadata_raw, Mapping)
-                else None
-            ),
-        )
+        try:
+            durable_intent_id = self._begin_durable_order_lifecycle(
+                client_order_id=client_order_id,
+                symbol=symbol,
+                side=mapped_side,
+                quantity=qty,
+                order_type=order_type_submitted,
+                expected_price=(
+                    price_for_limit
+                    if price_for_limit is not None
+                    else resolved_limit_price
+                ),
+                expected_edge_bps=(
+                    float(expected_edge_hint) if expected_edge_hint is not None else None
+                ),
+                closing_position=bool(closing_position),
+                model_id=model_id_hint,
+                model_version=model_version_hint,
+                config_snapshot_hash=config_snapshot_hash_hint,
+                dataset_hash=dataset_hash_hint,
+                feature_version=feature_version_hint,
+                model_artifact_hash=model_artifact_hash_hint,
+                policy_hash=policy_hash_hint,
+                decision_trace_id=decision_trace_id_hint,
+                session_regime=(
+                    str(execution_profile_context.get("session_regime") or "")
+                    if isinstance(execution_profile_context, Mapping)
+                    else None
+                ),
+                market_regime=(
+                    str(metadata_raw.get("market_regime") or "")
+                    if isinstance(metadata_raw, Mapping)
+                    else None
+                ),
+                volatility_regime=(
+                    str(metadata_raw.get("volatility_regime") or "")
+                    if isinstance(metadata_raw, Mapping)
+                    else None
+                ),
+                trend_regime=(
+                    str(metadata_raw.get("trend_regime") or "")
+                    if isinstance(metadata_raw, Mapping)
+                    else None
+                ),
+            )
+        except RuntimeError as exc:
+            if not self._durable_order_lifecycle_required():
+                durable_intent_id = None
+            else:
+                detail = str(exc) or "durable OMS intent lifecycle unavailable before broker submit"
+                logger.error(
+                    "DURABLE_ORDER_LIFECYCLE_UNAVAILABLE",
+                    extra={
+                        "symbol": symbol,
+                        "side": mapped_side,
+                        "order_type": order_type_submitted,
+                        "client_order_id": client_order_id,
+                        "execution_mode": str(getattr(self, "execution_mode", "") or ""),
+                        "detail": detail,
+                    },
+                )
+                self._skip_submit(
+                    symbol=symbol,
+                    side=mapped_side,
+                    reason="durable_oms_unavailable",
+                    order_type=order_type_submitted,
+                    detail=detail,
+                    submit_started_at=submit_started_at,
+                )
+                _release_capacity_reservation("durable_oms_unavailable")
+                return None
+        if durable_intent_id is None and self._durable_order_lifecycle_required():
+            detail = "durable OMS intent lifecycle unavailable before broker submit"
+            logger.error(
+                "DURABLE_ORDER_LIFECYCLE_UNAVAILABLE",
+                extra={
+                    "symbol": symbol,
+                    "side": mapped_side,
+                    "order_type": order_type_submitted,
+                    "client_order_id": client_order_id,
+                    "execution_mode": str(getattr(self, "execution_mode", "") or ""),
+                    "detail": detail,
+                },
+            )
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason="durable_oms_unavailable",
+                order_type=order_type_submitted,
+                detail=detail,
+                submit_started_at=submit_started_at,
+            )
+            _release_capacity_reservation("durable_oms_unavailable")
+            return None
         try:
             if order_type_submitted == "market":
                 order_kwargs.pop("price", None)

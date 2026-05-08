@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+SuccessExitStatus=2
 User=aiuser
 Group=aiuser
 WorkingDirectory=/home/aiuser/ai-trading-bot

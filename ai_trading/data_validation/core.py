@@ -28,6 +28,7 @@ __all__ = [
 ]
 REQUIRED_PRICE_COLS = ('open', 'high', 'low', 'close', 'volume')
 _MARKET_TZ = ZoneInfo("America/New_York")
+MAX_FUTURE_CLOCK_SKEW_SECONDS = 5
 
 
 def is_market_hours(ts: datetime | None=None) -> bool:
@@ -93,6 +94,16 @@ def check_data_freshness(df: DataFrame | None, symbol: str, *, max_staleness_min
         if last_ts.tzinfo is None:
             last_ts = last_ts.replace(tzinfo=UTC)
         age = now - last_ts.astimezone(UTC)
+        age_seconds = age.total_seconds()
+        if age_seconds < -MAX_FUTURE_CLOCK_SKEW_SECONDS:
+            return {
+                'symbol': symbol,
+                'is_fresh': False,
+                'minutes_stale': age_seconds / 60.0,
+                'market_hours': market_open,
+                'staleness_threshold': threshold,
+                'reason': 'future_timestamp',
+            }
         minutes = age.total_seconds() / 60.0
         return {
             'symbol': symbol,
