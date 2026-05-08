@@ -76,6 +76,16 @@ def build_trading_day_report(
     counterfactual_execution: Mapping[str, Any] | None = None,
     portfolio_edge: Mapping[str, Any] | None = None,
     decision_receipts: Mapping[str, Any] | None = None,
+    model_registry: Mapping[str, Any] | None = None,
+    pretrade_risk_verifier: Mapping[str, Any] | None = None,
+    post_trade_surveillance: Mapping[str, Any] | None = None,
+    experiment_ledger: Mapping[str, Any] | None = None,
+    walk_forward_capital: Mapping[str, Any] | None = None,
+    order_type_optimizer: Mapping[str, Any] | None = None,
+    regime_champions: Mapping[str, Any] | None = None,
+    adversarial_failure: Mapping[str, Any] | None = None,
+    drift_monitor: Mapping[str, Any] | None = None,
+    operator_control_plane: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     intents = [row for row in order_intents if _date_match(row, report_date)]
     fill_rows = [row for row in fills if _date_match(row, report_date)]
@@ -224,6 +234,16 @@ def build_trading_day_report(
         "counterfactual_execution": dict(counterfactual_execution or {}),
         "portfolio_edge_control": dict(portfolio_edge or {}),
         "decision_receipts": dict(decision_receipts or {}),
+        "model_registry": dict(model_registry or {}),
+        "pretrade_risk_control_verifier": dict(pretrade_risk_verifier or {}),
+        "post_trade_surveillance": dict(post_trade_surveillance or {}),
+        "experiment_ledger": dict(experiment_ledger or {}),
+        "walk_forward_capital_simulation": dict(walk_forward_capital or {}),
+        "order_type_optimizer": dict(order_type_optimizer or {}),
+        "regime_champion_models": dict(regime_champions or {}),
+        "adversarial_failure_simulation": dict(adversarial_failure or {}),
+        "model_data_drift_monitor": dict(drift_monitor or {}),
+        "operator_control_plane": dict(operator_control_plane or {}),
         "next_session_recommendation": "review_live_capital_readiness_before_live_trading",
     }
     report["health_report_summary"] = {
@@ -233,6 +253,16 @@ def build_trading_day_report(
         "fills": fill_count,
         "live_cost_status": live_status,
         "expected_edge_calibration_status": calibration_status,
+        "model_registry_status": _status(model_registry or {}),
+        "pretrade_risk_status": _status(pretrade_risk_verifier or {}),
+        "post_trade_surveillance_status": _status(post_trade_surveillance or {}),
+        "experiment_ledger_status": _status(experiment_ledger or {}),
+        "walk_forward_capital_status": _status(walk_forward_capital or {}),
+        "order_type_optimizer_status": _status(order_type_optimizer or {}),
+        "regime_champion_status": _status(regime_champions or {}),
+        "adversarial_failure_status": _status(adversarial_failure or {}),
+        "drift_monitor_status": _status(drift_monitor or {}),
+        "operator_control_plane_status": _status(operator_control_plane or {}),
         "top_reject_reasons": dict(reject_reasons.most_common(5)),
         "symbols_with_activity": sorted(report["symbol_trade_flow"]),
     }
@@ -283,6 +313,16 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Counterfactual execution: `{report.get('counterfactual_execution', {}).get('status', 'missing')}`",
             f"- Portfolio edge: `{report.get('portfolio_edge_control', {}).get('output', 'missing')}`",
             f"- Decision receipts: `{report.get('decision_receipts', {}).get('status', 'missing')}`",
+            f"- Model registry: `{report.get('model_registry', {}).get('status', 'missing')}`",
+            f"- Pre-trade risk verifier: `{report.get('pretrade_risk_control_verifier', {}).get('status', 'missing')}`",
+            f"- Post-trade surveillance: `{report.get('post_trade_surveillance', {}).get('status', 'missing')}`",
+            f"- Experiment ledger: `{report.get('experiment_ledger', {}).get('status', 'missing')}`",
+            f"- Walk-forward capital: `{report.get('walk_forward_capital_simulation', {}).get('status', 'missing')}`",
+            f"- Order-type optimizer: `{report.get('order_type_optimizer', {}).get('status', 'missing')}`",
+            f"- Regime champions: `{report.get('regime_champion_models', {}).get('status', 'missing')}`",
+            f"- Adversarial simulation: `{report.get('adversarial_failure_simulation', {}).get('status', 'missing')}`",
+            f"- Drift monitor: `{report.get('model_data_drift_monitor', {}).get('status', 'missing')}`",
+            f"- Operator control plane: `{report.get('operator_control_plane', {}).get('status', 'missing')}`",
             f"- Health/report summary: `{report.get('health_report_summary', {}).get('desired', 0)}` desired, "
             f"`{report.get('health_report_summary', {}).get('fills', 0)}` fills",
             f"- Next session: `{report.get('next_session_recommendation')}`",
@@ -306,6 +346,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--counterfactual-execution-json", type=Path, default=None)
     parser.add_argument("--portfolio-edge-json", type=Path, default=None)
     parser.add_argument("--decision-receipts-json", type=Path, default=None)
+    parser.add_argument("--model-registry-json", type=Path, default=None)
+    parser.add_argument("--pretrade-risk-json", type=Path, default=None)
+    parser.add_argument("--post-trade-surveillance-json", type=Path, default=None)
+    parser.add_argument("--experiment-ledger-json", type=Path, default=None)
+    parser.add_argument("--walk-forward-capital-json", type=Path, default=None)
+    parser.add_argument("--order-type-optimizer-json", type=Path, default=None)
+    parser.add_argument("--regime-champions-json", type=Path, default=None)
+    parser.add_argument("--adversarial-failure-json", type=Path, default=None)
+    parser.add_argument("--drift-monitor-json", type=Path, default=None)
+    parser.add_argument("--operator-control-plane-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     parser.add_argument("--latest-md", type=Path, default=None)
@@ -328,6 +378,16 @@ def main(argv: list[str] | None = None) -> int:
         counterfactual_execution=_read_json(args.counterfactual_execution_json),
         portfolio_edge=_read_json(args.portfolio_edge_json),
         decision_receipts=_read_json(args.decision_receipts_json),
+        model_registry=_read_json(args.model_registry_json),
+        pretrade_risk_verifier=_read_json(args.pretrade_risk_json),
+        post_trade_surveillance=_read_json(args.post_trade_surveillance_json),
+        experiment_ledger=_read_json(args.experiment_ledger_json),
+        walk_forward_capital=_read_json(args.walk_forward_capital_json),
+        order_type_optimizer=_read_json(args.order_type_optimizer_json),
+        regime_champions=_read_json(args.regime_champions_json),
+        adversarial_failure=_read_json(args.adversarial_failure_json),
+        drift_monitor=_read_json(args.drift_monitor_json),
+        operator_control_plane=_read_json(args.operator_control_plane_json),
     )
     for path, content in (
         (output_json, json.dumps(report, indent=2, sort_keys=True) + "\n"),

@@ -254,6 +254,7 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
     health = tmp_path / "health.json"
     live_cost = tmp_path / "live_cost.json"
     memory = tmp_path / "memory.json"
+    pretrade = tmp_path / "pretrade.json"
     symbol_promotion = tmp_path / "symbol_promotion.json"
     calibration = tmp_path / "calibration.json"
     starvation = tmp_path / "starvation.json"
@@ -270,6 +271,10 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
         encoding="utf-8",
     )
     memory.write_text(json.dumps({"status": "ok"}), encoding="utf-8")
+    pretrade.write_text(
+        json.dumps({"status": "passed", "fail_closed": False, "summary": {"violations": 0}}),
+        encoding="utf-8",
+    )
     symbol_promotion.write_text(
         json.dumps(
             {
@@ -301,10 +306,12 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
             str(health),
             "--live-cost-model-json",
             str(live_cost),
-            "--memory-audit-json",
-            str(memory),
-            "--symbol-promotion-json",
-            str(symbol_promotion),
+                "--memory-audit-json",
+                str(memory),
+                "--pretrade-risk-json",
+                str(pretrade),
+                "--symbol-promotion-json",
+                str(symbol_promotion),
             "--expected-edge-calibration-json",
             str(calibration),
             "--evidence-starvation-json",

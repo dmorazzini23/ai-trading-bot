@@ -162,6 +162,19 @@ def _trade_allowed(report: Mapping[str, Any]) -> tuple[bool, list[str]]:
         reasons.append("portfolio_edge_no_new_entries")
     if str(_nested(report, "execution_capture").get("status") or "").lower() == "degraded":
         reasons.append("execution_capture_degraded")
+    risk_status = str(_nested(report, "pretrade_risk_control_verifier").get("status") or "").lower()
+    if risk_status in {"failed", "blocked", "missing"}:
+        reasons.append("pretrade_risk_controls_not_verified")
+    surveillance_status = str(_nested(report, "post_trade_surveillance").get("status") or "").lower()
+    if surveillance_status in {"critical", "blocked"}:
+        reasons.append("post_trade_surveillance_critical")
+    drift_status = str(_nested(report, "model_data_drift_monitor").get("status") or "").lower()
+    if drift_status == "blocked":
+        reasons.append("model_data_drift_monitor_blocked")
+    if bool(_nested(report, "order_type_optimizer").get("live_enabled", False)):
+        reasons.append("order_type_optimizer_live_enabled_unexpectedly")
+    if bool(_nested(report, "walk_forward_capital_simulation").get("live_enabled", False)):
+        reasons.append("walk_forward_capital_simulation_live_enabled_unexpectedly")
     return not reasons, reasons
 
 
@@ -189,6 +202,16 @@ def build_daily_research_report(
     runtime_gonogo: Mapping[str, Any] | None = None,
     memory_audit: Mapping[str, Any] | None = None,
     artifact_retention: Mapping[str, Any] | None = None,
+    model_registry: Mapping[str, Any] | None = None,
+    pretrade_risk_verifier: Mapping[str, Any] | None = None,
+    post_trade_surveillance: Mapping[str, Any] | None = None,
+    experiment_ledger: Mapping[str, Any] | None = None,
+    walk_forward_capital: Mapping[str, Any] | None = None,
+    order_type_optimizer: Mapping[str, Any] | None = None,
+    regime_champions: Mapping[str, Any] | None = None,
+    adversarial_failure: Mapping[str, Any] | None = None,
+    drift_monitor: Mapping[str, Any] | None = None,
+    operator_control_plane: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     health = health or {}
     live_cost_model = live_cost_model or {}
@@ -212,6 +235,16 @@ def build_daily_research_report(
     runtime_gonogo_payload = _nested(runtime_gonogo, "go_no_go") or runtime_gonogo
     memory_audit = memory_audit or {}
     artifact_retention = artifact_retention or {}
+    model_registry = model_registry or {}
+    pretrade_risk_verifier = pretrade_risk_verifier or {}
+    post_trade_surveillance = post_trade_surveillance or {}
+    experiment_ledger = experiment_ledger or {}
+    walk_forward_capital = walk_forward_capital or {}
+    order_type_optimizer = order_type_optimizer or {}
+    regime_champions = regime_champions or {}
+    adversarial_failure = adversarial_failure or {}
+    drift_monitor = drift_monitor or {}
+    operator_control_plane = operator_control_plane or {}
     report: dict[str, Any] = {
         "schema_version": "1.0.0",
         "artifact_type": "daily_research_report",
@@ -400,6 +433,76 @@ def build_daily_research_report(
             "shadow_only": True,
             "promotion_authority": False,
         },
+        "model_registry": {
+            "available": bool(model_registry),
+            "status": model_registry.get("status", "missing"),
+            "artifact_type": model_registry.get("artifact_type"),
+            "summary": _nested(model_registry, "summary"),
+            "active_champion": _nested(model_registry, "active_champion"),
+            "promotion_authority": bool(model_registry.get("promotion_authority", False)),
+            "manual_approval_required": True,
+        },
+        "pretrade_risk_control_verifier": {
+            "available": bool(pretrade_risk_verifier),
+            "status": pretrade_risk_verifier.get("status", "missing"),
+            "fail_closed": bool(pretrade_risk_verifier.get("fail_closed", True)),
+            "summary": _nested(pretrade_risk_verifier, "summary"),
+            "violations": pretrade_risk_verifier.get("violations", []),
+            "live_money_authority": False,
+        },
+        "post_trade_surveillance": {
+            "available": bool(post_trade_surveillance),
+            "status": post_trade_surveillance.get("status", "missing"),
+            "summary": _nested(post_trade_surveillance, "summary"),
+            "findings": post_trade_surveillance.get("findings", []),
+            "live_money_authority": False,
+        },
+        "experiment_ledger": {
+            "available": bool(experiment_ledger),
+            "status": experiment_ledger.get("status", "missing"),
+            "latest_run": _nested(experiment_ledger, "latest_run"),
+            "completion_guard": _nested(experiment_ledger, "completion_guard"),
+            "reported_complete": experiment_ledger.get("reported_complete"),
+        },
+        "walk_forward_capital_simulation": {
+            "available": bool(walk_forward_capital),
+            "status": walk_forward_capital.get("status", "missing"),
+            "summary": _nested(walk_forward_capital, "summary"),
+            "live_enabled": bool(walk_forward_capital.get("live_enabled", False)),
+        },
+        "order_type_optimizer": {
+            "available": bool(order_type_optimizer),
+            "status": order_type_optimizer.get("status", "missing"),
+            "mode": order_type_optimizer.get("mode"),
+            "summary": _nested(order_type_optimizer, "summary"),
+            "recommendations_enabled": bool(order_type_optimizer.get("recommendations_enabled", False)),
+            "live_enabled": bool(order_type_optimizer.get("live_enabled", False)),
+        },
+        "regime_champion_models": {
+            "available": bool(regime_champions),
+            "status": regime_champions.get("status", "missing"),
+            "summary": _nested(regime_champions, "summary"),
+            "blocked_regimes": regime_champions.get("blocked_regimes", []),
+            "manual_approval_required": True,
+        },
+        "adversarial_failure_simulation": {
+            "available": bool(adversarial_failure),
+            "status": adversarial_failure.get("status", "missing"),
+            "summary": _nested(adversarial_failure, "summary"),
+            "live_money_authority": bool(adversarial_failure.get("live_money_authority", False)),
+        },
+        "model_data_drift_monitor": {
+            "available": bool(drift_monitor),
+            "status": drift_monitor.get("status", "missing"),
+            "summary": _nested(drift_monitor, "summary"),
+            "reasons": drift_monitor.get("reasons", []),
+        },
+        "operator_control_plane": {
+            "available": bool(operator_control_plane),
+            "status": operator_control_plane.get("status", "missing"),
+            "summary": _nested(operator_control_plane, "summary"),
+            "read_only": bool(operator_control_plane.get("read_only", True)),
+        },
     }
     allowed, reasons = _trade_allowed(report)
     profile_name = str(_nested(report, "launch_profile").get("name") or "paper_observe")
@@ -468,6 +571,49 @@ def build_daily_research_report(
             "shadow_only": True,
             "promotion_authority": False,
         },
+        "model_registry": {
+            "status": _summary_status(_nested(report, "model_registry")),
+            "promotion_authority": bool(_nested(report, "model_registry").get("promotion_authority", False)),
+            "manual_approval_required": True,
+        },
+        "pretrade_risk_control_verifier": {
+            "status": _summary_status(_nested(report, "pretrade_risk_control_verifier")),
+            "fail_closed": bool(_nested(report, "pretrade_risk_control_verifier").get("fail_closed", True)),
+        },
+        "post_trade_surveillance": {
+            "status": _summary_status(_nested(report, "post_trade_surveillance")),
+            "summary": _nested(report, "post_trade_surveillance").get("summary"),
+        },
+        "experiment_ledger": {
+            "status": _summary_status(_nested(report, "experiment_ledger")),
+            "latest_run": _nested(report, "experiment_ledger").get("latest_run"),
+        },
+        "walk_forward_capital_simulation": {
+            "status": _summary_status(_nested(report, "walk_forward_capital_simulation")),
+            "live_enabled": bool(_nested(report, "walk_forward_capital_simulation").get("live_enabled", False)),
+        },
+        "order_type_optimizer": {
+            "status": _summary_status(_nested(report, "order_type_optimizer")),
+            "live_enabled": bool(_nested(report, "order_type_optimizer").get("live_enabled", False)),
+        },
+        "regime_champion_models": {
+            "status": _summary_status(_nested(report, "regime_champion_models")),
+            "manual_approval_required": True,
+        },
+        "adversarial_failure_simulation": {
+            "status": _summary_status(_nested(report, "adversarial_failure_simulation")),
+            "live_money_authority": bool(
+                _nested(report, "adversarial_failure_simulation").get("live_money_authority", False)
+            ),
+        },
+        "model_data_drift_monitor": {
+            "status": _summary_status(_nested(report, "model_data_drift_monitor")),
+            "summary": _nested(report, "model_data_drift_monitor").get("summary"),
+        },
+        "operator_control_plane": {
+            "status": _summary_status(_nested(report, "operator_control_plane")),
+            "read_only": bool(_nested(report, "operator_control_plane").get("read_only", True)),
+        },
     }
     report["openclaw_summary"] = {
         "service": "ai-trading-research",
@@ -531,6 +677,16 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Training accelerator: `{_nested(report, 'training_accelerator').get('status', 'missing')}`",
             f"- Expected-edge calibration: `{_nested(report, 'expected_edge_calibration').get('status', 'missing')}`",
             f"- Evidence starvation: `{_nested(report, 'evidence_starvation').get('status', 'missing')}`",
+            f"- Model registry: `{_nested(report, 'model_registry').get('status', 'missing')}`",
+            f"- Pre-trade risk verifier: `{_nested(report, 'pretrade_risk_control_verifier').get('status', 'missing')}`",
+            f"- Post-trade surveillance: `{_nested(report, 'post_trade_surveillance').get('status', 'missing')}`",
+            f"- Experiment ledger: `{_nested(report, 'experiment_ledger').get('status', 'missing')}`",
+            f"- Walk-forward capital: `{_nested(report, 'walk_forward_capital_simulation').get('status', 'missing')}`",
+            f"- Order-type optimizer: `{_nested(report, 'order_type_optimizer').get('status', 'missing')}`",
+            f"- Regime champions: `{_nested(report, 'regime_champion_models').get('status', 'missing')}`",
+            f"- Adversarial simulation: `{_nested(report, 'adversarial_failure_simulation').get('status', 'missing')}`",
+            f"- Drift monitor: `{_nested(report, 'model_data_drift_monitor').get('status', 'missing')}`",
+            f"- Operator control plane: `{_nested(report, 'operator_control_plane').get('status', 'missing')}`",
             f"- Health/report summary: `{_nested(report, 'health_report_summary').get('runtime_status', 'missing')}` "
             f"trade_allowed={str(report.get('trade_allowed')).lower()}",
             "",
@@ -563,6 +719,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runtime-gonogo-json", type=Path, default=None)
     parser.add_argument("--memory-audit-json", type=Path, default=None)
     parser.add_argument("--artifact-retention-json", type=Path, default=None)
+    parser.add_argument("--model-registry-json", type=Path, default=None)
+    parser.add_argument("--pretrade-risk-json", type=Path, default=None)
+    parser.add_argument("--post-trade-surveillance-json", type=Path, default=None)
+    parser.add_argument("--experiment-ledger-json", type=Path, default=None)
+    parser.add_argument("--walk-forward-capital-json", type=Path, default=None)
+    parser.add_argument("--order-type-optimizer-json", type=Path, default=None)
+    parser.add_argument("--regime-champions-json", type=Path, default=None)
+    parser.add_argument("--adversarial-failure-json", type=Path, default=None)
+    parser.add_argument("--drift-monitor-json", type=Path, default=None)
+    parser.add_argument("--operator-control-plane-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     parser.add_argument("--output-md", type=Path, default=None)
@@ -651,6 +817,46 @@ def main(argv: list[str] | None = None) -> int:
         artifact_retention=_read_json(
             args.artifact_retention_json
             or _default_path("runtime/runtime_artifact_retention_latest.json")
+        ),
+        model_registry=_read_json(
+            args.model_registry_json
+            or _default_path("runtime/research_reports/latest/model_registry_latest.json")
+        ),
+        pretrade_risk_verifier=_read_json(
+            args.pretrade_risk_json
+            or _default_path("runtime/reports/pretrade_risk_control_verification_latest.json")
+        ),
+        post_trade_surveillance=_read_json(
+            args.post_trade_surveillance_json
+            or _default_path("runtime/reports/post_trade_surveillance_latest.json")
+        ),
+        experiment_ledger=_read_json(
+            args.experiment_ledger_json
+            or _default_path("runtime/research_reports/latest/experiment_ledger_latest.json")
+        ),
+        walk_forward_capital=_read_json(
+            args.walk_forward_capital_json
+            or _default_path("runtime/walk_forward_capital_simulation_latest.json")
+        ),
+        order_type_optimizer=_read_json(
+            args.order_type_optimizer_json
+            or _default_path("runtime/order_type_optimizer_latest.json")
+        ),
+        regime_champions=_read_json(
+            args.regime_champions_json
+            or _default_path("runtime/regime_champion_models_latest.json")
+        ),
+        adversarial_failure=_read_json(
+            args.adversarial_failure_json
+            or _default_path("runtime/adversarial_failure_simulation_latest.json")
+        ),
+        drift_monitor=_read_json(
+            args.drift_monitor_json
+            or _default_path("runtime/model_data_drift_monitor_latest.json")
+        ),
+        operator_control_plane=_read_json(
+            args.operator_control_plane_json
+            or _default_path("runtime/operator_control_plane_latest.json")
         ),
     )
     output_json.parent.mkdir(parents=True, exist_ok=True)

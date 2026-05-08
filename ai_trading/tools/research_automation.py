@@ -173,6 +173,16 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     counterfactual_execution = config.run_dir / "counterfactual_execution.json"
     portfolio_edge = config.run_dir / "portfolio_edge_control.json"
     decision_receipts = config.run_dir / "decision_receipts.json"
+    model_registry = config.run_dir / "model_registry.json"
+    experiment_ledger = config.run_dir / "experiment_ledger.json"
+    pretrade_risk = config.run_dir / "pretrade_risk_control_verification.json"
+    post_trade_surveillance = config.run_dir / "post_trade_surveillance.json"
+    walk_forward_capital = config.run_dir / "walk_forward_capital_simulation.json"
+    order_type_optimizer = config.run_dir / "order_type_optimizer.json"
+    regime_champions = config.run_dir / "regime_champion_models.json"
+    adversarial_failure = config.run_dir / "adversarial_failure_simulation.json"
+    drift_monitor = config.run_dir / "model_data_drift_monitor.json"
+    operator_control = config.run_dir / "operator_control_plane.json"
     daily_research = config.run_dir / "daily_research_report.json"
     daily_research_md = config.run_dir / "daily_research_report.md"
     live_readiness = config.run_dir / "live_capital_readiness.json"
@@ -418,6 +428,32 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 expected_edge_calibration,
                 "--execution-capture-json",
                 execution_capture,
+                "--counterfactual-execution-json",
+                counterfactual_execution,
+                "--portfolio-edge-json",
+                portfolio_edge,
+                "--decision-receipts-json",
+                decision_receipts,
+                "--model-registry-json",
+                model_registry,
+                "--pretrade-risk-json",
+                pretrade_risk,
+                "--post-trade-surveillance-json",
+                post_trade_surveillance,
+                "--experiment-ledger-json",
+                config.report_root / "latest" / "experiment_ledger_latest.json",
+                "--walk-forward-capital-json",
+                walk_forward_capital,
+                "--order-type-optimizer-json",
+                order_type_optimizer,
+                "--regime-champions-json",
+                regime_champions,
+                "--adversarial-failure-json",
+                adversarial_failure,
+                "--drift-monitor-json",
+                drift_monitor,
+                "--operator-control-plane-json",
+                operator_control,
                 "--output-json",
                 trading_day,
                 "--latest-json",
@@ -552,6 +588,222 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             metadata={"promotion_authority": False, "live_money_authority": False},
         ),
         ResearchStep(
+            name="pretrade_risk_control_verifier",
+            command=_python_module(
+                "ai_trading.tools.pretrade_risk_control_verifier",
+                "--report-date",
+                config.report_date,
+                "--intents-jsonl",
+                _runtime_input_path("runtime/order_events.jsonl"),
+                "--output-json",
+                pretrade_risk,
+                "--latest-json",
+                config.report_root / "latest" / "pretrade_risk_control_verification_latest.json",
+            ),
+            purpose="Verify pre-trade risk controls fail closed before any live-capital authority.",
+            output_path=pretrade_risk,
+            blocked_returncodes=(2,),
+            metadata={"live_money_authority": False, "fail_closed": True},
+        ),
+        ResearchStep(
+            name="post_trade_surveillance",
+            command=_python_module(
+                "ai_trading.tools.post_trade_surveillance_report",
+                "--report-date",
+                config.report_date,
+                "--decisions-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                "--orders-jsonl",
+                _runtime_input_path("runtime/order_events.jsonl"),
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--oms-jsonl",
+                _runtime_input_path("runtime/oms_events.jsonl"),
+                "--positions-json",
+                _runtime_input_path("runtime/open_position_reconciliation_latest.json"),
+                "--output-json",
+                post_trade_surveillance,
+                "--latest-json",
+                config.report_root / "latest" / "post_trade_surveillance_latest.json",
+            ),
+            purpose="Detect harmful post-trade behavior without mutating runtime state.",
+            output_path=post_trade_surveillance,
+            metadata={"live_money_authority": False},
+        ),
+        ResearchStep(
+            name="adversarial_failure_simulation",
+            command=_python_module(
+                "ai_trading.tools.adversarial_failure_simulation",
+                "--report-date",
+                config.report_date,
+                "--pretrade-json",
+                pretrade_risk,
+                "--surveillance-json",
+                post_trade_surveillance,
+                "--output-json",
+                adversarial_failure,
+                "--latest-json",
+                config.report_root / "latest" / "adversarial_failure_simulation_latest.json",
+            ),
+            purpose="Run non-live fail-closed simulations against generated safety artifacts.",
+            output_path=adversarial_failure,
+            metadata={"live_money_authority": False, "non_live": True},
+        ),
+        ResearchStep(
+            name="walk_forward_capital_simulation",
+            command=_python_module(
+                "ai_trading.tools.walk_forward_capital_simulation",
+                "--events-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--output-json",
+                walk_forward_capital,
+            ),
+            purpose="Estimate paper/canary capital path and drawdown without enabling live capital.",
+            output_path=walk_forward_capital,
+            metadata={"live_money_authority": False, "live_enabled": False},
+        ),
+        ResearchStep(
+            name="order_type_optimizer",
+            command=_python_module(
+                "ai_trading.tools.order_type_optimizer",
+                "--candidates-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                "--live-cost-model-json",
+                live_cost,
+                "--output-json",
+                order_type_optimizer,
+            ),
+            purpose="Produce shadow-only order-type recommendations from historical evidence.",
+            output_path=order_type_optimizer,
+            metadata={"live_money_authority": False, "enforcement_authority": False},
+        ),
+        ResearchStep(
+            name="model_data_drift_monitor",
+            command=_python_module(
+                "ai_trading.tools.model_data_drift_monitor",
+                "--baseline-json",
+                config.report_root / "latest" / "model_data_drift_baseline.json",
+                "--current-json",
+                expected_edge_calibration,
+                "--output-json",
+                drift_monitor,
+            ),
+            purpose="Check model/data drift with stale-baseline fail-closed semantics.",
+            output_path=drift_monitor,
+            metadata={"live_money_authority": False},
+        ),
+        ResearchStep(
+            name="model_registry_evaluation",
+            command=_python_module(
+                "ai_trading.tools.model_registry",
+                "evaluate",
+                "--registry-json",
+                config.report_root / "latest" / "model_registry_latest.json",
+                "--output-json",
+                model_registry,
+                "--latest-json",
+                config.report_root / "latest" / "model_registry_evaluation_latest.json",
+            ),
+            purpose="Evaluate registry champion/challenger evidence without deploying models.",
+            output_path=model_registry,
+            skip_if_missing=(config.report_root / "latest" / "model_registry_latest.json",),
+            blocked_returncodes=(2,),
+            metadata={"promotion_authority": False, "manual_approval_required": True},
+        ),
+        ResearchStep(
+            name="operator_control_plane",
+            command=_python_module(
+                "ai_trading.tools.operator_control_plane",
+                "--health-url",
+                "http://127.0.0.1:9001/healthz",
+                "--readiness-json",
+                _runtime_input_path("runtime/live_capital_readiness_latest.json"),
+                "--runtime-gonogo-json",
+                gonogo,
+                "--runtime-performance-json",
+                _runtime_input_path("runtime/runtime_performance_report_latest.json"),
+                "--oms-json",
+                _runtime_input_path("runtime/oms_lifecycle_parity_latest.json"),
+                "--model-registry-json",
+                model_registry,
+                "--latest-research-json",
+                config.report_root / "latest" / "daily_readiness_latest.json",
+                "--drift-json",
+                drift_monitor,
+                "--surveillance-json",
+                post_trade_surveillance,
+                "--risk-verifier-json",
+                pretrade_risk,
+                "--paper-sampling-json",
+                _runtime_input_path("runtime/paper_sampling_state_latest.json"),
+                "--output-json",
+                operator_control,
+            ),
+            purpose="Aggregate a read-only operator control-plane snapshot from artifacts.",
+            output_path=operator_control,
+            metadata={"read_only": True, "mutates_runtime": False},
+        ),
+        ResearchStep(
+            name="trading_day_report_enriched",
+            command=_python_module(
+                "ai_trading.tools.trading_day_report",
+                "--report-date",
+                config.report_date,
+                "--order-intents-jsonl",
+                _runtime_input_path("runtime/order_events.jsonl"),
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--shadow-jsonl",
+                config.shadow_jsonl,
+                "--gate-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                "--live-cost-model-json",
+                live_cost,
+                "--symbol-scorecard-json",
+                scorecard,
+                "--regime-entry-throttle-json",
+                regime_throttle,
+                "--expected-edge-calibration-json",
+                expected_edge_calibration,
+                "--execution-capture-json",
+                execution_capture,
+                "--counterfactual-execution-json",
+                counterfactual_execution,
+                "--portfolio-edge-json",
+                portfolio_edge,
+                "--decision-receipts-json",
+                decision_receipts,
+                "--model-registry-json",
+                model_registry,
+                "--pretrade-risk-json",
+                pretrade_risk,
+                "--post-trade-surveillance-json",
+                post_trade_surveillance,
+                "--experiment-ledger-json",
+                config.report_root / "latest" / "experiment_ledger_latest.json",
+                "--walk-forward-capital-json",
+                walk_forward_capital,
+                "--order-type-optimizer-json",
+                order_type_optimizer,
+                "--regime-champions-json",
+                regime_champions,
+                "--adversarial-failure-json",
+                adversarial_failure,
+                "--drift-monitor-json",
+                drift_monitor,
+                "--operator-control-plane-json",
+                operator_control,
+                "--output-json",
+                trading_day,
+                "--latest-json",
+                config.report_root / "latest" / "trading_day_latest.json",
+                "--latest-md",
+                config.report_root / "latest" / "trading_day_latest.md",
+            ),
+            purpose="Rewrite the trading-day report with all high-end evidence artifacts attached.",
+            output_path=trading_day,
+        ),
+        ResearchStep(
             name="daily_research_pipeline",
             command=_python_module(
                 "ai_trading.tools.daily_research_pipeline",
@@ -583,6 +835,26 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 portfolio_edge,
                 "--decision-receipts-json",
                 decision_receipts,
+                "--model-registry-json",
+                model_registry,
+                "--pretrade-risk-json",
+                pretrade_risk,
+                "--post-trade-surveillance-json",
+                post_trade_surveillance,
+                "--experiment-ledger-json",
+                config.report_root / "latest" / "experiment_ledger_latest.json",
+                "--walk-forward-capital-json",
+                walk_forward_capital,
+                "--order-type-optimizer-json",
+                order_type_optimizer,
+                "--regime-champions-json",
+                regime_champions,
+                "--adversarial-failure-json",
+                adversarial_failure,
+                "--drift-monitor-json",
+                drift_monitor,
+                "--operator-control-plane-json",
+                operator_control,
                 "--training-accelerator-json",
                 training_accelerator,
                 "--expected-edge-calibration-json",
@@ -625,6 +897,22 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 execution_capture,
                 "--portfolio-edge-json",
                 portfolio_edge,
+                "--model-registry-json",
+                model_registry,
+                "--pretrade-risk-json",
+                pretrade_risk,
+                "--post-trade-surveillance-json",
+                post_trade_surveillance,
+                "--walk-forward-capital-json",
+                walk_forward_capital,
+                "--order-type-optimizer-json",
+                order_type_optimizer,
+                "--regime-champions-json",
+                regime_champions,
+                "--adversarial-failure-json",
+                adversarial_failure,
+                "--drift-monitor-json",
+                drift_monitor,
                 "--output-json",
                 live_readiness,
                 "--success-on-blocked",
@@ -670,6 +958,30 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                     "promotion_authority": False,
                     "uses_cached_training_features": True,
                     "stable_cache_root": str(config.report_root / "latest" / "training_cache" / "daily"),
+                },
+            ),
+        )
+        steps.insert(
+            daily_research_index + 1,
+            ResearchStep(
+                name="regime_champion_models",
+                command=_python_module(
+                    "ai_trading.tools.regime_champion_models",
+                    "--candidates-json",
+                    training_accelerator,
+                    "--current-registry-json",
+                    config.report_root / "latest" / "model_registry_latest.json",
+                    "--output-json",
+                    regime_champions,
+                    "--success-on-blocked",
+                ),
+                purpose="Evaluate regime-specific champion candidates with conservative fallback.",
+                output_path=regime_champions,
+                skip_if_missing=(training_accelerator,),
+                metadata={
+                    "promotion_authority": False,
+                    "manual_approval_required": True,
+                    "conservative_fallback": True,
                 },
             ),
         )
@@ -1187,6 +1499,18 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
     counterfactual_execution = _read_json(latest / "counterfactual_execution_latest.json")
     portfolio_edge = _read_json(latest / "portfolio_edge_control_latest.json")
     decision_receipts = _read_json(latest / "decision_receipts_latest.json")
+    model_registry = _read_json(latest / "model_registry_latest.json") or _read_json(
+        latest / "model_registry_evaluation_latest.json"
+    )
+    experiment_ledger = _read_json(latest / "experiment_ledger_latest.json")
+    pretrade_risk = _read_json(latest / "pretrade_risk_control_verification_latest.json")
+    post_trade_surveillance = _read_json(latest / "post_trade_surveillance_latest.json")
+    walk_forward = _read_json(latest / "walk_forward_capital_simulation_latest.json")
+    order_optimizer = _read_json(latest / "order_type_optimizer_latest.json")
+    regime_champions = _read_json(latest / "regime_champion_models_latest.json")
+    adversarial_failure = _read_json(latest / "adversarial_failure_simulation_latest.json")
+    drift_monitor = _read_json(latest / "model_data_drift_monitor_latest.json")
+    operator_control = _read_json(latest / "operator_control_plane_latest.json")
     return {
         "daily_research": {
             "status": _artifact_status(daily),
@@ -1256,6 +1580,52 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
         "decision_receipts": {
             "status": _artifact_status(decision_receipts),
             "summary": decision_receipts.get("summary"),
+        },
+        "model_registry": {
+            "status": _artifact_status(model_registry),
+            "promotion_authority": bool(model_registry.get("promotion_authority", False)),
+            "manual_approval_required": True,
+        },
+        "experiment_ledger": {
+            "status": _artifact_status(experiment_ledger),
+            "latest_run": experiment_ledger.get("latest_run"),
+        },
+        "pretrade_risk_control_verifier": {
+            "status": _artifact_status(pretrade_risk),
+            "fail_closed": bool(pretrade_risk.get("fail_closed", True)),
+        },
+        "post_trade_surveillance": {
+            "status": _artifact_status(post_trade_surveillance),
+            "summary": post_trade_surveillance.get("summary"),
+        },
+        "walk_forward_capital_simulation": {
+            "status": _artifact_status(walk_forward),
+            "summary": walk_forward.get("summary"),
+            "live_enabled": bool(walk_forward.get("live_enabled", False)),
+        },
+        "order_type_optimizer": {
+            "status": _artifact_status(order_optimizer),
+            "summary": order_optimizer.get("summary"),
+            "live_enabled": bool(order_optimizer.get("live_enabled", False)),
+        },
+        "regime_champion_models": {
+            "status": _artifact_status(regime_champions),
+            "summary": regime_champions.get("summary"),
+            "manual_approval_required": True,
+        },
+        "adversarial_failure_simulation": {
+            "status": _artifact_status(adversarial_failure),
+            "summary": adversarial_failure.get("summary"),
+            "live_money_authority": bool(adversarial_failure.get("live_money_authority", False)),
+        },
+        "model_data_drift_monitor": {
+            "status": _artifact_status(drift_monitor),
+            "summary": drift_monitor.get("summary"),
+        },
+        "operator_control_plane": {
+            "status": _artifact_status(operator_control),
+            "summary": operator_control.get("summary"),
+            "read_only": bool(operator_control.get("read_only", True)),
         },
     }
 
@@ -1438,7 +1808,7 @@ def _copy_authority_artifacts(
                     ),
                 ]
             )
-        elif name == "trading_day_report":
+        elif name in {"trading_day_report", "trading_day_report_enriched"}:
             targets.extend(
                 [
                     latest_dir / "trading_day_latest.json",
@@ -1504,6 +1874,101 @@ def _copy_authority_artifacts(
                     ),
                 ]
             )
+        elif name == "pretrade_risk_control_verifier":
+            targets.extend(
+                [
+                    latest_dir / "pretrade_risk_control_verification_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/reports/pretrade_risk_control_verification_latest.json",
+                        default_relative="runtime/reports/pretrade_risk_control_verification_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "post_trade_surveillance":
+            targets.extend(
+                [
+                    latest_dir / "post_trade_surveillance_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/reports/post_trade_surveillance_latest.json",
+                        default_relative="runtime/reports/post_trade_surveillance_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "adversarial_failure_simulation":
+            targets.extend(
+                [
+                    latest_dir / "adversarial_failure_simulation_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/adversarial_failure_simulation_latest.json",
+                        default_relative="runtime/adversarial_failure_simulation_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "walk_forward_capital_simulation":
+            targets.extend(
+                [
+                    latest_dir / "walk_forward_capital_simulation_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/walk_forward_capital_simulation_latest.json",
+                        default_relative="runtime/walk_forward_capital_simulation_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "order_type_optimizer":
+            targets.extend(
+                [
+                    latest_dir / "order_type_optimizer_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/order_type_optimizer_latest.json",
+                        default_relative="runtime/order_type_optimizer_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "model_data_drift_monitor":
+            targets.extend(
+                [
+                    latest_dir / "model_data_drift_monitor_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/model_data_drift_monitor_latest.json",
+                        default_relative="runtime/model_data_drift_monitor_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "model_registry_evaluation":
+            targets.extend(
+                [
+                    latest_dir / "model_registry_latest.json",
+                    latest_dir / "model_registry_evaluation_latest.json",
+                ]
+            )
+        elif name == "regime_champion_models":
+            targets.extend(
+                [
+                    latest_dir / "regime_champion_models_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/regime_champion_models_latest.json",
+                        default_relative="runtime/regime_champion_models_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "operator_control_plane":
+            targets.extend(
+                [
+                    latest_dir / "operator_control_plane_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/operator_control_plane_latest.json",
+                        default_relative="runtime/operator_control_plane_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
         elif name == "daily_research_pipeline":
             targets.extend(
                 [
@@ -1541,6 +2006,56 @@ def _copy_authority_artifacts(
                 continue
             copied[name] = str(target)
     return copied
+
+
+def _write_experiment_ledger_for_run(
+    *,
+    config: ResearchConfig,
+    status: str,
+    report_path: Path,
+    blocked_reasons: Sequence[str],
+) -> Path:
+    from ai_trading.tools.experiment_ledger import build_experiment_ledger
+
+    ledger_status = {
+        "complete": "success",
+        "planned": "dry-run",
+        "dry_run": "dry-run",
+        "blocked": "blocked",
+        "failed": "failed",
+    }.get(status, "blocked")
+    latest_path = config.report_root / "latest" / "experiment_ledger_latest.json"
+    payload = build_experiment_ledger(
+        run_id=config.run_id,
+        workflow=f"{config.cadence}:{config.workflow}",
+        status=ledger_status,
+        conclusion=(
+            "research automation completed"
+            if status == "complete"
+            else f"research automation {status}"
+        ),
+        input_paths=[report_path],
+        config={
+            "cadence": config.cadence,
+            "workflow": config.workflow,
+            "symbols": config.symbols,
+            "report_date": config.report_date,
+            "blocked_reasons": list(blocked_reasons),
+        },
+        previous_ledger=_read_json(latest_path),
+        reported_complete=status == "complete",
+        notes="Generated by research automation after final status calculation.",
+    )
+    run_path = config.run_dir / "experiment_ledger.json"
+    _write_json(run_path, payload)
+    _write_json(latest_path, payload)
+    runtime_latest = resolve_runtime_artifact_path(
+        "runtime/research_reports/latest/experiment_ledger_latest.json",
+        default_relative="runtime/research_reports/latest/experiment_ledger_latest.json",
+        for_write=True,
+    )
+    _write_json(runtime_latest, payload)
+    return run_path
 
 
 def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
@@ -1602,6 +2117,12 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
     _write_json(report_path, report)
     latest_path = _copy_automation_latest(report, config)
     authority_copies = _copy_authority_artifacts(config=config, step_results=step_results)
+    ledger_path = _write_experiment_ledger_for_run(
+        config=config,
+        status=status,
+        report_path=report_path,
+        blocked_reasons=blocked_reasons,
+    )
     summary = _operator_summary(
         config=config,
         status=status,
@@ -1616,6 +2137,7 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
         "report": str(report_path),
         "operator_summary": str(summary_path),
         "latest_report": str(latest_path),
+        "experiment_ledger": str(ledger_path),
         "authority_copies": authority_copies,
     }
     _write_json(report_path, report)

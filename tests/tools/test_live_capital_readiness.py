@@ -51,6 +51,13 @@ def test_live_capital_readiness_allows_explicit_tiny_canary(monkeypatch):
         edge_calibration={"generated_at": now, "status": "calibrated"},
         execution_capture={"generated_at": now, "status": "acceptable"},
         portfolio_edge={"generated_at": now, "status": "ok"},
+        pretrade_risk_verifier={"generated_at": now, "status": "passed"},
+        post_trade_surveillance={"generated_at": now, "status": "clean"},
+        walk_forward_capital={"generated_at": now, "status": "completed", "live_enabled": False},
+        order_type_optimizer={"generated_at": now, "status": "ready", "live_enabled": False},
+        regime_champions={"generated_at": now, "status": "ready"},
+        adversarial_failure={"generated_at": now, "status": "passed", "live_money_authority": False},
+        drift_monitor={"generated_at": now, "status": "ok"},
     )
 
     assert report["status"] == "live_canary_allowed"
@@ -61,6 +68,8 @@ def test_live_capital_readiness_allows_explicit_tiny_canary(monkeypatch):
     assert report["canary_evidence"]["edge_calibration"]["status"] == "calibrated"
     assert report["canary_evidence"]["execution_capture"]["status"] == "acceptable"
     assert report["canary_evidence"]["portfolio_edge"]["status"] == "ok"
+    assert report["canary_evidence"]["pretrade_risk_verifier"]["status"] == "passed"
+    assert report["canary_evidence"]["model_data_drift_monitor"]["status"] == "ok"
     assert report["openclaw_summary"]["service"] == "ai-trading-live-capital"
 
 

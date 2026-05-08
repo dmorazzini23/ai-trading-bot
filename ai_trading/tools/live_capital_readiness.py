@@ -128,12 +128,28 @@ def build_live_capital_readiness(
     edge_calibration: Mapping[str, Any] | None = None,
     execution_capture: Mapping[str, Any] | None = None,
     portfolio_edge: Mapping[str, Any] | None = None,
+    model_registry: Mapping[str, Any] | None = None,
+    pretrade_risk_verifier: Mapping[str, Any] | None = None,
+    post_trade_surveillance: Mapping[str, Any] | None = None,
+    walk_forward_capital: Mapping[str, Any] | None = None,
+    order_type_optimizer: Mapping[str, Any] | None = None,
+    regime_champions: Mapping[str, Any] | None = None,
+    adversarial_failure: Mapping[str, Any] | None = None,
+    drift_monitor: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     validation = validation or {}
     canary_plan = canary_plan or {}
     edge_calibration = edge_calibration or {}
     execution_capture = execution_capture or {}
     portfolio_edge = portfolio_edge or {}
+    model_registry = model_registry or {}
+    pretrade_risk_verifier = pretrade_risk_verifier or {}
+    post_trade_surveillance = post_trade_surveillance or {}
+    walk_forward_capital = walk_forward_capital or {}
+    order_type_optimizer = order_type_optimizer or {}
+    regime_champions = regime_champions or {}
+    adversarial_failure = adversarial_failure or {}
+    drift_monitor = drift_monitor or {}
     profile = resolve_launch_profile()
     profile_payload = launch_profile_payload(profile)
     reasons: list[str] = []
@@ -166,6 +182,38 @@ def build_live_capital_readiness(
         "portfolio_edge": _freshness(
             portfolio_edge,
             max_age_hours=_freshness_limit("AI_TRADING_LIVE_PORTFOLIO_EDGE_MAX_AGE_HOURS", 24.0),
+        ),
+        "model_registry": _freshness(
+            model_registry,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_MODEL_REGISTRY_MAX_AGE_HOURS", 168.0),
+        ),
+        "pretrade_risk_verifier": _freshness(
+            pretrade_risk_verifier,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_PRETRADE_RISK_MAX_AGE_HOURS", 24.0),
+        ),
+        "post_trade_surveillance": _freshness(
+            post_trade_surveillance,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_SURVEILLANCE_MAX_AGE_HOURS", 24.0),
+        ),
+        "walk_forward_capital": _freshness(
+            walk_forward_capital,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_WALK_FORWARD_MAX_AGE_HOURS", 72.0),
+        ),
+        "order_type_optimizer": _freshness(
+            order_type_optimizer,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_ORDER_OPTIMIZER_MAX_AGE_HOURS", 72.0),
+        ),
+        "regime_champions": _freshness(
+            regime_champions,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_REGIME_CHAMPIONS_MAX_AGE_HOURS", 72.0),
+        ),
+        "adversarial_failure": _freshness(
+            adversarial_failure,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_ADVERSARIAL_SIM_MAX_AGE_HOURS", 168.0),
+        ),
+        "drift_monitor": _freshness(
+            drift_monitor,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_DRIFT_MONITOR_MAX_AGE_HOURS", 24.0),
         ),
     }
 
@@ -256,6 +304,42 @@ def build_live_capital_readiness(
             reasons.append("portfolio_edge_stale")
         elif portfolio_status in {"control_breach", "no_new_entries"}:
             reasons.append("portfolio_edge_control_breach")
+        risk_status = str(pretrade_risk_verifier.get("status") or "").lower()
+        if not pretrade_risk_verifier:
+            reasons.append("pretrade_risk_verifier_missing")
+        elif not freshness["pretrade_risk_verifier"]["fresh"]:
+            reasons.append("pretrade_risk_verifier_stale")
+        elif risk_status != "passed":
+            reasons.append("pretrade_risk_verifier_not_passed")
+        surveillance_status = str(post_trade_surveillance.get("status") or "").lower()
+        if not post_trade_surveillance:
+            reasons.append("post_trade_surveillance_missing")
+        elif not freshness["post_trade_surveillance"]["fresh"]:
+            reasons.append("post_trade_surveillance_stale")
+        elif surveillance_status in {"critical", "blocked"}:
+            reasons.append("post_trade_surveillance_not_clean")
+        drift_status = str(drift_monitor.get("status") or "").lower()
+        if not drift_monitor:
+            reasons.append("drift_monitor_missing")
+        elif not freshness["drift_monitor"]["fresh"]:
+            reasons.append("drift_monitor_stale")
+        elif drift_status in {"blocked", "drift_detected"}:
+            reasons.append("drift_monitor_not_clean")
+        walk_forward_status = str(walk_forward_capital.get("status") or "").lower()
+        if not walk_forward_capital:
+            reasons.append("walk_forward_capital_missing")
+        elif not freshness["walk_forward_capital"]["fresh"]:
+            reasons.append("walk_forward_capital_stale")
+        elif walk_forward_status in {"blocked", "risk_breach"}:
+            reasons.append("walk_forward_capital_not_acceptable")
+        if bool(order_type_optimizer.get("live_enabled", False)):
+            reasons.append("order_type_optimizer_live_enabled_unexpectedly")
+        if bool(adversarial_failure.get("live_money_authority", False)):
+            reasons.append("adversarial_failure_live_authority_unexpectedly")
+        if regime_champions and not freshness["regime_champions"]["fresh"]:
+            reasons.append("regime_champions_stale")
+        if model_registry and not freshness["model_registry"]["fresh"]:
+            reasons.append("model_registry_stale")
 
     if reasons:
         status = "paper_only" if reasons == ["live_capital_profile_not_selected"] else "blocked"
@@ -306,6 +390,48 @@ def build_live_capital_readiness(
             "status": portfolio_edge.get("status") or portfolio_edge.get("output"),
             "fresh": freshness["portfolio_edge"]["fresh"],
             "summary": _nested(portfolio_edge, "summary"),
+        },
+        "model_registry": {
+            "status": model_registry.get("status"),
+            "fresh": freshness["model_registry"]["fresh"],
+            "summary": _nested(model_registry, "summary"),
+        },
+        "pretrade_risk_verifier": {
+            "status": pretrade_risk_verifier.get("status"),
+            "fresh": freshness["pretrade_risk_verifier"]["fresh"],
+            "summary": _nested(pretrade_risk_verifier, "summary"),
+        },
+        "post_trade_surveillance": {
+            "status": post_trade_surveillance.get("status"),
+            "fresh": freshness["post_trade_surveillance"]["fresh"],
+            "summary": _nested(post_trade_surveillance, "summary"),
+        },
+        "walk_forward_capital": {
+            "status": walk_forward_capital.get("status"),
+            "fresh": freshness["walk_forward_capital"]["fresh"],
+            "summary": _nested(walk_forward_capital, "summary"),
+            "live_enabled": bool(walk_forward_capital.get("live_enabled", False)),
+        },
+        "order_type_optimizer": {
+            "status": order_type_optimizer.get("status"),
+            "fresh": freshness["order_type_optimizer"]["fresh"],
+            "summary": _nested(order_type_optimizer, "summary"),
+            "live_enabled": bool(order_type_optimizer.get("live_enabled", False)),
+        },
+        "regime_champion_models": {
+            "status": regime_champions.get("status"),
+            "fresh": freshness["regime_champions"]["fresh"],
+            "summary": _nested(regime_champions, "summary"),
+        },
+        "adversarial_failure_simulation": {
+            "status": adversarial_failure.get("status"),
+            "fresh": freshness["adversarial_failure"]["fresh"],
+            "summary": _nested(adversarial_failure, "summary"),
+        },
+        "model_data_drift_monitor": {
+            "status": drift_monitor.get("status"),
+            "fresh": freshness["drift_monitor"]["fresh"],
+            "summary": _nested(drift_monitor, "summary"),
         },
     }
     report["health_report_summary"] = {
@@ -360,6 +486,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--edge-calibration-json", type=Path, default=None)
     parser.add_argument("--execution-capture-json", type=Path, default=None)
     parser.add_argument("--portfolio-edge-json", type=Path, default=None)
+    parser.add_argument("--model-registry-json", type=Path, default=None)
+    parser.add_argument("--pretrade-risk-json", type=Path, default=None)
+    parser.add_argument("--post-trade-surveillance-json", type=Path, default=None)
+    parser.add_argument("--walk-forward-capital-json", type=Path, default=None)
+    parser.add_argument("--order-type-optimizer-json", type=Path, default=None)
+    parser.add_argument("--regime-champions-json", type=Path, default=None)
+    parser.add_argument("--adversarial-failure-json", type=Path, default=None)
+    parser.add_argument("--drift-monitor-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--success-on-blocked", action="store_true")
     args = parser.parse_args(argv)
@@ -379,6 +513,14 @@ def main(argv: list[str] | None = None) -> int:
         edge_calibration=_read_json(args.edge_calibration_json),
         execution_capture=_read_json(args.execution_capture_json),
         portfolio_edge=_read_json(args.portfolio_edge_json),
+        model_registry=_read_json(args.model_registry_json),
+        pretrade_risk_verifier=_read_json(args.pretrade_risk_json),
+        post_trade_surveillance=_read_json(args.post_trade_surveillance_json),
+        walk_forward_capital=_read_json(args.walk_forward_capital_json),
+        order_type_optimizer=_read_json(args.order_type_optimizer_json),
+        regime_champions=_read_json(args.regime_champions_json),
+        adversarial_failure=_read_json(args.adversarial_failure_json),
+        drift_monitor=_read_json(args.drift_monitor_json),
     )
     output = args.output_json or _default_output()
     output.parent.mkdir(parents=True, exist_ok=True)
