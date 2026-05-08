@@ -63,6 +63,7 @@ def build_trading_day_report(
     gate_rows: Sequence[Mapping[str, Any]],
     live_cost_model: Mapping[str, Any],
     symbol_scorecard: Mapping[str, Any],
+    regime_entry_throttle: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     intents = [row for row in order_intents if _date_match(row, report_date)]
     fill_rows = [row for row in fills if _date_match(row, report_date)]
@@ -164,6 +165,7 @@ def build_trading_day_report(
             "summary": symbol_scorecard.get("summary", {}),
             "symbols": symbol_scorecard.get("symbols", []),
         },
+        "regime_entry_throttle": dict(regime_entry_throttle or {}),
         "next_session_recommendation": "review_live_capital_readiness_before_live_trading",
     }
 
@@ -183,6 +185,11 @@ def _default_report_paths(report_date: str) -> tuple[Path, Path, Path]:
 
 
 def _markdown(report: Mapping[str, Any]) -> str:
+    throttle = report.get("regime_entry_throttle")
+    throttle_actions = {}
+    if isinstance(throttle, Mapping):
+        actions = throttle.get("actions")
+        throttle_actions = dict(actions) if isinstance(actions, Mapping) else {}
     return "\n".join(
         [
             f"# Trading Day {report.get('report_date')}",
@@ -191,6 +198,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Submitted trades: `{report.get('submitted_trades', {}).get('count', 0)}`",
             f"- Rejected trades: `{report.get('rejected_trades', {}).get('count', 0)}`",
             f"- Realized fills: `{report.get('realized_fills', {}).get('count', 0)}`",
+            f"- Regime entry throttle: `{throttle_actions or {}}`",
             f"- Next session: `{report.get('next_session_recommendation')}`",
             "",
         ]
@@ -206,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gate-jsonl", type=Path, default=None)
     parser.add_argument("--live-cost-model-json", type=Path, default=None)
     parser.add_argument("--symbol-scorecard-json", type=Path, default=None)
+    parser.add_argument("--regime-entry-throttle-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     parser.add_argument("--latest-md", type=Path, default=None)
@@ -222,6 +231,7 @@ def main(argv: list[str] | None = None) -> int:
         gate_rows=_read_jsonl(args.gate_jsonl, report_date=str(args.report_date)),
         live_cost_model=_read_json(args.live_cost_model_json),
         symbol_scorecard=_read_json(args.symbol_scorecard_json),
+        regime_entry_throttle=_read_json(args.regime_entry_throttle_json),
     )
     for path, content in (
         (output_json, json.dumps(report, indent=2, sort_keys=True) + "\n"),

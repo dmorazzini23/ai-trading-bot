@@ -57,6 +57,7 @@ def test_trading_day_report_attributes_rejections_and_symbol_pnl():
         ],
         live_cost_model={"status": {"status": "ready"}},
         symbol_scorecard={"summary": {"allow": 2}, "symbols": []},
+        regime_entry_throttle={"actions": {"reduce_size": 1}},
     )
 
     assert report["desired_trades"]["count"] == 1
@@ -67,6 +68,7 @@ def test_trading_day_report_attributes_rejections_and_symbol_pnl():
     assert report["symbol_expected_edge_bps"] == {"AAPL": 3.0, "AMZN": 1.0}
     assert report["symbol_slippage_bps"] == {"AAPL": 1.0, "AMZN": 3.0}
     assert report["edge_quality"]["mean_realized_edge_bps"] == 1 / 3
+    assert report["regime_entry_throttle"] == {"actions": {"reduce_size": 1}}
     assert report["symbol_trade_flow"]["AAPL"] == {
         "desired": 1,
         "submitted": 1,
@@ -81,12 +83,17 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
     intents = tmp_path / "intents.jsonl"
     fills = tmp_path / "fills.jsonl"
     gates = tmp_path / "gates.jsonl"
+    throttle = tmp_path / "throttle.json"
     out = tmp_path / "trading_day.json"
     latest = tmp_path / "latest.json"
     md = tmp_path / "latest.md"
     _write_jsonl(intents, [{"ts": "2026-05-05T14:00:00Z", "status": "FILLED"}])
     _write_jsonl(fills, [{"ts": "2026-05-05T14:00:02Z", "symbol": "AAPL", "pnl": 2.0}])
     _write_jsonl(gates, [{"ts": "2026-05-05T14:00:01Z", "status": "blocked", "reason": "spread_cap"}])
+    throttle.write_text(
+        json.dumps({"actions": {"block_new_entries": 1}, "evaluations": 1}),
+        encoding="utf-8",
+    )
 
     rc = trading_day_report.main(
         [
@@ -98,6 +105,8 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
             str(fills),
             "--gate-jsonl",
             str(gates),
+            "--regime-entry-throttle-json",
+            str(throttle),
             "--output-json",
             str(out),
             "--latest-json",
@@ -108,6 +117,10 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
     )
 
     assert rc == 0
-    assert json.loads(out.read_text(encoding="utf-8"))["realized_fills"]["count"] == 1
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["realized_fills"]["count"] == 1
+    assert payload["regime_entry_throttle"]["actions"] == {"block_new_entries": 1}
     assert latest.is_file()
-    assert "Trading Day 2026-05-05" in md.read_text(encoding="utf-8")
+    markdown = md.read_text(encoding="utf-8")
+    assert "Trading Day 2026-05-05" in markdown
+    assert "Regime entry throttle" in markdown

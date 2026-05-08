@@ -162,7 +162,10 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     decay = config.run_dir / "runtime_decay_controls.json"
     gonogo = config.run_dir / "runtime_gonogo_status.json"
     replay = config.run_dir / "replay_governance_summary.json"
+    replay_alignment = config.run_dir / "replay_live_cost_alignment.json"
+    regime_throttle = config.run_dir / "regime_entry_throttle.json"
     trading_day = config.run_dir / "trading_day_report.json"
+    symbol_promotion = config.run_dir / "symbol_promotion_comparison.json"
     daily_research = config.run_dir / "daily_research_report.json"
     daily_research_md = config.run_dir / "daily_research_report.md"
     live_readiness = config.run_dir / "live_capital_readiness.json"
@@ -214,6 +217,21 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             output_path=live_cost,
         ),
         ResearchStep(
+            name="regime_entry_throttle_report",
+            command=_python_module(
+                "ai_trading.tools.regime_entry_throttle_report",
+                "--report-date",
+                config.report_date,
+                "--live-cost-model-json",
+                live_cost,
+                "--output-json",
+                regime_throttle,
+            ),
+            purpose="Summarize conservative session/regime entry throttle evidence.",
+            output_path=regime_throttle,
+            metadata={"enforcement_authority": False},
+        ),
+        ResearchStep(
             name="ml_shadow_report",
             command=_python_module(
                 "ai_trading.tools.ml_shadow_report",
@@ -243,6 +261,23 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             purpose="Refresh replay governance evidence used by health and promotion gates.",
             output_path=replay,
             blocked_returncodes=(1, 2),
+        ),
+        ResearchStep(
+            name="replay_live_cost_alignment",
+            command=_python_module(
+                "ai_trading.tools.replay_live_cost_alignment_report",
+                "--live-cost-model-json",
+                live_cost,
+                "--replay-report-json",
+                replay,
+                "--output-json",
+                replay_alignment,
+                "--min-samples",
+                "5",
+            ),
+            purpose="Compare replay cost assumptions with observed live cost buckets.",
+            output_path=replay_alignment,
+            metadata={"promotion_authority": False, "live_money_authority": False},
         ),
         ResearchStep(
             name="symbol_universe_scorecard",
@@ -301,6 +336,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 live_cost,
                 "--symbol-scorecard-json",
                 scorecard,
+                "--regime-entry-throttle-json",
+                regime_throttle,
                 "--output-json",
                 trading_day,
                 "--latest-json",
@@ -310,6 +347,37 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             ),
             purpose="Summarize desired/submitted/rejected trades and daily attribution.",
             output_path=trading_day,
+        ),
+        ResearchStep(
+            name="symbol_promotion_comparison",
+            command=_python_module(
+                "ai_trading.tools.symbol_promotion_comparison",
+                "--report-date",
+                config.report_date,
+                "--symbols",
+                "AAPL,AMZN,MSFT",
+                "--live-cost-model-json",
+                live_cost,
+                "--replay-report-json",
+                replay,
+                "--shadow-report-json",
+                shadow_report,
+                "--trading-day-json",
+                trading_day,
+                "--symbol-scorecard-json",
+                scorecard,
+                "--canary-symbols",
+                _env_text("AI_TRADING_CANARY_SYMBOLS", ""),
+                "--shadow-symbols",
+                _env_text("AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS", ""),
+                "--output-json",
+                symbol_promotion,
+                "--latest-json",
+                config.report_root / "latest" / "symbol_promotion_latest.json",
+            ),
+            purpose="Compare executable/canary/shadow symbols with manual-only promotion recommendations.",
+            output_path=symbol_promotion,
+            metadata={"promotion_authority": False, "manual_approval_required": True},
         ),
         ResearchStep(
             name="daily_research_pipeline",
@@ -327,6 +395,14 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 replay,
                 "--symbol-scorecard-json",
                 scorecard,
+                "--symbol-promotion-json",
+                symbol_promotion,
+                "--replay-live-cost-alignment-json",
+                replay_alignment,
+                "--regime-entry-throttle-json",
+                regime_throttle,
+                "--training-accelerator-json",
+                training_accelerator,
                 "--runtime-gonogo-json",
                 gonogo,
                 "--memory-audit-json",
@@ -365,7 +441,16 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
         ),
     ]
     if config.data_dir is not None:
-        steps.append(
+        daily_research_index = next(
+            (
+                index
+                for index, step in enumerate(steps)
+                if step.name == "daily_research_pipeline"
+            ),
+            len(steps),
+        )
+        steps.insert(
+            daily_research_index,
             ResearchStep(
                 name="training_accelerator_daily",
                 command=_python_module(
@@ -378,6 +463,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                     config.symbols,
                     "--output-dir",
                     config.run_dir / "training_accelerator",
+                    "--training-cache-dir",
+                    config.report_root / "latest" / "training_cache" / "daily",
                     "--live-cost-model-json",
                     live_cost,
                     "--use-live-cost-model",
@@ -385,8 +472,12 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 purpose="Refresh cached lightweight replay-aligned training candidates.",
                 output_path=training_accelerator,
                 skip_if_missing=(config.data_dir,),
-                metadata={"promotion_authority": False, "uses_cached_training_features": True},
-            )
+                metadata={
+                    "promotion_authority": False,
+                    "uses_cached_training_features": True,
+                    "stable_cache_root": str(config.report_root / "latest" / "training_cache" / "daily"),
+                },
+            ),
         )
         steps.append(
             ResearchStep(
@@ -769,6 +860,45 @@ def _copy_automation_latest(report: Mapping[str, Any], config: ResearchConfig) -
     return latest_path
 
 
+def _blocked_reasons_from_step_results(
+    step_results: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    reasons: list[str] = []
+    for row in step_results:
+        if row.get("status") != "blocked":
+            continue
+        name = str(row.get("name") or "unknown_step")
+        candidates: list[Mapping[str, Any]] = []
+        for key in ("output_path", "stdout_path"):
+            raw_path = str(row.get(key) or "").strip()
+            if not raw_path:
+                continue
+            try:
+                parsed = json.loads(Path(raw_path).read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(parsed, Mapping):
+                candidates.append(parsed)
+        stdout_payload = _json_payload_from_stdout(str(row.get("stdout_tail") or ""))
+        if stdout_payload is not None:
+            candidates.append(stdout_payload)
+        reason = None
+        for payload in candidates:
+            error = payload.get("error")
+            error_message = error.get("message") if isinstance(error, Mapping) else None
+            reason = (
+                payload.get("reason")
+                or payload.get("status_reason")
+                or error_message
+            )
+            if reason not in (None, ""):
+                break
+        if reason in (None, ""):
+            reason = str(row.get("reason") or row.get("returncode") or "blocked")
+        reasons.append(f"{name}:{reason}")
+    return reasons
+
+
 def _operator_summary(
     *,
     config: ResearchConfig,
@@ -780,13 +910,16 @@ def _operator_summary(
     failed = [row["name"] for row in step_results if row.get("status") == "failed"]
     blocked = [row["name"] for row in step_results if row.get("status") == "blocked"]
     skipped = [row["name"] for row in step_results if row.get("status") == "skipped"]
+    effective_blocked_reasons = list(blocked_reasons) + _blocked_reasons_from_step_results(
+        step_results
+    )
     return {
         "artifact_type": "research_operator_summary",
         "generated_at": _iso_now(),
         "cadence": config.cadence,
         "workflow": config.workflow,
         "status": status,
-        "blocked_reasons": list(blocked_reasons),
+        "blocked_reasons": effective_blocked_reasons,
         "failed_steps": failed,
         "blocked_steps": blocked,
         "skipped_steps": skipped,
@@ -905,6 +1038,17 @@ def _copy_authority_artifacts(
                     ),
                 ]
             )
+        elif name == "replay_live_cost_alignment":
+            targets.extend(
+                [
+                    latest_dir / "replay_live_cost_alignment_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/replay_live_cost_alignment_latest.json",
+                        default_relative="runtime/replay_live_cost_alignment_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
         elif name == "symbol_universe_scorecard":
             targets.extend(
                 [
@@ -912,6 +1056,17 @@ def _copy_authority_artifacts(
                     resolve_runtime_artifact_path(
                         "runtime/symbol_universe_scorecard_latest.json",
                         default_relative="runtime/symbol_universe_scorecard_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "regime_entry_throttle_report":
+            targets.extend(
+                [
+                    latest_dir / "regime_entry_throttle_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/regime_entry_throttle_latest.json",
+                        default_relative="runtime/regime_entry_throttle_latest.json",
                         for_write=True,
                     ),
                 ]
@@ -927,6 +1082,17 @@ def _copy_authority_artifacts(
                     ),
                 ]
             )
+        elif name == "training_accelerator_daily":
+            targets.extend(
+                [
+                    latest_dir / "training_accelerator_daily_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/training_accelerator_daily_latest.json",
+                        default_relative="runtime/training_accelerator_daily_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
         elif name == "trading_day_report":
             targets.extend(
                 [
@@ -934,6 +1100,17 @@ def _copy_authority_artifacts(
                     resolve_runtime_artifact_path(
                         "runtime/reports/trading_day_latest.json",
                         default_relative="runtime/reports/trading_day_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "symbol_promotion_comparison":
+            targets.extend(
+                [
+                    latest_dir / "symbol_promotion_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/research_reports/latest/symbol_promotion_latest.json",
+                        default_relative="runtime/research_reports/latest/symbol_promotion_latest.json",
                         for_write=True,
                     ),
                 ]

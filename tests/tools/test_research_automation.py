@@ -46,9 +46,12 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "memory_hotspot_audit" in step_names
     assert "runtime_artifact_retention_plan" in step_names
     assert "live_cost_model" in step_names
+    assert "replay_live_cost_alignment" in step_names
+    assert "regime_entry_throttle_report" in step_names
     assert "runtime_decay_controls" in step_names
     assert "runtime_gonogo_status" in step_names
     assert "trading_day_report" in step_names
+    assert "symbol_promotion_comparison" in step_names
     assert "daily_research_pipeline" in step_names
     assert "live_capital_readiness" in step_names
     assert "evidence_manifest" in payload
@@ -61,6 +64,12 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "--order-intents-jsonl" in trading_day["command"]
     assert "--fills-jsonl" in trading_day["command"]
     assert "--gate-jsonl" in trading_day["command"]
+    assert "--regime-entry-throttle-json" in trading_day["command"]
+    daily_research = next(step for step in payload["steps"] if step["name"] == "daily_research_pipeline")  # type: ignore[index]
+    assert "--symbol-promotion-json" in daily_research["command"]
+    assert "--replay-live-cost-alignment-json" in daily_research["command"]
+    assert "--regime-entry-throttle-json" in daily_research["command"]
+    assert "--training-accelerator-json" in daily_research["command"]
 
 
 def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(
@@ -439,3 +448,52 @@ def test_run_research_automation_keeps_daily_report_latest_for_daily_pipeline(
         (config.report_root / "latest" / "daily_research_automation_latest.json").read_text()
     )
     assert automation_latest["artifact_type"] == "research_automation_report"
+
+
+def test_blocked_research_step_surfaces_operator_reason(tmp_path: Path, monkeypatch) -> None:
+    config = research_automation.ResearchConfig(
+        cadence="daily",
+        workflow="daily",
+        report_root=tmp_path / "reports",
+        run_dir=tmp_path / "run",
+        run_id="run",
+        symbols="AAPL,AMZN",
+        data_dir=None,
+        shadow_jsonl=tmp_path / "shadow.jsonl",
+        accepted_candidates_jsonl=None,
+        model_path=None,
+        manifest_path=None,
+        current_champion_path="",
+        report_date="2026-05-05",
+        plan_only=False,
+        dry_run=False,
+    )
+    output = config.run_dir / "replay_governance_summary.json"
+    step = research_automation.ResearchStep(
+        name="replay_governance_refresh",
+        command=(
+            "bash",
+            "-lc",
+            (
+                f"printf '%s\\n' '{{\"status\":\"blocked\","
+                f"\"reason\":\"REPLAY_POLICY_NON_REGRESSION_FAILED\"}}' > {output}; exit 2"
+            ),
+        ),
+        purpose="blocked replay governance",
+        output_path=output,
+        blocked_returncodes=(2,),
+    )
+    monkeypatch.setattr(research_automation, "build_research_steps", lambda _config: ([step], []))
+
+    report = research_automation.run_research_automation(config)
+    summary = json.loads(
+        (config.report_root / "latest" / "daily_operator_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert report["status"] == "blocked"
+    assert summary["blocked_steps"] == ["replay_governance_refresh"]
+    assert summary["blocked_reasons"] == [
+        "replay_governance_refresh:REPLAY_POLICY_NON_REGRESSION_FAILED"
+    ]

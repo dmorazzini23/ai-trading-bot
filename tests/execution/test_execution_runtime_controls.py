@@ -1596,6 +1596,54 @@ def test_pre_execution_order_checks_blocks_openings_on_launch_profile_gate(monke
     assert engine.stats["skipped_orders"] == 1
 
 
+def test_pre_execution_order_checks_blocks_openings_on_regime_entry_throttle(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_REGIME_ENTRY_THROTTLE_ENABLED", "1")
+    monkeypatch.setattr(
+        engine,
+        "_enforce_opposite_side_policy",
+        lambda *_args, **_kwargs: (True, None),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_resolve_exposure_normalization_settings",
+        lambda: {"block_openings": False},
+    )
+    monkeypatch.setattr(engine, "_exposure_normalization_context", lambda _account: None)
+    monkeypatch.setattr(engine, "_runtime_gonogo_openings_allowed", lambda: (True, {}))
+    monkeypatch.setattr(
+        lt,
+        "evaluate_launch_profile_order",
+        lambda *_args, **_kwargs: (True, {"profile": "live_canary"}),
+    )
+    monkeypatch.setattr(
+        lt,
+        "evaluate_regime_entry_throttle",
+        lambda *_args, **_kwargs: {
+            "action": "block_new_entries",
+            "qty_scale": 0.0,
+            "reasons": ["sample_insufficient"],
+        },
+    )
+    order = {
+        "symbol": "AMZN",
+        "side": "buy",
+        "quantity": 5,
+        "client_order_id": "cid-regime-throttle",
+        "closing_position": False,
+        "account_snapshot": {"equity": 100000, "buying_power": 100000},
+    }
+
+    allowed = engine._pre_execution_order_checks(order)
+
+    assert allowed is False
+    failure = engine._last_pre_execution_order_check_failure
+    assert failure["reason"] == "regime_entry_throttle"
+    assert failure["context"]["action"] == "block_new_entries"
+    assert engine.stats["capacity_skips"] == 1
+    assert engine.stats["skipped_orders"] == 1
+
+
 def test_pre_execution_order_checks_passes_broker_exposure_to_launch_profile_gate(monkeypatch):
     engine = _engine_stub()
     engine._broker_sync = SimpleNamespace(

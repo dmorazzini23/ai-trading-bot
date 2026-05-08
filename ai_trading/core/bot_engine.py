@@ -2035,6 +2035,35 @@ def _symbol_tokens_from_env(name: str) -> set[str]:
     }
 
 
+def _resolve_replay_symbols() -> tuple[set[str], str]:
+    explicit = _symbol_tokens_from_env("AI_TRADING_REPLAY_SYMBOLS")
+    if explicit:
+        return explicit, "AI_TRADING_REPLAY_SYMBOLS"
+    canary = _symbol_tokens_from_env("AI_TRADING_CANARY_SYMBOLS")
+    if canary:
+        return canary, "AI_TRADING_CANARY_SYMBOLS"
+    runtime_universe = _symbol_tokens_from_env("AI_TRADING_SYMBOLS")
+    if runtime_universe:
+        return runtime_universe, "AI_TRADING_SYMBOLS"
+    try:
+        use_tickers_file = bool(
+            get_env("AI_TRADING_REPLAY_FALLBACK_TO_TICKERS_FILE", True, cast=bool)
+        )
+    except BOT_ENGINE_FALLBACK_EXC:
+        use_tickers_file = True
+    if use_tickers_file:
+        try:
+            symbols = {
+                str(symbol).strip().upper()
+                for symbol in load_tickers(TICKERS_FILE)
+                if str(symbol).strip()
+            }
+        except BOT_ENGINE_FALLBACK_EXC:
+            symbols = set()
+        return symbols, "tickers_file"
+    return set(), "none"
+
+
 def _record_symbol_starvation_alert(
     *,
     ranked_symbols: Sequence[str],
@@ -38981,23 +39010,15 @@ def _run_replay_governance(
         return
     from ai_trading.replay.event_loop import ReplayEventLoop
 
-    raw_symbols = str(get_env("AI_TRADING_REPLAY_SYMBOLS", "") or "").strip()
-    symbols = {
-        token.strip().upper()
-        for token in raw_symbols.split(",")
-        if token and token.strip()
-    }
-    if not symbols and bool(
-        get_env("AI_TRADING_REPLAY_FALLBACK_TO_TICKERS_FILE", True, cast=bool)
-    ):
-        try:
-            symbols = {
-                str(symbol).strip().upper()
-                for symbol in load_tickers(TICKERS_FILE)
-                if str(symbol).strip()
-            }
-        except BOT_ENGINE_FALLBACK_EXC:
-            symbols = set()
+    symbols, symbols_source = _resolve_replay_symbols()
+    logger.info(
+        "REPLAY_GOVERNANCE_SYMBOL_UNIVERSE",
+        extra={
+            "symbol_count": len(symbols),
+            "symbols_source": symbols_source,
+            "symbols_sample": sorted(symbols)[:10],
+        },
+    )
     timeframes = {
         token.strip()
         for token in str(get_env("AI_TRADING_REPLAY_TIMEFRAMES", "5Min")).split(",")

@@ -14,6 +14,7 @@ from typing import Any, Mapping
 from ai_trading.config.management import get_env
 from ai_trading.config.managed_secrets import hydrate_managed_secrets
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.tools.symbol_promotion_comparison import symbol_promotion_digest
 
 
 def _env_text(name: str, default: str = "") -> str:
@@ -126,6 +127,11 @@ def build_research_completion_payload(
         if cadence == "daily" and not suppress_stale
         else {}
     )
+    symbol_promotion = (
+        _read_json(_latest_path(report_root, cadence, "symbol_promotion_latest.json"))
+        if cadence == "daily" and not suppress_stale
+        else {}
+    )
     report_status = str(report.get("status") or summary.get("status") or "unknown")
     status = run_status or report_status
     if exit_code != 0 and report_status not in {"blocked", "failed"}:
@@ -146,6 +152,7 @@ def build_research_completion_payload(
         f"rejected={trading_day.get('rejected_trades', {}).get('count', 'n/a')}, "
         f"fills={trading_day.get('realized_fills', {}).get('count', 'n/a')}"
     )
+    symbol_promotion_text = symbol_promotion_digest(symbol_promotion)
     title = f"ai-trading research {cadence} finished: {status}"
     text = (
         f"{title}\n"
@@ -169,6 +176,7 @@ def build_research_completion_payload(
         _field("Live readiness", readiness_status),
         _field("Trade allowed", str(trade_allowed).lower() if trade_allowed is not None else "n/a"),
         _field("Trading day", trading_counts),
+        _field("Symbol promotion", symbol_promotion_text),
         _field("Run report", report.get("paths", {}).get("report") if isinstance(report.get("paths"), Mapping) else None),
     ]
     payload: dict[str, Any] = {

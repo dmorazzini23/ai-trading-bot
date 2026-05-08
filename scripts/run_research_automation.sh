@@ -4,6 +4,18 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
+RUNTIME_ENV_PATH="${AI_TRADING_RUNTIME_ENV_FILE:-/run/ai-trading-bot/ai-trading-runtime.env}"
+if [[ "${AI_TRADING_RESEARCH_AUTO_SOURCE_RUNTIME_ENV:-1}" == "1" \
+  && -r "${RUNTIME_ENV_PATH}" \
+  && -z "${AI_TRADING_SECRETS_BACKEND:-}" \
+  && -z "${AI_TRADING_AWS_SECRET_ID:-}" \
+  && -z "${AI_TRADING_MANAGED_SECRET_KEYS:-}" ]]; then
+  set -a
+  # shellcheck source=/run/ai-trading-bot/ai-trading-runtime.env
+  source "${RUNTIME_ENV_PATH}"
+  set +a
+fi
+
 CADENCE="${1:-daily}"
 WORKFLOW="${2:-}"
 

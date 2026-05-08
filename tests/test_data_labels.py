@@ -6,6 +6,7 @@ import pytest
 from ai_trading.data.labels import (
     fixed_horizon_return,
     get_daily_vol,
+    trade_quality_labels,
     triple_barrier_labels,
 )
 
@@ -120,3 +121,69 @@ def test_get_daily_vol_returns_expected_indexed_series() -> None:
     assert not vol.empty
     assert vol.index.is_monotonic_increasing
     assert float(vol.dropna().iloc[-1]) >= 0.0
+
+
+def test_trade_quality_labels_multi_horizon_costs_and_end_timestamps() -> None:
+    idx = pd.date_range("2026-01-01 09:30:00", periods=5, freq="min")
+    prices = pd.DataFrame(
+        {
+            "close": [100.0, 101.0, 99.0, 104.0, 103.0],
+            "high": [100.5, 102.0, 100.0, 105.0, 104.0],
+            "low": [99.5, 100.5, 98.0, 103.0, 102.0],
+            "spread_bps": [1.0, 1.5, 2.0, 2.5, 3.0],
+        },
+        index=idx,
+    )
+
+    out = trade_quality_labels(
+        prices,
+        horizons=[1, 3],
+        slippage_bps=2.0,
+        fee_bps=1.0,
+        multiclass_edge_threshold_bps=25.0,
+    )
+
+    first_h1 = out[(out["label_start_timestamp"] == idx[0]) & (out["horizon_bars"] == 1)].iloc[0]
+    first_h3 = out[(out["label_start_timestamp"] == idx[0]) & (out["horizon_bars"] == 3)].iloc[0]
+    assert first_h1["label_end_timestamp"] == idx[1]
+    assert first_h3["label_end_timestamp"] == idx[3]
+    assert first_h1["round_trip_cost_bps"] == pytest.approx(7.0)
+    assert first_h1["gross_return_bps"] == pytest.approx(100.0)
+    assert first_h1["net_edge_after_cost_bps"] == pytest.approx(93.0)
+    assert first_h1["mae_bps"] == pytest.approx(50.0)
+    assert first_h1["mfe_bps"] == pytest.approx(200.0)
+    assert first_h1["quality_binary"] == 1
+    assert first_h1["quality_multiclass"] == 1
+    assert out["label_end_timestamp"].notna().all()
+    assert not ((out["label_start_timestamp"] == idx[-1]) & (out["horizon_bars"] == 1)).any()
+
+
+def test_trade_quality_labels_short_side_and_negative_quality() -> None:
+    idx = pd.date_range("2026-01-01 09:30:00", periods=3, freq="min")
+    prices = pd.DataFrame(
+        {
+            "close": [100.0, 102.0, 103.0],
+            "high": [100.5, 103.0, 104.0],
+            "low": [99.5, 101.0, 102.0],
+        },
+        index=idx,
+    )
+
+    out = trade_quality_labels(
+        prices,
+        horizons=1,
+        spread_bps=1.0,
+        slippage_bps=1.0,
+        fee_bps=1.0,
+        side="short",
+        multiclass_edge_threshold_bps=25.0,
+    )
+
+    first = out.iloc[0]
+    assert first["gross_return_bps"] == pytest.approx(-200.0)
+    assert first["net_edge_after_cost_bps"] == pytest.approx(-205.0)
+    assert first["mae_bps"] == pytest.approx(-300.0)
+    assert first["mfe_bps"] == pytest.approx(-100.0)
+    assert first["risk_adjusted_return_bps"] == pytest.approx(-505.0)
+    assert first["quality_binary"] == 0
+    assert first["quality_multiclass"] == -1

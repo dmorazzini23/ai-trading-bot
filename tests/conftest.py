@@ -52,11 +52,13 @@ else:
 
 
 @pytest.fixture(autouse=True)
-def _reset_runtime_env_overrides():
+def _reset_runtime_env_overrides(monkeypatch):
     """Ensure process-local config overrides do not leak across tests."""
 
     from ai_trading.config.management import clear_runtime_env_overrides
 
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("AI_TRADING_RUNTIME_ENV_PATH", raising=False)
     clear_runtime_env_overrides()
     yield
     clear_runtime_env_overrides()

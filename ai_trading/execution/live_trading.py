@@ -39,6 +39,7 @@ from ai_trading.config import EXECUTION_MODE, SAFE_MODE_ALLOW_PAPER, get_trading
 from ai_trading.broker.adapters import build_broker_adapter, list_alpaca_orders
 from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.runtime.live_canary import evaluate_launch_profile_order
+from ai_trading.runtime.regime_entry_throttle import evaluate_regime_entry_throttle
 from ai_trading.execution.guards import (
     can_execute,
     quote_fresh_enough,
@@ -30138,6 +30139,88 @@ class ExecutionEngine:
                 )
                 _mark_precheck_failure("launch_profile_gate", launch_profile_context)
                 return False
+            if bool(_resolve_bool_env("AI_TRADING_REGIME_ENTRY_THROTTLE_ENABLED") or False):
+                evidence_raw = order.get("regime_entry_throttle_evidence")
+                evidence: Mapping[str, Any]
+                if isinstance(evidence_raw, Mapping):
+                    evidence = evidence_raw
+                else:
+                    evidence = {
+                        "observed_at": order.get("quote_timestamp") or order.get("timestamp"),
+                        "sample_count": order.get("regime_sample_count"),
+                        "volatility_bps": order.get("volatility_bps"),
+                        "spread_bps": order.get("spread_bps"),
+                        "provider_state": order.get("provider_status") or order.get("provider_state"),
+                        "provider_healthy": order.get("provider_healthy"),
+                        "provider_success_rate": order.get("provider_success_rate"),
+                        "provider_error_rate": order.get("provider_error_rate"),
+                    }
+                throttle_context = evaluate_regime_entry_throttle(
+                    evidence,
+                    live_canary=str(launch_profile_context.get("profile") or "") == "live_canary",
+                    enforce=True,
+                )
+                throttle_action = str(throttle_context.get("action") or "")
+                if throttle_action == "block_new_entries":
+                    self.stats.setdefault("capacity_skips", 0)
+                    self.stats.setdefault("skipped_orders", 0)
+                    self.stats["capacity_skips"] += 1
+                    self.stats["skipped_orders"] += 1
+                    skip_payload = {
+                        "symbol": order.get("symbol"),
+                        "side": order.get("side"),
+                        "quantity": order.get("quantity"),
+                        "client_order_id": order.get("client_order_id"),
+                        "asset_class": order.get("asset_class"),
+                        "price_hint": order.get("price_hint"),
+                        "order_type": order.get("order_type", "unknown"),
+                        "using_fallback_price": bool(order.get("using_fallback_price")),
+                        "reason": "regime_entry_throttle",
+                        "context": throttle_context,
+                    }
+                    logger.warning("ENTRY_CONSTRAINED_REGIME_SESSION_THROTTLE", extra=skip_payload)
+                    logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                    _mark_precheck_failure("regime_entry_throttle", throttle_context)
+                    return False
+                if throttle_action == "reduce_size" and isinstance(order, dict):
+                    scale = _safe_float(throttle_context.get("qty_scale"))
+                    if scale is None:
+                        scale = 1.0
+                    adjusted_qty = int(math.floor(float(quantity) * max(0.0, min(1.0, scale))))
+                    if adjusted_qty <= 0:
+                        self.stats.setdefault("capacity_skips", 0)
+                        self.stats.setdefault("skipped_orders", 0)
+                        self.stats["capacity_skips"] += 1
+                        self.stats["skipped_orders"] += 1
+                        _mark_precheck_failure("regime_entry_throttle", throttle_context)
+                        logger.warning(
+                            "ENTRY_CONSTRAINED_REGIME_SESSION_THROTTLE",
+                            extra={
+                                "symbol": order.get("symbol"),
+                                "side": order.get("side"),
+                                "quantity": order.get("quantity"),
+                                "client_order_id": order.get("client_order_id"),
+                                "reason": "regime_entry_throttle",
+                                "context": throttle_context,
+                            },
+                        )
+                        return False
+                    if adjusted_qty < quantity:
+                        if "quantity" in order:
+                            order["quantity"] = adjusted_qty
+                        if "qty" in order:
+                            order["qty"] = adjusted_qty
+                        quantity = adjusted_qty
+                        logger.info(
+                            "ENTRY_REGIME_SESSION_THROTTLE_SIZE_REDUCED",
+                            extra={
+                                "symbol": order.get("symbol"),
+                                "side": order.get("side"),
+                                "quantity_after": adjusted_qty,
+                                "qty_scale": scale,
+                                "context": throttle_context,
+                            },
+                        )
             reconciliation_allowed, reconciliation_context = (
                 self._reconciliation_openings_guard_allows_openings()
             )

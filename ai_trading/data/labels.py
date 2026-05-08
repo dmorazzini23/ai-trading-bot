@@ -6,12 +6,196 @@ and other trading-specific target variables.
 """
 from __future__ import annotations
 import numpy as np
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 from ai_trading.logging import logger
 from ai_trading.utils.lazy_imports import load_pandas
 
 if TYPE_CHECKING:
     import pandas as pd
+
+
+def _as_price_series(prices: "pd.Series" | "pd.DataFrame") -> "pd.Series":
+    pd = load_pandas()
+    if isinstance(prices, pd.DataFrame):
+        if "close" in prices.columns:
+            return prices["close"]
+        if "price" in prices.columns:
+            return prices["price"]
+        return prices.iloc[:, 0]
+    return prices
+
+
+def _as_horizons(horizons: int | Iterable[int]) -> list[int]:
+    if isinstance(horizons, int):
+        parsed = [int(horizons)]
+    else:
+        parsed = [int(value) for value in horizons]
+    if not parsed or any(value <= 0 for value in parsed):
+        raise ValueError("horizons must contain positive integers")
+    return sorted(set(parsed))
+
+
+def _cost_component(
+    index: "pd.Index",
+    value: float | "pd.Series" | None,
+    *,
+    default: float = 0.0,
+) -> "pd.Series":
+    pd = load_pandas()
+    if isinstance(value, pd.Series):
+        return pd.to_numeric(value.reindex(index), errors="coerce").fillna(float(default)).astype(float)
+    return pd.Series(float(default if value is None else value), index=index, dtype=float)
+
+
+def _path_extreme_return_bps(
+    base: "pd.Series",
+    path: "pd.Series",
+    *,
+    horizon: int,
+    side_multiplier: float,
+    reducer: str,
+) -> "pd.Series":
+    pd = load_pandas()
+    base_safe = base.replace(0.0, np.nan)
+    returns = [
+        (((path.shift(-offset) / base_safe) - 1.0) * 10000.0 * side_multiplier)
+        for offset in range(1, horizon + 1)
+    ]
+    frame = pd.concat(returns, axis=1)
+    if reducer == "max":
+        return frame.max(axis=1, skipna=True)
+    return frame.min(axis=1, skipna=True)
+
+
+def trade_quality_labels(
+    prices: "pd.Series" | "pd.DataFrame",
+    horizons: int | Iterable[int],
+    *,
+    spread_bps: float | "pd.Series" | None = None,
+    slippage_bps: float | "pd.Series" = 0.0,
+    fee_bps: float | "pd.Series" = 0.0,
+    side: str = "long",
+    binary_edge_threshold_bps: float = 0.0,
+    multiclass_edge_threshold_bps: float = 5.0,
+    risk_penalty: float = 1.0,
+) -> "pd.DataFrame":
+    """Generate leakage-safe multi-horizon trade-quality labels."""
+    pd = load_pandas()
+    normalized_side = str(side or "long").strip().lower()
+    if normalized_side not in {"long", "short"}:
+        raise ValueError("side must be 'long' or 'short'")
+    side_multiplier = -1.0 if normalized_side == "short" else 1.0
+    parsed_horizons = _as_horizons(horizons)
+    try:
+        close = pd.to_numeric(_as_price_series(prices), errors="coerce").astype(float)
+        if isinstance(prices, pd.DataFrame):
+            high = pd.to_numeric(prices["high"], errors="coerce").astype(float) if "high" in prices.columns else close
+            low = pd.to_numeric(prices["low"], errors="coerce").astype(float) if "low" in prices.columns else close
+            spread_source: Any = prices["spread_bps"] if spread_bps is None and "spread_bps" in prices.columns else spread_bps
+        else:
+            high = close
+            low = close
+            spread_source = spread_bps
+        spread_cost_bps = _cost_component(close.index, spread_source)
+        slippage_cost_bps = 2.0 * _cost_component(close.index, slippage_bps)
+        fee_cost_bps = 2.0 * _cost_component(close.index, fee_bps)
+        round_trip_cost_bps = spread_cost_bps + slippage_cost_bps + fee_cost_bps
+        base_safe = close.replace(0.0, np.nan)
+        start_timestamps = pd.Series(close.index, index=close.index)
+        rows = []
+        for horizon in parsed_horizons:
+            future_close = close.shift(-horizon)
+            label_end_timestamp = start_timestamps.shift(-horizon)
+            gross_return_bps = (((future_close / base_safe) - 1.0) * 10000.0 * side_multiplier)
+            net_edge_after_cost_bps = gross_return_bps - round_trip_cost_bps
+            if normalized_side == "short":
+                mae_bps = _path_extreme_return_bps(
+                    base_safe,
+                    high,
+                    horizon=horizon,
+                    side_multiplier=side_multiplier,
+                    reducer="min",
+                )
+                mfe_bps = _path_extreme_return_bps(
+                    base_safe,
+                    low,
+                    horizon=horizon,
+                    side_multiplier=side_multiplier,
+                    reducer="max",
+                )
+            else:
+                mae_bps = _path_extreme_return_bps(
+                    base_safe,
+                    low,
+                    horizon=horizon,
+                    side_multiplier=side_multiplier,
+                    reducer="min",
+                )
+                mfe_bps = _path_extreme_return_bps(
+                    base_safe,
+                    high,
+                    horizon=horizon,
+                    side_multiplier=side_multiplier,
+                    reducer="max",
+                )
+            downside_bps = mae_bps.clip(upper=0.0).abs()
+            risk_adjusted_return_bps = net_edge_after_cost_bps - (float(risk_penalty) * downside_bps)
+            risk_adjusted_return = net_edge_after_cost_bps / downside_bps.replace(0.0, np.nan)
+            frame = pd.DataFrame(
+                {
+                    "label_start_timestamp": start_timestamps,
+                    "label_end_timestamp": label_end_timestamp,
+                    "horizon_bars": int(horizon),
+                    "side": normalized_side,
+                    "gross_return_bps": gross_return_bps,
+                    "spread_cost_bps": spread_cost_bps,
+                    "slippage_cost_bps": slippage_cost_bps,
+                    "fee_cost_bps": fee_cost_bps,
+                    "round_trip_cost_bps": round_trip_cost_bps,
+                    "net_edge_after_cost_bps": net_edge_after_cost_bps,
+                    "mae_bps": mae_bps,
+                    "mfe_bps": mfe_bps,
+                    "risk_adjusted_return_bps": risk_adjusted_return_bps,
+                    "risk_adjusted_return": risk_adjusted_return,
+                },
+                index=close.index,
+            )
+            frame["quality_binary"] = (
+                frame["net_edge_after_cost_bps"] > float(binary_edge_threshold_bps)
+            ).astype(int)
+            threshold = abs(float(multiclass_edge_threshold_bps))
+            frame["quality_multiclass"] = np.select(
+                [
+                    frame["net_edge_after_cost_bps"] >= threshold,
+                    frame["net_edge_after_cost_bps"] <= -threshold,
+                ],
+                [1, -1],
+                default=0,
+            ).astype(int)
+            rows.append(frame)
+        if not rows:
+            return pd.DataFrame()
+        result = pd.concat(rows, axis=0).replace([np.inf, -np.inf], np.nan)
+        result = result.dropna(
+            subset=[
+                "label_start_timestamp",
+                "label_end_timestamp",
+                "gross_return_bps",
+                "net_edge_after_cost_bps",
+                "mae_bps",
+                "mfe_bps",
+            ]
+        )
+        result = result.sort_values(["label_start_timestamp", "horizon_bars"]).reset_index(drop=True)
+        logger.debug(
+            "Generated trade quality labels",
+            extra={"rows": len(result), "horizons": parsed_horizons, "side": normalized_side},
+        )
+        return result
+    except (ValueError, TypeError, KeyError) as e:
+        logger.error(f"Error generating trade quality labels: {e}")
+        return pd.DataFrame()
 
 def fixed_horizon_return(prices: "pd.Series" | "pd.DataFrame", horizon_bars: int, fee_bps: float = 0.0) -> "pd.Series":
     pd = load_pandas()

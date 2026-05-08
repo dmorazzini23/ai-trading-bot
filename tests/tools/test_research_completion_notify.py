@@ -49,6 +49,25 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
             "realized_fills": {"count": 2},
         },
     )
+    _write_json(
+        root / "latest" / "symbol_promotion_latest.json",
+        {
+            "promotion_authority": False,
+            "runtime_symbol_gating_changed": False,
+            "symbols": [
+                {
+                    "symbol": "AMZN",
+                    "recommendation": "consider_promotion",
+                    "confidence": "high",
+                },
+                {
+                    "symbol": "MSFT",
+                    "recommendation": "collect_more_evidence",
+                    "confidence": "low",
+                },
+            ],
+        },
+    )
     _write_json(root / "daily" / "run" / "live_capital_readiness.json", {"status": "blocked"})
 
     payload = research_completion_notify.build_research_completion_payload(
@@ -79,6 +98,8 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
     assert "multi_horizon_lightweight" in field_text
     assert "runtime_gonogo_status" in field_text
     assert "desired=3" in field_text
+    assert "AMZN:consider_promotion/high" in field_text
+    assert "MSFT:collect_more_evidence/low" in field_text
 
 
 def test_research_completion_payload_marks_failed_exit_code_failed(tmp_path: Path) -> None:

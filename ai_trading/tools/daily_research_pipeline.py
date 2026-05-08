@@ -12,6 +12,7 @@ from urllib.request import urlopen
 
 from ai_trading.config.launch_profiles import launch_profile_payload, resolve_launch_profile
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.tools.symbol_promotion_comparison import symbol_promotion_digest
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
@@ -157,6 +158,10 @@ def build_daily_research_report(
     replay_governance: Mapping[str, Any] | None = None,
     symbol_scorecard: Mapping[str, Any] | None = None,
     promotion_report: Mapping[str, Any] | None = None,
+    symbol_promotion_comparison: Mapping[str, Any] | None = None,
+    replay_live_cost_alignment: Mapping[str, Any] | None = None,
+    regime_entry_throttle: Mapping[str, Any] | None = None,
+    training_accelerator: Mapping[str, Any] | None = None,
     runtime_gonogo: Mapping[str, Any] | None = None,
     memory_audit: Mapping[str, Any] | None = None,
     artifact_retention: Mapping[str, Any] | None = None,
@@ -167,6 +172,10 @@ def build_daily_research_report(
     replay_governance = replay_governance or {}
     symbol_scorecard = symbol_scorecard or {}
     promotion_report = promotion_report or {}
+    symbol_promotion_comparison = symbol_promotion_comparison or {}
+    replay_live_cost_alignment = replay_live_cost_alignment or {}
+    regime_entry_throttle = regime_entry_throttle or {}
+    training_accelerator = training_accelerator or {}
     runtime_gonogo = runtime_gonogo or {}
     runtime_gonogo_payload = _nested(runtime_gonogo, "go_no_go") or runtime_gonogo
     memory_audit = memory_audit or {}
@@ -231,6 +240,40 @@ def build_daily_research_report(
             "shadow_promotion": _nested(symbol_scorecard, "shadow_promotion"),
             "symbols": symbol_scorecard.get("symbols", []),
         },
+        "symbol_promotion": {
+            "available": bool(symbol_promotion_comparison.get("symbols")),
+            "promotion_authority": bool(symbol_promotion_comparison.get("promotion_authority", False)),
+            "runtime_symbol_gating_changed": bool(
+                symbol_promotion_comparison.get("runtime_symbol_gating_changed", False)
+            ),
+            "status": symbol_promotion_comparison.get("status", "missing"),
+            "summary": _nested(symbol_promotion_comparison, "summary"),
+            "digest": symbol_promotion_digest(symbol_promotion_comparison),
+            "symbols": symbol_promotion_comparison.get("symbols", []),
+        },
+        "replay_live_cost_alignment": {
+            "available": bool(replay_live_cost_alignment.get("summary")),
+            "status": replay_live_cost_alignment.get("status", "missing"),
+            "cost_realism": _nested(replay_live_cost_alignment, "cost_realism"),
+            "summary": _nested(replay_live_cost_alignment, "summary"),
+        },
+        "regime_entry_throttle": {
+            "available": bool(regime_entry_throttle.get("actions") or regime_entry_throttle.get("latest")),
+            "status": regime_entry_throttle.get("status", "ready" if regime_entry_throttle else "missing"),
+            "mode": regime_entry_throttle.get("mode"),
+            "actions": regime_entry_throttle.get("actions", {}),
+            "latest": _nested(regime_entry_throttle, "latest"),
+        },
+        "training_accelerator": {
+            "available": bool(training_accelerator),
+            "status": training_accelerator.get("status", "missing"),
+            "promotion_authority": bool(training_accelerator.get("promotion_authority", False)),
+            "cache": _nested(training_accelerator, "cache"),
+            "input_signature": training_accelerator.get("input_signature"),
+            "timing": _nested(training_accelerator, "timing"),
+            "ranked_candidate_count": training_accelerator.get("ranked_candidate_count"),
+            "lead_candidate_count": training_accelerator.get("lead_candidate_count"),
+        },
     }
     allowed, reasons = _trade_allowed(report)
     profile_name = str(_nested(report, "launch_profile").get("name") or "paper_observe")
@@ -285,6 +328,10 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Memory: `{_nested(report, 'memory_status').get('status', 'missing')}`",
             f"- Promotion: `{_nested(report, 'promotion_status').get('status', 'missing')}`",
             f"- Shadow promotion candidates: {suggestion_text}",
+            f"- Symbol promotion advisory: {_nested(report, 'symbol_promotion').get('digest', 'none')}",
+            f"- Replay/live cost realism: `{_nested(report, 'replay_live_cost_alignment', 'cost_realism').get('status', 'missing')}`",
+            f"- Regime throttle: `{_nested(report, 'regime_entry_throttle').get('actions', {})}`",
+            f"- Training accelerator: `{_nested(report, 'training_accelerator').get('status', 'missing')}`",
             "",
         ]
     )
@@ -300,6 +347,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--replay-governance-json", type=Path, default=None)
     parser.add_argument("--symbol-scorecard-json", type=Path, default=None)
     parser.add_argument("--promotion-report-json", type=Path, default=None)
+    parser.add_argument("--symbol-promotion-json", type=Path, default=None)
+    parser.add_argument("--replay-live-cost-alignment-json", type=Path, default=None)
+    parser.add_argument("--regime-entry-throttle-json", type=Path, default=None)
+    parser.add_argument("--training-accelerator-json", type=Path, default=None)
     parser.add_argument("--runtime-gonogo-json", type=Path, default=None)
     parser.add_argument("--memory-audit-json", type=Path, default=None)
     parser.add_argument("--artifact-retention-json", type=Path, default=None)
@@ -335,6 +386,22 @@ def main(argv: list[str] | None = None) -> int:
         ),
         promotion_report=_read_json(
             args.promotion_report_json or _default_path("runtime/promotion_report_latest.json")
+        ),
+        symbol_promotion_comparison=_read_json(
+            args.symbol_promotion_json
+            or _default_path("runtime/research_reports/latest/symbol_promotion_latest.json")
+        ),
+        replay_live_cost_alignment=_read_json(
+            args.replay_live_cost_alignment_json
+            or _default_path("runtime/replay_live_cost_alignment_latest.json")
+        ),
+        regime_entry_throttle=_read_json(
+            args.regime_entry_throttle_json
+            or _default_path("runtime/regime_entry_throttle_latest.json")
+        ),
+        training_accelerator=_read_json(
+            args.training_accelerator_json
+            or _default_path("runtime/training_accelerator_daily_latest.json")
         ),
         runtime_gonogo=_read_json(args.runtime_gonogo_json),
         memory_audit=_read_json(

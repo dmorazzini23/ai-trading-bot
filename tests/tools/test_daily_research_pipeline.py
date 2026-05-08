@@ -188,11 +188,27 @@ def test_daily_research_report_surfaces_shadow_promotion(monkeypatch):
             },
             "symbols": [],
         },
+        symbol_promotion_comparison={
+            "status": "ready",
+            "promotion_authority": False,
+            "runtime_symbol_gating_changed": False,
+            "summary": {"symbol_count": 1},
+            "symbols": [
+                {
+                    "symbol": "AMZN",
+                    "recommendation": "consider_promotion",
+                    "confidence": "high",
+                }
+            ],
+        },
         memory_audit={"status": "ok"},
     )
 
     assert report["symbol_actions"]["shadow_promotion"]["available"] is True
     assert report["symbol_actions"]["shadow_promotion"]["suggestions"][0]["symbol"] == "AMZN"
+    assert report["symbol_promotion"]["promotion_authority"] is False
+    assert report["symbol_promotion"]["runtime_symbol_gating_changed"] is False
+    assert report["symbol_promotion"]["digest"] == "AMZN:consider_promotion/high"
     assert "AMZN" in daily_research_pipeline._markdown(report)
 
 
@@ -201,6 +217,7 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
     health = tmp_path / "health.json"
     live_cost = tmp_path / "live_cost.json"
     memory = tmp_path / "memory.json"
+    symbol_promotion = tmp_path / "symbol_promotion.json"
     out = tmp_path / "daily.json"
     latest = tmp_path / "latest.json"
     md = tmp_path / "daily.md"
@@ -213,6 +230,22 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
         encoding="utf-8",
     )
     memory.write_text(json.dumps({"status": "ok"}), encoding="utf-8")
+    symbol_promotion.write_text(
+        json.dumps(
+            {
+                "status": "ready",
+                "promotion_authority": False,
+                "symbols": [
+                    {
+                        "symbol": "MSFT",
+                        "recommendation": "collect_more_evidence",
+                        "confidence": "low",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     rc = daily_research_pipeline.main(
         [
@@ -224,6 +257,8 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
             str(live_cost),
             "--memory-audit-json",
             str(memory),
+            "--symbol-promotion-json",
+            str(symbol_promotion),
             "--output-json",
             str(out),
             "--latest-json",
@@ -238,5 +273,6 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
     assert payload["artifact_type"] == "daily_research_report"
     assert payload["trade_allowed"] is True
     assert payload["memory_status"]["status"] == "ok"
+    assert payload["symbol_promotion"]["digest"] == "MSFT:collect_more_evidence/low"
     assert latest.is_file()
     assert "Daily Research 2026-05-05" in md.read_text(encoding="utf-8")

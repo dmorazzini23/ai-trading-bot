@@ -135,6 +135,9 @@ def _collect_replay_snapshot(path: Path) -> dict[str, Any]:
             "counterfactual_available": "passed" in counterfactual_mapping,
         }
     )
+    live_cost_alignment = payload.get("live_cost_alignment")
+    if isinstance(live_cost_alignment, dict):
+        snapshot["live_cost_alignment"] = dict(live_cost_alignment)
     return snapshot
 
 

@@ -143,6 +143,9 @@ def test_collect_replay_snapshot_does_not_default_missing_counterfactual_to_pass
                 "orders_submitted": 1,
                 "fill_events": 1,
                 "violations": [],
+                "live_cost_alignment": {
+                    "summary": {"alignment_counts": {"optimism": 1}},
+                },
             }
         ),
         encoding="utf-8",
@@ -152,6 +155,9 @@ def test_collect_replay_snapshot_does_not_default_missing_counterfactual_to_pass
 
     assert snapshot["counterfactual_passed"] is False
     assert snapshot["counterfactual_available"] is False
+    assert snapshot["live_cost_alignment"]["summary"]["alignment_counts"] == {
+        "optimism": 1,
+    }
 
 
 def test_replay_governance_policy_regression_writes_blocked_summary(
