@@ -43,6 +43,14 @@ def _artifact_timestamp() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _path_manifest(path: Path | None, *, exclude_paths: tuple[Path, ...] = ()) -> dict[str, Any]:
     if path is None:
         return {"path": None, "exists": False}
@@ -57,6 +65,7 @@ def _path_manifest(path: Path | None, *, exclude_paths: tuple[Path, ...] = ()) -
                     "kind": "file",
                     "size": int(stat.st_size),
                     "mtime_ns": int(stat.st_mtime_ns),
+                    "sha256": _file_sha256(resolved),
                 }
             )
         elif resolved.is_dir():
@@ -71,6 +80,7 @@ def _path_manifest(path: Path | None, *, exclude_paths: tuple[Path, ...] = ()) -
                         "path": str(item.relative_to(resolved)),
                         "size": int(stat.st_size),
                         "mtime_ns": int(stat.st_mtime_ns),
+                        "sha256": _file_sha256(item),
                     }
                 )
             payload.update({"kind": "directory", "files": files})
@@ -176,10 +186,17 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         if isinstance(previous_state, dict) and previous_state.get("status")
         else None
     )
+    previous_report_path = (
+        Path(str(previous_state.get("report_path"))).expanduser()
+        if isinstance(previous_state, dict) and previous_state.get("report_path")
+        else None
+    )
+    previous_report_exists = bool(previous_report_path is not None and previous_report_path.exists())
     cache_hit = bool(
         not args.plan_only
         and previous_signature == input_signature
         and previous_status == "complete"
+        and previous_report_exists
     )
     if previous_state is None:
         miss_reason = "no_success_state"
@@ -187,6 +204,8 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         miss_reason = "signature_changed"
     elif previous_status != "complete":
         miss_reason = "previous_status_not_successful"
+    elif not previous_report_exists:
+        miss_reason = "previous_report_missing"
     else:
         miss_reason = None
     report: dict[str, Any] = {
@@ -206,6 +225,7 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
             "miss_reason": None if cache_hit or args.plan_only else miss_reason,
             "previous_signature": previous_signature,
             "previous_status": previous_status,
+            "previous_report_exists": previous_report_exists,
         },
         "timing": {"started_at": started_at},
     }

@@ -90,6 +90,31 @@ _SEVERITY_RANKS = {
     "critical": 3,
 }
 _DEFAULT_CONNECTOR_HEALTH_PORT = 9001
+_OPERATOR_ASSISTANT_POLICY = {
+    "default_mode": "fast_read_only_artifact_summary",
+    "allowed_fast_actions": [
+        "read_runtime_artifacts",
+        "summarize_health",
+        "summarize_alerts",
+        "recommend_operator_commands",
+    ],
+    "disallowed_from_slack": [
+        "broad_validation",
+        "training",
+        "backtests",
+        "code_patches",
+        "service_restarts_without_explicit_request",
+    ],
+    "code_change_path": "produce_codex_goal",
+    "critical_alert_route": "#all-beatwallstreet",
+}
+
+
+def _operator_assistant_policy() -> dict[str, Any]:
+    return {
+        key: list(value) if isinstance(value, list) else value
+        for key, value in _OPERATOR_ASSISTANT_POLICY.items()
+    }
 
 
 def _normalize_severity(value: Any, *, default: str = "warning") -> str:
@@ -417,6 +442,7 @@ def _build_openclaw_runtime_payload(snapshot_result: dict[str, Any]) -> dict[str
         "top_rejection_concentration_ratio": snapshot.get("top_rejection_concentration_ratio"),
         "fingerprint": snapshot_result.get("fingerprint"),
         "snapshot_timestamp": snapshot.get("timestamp"),
+        "operator_assistant_policy": _operator_assistant_policy(),
     }
     return {
         "source": "runtime",
@@ -424,6 +450,7 @@ def _build_openclaw_runtime_payload(snapshot_result: dict[str, Any]) -> dict[str
         "severity": severity,
         "summary": summary,
         "suggestedAction": suggested_action,
+        "operatorAssistantPolicy": _operator_assistant_policy(),
         "details": details,
     }
 

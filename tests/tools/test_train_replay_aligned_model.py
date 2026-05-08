@@ -8,10 +8,12 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 import joblib
+import pytest
 
 from ai_trading.models.artifacts import verify_artifact
 from ai_trading.tools.train_replay_aligned_model import (
     REPLAY_ALIGNED_FEATURE_COLUMNS,
+    _symbol_feature_cache_key,
     build_training_dataset,
     _best_thresholds_by_regime,
     _split_train_validation_with_purge,
@@ -87,11 +89,37 @@ def test_split_train_validation_purges_overlapping_label_horizon() -> None:
     )
 
     assert diagnostics["purged_train_rows"] == 3
+    assert diagnostics["embargoed_train_rows"] == 0
+    assert diagnostics["embargo_bars"] == 0
     assert not train.empty
     assert not validation.empty
     assert train["target"].nunique() == 2
     assert validation["target"].nunique() == 2
     assert train["label_end_timestamp"].max() < validation["timestamp"].min()
+
+
+def test_split_train_validation_can_apply_extra_embargo() -> None:
+    timestamps = pd.date_range("2026-01-02 14:30:00+00:00", periods=12, freq="min")
+    dataset = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "label_end_timestamp": timestamps + pd.Timedelta(minutes=1),
+            "symbol": ["AAPL"] * 12,
+            "target": [0, 1] * 6,
+        }
+    )
+
+    train, validation, diagnostics = _split_train_validation_with_purge(
+        dataset,
+        train_fraction=0.75,
+        horizon_bars=1,
+        embargo_bars=2,
+    )
+
+    assert diagnostics["embargoed_train_rows"] == 2
+    assert len(train) == 6
+    assert not validation.empty
+    assert train["timestamp"].max() < validation["timestamp"].min()
 
 
 def test_threshold_report_does_not_turn_long_probabilities_into_shorts() -> None:
@@ -156,6 +184,45 @@ def test_build_training_dataset_supports_risk_adjusted_excursion_labels(tmp_path
     assert bool(
         (dataset["target"] == (dataset["label_score_bps"] > 0.0).astype(int)).all()
     )
+
+
+def test_build_training_dataset_standard_horizons_net_edge_and_spread_labels(tmp_path: Path) -> None:
+    _write_cycle_bars(tmp_path / "AAPL.csv", periods=140)
+    frame = pd.read_csv(tmp_path / "AAPL.csv")
+    frame["spread_bps"] = 3.0
+    frame.to_csv(tmp_path / "AAPL.csv", index=False)
+
+    row_counts: dict[int, int] = {}
+    for horizon in (1, 3, 5, 15):
+        net_dataset = build_training_dataset(
+            data_dir=tmp_path,
+            horizon_bars=horizon,
+            label_objective="net_markout",
+            fee_bps=1.0,
+            slippage_bps=2.0,
+            min_net_edge_bps=0.0,
+            training_cache_dir=tmp_path / "cache",
+        )
+        spread_dataset = build_training_dataset(
+            data_dir=tmp_path,
+            horizon_bars=horizon,
+            label_objective="spread_adjusted",
+            fee_bps=1.0,
+            slippage_bps=2.0,
+            min_net_edge_bps=0.0,
+            training_cache_dir=tmp_path / "cache",
+        )
+        row_counts[horizon] = len(net_dataset)
+        assert not net_dataset.empty
+        assert set(net_dataset["label_objective"].unique()) == {"net_markout"}
+        assert set(spread_dataset["label_objective"].unique()) == {"spread_adjusted"}
+        assert bool(net_dataset["label_end_timestamp"].gt(net_dataset["timestamp"]).all())
+        assert bool((net_dataset["target"] == (net_dataset["net_long_bps"] > 0.0).astype(int)).all())
+        assert net_dataset["round_trip_cost_bps"].mean() == pytest.approx(9.0)
+        assert spread_dataset["label_score_bps"].mean() > net_dataset["label_score_bps"].mean()
+        assert {"max_adverse_excursion_bps", "max_favorable_excursion_bps"} <= set(net_dataset.columns)
+
+    assert row_counts[1] > row_counts[3] > row_counts[5] > row_counts[15]
 
 
 def test_build_training_dataset_can_use_live_cost_model_labels(tmp_path: Path) -> None:
@@ -235,6 +302,20 @@ def test_build_training_dataset_reuses_feature_cache(tmp_path: Path, monkeypatch
     assert not first.empty
     assert not second.empty
     assert calls["count"] == 1
+
+
+def test_feature_cache_key_uses_content_hash_not_only_size_and_mtime(tmp_path: Path) -> None:
+    csv_path = tmp_path / "AAPL.csv"
+    csv_path.write_text("timestamp,close\n2026-01-02T14:30:00Z,100\n", encoding="utf-8")
+    first_mtime_ns = csv_path.stat().st_mtime_ns
+    first = _symbol_feature_cache_key(csv_path, timestamp_col="timestamp", symbol="AAPL")
+
+    csv_path.write_text("timestamp,close\n2026-01-02T14:30:00Z,101\n", encoding="utf-8")
+    second = _symbol_feature_cache_key(csv_path, timestamp_col="timestamp", symbol="AAPL")
+
+    assert csv_path.stat().st_size == len("timestamp,close\n2026-01-02T14:30:00Z,101\n")
+    assert first_mtime_ns != 0
+    assert first != second
 
 
 def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path: Path) -> None:

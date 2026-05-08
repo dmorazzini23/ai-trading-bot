@@ -409,6 +409,29 @@ def test_run_dispatch_openclaw_alert_uses_snapshot_builder() -> None:
     assert calls["openclaw"]["env"]["AI_TRADING_CONNECTOR_OPENCLAW_ENABLED"] == "1"
 
 
+def test_build_openclaw_runtime_payload_includes_operator_policy() -> None:
+    payload = dispatch._build_openclaw_runtime_payload(
+        {
+            "should_alert": True,
+            "fingerprint": "fp-policy",
+            "snapshot": {
+                "health_status": "degraded",
+                "health_ok": False,
+                "health_reason": "runtime_gonogo_failed",
+            },
+            "triggers": ["go_no_go_failed"],
+        }
+    )
+
+    policy = payload["operatorAssistantPolicy"]
+    assert policy["default_mode"] == "fast_read_only_artifact_summary"
+    assert policy["code_change_path"] == "produce_codex_goal"
+    assert policy["critical_alert_route"] == "#all-beatwallstreet"
+    assert "broad_validation" in policy["disallowed_from_slack"]
+    assert "code_patches" in policy["disallowed_from_slack"]
+    assert payload["details"]["operator_assistant_policy"] == policy
+
+
 def test_notify_openclaw_incident_suppresses_duplicate_without_send(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

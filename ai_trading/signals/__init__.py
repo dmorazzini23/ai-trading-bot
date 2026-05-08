@@ -1612,22 +1612,76 @@ def _prediction_calibrated_scale(model: Any, *names: str) -> float:
     raise ValueError("Classifier predictions require a calibrated edge scale; use predict_edge for raw edge")
 
 
-def _prediction_probability_margin(value: Any) -> float:
+def _shorts_enabled_for_signal_model() -> bool:
+    try:
+        return bool(_get_env("TRADING__ALLOW_SHORTS", False, cast=bool))
+    except (TypeError, ValueError):
+        return False
+
+
+def _model_class_token(value: Any) -> str:
+    raw = str(getattr(value, "value", value)).strip().lower()
+    if raw in {"-1", "0", "1"}:
+        return raw
+    return raw.replace("-", "_").replace(" ", "_")
+
+
+def _model_short_class_index(model: Any, width: int) -> int | None:
+    classes = getattr(model, "classes_", None)
+    if classes is None:
+        return None
+    try:
+        class_values = list(classes)
+    except TypeError:
+        return None
+    if len(class_values) != width:
+        return None
+    for idx, class_value in enumerate(class_values):
+        token = _model_class_token(class_value)
+        if token in {"-1", "short", "sell_short", "open_short", "entry_short", "short_sell"}:
+            return idx
+    return None
+
+
+def _model_long_class_index(model: Any, width: int) -> int:
+    classes = getattr(model, "classes_", None)
+    if classes is not None:
+        try:
+            class_values = list(classes)
+        except TypeError:
+            class_values = []
+        if len(class_values) == width:
+            for idx, class_value in enumerate(class_values):
+                token = _model_class_token(class_value)
+                if token in {"1", "long", "buy", "open_long", "entry_long"}:
+                    return idx
+    return width - 1
+
+
+def _prediction_probability_margin(model: Any, value: Any) -> float:
     np = _get_numpy()
     if np is not None:
         arr = np.asarray(value, dtype=float)
         if arr.ndim >= 2 and arr.shape[1] >= 2:
-            margin = float(arr[-1, -1] - arr[-1, 0])
+            row = arr[-1]
         else:
             raise ValueError("predict_proba output must include class probabilities")
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         last = value[-1]
         if isinstance(last, Sequence) and not isinstance(last, (str, bytes)) and len(last) >= 2:
-            margin = float(last[-1]) - float(last[0])
+            row = [float(item) for item in last]
         else:
             raise ValueError("predict_proba output must include class probabilities")
     else:
         raise ValueError("predict_proba output must include class probabilities")
+    width = len(row)
+    long_index = _model_long_class_index(model, width)
+    long_probability = float(row[long_index])
+    short_index = _model_short_class_index(model, width)
+    if short_index is not None and _shorts_enabled_for_signal_model():
+        margin = long_probability - float(row[short_index])
+    else:
+        margin = max(0.0, (long_probability - 0.5) * 2.0)
     if not math.isfinite(margin):
         raise ValueError("Model probability margin is not finite")
     return max(-1.0, min(1.0, margin))
@@ -1645,7 +1699,7 @@ def _predict_cost_aware_edge(model: Any, features: Any) -> float:
             "probability_edge_scale",
             "edge_scale",
         )
-        return _prediction_probability_margin(model.predict_proba(features)) * scale
+        return _prediction_probability_margin(model, model.predict_proba(features)) * scale
     if hasattr(model, "predict"):
         raise ValueError("Hard-label predict output is not a calibrated edge; use predict_edge")
     raise AttributeError("Model has neither predict_edge, predict_proba, nor predict")

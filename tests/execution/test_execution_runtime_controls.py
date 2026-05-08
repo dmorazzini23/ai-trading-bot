@@ -170,11 +170,11 @@ def test_market_sell_long_only_skip_records_submit_outcome(monkeypatch):
 
     assert engine.submit_market_order("MSFT", "sell", 1) is None
     assert engine._last_submit_outcome["status"] == "skipped"
-    assert engine._last_submit_outcome["reason"] == "shorting_disabled"
+    assert engine._last_submit_outcome["reason"] == "open_short_blocked_long_only"
     assert engine._last_submit_outcome["symbol"] == "MSFT"
     assert engine._last_submit_outcome["side"] == "sell"
     assert engine._cycle_order_outcomes[-1]["status"] == "skipped"
-    assert engine._cycle_order_outcomes[-1]["reason"] == "shorting_disabled"
+    assert engine._cycle_order_outcomes[-1]["reason"] == "open_short_blocked_long_only"
 
 
 def test_pending_order_reconcile_defers_fresh_lookup_failure(monkeypatch, caplog):

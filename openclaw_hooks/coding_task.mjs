@@ -19,6 +19,7 @@ export default function codingTask(ctx) {
     branch ? `branch=${branch}` : "",
     acceptance ? `acceptance=${acceptance}` : "",
     "",
+    "Operator assistant policy: Slack/OpenClaw chat stays fast and artifact-first. If this coding task came from Slack and requires repo edits, produce a Codex /goal or handoff plan unless the operator explicitly requested deep implementation.",
     "Work in the repo at /home/aiuser/ai-trading-bot. Read and follow AGENTS.md before making repo changes or running repo commands. Use apply_patch for all file edits, validate the result, and summarize what changed.",
     "If the task touches runtime, deployment, or service-control paths, also call out rollout risk, restart implications, and any missing tests or follow-up checks."
   ].filter(Boolean);

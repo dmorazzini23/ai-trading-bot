@@ -97,6 +97,10 @@ def trade_quality_labels(
             high = close
             low = close
             spread_source = spread_bps
+        if not close.index.is_monotonic_increasing:
+            close = close.sort_index(kind="mergesort")
+            high = high.reindex(close.index)
+            low = low.reindex(close.index)
         spread_cost_bps = _cost_component(close.index, spread_source)
         slippage_cost_bps = 2.0 * _cost_component(close.index, slippage_bps)
         fee_cost_bps = 2.0 * _cost_component(close.index, fee_bps)
@@ -108,6 +112,8 @@ def trade_quality_labels(
             future_close = close.shift(-horizon)
             label_end_timestamp = start_timestamps.shift(-horizon)
             gross_return_bps = (((future_close / base_safe) - 1.0) * 10000.0 * side_multiplier)
+            spread_adjusted_markout_bps = gross_return_bps - spread_cost_bps
+            slippage_adjusted_markout_bps = gross_return_bps - slippage_cost_bps
             net_edge_after_cost_bps = gross_return_bps - round_trip_cost_bps
             if normalized_side == "short":
                 mae_bps = _path_extreme_return_bps(
@@ -148,14 +154,18 @@ def trade_quality_labels(
                     "label_end_timestamp": label_end_timestamp,
                     "horizon_bars": int(horizon),
                     "side": normalized_side,
+                    "markout_bps": gross_return_bps,
                     "gross_return_bps": gross_return_bps,
                     "spread_cost_bps": spread_cost_bps,
                     "slippage_cost_bps": slippage_cost_bps,
                     "fee_cost_bps": fee_cost_bps,
                     "round_trip_cost_bps": round_trip_cost_bps,
+                    "spread_adjusted_markout_bps": spread_adjusted_markout_bps,
+                    "slippage_adjusted_markout_bps": slippage_adjusted_markout_bps,
                     "net_edge_after_cost_bps": net_edge_after_cost_bps,
                     "mae_bps": mae_bps,
                     "mfe_bps": mfe_bps,
+                    "adverse_selection_after_fill_bps": (-slippage_adjusted_markout_bps).clip(lower=0.0),
                     "risk_adjusted_return_bps": risk_adjusted_return_bps,
                     "risk_adjusted_return": risk_adjusted_return,
                 },
@@ -164,6 +174,7 @@ def trade_quality_labels(
             frame["quality_binary"] = (
                 frame["net_edge_after_cost_bps"] > float(binary_edge_threshold_bps)
             ).astype(int)
+            frame["net_edge_binary"] = frame["quality_binary"]
             threshold = abs(float(multiclass_edge_threshold_bps))
             frame["quality_multiclass"] = np.select(
                 [
@@ -173,6 +184,10 @@ def trade_quality_labels(
                 [1, -1],
                 default=0,
             ).astype(int)
+            frame["net_edge_multiclass"] = frame["quality_multiclass"]
+            frame["trade_quality_positive"] = (frame["quality_multiclass"] == 1).astype(int)
+            frame["trade_quality_neutral"] = (frame["quality_multiclass"] == 0).astype(int)
+            frame["trade_quality_negative"] = (frame["quality_multiclass"] == -1).astype(int)
             rows.append(frame)
         if not rows:
             return pd.DataFrame()
@@ -187,6 +202,7 @@ def trade_quality_labels(
                 "mfe_bps",
             ]
         )
+        result = result[result["label_end_timestamp"] > result["label_start_timestamp"]]
         result = result.sort_values(["label_start_timestamp", "horizon_bars"]).reset_index(drop=True)
         logger.debug(
             "Generated trade quality labels",

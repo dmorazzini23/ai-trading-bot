@@ -5,7 +5,9 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import json
 import logging
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ai_trading.config.management import get_env
@@ -26,6 +28,58 @@ _NON_DISABLEABLE_GATE_NAMES = frozenset(
     }
 )
 _NON_DISABLEABLE_GATE_ROOTS = frozenset({"LIQUIDITY_PARTICIPATION"})
+
+
+def _runtime_gonogo_suppresses_gate_auto_disable() -> tuple[bool, dict[str, Any]]:
+    if not bool(
+        get_env(
+            "AI_TRADING_GATE_AUTO_DISABLE_SUPPRESS_ON_RUNTIME_GONOGO_FAIL",
+            True,
+            cast=bool,
+        )
+    ):
+        return False, {"enabled": False}
+    raw_path = str(
+        get_env(
+            "AI_TRADING_GATE_AUTO_DISABLE_RUNTIME_GONOGO_PATH",
+            "/var/lib/ai-trading-bot/runtime/runtime_performance_report_latest.json",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    if not raw_path:
+        return False, {"enabled": True, "reason": "no_path_configured"}
+    path = Path(raw_path).expanduser()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False, {"enabled": True, "path": str(path), "reason": "missing_artifact"}
+    except (OSError, json.JSONDecodeError) as exc:
+        return False, {
+            "enabled": True,
+            "path": str(path),
+            "reason": "unreadable_artifact",
+            "error_type": type(exc).__name__,
+        }
+    if not isinstance(payload, MappingABC):
+        return False, {"enabled": True, "path": str(path), "reason": "invalid_artifact"}
+    gonogo_raw = payload.get("go_no_go")
+    gonogo = gonogo_raw if isinstance(gonogo_raw, MappingABC) else payload
+    if gonogo.get("gate_passed") is False:
+        failed_checks = gonogo.get("failed_checks")
+        return True, {
+            "enabled": True,
+            "path": str(path),
+            "reason": "runtime_gonogo_failed",
+            "failed_checks": list(failed_checks) if isinstance(failed_checks, list) else [],
+            "gate_reason": str(gonogo.get("reason") or ""),
+        }
+    return False, {
+        "enabled": True,
+        "path": str(path),
+        "reason": "runtime_gonogo_not_failed",
+        "gate_passed": gonogo.get("gate_passed"),
+    }
 
 
 @dataclass(slots=True)
@@ -385,6 +439,23 @@ def _build_gate_auto_disable_state(
         get_env("AI_TRADING_GATE_AUTO_DISABLE_MIN_CONTRIBUTION_BPS", 0.0, cast=float)
     )
     if gate_auto_disable_enabled:
+        suppress_auto_disable, suppress_context = _runtime_gonogo_suppresses_gate_auto_disable()
+        if suppress_auto_disable:
+            gate_auto_disable_hysteresis_context["suppressed"] = True
+            gate_auto_disable_hysteresis_context["suppression"] = suppress_context
+            logger.warning(
+                "GATE_AUTO_DISABLE_SUPPRESSED_RUNTIME_GONOGO",
+                extra={
+                    "reason": suppress_context.get("reason"),
+                    "failed_checks": suppress_context.get("failed_checks", []),
+                    "gate_reason": suppress_context.get("gate_reason", ""),
+                },
+            )
+            return (
+                ineffective_gate_blocklist,
+                ineffective_gate_diagnostics,
+                gate_auto_disable_hysteresis_context,
+            )
         try:
             gate_rows = read_jsonl_records_func(
                 str(gate_effectiveness_log_path_func()),

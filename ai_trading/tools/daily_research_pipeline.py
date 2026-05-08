@@ -71,6 +71,13 @@ def _promotion_ok(payload: Mapping[str, Any]) -> bool:
     return bool(payload.get("promotion_ready") or payload.get("status") == "ready_for_approval")
 
 
+def _summary_status(payload: Mapping[str, Any], default: str = "missing") -> str:
+    status = payload.get("status")
+    if isinstance(status, Mapping):
+        return str(status.get("status") or default)
+    return str(status or default)
+
+
 def _replay_status(payload: Mapping[str, Any]) -> dict[str, Any]:
     gate_raw = payload.get("replay_live_parity_gate")
     gate = dict(gate_raw) if isinstance(gate_raw, Mapping) else {}
@@ -146,6 +153,15 @@ def _trade_allowed(report: Mapping[str, Any]) -> tuple[bool, list[str]]:
             reasons.append("promotion_not_ready")
     if str(_nested(report, "memory_status").get("status") or "").lower() == "critical":
         reasons.append("memory_status_critical")
+    portfolio_output = str(
+        _nested(report, "portfolio_edge_control").get("output")
+        or _nested(report, "portfolio_edge_control").get("status")
+        or ""
+    ).lower()
+    if portfolio_output in {"no_new_entries"}:
+        reasons.append("portfolio_edge_no_new_entries")
+    if str(_nested(report, "execution_capture").get("status") or "").lower() == "degraded":
+        reasons.append("execution_capture_degraded")
     return not reasons, reasons
 
 
@@ -159,9 +175,17 @@ def build_daily_research_report(
     symbol_scorecard: Mapping[str, Any] | None = None,
     promotion_report: Mapping[str, Any] | None = None,
     symbol_promotion_comparison: Mapping[str, Any] | None = None,
+    symbol_lifecycle: Mapping[str, Any] | None = None,
     replay_live_cost_alignment: Mapping[str, Any] | None = None,
     regime_entry_throttle: Mapping[str, Any] | None = None,
+    execution_capture: Mapping[str, Any] | None = None,
+    counterfactual_execution: Mapping[str, Any] | None = None,
+    portfolio_edge: Mapping[str, Any] | None = None,
+    decision_receipts: Mapping[str, Any] | None = None,
     training_accelerator: Mapping[str, Any] | None = None,
+    expected_edge_calibration: Mapping[str, Any] | None = None,
+    evidence_starvation: Mapping[str, Any] | None = None,
+    paper_sampling_state: Mapping[str, Any] | None = None,
     runtime_gonogo: Mapping[str, Any] | None = None,
     memory_audit: Mapping[str, Any] | None = None,
     artifact_retention: Mapping[str, Any] | None = None,
@@ -173,9 +197,17 @@ def build_daily_research_report(
     symbol_scorecard = symbol_scorecard or {}
     promotion_report = promotion_report or {}
     symbol_promotion_comparison = symbol_promotion_comparison or {}
+    symbol_lifecycle = symbol_lifecycle or {}
     replay_live_cost_alignment = replay_live_cost_alignment or {}
     regime_entry_throttle = regime_entry_throttle or {}
+    execution_capture = execution_capture or {}
+    counterfactual_execution = counterfactual_execution or {}
+    portfolio_edge = portfolio_edge or {}
+    decision_receipts = decision_receipts or {}
     training_accelerator = training_accelerator or {}
+    expected_edge_calibration = expected_edge_calibration or {}
+    evidence_starvation = evidence_starvation or {}
+    paper_sampling_state = paper_sampling_state or {}
     runtime_gonogo = runtime_gonogo or {}
     runtime_gonogo_payload = _nested(runtime_gonogo, "go_no_go") or runtime_gonogo
     memory_audit = memory_audit or {}
@@ -251,6 +283,18 @@ def build_daily_research_report(
             "digest": symbol_promotion_digest(symbol_promotion_comparison),
             "symbols": symbol_promotion_comparison.get("symbols", []),
         },
+        "symbol_lifecycle": {
+            "available": bool(symbol_lifecycle.get("symbols")),
+            "status": symbol_lifecycle.get("status", "missing"),
+            "summary": _nested(symbol_lifecycle, "summary"),
+            "manual_approval_required_for_authority_increase": bool(
+                symbol_lifecycle.get("manual_approval_required_for_authority_increase", True)
+            ),
+            "runtime_symbol_gating_changed": bool(
+                symbol_lifecycle.get("runtime_symbol_gating_changed", False)
+            ),
+            "symbols": symbol_lifecycle.get("symbols", []),
+        },
         "replay_live_cost_alignment": {
             "available": bool(replay_live_cost_alignment.get("summary")),
             "status": replay_live_cost_alignment.get("status", "missing"),
@@ -262,7 +306,40 @@ def build_daily_research_report(
             "status": regime_entry_throttle.get("status", "ready" if regime_entry_throttle else "missing"),
             "mode": regime_entry_throttle.get("mode"),
             "actions": regime_entry_throttle.get("actions", {}),
+            "policy_actions": _nested(regime_entry_throttle, "policy_actions"),
             "latest": _nested(regime_entry_throttle, "latest"),
+        },
+        "execution_capture": {
+            "available": bool(execution_capture),
+            "status": execution_capture.get("status", "missing"),
+            "sample_gate": _nested(execution_capture, "sample_gate"),
+            "summary": _nested(execution_capture, "summary"),
+            "by_symbol": _nested(execution_capture, "by_symbol"),
+            "promotion_authority": bool(execution_capture.get("promotion_authority", False)),
+        },
+        "counterfactual_execution": {
+            "available": bool(counterfactual_execution),
+            "status": counterfactual_execution.get("status", "missing"),
+            "summary": _nested(counterfactual_execution, "summary"),
+            "promotion_authority": bool(counterfactual_execution.get("promotion_authority", False)),
+        },
+        "portfolio_edge_control": {
+            "available": bool(portfolio_edge),
+            "status": portfolio_edge.get("status", "missing"),
+            "output": portfolio_edge.get("output") or portfolio_edge.get("status"),
+            "flags": list(portfolio_edge.get("flags", []))
+            if isinstance(portfolio_edge.get("flags"), list)
+            else list(_nested(portfolio_edge, "controls").get("breaches", []))
+            if isinstance(_nested(portfolio_edge, "controls").get("breaches"), list)
+            else [],
+            "controls": _nested(portfolio_edge, "controls"),
+            "summary": _nested(portfolio_edge, "summary"),
+        },
+        "decision_receipts": {
+            "available": bool(decision_receipts),
+            "status": decision_receipts.get("status", "missing"),
+            "summary": _nested(decision_receipts, "summary"),
+            "live_money_authority": bool(decision_receipts.get("live_money_authority", False)),
         },
         "training_accelerator": {
             "available": bool(training_accelerator),
@@ -273,6 +350,55 @@ def build_daily_research_report(
             "timing": _nested(training_accelerator, "timing"),
             "ranked_candidate_count": training_accelerator.get("ranked_candidate_count"),
             "lead_candidate_count": training_accelerator.get("lead_candidate_count"),
+        },
+        "expected_edge_calibration": {
+            "available": bool(expected_edge_calibration),
+            "status": expected_edge_calibration.get("status", "missing"),
+            "recommended_next_action": expected_edge_calibration.get("recommended_next_action"),
+            "sample_gate": _nested(expected_edge_calibration, "sample_gate"),
+            "summary": _nested(expected_edge_calibration, "summary"),
+            "execution_capture_diagnosis": _nested(
+                expected_edge_calibration,
+                "execution_capture_diagnosis",
+            ),
+            "promotion_authority": bool(
+                expected_edge_calibration.get("promotion_authority", False)
+            ),
+        },
+        "execution_capture_diagnosis": _nested(
+            expected_edge_calibration,
+            "execution_capture_diagnosis",
+        ),
+        "evidence_starvation": {
+            "available": bool(evidence_starvation),
+            "status": evidence_starvation.get("status", "missing"),
+            "recommendation": evidence_starvation.get("recommendation"),
+            "counts": _nested(evidence_starvation, "counts"),
+            "estimated_days_until_sample_sufficiency": evidence_starvation.get(
+                "estimated_days_until_sample_sufficiency"
+            ),
+            "hard_safety_blockers": list(evidence_starvation.get("hard_safety_blockers", []))
+            if isinstance(evidence_starvation.get("hard_safety_blockers"), list)
+            else [],
+        },
+        "diagnostic_sampling": {
+            "activity": evidence_starvation.get("recommendation"),
+            "status": evidence_starvation.get("status", "missing"),
+            "state": dict(paper_sampling_state),
+            "paper_only": True,
+            "live_money_authority": False,
+        },
+        "long_only_side_semantics": {
+            "status": "reported_by_trading_day_and_gate_events",
+            "open_short_blockers_visible": True,
+            "sell_to_close_allowed": True,
+        },
+        "trade_quality_labels": {
+            "available": bool(training_accelerator),
+            "status": training_accelerator.get("status", "missing"),
+            "objectives": _nested(training_accelerator, "config").get("label_objectives"),
+            "shadow_only": True,
+            "promotion_authority": False,
         },
     }
     allowed, reasons = _trade_allowed(report)
@@ -294,6 +420,72 @@ def build_daily_research_report(
         "execution_quote_authority": _nested(report, "launch_profile").get("execution_quote_authority"),
         "backup_provider_live_policy": _nested(report, "launch_profile").get("backup_provider_live_policy"),
         "provider_authority_ok": _nested(report, "provider_authority").get("ok"),
+    }
+    report["health_report_summary"] = {
+        "runtime_status": _summary_status(_nested(report, "runtime_health")),
+        "runtime_ok": bool(_nested(report, "runtime_health").get("ok")),
+        "data_provider_status": _summary_status(_nested(report, "data_provider_health")),
+        "provider_authority_ok": _nested(report, "provider_authority").get("ok"),
+        "live_cost_status": _summary_status(_nested(report, "live_cost_status")),
+        "replay_status": _summary_status(_nested(report, "replay_status")),
+        "runtime_gonogo_passed": _nested(report, "runtime_gonogo").get("gate_passed"),
+        "memory_status": _summary_status(_nested(report, "memory_status")),
+        "trade_allowed": bool(allowed),
+        "blocked_reasons": reasons,
+    }
+    report["next_level_artifacts"] = {
+        "trading_day_report": {
+            "status": "available_in_trading_day_latest",
+            "latest_path": "runtime/research_reports/latest/trading_day_latest.json",
+        },
+        "live_capital_readiness": {
+            "status": "generated_after_daily_research",
+            "latest_path": "runtime/research_reports/latest/live_capital_readiness_latest.json",
+            "live_money_authority": False,
+            "manual_approval_required": True,
+        },
+        "expected_edge_calibration": {
+            "status": _summary_status(_nested(report, "expected_edge_calibration")),
+            "recommended_next_action": _nested(report, "expected_edge_calibration").get(
+                "recommended_next_action"
+            ),
+            "promotion_authority": bool(
+                _nested(report, "expected_edge_calibration").get("promotion_authority", False)
+            ),
+        },
+        "evidence_starvation": {
+            "status": _summary_status(_nested(report, "evidence_starvation")),
+            "recommendation": _nested(report, "evidence_starvation").get("recommendation"),
+            "live_money_authority": False,
+        },
+        "diagnostic_sampling": {
+            "status": _summary_status(_nested(report, "diagnostic_sampling")),
+            "activity": _nested(report, "diagnostic_sampling").get("activity"),
+            "paper_only": True,
+        },
+        "trade_quality_labels": {
+            "status": _summary_status(_nested(report, "trade_quality_labels")),
+            "shadow_only": True,
+            "promotion_authority": False,
+        },
+    }
+    report["openclaw_summary"] = {
+        "service": "ai-trading-research",
+        "severity": "info" if allowed else "warning",
+        "summary": (
+            f"daily_research trade_allowed={str(bool(allowed)).lower()} "
+            f"mode={report['recommended_next_session_mode']}"
+        ),
+        "suggested_action": (
+            "review live_capital_readiness before live cutover"
+            if allowed
+            else "resolve daily research blockers before next session"
+        ),
+        "blocked_reasons": reasons,
+        "details": {
+            "health_report_summary": report["health_report_summary"],
+            "next_level_artifacts": report["next_level_artifacts"],
+        },
     }
     return report
 
@@ -329,9 +521,18 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Promotion: `{_nested(report, 'promotion_status').get('status', 'missing')}`",
             f"- Shadow promotion candidates: {suggestion_text}",
             f"- Symbol promotion advisory: {_nested(report, 'symbol_promotion').get('digest', 'none')}",
+            f"- Symbol lifecycle: `{_nested(report, 'symbol_lifecycle').get('status', 'missing')}`",
             f"- Replay/live cost realism: `{_nested(report, 'replay_live_cost_alignment', 'cost_realism').get('status', 'missing')}`",
             f"- Regime throttle: `{_nested(report, 'regime_entry_throttle').get('actions', {})}`",
+            f"- Execution capture: `{_nested(report, 'execution_capture').get('status', 'missing')}`",
+            f"- Counterfactual execution: `{_nested(report, 'counterfactual_execution').get('status', 'missing')}`",
+            f"- Portfolio edge: `{_nested(report, 'portfolio_edge_control').get('output', 'missing')}`",
+            f"- Decision receipts: `{_nested(report, 'decision_receipts').get('status', 'missing')}`",
             f"- Training accelerator: `{_nested(report, 'training_accelerator').get('status', 'missing')}`",
+            f"- Expected-edge calibration: `{_nested(report, 'expected_edge_calibration').get('status', 'missing')}`",
+            f"- Evidence starvation: `{_nested(report, 'evidence_starvation').get('status', 'missing')}`",
+            f"- Health/report summary: `{_nested(report, 'health_report_summary').get('runtime_status', 'missing')}` "
+            f"trade_allowed={str(report.get('trade_allowed')).lower()}",
             "",
         ]
     )
@@ -348,9 +549,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--symbol-scorecard-json", type=Path, default=None)
     parser.add_argument("--promotion-report-json", type=Path, default=None)
     parser.add_argument("--symbol-promotion-json", type=Path, default=None)
+    parser.add_argument("--symbol-lifecycle-json", type=Path, default=None)
     parser.add_argument("--replay-live-cost-alignment-json", type=Path, default=None)
     parser.add_argument("--regime-entry-throttle-json", type=Path, default=None)
+    parser.add_argument("--execution-capture-json", type=Path, default=None)
+    parser.add_argument("--counterfactual-execution-json", type=Path, default=None)
+    parser.add_argument("--portfolio-edge-json", type=Path, default=None)
+    parser.add_argument("--decision-receipts-json", type=Path, default=None)
     parser.add_argument("--training-accelerator-json", type=Path, default=None)
+    parser.add_argument("--expected-edge-calibration-json", type=Path, default=None)
+    parser.add_argument("--evidence-starvation-json", type=Path, default=None)
+    parser.add_argument("--paper-sampling-state-json", type=Path, default=None)
     parser.add_argument("--runtime-gonogo-json", type=Path, default=None)
     parser.add_argument("--memory-audit-json", type=Path, default=None)
     parser.add_argument("--artifact-retention-json", type=Path, default=None)
@@ -391,6 +600,10 @@ def main(argv: list[str] | None = None) -> int:
             args.symbol_promotion_json
             or _default_path("runtime/research_reports/latest/symbol_promotion_latest.json")
         ),
+        symbol_lifecycle=_read_json(
+            args.symbol_lifecycle_json
+            or _default_path("runtime/research_reports/latest/symbol_lifecycle_latest.json")
+        ),
         replay_live_cost_alignment=_read_json(
             args.replay_live_cost_alignment_json
             or _default_path("runtime/replay_live_cost_alignment_latest.json")
@@ -399,9 +612,37 @@ def main(argv: list[str] | None = None) -> int:
             args.regime_entry_throttle_json
             or _default_path("runtime/regime_entry_throttle_latest.json")
         ),
+        execution_capture=_read_json(
+            args.execution_capture_json
+            or _default_path("runtime/reports/execution_capture_latest.json")
+        ),
+        counterfactual_execution=_read_json(
+            args.counterfactual_execution_json
+            or _default_path("runtime/reports/counterfactual_execution_latest.json")
+        ),
+        portfolio_edge=_read_json(
+            args.portfolio_edge_json
+            or _default_path("runtime/reports/portfolio_edge_control_latest.json")
+        ),
+        decision_receipts=_read_json(
+            args.decision_receipts_json
+            or _default_path("runtime/reports/decision_receipts_latest.json")
+        ),
         training_accelerator=_read_json(
             args.training_accelerator_json
             or _default_path("runtime/training_accelerator_daily_latest.json")
+        ),
+        expected_edge_calibration=_read_json(
+            args.expected_edge_calibration_json
+            or _default_path("runtime/reports/expected_edge_calibration_latest.json")
+        ),
+        evidence_starvation=_read_json(
+            args.evidence_starvation_json
+            or _default_path("runtime/reports/evidence_starvation_latest.json")
+        ),
+        paper_sampling_state=_read_json(
+            args.paper_sampling_state_json
+            or _default_path("runtime/paper_sampling_state_latest.json")
         ),
         runtime_gonogo=_read_json(args.runtime_gonogo_json),
         memory_audit=_read_json(

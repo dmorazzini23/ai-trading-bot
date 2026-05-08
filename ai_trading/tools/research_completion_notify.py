@@ -132,6 +132,16 @@ def build_research_completion_payload(
         if cadence == "daily" and not suppress_stale
         else {}
     )
+    edge_calibration = (
+        _read_json(_latest_path(report_root, cadence, "expected_edge_calibration_latest.json"))
+        if cadence == "daily" and not suppress_stale
+        else {}
+    )
+    evidence_starvation = (
+        _read_json(_latest_path(report_root, cadence, "evidence_starvation_latest.json"))
+        if cadence == "daily" and not suppress_stale
+        else {}
+    )
     report_status = str(report.get("status") or summary.get("status") or "unknown")
     status = run_status or report_status
     if exit_code != 0 and report_status not in {"blocked", "failed"}:
@@ -146,6 +156,12 @@ def build_research_completion_payload(
     readiness_status = str(readiness.get("status") or "n/a")
     recommended_mode = str(daily.get("recommended_next_session_mode") or "n/a")
     trade_allowed = daily.get("trade_allowed")
+    health_summary = summary.get("health_report_summary")
+    if not isinstance(health_summary, Mapping):
+        health_summary = daily.get("health_report_summary") if isinstance(daily.get("health_report_summary"), Mapping) else {}
+    openclaw_summary = summary.get("slack_openclaw_summary")
+    if not isinstance(openclaw_summary, Mapping):
+        openclaw_summary = daily.get("openclaw_summary") if isinstance(daily.get("openclaw_summary"), Mapping) else {}
     trading_counts = (
         f"desired={trading_day.get('desired_trades', {}).get('count', 'n/a')}, "
         f"submitted={trading_day.get('submitted_trades', {}).get('count', 'n/a')}, "
@@ -153,6 +169,14 @@ def build_research_completion_payload(
         f"fills={trading_day.get('realized_fills', {}).get('count', 'n/a')}"
     )
     symbol_promotion_text = symbol_promotion_digest(symbol_promotion)
+    edge_text = (
+        f"{edge_calibration.get('status', 'n/a')} / "
+        f"{edge_calibration.get('recommended_next_action', 'n/a')}"
+    )
+    starvation_text = (
+        f"{evidence_starvation.get('status', 'n/a')} / "
+        f"{evidence_starvation.get('recommendation', 'n/a')}"
+    )
     title = f"ai-trading research {cadence} finished: {status}"
     text = (
         f"{title}\n"
@@ -177,6 +201,10 @@ def build_research_completion_payload(
         _field("Trade allowed", str(trade_allowed).lower() if trade_allowed is not None else "n/a"),
         _field("Trading day", trading_counts),
         _field("Symbol promotion", symbol_promotion_text),
+        _field("Expected edge", edge_text),
+        _field("Evidence starvation", starvation_text),
+        _field("Health/report summary", json.dumps(health_summary, sort_keys=True) if health_summary else "n/a"),
+        _field("OpenClaw summary", openclaw_summary.get("summary") if openclaw_summary else "n/a"),
         _field("Run report", report.get("paths", {}).get("report") if isinstance(report.get("paths"), Mapping) else None),
     ]
     payload: dict[str, Any] = {

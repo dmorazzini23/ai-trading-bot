@@ -91,6 +91,8 @@ export default function runtimeEvent(ctx) {
   const lastGoodAt = pick(payload.lastGoodAt, payload.last_good_at, payload.lastHealthyAt, payload.last_healthy_at);
   const suggestedAction = pick(payload.suggestedAction, payload.suggested_action, payload.nextStep, payload.next_step);
   const smokeTest = looksLikeSmokeTest(payload, details);
+  const policy = payload.operatorAssistantPolicy || payload.operator_assistant_policy || {};
+  const criticalRoute = pick(policy.critical_alert_route, "#all-beatwallstreet");
 
   const lines = [
     `Runtime event for ${service}`,
@@ -104,6 +106,7 @@ export default function runtimeEvent(ctx) {
     smokeTest
       ? "This is a smoke-test or synthetic validation payload. Say explicitly that no trading or configuration action should be taken from this event alone."
       : "",
+    "Operator assistant policy: default to fast, read-only, artifact-based analysis. Do not run broad validation, training, backtests, code patches, or service restarts from Slack. If code changes are needed, propose a Codex /goal instead of editing. For urgent runtime issues, summarize the situation and recommend exact operator commands. Critical alerts should be called out clearly for " + criticalRoute + ".",
     "Assess operational urgency. Include the likely cause, the first verification step, whether /triage should be run immediately, and the next concrete action. Keep the reply concise and operator-focused."
   ].filter(Boolean);
 

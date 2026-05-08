@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -107,6 +108,7 @@ def _base_kwargs() -> dict[str, Any]:
 
 def test_build_netting_execution_context_collects_global_controls(monkeypatch) -> None:
     monkeypatch.setenv("AI_TRADING_DERISK_ON_SLO_BREACH_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_SUPPRESS_ON_RUNTIME_GONOGO_FAIL", "0")
     kwargs = _base_kwargs()
     context = build_netting_execution_context(**cast(Any, kwargs))
 
@@ -124,6 +126,7 @@ def test_build_netting_execution_context_collects_global_controls(monkeypatch) -
 
 def test_build_netting_execution_context_keeps_participation_gates_critical(monkeypatch) -> None:
     monkeypatch.setenv("AI_TRADING_DERISK_ON_SLO_BREACH_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_SUPPRESS_ON_RUNTIME_GONOGO_FAIL", "0")
     monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_NON_POSITIVE_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_LOOKBACK_CYCLES", "10")
     monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_MIN_BLOCKED", "10")
@@ -161,6 +164,56 @@ def test_build_netting_execution_context_keeps_participation_gates_critical(monk
     assert "LIQ_PARTICIPATION_BLOCK" not in context.ineffective_gate_blocklist
     assert "LIQUIDITY_PARTICIPATION" not in context.ineffective_gate_blocklist
     assert "CAPACITY_THROTTLE_BLOCK" not in context.ineffective_gate_blocklist
+
+
+def test_build_netting_execution_context_suppresses_auto_disable_when_gonogo_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_DERISK_ON_SLO_BREACH_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_NON_POSITIVE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_LOOKBACK_CYCLES", "10")
+    monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_MIN_BLOCKED", "10")
+    monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_MIN_CONTRIBUTION_BPS", "0")
+    gonogo_path = tmp_path / "runtime_performance_report_latest.json"
+    gonogo_path.write_text(
+        json.dumps(
+            {
+                "go_no_go": {
+                    "gate_passed": False,
+                    "reason": "paper_mode_soft_derisk",
+                    "failed_checks": ["win_rate", "live_samples_sufficient"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_GATE_AUTO_DISABLE_RUNTIME_GONOGO_PATH", str(gonogo_path))
+    kwargs = _base_kwargs()
+    kwargs["read_jsonl_records_func"] = lambda path, max_records: [
+        {
+            "gate_attribution": {
+                "NON_CRITICAL_GATE": {
+                    "blocked_records": 100,
+                    "edge_proxy_bps_sum": 50.0,
+                },
+            }
+        }
+    ]
+
+    context = build_netting_execution_context(**cast(Any, kwargs))
+
+    assert context.ineffective_gate_blocklist == set()
+    assert context.gate_auto_disable_hysteresis_context["suppressed"] is True
+    assert (
+        context.gate_auto_disable_hysteresis_context["suppression"]["reason"]
+        == "runtime_gonogo_failed"
+    )
+    logger = kwargs["logger"]
+    assert any(
+        event == "GATE_AUTO_DISABLE_SUPPRESSED_RUNTIME_GONOGO"
+        for _level, event, _extra in logger.entries
+    )
 
 
 def test_build_netting_execution_context_blocks_on_slo_breach(monkeypatch) -> None:

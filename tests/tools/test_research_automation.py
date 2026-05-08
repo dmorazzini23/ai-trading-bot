@@ -50,11 +50,16 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "regime_entry_throttle_report" in step_names
     assert "runtime_decay_controls" in step_names
     assert "runtime_gonogo_status" in step_names
+    assert "expected_edge_calibration_report" in step_names
+    assert "evidence_starvation_report" in step_names
     assert "trading_day_report" in step_names
     assert "symbol_promotion_comparison" in step_names
     assert "daily_research_pipeline" in step_names
     assert "live_capital_readiness" in step_names
     assert "evidence_manifest" in payload
+    summary = _read(summary_path)
+    assert summary["health_report_summary"]["daily_research"]["status"] == "missing"
+    assert summary["slack_openclaw_summary"]["service"] == "ai-trading-research-automation"
     readiness = next(step for step in payload["steps"] if step["name"] == "live_capital_readiness")  # type: ignore[index]
     assert readiness["metadata"]["live_money_authority"] is False
     retention = next(step for step in payload["steps"] if step["name"] == "runtime_artifact_retention_plan")  # type: ignore[index]
@@ -65,11 +70,15 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "--fills-jsonl" in trading_day["command"]
     assert "--gate-jsonl" in trading_day["command"]
     assert "--regime-entry-throttle-json" in trading_day["command"]
+    assert "--expected-edge-calibration-json" in trading_day["command"]
     daily_research = next(step for step in payload["steps"] if step["name"] == "daily_research_pipeline")  # type: ignore[index]
     assert "--symbol-promotion-json" in daily_research["command"]
     assert "--replay-live-cost-alignment-json" in daily_research["command"]
     assert "--regime-entry-throttle-json" in daily_research["command"]
     assert "--training-accelerator-json" in daily_research["command"]
+    assert "--expected-edge-calibration-json" in daily_research["command"]
+    assert "--evidence-starvation-json" in daily_research["command"]
+    assert "--paper-sampling-state-json" in daily_research["command"]
 
 
 def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(
@@ -262,6 +271,7 @@ def test_operator_summary_separates_blocked_from_failed(tmp_path: Path) -> None:
 
     assert summary["failed_steps"] == []
     assert summary["blocked_steps"] == ["runtime_gonogo_status"]
+    assert summary["slack_openclaw_summary"]["suggested_action"] == "review_summary_and_generated_artifacts"
 
 
 def test_json_stdout_artifact_keeps_final_payload(tmp_path: Path) -> None:
@@ -407,6 +417,70 @@ def test_authority_artifact_copy_writes_daily_evidence_latest_paths(tmp_path: Pa
     assert json.loads((report_root / "latest" / "daily_research_latest.json").read_text()) == {
         "artifact": "daily_research_pipeline"
     }
+
+
+def test_operator_summary_reads_next_level_latest_artifacts(tmp_path: Path) -> None:
+    report_root = tmp_path / "reports"
+    latest = report_root / "latest"
+    latest.mkdir(parents=True)
+    (latest / "daily_readiness_latest.json").write_text(
+        json.dumps(
+            {
+                "status": "ready",
+                "trade_allowed": False,
+                "recommended_next_session_mode": "observe",
+                "blocked_reasons": ["runtime_gonogo_failed"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (latest / "trading_day_latest.json").write_text(
+        json.dumps(
+            {
+                "desired_trades": {"count": 3},
+                "submitted_trades": {"count": 2},
+                "rejected_trades": {"count": 1},
+                "realized_fills": {"count": 2},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (latest / "live_capital_readiness_latest.json").write_text(
+        json.dumps({"status": "blocked", "reasons": ["live_account_not_explicitly_confirmed"]}),
+        encoding="utf-8",
+    )
+    config = research_automation.ResearchConfig(
+        cadence="daily",
+        workflow="daily",
+        report_root=report_root,
+        run_dir=tmp_path / "run",
+        run_id="run",
+        symbols="AAPL",
+        data_dir=None,
+        shadow_jsonl=tmp_path / "shadow.jsonl",
+        accepted_candidates_jsonl=None,
+        model_path=None,
+        manifest_path=None,
+        current_champion_path="",
+        report_date="2026-05-05",
+        plan_only=False,
+        dry_run=False,
+    )
+
+    summary = research_automation._operator_summary(
+        config=config,
+        status="blocked",
+        blocked_reasons=[],
+        step_results=[],
+        latest_path=latest / "daily_research_automation_latest.json",
+    )
+
+    assert summary["health_report_summary"]["daily_research"]["trade_allowed"] is False
+    assert summary["health_report_summary"]["trading_day"]["fills"] == 2
+    assert summary["health_report_summary"]["live_capital_readiness"]["status"] == "blocked"
+    assert summary["slack_openclaw_summary"]["next_level_artifacts"]["daily_research"]["blocked_reasons"] == [
+        "runtime_gonogo_failed"
+    ]
 
 
 def test_run_research_automation_keeps_daily_report_latest_for_daily_pipeline(

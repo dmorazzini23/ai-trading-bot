@@ -48,11 +48,20 @@ def test_live_capital_readiness_allows_explicit_tiny_canary(monkeypatch):
         promotion_report={"generated_at": now, "promotion_ready": True},
         validation={"generated_at": now, "full_validation_green": True},
         canary_plan={"generated_at": now, "paper_vs_live_canary_plan": "ready"},
+        edge_calibration={"generated_at": now, "status": "calibrated"},
+        execution_capture={"generated_at": now, "status": "acceptable"},
+        portfolio_edge={"generated_at": now, "status": "ok"},
     )
 
     assert report["status"] == "live_canary_allowed"
     assert report["reasons"] == []
     assert report["gates"]["live_account_confirmed"] is True
+    assert report["health_report_summary"]["status"] == "live_canary_allowed"
+    assert report["canary_evidence"]["daily_research_mode"] is None
+    assert report["canary_evidence"]["edge_calibration"]["status"] == "calibrated"
+    assert report["canary_evidence"]["execution_capture"]["status"] == "acceptable"
+    assert report["canary_evidence"]["portfolio_edge"]["status"] == "ok"
+    assert report["openclaw_summary"]["service"] == "ai-trading-live-capital"
 
 
 def test_live_capital_readiness_blocks_stale_live_cost_evidence(monkeypatch):
@@ -99,6 +108,8 @@ def test_live_capital_readiness_blocks_provider_authority_and_daily_research(mon
     assert "provider_authority_not_ok" in report["reasons"]
     assert "daily_research_trade_not_allowed" in report["reasons"]
     assert "runtime_gonogo_failed" in report["reasons"]
+    assert report["canary_evidence"]["daily_research_trade_allowed"] is False
+    assert report["openclaw_summary"]["severity"] == "warning"
 
 
 def test_live_capital_readiness_blocks_insufficient_cost_samples(monkeypatch):
@@ -142,3 +153,4 @@ def test_live_capital_readiness_cli_writes_blocked_artifact_with_success_overrid
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["status"] == "blocked"
     assert "live_capital_profile_not_selected" in payload["reasons"]
+    assert payload["health_report_summary"]["status"] == "blocked"

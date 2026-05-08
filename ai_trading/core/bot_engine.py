@@ -25301,18 +25301,10 @@ def _should_failsoft_allow_low_coverage(
 def _safe_mode_blocks_trading() -> bool:
     """Return ``True`` when the current degraded policy requires blocking trades."""
 
-    # Allow paper-mode bypass when explicitly permitted via env.
-    env_mode = str(get_env("EXECUTION_MODE", "") or "").strip().lower()
-    env_paper_bypass = str(get_env("AI_TRADING_SAFE_MODE_ALLOW_PAPER", "") or "").strip().lower()
-    if env_mode == "paper" and env_paper_bypass not in {"0", "false", "no", "off"}:
-        return False
     try:
         cfg = get_trading_config()
     except COMMON_EXC:
         return True
-    execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
-    if execution_mode == "paper" and bool(getattr(cfg, "safe_mode_allow_paper", False)):
-        return False
     mode = str(getattr(cfg, "degraded_feed_mode", "block") or "block").strip().lower()
     if mode not in {"block", "widen", "hard_block"}:
         mode = "block"
@@ -33360,16 +33352,6 @@ def _pre_trade_gate() -> bool:
         block_reasons.append("synthetic_quote")
     if stale_quote:
         block_reasons.append("stale_quote")
-
-    paper_bypass = False
-    try:
-        cfg = get_trading_config()
-        execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
-        paper_bypass = execution_mode == "paper" and bool(getattr(cfg, "safe_mode_allow_paper", False))
-    except COMMON_EXC:
-        paper_bypass = False
-    if paper_bypass:
-        return False
 
     if not block_reasons:
         return False

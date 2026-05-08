@@ -60,10 +60,20 @@ def test_daily_research_report_blocks_on_runtime_gonogo_failure(monkeypatch):
         replay_governance={"replay_live_parity_gate": {"ok": True}},
         runtime_gonogo={"gate_passed": False, "failed_checks": ["win_rate"]},
         memory_audit={"status": "ok"},
+        expected_edge_calibration={"status": "overestimated", "recommended_next_action": "keep_tiny_sampling"},
+        evidence_starvation={"status": "starved", "recommendation": "widen_paper_diagnostic_sampling"},
+        paper_sampling_state={"date": "2026-05-05", "count": 2},
     )
 
     assert report["trade_allowed"] is False
     assert "runtime_gonogo_failed" in report["blocked_reasons"]
+    assert report["expected_edge_calibration"]["status"] == "overestimated"
+    assert report["evidence_starvation"]["recommendation"] == "widen_paper_diagnostic_sampling"
+    assert report["diagnostic_sampling"]["paper_only"] is True
+    assert report["diagnostic_sampling"]["state"]["count"] == 2
+    assert report["health_report_summary"]["runtime_gonogo_passed"] is False
+    assert report["next_level_artifacts"]["expected_edge_calibration"]["status"] == "overestimated"
+    assert report["openclaw_summary"]["severity"] == "warning"
 
 
 def test_daily_research_report_blocks_on_top_level_replay_governance_status(
@@ -212,12 +222,42 @@ def test_daily_research_report_surfaces_shadow_promotion(monkeypatch):
     assert "AMZN" in daily_research_pipeline._markdown(report)
 
 
+def test_daily_research_report_surfaces_next_level_artifacts(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+
+    report = daily_research_pipeline.build_daily_research_report(
+        report_date="2026-05-05",
+        health={"ok": True, "status": "ready", "data_provider": {"status": "healthy"}},
+        live_cost_model={"status": {"available": True, "breach_count": 0, "status": "ready"}},
+        replay_governance={"replay_live_parity_gate": {"ok": True}},
+        symbol_lifecycle={
+            "status": "ready",
+            "summary": {"recommendations": {"consider_canary": 1}},
+            "symbols": [{"symbol": "AMZN", "recommendation": "consider_canary"}],
+        },
+        execution_capture={"status": "acceptable", "summary": {"classification_counts": {}}},
+        counterfactual_execution={"status": "passed", "summary": {"missed_positive_count": 0}},
+        portfolio_edge={"status": "ok", "summary": {"portfolio_capture_ratio": 0.7}},
+        decision_receipts={"status": "complete", "summary": {"receipts": 3}},
+        memory_audit={"status": "ok"},
+    )
+
+    assert report["symbol_lifecycle"]["status"] == "ready"
+    assert report["execution_capture"]["status"] == "acceptable"
+    assert report["counterfactual_execution"]["status"] == "passed"
+    assert report["portfolio_edge_control"]["output"] == "ok"
+    assert report["decision_receipts"]["summary"]["receipts"] == 3
+
+
 def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
     health = tmp_path / "health.json"
     live_cost = tmp_path / "live_cost.json"
     memory = tmp_path / "memory.json"
     symbol_promotion = tmp_path / "symbol_promotion.json"
+    calibration = tmp_path / "calibration.json"
+    starvation = tmp_path / "starvation.json"
+    paper_sampling = tmp_path / "paper_sampling.json"
     out = tmp_path / "daily.json"
     latest = tmp_path / "latest.json"
     md = tmp_path / "daily.md"
@@ -246,6 +286,12 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
         ),
         encoding="utf-8",
     )
+    calibration.write_text(json.dumps({"status": "calibrated"}), encoding="utf-8")
+    starvation.write_text(
+        json.dumps({"status": "collecting", "recommendation": "keep_sampling"}),
+        encoding="utf-8",
+    )
+    paper_sampling.write_text(json.dumps({"date": "2026-05-05", "count": 1}), encoding="utf-8")
 
     rc = daily_research_pipeline.main(
         [
@@ -259,6 +305,12 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
             str(memory),
             "--symbol-promotion-json",
             str(symbol_promotion),
+            "--expected-edge-calibration-json",
+            str(calibration),
+            "--evidence-starvation-json",
+            str(starvation),
+            "--paper-sampling-state-json",
+            str(paper_sampling),
             "--output-json",
             str(out),
             "--latest-json",
@@ -274,5 +326,13 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
     assert payload["trade_allowed"] is True
     assert payload["memory_status"]["status"] == "ok"
     assert payload["symbol_promotion"]["digest"] == "MSFT:collect_more_evidence/low"
+    assert payload["expected_edge_calibration"]["status"] == "calibrated"
+    assert payload["evidence_starvation"]["status"] == "collecting"
+    assert payload["diagnostic_sampling"]["state"]["count"] == 1
+    assert payload["health_report_summary"]["trade_allowed"] is True
+    assert payload["next_level_artifacts"]["diagnostic_sampling"]["paper_only"] is True
+    assert payload["openclaw_summary"]["service"] == "ai-trading-research"
     assert latest.is_file()
-    assert "Daily Research 2026-05-05" in md.read_text(encoding="utf-8")
+    markdown = md.read_text(encoding="utf-8")
+    assert "Daily Research 2026-05-05" in markdown
+    assert "Expected-edge calibration" in markdown

@@ -54,21 +54,39 @@ def test_trading_day_report_attributes_rejections_and_symbol_pnl():
         gate_rows=[
             {"ts": "2026-05-05T14:00:01Z", "symbol": "AAPL", "status": "blocked", "reason": "spread_cap"},
             {"ts": "2026-05-05T14:00:02Z", "symbol": "AMZN", "action": "reject", "gate": "quote_age"},
+            {"ts": "2026-05-05T14:00:03Z", "symbol": "MSFT", "status": "blocked", "side": "sell_short", "reason": "long_only_config"},
         ],
         live_cost_model={"status": {"status": "ready"}},
         symbol_scorecard={"summary": {"allow": 2}, "symbols": []},
         regime_entry_throttle={"actions": {"reduce_size": 1}},
+        expected_edge_calibration={
+            "status": "overestimated",
+            "execution_capture_diagnosis": {"attribution_counts": {"weak_execution_capture": 3}},
+        },
     )
 
     assert report["desired_trades"]["count"] == 1
     assert report["submitted_trades"]["count"] == 1
-    assert report["rejected_trades"]["reasons"] == {"quote_age": 1, "spread_cap": 1}
+    assert report["rejected_trades"]["reasons"] == {
+        "long_only_config": 1,
+        "quote_age": 1,
+        "spread_cap": 1,
+    }
     assert report["symbol_contribution"] == {"AAPL": 5.0, "AMZN": -1.0}
     assert report["symbol_realized_edge_bps"] == {"AAPL": 2.0, "AMZN": -3.0}
     assert report["symbol_expected_edge_bps"] == {"AAPL": 3.0, "AMZN": 1.0}
     assert report["symbol_slippage_bps"] == {"AAPL": 1.0, "AMZN": 3.0}
     assert report["edge_quality"]["mean_realized_edge_bps"] == 1 / 3
+    assert report["expected_edge_calibration"]["status"] == "overestimated"
+    assert report["execution_capture_diagnosis"]["attribution_counts"] == {
+        "weak_execution_capture": 3
+    }
     assert report["regime_entry_throttle"] == {"actions": {"reduce_size": 1}}
+    assert report["long_only_side_semantics"]["counts"]["sell_short_blocked"] == 1
+    assert report["health_report_summary"]["desired"] == 1
+    assert report["health_report_summary"]["rejected"] == 3
+    assert report["health_report_summary"]["expected_edge_calibration_status"] == "overestimated"
+    assert report["openclaw_summary"]["severity"] == "warning"
     assert report["symbol_trade_flow"]["AAPL"] == {
         "desired": 1,
         "submitted": 1,
@@ -84,6 +102,7 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
     fills = tmp_path / "fills.jsonl"
     gates = tmp_path / "gates.jsonl"
     throttle = tmp_path / "throttle.json"
+    calibration = tmp_path / "calibration.json"
     out = tmp_path / "trading_day.json"
     latest = tmp_path / "latest.json"
     md = tmp_path / "latest.md"
@@ -94,6 +113,7 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
         json.dumps({"actions": {"block_new_entries": 1}, "evaluations": 1}),
         encoding="utf-8",
     )
+    calibration.write_text(json.dumps({"status": "calibrated"}), encoding="utf-8")
 
     rc = trading_day_report.main(
         [
@@ -107,6 +127,8 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
             str(gates),
             "--regime-entry-throttle-json",
             str(throttle),
+            "--expected-edge-calibration-json",
+            str(calibration),
             "--output-json",
             str(out),
             "--latest-json",
@@ -120,6 +142,9 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["realized_fills"]["count"] == 1
     assert payload["regime_entry_throttle"]["actions"] == {"block_new_entries": 1}
+    assert payload["expected_edge_calibration"]["status"] == "calibrated"
+    assert payload["health_report_summary"]["fills"] == 1
+    assert payload["openclaw_summary"]["service"] == "ai-trading-research"
     assert latest.is_file()
     markdown = md.read_text(encoding="utf-8")
     assert "Trading Day 2026-05-05" in markdown

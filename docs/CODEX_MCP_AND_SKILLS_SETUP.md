@@ -126,6 +126,18 @@ Optional dispatch controls:
 - `AI_TRADING_CONNECTOR_OPENCLAW_ON_CHANGE_ONLY=1`
 - `AI_TRADING_CONNECTOR_FAIL_ON_ERROR=0`
 
+## Operator Assistant Policy
+
+OpenClaw/Slack is the fast operator layer. It should answer from artifacts and
+local health checks by default, not by running heavy work. Broad validation,
+training, replay/backtests, and code patches should be handed off as Codex
+`/goal` prompts unless the operator explicitly requests a deep implementation
+session. Runtime incident payloads include an `operatorAssistantPolicy` object
+with this boundary so OpenClaw can keep normal Slack chat quick while preserving
+Codex for thorough code changes.
+
+See [docs/OPERATOR_ASSISTANT_POLICY.md](/home/aiuser/ai-trading-bot/docs/OPERATOR_ASSISTANT_POLICY.md).
+
 ## Validation
 
 ```bash

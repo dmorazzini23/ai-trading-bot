@@ -288,6 +288,45 @@ def test_generate_cost_aware_signals_requires_calibrated_classifier_scale(monkey
     assert [decision["decision"] for decision in unsupported_decisions] == ["REJECT", "REJECT"]
 
 
+def test_cost_aware_probability_model_does_not_synthesize_short_without_short_label(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("TRADING__ALLOW_SHORTS", "1")
+    features = pd.DataFrame({"close": [100.0]})
+
+    class LongOnlyProbabilityModel:
+        calibrated_edge_scale = 0.02
+        classes_ = np.asarray([0, 1])
+
+        def predict_proba(self, _features):
+            return np.asarray([[0.9, 0.1]], dtype=float)
+
+    edge = signals._predict_cost_aware_edge(LongOnlyProbabilityModel(), features)
+
+    assert edge == pytest.approx(0.0)
+
+
+def test_cost_aware_probability_model_requires_shorts_enabled_for_short_edge(
+    monkeypatch,
+) -> None:
+    features = pd.DataFrame({"close": [100.0]})
+
+    class LongShortProbabilityModel:
+        calibrated_edge_scale = 0.02
+        classes_ = np.asarray([-1, 1])
+
+        def predict_proba(self, _features):
+            return np.asarray([[0.9, 0.1]], dtype=float)
+
+    monkeypatch.setenv("TRADING__ALLOW_SHORTS", "0")
+    disabled_edge = signals._predict_cost_aware_edge(LongShortProbabilityModel(), features)
+    monkeypatch.setenv("TRADING__ALLOW_SHORTS", "1")
+    enabled_edge = signals._predict_cost_aware_edge(LongShortProbabilityModel(), features)
+
+    assert disabled_edge == pytest.approx(0.0)
+    assert enabled_edge == pytest.approx(-0.016)
+
+
 def test_portfolio_filter_includes_sell_short_in_portfolio_and_cost_checks(monkeypatch):
     from ai_trading.portfolio import PortfolioDecision
 

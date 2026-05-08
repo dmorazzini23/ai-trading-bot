@@ -215,3 +215,11 @@ def test_replay_governance_main_returns_two_for_policy_regression(
     )
 
     assert exit_code == 2
+
+
+def test_replay_governance_timer_treats_blocked_as_success() -> None:
+    unit = Path("packaging/systemd/ai-trading-replay-governance.service").read_text(
+        encoding="utf-8"
+    )
+
+    assert "SuccessExitStatus=2" in unit

@@ -18,6 +18,10 @@ from ai_trading.core.execution_intent import (
 from ai_trading.oms.ledger import LedgerEntry, OrderLedger
 from ai_trading.oms.pretrade import safe_validate_pretrade
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.runtime.paper_sampling import (
+    evaluate_paper_sampling_order,
+    reserve_paper_sampling_order,
+)
 
 
 def _mapping_dict(value: Any) -> dict[str, Any]:
@@ -576,6 +580,35 @@ def submit_order_runtime(
         return None
     price = float(price_value)
 
+    sampling_decision = evaluate_paper_sampling_order(
+        cfg,
+        symbol=symbol,
+        side=side_norm,
+        qty=int(max(qty, 0)),
+        price=price,
+    )
+    if sampling_decision.enabled:
+        if not sampling_decision.allowed:
+            be.logger.warning(
+                sampling_decision.reason,
+                extra=sampling_decision.details,
+            )
+            _record_skip_submit(
+                be,
+                symbol=symbol,
+                side=side_norm,
+                reason=sampling_decision.reason,
+                detail=str(sampling_decision.details.get("reason") or sampling_decision.reason),
+                context=sampling_decision.details,
+            )
+            return None
+        qty = int(sampling_decision.qty)
+        annotations["paper_sampling"] = True
+        annotations["paper_sampling_requested_qty"] = int(
+            sampling_decision.details.get("requested_qty", qty)
+        )
+        annotations["paper_sampling_adjusted_qty"] = qty
+
     intent_context, submit_snapshot, broker_snapshot = _resolve_execution_intent_context(
         be,
         ctx=ctx,
@@ -611,6 +644,28 @@ def submit_order_runtime(
             reason=pretrade_reason,
             detail=str(pretrade_details.get("reason") or pretrade_reason),
             context=pretrade_details,
+        )
+        return None
+
+    sampling_reservation = reserve_paper_sampling_order(
+        cfg,
+        symbol=symbol,
+        side=side_norm,
+        qty=int(qty),
+        price=price,
+    )
+    if sampling_reservation.enabled and not sampling_reservation.allowed:
+        be.logger.warning(
+            sampling_reservation.reason,
+            extra=sampling_reservation.details,
+        )
+        _record_skip_submit(
+            be,
+            symbol=symbol,
+            side=side_norm,
+            reason=sampling_reservation.reason,
+            detail=str(sampling_reservation.details.get("reason") or sampling_reservation.reason),
+            context=sampling_reservation.details,
         )
         return None
 

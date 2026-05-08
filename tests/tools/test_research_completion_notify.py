@@ -34,7 +34,17 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
     )
     _write_json(
         root / "latest" / "daily_operator_summary.json",
-        {"operator_action": "review_summary_and_generated_artifacts", "blocked_reasons": []},
+        {
+            "operator_action": "review_summary_and_generated_artifacts",
+            "blocked_reasons": [],
+            "health_report_summary": {
+                "daily_research": {"trade_allowed": True},
+                "trading_day": {"fills": 2},
+            },
+            "slack_openclaw_summary": {
+                "summary": "research_automation cadence=daily workflow=daily status=complete"
+            },
+        },
     )
     _write_json(
         root / "latest" / "daily_readiness_latest.json",
@@ -68,6 +78,14 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
             ],
         },
     )
+    _write_json(
+        root / "latest" / "expected_edge_calibration_latest.json",
+        {"status": "overestimated", "recommended_next_action": "keep_tiny_sampling"},
+    )
+    _write_json(
+        root / "latest" / "evidence_starvation_latest.json",
+        {"status": "starved", "recommendation": "widen_paper_diagnostic_sampling"},
+    )
     _write_json(root / "daily" / "run" / "live_capital_readiness.json", {"status": "blocked"})
 
     payload = research_completion_notify.build_research_completion_payload(
@@ -100,6 +118,10 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
     assert "desired=3" in field_text
     assert "AMZN:consider_promotion/high" in field_text
     assert "MSFT:collect_more_evidence/low" in field_text
+    assert "overestimated / keep_tiny_sampling" in field_text
+    assert "starved / widen_paper_diagnostic_sampling" in field_text
+    assert "research_automation cadence=daily workflow=daily status=complete" in field_text
+    assert '"trade_allowed": true' in field_text
 
 
 def test_research_completion_payload_marks_failed_exit_code_failed(tmp_path: Path) -> None:

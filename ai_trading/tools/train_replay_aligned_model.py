@@ -128,6 +128,14 @@ def _training_cache_dir(raw: str | Path | None = None) -> Path:
     return Path(configured).expanduser() if configured else CACHE_DIR / "training" / "replay_aligned"
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _symbol_feature_cache_key(csv_path: Path, *, timestamp_col: str, symbol: str) -> str:
     stat = csv_path.stat()
     payload = {
@@ -137,6 +145,7 @@ def _symbol_feature_cache_key(csv_path: Path, *, timestamp_col: str, symbol: str
         "timestamp_col": timestamp_col,
         "size": int(stat.st_size),
         "mtime_ns": int(stat.st_mtime_ns),
+        "sha256": _file_sha256(csv_path),
         "feature_columns": list(REPLAY_ALIGNED_FEATURE_COLUMNS),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
@@ -165,6 +174,18 @@ def _load_or_build_symbol_features(
     frame, _report = load_historical_bars(csv_path, timestamp_col=timestamp_col)
     if frame.empty:
         return frame, pd.DataFrame()
+    try:
+        raw = pd.read_csv(csv_path)
+    except (OSError, ValueError):
+        raw = pd.DataFrame()
+    if not raw.empty:
+        lower_map = {str(col).lower(): col for col in raw.columns}
+        spread_col = lower_map.get("spread_bps")
+        ts_col = lower_map.get(str(timestamp_col).lower()) or lower_map.get("timestamp")
+        if spread_col is not None and ts_col is not None:
+            spread_index = pd.to_datetime(raw[ts_col], errors="coerce", utc=True, format="mixed")
+            spread = pd.Series(pd.to_numeric(raw[spread_col], errors="coerce").to_numpy(), index=spread_index)
+            frame["spread_bps"] = spread.reindex(frame.index).fillna(0.0).to_numpy(dtype=float)
     features = _feature_frame(frame, symbol=symbol)
     if use_training_cache:
         try:
@@ -205,17 +226,21 @@ def _excursion_bps(
     close: pd.Series,
     *,
     horizon_bars: int,
+    high: pd.Series | None = None,
+    low: pd.Series | None = None,
 ) -> tuple[pd.Series, pd.Series]:
     horizon = max(1, int(horizon_bars))
     close_float = pd.to_numeric(close, errors="coerce").astype(float)
+    high_float = pd.to_numeric(high, errors="coerce").astype(float) if high is not None else close_float
+    low_float = pd.to_numeric(low, errors="coerce").astype(float) if low is not None else close_float
     base = close_float.replace(0.0, np.nan)
-    future_returns: list[pd.Series] = []
+    adverse_returns: list[pd.Series] = []
+    favorable_returns: list[pd.Series] = []
     for offset in range(1, horizon + 1):
-        future = close_float.shift(-offset)
-        future_returns.append(((future / base) - 1.0) * 10000.0)
-    returns = pd.concat(future_returns, axis=1)
-    max_favorable = returns.max(axis=1, skipna=True)
-    max_adverse = returns.min(axis=1, skipna=True)
+        adverse_returns.append(((low_float.shift(-offset) / base) - 1.0) * 10000.0)
+        favorable_returns.append(((high_float.shift(-offset) / base) - 1.0) * 10000.0)
+    max_adverse = pd.concat(adverse_returns, axis=1).min(axis=1, skipna=True)
+    max_favorable = pd.concat(favorable_returns, axis=1).max(axis=1, skipna=True)
     return cast(pd.Series, max_adverse), cast(pd.Series, max_favorable)
 
 
@@ -223,13 +248,16 @@ def _label_score(
     *,
     objective: str,
     net_long_bps: pd.Series,
+    spread_adjusted_long_bps: pd.Series,
     max_adverse_excursion_bps: pd.Series,
     max_favorable_excursion_bps: pd.Series,
     round_trip_cost_bps: pd.Series,
 ) -> pd.Series:
     normalized = _normalize_label_objective(objective)
-    if normalized in {"net_markout", "spread_adjusted"}:
+    if normalized == "net_markout":
         return net_long_bps
+    if normalized == "spread_adjusted":
+        return spread_adjusted_long_bps
     adverse_penalty = max_adverse_excursion_bps.clip(upper=0.0).abs()
     favorable_credit = max_favorable_excursion_bps.clip(lower=0.0)
     if normalized == "risk_adjusted":
@@ -260,9 +288,16 @@ def _build_symbol_dataset(
     )
     if frame.empty:
         return pd.DataFrame()
+    if not frame.index.is_monotonic_increasing:
+        frame = frame.sort_index(kind="mergesort")
+        features = features.reindex(frame.index)
     close = pd.to_numeric(frame["close"], errors="coerce").astype(float)
     future_close = close.shift(-int(horizon_bars))
     gross_long_bps = ((future_close / close.replace(0.0, np.nan)) - 1.0) * 10000.0
+    if "spread_bps" in frame.columns:
+        spread_cost_bps = pd.to_numeric(frame["spread_bps"], errors="coerce").fillna(0.0).clip(lower=0.0).astype(float)
+    else:
+        spread_cost_bps = pd.Series(0.0, index=frame.index, dtype=float)
     cost_cfg = cast(
         Any,
         argparse.Namespace(
@@ -300,15 +335,21 @@ def _build_symbol_dataset(
         index=frame.index,
         dtype=float,
     )
-    round_trip_cost_bps = (2.0 * max(0.0, float(fee_bps))) + entry_slippage + exit_slippage
+    round_trip_cost_bps = (
+        spread_cost_bps + (2.0 * max(0.0, float(fee_bps))) + entry_slippage + exit_slippage
+    )
+    spread_adjusted_long_bps = gross_long_bps - spread_cost_bps
     net_long_bps = gross_long_bps - round_trip_cost_bps
     max_adverse_excursion_bps, max_favorable_excursion_bps = _excursion_bps(
         close,
         horizon_bars=horizon_bars,
+        high=frame["high"] if "high" in frame.columns else None,
+        low=frame["low"] if "low" in frame.columns else None,
     )
     risk_adjusted_net_bps = _label_score(
         objective="risk_adjusted",
         net_long_bps=net_long_bps,
+        spread_adjusted_long_bps=spread_adjusted_long_bps,
         max_adverse_excursion_bps=max_adverse_excursion_bps,
         max_favorable_excursion_bps=max_favorable_excursion_bps,
         round_trip_cost_bps=round_trip_cost_bps,
@@ -317,6 +358,7 @@ def _build_symbol_dataset(
     label_score_bps = _label_score(
         objective=normalized_objective,
         net_long_bps=net_long_bps,
+        spread_adjusted_long_bps=spread_adjusted_long_bps,
         max_adverse_excursion_bps=max_adverse_excursion_bps,
         max_favorable_excursion_bps=max_favorable_excursion_bps,
         round_trip_cost_bps=round_trip_cost_bps,
@@ -328,6 +370,8 @@ def _build_symbol_dataset(
     out["label_end_timestamp"] = label_end_timestamp.to_numpy()
     out["session_regime"] = [_replay_session_regime(ts) for ts in frame.index]
     out["gross_long_bps"] = gross_long_bps.to_numpy(dtype=float)
+    out["spread_cost_bps"] = spread_cost_bps.to_numpy(dtype=float)
+    out["spread_adjusted_long_bps"] = spread_adjusted_long_bps.to_numpy(dtype=float)
     out["entry_slippage_bps"] = entry_slippage.to_numpy(dtype=float)
     out["exit_slippage_bps"] = exit_slippage.to_numpy(dtype=float)
     out["round_trip_cost_bps"] = round_trip_cost_bps.to_numpy(dtype=float)
@@ -339,7 +383,14 @@ def _build_symbol_dataset(
     out["label_objective"] = normalized_objective
     out["target"] = (out["label_score_bps"] > float(min_net_edge_bps)).astype(int)
     out = out.replace([np.inf, -np.inf], np.nan).dropna(
-        subset=[*REPLAY_ALIGNED_FEATURE_COLUMNS, "net_long_bps", "label_score_bps", "target"]
+        subset=[
+            *REPLAY_ALIGNED_FEATURE_COLUMNS,
+            "timestamp",
+            "label_end_timestamp",
+            "net_long_bps",
+            "label_score_bps",
+            "target",
+        ]
     )
     return cast(pd.DataFrame, out)
 
@@ -618,21 +669,29 @@ def _split_train_validation_with_purge(
     *,
     train_fraction: float,
     horizon_bars: int,
+    embargo_bars: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     cutoff_idx = max(1, min(len(dataset) - 1, int(len(dataset) * float(train_fraction))))
     train = dataset.iloc[:cutoff_idx].copy()
     validation = dataset.iloc[cutoff_idx:].copy()
     validation_start = pd.to_datetime(validation["timestamp"], errors="coerce", utc=True).min()
     purged_train_rows = 0
+    embargoed_train_rows = 0
     if not pd.isna(validation_start) and "label_end_timestamp" in train.columns:
         label_end = pd.to_datetime(train["label_end_timestamp"], errors="coerce", utc=True)
         keep_mask = label_end < validation_start
         purged_train_rows = int((~keep_mask).sum())
         train = train.loc[keep_mask].copy()
+    embargo_count = max(0, int(0 if embargo_bars is None else embargo_bars))
+    if embargo_count > 0 and not train.empty:
+        embargoed_train_rows = int(min(embargo_count, len(train)))
+        train = train.iloc[:-embargoed_train_rows].copy() if embargoed_train_rows < len(train) else train.iloc[0:0].copy()
     diagnostics = {
         "initial_train_rows": int(cutoff_idx),
         "initial_validation_rows": int(len(dataset) - cutoff_idx),
         "purged_train_rows": int(purged_train_rows),
+        "embargoed_train_rows": int(embargoed_train_rows),
+        "embargo_bars": int(embargo_count),
         "horizon_bars": int(horizon_bars),
         "validation_start": None if pd.isna(validation_start) else str(validation_start),
     }

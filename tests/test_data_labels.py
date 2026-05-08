@@ -148,12 +148,21 @@ def test_trade_quality_labels_multi_horizon_costs_and_end_timestamps() -> None:
     assert first_h1["label_end_timestamp"] == idx[1]
     assert first_h3["label_end_timestamp"] == idx[3]
     assert first_h1["round_trip_cost_bps"] == pytest.approx(7.0)
+    assert first_h1["markout_bps"] == pytest.approx(100.0)
     assert first_h1["gross_return_bps"] == pytest.approx(100.0)
+    assert first_h1["spread_adjusted_markout_bps"] == pytest.approx(99.0)
+    assert first_h1["slippage_adjusted_markout_bps"] == pytest.approx(96.0)
     assert first_h1["net_edge_after_cost_bps"] == pytest.approx(93.0)
     assert first_h1["mae_bps"] == pytest.approx(50.0)
     assert first_h1["mfe_bps"] == pytest.approx(200.0)
+    assert first_h1["adverse_selection_after_fill_bps"] == pytest.approx(0.0)
     assert first_h1["quality_binary"] == 1
+    assert first_h1["net_edge_binary"] == 1
     assert first_h1["quality_multiclass"] == 1
+    assert first_h1["net_edge_multiclass"] == 1
+    assert first_h1["trade_quality_positive"] == 1
+    assert first_h1["trade_quality_neutral"] == 0
+    assert first_h1["trade_quality_negative"] == 0
     assert out["label_end_timestamp"].notna().all()
     assert not ((out["label_start_timestamp"] == idx[-1]) & (out["horizon_bars"] == 1)).any()
 
@@ -181,9 +190,132 @@ def test_trade_quality_labels_short_side_and_negative_quality() -> None:
 
     first = out.iloc[0]
     assert first["gross_return_bps"] == pytest.approx(-200.0)
+    assert first["spread_adjusted_markout_bps"] == pytest.approx(-201.0)
+    assert first["slippage_adjusted_markout_bps"] == pytest.approx(-202.0)
     assert first["net_edge_after_cost_bps"] == pytest.approx(-205.0)
     assert first["mae_bps"] == pytest.approx(-300.0)
     assert first["mfe_bps"] == pytest.approx(-100.0)
+    assert first["adverse_selection_after_fill_bps"] == pytest.approx(202.0)
     assert first["risk_adjusted_return_bps"] == pytest.approx(-505.0)
     assert first["quality_binary"] == 0
+    assert first["net_edge_binary"] == 0
     assert first["quality_multiclass"] == -1
+    assert first["net_edge_multiclass"] == -1
+    assert first["trade_quality_positive"] == 0
+    assert first["trade_quality_neutral"] == 0
+    assert first["trade_quality_negative"] == 1
+
+
+def test_trade_quality_labels_standard_bar_horizons_and_neutral_bucket() -> None:
+    idx = pd.date_range("2026-01-01 09:30:00", periods=18, freq="min")
+    prices = pd.DataFrame(
+        {
+            "close": [
+                100.0,
+                100.01,
+                100.02,
+                100.03,
+                100.04,
+                100.05,
+                100.06,
+                100.07,
+                100.08,
+                100.09,
+                100.10,
+                100.11,
+                100.12,
+                100.13,
+                100.14,
+                100.15,
+                100.16,
+                100.17,
+            ],
+            "high": [
+                100.03,
+                100.04,
+                100.05,
+                100.06,
+                100.07,
+                100.08,
+                100.09,
+                100.10,
+                100.11,
+                100.12,
+                100.13,
+                100.14,
+                100.15,
+                100.16,
+                100.17,
+                100.18,
+                100.19,
+                100.20,
+            ],
+            "low": [
+                99.99,
+                100.00,
+                100.01,
+                100.02,
+                100.03,
+                100.04,
+                100.05,
+                100.06,
+                100.07,
+                100.08,
+                100.09,
+                100.10,
+                100.11,
+                100.12,
+                100.13,
+                100.14,
+                100.15,
+                100.16,
+            ],
+        },
+        index=idx,
+    )
+
+    out = trade_quality_labels(
+        prices,
+        horizons=[1, 3, 5, 15],
+        spread_bps=0.5,
+        slippage_bps=0.25,
+        fee_bps=0.25,
+        multiclass_edge_threshold_bps=20.0,
+    )
+
+    assert set(out["horizon_bars"]) == {1, 3, 5, 15}
+    assert out["label_start_timestamp"].max() < idx[-1]
+    assert out["label_end_timestamp"].max() <= idx[-1]
+    first_h1 = out[(out["label_start_timestamp"] == idx[0]) & (out["horizon_bars"] == 1)].iloc[0]
+    assert first_h1["round_trip_cost_bps"] == pytest.approx(1.5)
+    assert first_h1["trade_quality_positive"] == 0
+    assert first_h1["trade_quality_neutral"] == 1
+    assert first_h1["trade_quality_negative"] == 0
+    assert first_h1["trade_quality_positive"] + first_h1["trade_quality_neutral"] + first_h1["trade_quality_negative"] == 1
+
+
+def test_trade_quality_labels_sorts_timestamps_before_future_horizons() -> None:
+    idx = pd.to_datetime(
+        [
+            "2026-01-01 09:32:00",
+            "2026-01-01 09:30:00",
+            "2026-01-01 09:31:00",
+            "2026-01-01 09:33:00",
+        ]
+    )
+    prices = pd.DataFrame(
+        {
+            "close": [102.0, 100.0, 101.0, 103.0],
+            "high": [102.5, 100.5, 101.5, 103.5],
+            "low": [101.5, 99.5, 100.5, 102.5],
+        },
+        index=idx,
+    )
+
+    out = trade_quality_labels(prices, horizons=[1, 3], spread_bps=0.0, slippage_bps=0.0, fee_bps=0.0)
+
+    assert set(out["horizon_bars"]) == {1, 3}
+    assert bool(out["label_end_timestamp"].gt(out["label_start_timestamp"]).all())
+    first = out[(out["label_start_timestamp"] == pd.Timestamp("2026-01-01 09:30:00")) & (out["horizon_bars"] == 1)].iloc[0]
+    assert first["label_end_timestamp"] == pd.Timestamp("2026-01-01 09:31:00")
+    assert first["gross_return_bps"] == pytest.approx(100.0)

@@ -164,8 +164,15 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     replay = config.run_dir / "replay_governance_summary.json"
     replay_alignment = config.run_dir / "replay_live_cost_alignment.json"
     regime_throttle = config.run_dir / "regime_entry_throttle.json"
+    expected_edge_calibration = config.run_dir / "expected_edge_calibration.json"
+    execution_capture = config.run_dir / "execution_capture.json"
+    evidence_starvation = config.run_dir / "evidence_starvation.json"
     trading_day = config.run_dir / "trading_day_report.json"
     symbol_promotion = config.run_dir / "symbol_promotion_comparison.json"
+    symbol_lifecycle = config.run_dir / "symbol_lifecycle.json"
+    counterfactual_execution = config.run_dir / "counterfactual_execution.json"
+    portfolio_edge = config.run_dir / "portfolio_edge_control.json"
+    decision_receipts = config.run_dir / "decision_receipts.json"
     daily_research = config.run_dir / "daily_research_report.json"
     daily_research_md = config.run_dir / "daily_research_report.md"
     live_readiness = config.run_dir / "live_capital_readiness.json"
@@ -319,6 +326,75 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             blocked_returncodes=(2,),
         ),
         ResearchStep(
+            name="expected_edge_calibration_report",
+            command=_python_module(
+                "ai_trading.tools.expected_edge_calibration_report",
+                "--report-date",
+                config.report_date,
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--gate-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                "--min-samples",
+                _env_text("AI_TRADING_EXPECTED_EDGE_CALIBRATION_MIN_SAMPLES", "25"),
+                "--output-json",
+                expected_edge_calibration,
+                "--latest-json",
+                config.report_root / "latest" / "expected_edge_calibration_latest.json",
+            ),
+            purpose="Diagnose whether expected edge is calibrated to realized fills and markouts.",
+            output_path=expected_edge_calibration,
+            metadata={"promotion_authority": False, "live_money_authority": False},
+        ),
+        ResearchStep(
+            name="execution_capture_report",
+            command=_python_module(
+                "ai_trading.tools.execution_capture_classification_report",
+                "--report-date",
+                config.report_date,
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--min-samples",
+                _env_text("AI_TRADING_EXECUTION_CAPTURE_MIN_SAMPLES", "10"),
+                "--output-json",
+                execution_capture,
+                "--latest-json",
+                config.report_root / "latest" / "execution_capture_latest.json",
+            ),
+            purpose="Classify whether execution preserved expected edge by symbol/session/regime.",
+            output_path=execution_capture,
+            metadata={"promotion_authority": False, "live_money_authority": False},
+        ),
+        ResearchStep(
+            name="evidence_starvation_report",
+            command=_python_module(
+                "ai_trading.tools.evidence_starvation_report",
+                "--report-date",
+                config.report_date,
+                "--executable-symbols",
+                _env_text("AI_TRADING_CANARY_SYMBOLS", ""),
+                "--shadow-symbols",
+                _env_text("AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS", ""),
+                "--order-intents-jsonl",
+                _runtime_input_path("runtime/order_events.jsonl"),
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--gate-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                "--runtime-gonogo-json",
+                gonogo,
+                "--sample-target",
+                _env_text("AI_TRADING_DIAGNOSTIC_SAMPLE_TARGET", "150"),
+                "--output-json",
+                evidence_starvation,
+                "--latest-json",
+                config.report_root / "latest" / "evidence_starvation_latest.json",
+            ),
+            purpose="Warn when throttling prevents enough paper evidence collection.",
+            output_path=evidence_starvation,
+            metadata={"promotion_authority": False, "live_money_authority": False},
+        ),
+        ResearchStep(
             name="trading_day_report",
             command=_python_module(
                 "ai_trading.tools.trading_day_report",
@@ -338,6 +414,10 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 scorecard,
                 "--regime-entry-throttle-json",
                 regime_throttle,
+                "--expected-edge-calibration-json",
+                expected_edge_calibration,
+                "--execution-capture-json",
+                execution_capture,
                 "--output-json",
                 trading_day,
                 "--latest-json",
@@ -347,6 +427,25 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             ),
             purpose="Summarize desired/submitted/rejected trades and daily attribution.",
             output_path=trading_day,
+        ),
+        ResearchStep(
+            name="counterfactual_execution_replay",
+            command=_python_module(
+                "ai_trading.tools.counterfactual_execution_replay_report",
+                "--report-date",
+                config.report_date,
+                "--decisions-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--output-json",
+                counterfactual_execution,
+                "--latest-json",
+                config.report_root / "latest" / "counterfactual_execution_latest.json",
+            ),
+            purpose="Estimate whether accepted and rejected decisions helped or hurt under historical evidence.",
+            output_path=counterfactual_execution,
+            metadata={"promotion_authority": False, "live_money_authority": False},
         ),
         ResearchStep(
             name="symbol_promotion_comparison",
@@ -380,6 +479,79 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             metadata={"promotion_authority": False, "manual_approval_required": True},
         ),
         ResearchStep(
+            name="symbol_lifecycle_report",
+            command=_python_module(
+                "ai_trading.tools.symbol_lifecycle_report",
+                "--report-date",
+                config.report_date,
+                "--symbols",
+                "AAPL,AMZN,MSFT",
+                "--live-cost-model-json",
+                live_cost,
+                "--replay-report-json",
+                replay,
+                "--shadow-report-json",
+                shadow_report,
+                "--trading-day-json",
+                trading_day,
+                "--symbol-scorecard-json",
+                scorecard,
+                "--canary-symbols",
+                _env_text("AI_TRADING_CANARY_SYMBOLS", ""),
+                "--shadow-symbols",
+                _env_text("AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS", ""),
+                "--output-json",
+                symbol_lifecycle,
+                "--latest-json",
+                config.report_root / "latest" / "symbol_lifecycle_latest.json",
+            ),
+            purpose="Summarize manual-only symbol lifecycle recommendations.",
+            output_path=symbol_lifecycle,
+            metadata={"promotion_authority": False, "manual_approval_required": True},
+        ),
+        ResearchStep(
+            name="portfolio_edge_control",
+            command=_python_module(
+                "ai_trading.tools.portfolio_edge_control_report",
+                "--report-date",
+                config.report_date,
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--expected-edge-calibration-json",
+                expected_edge_calibration,
+                "--output-json",
+                portfolio_edge,
+                "--latest-json",
+                config.report_root / "latest" / "portfolio_edge_control_latest.json",
+            ),
+            purpose="Summarize portfolio-level edge controls and concentration risks.",
+            output_path=portfolio_edge,
+            metadata={"promotion_authority": False, "live_money_authority": False},
+        ),
+        ResearchStep(
+            name="decision_receipts_report",
+            command=_python_module(
+                "ai_trading.tools.decision_receipts_report",
+                "--report-date",
+                config.report_date,
+                "--decisions-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                "--order-intents-jsonl",
+                _runtime_input_path("runtime/order_events.jsonl"),
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--gate-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                "--output-json",
+                decision_receipts,
+                "--latest-json",
+                config.report_root / "latest" / "decision_receipts_latest.json",
+            ),
+            purpose="Create operator-readable why-did-we-trade decision receipts from runtime logs.",
+            output_path=decision_receipts,
+            metadata={"promotion_authority": False, "live_money_authority": False},
+        ),
+        ResearchStep(
             name="daily_research_pipeline",
             command=_python_module(
                 "ai_trading.tools.daily_research_pipeline",
@@ -397,12 +569,28 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 scorecard,
                 "--symbol-promotion-json",
                 symbol_promotion,
+                "--symbol-lifecycle-json",
+                symbol_lifecycle,
                 "--replay-live-cost-alignment-json",
                 replay_alignment,
                 "--regime-entry-throttle-json",
                 regime_throttle,
+                "--execution-capture-json",
+                execution_capture,
+                "--counterfactual-execution-json",
+                counterfactual_execution,
+                "--portfolio-edge-json",
+                portfolio_edge,
+                "--decision-receipts-json",
+                decision_receipts,
                 "--training-accelerator-json",
                 training_accelerator,
+                "--expected-edge-calibration-json",
+                expected_edge_calibration,
+                "--evidence-starvation-json",
+                evidence_starvation,
+                "--paper-sampling-state-json",
+                _runtime_input_path("runtime/paper_sampling_state_latest.json"),
                 "--runtime-gonogo-json",
                 gonogo,
                 "--memory-audit-json",
@@ -431,6 +619,12 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 config.report_root / "latest" / "promotion_report_latest.json",
                 "--canary-plan-json",
                 daily_research,
+                "--edge-calibration-json",
+                expected_edge_calibration,
+                "--execution-capture-json",
+                execution_capture,
+                "--portfolio-edge-json",
+                portfolio_edge,
                 "--output-json",
                 live_readiness,
                 "--success-on-blocked",
@@ -853,6 +1047,16 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     tmp_path.replace(path)
 
 
+def _read_json(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _copy_automation_latest(report: Mapping[str, Any], config: ResearchConfig) -> Path:
     latest_dir = config.report_root / "latest"
     latest_path = latest_dir / f"{config.cadence}_research_automation_latest.json"
@@ -913,6 +1117,7 @@ def _operator_summary(
     effective_blocked_reasons = list(blocked_reasons) + _blocked_reasons_from_step_results(
         step_results
     )
+    artifact_summary = _next_level_artifact_summary(config)
     return {
         "artifact_type": "research_operator_summary",
         "generated_at": _iso_now(),
@@ -925,6 +1130,20 @@ def _operator_summary(
         "skipped_steps": skipped,
         "latest_report": str(latest_path) if latest_path is not None else None,
         "operator_action": _operator_action(status, config.cadence, config.workflow),
+        "health_report_summary": artifact_summary,
+        "slack_openclaw_summary": {
+            "service": "ai-trading-research-automation",
+            "severity": "info"
+            if status in {"complete", "planned", "dry_run"}
+            else "warning",
+            "summary": (
+                f"research_automation cadence={config.cadence} "
+                f"workflow={config.workflow} status={status}"
+            ),
+            "suggested_action": _operator_action(status, config.cadence, config.workflow),
+            "blocked_reasons": effective_blocked_reasons,
+            "next_level_artifacts": artifact_summary,
+        },
         "manual_gates": {
             "production_model_promotion": "manual_only",
             "live_money_cutover": "manual_only",
@@ -946,6 +1165,99 @@ def _operator_action(status: str, cadence: str, workflow: str) -> str:
     if status == "blocked":
         return "resolve_blocked_reasons_then_rerun"
     return "inspect_failed_steps_before_restarting_automation"
+
+
+def _artifact_status(payload: Mapping[str, Any], default: str = "missing") -> str:
+    raw = payload.get("status")
+    if isinstance(raw, Mapping):
+        return str(raw.get("status") or default)
+    return str(raw or default)
+
+
+def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
+    latest = config.report_root / "latest"
+    daily = _read_json(latest / "daily_readiness_latest.json")
+    trading_day = _read_json(latest / "trading_day_latest.json")
+    live_readiness = _read_json(latest / "live_capital_readiness_latest.json")
+    expected_edge = _read_json(latest / "expected_edge_calibration_latest.json")
+    execution_capture = _read_json(latest / "execution_capture_latest.json")
+    starvation = _read_json(latest / "evidence_starvation_latest.json")
+    symbol_promotion = _read_json(latest / "symbol_promotion_latest.json")
+    symbol_lifecycle = _read_json(latest / "symbol_lifecycle_latest.json")
+    counterfactual_execution = _read_json(latest / "counterfactual_execution_latest.json")
+    portfolio_edge = _read_json(latest / "portfolio_edge_control_latest.json")
+    decision_receipts = _read_json(latest / "decision_receipts_latest.json")
+    return {
+        "daily_research": {
+            "status": _artifact_status(daily),
+            "trade_allowed": daily.get("trade_allowed"),
+            "recommended_next_session_mode": daily.get("recommended_next_session_mode"),
+            "blocked_reasons": list(daily.get("blocked_reasons", []))
+            if isinstance(daily.get("blocked_reasons"), list)
+            else [],
+        },
+        "trading_day": {
+            "status": _artifact_status(trading_day, "available" if trading_day else "missing"),
+            "desired": trading_day.get("desired_trades", {}).get("count")
+            if isinstance(trading_day.get("desired_trades"), Mapping)
+            else None,
+            "submitted": trading_day.get("submitted_trades", {}).get("count")
+            if isinstance(trading_day.get("submitted_trades"), Mapping)
+            else None,
+            "rejected": trading_day.get("rejected_trades", {}).get("count")
+            if isinstance(trading_day.get("rejected_trades"), Mapping)
+            else None,
+            "fills": trading_day.get("realized_fills", {}).get("count")
+            if isinstance(trading_day.get("realized_fills"), Mapping)
+            else None,
+        },
+        "live_capital_readiness": {
+            "status": _artifact_status(live_readiness),
+            "reasons": list(live_readiness.get("reasons", []))
+            if isinstance(live_readiness.get("reasons"), list)
+            else [],
+            "live_money_authority": False,
+            "manual_approval_required": True,
+        },
+        "expected_edge_calibration": {
+            "status": _artifact_status(expected_edge),
+            "recommended_next_action": expected_edge.get("recommended_next_action"),
+        },
+        "execution_capture": {
+            "status": _artifact_status(execution_capture),
+            "summary": execution_capture.get("summary"),
+        },
+        "evidence_starvation": {
+            "status": _artifact_status(starvation),
+            "recommendation": starvation.get("recommendation"),
+        },
+        "symbol_promotion": {
+            "status": _artifact_status(symbol_promotion),
+            "promotion_authority": bool(symbol_promotion.get("promotion_authority", False)),
+            "runtime_symbol_gating_changed": bool(
+                symbol_promotion.get("runtime_symbol_gating_changed", False)
+            ),
+        },
+        "symbol_lifecycle": {
+            "status": _artifact_status(symbol_lifecycle),
+            "summary": symbol_lifecycle.get("summary"),
+            "manual_approval_required_for_authority_increase": bool(
+                symbol_lifecycle.get("manual_approval_required_for_authority_increase", True)
+            ),
+        },
+        "counterfactual_execution": {
+            "status": _artifact_status(counterfactual_execution),
+            "summary": counterfactual_execution.get("summary"),
+        },
+        "portfolio_edge_control": {
+            "status": _artifact_status(portfolio_edge),
+            "output": portfolio_edge.get("output"),
+        },
+        "decision_receipts": {
+            "status": _artifact_status(decision_receipts),
+            "summary": decision_receipts.get("summary"),
+        },
+    }
 
 
 def _artifact_generated_at(path: Path | None) -> str | None:
@@ -1093,6 +1405,39 @@ def _copy_authority_artifacts(
                     ),
                 ]
             )
+        elif name == "expected_edge_calibration_report":
+            targets.extend(
+                [
+                    latest_dir / "expected_edge_calibration_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/reports/expected_edge_calibration_latest.json",
+                        default_relative="runtime/reports/expected_edge_calibration_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "execution_capture_report":
+            targets.extend(
+                [
+                    latest_dir / "execution_capture_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/reports/execution_capture_latest.json",
+                        default_relative="runtime/reports/execution_capture_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "evidence_starvation_report":
+            targets.extend(
+                [
+                    latest_dir / "evidence_starvation_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/reports/evidence_starvation_latest.json",
+                        default_relative="runtime/reports/evidence_starvation_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
         elif name == "trading_day_report":
             targets.extend(
                 [
@@ -1111,6 +1456,50 @@ def _copy_authority_artifacts(
                     resolve_runtime_artifact_path(
                         "runtime/research_reports/latest/symbol_promotion_latest.json",
                         default_relative="runtime/research_reports/latest/symbol_promotion_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "symbol_lifecycle_report":
+            targets.extend(
+                [
+                    latest_dir / "symbol_lifecycle_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/research_reports/latest/symbol_lifecycle_latest.json",
+                        default_relative="runtime/research_reports/latest/symbol_lifecycle_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "counterfactual_execution_replay":
+            targets.extend(
+                [
+                    latest_dir / "counterfactual_execution_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/reports/counterfactual_execution_latest.json",
+                        default_relative="runtime/reports/counterfactual_execution_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "portfolio_edge_control":
+            targets.extend(
+                [
+                    latest_dir / "portfolio_edge_control_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/reports/portfolio_edge_control_latest.json",
+                        default_relative="runtime/reports/portfolio_edge_control_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "decision_receipts_report":
+            targets.extend(
+                [
+                    latest_dir / "decision_receipts_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/reports/decision_receipts_latest.json",
+                        default_relative="runtime/reports/decision_receipts_latest.json",
                         for_write=True,
                     ),
                 ]

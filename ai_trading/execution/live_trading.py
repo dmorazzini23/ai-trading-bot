@@ -2487,19 +2487,11 @@ def _safe_mode_guard(
     quantity: int | None = None,
 ) -> bool:
     allow_paper_bypass, execution_mode = _safe_mode_policy()
-    # For paper mode, always allow safe-mode bypass unless explicitly halted.
     env_mode = (_runtime_env("EXECUTION_MODE", "") or "").strip().lower()
     if env_mode:
         execution_mode = env_mode
     else:
         execution_mode = execution_mode or "paper"
-    env_flag = _runtime_env("AI_TRADING_SAFE_MODE_ALLOW_PAPER", "") or ""
-    env_paper_bypass = env_flag.strip().lower() not in {"0", "false", "no", "off"}
-    if execution_mode == "paper":
-        # Hard bypass for paper to prevent provider safe-mode from blocking orders.
-        allow_paper_bypass = env_paper_bypass or allow_paper_bypass
-        if allow_paper_bypass:
-            return False
     reason: str | None = None
     env_override = (_runtime_env("AI_TRADING_HALT", "") or "").strip().lower()
     if env_override in {"1", "true", "yes"}:
@@ -2536,8 +2528,7 @@ def _safe_mode_guard(
             and execution_mode == "paper"
             and reason not in {"env_halt", "halt_flag"}
         ):
-            logger.info("SAFE_MODE_PAPER_BYPASS", extra=extra)
-            return False
+            extra["paper_bypass_disabled"] = True
         logger.warning("ORDER_BLOCKED_SAFE_MODE", extra=extra)
         return True
     return False
@@ -18627,14 +18618,10 @@ class ExecutionEngine:
                     skip_reason = str(reason_candidate)
             if not skip_reason:
                 skip_reason = short_reason or "short_precheck_failed"
-            if (
-                short_reason in {"long_only", "margin", "shortability"}
-                or ("shortable" in skip_reason)
-                or ("short" in skip_reason and "disabled" in skip_reason)
-            ):
-                skip_reason = "shorting_disabled"
-            if (
-                short_reason in {"long_only", "margin", "shortability"}
+            if short_reason == "long_only":
+                skip_reason = "open_short_blocked_long_only"
+            elif (
+                short_reason in {"margin", "shortability"}
                 or ("shortable" in skip_reason)
                 or ("short" in skip_reason and "disabled" in skip_reason)
             ):
@@ -19427,6 +19414,7 @@ class ExecutionEngine:
             if not skip_reason:
                 skip_reason = short_reason or "short_precheck_failed"
             if short_reason == "long_only":
+                skip_reason = "open_short_blocked_long_only"
                 logger.info("SHORT_ORDER_SKIPPED_LONG_ONLY_MODE", extra=payload)
             else:
                 log_name = (

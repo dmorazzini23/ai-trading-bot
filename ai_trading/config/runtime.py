@@ -977,8 +977,38 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="safe_mode_allow_paper",
         env=("AI_TRADING_SAFE_MODE_ALLOW_PAPER",),
         cast="bool",
-        default=True,
+        default=False,
         description="Allow paper execution to bypass provider safe-mode blocks.",
+    ),
+    ConfigSpec(
+        field="paper_sampling_enabled",
+        env=("AI_TRADING_PAPER_SAMPLING_ENABLED",),
+        cast="bool",
+        default=False,
+        description="Enable tightly bounded diagnostic paper-order sampling.",
+    ),
+    ConfigSpec(
+        field="paper_sampling_allowed_symbols",
+        env=("AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS",),
+        cast="tuple[str]",
+        default=("AAPL", "AMZN"),
+        description="Symbols eligible for diagnostic paper-order sampling.",
+    ),
+    ConfigSpec(
+        field="paper_sampling_max_trades_per_day",
+        env=("AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_DAY",),
+        cast="int",
+        default=2,
+        description="Maximum diagnostic paper-sampling orders allowed per UTC day.",
+        min_value=1,
+    ),
+    ConfigSpec(
+        field="paper_sampling_max_notional_per_order",
+        env=("AI_TRADING_PAPER_SAMPLING_MAX_NOTIONAL_PER_ORDER",),
+        cast="float",
+        default=250.0,
+        description="Maximum diagnostic paper-sampling order notional before 1-share fallback.",
+        min_value=0.01,
     ),
     ConfigSpec(
         field="max_data_fallbacks",
@@ -2305,7 +2335,7 @@ def _get_sensitive_env_keys() -> tuple[str, ...]:
     if _SENSITIVE_ENV_KEYS is not None:
         return _SENSITIVE_ENV_KEYS
 
-    keys: set[str] = {"AI_TRADING_TRADING_MODE"}
+    keys: set[str] = {"AI_TRADING_LAUNCH_PROFILE", "AI_TRADING_TRADING_MODE"}
     for spec in CONFIG_SPECS:
         keys.update(spec.env)
         keys.update(spec.deprecated_env.keys())
@@ -2391,7 +2421,9 @@ _ENV_ALIAS_MAP: dict[str, str] = {
 }
 
 
-_ALLOWED_OVERRIDE_ENV_KEYS: frozenset[str] = frozenset({*SPEC_BY_ENV.keys(), *_ENV_ALIAS_MAP.keys()})
+_ALLOWED_OVERRIDE_ENV_KEYS: frozenset[str] = frozenset(
+    {*SPEC_BY_ENV.keys(), *_ENV_ALIAS_MAP.keys(), "AI_TRADING_LAUNCH_PROFILE"}
+)
 
 
 def _validate_override_keys(overrides: Mapping[str, Any]) -> None:
@@ -2829,6 +2861,7 @@ class TradingConfig:
         values.setdefault("data_provider", values.get("data_provider_priority", (None,))[0])
         values.setdefault("paper", _infer_paper_mode(values))
         values.setdefault("max_position_mode", values.get("max_position_mode", "STATIC"))
+        _validate_paper_sampling_config(values, env_map)
 
         return cls(
             _explicit_fields=provided_fields,
@@ -3075,6 +3108,28 @@ def _apply_live_execution_quote_defaults(
     for field, default_value in live_defaults.items():
         if field not in explicit_fields:
             values[field] = default_value
+
+
+def _validate_paper_sampling_config(values: Mapping[str, Any], env_map: Mapping[str, Any]) -> None:
+    if not bool(values.get("paper_sampling_enabled")):
+        return
+    execution_mode = str(values.get("execution_mode") or "sim").strip().lower()
+    paper_mode = bool(values.get("paper"))
+    base_url = _normalize_base_url(values.get("alpaca_base_url")).lower()
+    launch_profile = _normalize_env_label(env_map.get("AI_TRADING_LAUNCH_PROFILE"), default="")
+    app_env = _normalize_env_label(values.get("app_env"), default="test")
+    live_like = (
+        execution_mode == "live"
+        or app_env in _LIVE_ENV_VALUES
+        or "paper" not in base_url
+        or launch_profile == "live_canary"
+        or launch_profile.startswith("live_")
+    )
+    if execution_mode != "paper" or not paper_mode or live_like:
+        raise ValueError(
+            "AI_TRADING_PAPER_SAMPLING_ENABLED requires EXECUTION_MODE=paper, "
+            "a paper Alpaca base URL, and a non-live launch profile."
+        )
 
 
 __all__ = [

@@ -111,6 +111,13 @@ def _freshness_limit(name: str, default: float) -> float:
     return max(0.0, parsed)
 
 
+def _summary_status(payload: Mapping[str, Any], default: str = "missing") -> str:
+    raw = payload.get("status")
+    if isinstance(raw, Mapping):
+        return str(raw.get("status") or default)
+    return str(raw or default)
+
+
 def build_live_capital_readiness(
     *,
     health: Mapping[str, Any],
@@ -118,9 +125,15 @@ def build_live_capital_readiness(
     promotion_report: Mapping[str, Any],
     validation: Mapping[str, Any] | None = None,
     canary_plan: Mapping[str, Any] | None = None,
+    edge_calibration: Mapping[str, Any] | None = None,
+    execution_capture: Mapping[str, Any] | None = None,
+    portfolio_edge: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     validation = validation or {}
     canary_plan = canary_plan or {}
+    edge_calibration = edge_calibration or {}
+    execution_capture = execution_capture or {}
+    portfolio_edge = portfolio_edge or {}
     profile = resolve_launch_profile()
     profile_payload = launch_profile_payload(profile)
     reasons: list[str] = []
@@ -141,6 +154,18 @@ def build_live_capital_readiness(
         "canary_plan": _freshness(
             canary_plan,
             max_age_hours=_freshness_limit("AI_TRADING_LIVE_CANARY_PLAN_MAX_AGE_HOURS", 72.0),
+        ),
+        "edge_calibration": _freshness(
+            edge_calibration,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_EDGE_CALIBRATION_MAX_AGE_HOURS", 24.0),
+        ),
+        "execution_capture": _freshness(
+            execution_capture,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_EXECUTION_CAPTURE_MAX_AGE_HOURS", 24.0),
+        ),
+        "portfolio_edge": _freshness(
+            portfolio_edge,
+            max_age_hours=_freshness_limit("AI_TRADING_LIVE_PORTFOLIO_EDGE_MAX_AGE_HOURS", 24.0),
         ),
     }
 
@@ -209,6 +234,28 @@ def build_live_capital_readiness(
         reasons.append("live_canary_notional_cap_not_tiny")
     if profile.name == "live_canary" and profile.max_order_count > 3:
         reasons.append("live_canary_order_count_too_high")
+    if profile.name.startswith("live_"):
+        edge_status = str(edge_calibration.get("status") or "").lower()
+        if not edge_calibration:
+            reasons.append("edge_calibration_missing")
+        elif not freshness["edge_calibration"]["fresh"]:
+            reasons.append("edge_calibration_stale")
+        elif edge_status in {"inverted", "overestimated"}:
+            reasons.append(f"edge_calibration_{edge_status}")
+        capture_status = str(execution_capture.get("status") or "").lower()
+        if not execution_capture:
+            reasons.append("execution_capture_missing")
+        elif not freshness["execution_capture"]["fresh"]:
+            reasons.append("execution_capture_stale")
+        elif capture_status in {"needs_review", "degraded"}:
+            reasons.append("execution_capture_not_acceptable")
+        portfolio_status = str(portfolio_edge.get("status") or portfolio_edge.get("output") or "").lower()
+        if not portfolio_edge:
+            reasons.append("portfolio_edge_missing")
+        elif not freshness["portfolio_edge"]["fresh"]:
+            reasons.append("portfolio_edge_stale")
+        elif portfolio_status in {"control_breach", "no_new_entries"}:
+            reasons.append("portfolio_edge_control_breach")
 
     if reasons:
         status = "paper_only" if reasons == ["live_capital_profile_not_selected"] else "blocked"
@@ -216,7 +263,7 @@ def build_live_capital_readiness(
         status = "live_canary_allowed"
     else:
         status = "live_allowed"
-    return {
+    report = {
         "schema_version": "1.0.0",
         "artifact_type": "live_capital_readiness",
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -236,6 +283,62 @@ def build_live_capital_readiness(
             "live_account_confirmed": _env_bool("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", False),
         },
     }
+    report["canary_evidence"] = {
+        "daily_research_trade_allowed": canary_plan.get("trade_allowed"),
+        "daily_research_mode": canary_plan.get("recommended_next_session_mode"),
+        "daily_research_blocked_reasons": list(canary_plan.get("blocked_reasons", []))
+        if isinstance(canary_plan.get("blocked_reasons"), list)
+        else [],
+        "runtime_gonogo": _nested(canary_plan, "runtime_gonogo"),
+        "health_report_summary": _nested(canary_plan, "health_report_summary"),
+        "next_session_limits": _nested(canary_plan, "next_session_limits"),
+        "edge_calibration": {
+            "status": edge_calibration.get("status"),
+            "fresh": freshness["edge_calibration"]["fresh"],
+            "summary": _nested(edge_calibration, "summary"),
+        },
+        "execution_capture": {
+            "status": execution_capture.get("status"),
+            "fresh": freshness["execution_capture"]["fresh"],
+            "summary": _nested(execution_capture, "summary"),
+        },
+        "portfolio_edge": {
+            "status": portfolio_edge.get("status") or portfolio_edge.get("output"),
+            "fresh": freshness["portfolio_edge"]["fresh"],
+            "summary": _nested(portfolio_edge, "summary"),
+        },
+    }
+    report["health_report_summary"] = {
+        "status": status,
+        "health_status": _summary_status(health),
+        "health_ok": bool(health.get("ok")),
+        "broker_connected": bool(broker.get("connected")),
+        "database_ok": bool(_nested(health, "database").get("ok")),
+        "provider_status": _summary_status(_nested(health, "data_provider")),
+        "provider_authority_ok": _nested(health, "provider_authority").get("ok"),
+        "promotion_ready": bool(promotion_report.get("promotion_ready")),
+        "live_cost_status": _summary_status(live_status),
+        "validation_fresh": bool(freshness["validation"]["fresh"]),
+        "live_cost_fresh": bool(freshness["live_cost_model"]["fresh"]),
+        "canary_plan_fresh": bool(freshness["canary_plan"]["fresh"]),
+        "reasons": reasons,
+    }
+    report["openclaw_summary"] = {
+        "service": "ai-trading-live-capital",
+        "severity": "info" if status in {"live_canary_allowed", "live_allowed"} else "warning",
+        "summary": f"live_capital_readiness status={status} profile={profile.name}",
+        "suggested_action": (
+            "manual review required before enabling live capital"
+            if status in {"live_canary_allowed", "live_allowed"}
+            else "resolve live-capital readiness blockers before live cutover"
+        ),
+        "blocked_reasons": reasons,
+        "details": {
+            "health_report_summary": report["health_report_summary"],
+            "canary_evidence": report["canary_evidence"],
+        },
+    }
+    return report
 
 
 def _default_output() -> Path:
@@ -254,6 +357,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--promotion-report-json", type=Path, default=None)
     parser.add_argument("--validation-json", type=Path, default=None)
     parser.add_argument("--canary-plan-json", type=Path, default=None)
+    parser.add_argument("--edge-calibration-json", type=Path, default=None)
+    parser.add_argument("--execution-capture-json", type=Path, default=None)
+    parser.add_argument("--portfolio-edge-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--success-on-blocked", action="store_true")
     args = parser.parse_args(argv)
@@ -270,6 +376,9 @@ def main(argv: list[str] | None = None) -> int:
         promotion_report=_read_json(args.promotion_report_json),
         validation=_read_json(args.validation_json),
         canary_plan=_read_json(args.canary_plan_json),
+        edge_calibration=_read_json(args.edge_calibration_json),
+        execution_capture=_read_json(args.execution_capture_json),
+        portfolio_edge=_read_json(args.portfolio_edge_json),
     )
     output = args.output_json or _default_output()
     output.parent.mkdir(parents=True, exist_ok=True)
