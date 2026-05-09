@@ -216,6 +216,45 @@ def test_analyze_text_success_with_fake_transformer_stack(monkeypatch: pytest.Mo
     }
 
 
+def test_analyze_text_uses_model_label_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Torch:
+        @staticmethod
+        def no_grad() -> Any:
+            class Context:
+                def __enter__(self) -> None:
+                    return None
+
+                def __exit__(self, *_args: object) -> None:
+                    return None
+
+            return Context()
+
+        @staticmethod
+        def softmax(_logits: Any, dim: int) -> Any:
+            assert dim == 0
+            return SimpleNamespace(tolist=lambda: [0.6, 0.3, 0.1])
+
+    class Model:
+        config = SimpleNamespace(id2label={0: "Neutral", 1: "Positive", 2: "Negative"})
+
+        def __call__(self, **_inputs: Any) -> Any:
+            return SimpleNamespace(logits=[[1.0, 2.0, 3.0]])
+
+    monkeypatch.setattr(
+        sentiment,
+        "_load_transformers",
+        lambda _logger=None: (Torch, lambda *_args, **_kwargs: {"ids": [1]}, Model()),
+    )
+    monkeypatch.setattr(sentiment, "tensors_to_device", lambda inputs, _device: inputs)
+
+    assert sentiment.analyze_text("earnings look strong") == {
+        "available": True,
+        "pos": 0.3,
+        "neg": 0.1,
+        "neu": 0.6,
+    }
+
+
 def test_analyze_text_ssl_error_becomes_actionable_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

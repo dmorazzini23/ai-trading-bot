@@ -317,3 +317,66 @@ def test_optional_dependency_loaders_cache_success_and_log_missing_once(
     assert sentiment._load_transformers(Log) is None
     assert sentiment._load_transformers(Log) is None
     assert warnings == [{"package": "bs4"}, {"package": "transformers"}]
+
+
+def test_transformer_loader_falls_back_to_explicit_bert_classes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_import = builtins.__import__
+
+    class Log:
+        @staticmethod
+        def warning(_message: str, *, extra: dict[str, str]) -> None:
+            raise AssertionError(extra)
+
+    class AutoTokenizer:
+        @staticmethod
+        def from_pretrained(_name: str, *, local_files_only: bool = False) -> str:
+            assert local_files_only is True
+            raise ValueError("auto tokenizer unavailable")
+
+    class AutoModel:
+        @staticmethod
+        def from_pretrained(_name: str, *, local_files_only: bool = False) -> str:
+            raise AssertionError("auto model should not be used after tokenizer failure")
+
+    class BertTokenizer:
+        @staticmethod
+        def from_pretrained(name: str, *, local_files_only: bool = False) -> str:
+            assert name == "yiyanghkust/finbert-tone"
+            assert local_files_only is True
+            return "bert-tokenizer"
+
+    class BertModel:
+        @staticmethod
+        def from_pretrained(name: str, *, local_files_only: bool = False) -> Any:
+            assert name == "yiyanghkust/finbert-tone"
+            assert local_files_only is True
+
+            class Model:
+                def to(self, device: str) -> None:
+                    assert device == "cpu"
+
+                def eval(self) -> None:
+                    return None
+
+            return Model()
+
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "torch":
+            return "torch"
+        if name == "transformers":
+            return SimpleNamespace(
+                AutoTokenizer=AutoTokenizer,
+                AutoModelForSequenceClassification=AutoModel,
+                BertTokenizer=BertTokenizer,
+                BertForSequenceClassification=BertModel,
+            )
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    sentiment._transformers_bundle = None
+
+    loaded = sentiment._load_transformers(Log)
+
+    assert loaded[:2] == ("torch", "bert-tokenizer")

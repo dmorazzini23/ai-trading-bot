@@ -45,7 +45,10 @@ def _init_sentiment() -> None:
     global _sentiment_initialized, _device
     if _sentiment_initialized:
         return
-    if not get_env("PYTEST_RUNNING", "0", cast=bool):
+    if not (
+        get_env("PYTEST_RUNNING", "0", cast=bool)
+        or get_env("AI_TRADING_HF_SENTIMENT_BENCHMARK_MODE", False, cast=bool)
+    ):
         validate_required_env()
     _device = get_device()
     _sentiment_initialized = True
@@ -189,11 +192,20 @@ def _load_transformers(log=logger):
             )
             or "yiyanghkust/finbert-tone"
         )
-        tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
-        model = AutoModelForSequenceClassification.from_pretrained(
-            model_name,
-            local_files_only=True,
-        )
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+            model = AutoModelForSequenceClassification.from_pretrained(
+                model_name,
+                local_files_only=True,
+            )
+        except ValueError:
+            from transformers import BertForSequenceClassification, BertTokenizer
+
+            tokenizer = BertTokenizer.from_pretrained(model_name, local_files_only=True)
+            model = BertForSequenceClassification.from_pretrained(
+                model_name,
+                local_files_only=True,
+            )
         model.to(_device)
         model.eval()
         _transformers_bundle = (torch, tokenizer, model)
@@ -205,6 +217,39 @@ def _load_transformers(log=logger):
             _SENT_DEPS_LOGGED.add("transformers")
         _transformers_bundle = None
     return _transformers_bundle
+
+
+def _sentiment_label_key(raw: Any) -> str | None:
+    token = str(raw or "").strip().lower().replace("_", "-")
+    if "positive" in token or token in {"pos", "bull", "bullish"}:
+        return "pos"
+    if "negative" in token or token in {"neg", "bear", "bearish"}:
+        return "neg"
+    if "neutral" in token or token == "neu":
+        return "neu"
+    return None
+
+
+def _sentiment_probability_payload(probs: Any, model: Any) -> dict[str, float | bool]:
+    values = [float(x) for x in probs.tolist()]
+    id2label = getattr(getattr(model, "config", None), "id2label", {}) or {}
+    mapped = {"pos": 0.0, "neg": 0.0, "neu": 0.0}
+    used_mapping = False
+    for index, value in enumerate(values):
+        label = id2label.get(index)
+        if label is None:
+            label = id2label.get(str(index)) if isinstance(id2label, dict) else None
+        key = _sentiment_label_key(label)
+        if key is None:
+            continue
+        mapped[key] = value
+        used_mapping = True
+    if used_mapping:
+        return {"available": True, "pos": mapped["pos"], "neg": mapped["neg"], "neu": mapped["neu"]}
+    if len(values) >= 3:
+        neg, neu, pos = values[:3]
+        return {"available": True, "pos": pos, "neg": neg, "neu": neu}
+    return _neutral_sentiment_payload("sentiment_label_mapping_unavailable")
 SENTIMENT_TTL_SEC = 600
 SENTIMENT_RATE_LIMITED_TTL_SEC = 7200
 SENTIMENT_FAILURE_THRESHOLD = 15
@@ -764,8 +809,7 @@ def analyze_text(text: str, logger=logger) -> dict:
             outputs = model(**inputs)
             logits = outputs.logits[0]
             probs = torch.softmax(logits, dim=0)
-        neg, neu, pos = (float(x) for x in probs.tolist())
-        return {'available': True, 'pos': pos, 'neg': neg, 'neu': neu}
+        return _sentiment_probability_payload(probs, model)
     except (ValueError, TypeError) as exc:
         logger.warning('analyze_text inference failed: %s', exc)
         if not _SENTIMENT_STUB_LOGGED:
