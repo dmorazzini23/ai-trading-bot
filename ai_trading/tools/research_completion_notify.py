@@ -195,6 +195,17 @@ def build_research_completion_payload(
         f"accepted={hf_intake_summary.get('accepted_for_offline_experiment', hf_summary.get('accepted_for_offline_experiment', 'n/a'))}, "
         "runtime_authority=false"
     )
+    weekend_schedule = report.get("weekend_schedule") if isinstance(report.get("weekend_schedule"), Mapping) else {}
+    monday_preparation = report.get("monday_preparation") if isinstance(report.get("monday_preparation"), Mapping) else {}
+    weekend_text = "n/a"
+    if str(cadence).startswith("weekend-"):
+        weekend_text = (
+            f"symbols={weekend_schedule.get('effective_symbols', 'n/a')}, "
+            f"max_candidates={weekend_schedule.get('max_candidates', 'n/a')}, "
+            f"max_replay={weekend_schedule.get('max_replay_candidates', 'n/a')}, "
+            f"monday_action={monday_preparation.get('recommended_operator_action', 'n/a')}, "
+            "research_only=true"
+        )
     title = f"ai-trading research {cadence} finished: {status}"
     text = (
         f"{title}\n"
@@ -222,6 +233,7 @@ def build_research_completion_payload(
         _field("Expected edge", edge_text),
         _field("Evidence starvation", starvation_text),
         _field("Hugging Face research", hf_text),
+        _field("Weekend research", weekend_text),
         _field("Health/report summary", json.dumps(health_summary, sort_keys=True) if health_summary else "n/a"),
         _field("OpenClaw summary", openclaw_summary.get("summary") if openclaw_summary else "n/a"),
         _field("Run report", report.get("paths", {}).get("report") if isinstance(report.get("paths"), Mapping) else None),

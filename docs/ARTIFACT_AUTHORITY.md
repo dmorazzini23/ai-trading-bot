@@ -43,6 +43,14 @@ Use these latest pointers for current operational decisions:
   Completion notifications must use the automation latest pointer for run
   status and must not substitute stale daily readiness aliases after failed or
   locked launches.
+- Weekend research:
+  `/var/lib/ai-trading-bot/runtime/research_reports/latest/weekend_research_latest.json`
+  and
+  `/var/lib/ai-trading-bot/runtime/research_reports/latest/weekend_operator_summary.json`
+  summarize Saturday broad research and Sunday Monday-readiness synthesis. These
+  artifacts are research-only evidence. They may recommend review actions, but
+  they never change model, symbol, size, launch-profile, provider, canary, or
+  live-capital authority.
 - Hugging Face research:
   `/var/lib/ai-trading-bot/runtime/research_reports/latest/hf_discovery_latest.json`,
   `hf_candidate_intake_latest.json`, and `hf_cache_materialization_latest.json`
@@ -52,10 +60,10 @@ Use these latest pointers for current operational decisions:
 
 ## Research Artifacts
 
-Daily, weekly, and monthly research bundles are evidence, not authority to mutate
-the runtime. They may contain candidate models, replay studies, symbol rankings,
-or suggested gates. A candidate becomes operational only after a manual promotion
-report and an operator cutover.
+Daily, weekly, monthly, and weekend research bundles are evidence, not authority
+to mutate the runtime. They may contain candidate models, replay studies, symbol
+rankings, Monday-preparation recommendations, or suggested gates. A candidate
+becomes operational only after a manual promotion report and an operator cutover.
 
 ## Archive Rules
 

@@ -136,6 +136,163 @@ def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(
     assert bridge["metadata"]["enforcement_authority"] is False
 
 
+def test_weekend_saturday_plan_uses_bounded_broad_research_caps(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "bars"
+    data_dir.mkdir()
+    report_root = tmp_path / "reports"
+    exit_code = research_automation.main(
+        [
+            "weekend-saturday",
+            "--report-root",
+            str(report_root),
+            "--run-id",
+            "saturday-test",
+            "--data-dir",
+            str(data_dir),
+            "--symbols",
+            "AAPL,AMZN,MSFT,NVDA",
+            "--plan-only",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = _read(report_root / "weekend" / "saturday-test" / "weekend_research_report.json")
+    assert payload["status"] == "planned"
+    assert payload["cadence"] == "weekend-saturday"
+    assert payload["weekend_schedule"]["max_runtime_minutes"] == 180
+    assert payload["weekend_schedule"]["max_symbols"] == 25
+    assert payload["weekend_schedule"]["max_candidates"] == 100
+    assert payload["weekend_schedule"]["max_replay_candidates"] == 15
+    assert payload["monday_preparation"]["research_only"] is True
+    assert payload["safety"]["weekend_research_authority"] == "research_only"
+    step_names = {str(step["name"]) for step in payload["steps"]}  # type: ignore[index]
+    assert "training_accelerator_weekend_broad" in step_names
+    assert "multi_horizon_weekend_broad" in step_names
+    broad = next(step for step in payload["steps"] if step["name"] == "multi_horizon_weekend_broad")  # type: ignore[index]
+    assert "--max-replay-candidates" in broad["command"]
+    assert "15" in broad["command"]
+    assert broad["metadata"]["promotion_authority"] is False
+    assert broad["metadata"]["manual_approval_required"] is True
+    assert (report_root / "latest" / "weekend_research_latest.json").is_file()
+    assert (report_root / "latest" / "weekend_operator_summary.json").is_file()
+
+
+def test_weekend_sunday_plan_builds_monday_readiness_synthesis(tmp_path: Path) -> None:
+    report_root = tmp_path / "reports"
+    exit_code = research_automation.main(
+        [
+            "weekend-sunday",
+            "--report-root",
+            str(report_root),
+            "--run-id",
+            "sunday-test",
+            "--plan-only",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = _read(report_root / "weekend" / "sunday-test" / "weekend_research_report.json")
+    assert payload["status"] == "planned"
+    assert payload["cadence"] == "weekend-sunday"
+    assert payload["weekend_schedule"]["max_runtime_minutes"] == 120
+    assert payload["weekend_schedule"]["max_replay_candidates"] == 20
+    assert payload["monday_preparation"]["recommended_operator_action"] == (
+        "review_monday_preparation_before_market_open"
+    )
+    step_names = {str(step["name"]) for step in payload["steps"]}  # type: ignore[index]
+    for expected in (
+        "replay_governance_refresh",
+        "replay_live_cost_alignment",
+        "walk_forward_capital_simulation",
+        "counterfactual_execution_replay",
+        "regime_entry_throttle_report",
+        "order_type_optimizer",
+        "post_trade_surveillance",
+        "model_data_drift_monitor",
+        "operator_control_plane",
+        "live_capital_readiness",
+    ):
+        assert expected in step_names
+    readiness = next(step for step in payload["steps"] if step["name"] == "live_capital_readiness")  # type: ignore[index]
+    assert readiness["metadata"]["live_money_authority"] is False
+    assert readiness["metadata"]["manual_approval_required"] is True
+
+
+def test_weekend_research_disabled_blocks_without_steps(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        research_automation,
+        "_env_text",
+        lambda name, default: "0"
+        if name == "AI_TRADING_WEEKEND_RESEARCH_ENABLED"
+        else default,
+    )
+
+    exit_code = research_automation.main(
+        [
+            "weekend-saturday",
+            "--report-root",
+            str(tmp_path / "reports"),
+            "--run-id",
+            "disabled-test",
+        ]
+    )
+
+    assert exit_code == 2
+    payload = _read(
+        tmp_path / "reports" / "weekend" / "disabled-test" / "weekend_research_report.json"
+    )
+    assert payload["status"] == "blocked"
+    assert payload["blocked_reasons"] == ["weekend_research_disabled"]
+    assert payload["steps"] == []
+
+
+def test_weekend_cap_exhaustion_marks_remaining_steps_failed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = research_automation.ResearchConfig(
+        cadence="weekend-saturday",
+        workflow="weekend-saturday",
+        report_root=tmp_path / "reports",
+        run_dir=tmp_path / "reports" / "weekend" / "run",
+        run_id="run",
+        symbols="AAPL",
+        data_dir=None,
+        shadow_jsonl=tmp_path / "shadow.jsonl",
+        accepted_candidates_jsonl=None,
+        model_path=None,
+        manifest_path=None,
+        current_champion_path="",
+        report_date="2026-05-09",
+        plan_only=False,
+        dry_run=False,
+    )
+    step = research_automation.ResearchStep(
+        name="slow_weekend_step",
+        command=("bash", "-lc", "sleep 2"),
+        purpose="exercise timeout",
+    )
+    monkeypatch.setattr(research_automation, "build_research_steps", lambda _config: ([step], []))
+    monkeypatch.setattr(research_automation, "_weekend_cap_summary", lambda _config: {
+        "enabled": True,
+        "max_runtime_minutes": 15,
+        "max_symbols": 1,
+        "max_candidates": 1,
+        "max_replay_candidates": 1,
+        "max_parallel_workers": 1,
+        "cache_enabled": True,
+        "effective_symbols": "AAPL",
+    })
+    times = iter([0.0, 901.0])
+    monkeypatch.setattr(research_automation, "monotonic", lambda: next(times, 901.0))
+
+    report = research_automation.run_research_automation(config)
+
+    assert report["status"] == "failed"
+    assert report["step_results"][0]["reason"] == "weekend_runtime_cap_exhausted"
+
+
 def test_manual_promotion_blocks_without_model_path(tmp_path: Path) -> None:
     exit_code = research_automation.main(
         [

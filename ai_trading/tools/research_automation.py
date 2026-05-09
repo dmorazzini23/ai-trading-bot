@@ -1,9 +1,9 @@
 """Orchestrate recurring trading research automation runs.
 
 The automation layer intentionally composes existing tools instead of adding
-new model-promotion authority. Daily, weekly, and monthly runs create evidence
-bundles; production model promotion and live-capital cutover remain manual and
-gated.
+new model-promotion authority. Daily, weekly, monthly, and weekend runs create
+evidence bundles; production model promotion and live-capital cutover remain
+manual and gated.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic
 from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
@@ -24,7 +25,8 @@ from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 logger = get_logger(__name__)
 
-_CADENCES = {"daily", "weekly", "monthly", "manual"}
+_WEEKEND_CADENCES = {"weekend-saturday", "weekend-sunday"}
+_CADENCES = {"daily", "weekly", "monthly", "manual", *_WEEKEND_CADENCES}
 _MANUAL_WORKFLOWS = {"promotion", "live-cutover", "incident-replay", "strategy-change"}
 
 
@@ -89,6 +91,61 @@ def _default_market_report_date() -> str:
 
 def _env_text(name: str, default: str) -> str:
     return str(get_env(name, default, cast=str, resolve_aliases=False) or default).strip()
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    raw = _env_text(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        return max(minimum, int(default))
+    return max(minimum, value)
+
+
+def _is_weekend_cadence(cadence: str) -> bool:
+    return str(cadence or "").strip().lower() in _WEEKEND_CADENCES
+
+
+def _weekend_enabled() -> bool:
+    return _truthy(_env_text("AI_TRADING_WEEKEND_RESEARCH_ENABLED", "1"))
+
+
+def _capped_symbols(symbols: str, max_symbols: int) -> str:
+    seen: set[str] = set()
+    capped: list[str] = []
+    for raw in str(symbols or "").split(","):
+        symbol = raw.strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        capped.append(symbol)
+        if len(capped) >= max_symbols:
+            break
+    return ",".join(capped)
+
+
+def _weekend_runtime_limit_minutes(cadence: str) -> int:
+    if cadence == "weekend-sunday":
+        return _env_int("AI_TRADING_WEEKEND_VALIDATION_MAX_RUNTIME_MINUTES", 120, minimum=15)
+    return _env_int("AI_TRADING_WEEKEND_RESEARCH_MAX_RUNTIME_MINUTES", 180, minimum=15)
+
+
+def _weekend_cap_summary(config: ResearchConfig) -> dict[str, Any]:
+    max_symbols = _env_int("AI_TRADING_WEEKEND_RESEARCH_MAX_SYMBOLS", 25, minimum=1)
+    if config.cadence == "weekend-sunday":
+        max_replay = _env_int("AI_TRADING_WEEKEND_VALIDATION_MAX_REPLAY_CANDIDATES", 20, minimum=1)
+    else:
+        max_replay = _env_int("AI_TRADING_WEEKEND_RESEARCH_MAX_REPLAY_CANDIDATES", 15, minimum=1)
+    return {
+        "enabled": _weekend_enabled(),
+        "max_runtime_minutes": _weekend_runtime_limit_minutes(config.cadence),
+        "max_symbols": max_symbols,
+        "max_candidates": _env_int("AI_TRADING_WEEKEND_RESEARCH_MAX_CANDIDATES", 100, minimum=1),
+        "max_replay_candidates": max_replay,
+        "max_parallel_workers": _env_int("AI_TRADING_WEEKEND_RESEARCH_MAX_PARALLEL_WORKERS", 2, minimum=1),
+        "cache_enabled": _truthy(_env_text("AI_TRADING_WEEKEND_RESEARCH_CACHE_ENABLED", "1")),
+        "effective_symbols": _capped_symbols(config.symbols, max_symbols),
+    }
 
 
 def _default_report_root() -> Path:
@@ -161,6 +218,17 @@ def _runtime_path(relative: str) -> Path:
 
 def _runtime_input_path(relative: str) -> Path:
     return resolve_runtime_artifact_path(relative, default_relative=relative, for_write=False)
+
+
+def _training_cache_args(config: ResearchConfig, cadence: str) -> tuple[str, ...]:
+    if _is_weekend_cadence(config.cadence) and not _truthy(
+        _env_text("AI_TRADING_WEEKEND_RESEARCH_CACHE_ENABLED", "1")
+    ):
+        return ()
+    return (
+        "--training-cache-dir",
+        str(config.report_root / "latest" / "training_cache" / cadence),
+    )
 
 
 def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
@@ -817,6 +885,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 model_registry,
                 "--latest-research-json",
                 config.report_root / "latest" / "daily_readiness_latest.json",
+                "--weekend-research-json",
+                config.report_root / "latest" / "weekend_research_latest.json",
                 "--drift-json",
                 drift_monitor,
                 "--surveillance-json",
@@ -884,6 +954,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 drift_monitor,
                 "--operator-control-plane-json",
                 operator_control,
+                "--weekend-research-json",
+                config.report_root / "latest" / "weekend_research_latest.json",
                 "--huggingface-discovery-json",
                 hf_discovery,
                 "--huggingface-candidate-intake-json",
@@ -1395,6 +1467,653 @@ def _monthly_steps(config: ResearchConfig) -> list[ResearchStep]:
     return steps
 
 
+def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep], list[str]]:
+    if not _weekend_enabled():
+        return [], ["weekend_research_disabled"]
+    caps = _weekend_cap_summary(config)
+    symbols = str(caps["effective_symbols"])
+    live_cost = config.run_dir / "live_cost_model.json"
+    shadow_report = config.run_dir / "ml_shadow_report.json"
+    scorecard = config.run_dir / "symbol_universe_scorecard.json"
+    expected_edge = config.run_dir / "expected_edge_calibration.json"
+    execution_capture = config.run_dir / "execution_capture.json"
+    symbol_promotion = config.run_dir / "symbol_promotion_comparison.json"
+    symbol_lifecycle = config.run_dir / "symbol_lifecycle.json"
+    training_accelerator = config.run_dir / "training_accelerator" / "training_accelerator_report.json"
+    multi_horizon_dir = config.run_dir / "multi_horizon_weekend"
+    hf_discovery = config.run_dir / "hf_discovery.json"
+    hf_intake = config.run_dir / "hf_candidate_intake.json"
+    hf_cache = config.run_dir / "hf_cache_materialization.json"
+    model_registry = config.run_dir / "model_registry.json"
+    steps = [
+        ResearchStep(
+            name="live_cost_model",
+            command=_python_module("ai_trading.tools.live_cost_model", "--output-json", live_cost),
+            purpose="Pin observed live costs before broad weekend research.",
+            output_path=live_cost,
+        ),
+        ResearchStep(
+            name="ml_shadow_report",
+            command=_python_module(
+                "ai_trading.tools.ml_shadow_report",
+                "--input-jsonl",
+                config.shadow_jsonl,
+                "--output-json",
+                shadow_report,
+                "--frame-filter",
+                "minute",
+                "--provider-filter",
+                "healthy-primary",
+            ),
+            purpose="Refresh shadow-model evidence before weekend candidate search.",
+            output_path=shadow_report,
+            skip_if_missing=(config.shadow_jsonl,),
+        ),
+        ResearchStep(
+            name="expected_edge_calibration_report",
+            command=_python_module(
+                "ai_trading.tools.expected_edge_calibration_report",
+                "--report-date",
+                config.report_date,
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--gate-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                "--min-samples",
+                _env_text("AI_TRADING_EXPECTED_EDGE_CALIBRATION_MIN_SAMPLES", "25"),
+                "--output-json",
+                expected_edge,
+                "--latest-json",
+                config.report_root / "latest" / "expected_edge_calibration_latest.json",
+            ),
+            purpose="Refresh expected-edge calibration for broad weekend search.",
+            output_path=expected_edge,
+            metadata={"promotion_authority": False, "live_money_authority": False},
+        ),
+        ResearchStep(
+            name="execution_capture_report",
+            command=_python_module(
+                "ai_trading.tools.execution_capture_classification_report",
+                "--report-date",
+                config.report_date,
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--min-samples",
+                _env_text("AI_TRADING_EXECUTION_CAPTURE_MIN_SAMPLES", "10"),
+                "--output-json",
+                execution_capture,
+                "--latest-json",
+                config.report_root / "latest" / "execution_capture_latest.json",
+            ),
+            purpose="Refresh execution-capture evidence before weekend model search.",
+            output_path=execution_capture,
+            metadata={"promotion_authority": False, "live_money_authority": False},
+        ),
+        ResearchStep(
+            name="symbol_universe_scorecard",
+            command=_python_module(
+                "ai_trading.tools.symbol_universe_scorecard",
+                "--live-cost-model-json",
+                live_cost,
+                "--shadow-report-json",
+                shadow_report,
+                "--executable-symbols",
+                _env_text("AI_TRADING_CANARY_SYMBOLS", ""),
+                "--shadow-symbols",
+                _env_text("AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS", ""),
+                "--output-json",
+                scorecard,
+            ),
+            purpose="Refresh symbol scorecards before weekend expansion research.",
+            output_path=scorecard,
+        ),
+        ResearchStep(
+            name="symbol_promotion_comparison",
+            command=_python_module(
+                "ai_trading.tools.symbol_promotion_comparison",
+                "--report-date",
+                config.report_date,
+                "--symbols",
+                symbols,
+                "--live-cost-model-json",
+                live_cost,
+                "--shadow-report-json",
+                shadow_report,
+                "--symbol-scorecard-json",
+                scorecard,
+                "--canary-symbols",
+                _env_text("AI_TRADING_CANARY_SYMBOLS", ""),
+                "--shadow-symbols",
+                _env_text("AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS", ""),
+                "--output-json",
+                symbol_promotion,
+                "--latest-json",
+                config.report_root / "latest" / "symbol_promotion_latest.json",
+            ),
+            purpose="Compare weekend symbols with manual-only promotion recommendations.",
+            output_path=symbol_promotion,
+            metadata={"promotion_authority": False, "manual_approval_required": True},
+        ),
+        ResearchStep(
+            name="symbol_lifecycle_report",
+            command=_python_module(
+                "ai_trading.tools.symbol_lifecycle_report",
+                "--report-date",
+                config.report_date,
+                "--symbols",
+                symbols,
+                "--live-cost-model-json",
+                live_cost,
+                "--shadow-report-json",
+                shadow_report,
+                "--symbol-scorecard-json",
+                scorecard,
+                "--canary-symbols",
+                _env_text("AI_TRADING_CANARY_SYMBOLS", ""),
+                "--shadow-symbols",
+                _env_text("AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS", ""),
+                "--output-json",
+                symbol_lifecycle,
+                "--latest-json",
+                config.report_root / "latest" / "symbol_lifecycle_latest.json",
+            ),
+            purpose="Summarize manual-only symbol lifecycle changes after broad weekend review.",
+            output_path=symbol_lifecycle,
+            metadata={"promotion_authority": False, "manual_approval_required": True},
+        ),
+        ResearchStep(
+            name="huggingface_research_discovery",
+            command=_python_module(
+                "ai_trading.tools.huggingface_research_discovery",
+                "--report-date",
+                config.report_date,
+                "--output-json",
+                hf_discovery,
+                "--latest-json",
+                config.report_root / "latest" / "hf_discovery_latest.json",
+                *(("--enabled", "--use-hf-api") if _hf_research_enabled() else ()),
+            ),
+            purpose="Discover research-only HF candidates during weekend research, if enabled.",
+            output_path=hf_discovery,
+            metadata={
+                "runtime_authority": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+                "metadata_only": True,
+            },
+        ),
+        ResearchStep(
+            name="huggingface_candidate_intake",
+            command=_python_module(
+                "ai_trading.tools.huggingface_candidate_intake",
+                "--report-date",
+                config.report_date,
+                "--discovery-json",
+                hf_discovery,
+                "--ledger-json",
+                config.report_root / "latest" / "experiment_ledger_latest.json",
+                "--ledger-latest-json",
+                config.report_root / "latest" / "experiment_ledger_latest.json",
+                "--output-json",
+                hf_intake,
+                "--latest-json",
+                config.report_root / "latest" / "hf_candidate_intake_latest.json",
+            ),
+            purpose="Convert weekend HF discoveries into manual offline research hypotheses.",
+            output_path=hf_intake,
+            skip_if_missing=(hf_discovery,),
+            metadata={
+                "runtime_authority": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+                "manual_review_required": True,
+            },
+        ),
+        ResearchStep(
+            name="huggingface_cache_materialization_plan",
+            command=_python_module(
+                "ai_trading.tools.huggingface_cache_materializer",
+                "--report-date",
+                config.report_date,
+                "--intake-json",
+                hf_intake,
+                "--dry-run",
+                "--output-json",
+                hf_cache,
+                "--latest-json",
+                config.report_root / "latest" / "hf_cache_materialization_latest.json",
+            ),
+            purpose="Plan optional HF cache materialization; downloads remain disabled by default.",
+            output_path=hf_cache,
+            skip_if_missing=(hf_intake,),
+            metadata={
+                "runtime_authority": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+                "downloads_enabled_by_default": False,
+            },
+        ),
+        ResearchStep(
+            name="model_registry_evaluation",
+            command=_python_module(
+                "ai_trading.tools.model_registry",
+                "evaluate",
+                "--registry-json",
+                config.report_root / "latest" / "model_registry_latest.json",
+                "--output-json",
+                model_registry,
+                "--latest-json",
+                config.report_root / "latest" / "model_registry_evaluation_latest.json",
+            ),
+            purpose="Evaluate registry champion/challenger evidence without deploying models.",
+            output_path=model_registry,
+            skip_if_missing=(config.report_root / "latest" / "model_registry_latest.json",),
+            blocked_returncodes=(2,),
+            metadata={"promotion_authority": False, "manual_approval_required": True},
+        ),
+    ]
+    if config.data_dir is not None:
+        cache_args = _training_cache_args(config, "weekend")
+        steps.append(
+            ResearchStep(
+                name="training_accelerator_weekend_broad",
+                command=_python_module(
+                    "ai_trading.tools.training_accelerator",
+                    "--cadence",
+                    "weekly",
+                    "--data-dir",
+                    config.data_dir,
+                    "--symbols",
+                    symbols,
+                    "--output-dir",
+                    config.run_dir / "training_accelerator",
+                    *cache_args,
+                    "--live-cost-model-json",
+                    live_cost,
+                    "--use-live-cost-model",
+                    "--max-replay-candidates",
+                    str(caps["max_replay_candidates"]),
+                ),
+                purpose="Run bounded broad weekend candidate refresh with cached features.",
+                output_path=training_accelerator,
+                skip_if_missing=(config.data_dir,),
+                metadata={
+                    "promotion_authority": False,
+                    "uses_cached_training_features": bool(caps["cache_enabled"]),
+                    "max_candidates": caps["max_candidates"],
+                    "max_replay_candidates": caps["max_replay_candidates"],
+                    "research_only": True,
+                },
+            )
+        )
+        steps.append(
+            ResearchStep(
+                name="multi_horizon_weekend_broad",
+                command=_python_module(
+                    "ai_trading.tools.multi_horizon_research_pipeline",
+                    "--data-dir",
+                    config.data_dir,
+                    "--symbols",
+                    symbols,
+                    "--output-dir",
+                    multi_horizon_dir,
+                    "--horizons",
+                    "1,3,5,15,30,60",
+                    "--label-objectives",
+                    "net_markout,spread_adjusted,risk_adjusted,mae_mfe",
+                    "--lead-horizon-bars",
+                    "15",
+                    "--live-cost-model-json",
+                    live_cost,
+                    "--use-live-cost-model",
+                    "--max-replay-candidates",
+                    str(caps["max_replay_candidates"]),
+                    *(
+                        (
+                            "--training-cache",
+                            "--training-cache-dir",
+                            str(config.report_root / "latest" / "training_cache" / "weekend"),
+                        )
+                        if bool(caps["cache_enabled"])
+                        else ("--no-training-cache",)
+                    ),
+                ),
+                purpose="Run bounded multi-horizon weekend search with successive-halving replay.",
+                output_path=multi_horizon_dir / "multi_horizon_research_report.json",
+                skip_if_missing=(config.data_dir,),
+                metadata={
+                    "promotion_authority": False,
+                    "research_only": True,
+                    "max_symbols": caps["max_symbols"],
+                    "max_candidates": caps["max_candidates"],
+                    "max_replay_candidates": caps["max_replay_candidates"],
+                    "manual_approval_required": True,
+                },
+            )
+        )
+    return steps, []
+
+
+def _weekend_sunday_steps(config: ResearchConfig) -> tuple[list[ResearchStep], list[str]]:
+    if not _weekend_enabled():
+        return [], ["weekend_research_disabled"]
+    caps = _weekend_cap_summary(config)
+    live_cost = config.run_dir / "live_cost_model.json"
+    replay = config.run_dir / "replay_governance_summary.json"
+    replay_alignment = config.run_dir / "replay_live_cost_alignment.json"
+    expected_edge = config.run_dir / "expected_edge_calibration.json"
+    execution_capture = config.run_dir / "execution_capture.json"
+    regime_throttle = config.run_dir / "regime_entry_throttle.json"
+    counterfactual_execution = config.run_dir / "counterfactual_execution.json"
+    walk_forward = config.run_dir / "walk_forward_capital_simulation.json"
+    order_optimizer = config.run_dir / "order_type_optimizer.json"
+    post_trade_surveillance = config.run_dir / "post_trade_surveillance.json"
+    drift_monitor = config.run_dir / "model_data_drift_monitor.json"
+    pretrade_risk = config.run_dir / "pretrade_risk_control_verification.json"
+    operator_control = config.run_dir / "operator_control_plane.json"
+    live_readiness = config.run_dir / "live_capital_readiness.json"
+    steps = [
+        ResearchStep(
+            name="live_cost_model",
+            command=_python_module("ai_trading.tools.live_cost_model", "--output-json", live_cost),
+            purpose="Refresh observed costs before Sunday replay/readiness synthesis.",
+            output_path=live_cost,
+        ),
+        ResearchStep(
+            name="expected_edge_calibration_report",
+            command=_python_module(
+                "ai_trading.tools.expected_edge_calibration_report",
+                "--report-date",
+                config.report_date,
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--gate-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                "--min-samples",
+                _env_text("AI_TRADING_EXPECTED_EDGE_CALIBRATION_MIN_SAMPLES", "25"),
+                "--output-json",
+                expected_edge,
+                "--latest-json",
+                config.report_root / "latest" / "expected_edge_calibration_latest.json",
+            ),
+            purpose="Refresh calibration evidence before Monday preparation.",
+            output_path=expected_edge,
+            metadata={"promotion_authority": False, "live_money_authority": False},
+        ),
+        ResearchStep(
+            name="execution_capture_report",
+            command=_python_module(
+                "ai_trading.tools.execution_capture_classification_report",
+                "--report-date",
+                config.report_date,
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--min-samples",
+                _env_text("AI_TRADING_EXECUTION_CAPTURE_MIN_SAMPLES", "10"),
+                "--output-json",
+                execution_capture,
+                "--latest-json",
+                config.report_root / "latest" / "execution_capture_latest.json",
+            ),
+            purpose="Refresh execution-capture evidence before Monday preparation.",
+            output_path=execution_capture,
+            metadata={"promotion_authority": False, "live_money_authority": False},
+        ),
+        ResearchStep(
+            name="replay_governance_refresh",
+            command=_python_module(
+                "ai_trading.tools.replay_governance",
+                "--force",
+                "--replay-output-dir",
+                _runtime_path("runtime/replay_outputs"),
+                "--summary-json",
+                replay,
+            ),
+            purpose="Refresh replay governance for Monday-readiness synthesis.",
+            output_path=replay,
+            blocked_returncodes=(1, 2),
+        ),
+        ResearchStep(
+            name="replay_live_cost_alignment",
+            command=_python_module(
+                "ai_trading.tools.replay_live_cost_alignment_report",
+                "--live-cost-model-json",
+                live_cost,
+                "--replay-report-json",
+                replay,
+                "--output-json",
+                replay_alignment,
+                "--min-samples",
+                "5",
+            ),
+            purpose="Compare replay costs with observed live cost buckets before Monday.",
+            output_path=replay_alignment,
+            metadata={"promotion_authority": False, "live_money_authority": False},
+        ),
+        ResearchStep(
+            name="regime_entry_throttle_report",
+            command=_python_module(
+                "ai_trading.tools.regime_entry_throttle_report",
+                "--report-date",
+                config.report_date,
+                "--live-cost-model-json",
+                live_cost,
+                "--output-json",
+                regime_throttle,
+            ),
+            purpose="Review opening/midday/closing throttle status before Monday.",
+            output_path=regime_throttle,
+            metadata={"enforcement_authority": False},
+        ),
+        ResearchStep(
+            name="counterfactual_execution_replay",
+            command=_python_module(
+                "ai_trading.tools.counterfactual_execution_replay_report",
+                "--report-date",
+                config.report_date,
+                "--decisions-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--output-json",
+                counterfactual_execution,
+                "--latest-json",
+                config.report_root / "latest" / "counterfactual_execution_latest.json",
+            ),
+            purpose="Summarize whether recent gates helped or hurt under counterfactual evidence.",
+            output_path=counterfactual_execution,
+            metadata={"promotion_authority": False, "live_money_authority": False},
+        ),
+        ResearchStep(
+            name="walk_forward_capital_simulation",
+            command=_python_module(
+                "ai_trading.tools.walk_forward_capital_simulation",
+                "--events-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--output-json",
+                walk_forward,
+            ),
+            purpose="Estimate Monday paper/canary capital path without enabling live capital.",
+            output_path=walk_forward,
+            metadata={"live_money_authority": False, "live_enabled": False},
+        ),
+        ResearchStep(
+            name="order_type_optimizer",
+            command=_python_module(
+                "ai_trading.tools.order_type_optimizer",
+                "--candidates-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                "--live-cost-model-json",
+                live_cost,
+                "--output-json",
+                order_optimizer,
+            ),
+            purpose="Review shadow-only order-type recommendations before Monday.",
+            output_path=order_optimizer,
+            metadata={"live_money_authority": False, "enforcement_authority": False},
+        ),
+        ResearchStep(
+            name="post_trade_surveillance",
+            command=_python_module(
+                "ai_trading.tools.post_trade_surveillance_report",
+                "--report-date",
+                config.report_date,
+                "--decisions-jsonl",
+                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                "--orders-jsonl",
+                _runtime_input_path("runtime/order_events.jsonl"),
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--oms-jsonl",
+                _runtime_input_path("runtime/oms_events.jsonl"),
+                "--positions-json",
+                _runtime_input_path("runtime/open_position_reconciliation_latest.json"),
+                "--output-json",
+                post_trade_surveillance,
+                "--latest-json",
+                config.report_root / "latest" / "post_trade_surveillance_latest.json",
+            ),
+            purpose="Detect post-trade issues before Monday open.",
+            output_path=post_trade_surveillance,
+            metadata={"live_money_authority": False},
+        ),
+        ResearchStep(
+            name="pretrade_risk_control_verifier",
+            command=_python_module(
+                "ai_trading.tools.pretrade_risk_control_verifier",
+                "--report-date",
+                config.report_date,
+                "--intents-jsonl",
+                _runtime_input_path("runtime/order_events.jsonl"),
+                "--output-json",
+                pretrade_risk,
+                "--latest-json",
+                config.report_root / "latest" / "pretrade_risk_control_verification_latest.json",
+            ),
+            purpose="Verify pre-trade controls are active before Monday preparation.",
+            output_path=pretrade_risk,
+            blocked_returncodes=(2,),
+            metadata={"live_money_authority": False, "fail_closed": True},
+        ),
+        ResearchStep(
+            name="model_data_drift_monitor",
+            command=_python_module(
+                "ai_trading.tools.model_data_drift_monitor",
+                "--baseline-json",
+                config.report_root / "latest" / "model_data_drift_baseline.json",
+                "--current-json",
+                expected_edge,
+                "--output-json",
+                drift_monitor,
+            ),
+            purpose="Review drift before Monday preparation.",
+            output_path=drift_monitor,
+            metadata={"live_money_authority": False},
+        ),
+        ResearchStep(
+            name="operator_control_plane",
+            command=_python_module(
+                "ai_trading.tools.operator_control_plane",
+                "--health-url",
+                "http://127.0.0.1:9001/healthz",
+                "--readiness-json",
+                _runtime_input_path("runtime/live_capital_readiness_latest.json"),
+                "--runtime-gonogo-json",
+                _runtime_input_path("runtime/runtime_gonogo_status_latest.json"),
+                "--runtime-performance-json",
+                _runtime_input_path("runtime/runtime_performance_report_latest.json"),
+                "--oms-json",
+                _runtime_input_path("runtime/oms_lifecycle_parity_latest.json"),
+                "--latest-research-json",
+                config.report_root / "latest" / "daily_readiness_latest.json",
+                "--weekend-research-json",
+                config.report_root / "latest" / "weekend_research_latest.json",
+                "--drift-json",
+                drift_monitor,
+                "--surveillance-json",
+                post_trade_surveillance,
+                "--risk-verifier-json",
+                pretrade_risk,
+                "--paper-sampling-json",
+                _runtime_input_path("runtime/paper_sampling_state_latest.json"),
+                "--output-json",
+                operator_control,
+            ),
+            purpose="Build a read-only Monday operator control-plane snapshot from artifacts.",
+            output_path=operator_control,
+            metadata={"read_only": True, "mutates_runtime": False},
+        ),
+        ResearchStep(
+            name="live_capital_readiness",
+            command=_python_module(
+                "ai_trading.tools.live_capital_readiness",
+                "--health-url",
+                "http://127.0.0.1:9001/healthz",
+                "--live-cost-model-json",
+                live_cost,
+                "--promotion-report-json",
+                config.report_root / "latest" / "promotion_report_latest.json",
+                "--canary-plan-json",
+                config.report_root / "latest" / "daily_readiness_latest.json",
+                "--edge-calibration-json",
+                expected_edge,
+                "--execution-capture-json",
+                execution_capture,
+                "--pretrade-risk-json",
+                pretrade_risk,
+                "--post-trade-surveillance-json",
+                post_trade_surveillance,
+                "--walk-forward-capital-json",
+                walk_forward,
+                "--order-type-optimizer-json",
+                order_optimizer,
+                "--drift-monitor-json",
+                drift_monitor,
+                "--output-json",
+                live_readiness,
+                "--success-on-blocked",
+            ),
+            purpose="Create a Sunday reporting-only live-capital readiness artifact.",
+            output_path=live_readiness,
+            metadata={"live_money_authority": False, "manual_approval_required": True},
+        ),
+    ]
+    if config.data_dir is not None:
+        steps.append(
+            ResearchStep(
+                name="training_accelerator_weekend_validation",
+                command=_python_module(
+                    "ai_trading.tools.training_accelerator",
+                    "--cadence",
+                    "weekly",
+                    "--data-dir",
+                    config.data_dir,
+                    "--symbols",
+                    str(caps["effective_symbols"]),
+                    "--output-dir",
+                    config.run_dir / "training_accelerator_validation",
+                    *_training_cache_args(config, "weekend"),
+                    "--live-cost-model-json",
+                    live_cost,
+                    "--use-live-cost-model",
+                    "--max-replay-candidates",
+                    str(caps["max_replay_candidates"]),
+                ),
+                purpose="Run bounded Sunday validation refresh for top replay candidates.",
+                output_path=config.run_dir
+                / "training_accelerator_validation"
+                / "training_accelerator_report.json",
+                skip_if_missing=(config.data_dir,),
+                metadata={
+                    "promotion_authority": False,
+                    "research_only": True,
+                    "max_replay_candidates": caps["max_replay_candidates"],
+                },
+            )
+        )
+    return steps, []
+
+
 def _manual_steps(config: ResearchConfig) -> tuple[list[ResearchStep], list[str]]:
     blocked: list[str] = []
     workflow = config.workflow
@@ -1488,6 +2207,10 @@ def build_research_steps(config: ResearchConfig) -> tuple[list[ResearchStep], li
         return _weekly_steps(config), []
     if config.cadence == "monthly":
         return _monthly_steps(config), []
+    if config.cadence == "weekend-saturday":
+        return _weekend_saturday_steps(config)
+    if config.cadence == "weekend-sunday":
+        return _weekend_sunday_steps(config)
     if config.cadence == "manual":
         return _manual_steps(config)
     return [], [f"unsupported_cadence:{config.cadence}"]
@@ -1528,7 +2251,7 @@ def _write_stdout_artifact(path: Path, stdout: str) -> None:
     path.write_text(stdout, encoding="utf-8")
 
 
-def _run_step(step: ResearchStep) -> dict[str, Any]:
+def _run_step(step: ResearchStep, *, timeout_seconds: float | None = None) -> dict[str, Any]:
     missing = _missing_inputs(step)
     if missing:
         return {
@@ -1546,8 +2269,22 @@ def _run_step(step: ResearchStep) -> dict[str, Any]:
             capture_output=True,
             text=True,
             check=False,
+            timeout=timeout_seconds,
         )
         completed = _iso_now()
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "name": step.name,
+            "status": "failed",
+            "required": step.required,
+            "started_at": started,
+            "completed_at": _iso_now(),
+            "returncode": None,
+            "reason": "timeout",
+            "timeout_seconds": timeout_seconds,
+            "stdout_tail": _tail(str(exc.stdout or "")),
+            "stderr_tail": _tail(str(exc.stderr or "")),
+        }
     except OSError as exc:
         return {
             "name": step.name,
@@ -1601,6 +2338,8 @@ def _copy_automation_latest(report: Mapping[str, Any], config: ResearchConfig) -
     latest_dir = config.report_root / "latest"
     latest_path = latest_dir / f"{config.cadence}_research_automation_latest.json"
     _write_json(latest_path, report)
+    if _is_weekend_cadence(config.cadence):
+        _write_json(latest_dir / "weekend_research_latest.json", report)
     return latest_path
 
 
@@ -1701,6 +2440,10 @@ def _operator_action(status: str, cadence: str, workflow: str) -> str:
             return "review_promotion_report_before_any_runtime_cutover"
         if cadence == "manual" and workflow == "live-cutover":
             return "review_cutover_drill_before_enabling_live_money"
+        if cadence == "weekend-saturday":
+            return "review_broad_research_then_wait_for_sunday_validation"
+        if cadence == "weekend-sunday":
+            return "review_monday_preparation_before_market_open"
         return "review_summary_and_generated_artifacts"
     if status == "blocked":
         return "resolve_blocked_reasons_then_rerun"
@@ -1742,6 +2485,8 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
     hf_discovery = _read_json(latest / "hf_discovery_latest.json")
     hf_intake = _read_json(latest / "hf_candidate_intake_latest.json")
     hf_cache = _read_json(latest / "hf_cache_materialization_latest.json")
+    weekend_research = _read_json(latest / "weekend_research_latest.json")
+    weekend_summary = _read_json(latest / "weekend_operator_summary.json")
     return {
         "daily_research": {
             "status": _artifact_status(daily),
@@ -1866,6 +2611,21 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
             "runtime_authority": False,
             "promotion_authority": False,
             "live_money_authority": False,
+        },
+        "weekend_research": {
+            "status": _artifact_status(weekend_research),
+            "cadence": weekend_research.get("cadence"),
+            "workflow": weekend_research.get("workflow"),
+            "run_id": weekend_research.get("config", {}).get("run_id")
+            if isinstance(weekend_research.get("config"), Mapping)
+            else None,
+            "operator_action": weekend_summary.get("operator_action"),
+            "monday_preparation": weekend_research.get("monday_preparation"),
+            "research_only": True,
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+            "manual_approval_required": True,
         },
     }
 
@@ -2011,6 +2771,20 @@ def _copy_authority_artifacts(
                     resolve_runtime_artifact_path(
                         "runtime/training_accelerator_daily_latest.json",
                         default_relative="runtime/training_accelerator_daily_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name in {
+            "training_accelerator_weekend_broad",
+            "training_accelerator_weekend_validation",
+        }:
+            targets.extend(
+                [
+                    latest_dir / "training_accelerator_weekend_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/training_accelerator_weekend_latest.json",
+                        default_relative="runtime/training_accelerator_weekend_latest.json",
                         for_write=True,
                     ),
                 ]
@@ -2331,9 +3105,45 @@ def _write_experiment_ledger_for_run(
     return run_path
 
 
+def _monday_preparation(
+    status: str,
+    config: ResearchConfig,
+    weekend_caps: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if not weekend_caps:
+        return None
+    if config.cadence == "weekend-saturday":
+        action = (
+            "review_broad_research_then_let_sunday_validation_synthesize_monday_readiness"
+            if status in {"complete", "planned", "dry_run"}
+            else "resolve_saturday_research_blockers_before_sunday_validation"
+        )
+    else:
+        action = (
+            "review_monday_preparation_before_market_open"
+            if status in {"complete", "planned", "dry_run"}
+            else "resolve_sunday_validation_blockers_before_market_open"
+        )
+    return {
+        "question": "Can the system trade next session, with what limits, and why?",
+        "status": status,
+        "recommended_operator_action": action,
+        "effective_symbols_reviewed": weekend_caps.get("effective_symbols"),
+        "max_symbols": weekend_caps.get("max_symbols"),
+        "max_candidates": weekend_caps.get("max_candidates"),
+        "max_replay_candidates": weekend_caps.get("max_replay_candidates"),
+        "manual_approval_required_for_authority_increase": True,
+        "research_only": True,
+        "runtime_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
+
+
 def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
     steps, blocked_reasons = build_research_steps(config)
     config.run_dir.mkdir(parents=True, exist_ok=True)
+    weekend_caps = _weekend_cap_summary(config) if _is_weekend_cadence(config.cadence) else {}
     if config.plan_only:
         status = "planned"
         step_results: list[dict[str, Any]] = []
@@ -2344,7 +3154,32 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
         status = "blocked"
         step_results = []
     else:
-        step_results = [_run_step(step) for step in steps]
+        step_results = []
+        deadline = (
+            monotonic() + float(int(weekend_caps["max_runtime_minutes"]) * 60)
+            if weekend_caps
+            else None
+        )
+        for step in steps:
+            timeout_seconds: float | None = None
+            if deadline is not None:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    step_results.append(
+                        {
+                            "name": step.name,
+                            "status": "failed",
+                            "required": step.required,
+                            "reason": "weekend_runtime_cap_exhausted",
+                            "timeout_seconds": 0,
+                            "output_path": str(step.output_path)
+                            if step.output_path is not None
+                            else None,
+                        }
+                    )
+                    continue
+                timeout_seconds = max(1.0, remaining)
+            step_results.append(_run_step(step, timeout_seconds=timeout_seconds))
         failed_steps = [row for row in step_results if row.get("status") == "failed"]
         blocked_steps = [row for row in step_results if row.get("status") == "blocked"]
         required_skipped = [
@@ -2359,6 +3194,14 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
         else:
             status = "complete"
 
+    safety: dict[str, Any] = {
+        "production_model_promotion": "manual_only",
+        "live_money_cutover": "manual_only",
+        "automated_runtime_mutations": False,
+        "slack_openclaw_source": "generated_artifacts",
+    }
+    if _is_weekend_cadence(config.cadence):
+        safety["weekend_research_authority"] = "research_only"
     report: dict[str, Any] = {
         "schema_version": "1.0.0",
         "artifact_type": "research_automation_report",
@@ -2376,17 +3219,18 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
             "manual_model_path": str(config.model_path) if config.model_path is not None else None,
             "report_date": config.report_date,
         },
-        "safety": {
-            "production_model_promotion": "manual_only",
-            "live_money_cutover": "manual_only",
-            "automated_runtime_mutations": False,
-            "slack_openclaw_source": "generated_artifacts",
-        },
+        "weekend_schedule": weekend_caps if weekend_caps else None,
+        "monday_preparation": _monday_preparation(status, config, weekend_caps),
+        "safety": safety,
         "steps": [step.to_plan() for step in steps],
         "step_results": step_results,
         "evidence_manifest": _evidence_manifest(steps, step_results),
     }
-    report_path = config.run_dir / "research_automation_report.json"
+    report_path = (
+        config.run_dir / "weekend_research_report.json"
+        if _is_weekend_cadence(config.cadence)
+        else config.run_dir / "research_automation_report.json"
+    )
     _write_json(report_path, report)
     latest_path = _copy_automation_latest(report, config)
     authority_copies = _copy_authority_artifacts(config=config, step_results=step_results)
@@ -2406,6 +3250,8 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
     summary_path = config.run_dir / "operator_summary.json"
     _write_json(summary_path, summary)
     _write_json(config.report_root / "latest" / f"{config.cadence}_operator_summary.json", summary)
+    if _is_weekend_cadence(config.cadence):
+        _write_json(config.report_root / "latest" / "weekend_operator_summary.json", summary)
     report["paths"] = {
         "report": str(report_path),
         "operator_summary": str(summary_path),
@@ -2436,7 +3282,7 @@ def _build_config(args: argparse.Namespace) -> ResearchConfig:
         workflow = "promotion"
     report_root = Path(args.report_root).expanduser() if args.report_root else _default_report_root()
     run_id = _run_id(cadence, str(args.run_id or ""))
-    run_dir = report_root / cadence / run_id
+    run_dir = report_root / ("weekend" if _is_weekend_cadence(cadence) else cadence) / run_id
     data_dir = _maybe_data_dir(str(args.data_dir or ""))
     shadow_jsonl = Path(args.shadow_jsonl).expanduser() if args.shadow_jsonl else _default_shadow_jsonl()
     accepted = (

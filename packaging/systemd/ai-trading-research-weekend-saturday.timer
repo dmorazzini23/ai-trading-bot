@@ -1,0 +1,12 @@
+[Unit]
+Description=Run AI Trading Weekend Saturday Broad Research Automation
+
+[Timer]
+OnCalendar=Sat 09:00 America/New_York
+RandomizedDelaySec=10m
+AccuracySec=1m
+Persistent=true
+Unit=ai-trading-research-weekend-saturday.service
+
+[Install]
+WantedBy=timers.target

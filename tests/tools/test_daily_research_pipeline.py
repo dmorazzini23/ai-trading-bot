@@ -247,6 +247,11 @@ def test_daily_research_report_surfaces_next_level_artifacts(monkeypatch):
             "status": "ready_for_manual_review",
             "summary": {"accepted_for_offline_experiment": 1, "blocked": 2},
         },
+        weekend_research={
+            "status": "complete",
+            "cadence": "weekend-sunday",
+            "monday_preparation": {"recommended_operator_action": "review_monday_preparation_before_market_open"},
+        },
         memory_audit={"status": "ok"},
     )
 
@@ -259,6 +264,8 @@ def test_daily_research_report_surfaces_next_level_artifacts(monkeypatch):
     assert report["huggingface_research"]["summary"]["accepted_for_offline_experiment"] == 1
     assert report["huggingface_research"]["runtime_authority"] is False
     assert report["next_level_artifacts"]["huggingface_research"]["runtime_authority"] is False
+    assert report["weekend_research"]["research_only"] is True
+    assert report["next_level_artifacts"]["weekend_research"]["live_money_authority"] is False
 
 
 def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_path: Path):

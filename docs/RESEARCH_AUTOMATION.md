@@ -103,6 +103,8 @@ Plan a run without executing steps:
 ./venv/bin/python -m ai_trading.tools.research_automation daily --plan-only
 ./venv/bin/python -m ai_trading.tools.research_automation weekly --plan-only
 ./venv/bin/python -m ai_trading.tools.research_automation monthly --plan-only
+./venv/bin/python -m ai_trading.tools.research_automation weekend-saturday --plan-only
+./venv/bin/python -m ai_trading.tools.research_automation weekend-sunday --plan-only
 ```
 
 Run the canonical script:
@@ -111,7 +113,51 @@ Run the canonical script:
 scripts/run_research_automation.sh daily
 scripts/run_research_automation.sh weekly
 scripts/run_research_automation.sh monthly
+scripts/run_research_automation.sh weekend-saturday
+scripts/run_research_automation.sh weekend-sunday
 ```
+
+## Weekend Research Schedule
+
+Weekend automation uses extra CPU headroom without changing runtime authority.
+Saturday runs broad research/training and Sunday runs validation plus Monday
+operator synthesis. Both cadences write under:
+
+```bash
+/var/lib/ai-trading-bot/runtime/research_reports/weekend/<run-id>/
+```
+
+Stable latest pointers are:
+
+```bash
+/var/lib/ai-trading-bot/runtime/research_reports/latest/weekend_research_latest.json
+/var/lib/ai-trading-bot/runtime/research_reports/latest/weekend_operator_summary.json
+```
+
+Weekend research is evidence only. It must not promote models, change launch
+profiles, change executable symbols, increase size, restart services, or enable
+live trading. Any authority-increasing recommendation still requires manual
+operator approval plus the existing replay, shadow, live-cost, promotion, and
+live-capital readiness gates.
+
+Safe caps are controlled through:
+
+```bash
+AI_TRADING_WEEKEND_RESEARCH_ENABLED=1
+AI_TRADING_WEEKEND_RESEARCH_MAX_RUNTIME_MINUTES=180
+AI_TRADING_WEEKEND_RESEARCH_MAX_SYMBOLS=25
+AI_TRADING_WEEKEND_RESEARCH_MAX_CANDIDATES=100
+AI_TRADING_WEEKEND_RESEARCH_MAX_REPLAY_CANDIDATES=15
+AI_TRADING_WEEKEND_RESEARCH_MAX_PARALLEL_WORKERS=2
+AI_TRADING_WEEKEND_RESEARCH_CACHE_ENABLED=1
+AI_TRADING_WEEKEND_VALIDATION_MAX_RUNTIME_MINUTES=120
+AI_TRADING_WEEKEND_VALIDATION_MAX_REPLAY_CANDIDATES=20
+```
+
+Saturday initially targets a 3-hour cap. Sunday targets a 2-hour cap and should
+produce the Monday preparation answer: whether the system may trade next
+session, what mode is recommended, which blockers remain, and what manual
+operator actions are required.
 
 Manual workflows:
 
@@ -168,6 +214,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ai-trading-research-daily.timer
 sudo systemctl enable --now ai-trading-research-weekly.timer
 sudo systemctl enable --now ai-trading-research-monthly.timer
+sudo systemctl enable --now ai-trading-research-weekend-saturday.timer
+sudo systemctl enable --now ai-trading-research-weekend-sunday.timer
 ```
 
 Check timers and recent runs:
@@ -176,6 +224,7 @@ Check timers and recent runs:
 systemctl list-timers 'ai-trading-research-*' --no-pager
 journalctl -u ai-trading-research-daily.service -n 100 --no-pager
 jq . /var/lib/ai-trading-bot/runtime/research_reports/latest/daily_operator_summary.json
+jq . /var/lib/ai-trading-bot/runtime/research_reports/latest/weekend_operator_summary.json
 ```
 
 Smoke-test the completion notification without sending:

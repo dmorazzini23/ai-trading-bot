@@ -11,6 +11,8 @@ def test_research_automation_units_follow_runtime_safety_contract() -> None:
         "ai-trading-research-daily.service",
         "ai-trading-research-weekly.service",
         "ai-trading-research-monthly.service",
+        "ai-trading-research-weekend-saturday.service",
+        "ai-trading-research-weekend-sunday.service",
         "ai-trading-research-manual@.service",
     ):
         content = (SYSTEMD_DIR / service_name).read_text(encoding="utf-8")
@@ -52,6 +54,8 @@ def test_research_automation_timers_are_after_hours_and_persistent() -> None:
         "ai-trading-research-daily.timer": "OnCalendar=Mon..Fri 16:35 America/New_York",
         "ai-trading-research-weekly.timer": "OnCalendar=Sat 10:15 America/New_York",
         "ai-trading-research-monthly.timer": "OnCalendar=Sat *-*-01..07 12:00 America/New_York",
+        "ai-trading-research-weekend-saturday.timer": "OnCalendar=Sat 09:00 America/New_York",
+        "ai-trading-research-weekend-sunday.timer": "OnCalendar=Sun 10:00 America/New_York",
     }
     for timer_name, calendar in timer_expectations.items():
         content = (SYSTEMD_DIR / timer_name).read_text(encoding="utf-8")

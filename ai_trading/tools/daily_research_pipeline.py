@@ -258,6 +258,7 @@ def build_daily_research_report(
     adversarial_failure: Mapping[str, Any] | None = None,
     drift_monitor: Mapping[str, Any] | None = None,
     operator_control_plane: Mapping[str, Any] | None = None,
+    weekend_research: Mapping[str, Any] | None = None,
     huggingface_discovery: Mapping[str, Any] | None = None,
     huggingface_candidate_intake: Mapping[str, Any] | None = None,
     huggingface_cache_materialization: Mapping[str, Any] | None = None,
@@ -294,6 +295,7 @@ def build_daily_research_report(
     adversarial_failure = adversarial_failure or {}
     drift_monitor = drift_monitor or {}
     operator_control_plane = operator_control_plane or {}
+    weekend_research = weekend_research or {}
     huggingface_discovery = huggingface_discovery or {}
     huggingface_candidate_intake = huggingface_candidate_intake or {}
     huggingface_cache_materialization = huggingface_cache_materialization or {}
@@ -560,6 +562,17 @@ def build_daily_research_report(
             "summary": _nested(operator_control_plane, "summary"),
             "read_only": bool(operator_control_plane.get("read_only", True)),
         },
+        "weekend_research": {
+            "available": bool(weekend_research),
+            "status": weekend_research.get("status", "missing"),
+            "cadence": weekend_research.get("cadence"),
+            "monday_preparation": weekend_research.get("monday_preparation"),
+            "research_only": True,
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+            "manual_approval_required": True,
+        },
         "huggingface_research": huggingface_research,
     }
     allowed, reasons = _trade_allowed(report)
@@ -671,6 +684,14 @@ def build_daily_research_report(
         "operator_control_plane": {
             "status": _summary_status(_nested(report, "operator_control_plane")),
             "read_only": bool(_nested(report, "operator_control_plane").get("read_only", True)),
+        },
+        "weekend_research": {
+            "status": _summary_status(_nested(report, "weekend_research")),
+            "monday_preparation": _nested(report, "weekend_research").get("monday_preparation"),
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+            "manual_approval_required": True,
         },
         "huggingface_research": {
             "status": _nested(report, "huggingface_research").get("status"),
@@ -797,6 +818,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--adversarial-failure-json", type=Path, default=None)
     parser.add_argument("--drift-monitor-json", type=Path, default=None)
     parser.add_argument("--operator-control-plane-json", type=Path, default=None)
+    parser.add_argument("--weekend-research-json", type=Path, default=None)
     parser.add_argument("--huggingface-discovery-json", type=Path, default=None)
     parser.add_argument("--huggingface-candidate-intake-json", type=Path, default=None)
     parser.add_argument("--huggingface-cache-json", type=Path, default=None)
@@ -928,6 +950,10 @@ def main(argv: list[str] | None = None) -> int:
         operator_control_plane=_read_json(
             args.operator_control_plane_json
             or _default_path("runtime/operator_control_plane_latest.json")
+        ),
+        weekend_research=_read_json(
+            args.weekend_research_json
+            or _default_path("runtime/research_reports/latest/weekend_research_latest.json")
         ),
         huggingface_discovery=_read_json(
             args.huggingface_discovery_json

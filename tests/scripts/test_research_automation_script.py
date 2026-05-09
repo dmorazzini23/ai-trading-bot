@@ -35,6 +35,36 @@ def test_research_automation_script_delegates_plan_only(tmp_path: Path) -> None:
     assert payload["cadence"] == "daily"
 
 
+def test_research_automation_script_delegates_weekend_plan_only(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[2]
+    report_root = tmp_path / "reports"
+    env = {
+        **os.environ,
+        "AI_TRADING_RESEARCH_REPORT_ROOT": str(report_root),
+        "AI_TRADING_RESEARCH_PLAN_ONLY": "1",
+        "AI_TRADING_RESEARCH_LOCK_DIR": str(tmp_path),
+    }
+
+    result = subprocess.run(
+        [str(root / "scripts" / "run_research_automation.sh"), "weekend-saturday"],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(
+        (report_root / "latest" / "weekend_research_latest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert payload["status"] == "planned"
+    assert payload["cadence"] == "weekend-saturday"
+    assert payload["safety"]["weekend_research_authority"] == "research_only"
+
+
 def test_research_automation_script_dry_run_skips_completion_notification(
     tmp_path: Path,
 ) -> None:

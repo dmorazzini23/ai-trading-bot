@@ -114,6 +114,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ai-trading-research-daily.timer
 sudo systemctl enable --now ai-trading-research-weekly.timer
 sudo systemctl enable --now ai-trading-research-monthly.timer
+sudo systemctl enable --now ai-trading-research-weekend-saturday.timer
+sudo systemctl enable --now ai-trading-research-weekend-sunday.timer
 systemctl list-timers 'ai-trading-research-*' --no-pager
 ```
 

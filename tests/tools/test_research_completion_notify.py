@@ -133,6 +133,56 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
     assert '"trade_allowed": true' in field_text
 
 
+def test_research_completion_payload_includes_weekend_artifact_summary(tmp_path: Path) -> None:
+    root = tmp_path / "reports"
+    _write_json(
+        root / "latest" / "weekend-saturday_research_automation_latest.json",
+        {
+            "status": "complete",
+            "cadence": "weekend-saturday",
+            "weekend_schedule": {
+                "effective_symbols": "AAPL,AMZN",
+                "max_candidates": 100,
+                "max_replay_candidates": 15,
+            },
+            "monday_preparation": {
+                "recommended_operator_action": "review_broad_research_then_wait_for_sunday_validation"
+            },
+            "paths": {"report": "/runtime/research/weekend_research_report.json"},
+            "step_results": [
+                {"name": "training_accelerator_weekend_broad", "status": "passed"},
+            ],
+        },
+    )
+    _write_json(
+        root / "latest" / "weekend-saturday_operator_summary.json",
+        {
+            "operator_action": "review_broad_research_then_wait_for_sunday_validation",
+            "blocked_reasons": [],
+        },
+    )
+
+    payload = research_completion_notify.build_research_completion_payload(
+        cadence="weekend-saturday",
+        workflow="weekend-saturday",
+        exit_code=0,
+        report_root=root,
+        channel="#all-beatwallstreet",
+    )
+
+    field_text = "\n".join(
+        field["text"]
+        for block in payload["blocks"]
+        if block.get("type") == "section"
+        for field in block.get("fields", [])
+    )
+    assert "symbols=AAPL,AMZN" in field_text
+    assert "max_candidates=100" in field_text
+    assert "max_replay=15" in field_text
+    assert "research_only=true" in field_text
+    assert "review_broad_research_then_wait_for_sunday_validation" in field_text
+
+
 def test_research_completion_payload_marks_failed_exit_code_failed(tmp_path: Path) -> None:
     root = tmp_path / "reports"
     _write_json(

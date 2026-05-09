@@ -139,7 +139,8 @@ the report rollback command if live behavior regresses.
 
 Recurring research is orchestrated by
 `ai_trading.tools.research_automation` and the
-`ai-trading-research-{daily,weekly,monthly}.timer` units. The timers write
+`ai-trading-research-{daily,weekly,monthly,weekend-saturday,weekend-sunday}.timer`
+units. The timers write
 dated bundles under `/var/lib/ai-trading-bot/runtime/research_reports/` and
 stable latest summaries under
 `/var/lib/ai-trading-bot/runtime/research_reports/latest/`.
@@ -151,6 +152,10 @@ used to decide whether a completion notification describes the current run.
 Daily automation refreshes evidence and lightweight candidates. Weekly
 automation searches horizons, objectives, symbol expansion, exits, and sizing.
 Monthly automation performs broader architecture and capital-profile review.
+Saturday weekend automation runs bounded broad research/training with a 3-hour
+default cap. Sunday weekend automation runs replay/validation/operator synthesis
+with a 2-hour default cap and writes `weekend_research_latest.json` plus
+`weekend_operator_summary.json` for Monday preparation.
 Manual workflows generate gated promotion, live-cutover, incident-replay, and
 strategy-change artifacts.
 

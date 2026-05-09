@@ -133,6 +133,7 @@ def build_operator_control_plane(
     oms: Mapping[str, Any] | None = None,
     model_registry: Mapping[str, Any] | None = None,
     latest_research: Mapping[str, Any] | None = None,
+    weekend_research: Mapping[str, Any] | None = None,
     drift: Mapping[str, Any] | None = None,
     surveillance: Mapping[str, Any] | None = None,
     risk_verifier: Mapping[str, Any] | None = None,
@@ -150,6 +151,7 @@ def build_operator_control_plane(
     oms_payload = _mapping(oms)
     model_registry_payload = _mapping(model_registry)
     latest_research_payload = _mapping(latest_research)
+    weekend_research_payload = _mapping(weekend_research)
     drift_payload = _mapping(drift)
     surveillance_payload = _mapping(surveillance)
     risk_verifier_payload = _mapping(risk_verifier)
@@ -173,6 +175,7 @@ def build_operator_control_plane(
             ("oms", oms_payload),
             ("model_registry", model_registry_payload),
             ("latest_research", latest_research_payload),
+            ("weekend_research", weekend_research_payload),
             ("drift", drift_payload),
             ("surveillance", surveillance_payload),
             ("risk_verifier", risk_verifier_payload),
@@ -216,6 +219,14 @@ def build_operator_control_plane(
         ),
         "model_registry": _section(model_registry_payload, label="model_registry"),
         "latest_research": _section(latest_research_payload, label="latest_research"),
+        "weekend_research": {
+            **_section(weekend_research_payload, label="weekend_research"),
+            "research_only": True,
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+            "manual_approval_required": True,
+        },
         "drift": _section(drift_payload, label="drift"),
         "surveillance": _section(surveillance_payload, label="surveillance"),
         "risk_verifier": _section(risk_verifier_payload, label="risk_verifier"),
@@ -253,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--oms-json", type=Path, default=None)
     parser.add_argument("--model-registry-json", type=Path, default=None)
     parser.add_argument("--latest-research-json", type=Path, default=None)
+    parser.add_argument("--weekend-research-json", type=Path, default=None)
     parser.add_argument("--drift-json", type=Path, default=None)
     parser.add_argument("--surveillance-json", type=Path, default=None)
     parser.add_argument("--risk-verifier-json", type=Path, default=None)
@@ -286,6 +298,10 @@ def main(argv: list[str] | None = None) -> int:
         latest_research=_read_json_mapping(
             args.latest_research_json
             or _default_path("runtime/research_reports/latest/daily_readiness_latest.json")
+        ),
+        weekend_research=_read_json_mapping(
+            args.weekend_research_json
+            or _default_path("runtime/research_reports/latest/weekend_research_latest.json")
         ),
         drift=_read_json_mapping(args.drift_json or _default_path("runtime/model_data_drift_monitor_latest.json")),
         surveillance=_read_json_mapping(
