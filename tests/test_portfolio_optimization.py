@@ -165,6 +165,23 @@ class TestPortfolioOptimizer:
         # Large changes are more likely to be rejected or deferred
         assert decision_large in [PortfolioDecision.REJECT, PortfolioDecision.DEFER]
 
+    def test_portfolio_decision_defers_without_price_evidence(self):
+        """Missing price evidence should defer before weak cost/return defaults can approve."""
+        decision, reasoning = self.optimizer.make_portfolio_decision(
+            'AAPL',
+            120.0,
+            self.sample_positions,
+            {
+                'prices': {},
+                'returns': self.sample_market_data['returns'],
+                'correlations': self.sample_market_data['correlations'],
+            },
+        )
+
+        assert decision is PortfolioDecision.DEFER
+        assert 'Low confidence' in reasoning
+        assert self.optimizer._estimate_transaction_cost('AAPL', 20.0, {}) == 1.0
+
     def test_rebalance_trigger_logic(self):
         """Test rebalancing trigger logic."""
         target_weights = {

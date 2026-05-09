@@ -4,6 +4,7 @@ import logging
 import sys
 import time
 import types
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -247,11 +248,9 @@ def test_missing_model_warns_when_flag_set(monkeypatch, tmp_path, caplog):
     assert "ML_MODEL_MISSING" in caplog.text
 
 
-def test_heuristic_fallback_marked_placeholder(monkeypatch, tmp_path):
+def test_missing_placeholder_symbol_requires_active_registry(monkeypatch, tmp_path):
     external = tmp_path / "ext"
-    internal = tmp_path / "int"
     external.mkdir()
-    internal.mkdir()
 
     monkeypatch.setenv("AI_TRADING_MODELS_DIR", str(external))
 
@@ -260,13 +259,10 @@ def test_heuristic_fallback_marked_placeholder(monkeypatch, tmp_path):
 
     importlib.reload(paths)
     ml = importlib.reload(model_loader)
-    monkeypatch.setattr(ml, "INTERNAL_MODELS_DIR", internal)
     ml.ML_MODELS.clear()
 
-    model = ml.load_model("MISSING_PLACEHOLDER")
-
-    assert getattr(model, "is_placeholder_model", False) is True
-    assert tuple(getattr(model, "classes_", ())) == (0, 1)
+    with pytest.raises(RuntimeError, match="Active registry model required"):
+        ml.load_model("MISSING_PLACEHOLDER")
 
 
 def test_registry_model_runtime_failure_does_not_fall_back(monkeypatch, tmp_path):
@@ -276,6 +272,7 @@ def test_registry_model_runtime_failure_does_not_fall_back(monkeypatch, tmp_path
     registry.get_active_model_meta = lambda _symbol: {  # type: ignore[attr-defined]
         "path": str(tmp_path / "registry-model.pkl"),
         "manifest_path": str(tmp_path / "registry-model.pkl.manifest.json"),
+        "registered_at": datetime.now(UTC).isoformat(),
     }
     monkeypatch.setitem(sys.modules, "ai_trading.model_registry", registry)
 
@@ -283,7 +280,6 @@ def test_registry_model_runtime_failure_does_not_fall_back(monkeypatch, tmp_path
 
     model_loader.ML_MODELS.clear()
     monkeypatch.setattr(model_loader, "MODELS_DIR", tmp_path)
-    monkeypatch.setattr(model_loader, "INTERNAL_MODELS_DIR", tmp_path / "internal")
     monkeypatch.setattr(
         model_loader,
         "load_verified_joblib_artifact",
@@ -291,6 +287,23 @@ def test_registry_model_runtime_failure_does_not_fall_back(monkeypatch, tmp_path
     )
 
     with pytest.raises(RuntimeError, match="registry model"):
+        model_loader.load_model("SPY")
+
+
+def test_runtime_model_loader_rejects_ungoverned_local_file(monkeypatch, tmp_path):
+    import ai_trading.model_loader as model_loader
+
+    fallback_path = tmp_path / "SPY.pkl"
+    fallback_path.write_bytes(b"fallback")
+    model_loader.ML_MODELS.clear()
+    monkeypatch.setattr(model_loader, "MODELS_DIR", tmp_path)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("AI_TRADING_ALLOW_UNGOVERNED_MODEL_FILE_LOADING", raising=False)
+    monkeypatch.delenv("AI_TRADING_OFFLINE_RESEARCH", raising=False)
+
+    with pytest.raises(RuntimeError, match="Active registry model required"):
         model_loader.load_model("SPY")
 
 

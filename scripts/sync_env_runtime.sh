@@ -26,13 +26,29 @@ if [[ ! -f "${ENV_SRC}" ]]; then
   echo "AI_TRADING_ENV_SRC does not exist: ${ENV_SRC}" >&2
   exit 1
 fi
+PACKAGED_RUNTIME_DIR="${AI_TRADING_PACKAGED_RUNTIME_DIR:-/run/ai-trading-bot}"
 if [[ -n "${AI_TRADING_RUNTIME_ENV_DST:-}" ]]; then
   RUNTIME_ENV_DST="${AI_TRADING_RUNTIME_ENV_DST}"
-elif [[ -d "/run/ai-trading-bot" && -w "/run/ai-trading-bot" ]]; then
-  RUNTIME_ENV_DST="/run/ai-trading-bot/ai-trading-runtime.env"
+elif [[ -d "${PACKAGED_RUNTIME_DIR}" ]]; then
+  RUNTIME_ENV_DST="${PACKAGED_RUNTIME_DIR}/ai-trading-runtime.env"
 else
   RUNTIME_ENV_DST="runtime/ai-trading-runtime.env"
 fi
-mkdir -p "$(dirname "${RUNTIME_ENV_DST}")"
+RUNTIME_ENV_DIR="$(dirname "${RUNTIME_ENV_DST}")"
+case "${RUNTIME_ENV_DST}" in
+  "${PACKAGED_RUNTIME_DIR}"/*)
+    if [[ ! -d "${RUNTIME_ENV_DIR}" ]]; then
+      echo "packaged runtime env directory is missing: ${RUNTIME_ENV_DIR}" >&2
+      exit 1
+    fi
+    if [[ ! -w "${RUNTIME_ENV_DIR}" ]]; then
+      echo "packaged runtime env directory is not writable: ${RUNTIME_ENV_DIR}" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    mkdir -p "${RUNTIME_ENV_DIR}"
+    ;;
+esac
 
 "${PYTHON_BIN}" scripts/runtime_env_sync.py --src "${ENV_SRC}" --dst "${RUNTIME_ENV_DST}"

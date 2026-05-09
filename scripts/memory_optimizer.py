@@ -11,24 +11,26 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 
 class MemoryOptimizer:
     """Memory optimization and monitoring system."""
 
     def __init__(self, enable_monitoring: bool=True):
         self.enable_monitoring = enable_monitoring
-        self.logger = self._setup_logger()
-        self.memory_snapshots = []
-        self.gc_stats = []
-        self.monitoring_thread = None
+        self.logger: Any = self._setup_logger()
+        self.memory_snapshots: list[dict[str, Any]] = []
+        self.gc_stats: list[dict[str, Any]] = []
+        self.monitoring_thread: threading.Thread | None = None
         self.stop_monitoring = threading.Event()
-        self._weak_refs = {}
+        self._weak_refs: dict[str, Callable[[], Any]] = {}
         self.configure_garbage_collection()
         if enable_monitoring:
             self.start_memory_monitoring()
 
-    def _setup_logger(self) -> logging.Logger:
+    def _setup_logger(self) -> Any:
         """Setup memory optimizer logger using centralized logging system."""
+        logger: Any
         try:
             from ai_trading.logging import get_logger
             logger = get_logger('memory_optimizer')
@@ -46,7 +48,7 @@ class MemoryOptimizer:
 
     def get_memory_usage(self) -> dict:
         """Get current memory usage statistics."""
-        memory_info = {}
+        memory_info: dict[str, Any] = {}
         try:
             import resource
             usage = resource.getrusage(resource.RUSAGE_SELF)
@@ -59,7 +61,7 @@ class MemoryOptimizer:
         memory_info['gc_threshold'] = gc.get_threshold()
         all_objects = gc.get_objects()
         memory_info['total_objects'] = len(all_objects)
-        object_counts = {}
+        object_counts: dict[str, int] = {}
         for obj in all_objects:
             obj_type = type(obj).__name__
             object_counts[obj_type] = object_counts.get(obj_type, 0) + 1
@@ -185,8 +187,8 @@ class MemoryProfiler:
     """Simple memory profiler for function-level memory tracking."""
 
     def __init__(self):
-        self.profiles = {}
-        self.logger = logging.getLogger('memory_profiler')
+        self.profiles: dict[str, list[dict[str, Any]]] = {}
+        self.logger: logging.Logger = logging.getLogger('memory_profiler')
 
     def profile_function(self, func: Callable) -> Callable:
         """Decorator to profile memory usage of a function."""
@@ -219,7 +221,7 @@ class MemoryProfiler:
 
     def get_profile_report(self) -> dict:
         """Get profiling report for all tracked functions."""
-        report = {}
+        report: dict[str, dict[str, Any]] = {}
         for func_name, profiles in self.profiles.items():
             if profiles:
                 total_memory = sum((p['memory_delta_mb'] for p in profiles))
@@ -227,7 +229,7 @@ class MemoryProfiler:
                 max_memory = max((p['memory_delta_mb'] for p in profiles))
                 report[func_name] = {'call_count': len(profiles), 'total_memory_mb': total_memory, 'average_memory_mb': avg_memory, 'max_memory_mb': max_memory, 'last_called': profiles[-1]['timestamp']}
         return report
-_memory_optimizer = None
+_memory_optimizer: MemoryOptimizer | None = None
 
 def get_memory_optimizer() -> MemoryOptimizer:
     """Get global memory optimizer instance."""

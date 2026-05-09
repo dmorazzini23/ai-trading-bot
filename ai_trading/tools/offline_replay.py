@@ -593,6 +593,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="timestamp",
         help="Timestamp column name. Falls back to first parseable datetime column.",
     )
+    parser.add_argument(
+        "--allow-research-synthetic-timestamps",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Allow non-timestamped CSVs for explicitly research-only synthetic replay.",
+    )
     parser.add_argument("--confidence-threshold", type=float, default=0.52)
     parser.add_argument("--entry-score-threshold", type=float, default=0.15)
     parser.add_argument(
@@ -756,6 +762,53 @@ def _input_report_payload(
     return {
         symbol: report.as_dict()
         for symbol, report in sorted(reports.items())
+    }
+
+
+def _load_replay_historical_bars(
+    csv_path: Path,
+    *,
+    timestamp_col: str,
+    allow_research_synthetic_timestamps: bool,
+) -> tuple[pd.DataFrame, HistoricalBarLoadReport]:
+    try:
+        return load_historical_bars(
+            csv_path,
+            timestamp_col=timestamp_col,
+            require_timestamp=True,
+            allow_research_synthetic=allow_research_synthetic_timestamps,
+        )
+    except TypeError as exc:
+        if "unexpected keyword" not in str(exc):
+            raise
+        return load_historical_bars(csv_path, timestamp_col=timestamp_col)
+
+
+def _authority_payload(reports: Mapping[str, HistoricalBarLoadReport]) -> dict[str, Any]:
+    timestamp_authoritative = all(
+        bool(getattr(report, "timestamp_authoritative", True))
+        for report in reports.values()
+    )
+    research_synthetic = any(
+        bool(getattr(report, "research_synthetic", False))
+        for report in reports.values()
+    )
+    source_providers = sorted(
+        {
+            provider
+            for report in reports.values()
+            for provider in getattr(report, "source_providers", ())
+            if str(provider).strip()
+        }
+    )
+    return {
+        "runtime_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+        "research_only": True,
+        "timestamp_authoritative": bool(timestamp_authoritative),
+        "research_synthetic": bool(research_synthetic),
+        "source_providers": source_providers,
     }
 
 
@@ -2025,7 +2078,11 @@ def _write_accepted_candidate_artifacts(
     elif getattr(args, "output_json", None) is not None:
         base_dir = Path(args.output_json).parent
     else:
-        base_dir = Path("artifacts") / "offline_replay_accepted_candidates"
+        base_dir = resolve_runtime_artifact_path(
+            "runtime/offline_replay/accepted_candidates",
+            default_relative="runtime/offline_replay/accepted_candidates",
+            for_write=True,
+        )
     base_dir.mkdir(parents=True, exist_ok=True)
     csv_path = base_dir / "accepted_candidates.csv"
     jsonl_path = base_dir / "accepted_candidates.jsonl"
@@ -2099,7 +2156,13 @@ def _run_parity_simulation(
     opportunity_opened_symbols: set[str] = set()
     synthetic_index = 0
     for symbol, csv_path in symbol_paths.items():
-        frame, load_report = load_historical_bars(csv_path, timestamp_col=args.timestamp_col)
+        frame, load_report = _load_replay_historical_bars(
+            csv_path,
+            timestamp_col=args.timestamp_col,
+            allow_research_synthetic_timestamps=bool(
+                getattr(args, "allow_research_synthetic_timestamps", False)
+            ),
+        )
         load_reports[symbol] = load_report
         score_source = "heuristic"
         if model_context is not None:
@@ -2494,6 +2557,7 @@ def _run_parity_simulation(
         "schema_version": OFFLINE_REPLAY_SCHEMA_VERSION,
         "artifact_type": "offline_replay_summary",
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "authority": _authority_payload(load_reports),
         "aggregate": aggregate,
         "inputs": {"symbols": _input_report_payload(load_reports)},
         "symbols": per_symbol,
@@ -2965,7 +3029,13 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
     per_symbol: list[dict[str, Any]] = []
     load_reports: dict[str, HistoricalBarLoadReport] = {}
     for symbol, csv_path in symbol_paths.items():
-        frame, load_report = load_historical_bars(csv_path, timestamp_col=args.timestamp_col)
+        frame, load_report = _load_replay_historical_bars(
+            csv_path,
+            timestamp_col=args.timestamp_col,
+            allow_research_synthetic_timestamps=bool(
+                getattr(args, "allow_research_synthetic_timestamps", False)
+            ),
+        )
         load_reports[symbol] = load_report
         per_symbol.append(_simulate_symbol(symbol, frame, cfg))
 
@@ -3036,6 +3106,7 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
         "schema_version": OFFLINE_REPLAY_SCHEMA_VERSION,
         "artifact_type": "offline_replay_summary",
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "authority": _authority_payload(load_reports),
         "aggregate": aggregate,
         "inputs": {"symbols": _input_report_payload(load_reports)},
         "symbols": per_symbol,
@@ -3086,6 +3157,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.output_json is not None:
+        if not args.output_json.is_absolute():
+            args.output_json = resolve_runtime_artifact_path(
+                args.output_json,
+                default_relative=str(args.output_json),
+                for_write=True,
+            )
         payload.setdefault("artifacts", {})
         artifacts = payload.get("artifacts")
         if isinstance(artifacts, dict):

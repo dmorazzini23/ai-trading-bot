@@ -57,7 +57,7 @@ once. Future requests for the same pair use the working feed immediately, elimin
   `alpaca_sip` is inserted after `alpaca_iex`. For live-capable runtimes, prefer
   `alpaca_iex,alpaca_sip,finnhub` or disable the backup provider entirely.
 - `MAX_DATA_FALLBACKS`: maximum number of fallbacks allowed before giving up.
-  Default is `2` in the legacy non-live ordering.
+  Default is `2` in the historical non-live ordering.
 
 Configure these variables in your deployment environment to control provider availability and failover behavior.
 

@@ -20,9 +20,9 @@ def test_execute_entry_logs_trade(tmp_path, monkeypatch):
     bot_engine._TRADE_LOGGER_SINGLETON = None
 
     # Stub out heavy dependencies
-    monkeypatch.setattr(bot_engine, "submit_order", lambda *a, **k: None)
-    monkeypatch.setattr(bot_engine, "vwap_pegged_submit", lambda *a, **k: None)
-    monkeypatch.setattr(bot_engine, "pov_submit", lambda *a, **k: None)
+    monkeypatch.setattr("ai_trading.services.execution.submit_order", lambda *a, **k: None)
+    monkeypatch.setattr(execution_flow, "vwap_pegged_submit", lambda *a, **k: None)
+    monkeypatch.setattr(execution_flow, "pov_submit", lambda *a, **k: None)
     monkeypatch.setattr(bot_engine, "POV_SLICE_PCT", 0)
     monkeypatch.setattr(bot_engine, "SLICE_THRESHOLD", 10)
 

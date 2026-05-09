@@ -86,6 +86,51 @@ def test_load_historical_bars_uses_range_index_when_no_datetime_column(tmp_path:
     assert report.inferred_range_index is True
     assert report.timestamp_column is None
     assert report.missing_volume_filled is True
+    assert report.timestamp_authoritative is False
+
+
+def test_load_historical_bars_can_require_authoritative_timestamps(tmp_path: Path) -> None:
+    csv_path = tmp_path / "range.csv"
+    pd.DataFrame(
+        {
+            "seq": [0, 1, 2],
+            "open": [100.0, 101.0, 102.0],
+            "high": [100.5, 101.5, 102.5],
+            "low": [99.5, 100.5, 101.5],
+            "close": [100.2, 101.2, 102.2],
+        }
+    ).to_csv(csv_path, index=False)
+
+    with pytest.raises(ValueError, match="requires timestamp-authoritative bars"):
+        load_historical_bars(csv_path, require_timestamp=True)
+
+    frame, report = load_historical_bars(
+        csv_path,
+        require_timestamp=True,
+        allow_research_synthetic=True,
+    )
+    assert len(frame) == 3
+    assert report.timestamp_authoritative is False
+    assert report.research_synthetic is True
+
+
+def test_load_historical_bars_reports_source_provider_column(tmp_path: Path) -> None:
+    csv_path = tmp_path / "providers.csv"
+    pd.DataFrame(
+        {
+            "timestamp": ["2025-01-01T00:00:00Z", "2025-01-02T00:00:00Z"],
+            "data_provider": ["Yahoo", "alpaca"],
+            "open": [100.0, 101.0],
+            "high": [100.5, 101.5],
+            "low": [99.5, 100.5],
+            "close": [100.2, 101.2],
+        }
+    ).to_csv(csv_path, index=False)
+
+    _, report = load_historical_bars(csv_path)
+
+    assert report.timestamp_authoritative is True
+    assert report.source_providers == ("alpaca", "yahoo")
 
 
 def test_filter_historical_bars_window_can_return_empty_frame(tmp_path: Path) -> None:

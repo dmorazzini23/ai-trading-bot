@@ -10,6 +10,7 @@ import pandas as pd
 
 
 _REQUIRED_COLUMNS: tuple[str, ...] = ("open", "high", "low", "close")
+_SOURCE_COLUMNS: tuple[str, ...] = ("data_provider", "provider", "source_provider", "source")
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,9 @@ class HistoricalBarLoadReport:
     duplicate_timestamp_rows: int
     non_numeric_rows_dropped: int
     non_positive_rows_dropped: int
+    timestamp_authoritative: bool
+    research_synthetic: bool
+    source_providers: tuple[str, ...]
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -41,6 +45,8 @@ def load_historical_bars(
     csv_path: str | Path,
     *,
     timestamp_col: str = "timestamp",
+    require_timestamp: bool = False,
+    allow_research_synthetic: bool = False,
 ) -> tuple[pd.DataFrame, HistoricalBarLoadReport]:
     path = Path(csv_path)
     df = pd.read_csv(path)
@@ -50,6 +56,17 @@ def load_historical_bars(
     rows_read = int(len(df))
     idx: pd.Index | None = None
     lower_map = {str(col).lower(): col for col in df.columns}
+    source_providers: tuple[str, ...] = tuple(
+        sorted(
+            {
+                str(value).strip().lower()
+                for source_col in _SOURCE_COLUMNS
+                if (resolved_source_col := lower_map.get(source_col)) is not None
+                for value in df[resolved_source_col].dropna().unique().tolist()
+                if str(value).strip()
+            }
+        )
+    )
     resolved_ts_col = lower_map.get(timestamp_col.lower()) or lower_map.get("timestamp")
     inferred_range_index = False
 
@@ -72,6 +89,12 @@ def load_historical_bars(
             else:
                 idx = pd.RangeIndex(start=0, stop=len(df), step=1)
                 inferred_range_index = True
+
+    if inferred_range_index and require_timestamp and not allow_research_synthetic:
+        raise ValueError(
+            f"{path} requires timestamp-authoritative bars; "
+            "CSV did not provide a parseable datetime column"
+        )
 
     df = df.rename(columns={col: str(col).lower() for col in df.columns})
     missing = [col for col in _REQUIRED_COLUMNS if col not in df.columns]
@@ -125,6 +148,9 @@ def load_historical_bars(
         duplicate_timestamp_rows=duplicate_timestamp_rows,
         non_numeric_rows_dropped=non_numeric_rows_dropped,
         non_positive_rows_dropped=non_positive_rows_dropped,
+        timestamp_authoritative=not inferred_range_index,
+        research_synthetic=bool(inferred_range_index and allow_research_synthetic),
+        source_providers=source_providers,
     )
     return out, report
 

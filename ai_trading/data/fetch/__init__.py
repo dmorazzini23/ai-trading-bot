@@ -3028,6 +3028,20 @@ def _fallback_frame_is_usable(
                 return False
         except TypeError:
             return False
+        try:
+            duration_minutes = max(
+                0.0,
+                (end_utc - start_utc).total_seconds() / 60.0,
+            )
+            if duration_minutes >= 10.0:
+                valid_ts = ts_index[~ts_index.isna()]
+                unique_ts_count = int(getattr(valid_ts, "nunique", lambda: len(set(valid_ts)))())
+                expected_minutes = int(duration_minutes) + 1
+                coverage_ratio = unique_ts_count / max(expected_minutes, 1)
+                if unique_ts_count < 2 or coverage_ratio < 0.50:
+                    return False
+        except FETCH_FALLBACK_EXCEPTIONS:
+            return False
     return True
 
 
@@ -3139,7 +3153,10 @@ def _mark_fallback(
     if (
         provider_for_register_lower == "yahoo"
         and fallback_df is not None
-        and getattr(fallback_df, "empty", False)
+        and (
+            getattr(fallback_df, "empty", False)
+            or not _fallback_frame_is_usable(fallback_df, start, end)
+        )
     ):
         return
     fallback_order.register_fallback(provider_for_register, symbol)

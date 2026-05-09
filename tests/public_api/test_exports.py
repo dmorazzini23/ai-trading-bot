@@ -1,5 +1,6 @@
 import importlib
 from importlib import import_module
+import pytest
 
 EXPECTED = {
     'ai_trading': [
@@ -120,6 +121,19 @@ def test_package_import_does_not_patch_runtime_override_helpers():
 
     assert management.clear_runtime_env_overrides is original_clear
     assert not hasattr(management, "_test_override_guard_installed")
+
+
+def test_legacy_live_api_exports_warn_as_research_only():
+    import ai_trading
+
+    importlib.reload(ai_trading)
+    vars(ai_trading).pop("predict", None)
+    vars(ai_trading).pop("trade_logic", None)
+    with pytest.warns(DeprecationWarning, match="research utilities"):
+        assert ai_trading.predict is import_module("ai_trading.predict")
+    vars(ai_trading).pop("trade_logic", None)
+    with pytest.warns(DeprecationWarning, match="research utilities"):
+        assert ai_trading.trade_logic is import_module("ai_trading.trade_logic")
 
 
 def test_root_execution_engine_export_uses_runtime_selector(monkeypatch):

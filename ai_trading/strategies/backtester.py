@@ -18,6 +18,7 @@ from ai_trading.data.historical_bars import (
 )
 from ai_trading.logging import get_logger
 from ai_trading.oms.simulated_lifecycle import SimulatedLifecycleDriver
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 if TYPE_CHECKING:  # pragma: no cover
     import pandas as pd
@@ -222,7 +223,33 @@ def _resolve_output_path(path_value: str | Path) -> Path:
     target = Path(path_value).expanduser()
     if target.is_absolute():
         return target.resolve()
-    return (Path.cwd() / target).resolve()
+    default_relative = "runtime/backtests" if str(target).strip() in {"", "."} else str(target)
+    return resolve_runtime_artifact_path(
+        target,
+        default_relative=default_relative,
+        for_write=True,
+    )
+
+
+def _authority_payload(load_reports: dict[str, HistoricalBarLoadReport]) -> dict[str, Any]:
+    return {
+        "runtime_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+        "research_only": True,
+        "timestamp_authoritative": all(
+            report.timestamp_authoritative for report in load_reports.values()
+        ),
+        "research_synthetic": any(report.research_synthetic for report in load_reports.values()),
+        "source_providers": sorted(
+            {
+                provider
+                for report in load_reports.values()
+                for provider in report.source_providers
+                if str(provider).strip()
+            }
+        ),
+    }
 
 
 def _result_trade_records(result: BacktestResult, *, symbol: str) -> list[dict[str, Any]]:
@@ -277,6 +304,7 @@ def _summary_payload(
         "schema_version": BACKTEST_ARTIFACT_SCHEMA_VERSION,
         "artifact_type": "backtest_summary",
         "generated_at": datetime.now(UTC).isoformat(),
+        "authority": _authority_payload(load_reports),
         "config": {
             "symbols_requested": [str(symbol).upper() for symbol in args.symbols],
             "symbols_loaded": [row["symbol"] for row in rows],
@@ -340,6 +368,7 @@ def _build_manifest_payload(
         "schema_version": BACKTEST_MANIFEST_SCHEMA_VERSION,
         "artifact_type": "backtest_run_manifest",
         "generated_at": datetime.now(UTC).isoformat(),
+        "authority": _authority_payload(load_reports),
         "engine": {
             "name": "ai_trading.strategies.backtester",
             "strategy_id": "deterministic_local_signal_v1",
@@ -766,6 +795,7 @@ def main(argv: list[str] | None = None) -> None:
             frame, report = load_historical_bars(
                 csv_path,
                 timestamp_col=args.timestamp_col,
+                require_timestamp=True,
             )
             if report.invalid_timestamp_rows > 0:
                 logger.warning(

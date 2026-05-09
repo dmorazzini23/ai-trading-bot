@@ -48,10 +48,8 @@ def test_audit_positions_uses_get_all_positions(monkeypatch):
     monkeypatch.setattr(bot_engine, "OrderSide", _Side)
     monkeypatch.setattr(bot_engine, "MarketOrderRequest", _Req)
 
-    orders = []
-
     def fake_submit(api, req):
-        orders.append(req)
+        raise AssertionError("position audit must remain observe-only")
 
     monkeypatch.setattr(bot_engine, "safe_submit_order", fake_submit)
 
@@ -62,8 +60,3 @@ def test_audit_positions_uses_get_all_positions(monkeypatch):
     bot_engine.audit_positions(ctx)
 
     assert api.called
-    assert orders
-    order = orders[0]
-    assert order.symbol == "AAPL"
-    assert int(order.qty) == 2
-    assert order.side == bot_engine.OrderSide.SELL

@@ -14,7 +14,9 @@ import pytest
 import ai_trading.portfolio as portfolio_mod
 
 from ai_trading.services.execution import (
+    ExecutionService,
     NonNettingLiveExecutionBlockedError,
+    UnknownExecutionModeError,
     execute_signal_orders,
     execute_trade_cycle,
     submit_order,
@@ -86,68 +88,67 @@ def test_evaluate_signal_and_confirm_enforces_threshold() -> None:
     assert logger.messages[0][0] == "SKIP_LOW_SIGNAL"
 
 
-def test_execute_signal_orders_submits_expected_orders() -> None:
-    calls: list[Any] = []
-    ctx = types.SimpleNamespace(
-        api=types.SimpleNamespace(
-            submit_order=lambda *, order_data: calls.append(order_data)
-        )
-    )
+def test_execute_signal_orders_submits_expected_orders(monkeypatch) -> None:
+    calls: list[tuple[str, int, str]] = []
+    ctx = types.SimpleNamespace()
     signals = pd.Series([1, 0, -1], index=["A", "B", "C"])
 
+    def _submit_order(_self, _ctx, symbol, qty, side, **_kwargs):
+        calls.append((symbol, qty, side))
+        return types.SimpleNamespace(status="accepted")
+
+    monkeypatch.setattr(ExecutionService, "submit_order", _submit_order)
     orders = execute_signal_orders(ctx, signals, logger=_DummyLogger())
 
     assert orders == [("A", "buy"), ("C", "sell")]
-    assert [_request_snapshot(call) for call in calls] == [("A", 1.0, "buy"), ("C", 1.0, "sell")]
+    assert calls == [("A", 1, "buy"), ("C", 1, "sell")]
 
 
-def test_execute_signal_orders_returns_only_successfully_submitted_orders() -> None:
-    calls: list[Any] = []
+def test_execute_signal_orders_returns_only_successfully_submitted_orders(monkeypatch) -> None:
+    calls: list[tuple[str, int, str]] = []
+    ctx = types.SimpleNamespace()
+    signals = pd.Series([1, -1], index=["A", "C"])
 
-    def _submit_order(*, order_data: object) -> None:
-        calls.append(order_data)
-        if getattr(order_data, "symbol") == "A":
+    def _submit_order(_self, _ctx, symbol, qty, side, **_kwargs):
+        calls.append((symbol, qty, side))
+        if symbol == "A":
             raise ValueError("broker rejected")
-
-    ctx = types.SimpleNamespace(api=types.SimpleNamespace(submit_order=_submit_order))
-    signals = pd.Series([1, -1], index=["A", "C"])
-
-    orders = execute_signal_orders(ctx, signals, logger=_DummyLogger())
-
-    assert orders == [("C", "sell")]
-    assert [_request_snapshot(call) for call in calls] == [("A", 1.0, "buy"), ("C", 1.0, "sell")]
-
-
-def test_execute_signal_orders_excludes_terminal_rejected_response() -> None:
-    ctx = types.SimpleNamespace(
-        api=types.SimpleNamespace(
-            submit_order=lambda *, order_data: types.SimpleNamespace(
-                status="rejected" if order_data.symbol == "A" else "accepted"
-            )
-        )
-    )
-    signals = pd.Series([1, -1], index=["A", "C"])
-
-    orders = execute_signal_orders(ctx, signals, logger=_DummyLogger())
-
-    assert orders == [("C", "sell")]
-
-
-def test_execute_signal_orders_uses_alpaca_request_keyword() -> None:
-    calls: list[dict[str, Any]] = []
-
-    def _submit_order(*args: object, **kwargs: object) -> types.SimpleNamespace:
-        calls.append({"args": args, "kwargs": kwargs})
         return types.SimpleNamespace(status="accepted")
 
-    ctx = types.SimpleNamespace(api=types.SimpleNamespace(submit_order=_submit_order))
+    monkeypatch.setattr(ExecutionService, "submit_order", _submit_order)
+    orders = execute_signal_orders(ctx, signals, logger=_DummyLogger())
+
+    assert orders == [("C", "sell")]
+    assert calls == [("A", 1, "buy"), ("C", 1, "sell")]
+
+
+def test_execute_signal_orders_excludes_terminal_rejected_response(monkeypatch) -> None:
+    ctx = types.SimpleNamespace()
+    signals = pd.Series([1, -1], index=["A", "C"])
+
+    def _submit_order(_self, _ctx, symbol, _qty, _side, **_kwargs):
+        return types.SimpleNamespace(status="rejected" if symbol == "A" else "accepted")
+
+    monkeypatch.setattr(ExecutionService, "submit_order", _submit_order)
+    orders = execute_signal_orders(ctx, signals, logger=_DummyLogger())
+
+    assert orders == [("C", "sell")]
+
+
+def test_execute_signal_orders_uses_canonical_submit_service(monkeypatch) -> None:
+    calls: list[tuple[str, int, str]] = []
+
+    def _submit_order(_self, _ctx, symbol, qty, side, **_kwargs) -> types.SimpleNamespace:
+        calls.append((symbol, qty, side))
+        return types.SimpleNamespace(status="accepted")
+
+    monkeypatch.setattr(ExecutionService, "submit_order", _submit_order)
+    ctx = types.SimpleNamespace()
 
     orders = execute_signal_orders(ctx, pd.Series([1], index=["AAPL"]), logger=_DummyLogger())
 
     assert orders == [("AAPL", "buy")]
-    assert calls[0]["args"] == ()
-    order_data = calls[0]["kwargs"]["order_data"]
-    assert _request_snapshot(order_data) == ("AAPL", 1.0, "buy")
+    assert calls == [("AAPL", 1, "buy")]
 
 
 def test_execute_signal_orders_blocks_non_netting_live_mode(monkeypatch) -> None:
@@ -338,6 +339,15 @@ def test_execution_service_non_netting_live_escape_hatch_is_test_only(monkeypatc
     monkeypatch.setattr("ai_trading.services.execution.is_test_runtime", lambda: False)
 
     with pytest.raises(NonNettingLiveExecutionBlockedError, match="blocked for live non-netting execution"):
+        submit_order(types.SimpleNamespace(), "AAPL", 1, "buy", price=100.0)
+
+
+def test_execution_service_unknown_mode_fails_fast(monkeypatch) -> None:
+    monkeypatch.setenv("EXECUTION_MODE", "mystery")
+    monkeypatch.delenv("AI_TRADING_ALLOW_EXECUTION_MODE_SIM_FALLBACK", raising=False)
+    monkeypatch.setattr("ai_trading.core.runtime_contract.is_testing_mode", lambda: False)
+
+    with pytest.raises(UnknownExecutionModeError, match="EXECUTION_MODE must be one of"):
         submit_order(types.SimpleNamespace(), "AAPL", 1, "buy", price=100.0)
 
 

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, Tuple
 
 from ai_trading.logging import get_logger
+from ai_trading.core.runtime_contract import normalize_execution_mode
 from ai_trading.utils.env import (
     alpaca_credential_status,
     get_alpaca_base_url,
@@ -155,10 +156,7 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
         mode = str(settings.mode or "sim").lower()
         shadow = bool(settings.shadow_mode)
 
-    normalized_mode = {
-        "broker": "paper",
-        "alpaca": "paper",
-    }.get(mode, mode)
+    normalized_mode = normalize_execution_mode(mode)
 
     engine_cls: type[_SimExecutionEngine] = _SimExecutionEngine
     engine_class_path = f"{engine_cls.__module__}.{engine_cls.__qualname__}"
@@ -198,13 +196,6 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
                         "base_url": base_url,
                     },
                 )
-    elif normalized_mode not in {"sim"}:
-        reason = reason or "mode_unknown"
-        _logger.warning(
-            "EXECUTION_MODE_UNKNOWN",
-            extra={"requested_mode": mode},
-        )
-
     global _RUNTIME_STATUS
     _RUNTIME_STATUS = ExecutionEngineStatus(
         mode=normalized_mode,

@@ -154,6 +154,8 @@ make install-dev
 **Import errors in tests**
 - Ensure `PYTHONPATH=.` is set (handled by Makefile)
 - Check that all dependencies are installed
+- Keep Makefile targets side-effect free at parse time; create artifact
+  directories inside the targets that write reports.
 
 **CI failures due to dependencies**
 - CI and security workflows install dependencies from `requirements*.txt`

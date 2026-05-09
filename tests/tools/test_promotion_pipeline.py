@@ -165,6 +165,41 @@ def test_promotion_report_rejects_replay_governance_schema_for_replay_evidence(
     assert report["gates"]["full_replay_positive"] is False
 
 
+def test_promotion_report_blocks_explicit_yahoo_or_synthetic_replay_authority(
+    tmp_path: Path,
+) -> None:
+    model = tmp_path / "candidate.joblib"
+    manifest = _write_model(model)
+    yahoo_replay = _replay_payload()
+    yahoo_replay["authority"] = {
+        "timestamp_authoritative": True,
+        "research_synthetic": False,
+        "source_providers": ["yahoo"],
+    }
+
+    report = promotion_pipeline.build_promotion_report(
+        model_path=model,
+        manifest_path=manifest,
+        full_replay=yahoo_replay,
+        tail_replay=_replay_payload(),
+        recent_replay=_replay_payload(),
+        shadow_report=_shadow_payload(),
+        live_cost_model={
+            "generated_at": "2026-05-05T20:00:00Z",
+            "status": {"available": True, "status": "ready", "breach_count": 0},
+        },
+        runtime_decay_controls={
+            "generated_at": "2026-05-05T20:00:00Z",
+            "actions": {"entries_allowed": True, "max_action": "normal"},
+        },
+        generated_at=datetime(2026, 5, 5, 21, 0, tzinfo=UTC),
+    )
+
+    assert report["promotion_ready"] is False
+    assert report["gates"]["evidence_authority_acceptable"] is False
+    assert report["evidence_authority"]["full_replay"]["reason"] == "yahoo_research_boundary"
+
+
 def test_promotion_pipeline_cli_writes_report_and_returns_blocked(tmp_path: Path) -> None:
     model = tmp_path / "candidate.joblib"
     manifest = _write_model(model)

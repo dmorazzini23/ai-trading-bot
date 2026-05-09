@@ -8,6 +8,7 @@ from typing import Any
 
 from ai_trading.logging import get_logger
 from ai_trading.replay.bad_session import build_replay_dataset_from_bad_session
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.tools.offline_replay import run_replay
 
 logger = get_logger(__name__)
@@ -61,26 +62,63 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
+def _resolve_artifact_path(path: Path, *, default_relative: str, for_write: bool) -> Path:
+    target = Path(path).expanduser()
+    if target.is_absolute():
+        return target
+    return resolve_runtime_artifact_path(
+        target,
+        default_relative=default_relative,
+        for_write=for_write,
+    )
+
+
 def run_incident_replay(argv: list[str] | None = None) -> dict[str, Any]:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    log_path = _resolve_artifact_path(
+        args.log_path,
+        default_relative=str(args.log_path),
+        for_write=False,
+    )
+    output_dir = _resolve_artifact_path(
+        args.output_dir,
+        default_relative=str(args.output_dir),
+        for_write=True,
+    )
+    offline_output_json = (
+        _resolve_artifact_path(
+            args.offline_output_json,
+            default_relative=str(args.offline_output_json),
+            for_write=True,
+        )
+        if args.offline_output_json is not None
+        else None
+    )
 
     report = build_replay_dataset_from_bad_session(
-        args.log_path,
-        output_dir=args.output_dir,
+        log_path,
+        output_dir=output_dir,
         seed=int(args.seed),
     )
     payload: dict[str, Any] = {
         "status": "ok",
-        "source_log": str(args.log_path),
-        "output_dir": str(args.output_dir),
+        "authority": {
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+            "research_only": True,
+            "timestamp_authoritative": True,
+        },
+        "source_log": str(log_path),
+        "output_dir": str(output_dir),
         "seed": int(args.seed),
         "dataset": report,
     }
     if bool(args.run_offline_replay):
         if int(report.get("events", 0) or 0) <= 0:
             raise ValueError("incident replay requested but source log produced zero replay events")
-        replay_args: list[str] = ["--data-dir", str(args.output_dir)]
+        replay_args: list[str] = ["--data-dir", str(output_dir)]
         symbols = [
             str(symbol).strip().upper()
             for symbol in report.get("symbols", [])
@@ -88,21 +126,26 @@ def run_incident_replay(argv: list[str] | None = None) -> dict[str, Any]:
         ]
         if symbols:
             replay_args.extend(["--symbols", ",".join(symbols)])
-        if args.offline_output_json is not None:
-            replay_args.extend(["--output-json", str(args.offline_output_json)])
+        if offline_output_json is not None:
+            replay_args.extend(["--output-json", str(offline_output_json)])
         replay_payload = run_replay(replay_args)
         payload["offline_replay"] = replay_payload
 
     summary_target = args.summary_json
     if summary_target is None:
-        summary_target = Path(args.output_dir) / "incident_replay_summary.json"
-    _write_json(Path(summary_target), payload)
+        summary_target = output_dir / "incident_replay_summary.json"
+    summary_target = _resolve_artifact_path(
+        Path(summary_target),
+        default_relative=str(summary_target),
+        for_write=True,
+    )
+    _write_json(summary_target, payload)
     payload["summary_path"] = str(summary_target)
     logger.info(
         "INCIDENT_REPLAY_COMPLETE",
         extra={
-            "source_log": str(args.log_path),
-            "output_dir": str(args.output_dir),
+            "source_log": str(log_path),
+            "output_dir": str(output_dir),
             "summary_path": str(summary_target),
             "symbols": int(len(report.get("symbols", []))),
             "events": int(report.get("events", 0) or 0),

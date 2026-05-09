@@ -57,7 +57,7 @@ def test_minimum_quantity_uses_config_then_fallback_and_logs_once(
 @pytest.mark.parametrize(
     ("raw_qty", "expected"),
     [
-        (float("nan"), 2),
+        (float("nan"), 0),
         (0.0, 0),
         (-5.0, 0),
         (7.9, 7),

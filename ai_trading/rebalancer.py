@@ -112,6 +112,16 @@ def _extract_position_quantity(position: Any) -> float:
     return float(raw_quantity)
 
 
+def _finite_positive(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric) or numeric <= 0.0:
+        return None
+    return numeric
+
+
 class TaxAwareRebalancer:
     """
     Tax-aware portfolio rebalancing with loss harvesting and wash sale avoidance.
@@ -498,9 +508,9 @@ def portfolio_first_rebalance(ctx) -> None:
         current_positions = _get_current_positions_for_rebalancing(ctx)
         target_weights = _get_target_weights_for_rebalancing(ctx)
         market_data = _prepare_rebalancing_market_data(ctx)
-        if not current_positions or not target_weights or (not market_data):
-            logger.warning('Insufficient data for portfolio-first rebalancing, using fallback')
-            rebalance_portfolio(ctx)
+        if not current_positions or not target_weights or not market_data.get('prices'):
+            logger.warning('PORTFOLIO_FIRST_REBALANCING_SKIPPED', extra={'reason': 'missing_rebalance_evidence'})
+            ctx.rebalance_plan = {'error': 'missing_rebalance_evidence', 'rebalance_trades': []}
             return
         regime, regime_metrics = _rebalancer.regime_detector.detect_current_regime(market_data)
         dynamic_thresholds = _rebalancer.regime_detector.calculate_dynamic_thresholds(regime, regime_metrics)
@@ -511,13 +521,30 @@ def portfolio_first_rebalance(ctx) -> None:
             current_positions, target_weights, current_prices
         )
         if should_rebalance:
-            account_equity = sum((abs(pos) * current_prices.get(symbol, 100.0) for symbol, pos in current_positions.items()))
+            account_equity = 0.0
+            missing_prices: list[str] = []
+            for symbol, pos in current_positions.items():
+                current_price = _finite_positive(current_prices.get(symbol))
+                if current_price is None:
+                    missing_prices.append(symbol)
+                    continue
+                account_equity += abs(pos) * current_price
+            if missing_prices or account_equity <= 0.0:
+                logger.warning(
+                    'PORTFOLIO_FIRST_REBALANCING_SKIPPED',
+                    extra={'reason': 'missing_price_evidence', 'symbols': missing_prices},
+                )
+                ctx.rebalance_plan = {'error': 'missing_price_evidence', 'rebalance_trades': []}
+                return
             formatted_positions = {}
             for symbol, quantity in current_positions.items():
                 if quantity != 0:
+                    current_price = _finite_positive(current_prices.get(symbol))
+                    if current_price is None:
+                        continue
                     formatted_positions[symbol] = {
                         'quantity': quantity,
-                        'purchase_price': current_prices.get(symbol, 100.0),
+                        'purchase_price': current_price,
                         'purchase_date': datetime.now(UTC) - timedelta(days=100),
                     }
             rebalance_plan = _rebalancer.calculate_optimal_rebalance(
@@ -610,13 +637,13 @@ def _get_target_weights_for_rebalancing(ctx) -> dict:
         if hasattr(ctx, 'target_weights'):
             target_weights = getattr(ctx, 'target_weights', {})
             if isinstance(target_weights, dict):
-                return {str(sym): float(weight) for sym, weight in target_weights.items()}
+                normalized = {}
+                for sym, weight in target_weights.items():
+                    numeric = float(weight)
+                    if math.isfinite(numeric):
+                        normalized[str(sym)] = numeric
+                return normalized
             return {}
-        current_positions = _get_current_positions_for_rebalancing(ctx)
-        if current_positions:
-            num_positions = len(current_positions)
-            equal_weight = 1.0 / num_positions
-            return dict.fromkeys(current_positions.keys(), equal_weight)
         return {}
     except (KeyError, ValueError, TypeError) as e:
         logger.error('GET_TARGET_WEIGHTS_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
@@ -642,7 +669,14 @@ def _prepare_rebalancing_market_data(ctx) -> dict:
                     continue
                 df = fetcher.get_daily_df(ctx, symbol)
                 if df is not None and len(df) > 0:
-                    market_data['prices'][symbol] = df['close'].iloc[-1] if 'close' in df.columns else 100.0
+                    if 'close' not in df.columns:
+                        logger.debug('REBALANCE_PRICE_EVIDENCE_MISSING', extra={'symbol': symbol})
+                        continue
+                    current_price = _finite_positive(df['close'].iloc[-1])
+                    if current_price is None:
+                        logger.debug('REBALANCE_PRICE_EVIDENCE_INVALID', extra={'symbol': symbol})
+                        continue
+                    market_data['prices'][symbol] = current_price
                     if 'close' in df.columns and len(df) > 1:
                         prices = df['close'].values[-100:]
                         returns = []

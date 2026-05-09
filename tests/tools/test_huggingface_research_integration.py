@@ -53,8 +53,11 @@ def test_huggingface_discovery_is_research_only_and_scores_offline_results() -> 
     assert report["runtime_authority"] is False
     assert report["promotion_authority"] is False
     assert report["live_money_authority"] is False
+    assert report["non_authoritative"] is True
+    assert report["external_network_allowed"] is False
     assert report["summary"]["candidate_count"] == 3
     assert report["candidates"][0]["repo_id"] == "open/finance-timeseries"
+    assert report["candidates"][0]["non_authoritative"] is True
     gated = next(row for row in report["candidates"] if row["repo_id"] == "closed/gated-stock-model")
     assert gated["blocked_reasons"] == ["gated_access_not_allowed"]
 
@@ -69,6 +72,23 @@ def test_huggingface_discovery_disabled_without_offline_fixture_blocks_softly() 
     assert report["status"] == "disabled"
     assert report["blocked_reasons"] == ["hf_research_disabled"]
     assert report["research_only"] is True
+
+
+def test_huggingface_api_requires_enabled_explicit_opt_in() -> None:
+    calls: list[str] = []
+
+    report = huggingface_research_discovery.build_huggingface_research_discovery(
+        report_date="2026-05-09",
+        enabled=False,
+        use_hf_api=True,
+        fetch_json=lambda url, *_args: calls.append(url) or [],
+    )
+
+    assert report["status"] == "disabled"
+    assert report["blocked_reasons"] == ["hf_research_disabled"]
+    assert report["query"]["explicit_opt_in"] is False
+    assert report["external_network_allowed"] is False
+    assert calls == []
 
 
 def test_huggingface_discovery_cli_writes_dated_and_latest(tmp_path: Path) -> None:

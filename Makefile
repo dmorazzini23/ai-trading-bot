@@ -10,9 +10,6 @@ DISABLE_ENV_ASSERT ?= 0
 IMPORT_REPAIR_REPORT ?= artifacts/import-repair-report.md
 SKIP_INSTALL ?= 0
 	
-# Ensure artifact dir exists even on CI
-$(shell mkdir -p artifacts >/dev/null 2>&1)
-
 .PHONY: ensure-runtime install-dev validate-env test-collect-report ci-smoke smoke test test-all test-all-heavy test-after-hours-pipeline lint tests-self lint-core institutional-gates secret-scan runtime-artifacts-reset runtime-artifacts-reset-no-cycle
 
 ensure-runtime:
@@ -33,6 +30,7 @@ validate-env:
 # Collect only + harvest into artifact (always writes report)
 test-collect-report: ensure-runtime
 	@echo "[harvest] writing $(IMPORT_REPAIR_REPORT)"
+	@mkdir -p "$(dir $(IMPORT_REPAIR_REPORT))"
 	@DISABLE_ENV_ASSERT=$(DISABLE_ENV_ASSERT) \
 	TOP_N=$(TOP_N) \
 	FAIL_ON_IMPORT_ERRORS=$(FAIL_ON_IMPORT_ERRORS) \
@@ -76,6 +74,7 @@ doctor:
 .PHONY: audit-exceptions legacy-scan
 audit-exceptions:
 	@echo "== audit broad exceptions =="
+	@mkdir -p artifacts
 	@$(PYTHON) tools/audit_exceptions.py --paths ai_trading > artifacts/audit-exceptions.json
 
 secret-scan:

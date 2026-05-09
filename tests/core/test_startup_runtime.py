@@ -42,8 +42,7 @@ def test_initial_rebalance_runtime_initializes_missing_tracking_attrs(monkeypatc
 
     monkeypatch.setattr(bot_engine, "datetime", FakeDateTime)
     monkeypatch.setattr(
-        bot_engine,
-        "submit_order",
+        "ai_trading.services.execution.submit_order",
         lambda ctx_, symbol, qty, side: ctx_.api.positions.setdefault(symbol, qty) or object(),
     )
 
@@ -155,8 +154,7 @@ def test_initial_rebalance_runtime_skips_bad_symbol_and_continues(monkeypatch):
         lambda event, extra=None: warnings.append((event, extra)),
     )
     monkeypatch.setattr(
-        bot_engine,
-        "submit_order",
+        "ai_trading.services.execution.submit_order",
         lambda ctx_, symbol, qty, side: ctx_.api.positions.setdefault(symbol, qty) or object(),
     )
 

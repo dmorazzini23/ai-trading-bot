@@ -13,13 +13,16 @@ from .low_beta_defensive import LowBetaDefensiveStrategy
 from .time_series_momentum_overlay import TimeSeriesMomentumOverlayStrategy
 MetaLearning: Any | None
 try:
-    from .metalearning import MetaLearning
+    from .metalearning import MetaLearning as _MetaLearning
 except (KeyError, ValueError, TypeError):
     MetaLearning = None
+else:
+    MetaLearning = _MetaLearning
 from .base import StrategySignal as TradeSignal
 from .moving_average_crossover import MovingAverageCrossoverStrategy
 REGISTRY = {
-    'momentum': MomentumStrategy,
+    # Legacy MomentumStrategy remains importable for research/backtests but is
+    # no longer an implicit live-authority registry default.
     'mean_reversion': MeanReversionStrategy,
     'cross_sectional_momentum': CrossSectionalMomentumStrategy,
     'cross_momentum': CrossSectionalMomentumStrategy,

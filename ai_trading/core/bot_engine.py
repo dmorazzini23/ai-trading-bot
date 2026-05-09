@@ -3463,14 +3463,6 @@ class BotEngine:
         # Load universe tickers once and store on both engine and runtime
         self._tickers = load_universe()
         setattr(self._ctx, "tickers", self._tickers)
-        try:
-            from ai_trading.ml_model import ensure_default_models
-
-            ensure_default_models(self._tickers)
-        except BOT_ENGINE_FALLBACK_EXC as exc:  # pragma: no cover - best effort on startup
-            self.logger.warning(
-                "MODEL_STARTUP_CHECK_FAILED", extra={"error": str(exc)}
-            )
 
         # Eagerly load the configured model so misconfiguration fails fast
         _load_required_model()
@@ -16462,10 +16454,20 @@ def _parse_local_positions() -> dict[str, int]:
     return positions
 
 
+def _position_audit_remediation_enabled() -> bool:
+    return _env_flag("AI_TRADING_POSITION_AUDIT_REMEDIATE", False)
+
+
 def audit_positions(ctx) -> None:
     """
-    Fetch local vs. broker positions and submit market orders to correct any mismatch.
+    Fetch local vs. broker positions and report mismatches.
+
+    Startup and prep-cycle reconciliation must be observe-only by default.  Older
+    behavior submitted market orders directly from this audit, which bypassed the
+    canonical OMS/pretrade/provider/risk path.  Keep the audit as an operator
+    signal and require a separate canonical remediation path for any future fix.
     """
+    logger = get_logger(__name__)
     # 1) Read local open positions from the trade log
     local = _parse_local_positions()
 
@@ -16481,78 +16483,45 @@ def audit_positions(ctx) -> None:
         )
         return
 
-    max_order_size = _as_int(get_env("MAX_ORDER_SIZE", "1000"), 1000)
-
-    _ensure_alpaca_classes()
+    remediation_enabled = _position_audit_remediation_enabled()
+    if remediation_enabled:
+        logger.error(
+            "POSITION_AUDIT_REMEDIATION_UNAVAILABLE",
+            extra={
+                "reason": "direct_audit_market_orders_removed",
+                "required_path": "canonical_oms_pretrade_remediation",
+            },
+        )
 
     # 3) For any symbol in remote whose remote_qty != local_qty, correct via market order
     for sym, rq in remote.items():
         lq = local.get(sym, 0)
         if lq != rq:
             diff = rq - lq
-            if diff > 0:
-                # Broker has more shares than local: sell off the excess
-                try:
-                    req = MarketOrderRequest(
-                        symbol=sym,
-                        qty=min(abs(diff), max_order_size),
-                        side=OrderSide.SELL,
-                        time_in_force=TimeInForce.DAY,
-                    )
-                    safe_submit_order(ctx.api, req)
-                except APIError as exc:
-                    logger.exception(
-                        "bot.py unexpected",
-                        exc_info=exc,
-                        extra={"cause": exc.__class__.__name__},
-                    )
-                    raise
-            else:
-                # Broker has fewer shares than local: buy back the missing shares
-                try:
-                    req = MarketOrderRequest(
-                        symbol=sym,
-                        qty=min(abs(diff), max_order_size),
-                        side=OrderSide.BUY,
-                        time_in_force=TimeInForce.DAY,
-                    )
-                    safe_submit_order(ctx.api, req)
-                except APIError as exc:
-                    logger.exception(
-                        "bot.py unexpected",
-                        exc_info=exc,
-                        extra={"cause": exc.__class__.__name__},
-                    )
-                    raise
+            logger.warning(
+                "POSITION_AUDIT_MISMATCH_OBSERVED",
+                extra={
+                    "symbol": sym,
+                    "local_qty": lq,
+                    "broker_qty": rq,
+                    "diff_qty": diff,
+                    "remediation_enabled": False,
+                },
+            )
 
     # 4) For any symbol in local that is not in remote, submit order matching the local side
     for sym, lq in local.items():
         if sym not in remote:
-            # AI-AGENT-REF: prevent oversize orders on unmatched locals
-            if abs(lq) > max_order_size:
-                logger.warning(
-                    "Order size %d exceeds maximum %d for %s",
-                    abs(lq),
-                    max_order_size,
-                    sym,
-                )
-                continue
-            try:
-                side = OrderSide.BUY if lq > 0 else OrderSide.SELL
-                req = MarketOrderRequest(
-                    symbol=sym,
-                    qty=abs(lq),
-                    side=side,
-                    time_in_force=TimeInForce.DAY,
-                )
-                safe_submit_order(ctx.api, req)
-            except APIError as exc:
-                logger.exception(
-                    "bot.py unexpected",
-                    exc_info=exc,
-                    extra={"cause": exc.__class__.__name__},
-                )
-                raise
+            logger.warning(
+                "POSITION_AUDIT_LOCAL_ONLY_POSITION_OBSERVED",
+                extra={
+                    "symbol": sym,
+                    "local_qty": lq,
+                    "broker_qty": 0,
+                    "diff_qty": -lq,
+                    "remediation_enabled": False,
+                },
+            )
 
 
 def validate_open_orders(ctx: Any) -> None:
@@ -20694,11 +20663,11 @@ def fractional_kelly_size(
             logger.error("Invalid price for Kelly calculation: %s", price)
             return 0
 
-        if not isinstance(atr, int | float) or atr < 0:
+        if not isinstance(atr, int | float) or atr <= 0:
             logger.warning(
-                "Invalid ATR for Kelly calculation: %s, using minimum position", atr
+                "Invalid ATR for Kelly calculation: %s, returning zero position", atr
             )
-            return 1
+            return 0
 
         # AI-AGENT-REF: Normalize confidence values to valid probability range
         if not isinstance(win_prob, int | float):
@@ -20841,9 +20810,17 @@ def fractional_kelly_size(
             kelly = max(0, min(kelly, 1))
 
         dollars_to_risk = kelly * balance
+        if edge <= 0 or kelly <= 0 or dollars_to_risk <= 0:
+            logger.debug(
+                "Kelly calculation produced no positive edge: edge=%s kelly=%s dollars_to_risk=%s",
+                edge,
+                kelly,
+                dollars_to_risk,
+            )
+            return 0
 
         if atr <= 0:
-            logger.warning("ATR is zero or negative, using minimum position size")
+            logger.warning("ATR is zero or negative, returning zero position size")
             try:
                 new_peak = max(balance, prev_peak)
                 with open(PEAK_EQUITY_FILE, "w") as lock:
@@ -20856,7 +20833,7 @@ def fractional_kelly_size(
                 _log_peak_equity_permission()
             except OSError as e:
                 logger.warning("Error updating peak equity file: %s", e)
-            return 1
+            return 0
 
         # Calculate position sizes with multiple caps
         raw_pos = dollars_to_risk / atr if atr > 0 else 0
@@ -20868,7 +20845,15 @@ def fractional_kelly_size(
         size = int(
             round(min(raw_pos, cap_pos, risk_cap, dollar_cap, MAX_POSITION_SIZE))
         )
-        size = max(size, 1)  # Ensure minimum position size
+        if size <= 0:
+            logger.debug(
+                "Kelly calculation capped to zero position: raw_pos=%s cap_pos=%s risk_cap=%s dollar_cap=%s",
+                raw_pos,
+                cap_pos,
+                risk_cap,
+                dollar_cap,
+            )
+            return 0
 
         # Validate final size is reasonable
         if size > MAX_POSITION_SIZE:

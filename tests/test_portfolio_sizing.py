@@ -158,12 +158,25 @@ def test_volatility_targeting_preserves_short_signal_direction() -> None:
         signals={"LONG": 1.0, "SHORT": -0.5},
         current_prices={"LONG": 100.0, "SHORT": 50.0},
         portfolio_value=10_000.0,
+        price_history={"LONG": _series(100.0, 0.2), "SHORT": _series(50.0, -0.1)},
     )
 
     assert result["LONG"]["weight"] > 0
     assert result["LONG"]["shares"] > 0
     assert result["SHORT"]["weight"] < 0
     assert result["SHORT"]["shares"] < 0
+
+
+def test_volatility_targeting_fails_closed_without_symbol_evidence() -> None:
+    sizer = sizing.VolatilityTargetingSizer(min_weight=0.01, max_weight=0.9)
+
+    result = sizer.calculate_position_sizes(
+        signals={"LONG": 1.0},
+        current_prices={"LONG": 100.0},
+        portfolio_value=10_000.0,
+    )
+
+    assert result == {}
 
 
 def test_position_size_callable_for_bot_engine_hook() -> None:
@@ -263,7 +276,7 @@ def test_calculate_inverse_vol_weights_error_fallback() -> None:
         signals=cast(dict[str, float], {"AAA": "bad", "BBB": "also_bad"}),
         volatilities={"AAA": 0.2, "BBB": 0.3},
     )
-    assert result == {"AAA": 0.5, "BBB": 0.5}
+    assert result == {}
 
 
 def test_risk_parity_weight_paths_and_sign_handling() -> None:
@@ -285,19 +298,19 @@ def test_risk_parity_weight_paths_and_sign_handling() -> None:
         signals={"AAA": 1.0},
         price_history=price_history,
     )
-    assert single == {"AAA": 1.0}
+    assert single == {}
 
     single_short = sizer.calculate_risk_parity_weights(
         signals={"AAA": -1.0},
         price_history=price_history,
     )
-    assert single_short == {"AAA": -1.0}
+    assert single_short == {}
 
     equal = sizer.calculate_risk_parity_weights(
         signals={"AAA": 1.0, "BBB": -1.0},
         price_history={"AAA": pd.Series([1.0, 1.1]), "BBB": pd.Series([2.0, 2.1])},
     )
-    assert equal == {"AAA": 0.5, "BBB": -0.5}
+    assert equal == {}
 
 
 def test_risk_parity_covariance_and_optimizer_fallbacks(
@@ -326,7 +339,7 @@ def test_risk_parity_covariance_and_optimizer_fallbacks(
     assert max(capped.values()) <= 0.400001
 
     fallback = sizer._optimize_risk_parity(np.array([[1.0]]), ["AAA", "BBB"])
-    assert fallback == {"AAA": 0.5, "BBB": 0.5}
+    assert fallback == {}
 
     def _raise(*_args, **_kwargs):
         raise ValueError("bad_cov")
@@ -336,7 +349,7 @@ def test_risk_parity_covariance_and_optimizer_fallbacks(
         signals={"AAA": 1.0, "BBB": 1.0},
         price_history=history,
     )
-    assert safe == {"AAA": 0.5, "BBB": 0.5}
+    assert safe == {}
 
 
 def test_cluster_sizer_apply_limits_and_matrix_paths() -> None:

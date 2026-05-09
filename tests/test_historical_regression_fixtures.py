@@ -77,6 +77,7 @@ def _write_replay_symbol(path: Path, *, trend: float, include_volume: bool, dupl
 def _normalize_backtester_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = json.loads(json.dumps(payload))
     normalized.pop("generated_at", None)
+    normalized.pop("authority", None)
     normalized["config"]["data_dir"] = "__DATA_DIR__"
     normalized["artifacts"] = {
         key: Path(str(value)).name
@@ -84,15 +85,22 @@ def _normalize_backtester_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
     for report in normalized["inputs"]["symbols"].values():
         report["path"] = Path(str(report["path"])).name
+        report.pop("timestamp_authoritative", None)
+        report.pop("research_synthetic", None)
+        report.pop("source_providers", None)
     normalized["symbols"] = sorted(normalized["symbols"], key=lambda item: str(item["symbol"]))
     for row in normalized["symbols"]:
         row["load_report"]["path"] = Path(str(row["load_report"]["path"])).name
+        row["load_report"].pop("timestamp_authoritative", None)
+        row["load_report"].pop("research_synthetic", None)
+        row["load_report"].pop("source_providers", None)
     return cast(dict[str, Any], normalized)
 
 
 def _normalize_offline_replay_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = json.loads(json.dumps(payload))
     normalized.pop("generated_at", None)
+    normalized.pop("authority", None)
     artifacts = normalized.get("artifacts", {})
     if isinstance(artifacts, dict):
         normalized["artifacts"] = {
@@ -101,6 +109,9 @@ def _normalize_offline_replay_payload(payload: dict[str, Any]) -> dict[str, Any]
         }
     for report in normalized["inputs"]["symbols"].values():
         report["path"] = Path(str(report["path"])).name
+        report.pop("timestamp_authoritative", None)
+        report.pop("research_synthetic", None)
+        report.pop("source_providers", None)
     normalized["symbols"] = [
         {
             key: value

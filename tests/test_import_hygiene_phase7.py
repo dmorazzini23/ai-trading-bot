@@ -56,7 +56,7 @@ http.get_http_session = boom_session
 
 import ai_trading.predict as predict
 
-assert predict._HTTP is None
+assert not hasattr(predict, "_HTTP")
 """
     )
     assert proc.returncode == 0, proc.stderr + proc.stdout

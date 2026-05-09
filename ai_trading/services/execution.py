@@ -4,6 +4,10 @@ from json import JSONDecodeError
 from typing import Any
 
 from ai_trading.config.management import get_env, is_test_runtime
+from ai_trading.core.runtime_contract import (
+    UnknownExecutionModeError,
+    normalize_execution_mode,
+)
 
 _NON_ACCEPTED_ORDER_STATUSES = {"rejected", "canceled", "cancelled", "expired", "done_for_day"}
 
@@ -21,8 +25,8 @@ def _order_status_token(order: Any) -> str:
 def _execution_mode(ctx: Any) -> str:
     ctx_mode = str(getattr(ctx, "execution_mode", "") or "").strip().lower()
     if ctx_mode:
-        return ctx_mode
-    return str(get_env("EXECUTION_MODE", "paper") or "paper").strip().lower()
+        return normalize_execution_mode(ctx_mode)
+    return normalize_execution_mode(get_env("EXECUTION_MODE", "paper") or "paper")
 
 
 def _non_netting_live_execution_allowed() -> bool:
@@ -142,36 +146,34 @@ class ExecutionService:
             if sig == 0:
                 continue
             side = "buy" if sig > 0 else "sell"
-            api = getattr(ctx, "api", None)
-            if api is not None and hasattr(api, "submit_order"):
-                try:
-                    order = api.submit_order(order_data=_market_order_request(str(symbol), 1, side))
-                    status_token = _order_status_token(order)
-                    if status_token in _NON_ACCEPTED_ORDER_STATUSES:
-                        logger.error(
-                            "Broker did not accept test order for %s %s: status=%s",
-                            symbol,
-                            side,
-                            status_token,
-                        )
-                        continue
-                    orders.append((str(symbol), side))
-                except (
-                    FileNotFoundError,
-                    PermissionError,
-                    IsADirectoryError,
-                    JSONDecodeError,
-                    ValueError,
-                    KeyError,
-                    TypeError,
-                    OSError,
-                ) as exc:
+            try:
+                order = self.submit_order(ctx, str(symbol), 1, side)
+                status_token = _order_status_token(order)
+                if status_token in _NON_ACCEPTED_ORDER_STATUSES:
                     logger.error(
-                        "Failed to submit test order for %s %s: %s",
+                        "Broker did not accept test order for %s %s: status=%s",
                         symbol,
                         side,
-                        exc,
+                        status_token,
                     )
+                    continue
+                orders.append((str(symbol), side))
+            except (
+                FileNotFoundError,
+                PermissionError,
+                IsADirectoryError,
+                JSONDecodeError,
+                ValueError,
+                KeyError,
+                TypeError,
+                OSError,
+            ) as exc:
+                logger.error(
+                    "Failed to submit test order for %s %s: %s",
+                    symbol,
+                    side,
+                    exc,
+                )
         return orders
 
 
@@ -229,7 +231,9 @@ def execute_signal_orders(
 __all__ = [
     "ExecutionService",
     "NonNettingLiveExecutionBlockedError",
+    "UnknownExecutionModeError",
     "execute_signal_orders",
     "execute_trade_cycle",
+    "normalize_execution_mode",
     "submit_order",
 ]

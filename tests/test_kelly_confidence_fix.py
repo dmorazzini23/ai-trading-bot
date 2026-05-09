@@ -128,6 +128,9 @@ def test_kelly_input_validation():
         assert fractional_kelly_size(ctx, -1000, 100, 2.0, 0.6) == 0  # negative balance
         assert fractional_kelly_size(ctx, 1000, -100, 2.0, 0.6) == 0  # negative price
         assert fractional_kelly_size(ctx, 1000, 0, 2.0, 0.6) == 0     # zero price
+        assert fractional_kelly_size(ctx, 1000, 100, 0.0, 0.6) == 0  # zero ATR
+        assert fractional_kelly_size(ctx, 1000, 100, -1.0, 0.6) == 0  # invalid ATR
+        assert fractional_kelly_size(ctx, 1000, 100, 2.0, 0.0) == 0  # no edge
 
         # Test that valid inputs work
         result = fractional_kelly_size(ctx, 1000, 100, 2.0, 0.6)

@@ -123,6 +123,8 @@ def initial_rebalance_runtime(ctx: Any, symbols: list[str]) -> None:
     """Initial portfolio rebalancing."""
 
     be = _bot_engine()
+    from ai_trading.services.execution import submit_order as submit_order_service
+
     _ensure_rebalance_tracking(ctx)
 
     if ctx.api is None:
@@ -218,7 +220,7 @@ def initial_rebalance_runtime(ctx: Any, symbols: list[str]) -> None:
                             cid = f"{sym}-{be.uuid.uuid4().hex[:8]}"
                             ctx.rebalance_ids[sym] = cid
                             ctx.rebalance_attempts[sym] = 0
-                        order_id = be.submit_order(ctx, sym, qty_to_buy, "buy")
+                        order_id = submit_order_service(ctx, sym, qty_to_buy, "buy")
                         if order_id:
                             be.logger.info("INITIAL_REBALANCE: Bought %s %s", qty_to_buy, sym)
                             ctx.rebalance_buys[sym] = be.datetime.now(be.UTC)
@@ -241,7 +243,7 @@ def initial_rebalance_runtime(ctx: Any, symbols: list[str]) -> None:
                     if qty_to_sell < 1:
                         continue
                     try:
-                        be.submit_order(ctx, sym, qty_to_sell, "sell")
+                        submit_order_service(ctx, sym, qty_to_sell, "sell")
                         be.logger.info("INITIAL_REBALANCE: Sold %s %s", qty_to_sell, sym)
                     except (be.APIError, TimeoutError, ConnectionError) as exc:
                         be.logger.error(

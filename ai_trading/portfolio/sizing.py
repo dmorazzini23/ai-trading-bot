@@ -178,9 +178,31 @@ class VolatilityTargetingSizer:
                 return {}
             if price_history:
                 self.price_history.update(price_history)
-            volatilities = self._estimate_volatilities(list(signals.keys()))
-            self.correlation_matrix = self._estimate_correlations(list(signals.keys()))
-            raw_weights = self._calculate_inverse_vol_weights(signals, volatilities)
+            eligible_signals = {
+                symbol: signal
+                for symbol, signal in signals.items()
+                if self._has_sizing_evidence(symbol)
+            }
+            if not eligible_signals:
+                logger.warning('SIZING_SKIPPED', extra={'reason': 'missing_volatility_evidence'})
+                return {}
+            volatilities = self._estimate_volatilities(list(eligible_signals.keys()))
+            volatilities = {
+                symbol: vol
+                for symbol, vol in volatilities.items()
+                if np.isfinite(vol) and vol > 0.0
+            }
+            if not volatilities:
+                logger.warning('SIZING_SKIPPED', extra={'reason': 'invalid_volatility_evidence'})
+                return {}
+            evidence_symbols = list(volatilities.keys())
+            eligible_signals = {
+                symbol: eligible_signals[symbol]
+                for symbol in evidence_symbols
+                if symbol in eligible_signals
+            }
+            self.correlation_matrix = self._estimate_correlations(evidence_symbols)
+            raw_weights = self._calculate_inverse_vol_weights(eligible_signals, volatilities)
             adjusted_weights = self._apply_position_limits(raw_weights)
             scaled_weights = self._scale_to_target_volatility(adjusted_weights, volatilities, self.correlation_matrix)
             position_details = {}
@@ -194,6 +216,23 @@ class VolatilityTargetingSizer:
         except COMMON_EXC as e:
             logger.error(f'Error calculating position sizes: {e}')
             return {}
+
+    def _has_sizing_evidence(self, symbol: str) -> bool:
+        """Return True when volatility sizing has symbol-specific evidence."""
+        if symbol in self.volatility_estimates:
+            try:
+                estimate = float(self.volatility_estimates[symbol])
+            except (TypeError, ValueError):
+                return False
+            return bool(np.isfinite(estimate) and estimate > 0.0)
+        prices = self.price_history.get(symbol)
+        if prices is None:
+            return False
+        try:
+            recent_prices = prices.tail(self.lookback_days)
+            return len(recent_prices) > 5
+        except (AttributeError, TypeError, ValueError):
+            return False
 
     def _estimate_volatilities(self, symbols: list[str]) -> dict[str, float]:
         """Estimate asset volatilities from price history."""
@@ -222,7 +261,7 @@ class VolatilityTargetingSizer:
         pd = load_pandas()
         try:
             if len(symbols) < 2:
-                return np.array([[1.0]])
+                return cast(np.ndarray, np.array([[1.0]]))
             return_series = {}
             for symbol in symbols:
                 if symbol in self.price_history:
@@ -233,7 +272,7 @@ class VolatilityTargetingSizer:
             if len(return_series) < 2:
                 n = len(symbols)
                 corr_matrix = np.eye(n) * 0.8 + np.ones((n, n)) * 0.2
-                return corr_matrix
+                return cast(np.ndarray, corr_matrix)
             df = pd.DataFrame(return_series)
             df = df.dropna()
             if len(df) > 10:
@@ -247,14 +286,14 @@ class VolatilityTargetingSizer:
                             full_corr[i, j] = corr_matrix[idx1, idx2]
                         elif i != j:
                             full_corr[i, j] = 0.3
-                return full_corr
+                return cast(np.ndarray, full_corr)
             else:
                 n = len(symbols)
-                return np.eye(n) * 0.7 + np.ones((n, n)) * 0.3
+                return cast(np.ndarray, np.eye(n) * 0.7 + np.ones((n, n)) * 0.3)
         except COMMON_EXC as e:
             logger.error(f'Error estimating correlations: {e}')
             n = len(symbols)
-            return np.eye(n) * 0.7 + np.ones((n, n)) * 0.3
+            return cast(np.ndarray, np.eye(n) * 0.7 + np.ones((n, n)) * 0.3)
 
     def _calculate_inverse_vol_weights(self, signals: dict[str, float], volatilities: dict[str, float]) -> dict[str, float]:
         """Calculate weights inversely proportional to volatility."""
@@ -271,15 +310,7 @@ class VolatilityTargetingSizer:
             return inv_vol_weights
         except COMMON_EXC as e:
             logger.error(f'Error calculating inverse vol weights: {e}')
-            n = len(signals)
-            fallback_weights = {}
-            for symbol, signal in signals.items():
-                try:
-                    sign = 1.0 if float(signal) >= 0 else -1.0
-                except (TypeError, ValueError):
-                    sign = 1.0
-                fallback_weights[symbol] = sign / n
-            return fallback_weights
+            return {}
 
     def _apply_position_limits(self, weights: dict[str, float]) -> dict[str, float]:
         """Apply minimum and maximum position limits."""
@@ -364,10 +395,10 @@ class RiskParitySizer:
         try:
             symbols = list(signals.keys())
             if len(symbols) < 2:
-                return self._signed_equal_weights(signals)
+                return {}
             cov_matrix = self._calculate_covariance_matrix(symbols, price_history)
             if cov_matrix is None:
-                return self._signed_equal_weights(signals)
+                return {}
             weights = self._optimize_risk_parity(cov_matrix, symbols)
             for symbol in symbols:
                 if signals[symbol] < 0:
@@ -375,7 +406,7 @@ class RiskParitySizer:
             return weights
         except COMMON_EXC as e:
             logger.error(f'Error calculating risk parity weights: {e}')
-            return self._signed_equal_weights(signals)
+            return {}
 
     def _signed_equal_weights(self, signals: dict[str, float]) -> dict[str, float]:
         """Return equal gross weights with direction from each signal."""
@@ -439,8 +470,7 @@ class RiskParitySizer:
             return weight_dict
         except COMMON_EXC as e:
             logger.error(f'Error optimizing risk parity: {e}')
-            n = len(symbols)
-            return dict.fromkeys(symbols, 1.0 / n)
+            return {}
 
 class CorrelationClusterSizer:
     """

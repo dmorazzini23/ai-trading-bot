@@ -77,3 +77,21 @@ def test_predict_scores_latest_row_positive_class(tmp_path, monkeypatch):
 
     assert pred == 3
     assert proba == 0.8
+
+
+def test_predict_fetch_sentiment_uses_canonical_sentiment(monkeypatch):
+    predict = _import_predict(monkeypatch)
+    calls = []
+
+    from ai_trading.analysis import sentiment
+
+    monkeypatch.setattr(
+        sentiment,
+        "fetch_sentiment",
+        lambda ctx, symbol: calls.append((ctx, symbol)) or 0.42,
+    )
+    predict.reset_predict_runtime_cache()
+
+    assert predict.fetch_sentiment("AAPL") == 0.42
+    assert predict.fetch_sentiment("AAPL") == 0.42
+    assert calls == [(None, "AAPL")]

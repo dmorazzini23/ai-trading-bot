@@ -10,7 +10,7 @@ avoids ``pickle.load`` where possible.
 from ai_trading.logging import get_logger
 from ai_trading.paths import MODELS_DIR
 from ai_trading.config.management import get_env
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 import json
@@ -28,8 +28,7 @@ from ai_trading.models.contracts import (
 logger = get_logger(__name__)
 ML_MODELS: dict[str, object | None] = {}
 
-# Built-in models bundled with the package live alongside this module.
-INTERNAL_MODELS_DIR = Path(__file__).resolve().parent / "models"
+DEFAULT_MODEL_MAX_AGE_DAYS = 14
 
 
 def _build_training_frame(df: Any) -> Any:
@@ -102,6 +101,63 @@ def _synthetic_training_allowed() -> bool:
         or bool(get_env("TESTING", False, cast=bool))
         or bool(get_env("AI_TRADING_MODEL_TRAINING_SMOKE", False, cast=bool))
     )
+
+
+def _active_model_timestamp(meta: dict[str, Any]) -> datetime:
+    """Return the governance timestamp that proves an active model is fresh."""
+
+    nested_meta = meta.get("meta")
+    candidates: list[Any] = []
+    for payload in (meta, nested_meta if isinstance(nested_meta, dict) else {}):
+        candidates.extend(
+            payload.get(key)
+            for key in (
+                "trained_at",
+                "training_timestamp",
+                "registered_at",
+                "created_at",
+            )
+        )
+    for raw_value in candidates:
+        if raw_value in (None, ""):
+            continue
+        text = str(raw_value).strip()
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    raise RuntimeError("Active model registry entry is missing freshness metadata")
+
+
+def _validate_active_model_freshness(symbol: str, meta: dict[str, Any]) -> None:
+    trained_at = _active_model_timestamp(meta)
+    max_age_days = int(
+        get_env(
+            "AI_TRADING_MODEL_MAX_AGE_DAYS",
+            DEFAULT_MODEL_MAX_AGE_DAYS,
+            cast=int,
+        )
+    )
+    if max_age_days <= 0:
+        raise RuntimeError("AI_TRADING_MODEL_MAX_AGE_DAYS must be positive")
+    age = datetime.now(UTC) - trained_at
+    if age > timedelta(days=max_age_days):
+        logger.error(
+            "MODEL_REGISTRY_STALE",
+            extra={
+                "symbol": symbol,
+                "trained_at": trained_at.isoformat(),
+                "max_age_days": max_age_days,
+            },
+        )
+        raise RuntimeError(
+            f"Active model for '{symbol}' is stale: trained_at={trained_at.isoformat()}"
+        )
 
 
 def train_and_save_model(symbol: str, models_dir: Path) -> object:
@@ -224,84 +280,43 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
 
 
 def load_model(symbol: str) -> object:
-    """Load an ML model for ``symbol``.
+    """Load the governed active registry model for ``symbol``.
 
-    Two locations are searched in order:
-
-    * The external models directory resolved from
-      :data:`ai_trading.paths.MODELS_DIR` (``AI_TRADING_MODELS_DIR``).
-    * Built-in models shipped with the package under ``INTERNAL_MODELS_DIR``.
-
-    The first matching ````.pkl```` file is deserialized with :mod:`joblib`. If no
-    model file exists in either location, a ``RuntimeError`` is raised. Paths are
-    validated to remain within their respective base directories.
+    Runtime loading is intentionally registry-only. Missing active entries,
+    missing freshness metadata, stale timestamps, or artifact verification
+    failures all fail closed instead of searching default model paths.
     """
 
-    # Prefer active model from registry when available
+    from ai_trading.model_registry import get_active_model_meta
+
+    meta = get_active_model_meta(symbol)
+    if not isinstance(meta, dict) or not meta.get("path"):
+        logger.error("MODEL_REGISTRY_ACTIVE_MISSING", extra={"symbol": symbol})
+        raise RuntimeError(f"Active registry model required for '{symbol}'")
+
+    _validate_active_model_freshness(symbol, meta)
+    manifest_path = meta.get("manifest_path")
     try:
-        from ai_trading.model_registry import get_active_model_meta
-
-        meta = get_active_model_meta(symbol)
-        if meta and meta.get("path"):
-            try:
-                manifest_path = meta.get("manifest_path")
-                model = load_verified_joblib_artifact(
-                    Path(meta["path"]),
-                    manifest_path=manifest_path if manifest_path else None,
-                )
-                ML_MODELS[symbol] = model
-                return model
-            except RuntimeError as exc:
-                msg = f"Failed to load registry model for '{symbol}' at '{meta.get('path')}': {exc}"
-                logger.error(
-                    "MODEL_REGISTRY_LOAD_ERROR",
-                    extra={"symbol": symbol, "path": str(meta.get("path")), "error": str(exc)},
-                )
-                raise RuntimeError(msg) from exc
-            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-                logger.warning("MODEL_REGISTRY_LOAD_FAILED for %s: %s", symbol, exc)
-    except (AttributeError, ImportError, LookupError, OSError, TypeError, ValueError):
-        pass
-
-    dirs = (MODELS_DIR, INTERNAL_MODELS_DIR)
-    for base in dirs:
-        path = (base / f"{symbol}.pkl").resolve()
-        if not path.is_relative_to(base):
-            raise RuntimeError(f"Model path escapes models directory: {path}")
-        if path.exists():
-            try:
-                model = load_verified_joblib_artifact(path)
-            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # noqa: BLE001 - joblib may raise various errors
-                msg = f"Failed to load model for '{symbol}' at '{path}': {exc}"
-                logger.error(
-                    "MODEL_LOAD_ERROR",
-                    extra={"symbol": symbol, "path": str(path), "error": str(exc)},
-                )
-                raise RuntimeError(msg) from exc
-            ML_MODELS[symbol] = model
-            return model
-
-    logger.error(
-        "MODEL_FILE_MISSING",
-        extra={"symbol": symbol, "paths": [str(p) for p in dirs]},
-    )
-    test_mode = (
-        bool(get_env("PYTEST_CURRENT_TEST", "", cast=str))
-        or bool(get_env("PYTEST_RUNNING", False, cast=bool))
-        or bool(get_env("TESTING", False, cast=bool))
-    )
-    allow_placeholder = "PLACEHOLDER" in str(symbol).upper()
-    if test_mode and allow_placeholder:
-        from ai_trading.simple_models import get_model
-
-        model = get_model()
-        ML_MODELS[symbol] = model
-        logger.warning(
-            "MODEL_PLACEHOLDER_USED",
-            extra={"symbol": symbol, "reason": "missing_model"},
+        model = load_verified_joblib_artifact(
+            Path(str(meta["path"])),
+            manifest_path=str(manifest_path) if manifest_path else None,
         )
-        return model
-    raise RuntimeError("Model required but not configured")
+    except RuntimeError as exc:
+        msg = f"Failed to load registry model for '{symbol}' at '{meta.get('path')}': {exc}"
+        logger.error(
+            "MODEL_REGISTRY_LOAD_ERROR",
+            extra={"symbol": symbol, "path": str(meta.get("path")), "error": str(exc)},
+        )
+        raise RuntimeError(msg) from exc
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        msg = f"Failed to load registry model for '{symbol}' at '{meta.get('path')}': {exc}"
+        logger.error(
+            "MODEL_REGISTRY_LOAD_ERROR",
+            extra={"symbol": symbol, "path": str(meta.get("path")), "error": str(exc)},
+        )
+        raise RuntimeError(msg) from exc
+    ML_MODELS[symbol] = model
+    return model
 
 
 # AI-AGENT-REF: avoid import-time model loading; expose explicit preload

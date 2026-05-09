@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/rollout_advanced_gates.sh <stage> [--env-file PATH] [--service NAME] [--restart] [--verify]
+  scripts/rollout_advanced_gates.sh <stage> [--env-file PATH] [--service NAME] [--dry-run] [--confirm] [--restart] [--verify]
 
 Stages:
   baseline    Keep advanced rollout features off (safe default)
@@ -15,8 +15,8 @@ Stages:
   status      Show current relevant env values
 
 Examples:
-  scripts/rollout_advanced_gates.sh baseline --restart --verify
-  scripts/rollout_advanced_gates.sh geometric --restart --verify
+  scripts/rollout_advanced_gates.sh geometric
+  scripts/rollout_advanced_gates.sh geometric --confirm --restart --verify
 USAGE
 }
 
@@ -32,6 +32,10 @@ ENV_FILE=".env"
 SERVICE_NAME="ai-trading.service"
 DO_RESTART=0
 DO_VERIFY=0
+CONFIRM=0
+planned_changes=()
+declare -A planned_seen=()
+declare -A planned_values=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,6 +53,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --verify)
       DO_VERIFY=1
+      shift
+      ;;
+    --confirm)
+      CONFIRM=1
+      shift
+      ;;
+    --dry-run)
+      CONFIRM=0
       shift
       ;;
     -h|--help)
@@ -71,6 +83,14 @@ fi
 set_env_kv() {
   local key="$1"
   local value="$2"
+  if [[ "${CONFIRM}" != "1" ]]; then
+    if [[ -z "${planned_seen[${key}]+x}" ]]; then
+      planned_changes+=("${key}")
+      planned_seen["${key}"]=1
+    fi
+    planned_values["${key}"]="${value}"
+    return
+  fi
   if grep -q "^${key}=" "${ENV_FILE}"; then
     sed -i "s|^${key}=.*|${key}=${value}|g" "${ENV_FILE}"
   else
@@ -149,6 +169,22 @@ case "${STAGE}" in
     exit 2
     ;;
 esac
+
+if [[ "${CONFIRM}" != "1" ]]; then
+  echo "Dry run for stage '${STAGE}' against ${ENV_FILE}"
+  echo "No changes written. Planned values:"
+  for key in "${planned_changes[@]}"; do
+    printf '  %s=%s\n' "${key}" "${planned_values[${key}]}"
+  done
+  if [[ "${DO_RESTART}" == "1" ]]; then
+    echo "Restart skipped in dry-run mode."
+  fi
+  if [[ "${DO_VERIFY}" == "1" ]]; then
+    echo "Verification skipped in dry-run mode."
+  fi
+  echo "Re-run with --confirm to apply."
+  exit 0
+fi
 
 echo "Applied stage '${STAGE}' to ${ENV_FILE}"
 show_status

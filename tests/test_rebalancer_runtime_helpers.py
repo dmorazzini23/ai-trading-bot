@@ -341,6 +341,22 @@ def test_portfolio_first_rebalance_uses_fallback_when_disabled(
     assert calls == [ctx]
 
 
+def test_portfolio_first_rebalance_fails_closed_without_target_evidence(
+    monkeypatch,
+    portfolio_settings,
+) -> None:
+    portfolio_settings.ENABLE_PORTFOLIO_FEATURES = True
+    monkeypatch.setattr(rebalancer, "_rebalancer", object())
+    calls: list[object] = []
+    monkeypatch.setattr(rebalancer, "rebalance_portfolio", lambda ctx: calls.append(ctx))
+    ctx = SimpleNamespace(portfolio_positions={"AAPL": 2}, current_prices={"AAPL": 100.0})
+
+    rebalancer.portfolio_first_rebalance(ctx)
+
+    assert calls == []
+    assert ctx.rebalance_plan == {"error": "missing_rebalance_evidence", "rebalance_trades": []}
+
+
 def test_check_portfolio_first_rebalancing_reasons(monkeypatch) -> None:
     assert rebalancer._check_portfolio_first_rebalancing(SimpleNamespace(), 0.20, 0.10)[0] is True  # noqa: SLF001
     assert rebalancer._check_portfolio_first_rebalancing(SimpleNamespace(), 0.01, 0.10) == (  # noqa: SLF001
@@ -393,11 +409,7 @@ def test_rebalancing_position_and_target_helpers() -> None:
         "SHORT": -3.0,
         "OBJECT": 4.0,
     }
-    assert rebalancer._get_target_weights_for_rebalancing(ctx) == {  # noqa: SLF001
-        "AAPL": pytest.approx(1 / 3),
-        "SHORT": pytest.approx(1 / 3),
-        "OBJECT": pytest.approx(1 / 3),
-    }
+    assert rebalancer._get_target_weights_for_rebalancing(ctx) == {}  # noqa: SLF001
     assert rebalancer._get_target_weights_for_rebalancing(  # noqa: SLF001
         SimpleNamespace(target_weights={"AAPL": "0.25", 7: 0.75})
     ) == {"AAPL": 0.25, "7": 0.75}

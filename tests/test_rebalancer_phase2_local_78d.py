@@ -70,7 +70,7 @@ def test_rebalance_helpers_extract_targets_market_data_and_reasons(monkeypatch) 
     )
 
     assert rebalancer._get_current_positions_for_rebalancing(ctx) == {"AAPL": 3.0}
-    assert rebalancer._get_target_weights_for_rebalancing(ctx) == {"AAPL": 1.0}
+    assert rebalancer._get_target_weights_for_rebalancing(ctx) == {}
     market_data = rebalancer._prepare_rebalancing_market_data(ctx)
     assert market_data["prices"]["AAPL"] == 101.0
     assert market_data["volumes"]["AAPL"] == 20.0

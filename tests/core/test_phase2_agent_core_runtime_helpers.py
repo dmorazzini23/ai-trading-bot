@@ -278,7 +278,7 @@ def test_pov_submit_continues_after_none_submission_and_fills_next_slice(
             return None
         return SimpleNamespace(id="order-2", status="filled", filled_qty=str(qty))
 
-    monkeypatch.setattr(bot_engine, "submit_order", _submit_order)
+    monkeypatch.setattr("ai_trading.services.execution.submit_order", _submit_order)
     ctx = SimpleNamespace(
         data_client=SimpleNamespace(
             get_stock_latest_quote=lambda _request: SimpleNamespace(ask_price=100.01, bid_price=100.0)

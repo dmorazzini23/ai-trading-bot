@@ -8,7 +8,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import time as pytime
 from datetime import datetime
 from threading import Lock
-from typing import Any, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast
 
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
@@ -56,6 +56,19 @@ _SENT_DEPS_LOGGED: set[str] = set()
 _SENTIMENT_STUB_LOGGED = False
 
 
+class SentimentEvidence(TypedDict, total=False):
+    ticker: str
+    score: float
+    available: bool
+    source: str
+    authoritative: bool
+    provenance: dict[str, Any]
+    reason: str
+
+
+_sentiment_evidence_cache: dict[str, SentimentEvidence] = {}
+
+
 def _default_fail_closed_outside_tests() -> bool:
     return not bool(
         str(get_env("PYTEST_CURRENT_TEST", "", cast=str) or "").strip()
@@ -71,6 +84,37 @@ def _sentiment_fail_closed() -> bool:
             cast=bool,
         )
     )
+
+
+def _sentiment_runtime_enabled() -> bool:
+    return bool(get_env("AI_TRADING_SENTIMENT_ENABLED", True, cast=bool))
+
+
+def _record_sentiment_evidence(
+    ticker: str,
+    score: float,
+    *,
+    source: str,
+    authoritative: bool,
+    reason: str,
+    provenance: dict[str, Any] | None = None,
+) -> None:
+    evidence: SentimentEvidence = {
+        "ticker": ticker,
+        "score": float(max(-1.0, min(1.0, score))),
+        "available": bool(authoritative),
+        "source": source,
+        "authoritative": bool(authoritative),
+        "reason": reason,
+        "provenance": dict(provenance or {}),
+    }
+    _sentiment_evidence_cache[ticker] = evidence
+
+
+def get_sentiment_evidence(ticker: str) -> SentimentEvidence | None:
+    """Return the last structured sentiment evidence recorded for ``ticker``."""
+    evidence = _sentiment_evidence_cache.get(ticker)
+    return cast(SentimentEvidence, dict(evidence)) if evidence is not None else None
 
 
 def _raise_sentiment_unavailable(reason: str) -> None:
@@ -113,6 +157,7 @@ def _set_sentiment_http_session_for_tests(session: HTTPSession | None) -> None:
 def reset_sentiment_runtime_cache() -> None:
     """Clear lazily initialized sentiment runtime resources."""
     _set_sentiment_http_session_for_tests(None)
+    _sentiment_evidence_cache.clear()
 
 def _load_bs4(log=logger):
     global _bs4, _SENT_DEPS_LOGGED
@@ -135,8 +180,20 @@ def _load_transformers(log=logger):
     try:
         import torch
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained('yiyanghkust/finbert-tone')
-        model = AutoModelForSequenceClassification.from_pretrained('yiyanghkust/finbert-tone')
+        model_name = str(
+            get_env(
+                "AI_TRADING_FINBERT_MODEL_NAME",
+                "yiyanghkust/finbert-tone",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or "yiyanghkust/finbert-tone"
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            local_files_only=True,
+        )
         model.to(_device)
         model.eval()
         _transformers_bundle = (torch, tokenizer, model)
@@ -183,6 +240,8 @@ __all__ = [
     'analyze_text',
     'sentiment_lock',
     '_sentiment_cache',
+    '_sentiment_evidence_cache',
+    'get_sentiment_evidence',
     'SENTIMENT_FAILURE_THRESHOLD',
     'SENTIMENT_API_KEY',
     'SENTIMENT_NEWS_WEIGHT',
@@ -315,14 +374,23 @@ def _fetch_sentiment_once(ctx, ticker: str) -> float:
         Sentiment score between -1.0 and 1.0
     """
     _init_sentiment()
+    if not _sentiment_runtime_enabled():
+        with sentiment_lock:
+            cached = _sentiment_cache.get(ticker)
+        score = float(cached[1]) if cached else 0.0
+        _record_sentiment_evidence(
+            ticker,
+            score,
+            source="disabled",
+            authoritative=False,
+            reason="sentiment_disabled",
+        )
+        return score
     settings = get_settings()
     api_key = _resolve_sentiment_api_key(settings)
     if not api_key:
         logger.debug('No sentiment API key configured (checked settings.sentiment_api_key and news API key)')
-        return _get_cached_or_neutral_sentiment(
-            ticker,
-            reason="missing_api_key",
-        )
+        _raise_sentiment_unavailable("missing_api_key")
     now_ts = pytime.time()
     with sentiment_lock:
         cached = _sentiment_cache.get(ticker)
@@ -337,6 +405,14 @@ def _fetch_sentiment_once(ctx, ticker: str) -> float:
                 logger.debug(
                     f'Sentiment cache hit for {ticker} (age: {(now_ts - last_ts) / 60:.1f}m)'
                 )
+                _record_sentiment_evidence(
+                    ticker,
+                    last_score,
+                    source="cache",
+                    authoritative=False,
+                    reason="cache_hit",
+                    provenance={"cache_age_seconds": now_ts - last_ts},
+                )
                 return last_score
     if not _check_sentiment_circuit_breaker():
         logger.info(f'Sentiment circuit breaker open, returning cached/neutral for {ticker}')
@@ -349,8 +425,23 @@ def _fetch_sentiment_once(ctx, ticker: str) -> float:
             if cached:
                 _, last_score = cached
                 logger.debug(f'Using stale cached sentiment {last_score} for {ticker}')
+                _record_sentiment_evidence(
+                    ticker,
+                    last_score,
+                    source="cache",
+                    authoritative=False,
+                    reason="circuit_breaker_stale_cache",
+                    provenance={"circuit_breaker_state": _sentiment_circuit_breaker["state"]},
+                )
                 return last_score
             _sentiment_cache[ticker] = (now_ts, fallback_score)
+        _record_sentiment_evidence(
+            ticker,
+            fallback_score,
+            source="neutral_fallback",
+            authoritative=False,
+            reason="circuit_breaker_open_without_cache",
+        )
         return fallback_score
     try:
         url = f'{settings.sentiment_api_url}?q={ticker}&sortBy=publishedAt&language=en&pageSize=5&apiKey={api_key}'
@@ -411,6 +502,22 @@ def _fetch_sentiment_once(ctx, ticker: str) -> float:
         _record_sentiment_success()
         with sentiment_lock:
             _sentiment_cache[ticker] = (now_ts, final_score)
+        _record_sentiment_evidence(
+            ticker,
+            final_score,
+            source="newsapi_finbert_form4",
+            authoritative=True,
+            reason="provider_success",
+            provenance={
+                "article_count": len(articles),
+                "scored_article_count": len(scores),
+                "news_score": news_score,
+                "form4_score": form4_score,
+                "news_weight": SENTIMENT_NEWS_WEIGHT,
+                "form4_weight": SENTIMENT_FORM4_WEIGHT,
+                "text_model": "finbert_local_files_only",
+            },
+        )
         return final_score
     except (RequestException, ValueError, TypeError) as e:
         logger.warning(f'Sentiment API request failed for {ticker}: {e}')
@@ -420,6 +527,14 @@ def _fetch_sentiment_once(ctx, ticker: str) -> float:
             if cached:
                 _, last_score = cached
                 logger.debug(f'Using cached sentiment fallback {last_score} for {ticker}')
+                _record_sentiment_evidence(
+                    ticker,
+                    last_score,
+                    source="cache",
+                    authoritative=False,
+                    reason="api_error_cached_fallback",
+                    provenance={"error": str(e)},
+                )
                 return last_score
         fallback_score = _get_cached_or_neutral_sentiment(
             ticker,
@@ -427,6 +542,14 @@ def _fetch_sentiment_once(ctx, ticker: str) -> float:
         )
         with sentiment_lock:
             _sentiment_cache[ticker] = (now_ts, fallback_score)
+        _record_sentiment_evidence(
+            ticker,
+            fallback_score,
+            source="neutral_fallback",
+            authoritative=False,
+            reason="api_error_without_cache",
+            provenance={"error": str(e)},
+        )
         return fallback_score
 
 def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
@@ -462,7 +585,30 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
             result = fallback_call()
             if result is not None:
                 logger.info(f'SENTIMENT_FALLBACK_SUCCESS | ticker={ticker} source={fallback_func.__name__} value={result}')
-                return float(result)
+                source_name: Literal[
+                    "alternative_provider",
+                    "similar_symbol_proxy",
+                    "sector_proxy",
+                    "neutral_fallback",
+                ]
+                if fallback_func is _try_alternative_sentiment_sources:
+                    source_name = "alternative_provider"
+                elif fallback_func is _try_cached_similar_symbols:
+                    source_name = "similar_symbol_proxy"
+                elif fallback_func is _try_sector_sentiment_proxy:
+                    source_name = "sector_proxy"
+                else:
+                    source_name = "neutral_fallback"
+                value = float(result)
+                _record_sentiment_evidence(
+                    ticker,
+                    value,
+                    source=source_name,
+                    authoritative=False,
+                    reason="rate_limit_fallback",
+                    provenance={"fallback": fallback_func.__name__},
+                )
+                return value
         except (ValueError, TypeError) as e:
             logger.debug(f'SENTIMENT_FALLBACK_FAILED | ticker={ticker} source={fallback_func.__name__} error={e}')
             continue
@@ -474,6 +620,14 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
                 logger.info(
                     f'SENTIMENT_RATE_LIMIT_USING_EXTENDED_CACHE | ticker={ticker} '
                     f'age_hours={int((pytime.time() - cache_ts) / 3600)}'
+                )
+                _record_sentiment_evidence(
+                    ticker,
+                    sentiment_val,
+                    source="cache",
+                    authoritative=False,
+                    reason="rate_limit_extended_cache",
+                    provenance={"cache_age_seconds": pytime.time() - cache_ts},
                 )
                 return sentiment_val
     logger.warning('SENTIMENT_RATE_LIMIT_ALL_FALLBACKS_EXHAUSTED', extra={'ticker': ticker, 'fallback_strategies_tried': len(fallback_sources), 'cache_ttl_hours': SENTIMENT_RATE_LIMITED_TTL_SEC / 3600, 'recommendation': 'Consider upgrading NewsAPI plan, adding alternative sentiment sources, or reviewing rate limits'})
@@ -567,6 +721,13 @@ def _get_cached_or_neutral_sentiment(ticker: str, *, reason: str) -> float:
                 return sentiment_val
     if _sentiment_fail_closed():
         _raise_sentiment_unavailable(reason)
+    _record_sentiment_evidence(
+        ticker,
+        0.0,
+        source="neutral_fallback",
+        authoritative=False,
+        reason=reason,
+    )
     return 0.0
 
 def analyze_text(text: str, logger=logger) -> dict:

@@ -6,6 +6,26 @@ from typing import Any, Mapping
 
 from ai_trading.config.management import get_env
 
+_EXECUTION_MODE_ALIASES = {
+    "alpaca": "paper",
+    "broker": "paper",
+    "paper": "paper",
+    "live": "live",
+    "prod": "live",
+    "production": "live",
+    "sim": "sim",
+    "simulation": "sim",
+    "test": "sim",
+    "disabled": "disabled",
+    "none": "disabled",
+    "off": "disabled",
+}
+_SUPPORTED_EXECUTION_MODES = {"sim", "paper", "live", "disabled"}
+
+
+class UnknownExecutionModeError(RuntimeError):
+    """Raised when runtime execution mode is not a supported explicit mode."""
+
 
 def _execution_mode(execution_mode: str | None = None) -> str:
     if execution_mode:
@@ -21,6 +41,29 @@ def is_testing_mode() -> bool:
     if bool(get_env("PYTEST_RUNNING", "0", cast=bool)):
         return True
     return bool(get_env("TESTING", "0", cast=bool))
+
+
+def _explicit_sim_fallback_allowed() -> bool:
+    return bool(
+        is_testing_mode()
+        or get_env("AI_TRADING_ALLOW_EXECUTION_MODE_SIM_FALLBACK", False, cast=bool)
+    )
+
+
+def normalize_execution_mode(raw_mode: Any, *, allow_sim_fallback: bool = False) -> str:
+    """Normalize execution mode and fail fast on unknown runtime values."""
+
+    requested = str(raw_mode or "").strip().lower()
+    if not requested:
+        requested = "paper"
+    normalized = _EXECUTION_MODE_ALIASES.get(requested, requested)
+    if normalized in _SUPPORTED_EXECUTION_MODES:
+        return normalized
+    if allow_sim_fallback or _explicit_sim_fallback_allowed():
+        return "sim"
+    raise UnknownExecutionModeError(
+        "EXECUTION_MODE must be one of: sim, paper, live, disabled"
+    )
 
 
 def _should_enforce(execution_mode: str | None = None) -> bool:

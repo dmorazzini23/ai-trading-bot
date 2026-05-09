@@ -150,3 +150,18 @@ def test_execution_settings_errors_are_not_swallowed(monkeypatch):
 
     with pytest.raises(RuntimeError, match="settings are invalid"):
         execution_mod._load_execution_settings()
+
+
+def test_unknown_execution_mode_selection_fails_fast(monkeypatch):
+    import ai_trading.execution as execution_mod
+    from ai_trading.core.runtime_contract import UnknownExecutionModeError
+
+    monkeypatch.setattr(
+        execution_mod,
+        "_load_execution_settings",
+        lambda: (SimpleNamespace(mode="mystery", shadow_mode=False), None),
+    )
+    monkeypatch.setattr("ai_trading.core.runtime_contract.is_testing_mode", lambda: False)
+
+    with pytest.raises(UnknownExecutionModeError, match="EXECUTION_MODE must be one of"):
+        execution_mod.select_execution_engine(force_refresh=True)

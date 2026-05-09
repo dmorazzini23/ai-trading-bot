@@ -93,6 +93,11 @@ def test_fetch_sentiment_aggregates_news_and_form4(monkeypatch: pytest.MonkeyPat
         "margin pressure. costs rose",
     ]
     assert sentiment._sentiment_cache["AAPL"] == (1000.0, pytest.approx(0.18))
+    evidence = sentiment.get_sentiment_evidence("AAPL")
+    assert evidence is not None
+    assert evidence["source"] == "newsapi_finbert_form4"
+    assert evidence["authoritative"] is True
+    assert evidence["provenance"]["scored_article_count"] == 2
 
 
 def test_fetch_sentiment_bad_payload_falls_back_and_caches(
@@ -256,14 +261,16 @@ def test_optional_dependency_loaders_cache_success_and_log_missing_once(
 
     class Tokenizer:
         @staticmethod
-        def from_pretrained(name: str) -> str:
+        def from_pretrained(name: str, *, local_files_only: bool = False) -> str:
             assert name == "yiyanghkust/finbert-tone"
+            assert local_files_only is True
             return "tokenizer"
 
     class ModelFactory:
         @staticmethod
-        def from_pretrained(name: str) -> Any:
+        def from_pretrained(name: str, *, local_files_only: bool = False) -> Any:
             assert name == "yiyanghkust/finbert-tone"
+            assert local_files_only is True
 
             class Model:
                 def to(self, device: str) -> None:

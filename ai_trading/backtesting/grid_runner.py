@@ -4,9 +4,11 @@ import os
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from pathlib import Path
 from itertools import product
 from typing import Any
 from ai_trading.logging import get_logger
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 logger = get_logger(__name__)
 try:  # optional joblib import
@@ -34,17 +36,34 @@ def grid_search(evaluator, param_grid: dict[str, Iterable[Any]], n_jobs: int=-1)
     return {'results': results, 'count': len(results)}
 
 def persist_artifacts(run: dict[str, Any], out_dir: str) -> str:
+    root = Path(out_dir).expanduser()
+    if not root.is_absolute():
+        root = resolve_runtime_artifact_path(
+            root,
+            default_relative=str(root),
+            for_write=True,
+        )
     ts = _timestamp()
     for _ in range(10):
-        run_dir = os.path.join(out_dir, f'run_{ts}_{uuid.uuid4().hex[:8]}')
+        run_dir = os.path.join(str(root), f'run_{ts}_{uuid.uuid4().hex[:8]}')
         try:
             os.makedirs(run_dir, exist_ok=False)
             break
         except FileExistsError:
             continue
     else:
-        run_dir = os.path.join(out_dir, f'run_{ts}_{uuid.uuid4().hex}')
+        run_dir = os.path.join(str(root), f'run_{ts}_{uuid.uuid4().hex}')
         os.makedirs(run_dir, exist_ok=False)
+    payload = dict(run)
+    payload.setdefault(
+        "authority",
+        {
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+            "research_only": True,
+        },
+    )
     with open(os.path.join(run_dir, 'results.json'), 'w', encoding='utf-8') as f:
-        json.dump(run, f, indent=2)
+        json.dump(payload, f, indent=2)
     return run_dir

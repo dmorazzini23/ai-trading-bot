@@ -35,10 +35,11 @@ def test_volatility_multiplier_bounds_and_adjusted_size() -> None:
     assert sizer.calculate_volatility_multiplier([0.0] * 20) == 1.0
     assert sizer.calculate_volatility_multiplier([0.05, -0.05] * 10) == 0.2
     assert sizer.calculate_volatility_multiplier([0.001, -0.001] * 10) == 2.0
+    assert sizer.calculate_position_size(100, [0.01] * 9) == 0
     assert sizer.calculate_position_size(100, [0.001, -0.001] * 10) == 200
 
 
-def test_dynamic_position_size_uses_conservative_fallbacks_and_concentration_limit() -> None:
+def test_dynamic_position_size_fails_closed_without_atr_evidence() -> None:
     sizer = DynamicPositionSizer(RiskLevel.CONSERVATIVE)
 
     result = sizer.calculate_optimal_position(
@@ -49,12 +50,25 @@ def test_dynamic_position_size_uses_conservative_fallbacks_and_concentration_lim
         historical_data={},
     )
 
-    assert result["recommended_size"] == 20
+    assert result["recommended_size"] == 0
+    assert result["sizing_methods"] == {}
+    assert result["warnings"] == ["Invalid ATR value"]
+
+
+def test_dynamic_position_size_fails_closed_without_return_evidence() -> None:
+    sizer = DynamicPositionSizer(RiskLevel.CONSERVATIVE)
+
+    result = sizer.calculate_optimal_position(
+        symbol="AAPL",
+        account_equity=100_000.0,
+        entry_price=100.0,
+        market_data={"atr": 2.0},
+        historical_data={},
+    )
+
+    assert result["recommended_size"] == 0
     assert result["sizing_methods"]["atr_based"] == 625
-    assert result["sizing_methods"]["concentration_limit"] == 20
-    assert "Invalid ATR value, using conservative sizing" in result["warnings"]
-    assert "No return data for volatility adjustment" in result["warnings"]
-    assert result["risk_metrics"]["position_percentage"] == pytest.approx(0.02)
+    assert result["warnings"] == ["Insufficient return data for volatility adjustment"]
 
 
 def test_dynamic_position_size_records_positive_kelly_method() -> None:

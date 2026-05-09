@@ -310,6 +310,8 @@ def _normalize_candidate(
         "usefulness": score["usefulness"],
         "recommended_use": score["recommended_use"],
         "risk_notes": score["reasons"],
+        "authoritative": False,
+        "non_authoritative": True,
         "runtime_authority": False,
         "promotion_authority": False,
         "live_money_authority": False,
@@ -509,6 +511,7 @@ def build_huggingface_research_discovery(
             "min_downloads": int(min_downloads),
             "metadata_only": True,
             "use_hf_api": bool(use_hf_api),
+            "explicit_opt_in": bool(enabled and use_hf_api),
         },
         "summary": {
             "raw_results": len(raw_items),
@@ -532,7 +535,11 @@ def build_huggingface_research_discovery(
         "promotion_authority": False,
         "live_money_authority": False,
         "provider_authority": False,
+        "authoritative": False,
+        "non_authoritative": True,
         "research_only": True,
+        "external_network_allowed": bool(enabled and use_hf_api),
+        "requires_explicit_opt_in": True,
         "operator_action": "review_candidates_for_offline_intake" if accepted else "no_hf_action_required",
     }
 

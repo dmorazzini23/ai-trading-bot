@@ -2,9 +2,6 @@ from __future__ import annotations
 import importlib
 from functools import lru_cache
 from typing import MutableMapping, cast
-from ai_trading.net.http import HTTPSession, get_http_session
-from ai_trading.exc import RequestException
-from ai_trading.utils.http import clamp_request_timeout
 
 _sentiment_cache: MutableMapping[str, float]
 
@@ -37,21 +34,9 @@ except ImportError:
     _CACHETOOLS_AVAILABLE = False
     _sentiment_cache = {}
 
-_HTTP: HTTPSession | None = None
-
-
-def _get_predict_http_session() -> HTTPSession:
-    """Return the prediction HTTP session, creating it only when needed."""
-    global _HTTP
-    if _HTTP is None:
-        _HTTP = get_http_session()
-    return _HTTP
-
-
 def reset_predict_runtime_cache() -> None:
     """Clear lazily initialized prediction runtime resources."""
-    global _HTTP
-    _HTTP = None
+    _sentiment_cache.clear()
 
 @lru_cache(maxsize=1024)
 def predict(path: str):
@@ -80,19 +65,11 @@ def load_model(regime: str):
     raise NotImplementedError
 
 def fetch_sentiment(symbol: str) -> float:
-    """Fetch sentiment score with simple caching."""
+    """Fetch sentiment through the canonical sentiment implementation."""
     if symbol in _sentiment_cache:
         return float(_sentiment_cache[symbol])
-    score = 0.0
-    try:
-        resp = _get_predict_http_session().get(
-            f"https://example.com/{symbol}", timeout=clamp_request_timeout(10)
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        score = float(data.get("score", 0.0))
-    except (RequestException, TimeoutError):
-        score = 0.0
+    sentiment = importlib.import_module("ai_trading.analysis.sentiment")
+    score = float(sentiment.fetch_sentiment(None, symbol))
     target_cache = cast(MutableMapping[str, float], _sentiment_cache)
     target_cache[symbol] = score
     if len(target_cache) > 1000:

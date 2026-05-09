@@ -1,14 +1,8 @@
 import logging
 'Trading Execution Debugging CLI Tool\n\nThis command-line tool helps diagnose and debug trading execution issues\nusing the enhanced debugging system.\n\nUsage:\n    python debug_cli.py status                    # Show overall status\n    python debug_cli.py executions [--limit 10]  # Show recent executions\n    python debug_cli.py positions                 # Check position discrepancies  \n    python debug_cli.py pnl [symbol]             # Show PnL breakdown\n    python debug_cli.py trace [correlation_id]   # Trace execution timeline\n    python debug_cli.py health                   # Run health check\n'
 import argparse
-import os
 import sys
 from datetime import datetime
-os.environ.setdefault('ALPACA_API_KEY', 'cli_key')
-os.environ.setdefault('ALPACA_SECRET_KEY', 'cli_secret')
-os.environ.setdefault('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
-os.environ.setdefault('WEBHOOK_SECRET', 'cli_webhook')
-os.environ.setdefault('FLASK_PORT', '9000')
 
 def cmd_status():
     """Show overall execution system status."""
@@ -115,7 +109,7 @@ def cmd_pnl(symbol=None):
         if symbol:
             breakdown = get_symbol_pnl_breakdown(symbol)
             if breakdown:
-                total_realized = 0
+                total_realized = 0.0
                 logging.info(f'📈 {symbol} PnL BY SOURCE:')
                 for source, amount in breakdown.items():
                     if amount != 0:
@@ -184,7 +178,7 @@ def cmd_trace(correlation_id):
             logging.info('Available correlation IDs:')
             active_orders = tracker.get_active_orders()
             recent_executions = tracker.get_recent_executions(limit=5)
-            all_ids = set()
+            all_ids: set[str] = set()
             all_ids.update(active_orders.keys())
             for exec_data in recent_executions:
                 if 'correlation_id' in exec_data:

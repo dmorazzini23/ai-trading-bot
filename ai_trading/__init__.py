@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from importlib import import_module as _import_module
 from typing import Any
+import warnings
 
 PYTEST_DONT_REWRITE = ["ai_trading"]
 
@@ -44,11 +45,19 @@ _EXPORTS = {
 
 __all__ = sorted(_EXPORTS)
 
+_DEPRECATED_RESEARCH_EXPORTS = {
+    "predict": "ai_trading.predict is deprecated as a package-level live API; use it only for research utilities.",
+    "trade_logic": "ai_trading.trade_logic is deprecated as a package-level live API; use it only for research utilities.",
+}
+
 
 def __getattr__(name: str) -> Any:
     target = _EXPORTS.get(name)
     if target is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    warning_message = _DEPRECATED_RESEARCH_EXPORTS.get(name)
+    if warning_message is not None:
+        warnings.warn(warning_message, DeprecationWarning, stacklevel=2)
     if name == "ExecutionEngine":
         execution_module = _import_module("ai_trading.execution")
         return execution_module.select_execution_engine()

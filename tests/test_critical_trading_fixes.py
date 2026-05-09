@@ -56,7 +56,7 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
 
     @patch('ai_trading.analysis.sentiment._get_sentiment_http_session')
     def test_enhanced_fallback_strategies(self, mock_session):
-        """Test that enhanced fallback strategies work when rate limited."""
+        """Missing provider credentials fail closed instead of becoming neutral evidence."""
         # Simulate rate limiting
         mock_response = Mock()
         mock_response.status_code = 429
@@ -66,11 +66,8 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
         # Mock context
         mock_ctx = Mock()
 
-        # Test rate limiting triggers fallback
-        result = sentiment.fetch_sentiment(mock_ctx, 'AAPL')
-
-        # Should return neutral sentiment when all fallbacks fail
-        self.assertEqual(result, 0.0)
+        with self.assertRaisesRegex(RuntimeError, "missing_api_key"):
+            sentiment.fetch_sentiment(mock_ctx, 'AAPL')
 
     @patch('ai_trading.analysis.sentiment._get_sentiment_http_session')
     def test_alternative_sentiment_sources(self, mock_session):

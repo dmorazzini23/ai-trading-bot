@@ -87,8 +87,65 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert hf_step["metadata"]["runtime_authority"] is False
     assert hf_step["metadata"]["promotion_authority"] is False
     assert hf_step["metadata"]["live_money_authority"] is False
+    assert hf_step["metadata"]["non_authoritative"] is True
+    assert hf_step["metadata"]["requires_explicit_api_opt_in"] is True
     hf_cache = next(step for step in payload["steps"] if step["name"] == "huggingface_cache_materialization_plan")  # type: ignore[index]
     assert "--dry-run" in hf_cache["command"]
+
+
+def test_hf_research_api_requires_second_explicit_toggle(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_HF_RESEARCH_ENABLED", "1")
+    monkeypatch.delenv("AI_TRADING_HF_RESEARCH_USE_API", raising=False)
+
+    exit_code = research_automation.main(
+        [
+            "daily",
+            "--report-root",
+            str(tmp_path / "reports"),
+            "--run-id",
+            "hf-toggle-test",
+            "--plan-only",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = _read(
+        tmp_path
+        / "reports"
+        / "daily"
+        / "hf-toggle-test"
+        / "research_automation_report.json"
+    )
+    hf_step = next(step for step in payload["steps"] if step["name"] == "huggingface_research_discovery")  # type: ignore[index]
+    assert "--enabled" in hf_step["command"]
+    assert "--use-hf-api" not in hf_step["command"]
+
+    monkeypatch.setenv("AI_TRADING_HF_RESEARCH_USE_API", "1")
+    exit_code = research_automation.main(
+        [
+            "daily",
+            "--report-root",
+            str(tmp_path / "reports-api"),
+            "--run-id",
+            "hf-toggle-test",
+            "--plan-only",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = _read(
+        tmp_path
+        / "reports-api"
+        / "daily"
+        / "hf-toggle-test"
+        / "research_automation_report.json"
+    )
+    hf_step = next(step for step in payload["steps"] if step["name"] == "huggingface_research_discovery")  # type: ignore[index]
+    assert "--enabled" in hf_step["command"]
+    assert "--use-hf-api" in hf_step["command"]
 
 
 def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(

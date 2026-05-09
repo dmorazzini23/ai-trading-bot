@@ -49,8 +49,7 @@ class ATRPositionSizer:
             multiplier = stop_distance_multiplier or self.atr_multiplier
             risk_amount = account_equity * self.risk_per_trade
             stop_distance = atr_value * multiplier
-            position_size = int(risk_amount / stop_distance)
-            position_size = max(1, position_size)
+            position_size = max(0, int(risk_amount / stop_distance))
             logger.debug(f'ATR position sizing: equity=${account_equity:,.2f}, risk_amount=${risk_amount:,.2f}, stop_distance=${stop_distance:.2f}, position_size={position_size}')
             return position_size
         except COMMON_EXC as e:
@@ -138,13 +137,18 @@ class VolatilityPositionSizer:
             Volatility-adjusted position size
         """
         try:
+            if base_position_size <= 0:
+                return 0
+            if len(returns) < 10:
+                logger.warning(f'Insufficient data for volatility-adjusted sizing: {len(returns)} returns')
+                return 0
             volatility_multiplier = self.calculate_volatility_multiplier(returns)
             adjusted_size = int(base_position_size * volatility_multiplier)
             logger.debug(f'Volatility position sizing: base={base_position_size}, multiplier={volatility_multiplier:.3f}, adjusted={adjusted_size}')
-            return max(1, adjusted_size)
+            return max(0, adjusted_size)
         except COMMON_EXC as e:
             logger.error(f'Error calculating volatility-adjusted position size: {e}')
-            return base_position_size
+            return 0
 
 class DynamicPositionSizer:
     """
@@ -193,16 +197,15 @@ class DynamicPositionSizer:
             returns = historical_data.get('returns', [])
             trade_history: list[dict[str, Any]] = list(historical_data.get('trade_history', []) or [])
             if atr_value <= 0:
-                result['warnings'].append('Invalid ATR value, using conservative sizing')
-                atr_value = entry_price * 0.02
+                result['warnings'].append('Invalid ATR value')
+                return result
             atr_size = self.atr_sizer.calculate_position_size(account_equity, entry_price, atr_value)
             result['sizing_methods']['atr_based'] = atr_size
-            if returns:
-                vol_adjusted_size = self.volatility_sizer.calculate_position_size(atr_size, returns)
-                result['sizing_methods']['volatility_adjusted'] = vol_adjusted_size
-            else:
-                vol_adjusted_size = atr_size
-                result['warnings'].append('No return data for volatility adjustment')
+            if len(returns) < 10:
+                result['warnings'].append('Insufficient return data for volatility adjustment')
+                return result
+            vol_adjusted_size = self.volatility_sizer.calculate_position_size(atr_size, returns)
+            result['sizing_methods']['volatility_adjusted'] = vol_adjusted_size
             kelly_size = atr_size
             if trade_history and len(trade_history) >= self.kelly_criterion.min_sample_size:
                 kelly_fraction, kelly_stats = self.kelly_criterion.calculate_from_returns([trade.get('return', 0.0) for trade in trade_history])
@@ -281,7 +284,7 @@ class DynamicPositionSizer:
             if notional_value <= 0 or atr_value <= 0:
                 return 0.0
             risk_estimate = atr_value * self.atr_sizer.atr_multiplier / (notional_value / 100)
-            return min(1.0, risk_estimate)
+            return float(min(1.0, risk_estimate))
         except COMMON_EXC:
             return 0.0
 

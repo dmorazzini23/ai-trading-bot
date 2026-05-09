@@ -58,7 +58,7 @@ must be treated as a blocker. If OMS strictness is required, any
 3. Confirm runtime health is green:
 
 ```bash
-curl -sS http://127.0.0.1:8081/healthz
+curl -sS http://127.0.0.1:9001/healthz
 ```
 
 Expected checks:

@@ -189,13 +189,32 @@ def _hf_research_enabled() -> bool:
     return _truthy(_env_text("AI_TRADING_HF_RESEARCH_ENABLED", "0"))
 
 
+def _hf_research_use_api_enabled() -> bool:
+    return _truthy(_env_text("AI_TRADING_HF_RESEARCH_USE_API", "0"))
+
+
+def _hf_research_command_flags() -> tuple[str, ...]:
+    if not _hf_research_enabled():
+        return ()
+    if _hf_research_use_api_enabled():
+        return ("--enabled", "--use-hf-api")
+    return ("--enabled",)
+
+
 def _maybe_data_dir(raw: str) -> Path | None:
     value = str(raw or "").strip()
     if not value:
         value = _env_text("AI_TRADING_RESEARCH_DATA_DIR", "")
     if not value:
         return None
-    return Path(value).expanduser()
+    target = Path(value).expanduser()
+    if target.is_absolute():
+        return target
+    return resolve_runtime_artifact_path(
+        target,
+        default_relative=value,
+        for_write=False,
+    )
 
 
 def _run_id(cadence: str, configured: str) -> str:
@@ -805,7 +824,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 hf_discovery,
                 "--latest-json",
                 config.report_root / "latest" / "hf_discovery_latest.json",
-                *(("--enabled", "--use-hf-api") if _hf_research_enabled() else ()),
+                *_hf_research_command_flags(),
             ),
             purpose="Summarize research-only Hugging Face model/dataset candidates.",
             output_path=hf_discovery,
@@ -814,6 +833,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 "promotion_authority": False,
                 "live_money_authority": False,
                 "metadata_only": True,
+                "non_authoritative": True,
+                "requires_explicit_api_opt_in": True,
             },
         ),
         ResearchStep(
@@ -1215,7 +1236,7 @@ def _weekly_steps(config: ResearchConfig) -> list[ResearchStep]:
                 hf_discovery,
                 "--latest-json",
                 config.report_root / "latest" / "hf_discovery_latest.json",
-                *(("--enabled", "--use-hf-api") if _hf_research_enabled() else ()),
+                *_hf_research_command_flags(),
             ),
             purpose="Discover research-only Hugging Face candidates for weekly experiments.",
             output_path=hf_discovery,
@@ -1224,6 +1245,8 @@ def _weekly_steps(config: ResearchConfig) -> list[ResearchStep]:
                 "promotion_authority": False,
                 "live_money_authority": False,
                 "metadata_only": True,
+                "non_authoritative": True,
+                "requires_explicit_api_opt_in": True,
             },
         ),
         ResearchStep(
@@ -1381,7 +1404,7 @@ def _monthly_steps(config: ResearchConfig) -> list[ResearchStep]:
                 hf_discovery,
                 "--latest-json",
                 config.report_root / "latest" / "hf_discovery_latest.json",
-                *(("--enabled", "--use-hf-api") if _hf_research_enabled() else ()),
+                *_hf_research_command_flags(),
             ),
             purpose="Discover research-only HF candidates for monthly architecture review.",
             output_path=hf_discovery,
@@ -1390,6 +1413,8 @@ def _monthly_steps(config: ResearchConfig) -> list[ResearchStep]:
                 "promotion_authority": False,
                 "live_money_authority": False,
                 "metadata_only": True,
+                "non_authoritative": True,
+                "requires_explicit_api_opt_in": True,
             },
         ),
         ResearchStep(
@@ -1631,7 +1656,7 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
                 hf_discovery,
                 "--latest-json",
                 config.report_root / "latest" / "hf_discovery_latest.json",
-                *(("--enabled", "--use-hf-api") if _hf_research_enabled() else ()),
+                *_hf_research_command_flags(),
             ),
             purpose="Discover research-only HF candidates during weekend research, if enabled.",
             output_path=hf_discovery,
@@ -1640,6 +1665,8 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
                 "promotion_authority": False,
                 "live_money_authority": False,
                 "metadata_only": True,
+                "non_authoritative": True,
+                "requires_explicit_api_opt_in": True,
             },
         ),
         ResearchStep(
@@ -3038,7 +3065,11 @@ def _copy_authority_artifacts(
             targets.extend(
                 [
                     latest_dir / "promotion_report_latest.json",
-                    Path("artifacts/promotion/promotion_report_latest.json"),
+                    resolve_runtime_artifact_path(
+                        "runtime/promotion/promotion_report_latest.json",
+                        default_relative="runtime/promotion/promotion_report_latest.json",
+                        for_write=True,
+                    ),
                 ]
             )
         for target in targets:
@@ -3206,6 +3237,13 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
         "schema_version": "1.0.0",
         "artifact_type": "research_automation_report",
         "generated_at": _iso_now(),
+        "authority": {
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+            "research_only": True,
+            "manual_approval_required_for_authority_increase": True,
+        },
         "cadence": config.cadence,
         "workflow": config.workflow,
         "status": status,
@@ -3280,13 +3318,45 @@ def _build_config(args: argparse.Namespace) -> ResearchConfig:
         workflow = cadence
     elif not workflow:
         workflow = "promotion"
-    report_root = Path(args.report_root).expanduser() if args.report_root else _default_report_root()
+    if args.report_root:
+        raw_report_root = Path(args.report_root).expanduser()
+        report_root = (
+            raw_report_root
+            if raw_report_root.is_absolute()
+            else resolve_runtime_artifact_path(
+                raw_report_root,
+                default_relative=str(raw_report_root),
+                for_write=True,
+            )
+        )
+    else:
+        report_root = _default_report_root()
     run_id = _run_id(cadence, str(args.run_id or ""))
     run_dir = report_root / ("weekend" if _is_weekend_cadence(cadence) else cadence) / run_id
     data_dir = _maybe_data_dir(str(args.data_dir or ""))
-    shadow_jsonl = Path(args.shadow_jsonl).expanduser() if args.shadow_jsonl else _default_shadow_jsonl()
+    if args.shadow_jsonl:
+        raw_shadow = Path(args.shadow_jsonl).expanduser()
+        shadow_jsonl = (
+            raw_shadow
+            if raw_shadow.is_absolute()
+            else resolve_runtime_artifact_path(
+                raw_shadow,
+                default_relative=str(raw_shadow),
+                for_write=False,
+            )
+        )
+    else:
+        shadow_jsonl = _default_shadow_jsonl()
     accepted = (
-        Path(args.accepted_candidates_jsonl).expanduser()
+        (
+            Path(args.accepted_candidates_jsonl).expanduser()
+            if Path(args.accepted_candidates_jsonl).expanduser().is_absolute()
+            else resolve_runtime_artifact_path(
+                Path(args.accepted_candidates_jsonl).expanduser(),
+                default_relative=str(args.accepted_candidates_jsonl),
+                for_write=False,
+            )
+        )
         if args.accepted_candidates_jsonl
         else None
     )

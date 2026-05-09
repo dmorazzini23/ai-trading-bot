@@ -151,11 +151,11 @@ def _calculate_position_size(
 
     if not _is_finite_number(raw_qty):
         logger.warning(
-            "Non-finite raw_qty %s for %s; falling back to minimum position size",
+            "Non-finite raw_qty %s for %s; returning 0",
             raw_qty,
             symbol,
         )
-        return max(min_qty, 0)
+        return 0
 
     if raw_qty < 0:
         logger.warning("Negative raw_qty %s for %s, returning 0", raw_qty, symbol)

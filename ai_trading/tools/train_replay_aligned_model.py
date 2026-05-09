@@ -20,7 +20,7 @@ from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from ai_trading.data.historical_bars import load_historical_bars
+from ai_trading.data.historical_bars import HistoricalBarLoadReport, load_historical_bars
 from ai_trading.features.indicators import (
     compute_atr,
     compute_macd,
@@ -32,6 +32,7 @@ from ai_trading.logging import get_logger
 from ai_trading.models.artifacts import write_artifact_manifest
 from ai_trading.config.management import get_env
 from ai_trading.paths import CACHE_DIR
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.tools.offline_replay import (
     LiveCostReplayModel,
     _augment_model_features,
@@ -128,6 +129,28 @@ def _training_cache_dir(raw: str | Path | None = None) -> Path:
     return Path(configured).expanduser() if configured else CACHE_DIR / "training" / "replay_aligned"
 
 
+def _resolve_output_dir(path: str | Path) -> Path:
+    target = Path(path).expanduser()
+    if target.is_absolute():
+        return target
+    return resolve_runtime_artifact_path(
+        target,
+        default_relative=str(target),
+        for_write=True,
+    )
+
+
+def _resolve_input_dir(path: str | Path) -> Path:
+    target = Path(path).expanduser()
+    if target.is_absolute():
+        return target
+    return resolve_runtime_artifact_path(
+        target,
+        default_relative=str(target),
+        for_write=False,
+    )
+
+
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -158,9 +181,16 @@ def _load_or_build_symbol_features(
     timestamp_col: str,
     use_training_cache: bool,
     training_cache_dir: Path | None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+    allow_research_synthetic_timestamps: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame, HistoricalBarLoadReport]:
     cache_dir = training_cache_dir or _training_cache_dir()
     cache_path = cache_dir / f"{symbol}_{_symbol_feature_cache_key(csv_path, timestamp_col=timestamp_col, symbol=symbol)}.pkl"
+    frame, report = load_historical_bars(
+        csv_path,
+        timestamp_col=timestamp_col,
+        require_timestamp=True,
+        allow_research_synthetic=allow_research_synthetic_timestamps,
+    )
     if use_training_cache and cache_path.exists():
         try:
             cached = pd.read_pickle(cache_path)
@@ -170,10 +200,9 @@ def _load_or_build_symbol_features(
             frame = cached.get("frame")
             features = cached.get("features")
             if isinstance(frame, pd.DataFrame) and isinstance(features, pd.DataFrame):
-                return frame, features
-    frame, _report = load_historical_bars(csv_path, timestamp_col=timestamp_col)
+                return frame, features, report
     if frame.empty:
-        return frame, pd.DataFrame()
+        return frame, pd.DataFrame(), report
     try:
         raw = pd.read_csv(csv_path)
     except (OSError, ValueError):
@@ -197,7 +226,7 @@ def _load_or_build_symbol_features(
                 extra={"path": str(cache_path), "symbol": symbol},
                 exc_info=True,
             )
-    return frame, features
+    return frame, features, report
 
 
 def _normalize_label_objective(value: str) -> str:
@@ -278,14 +307,19 @@ def _build_symbol_dataset(
     live_cost_model: LiveCostReplayModel | None = None,
     use_training_cache: bool = True,
     training_cache_dir: Path | None = None,
+    allow_research_synthetic_timestamps: bool = False,
 ) -> pd.DataFrame:
-    frame, features = _load_or_build_symbol_features(
+    frame, features, report = _load_or_build_symbol_features(
         symbol,
         csv_path,
         timestamp_col=timestamp_col,
         use_training_cache=use_training_cache,
         training_cache_dir=training_cache_dir,
+        allow_research_synthetic_timestamps=allow_research_synthetic_timestamps,
     )
+    reports = getattr(_build_symbol_dataset, "_load_reports", None)
+    if isinstance(reports, dict):
+        reports[symbol] = report
     if frame.empty:
         return pd.DataFrame()
     if not frame.index.is_monotonic_increasing:
@@ -408,28 +442,35 @@ def build_training_dataset(
     live_cost_model: LiveCostReplayModel | None = None,
     use_training_cache: bool | None = None,
     training_cache_dir: Path | None = None,
+    allow_research_synthetic_timestamps: bool = False,
 ) -> pd.DataFrame:
     rows: list[pd.DataFrame] = []
+    load_reports: dict[str, HistoricalBarLoadReport] = {}
+    setattr(_build_symbol_dataset, "_load_reports", load_reports)
     cache_enabled = _env_bool(
         "AI_TRADING_REPLAY_ALIGNED_TRAINING_CACHE_ENABLED",
         True,
     ) if use_training_cache is None else bool(use_training_cache)
-    for symbol, csv_path in _resolve_symbol_paths(data_dir, symbols).items():
-        symbol_rows = _build_symbol_dataset(
-            symbol,
-            csv_path,
-            timestamp_col=timestamp_col,
-            horizon_bars=horizon_bars,
-            label_objective=label_objective,
-            fee_bps=fee_bps,
-            slippage_bps=slippage_bps,
-            min_net_edge_bps=min_net_edge_bps,
-            live_cost_model=live_cost_model,
-            use_training_cache=cache_enabled,
-            training_cache_dir=training_cache_dir,
-        )
-        if not symbol_rows.empty:
-            rows.append(symbol_rows)
+    try:
+        for symbol, csv_path in _resolve_symbol_paths(data_dir, symbols).items():
+            symbol_rows = _build_symbol_dataset(
+                symbol,
+                csv_path,
+                timestamp_col=timestamp_col,
+                horizon_bars=horizon_bars,
+                label_objective=label_objective,
+                fee_bps=fee_bps,
+                slippage_bps=slippage_bps,
+                min_net_edge_bps=min_net_edge_bps,
+                live_cost_model=live_cost_model,
+                use_training_cache=cache_enabled,
+                training_cache_dir=training_cache_dir,
+                allow_research_synthetic_timestamps=allow_research_synthetic_timestamps,
+            )
+            if not symbol_rows.empty:
+                rows.append(symbol_rows)
+    finally:
+        setattr(_build_symbol_dataset, "_load_reports", None)
     if not rows:
         return pd.DataFrame()
     dataset = pd.concat(rows, axis=0, ignore_index=True)
@@ -440,7 +481,44 @@ def build_training_dataset(
         utc=True,
     )
     dataset = dataset.dropna(subset=["timestamp", "label_end_timestamp"]).sort_values(["timestamp", "symbol"]).reset_index(drop=True)
+    dataset.attrs["load_reports"] = {
+        symbol: report.as_dict()
+        for symbol, report in sorted(load_reports.items())
+    }
     return cast(pd.DataFrame, dataset)
+
+
+def _training_authority(dataset: pd.DataFrame) -> dict[str, Any]:
+    reports_raw = dataset.attrs.get("load_reports")
+    reports = reports_raw if isinstance(reports_raw, Mapping) else {}
+    timestamp_authoritative = all(
+        bool(report.get("timestamp_authoritative"))
+        for report in reports.values()
+        if isinstance(report, Mapping)
+    )
+    source_providers = sorted(
+        {
+            str(provider).strip().lower()
+            for report in reports.values()
+            if isinstance(report, Mapping)
+            for provider in report.get("source_providers", ())
+            if str(provider).strip()
+        }
+    )
+    research_synthetic = any(
+        bool(report.get("research_synthetic"))
+        for report in reports.values()
+        if isinstance(report, Mapping)
+    )
+    return {
+        "runtime_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+        "research_only": True,
+        "timestamp_authoritative": bool(timestamp_authoritative and bool(reports)),
+        "research_synthetic": bool(research_synthetic),
+        "source_providers": source_providers,
+    }
 
 
 def _make_model(model_type: str, *, random_state: int) -> Any:
@@ -699,8 +777,8 @@ def _split_train_validation_with_purge(
 
 
 def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
-    data_dir = Path(args.data_dir)
-    output_dir = Path(args.output_dir)
+    data_dir = _resolve_input_dir(args.data_dir)
+    output_dir = _resolve_output_dir(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     live_cost_model = _load_live_cost_replay_model(
         argparse.Namespace(
@@ -723,6 +801,9 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             _training_cache_dir(getattr(args, "training_cache_dir", None))
             if getattr(args, "training_cache_dir", None)
             else None
+        ),
+        allow_research_synthetic_timestamps=bool(
+            getattr(args, "allow_research_synthetic_timestamps", False)
         ),
     )
     if dataset.empty:
@@ -796,6 +877,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "feature_columns": list(REPLAY_ALIGNED_FEATURE_COLUMNS),
             "objective": f"{config.horizon_bars}_bar_{config.label_objective}_binary",
             "config": asdict(config),
+            "authority": _training_authority(dataset),
             "thresholds_by_regime": edge_thresholds_by_regime,
             "live_cost_model": {
                 "enabled": live_cost_model is not None,
@@ -810,10 +892,12 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         "schema_version": "1.0.0",
         "artifact_type": "replay_aligned_training_report",
         "generated_at": datetime.now(UTC).isoformat(),
+        "authority": _training_authority(dataset),
         "model_path": str(model_path),
         "manifest_path": str(manifest_path),
         "config": asdict(config),
         "dataset": {
+            "load_reports": dataset.attrs.get("load_reports", {}),
             "rows": int(len(dataset)),
             "train_rows": int(len(train)),
             "validation_rows": int(len(validation)),
@@ -912,6 +996,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Cache replay-aligned feature frames across horizon/objective training runs.",
     )
     parser.add_argument("--training-cache-dir", type=Path, default=None)
+    parser.add_argument(
+        "--allow-research-synthetic-timestamps",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Allow non-timestamped CSVs only for explicitly research-only synthetic training.",
+    )
     return parser
 
 

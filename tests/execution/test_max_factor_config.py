@@ -7,9 +7,9 @@ import pytest
 from ai_trading.core import bot_engine, execution_flow
 
 def test_execute_entry_uses_config_max_factor(monkeypatch):
-    monkeypatch.setattr(bot_engine, "submit_order", lambda *a, **k: None)
-    monkeypatch.setattr(bot_engine, "vwap_pegged_submit", lambda *a, **k: None)
-    monkeypatch.setattr(bot_engine, "pov_submit", lambda *a, **k: None)
+    monkeypatch.setattr("ai_trading.services.execution.submit_order", lambda *a, **k: None)
+    monkeypatch.setattr(execution_flow, "vwap_pegged_submit", lambda *a, **k: None)
+    monkeypatch.setattr(execution_flow, "pov_submit", lambda *a, **k: None)
     monkeypatch.setattr(bot_engine, "POV_SLICE_PCT", 0)
     monkeypatch.setattr(bot_engine, "SLICE_THRESHOLD", 10)
     df = pd.DataFrame({"close": [100.0], "atr": [1.0]})

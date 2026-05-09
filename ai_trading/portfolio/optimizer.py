@@ -5,11 +5,12 @@ This module implements portfolio-first trading decisions that dramatically reduc
 by evaluating trades at the portfolio level rather than individual signal level.
 Integrates Kelly Criterion, correlation analysis, and tax-aware rebalancing.
 """
+import math
 import statistics
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 from ai_trading.logging import logger
 from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer, MarketRegime
 from ai_trading.risk.kelly import KellyCalculator, KellyCriterion
@@ -127,18 +128,32 @@ class PortfolioOptimizer:
         """Calculate historical portfolio returns based on current positions."""
         if not positions or not returns_data:
             return []
-        min_length = min((len(returns_data[symbol]) for symbol in positions if symbol in returns_data))
+        eligible_prices: dict[str, float] = {}
+        for symbol in positions:
+            if symbol not in returns_data or symbol not in current_prices:
+                continue
+            try:
+                price = float(current_prices[symbol])
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(price) and price > 0.0:
+                eligible_prices[symbol] = price
+        eligible_symbols = list(eligible_prices)
+        if not eligible_symbols:
+            return []
+        min_length = min((len(returns_data[symbol]) for symbol in eligible_symbols))
         if min_length == 0:
             return []
-        total_value = sum((abs(positions[symbol]) * current_prices.get(symbol, 1.0) for symbol in positions))
+        total_value = sum((abs(positions[symbol]) * eligible_prices[symbol] for symbol in eligible_symbols))
         if total_value == 0:
             return []
         portfolio_returns = []
         for i in range(min_length):
             period_return = 0.0
-            for symbol, position in positions.items():
+            for symbol in eligible_symbols:
+                position = positions[symbol]
                 if symbol in returns_data and i < len(returns_data[symbol]):
-                    weight = position * current_prices.get(symbol, 1.0) / total_value
+                    weight = position * eligible_prices[symbol] / total_value
                     period_return += weight * returns_data[symbol][i]
             portfolio_returns.append(period_return)
         return portfolio_returns
@@ -239,6 +254,8 @@ class PortfolioOptimizer:
         """
         try:
             impact = self.evaluate_trade_impact(symbol, proposed_position, current_positions, market_data)
+            if impact.confidence < 0.6:
+                return (PortfolioDecision.DEFER, f'Low confidence {impact.confidence:.3f} in analysis')
             if impact.net_benefit < self.improvement_threshold:
                 return (PortfolioDecision.REJECT, f'Net benefit {impact.net_benefit:.3f} below threshold {self.improvement_threshold:.3f}')
             if impact.transaction_cost > abs(impact.expected_return_change) * 0.5:
@@ -247,8 +264,6 @@ class PortfolioOptimizer:
                 return (PortfolioDecision.DEFER, f'Correlation impact {impact.correlation_impact:.3f} exceeds maximum {self.max_correlation_penalty:.3f}')
             if impact.kelly_efficiency_change < -0.05:
                 return (PortfolioDecision.REJECT, f'Kelly efficiency would decrease by {abs(impact.kelly_efficiency_change):.3f}')
-            if impact.confidence < 0.6:
-                return (PortfolioDecision.DEFER, f'Low confidence {impact.confidence:.3f} in analysis')
             if 0.005 <= impact.net_benefit < self.improvement_threshold:
                 return (PortfolioDecision.BATCH, f'Small improvement {impact.net_benefit:.3f} suitable for batching')
             return (PortfolioDecision.APPROVE, f'Portfolio improvement: {impact.net_benefit:.3f}, Kelly change: {impact.kelly_efficiency_change:.3f}')
@@ -298,7 +313,11 @@ class PortfolioOptimizer:
     def _estimate_transaction_cost(self, symbol: str, trade_size: float, current_prices: dict[str, float]) -> float:
         """Estimate transaction cost as a fraction of trade value."""
         try:
-            price = current_prices.get(symbol, 100.0)
+            if symbol not in current_prices:
+                return 1.0
+            price = float(current_prices[symbol])
+            if not (math.isfinite(price) and price > 0.0):
+                return 1.0
             trade_value = abs(trade_size) * price
             if trade_value <= 0.0:
                 return 0.0
@@ -316,7 +335,7 @@ class PortfolioOptimizer:
             total_cost = slippage_cost + commission + market_impact
             return total_cost / trade_value
         except (KeyError, TypeError, ValueError):
-            return 0.0001
+            return 1.0
 
     def _estimate_return_change(self, symbol: str, position_change: float, market_data: dict[str, Any]) -> float:
         """Estimate expected return change as a fraction of trade value."""
@@ -375,7 +394,7 @@ class PortfolioOptimizer:
             def _weights(pos: dict[str, float]) -> _np.ndarray:
                 vals = _np.array([abs(pos.get(s, 0.0)) * float(prices.get(s, 1.0)) for s in symbols], dtype=float)
                 tot = float(vals.sum())
-                return (vals / tot) if tot > 0 else _np.zeros_like(vals)
+                return cast(_np.ndarray, (vals / tot) if tot > 0 else _np.zeros_like(vals))
             curr_w = _weights(current_positions)
             prop = current_positions.copy()
             prop[symbol] = prop.get(symbol, 0.0) + position_change
@@ -399,8 +418,16 @@ class PortfolioOptimizer:
         """Calculate confidence in analysis based on data quality."""
         try:
             confidence = 1.0
-            if symbol not in market_data.get('prices', {}):
+            prices = market_data.get('prices', {})
+            if symbol not in prices:
                 confidence *= 0.5
+            else:
+                try:
+                    price = float(prices[symbol])
+                except (TypeError, ValueError):
+                    price = 0.0
+                if not (math.isfinite(price) and price > 0.0):
+                    confidence *= 0.5
             returns_data = market_data.get('returns', {})
             if symbol not in returns_data:
                 confidence *= 0.3

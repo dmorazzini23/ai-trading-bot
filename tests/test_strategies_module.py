@@ -101,16 +101,16 @@ def _prep_settings(strategies):
 def test_get_strategies_non_empty_for_empty_settings(monkeypatch):
     _prep_settings([])
     monkeypatch.delenv("STRATEGIES", raising=False)
-    assert get_strategies()
+    assert get_strategies() == []
 
 
 def test_get_strategies_non_empty_for_unknown_settings(monkeypatch):
     _prep_settings(["unknown"])
     monkeypatch.delenv("STRATEGIES", raising=False)
-    assert get_strategies()
+    assert get_strategies() == []
 
 
 def test_get_strategies_non_empty_when_env_unset(monkeypatch):
     _prep_settings(None)
     monkeypatch.delenv("STRATEGIES", raising=False)
-    assert get_strategies()
+    assert get_strategies() == []

@@ -235,7 +235,26 @@ def test_offline_replay_writes_summary_json(tmp_path: Path) -> None:
     assert payload["aggregate"]["total_bars"] == 360
     assert payload["artifacts"]["output_json"] == str(out_path)
     assert payload["inputs"]["symbols"]["AAPL"]["rows_after_cleanup"] == 360
+    assert payload["authority"]["timestamp_authoritative"] is True
+    assert payload["authority"]["research_synthetic"] is False
     assert "total_trades" in payload["aggregate"]
+
+
+def test_offline_replay_rejects_non_timestamped_csv_by_default(tmp_path: Path) -> None:
+    csv_path = tmp_path / "AAPL.csv"
+    pd.DataFrame(
+        {
+            "seq": [0, 1, 2, 3],
+            "open": [100.0, 101.0, 102.0, 103.0],
+            "high": [101.0, 102.0, 103.0, 104.0],
+            "low": [99.0, 100.0, 101.0, 102.0],
+            "close": [100.5, 101.5, 102.5, 103.5],
+            "volume": [10, 10, 10, 10],
+        }
+    ).to_csv(csv_path, index=False)
+
+    with pytest.raises(ValueError, match="requires timestamp-authoritative bars"):
+        replay_tool.run_replay(["--csv", str(csv_path)])
 
 
 def test_offline_replay_live_cost_model_updates_slippage_assumptions(

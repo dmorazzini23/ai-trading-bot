@@ -358,3 +358,23 @@ def test_portfolio_rl_trigger(monkeypatch):
     state = np.random.rand(10)
     weights = learner.rebalance_portfolio(state)
     assert np.isclose(weights.sum(), 1.0, atol=0.1)
+
+
+def test_regime_rl_rebalance_is_research_only_without_runtime_evidence(monkeypatch):
+    calls = []
+
+    class _Learner:
+        def rebalance_portfolio(self, _state):
+            calls.append("rebalance")
+
+    monkeypatch.setattr(
+        meta_learning_core,
+        "get_settings",
+        lambda: types.SimpleNamespace(enable_reinforcement_learning=True),
+    )
+    monkeypatch.setattr(meta_learning_core, "PortfolioReinforcementLearner", _Learner)
+    monkeypatch.delenv("AI_TRADING_RL_RUNTIME_REBALANCE_ENABLED", raising=False)
+
+    meta_learning_core.trigger_rebalance_on_regime([])
+
+    assert calls == []

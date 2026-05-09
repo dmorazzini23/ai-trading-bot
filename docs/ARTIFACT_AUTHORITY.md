@@ -73,6 +73,8 @@ delete historical evidence blindly. Do not move fixtures used by tests.
 
 Agents should treat root-level `*_SUMMARY.md`, `*_REPORT.md`, and snapshot-style
 documents as archival unless they are explicitly refreshed in the current task.
+See [LEGACY_INVENTORY.md](LEGACY_INVENTORY.md) for retained legacy scripts and
+operator surfaces that are intentionally thin or pending retirement.
 
 ## Authority Rules
 

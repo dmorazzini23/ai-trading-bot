@@ -80,7 +80,7 @@ class TestOrderExecutionTracking(unittest.TestCase):
 
         with patch('ai_trading.core.bot_engine.fetch_minute_df_safe', return_value=mock_df), \
              patch.object(self.mock_ctx.data_client, 'get_stock_latest_quote', return_value=mock_quote), \
-             patch('ai_trading.core.bot_engine.submit_order', return_value=self.mock_order) as mock_submit:
+             patch('ai_trading.services.execution.submit_order', return_value=self.mock_order) as mock_submit:
 
             # Test that we can access the POV submit function
             if hasattr(bot_engine, 'pov_submit'):

@@ -63,10 +63,42 @@ fi
 ARCHIVE_STAMP="$(date -u +%Y%m%d_%H%M%S)"
 ARCHIVE_DIR="${RUNTIME_DIR}/archive/${ARCHIVE_STAMP}"
 RUN_CYCLE=1
+CONFIRM=0
 
-if [[ "${1:-}" == "--skip-cycle" ]]; then
-  RUN_CYCLE=0
-fi
+usage() {
+  cat <<'USAGE'
+Usage:
+  scripts/runtime_artifacts_reset.sh [--dry-run] [--confirm] [--skip-cycle]
+
+Defaults to dry-run. Pass --confirm to archive and rewrite runtime artifacts.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skip-cycle)
+      RUN_CYCLE=0
+      shift
+      ;;
+    --confirm)
+      CONFIRM=1
+      shift
+      ;;
+    --dry-run)
+      CONFIRM=0
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
 
 resolve_path() {
   local raw="${1:-}"
@@ -84,7 +116,6 @@ GATE_SUMMARY_PATH="$(resolve_path "${AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH:-
 
 echo "[runtime-reset] data root: ${DATA_ROOT}"
 echo "[runtime-reset] target runtime dir: ${RUNTIME_DIR}"
-mkdir -p "${RUNTIME_DIR}" "${ARCHIVE_DIR}"
 
 tracked_artifacts=(
   "after_hours_training_state.json"
@@ -96,6 +127,25 @@ tracked_artifacts=(
   "run_manifest.json"
   "run_manifest.jsonl"
 )
+
+if [[ "${CONFIRM}" != "1" ]]; then
+  echo "[runtime-reset] dry run: no files will be changed"
+  echo "[runtime-reset] would create archive dir: ${ARCHIVE_DIR}"
+  echo "[runtime-reset] would archive tracked runtime artifacts:"
+  for name in "${tracked_artifacts[@]}"; do
+    echo "  - ${RUNTIME_DIR}/${name}"
+  done
+  echo "[runtime-reset] would write clean baseline runtime artifacts"
+  if [[ "${RUN_CYCLE}" == "1" ]]; then
+    echo "[runtime-reset] would run one controlled paper cycle"
+  else
+    echo "[runtime-reset] controlled paper cycle skipped by request"
+  fi
+  echo "[runtime-reset] rerun with --confirm to execute"
+  exit 0
+fi
+
+mkdir -p "${RUNTIME_DIR}" "${ARCHIVE_DIR}"
 
 echo "[runtime-reset] archiving tracked runtime artifacts -> ${ARCHIVE_DIR}"
 for name in "${tracked_artifacts[@]}"; do

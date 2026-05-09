@@ -21,7 +21,9 @@ On restart, packaged services run `scripts/sync_env_runtime.sh` and render
 `/run/ai-trading-bot/ai-trading-runtime.env` from the repo `.env`. Operators
 should edit `/home/aiuser/ai-trading-bot/.env`; after the updated unit files
 are deployed, `sudo systemctl restart ai-trading.service` is enough to refresh
-the runtime environment.
+the runtime environment. The sync step fails closed for packaged destinations:
+if `/run/ai-trading-bot` is missing or not writable, it exits non-zero instead
+of silently writing a repo-local fallback env file.
 
 Use `RUN_HEALTHCHECK=1 python -m ai_trading.app` only when you want the
 standalone lightweight health app. In that mode the standalone health server
@@ -104,6 +106,16 @@ Live mode now requires one authoritative durability path:
 ### Canonical Topology
 
 - Production ownership belongs to `ai-trading.service` only.
+
+### Confirm-First Ops Scripts
+
+- `scripts/runtime_artifacts_reset.sh` defaults to a dry-run plan. Pass
+  `--confirm` to archive and rewrite runtime artifacts.
+- `scripts/rollout_advanced_gates.sh <stage>` defaults to a dry-run plan. Pass
+  `--confirm` to edit `.env`; `--restart` and `--verify` are skipped unless the
+  stage is confirmed.
+- The Makefile does not create `artifacts/` at parse time. Targets that write
+  reports create their artifact directories at execution time.
 
 ### Model Artifact Loading
 

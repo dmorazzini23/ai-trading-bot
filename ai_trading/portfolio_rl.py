@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 from functools import lru_cache
+from typing import cast
 
 from ai_trading.utils.device import TORCH_AVAILABLE
 
@@ -54,6 +55,7 @@ class PortfolioReinforcementLearner:
         _, _, optim_mod = _lazy_import_torch()
         self.state_dim = state_dim
         self.action_dim = action_dim
+        self.research_only = True
         self.actor = Actor(state_dim, action_dim)
         self.optimizer = optim_mod.Adam(self.actor.parameters(), lr=0.001)
 
@@ -64,6 +66,8 @@ class PortfolioReinforcementLearner:
         if hasattr(state, "tolist"):
             state = state.tolist()
         arr = np.asarray(state, dtype=np.float32)
+        if arr.size == 0 or not np.isfinite(arr).all():
+            return cast(np.ndarray, np.zeros(self.action_dim, dtype=np.float32))
         if arr.size < self.state_dim:
             arr = np.pad(arr, (0, self.state_dim - arr.size))
         elif arr.size > self.state_dim:
@@ -73,7 +77,7 @@ class PortfolioReinforcementLearner:
             weights = self.actor(state_tensor).numpy()
         total = float(weights.sum())
         normalized = (weights / total) if total else weights
-        return np.asarray(normalized, dtype=np.float32)
+        return cast(np.ndarray, np.asarray(normalized, dtype=np.float32))
 
 
 __all__ = ["PortfolioReinforcementLearner", "Actor"]

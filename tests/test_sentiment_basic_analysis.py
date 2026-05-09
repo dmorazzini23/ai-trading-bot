@@ -125,6 +125,35 @@ def test_fetch_sentiment_missing_api_key_fails_closed_outside_pytest(monkeypatch
         sentiment.fetch_sentiment(None, "AAPL")
 
 
+def test_fetch_sentiment_enabled_without_key_fails_closed_in_tests(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_SENTIMENT_FAIL_CLOSED", "0")
+    monkeypatch.setenv("AI_TRADING_SENTIMENT_ENABLED", "1")
+    monkeypatch.delenv("SENTIMENT_API_KEY", raising=False)
+    monkeypatch.setattr(sentiment, "SENTIMENT_API_KEY", "", raising=False)
+
+    class DummySettings:
+        sentiment_api_url = "http://example.com"
+        sentiment_api_key = None
+
+    monkeypatch.setattr(sentiment, "get_settings", lambda: DummySettings())
+    monkeypatch.setattr(sentiment, "get_news_api_key", lambda: "")
+
+    with pytest.raises(RuntimeError, match="missing_api_key"):
+        sentiment.fetch_sentiment(None, "AAPL")
+
+
+def test_fetch_sentiment_disabled_without_key_returns_non_authoritative_neutral(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_SENTIMENT_FAIL_CLOSED", "1")
+    monkeypatch.setenv("AI_TRADING_SENTIMENT_ENABLED", "0")
+    monkeypatch.delenv("SENTIMENT_API_KEY", raising=False)
+
+    assert sentiment.fetch_sentiment(None, "AAPL") == 0.0
+    evidence = sentiment.get_sentiment_evidence("AAPL")
+    assert evidence is not None
+    assert evidence["source"] == "disabled"
+    assert evidence["authoritative"] is False
+
+
 def test_fetch_sentiment_fail_closed_runtime_error_is_not_retried(monkeypatch):
     calls = {"count": 0}
 
@@ -144,7 +173,7 @@ def test_fetch_sentiment_fail_closed_runtime_error_is_not_retried(monkeypatch):
     with pytest.raises(RuntimeError, match="missing_api_key"):
         sentiment.fetch_sentiment(None, "AAPL")
 
-    assert calls["count"] == 1
+    assert calls["count"] == 0
 
 
 def test_fetch_sentiment_resolves_fresh_key_over_import_constant(monkeypatch):

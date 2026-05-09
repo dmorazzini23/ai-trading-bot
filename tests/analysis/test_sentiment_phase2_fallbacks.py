@@ -102,6 +102,10 @@ def test_rate_limit_fallback_uses_similar_symbol_cache(monkeypatch: pytest.Monke
     score = sentiment._handle_rate_limit_with_enhanced_strategies("AAPL")
 
     assert score == pytest.approx(0.4)
+    evidence = sentiment.get_sentiment_evidence("AAPL")
+    assert evidence is not None
+    assert evidence["source"] == "similar_symbol_proxy"
+    assert evidence["authoritative"] is False
 
 
 def test_rate_limit_fallback_uses_sector_proxy_and_final_neutral(
@@ -112,6 +116,10 @@ def test_rate_limit_fallback_uses_sector_proxy_and_final_neutral(
     sentiment._sentiment_cache["XLK"] = (190.0, 0.6)
 
     assert sentiment._handle_rate_limit_with_enhanced_strategies("NVDA") == pytest.approx(0.36)
+    evidence = sentiment.get_sentiment_evidence("NVDA")
+    assert evidence is not None
+    assert evidence["source"] == "sector_proxy"
+    assert evidence["authoritative"] is False
 
     sentiment._sentiment_cache.clear()
     monkeypatch.setattr(sentiment, "_try_alternative_sentiment_sources", lambda _ticker: None)

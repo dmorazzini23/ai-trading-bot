@@ -230,7 +230,16 @@ class RegimeDetector:
     def _analyze_sentiment(self, supplementary_data: dict=None) -> dict[str, Any]:
         """Analyze market sentiment indicators."""
         try:
-            sentiment_analysis = {'fear_greed_index': 50, 'put_call_ratio': 1.0, 'sentiment_score': 'neutral'}
+            sentiment_analysis = {
+                'fear_greed_index': 50,
+                'put_call_ratio': 1.0,
+                'sentiment_score': 'neutral',
+                'authoritative': False,
+                'provenance': {
+                    'source': 'regime_supplementary_proxy',
+                    'non_authoritative': True,
+                },
+            }
             if not supplementary_data:
                 return sentiment_analysis
             vix_level = supplementary_data.get('vix', 20)

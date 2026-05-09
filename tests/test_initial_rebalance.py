@@ -57,7 +57,7 @@ def test_partial_initial_rebalance_fill(monkeypatch, api_cls):
         ctx_.api.positions[symbol] = ctx_.api.positions.get(symbol, 0) + qty // 2
         return object()
 
-    monkeypatch.setattr(bot_engine, "submit_order", fake_submit)
+    monkeypatch.setattr("ai_trading.services.execution.submit_order", fake_submit)
 
     bot_engine.initial_rebalance(ctx, ["AAPL"])
     assert ctx.api.positions["AAPL"] == 5

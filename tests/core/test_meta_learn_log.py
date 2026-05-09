@@ -52,7 +52,8 @@ def _make_engine(monkeypatch, history_symbols: list[str]) -> bot_engine.BotEngin
     monkeypatch.setenv("HEALTH_TICK_SECONDS", "30")
     monkeypatch.setenv("ALPACA_API_KEY", "test")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "test")
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.delenv("ALPACA_BASE_URL", raising=False)
     frame = pd.DataFrame({"symbol": history_symbols}) if history_symbols else pd.DataFrame(columns=["symbol"])
     monkeypatch.setattr(
         bot_engine,
@@ -111,6 +112,21 @@ def test_meta_learn_logs_once_when_history_missing(monkeypatch, caplog) -> None:
 
     fallback_logs = [rec for rec in caplog.records if "METALEARN_FALLBACK" in rec.message]
     assert len(fallback_logs) == 1
+
+
+def test_bot_engine_startup_does_not_auto_provision_models(monkeypatch) -> None:
+    calls: list[object] = []
+    monkeypatch.setitem(
+        sys.modules,
+        "ai_trading.ml_model",
+        SimpleNamespace(ensure_default_models=lambda *args, **kwargs: calls.append((args, kwargs))),
+    )
+    monkeypatch.setattr(bot_engine, "_load_required_model", lambda: None)
+    monkeypatch.setattr(bot_engine, "load_universe", lambda: ["AAPL"])
+
+    bot_engine.BotEngine()
+
+    assert calls == []
 
 
 def test_meta_learn_suppressed_when_history_present(monkeypatch, caplog) -> None:

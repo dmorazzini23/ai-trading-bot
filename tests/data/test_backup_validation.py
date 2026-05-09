@@ -40,6 +40,19 @@ def test_fallback_frame_is_usable_accepts_recent_datetime_index():
     assert fetch._fallback_frame_is_usable(frame, start, now) is True
 
 
+def test_fallback_frame_is_usable_rejects_sparse_intraday_backup():
+    now = datetime.now(UTC)
+    start = now - timedelta(minutes=60)
+    frame = pd.DataFrame(
+        {
+            "timestamp": [start + timedelta(minutes=59)],
+            "close": [102.0],
+        }
+    )
+
+    assert fetch._fallback_frame_is_usable(frame, start, now) is False
+
+
 def test_fallback_frame_is_usable_rejects_stale_datetime_index():
     now = datetime.now(UTC)
     start = now - timedelta(minutes=2)

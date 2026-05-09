@@ -1762,6 +1762,12 @@ def trigger_rebalance_on_regime(df: Any) -> None:
     settings = get_settings()
     if not bool(getattr(settings, "enable_reinforcement_learning", False)):
         return
+    if not bool(get_env("AI_TRADING_RL_RUNTIME_REBALANCE_ENABLED", False, cast=bool)):
+        logger.warning(
+            "RL_REBALANCE_SKIPPED_RESEARCH_ONLY",
+            extra={"reason": "runtime_rebalance_evidence_missing"},
+        )
+        return
     if PortfolioReinforcementLearner is None:
         raise RuntimeError('Reinforcement learning enabled but ai_trading.portfolio_rl module unavailable. Set ENABLE_REINFORCEMENT_LEARNING=False to disable')
     rl = PortfolioReinforcementLearner()

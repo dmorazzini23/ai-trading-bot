@@ -49,8 +49,7 @@ def test_twap_submit_places_slices_and_sleeps(monkeypatch):
     orders: list[tuple[str, int, str]] = []
     sleeps: list[float] = []
     monkeypatch.setattr(
-        bot_engine,
-        "submit_order",
+        "ai_trading.services.execution.submit_order",
         lambda _ctx, symbol, qty, side: orders.append((symbol, qty, side)),
     )
     monkeypatch.setattr(execution_flow.pytime, "sleep", lambda seconds: sleeps.append(seconds))
@@ -105,7 +104,7 @@ def test_pov_submit_records_partial_fill_summary(monkeypatch):
         submitted.append(qty)
         return SimpleNamespace(id="order-1", status="partially_filled", filled_qty="1")
 
-    monkeypatch.setattr(bot_engine, "submit_order", _submit_order)
+    monkeypatch.setattr("ai_trading.services.execution.submit_order", _submit_order)
     ctx = SimpleNamespace(
         data_client=SimpleNamespace(
             get_stock_latest_quote=lambda _request: SimpleNamespace(ask_price=100.01, bid_price=100.0)
@@ -268,9 +267,9 @@ def test_execute_entry_routes_large_order_to_pov(monkeypatch):
     monkeypatch.setattr(bot_engine, "POV_SLICE_PCT", 0.1)
     monkeypatch.setattr(bot_engine, "SLICE_THRESHOLD", 10)
     monkeypatch.setattr(
-        bot_engine,
+        execution_flow,
         "pov_submit",
-        lambda _ctx, symbol, qty, _side: calls.append((symbol, qty)),
+        lambda _ctx, symbol, qty, _side, *_args: calls.append((symbol, qty)),
     )
     monkeypatch.setattr(
         bot_engine,
@@ -289,7 +288,7 @@ def test_execute_entry_routes_large_order_to_vwap(monkeypatch):
     monkeypatch.setattr(bot_engine, "POV_SLICE_PCT", 0)
     monkeypatch.setattr(bot_engine, "SLICE_THRESHOLD", 10)
     monkeypatch.setattr(
-        bot_engine,
+        execution_flow,
         "vwap_pegged_submit",
         lambda _ctx, symbol, qty, _side: calls.append((symbol, qty)),
     )
@@ -309,7 +308,10 @@ def test_execute_entry_handles_indicator_preparation_failure(monkeypatch):
     monkeypatch.setattr(bot_engine, "get_trade_logger", lambda: SimpleNamespace())
     monkeypatch.setattr(bot_engine, "POV_SLICE_PCT", 0)
     monkeypatch.setattr(bot_engine, "SLICE_THRESHOLD", 10)
-    monkeypatch.setattr(bot_engine, "submit_order", lambda *_args, **_kwargs: orders.append("order"))
+    monkeypatch.setattr(
+        "ai_trading.services.execution.submit_order",
+        lambda *_args, **_kwargs: orders.append("order"),
+    )
     monkeypatch.setattr(
         bot_engine,
         "fetch_minute_df_safe",

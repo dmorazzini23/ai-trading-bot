@@ -357,6 +357,10 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     assert getattr(loaded, "edge_thresholds_by_regime_")
 
     persisted = cast(dict[str, Any], json.loads(report_path.read_text(encoding="utf-8")))
+    assert persisted["authority"]["timestamp_authoritative"] is True
+    assert persisted["authority"]["research_synthetic"] is False
+    assert persisted["authority"]["promotion_authority"] is False
+    assert persisted["dataset"]["load_reports"]["AAPL"]["timestamp_authoritative"] is True
     assert persisted["config"]["edge_global_threshold"] == 0.66
     assert persisted["config"]["label_objective"] == "mae_mfe"
     assert persisted["dataset"]["mean_label_score_bps"] != persisted["dataset"]["mean_round_trip_cost_bps"]
@@ -368,3 +372,21 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     assert persisted["validation"]["rows"] == persisted["dataset"]["validation_rows"]
     assert persisted["threshold_sweep"]
     assert persisted["recommendation"] == "evaluate_candidate_with_offline_replay_before_promotion"
+
+
+def test_build_training_dataset_rejects_non_timestamped_csv_by_default(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    pd.DataFrame(
+        {
+            "seq": list(range(8)),
+            "open": np.linspace(100.0, 107.0, 8),
+            "high": np.linspace(100.5, 107.5, 8),
+            "low": np.linspace(99.5, 106.5, 8),
+            "close": np.linspace(100.2, 107.2, 8),
+            "volume": [1000.0] * 8,
+        }
+    ).to_csv(data_dir / "AAPL.csv", index=False)
+
+    with pytest.raises(ValueError, match="requires timestamp-authoritative bars"):
+        build_training_dataset(data_dir=data_dir, symbols="AAPL")

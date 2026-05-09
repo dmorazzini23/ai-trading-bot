@@ -161,7 +161,8 @@ def twap_submit(
     n_slices: int = 10,
 ) -> None:
     """Submit TWAP slices over the specified window."""
-    from ai_trading.core.bot_engine import submit_order, APIError
+    from ai_trading.core.bot_engine import APIError
+    from ai_trading.services.execution import submit_order
 
     slice_qty = max(1, int(total_qty // max(1, n_slices)))
     wait_secs = float(window_secs) / max(1, n_slices)
@@ -192,15 +193,9 @@ def vwap_pegged_submit(
         _slippage_log,
         slippage_lock,
         SLIPPAGE_LOG_FILE,
-        safe_submit_order,
     )
     from ai_trading.core import bot_engine as _bot_engine
-
-    _bot_engine._ensure_alpaca_classes()
-    OrderSide = _bot_engine.OrderSide
-    TimeInForce = _bot_engine.TimeInForce
-    LimitOrderRequest = _bot_engine.LimitOrderRequest
-    MarketOrderRequest = _bot_engine.MarketOrderRequest
+    from ai_trading.services.execution import submit_order
 
     start_time = pytime.time()
     placed = 0
@@ -260,15 +255,14 @@ def vwap_pegged_submit(
                         "order_type": "limit",
                     },
                 )
-                order = safe_submit_order(
-                    ctx.api,
-                    LimitOrderRequest(
-                        symbol=symbol,
-                        qty=slice_qty,
-                        side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
-                        time_in_force=TimeInForce.IOC,
-                        limit_price=round(vwap_price, 2),
-                    ),
+                order = submit_order(
+                    ctx,
+                    symbol,
+                    slice_qty,
+                    side,
+                    price=round(float(vwap_price), 2),
+                    time_in_force="ioc",
+                    execution_algorithm="vwap",
                 )
                 logger.info(
                     "ORDER_ACK",
@@ -389,13 +383,7 @@ def send_exit_order(
     raw_positions: list | None = None,
 ) -> None:
     """Submit an exit order (market or limit) with simple validations."""
-    from ai_trading.core import bot_engine as _bot_engine
-
-    _bot_engine._ensure_alpaca_classes()
-    MarketOrderRequest = _bot_engine.MarketOrderRequest
-    LimitOrderRequest = _bot_engine.LimitOrderRequest
-    OrderSide = _bot_engine.OrderSide
-    TimeInForce = _bot_engine.TimeInForce
+    from ai_trading.services.execution import submit_order
 
     logger.info(
         f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price}"
@@ -426,26 +414,31 @@ def send_exit_order(
             f"No shares available to exit for {symbol} (requested {exit_qty}, have {held_qty})"
         )
         return
-    exit_side = OrderSide.BUY if held_qty_signed < 0 else OrderSide.SELL
+    exit_side = "buy_to_cover" if held_qty_signed < 0 else "sell"
+    exit_metadata = {"reason": reason, "closing_position": True, "reduce_only": True}
     if price <= 0.0:
-        req = MarketOrderRequest(
+        submit_order(
+            ctx,
             symbol=symbol,
             qty=exit_qty,
             side=exit_side,
-            time_in_force=TimeInForce.DAY,
+            metadata=exit_metadata,
+            closing_position=True,
+            reduce_only=True,
         )
-        _bot_engine.safe_submit_order(ctx.api, req)
         return
-    limit_order = _bot_engine.safe_submit_order(
-        ctx.api,
-        LimitOrderRequest(
-            symbol=symbol,
-            qty=exit_qty,
-            side=exit_side,
-            time_in_force=TimeInForce.DAY,
-            limit_price=price,
-        ),
+    limit_order = submit_order(
+        ctx,
+        symbol=symbol,
+        qty=exit_qty,
+        side=exit_side,
+        price=price,
+        metadata=exit_metadata,
+        closing_position=True,
+        reduce_only=True,
     )
+    if limit_order is None:
+        return
     pytime.sleep(5)
     try:
         o2 = ctx.api.get_order_by_id(limit_order.id)
@@ -462,14 +455,14 @@ def send_exit_order(
             remaining_qty = max(int(exit_qty) - _broker_filled_qty(refreshed), 0)
             if remaining_qty <= 0:
                 return
-            _bot_engine.safe_submit_order(
-                ctx.api,
-                MarketOrderRequest(
-                    symbol=symbol,
-                    qty=remaining_qty,
-                    side=exit_side,
-                    time_in_force=TimeInForce.DAY,
-                ),
+            submit_order(
+                ctx,
+                symbol=symbol,
+                qty=remaining_qty,
+                side=exit_side,
+                metadata=exit_metadata,
+                closing_position=True,
+                reduce_only=True,
             )
     except AI_TRADING_FALLBACK_EXCEPTIONS as e:
         logger.error(
@@ -499,9 +492,9 @@ def pov_submit(
         DataFetchError,
         Quote,
         APIError,
-        submit_order,
     )
     from ai_trading.core import bot_engine as _bot_engine
+    from ai_trading.services.execution import submit_order
     import random
 
     import sys as _sys
@@ -529,6 +522,7 @@ def pov_submit(
     retries = 0
     interval = cfg.sleep_interval
     terminated_on_gap = False
+    none_submission_retries = 0
     while placed < total_qty:
         try:
             df = fetch_minute_df_safe(symbol)
@@ -602,11 +596,24 @@ def pov_submit(
         try:
             order = submit_order(ctx, symbol, slice_qty, side)
             if order is None:
+                none_submission_retries += 1
                 logger.warning(
                     "[pov_submit] submit_order returned None for slice, skipping",
-                    extra={"symbol": symbol, "slice_qty": slice_qty},
+                    extra={
+                        "symbol": symbol,
+                        "slice_qty": slice_qty,
+                        "retry": none_submission_retries,
+                    },
                 )
+                if none_submission_retries > max(1, int(getattr(cfg, "max_retries", 0) or 0)):
+                    logger.warning(
+                        "[pov_submit] submit_order returned None repeatedly, aborting",
+                        extra={"symbol": symbol, "slice_qty": slice_qty},
+                    )
+                    return False
+                _sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
                 continue
+            none_submission_retries = 0
             intended_total += slice_qty
             actual_filled = int(getattr(order, "filled_qty", "0") or "0")
             new_total_filled = placed + actual_filled
@@ -686,11 +693,9 @@ __all__.append("pov_submit")
 def execute_entry(ctx: Any, symbol: str, qty: int, side: str) -> None:
     """Execute entry order with slicing policies and target initialization."""
     from ai_trading.core.bot_engine import (
-        submit_order,
-        vwap_pegged_submit,
-        pov_submit,
         SLICE_THRESHOLD,
         POV_SLICE_PCT,
+        SliceConfig,
         fetch_minute_df_safe,
         DataFetchError,
         prepare_indicators,
@@ -702,6 +707,7 @@ def execute_entry(ctx: Any, symbol: str, qty: int, side: str) -> None:
         BotState,
         get_trade_logger,  # AI-AGENT-REF: ensure trade log initialization
     )
+    from ai_trading.services.execution import submit_order
     import numpy as np  # local import to avoid global cost
     from datetime import UTC, datetime
     from zoneinfo import ZoneInfo
@@ -729,7 +735,7 @@ def execute_entry(ctx: Any, symbol: str, qty: int, side: str) -> None:
         return
     if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
         logger.info("POV_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
-        pov_submit(ctx, symbol, qty, side)
+        pov_submit(ctx, symbol, qty, side, SliceConfig(pct=POV_SLICE_PCT))
     elif qty > SLICE_THRESHOLD:
         logger.info("VWAP_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
         vwap_pegged_submit(ctx, symbol, qty, side)

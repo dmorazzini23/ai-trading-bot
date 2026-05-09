@@ -8,6 +8,7 @@ from typing import Any, cast
 import pytest
 
 from ai_trading.core.enums import OrderSide, OrderType, RiskLevel
+from ai_trading.core.runtime_contract import UnknownExecutionModeError
 from ai_trading.execution.classes import ExecutionResult, OrderRequest
 from ai_trading.execution.engine import ExecutionAlgorithm, Order, OrderStatus
 from ai_trading.execution import production_engine as pe
@@ -54,6 +55,13 @@ def test_run_helper_returns_coordinator() -> None:
     assert isinstance(coordinator, pe.ProductionExecutionCoordinator)
     assert coordinator.account_equity == 12_345.0
     assert coordinator.risk_level is RiskLevel.CONSERVATIVE
+
+
+def test_unknown_execution_mode_fails_fast_outside_tests(monkeypatch) -> None:
+    monkeypatch.setattr("ai_trading.core.runtime_contract.is_testing_mode", lambda: False)
+
+    with pytest.raises(UnknownExecutionModeError, match="EXECUTION_MODE must be one of"):
+        pe.ProductionExecutionCoordinator(account_equity=100_000.0, execution_mode="mystery")
 
 
 def test_submit_order_request_rejects_invalid_request(monkeypatch) -> None:
@@ -315,7 +323,7 @@ def test_market_impact_and_execution_monitoring(monkeypatch) -> None:
     assert result.actual_slippage_bps == pytest.approx(5.0)
 
 
-def test_live_execution_requires_broker_adapter(monkeypatch) -> None:
+def test_live_execution_requires_canonical_oms_pretrade(monkeypatch) -> None:
     coordinator = _coordinator(monkeypatch)
     coordinator.execution_mode = "live"
     order = _order(quantity=10, price=100.0)
@@ -323,11 +331,11 @@ def test_live_execution_requires_broker_adapter(monkeypatch) -> None:
     result = _run(coordinator._execute_order_with_monitoring(order, {"estimated_slippage_bps": 5}))
 
     assert result.status == "failed"
-    assert result.error_code == "live_broker_adapter_required"
+    assert result.error_code == "canonical_oms_pretrade_required"
     assert order.status is OrderStatus.REJECTED
 
 
-def test_live_execution_uses_broker_adapter(monkeypatch) -> None:
+def test_live_execution_does_not_use_broker_adapter(monkeypatch) -> None:
     class Adapter:
         provider = "alpaca"
 
@@ -346,15 +354,13 @@ def test_live_execution_uses_broker_adapter(monkeypatch) -> None:
 
     result = _run(coordinator._execute_order_with_monitoring(order, {"estimated_slippage_bps": 5}))
 
-    assert result.status == "accepted"
-    assert result.order_id == "broker-1"
-    assert result.venue == "alpaca"
-    assert adapter.payload is not None
-    assert adapter.payload["symbol"] == "AAPL"
-    assert order.status is OrderStatus.PENDING
+    assert result.status == "failed"
+    assert result.error_code == "canonical_oms_pretrade_required"
+    assert adapter.payload is None
+    assert order.status is OrderStatus.REJECTED
 
 
-def test_live_execution_preserves_partial_fill_quantity(monkeypatch) -> None:
+def test_live_execution_suppresses_adapter_partial_fill_simulation(monkeypatch) -> None:
     class Adapter:
         provider = "alpaca"
 
@@ -374,12 +380,10 @@ def test_live_execution_preserves_partial_fill_quantity(monkeypatch) -> None:
 
     result = _run(coordinator._execute_order_with_monitoring(order, {"estimated_slippage_bps": 5}))
 
-    assert result.status == "partially_filled"
-    assert result.quantity == 10
-    assert result.filled_qty == pytest.approx(2.5)
-    assert result.to_dict()["filled_qty"] == pytest.approx(2.5)
-    assert order.filled_quantity == pytest.approx(2.5)
-    assert coordinator.pending_orders["broker-partial-1"].filled_quantity == pytest.approx(2.5)
+    assert result.status == "failed"
+    assert result.error_code == "canonical_oms_pretrade_required"
+    assert order.status is OrderStatus.REJECTED
+    assert "broker-partial-1" not in coordinator.pending_orders
 
 
 def test_post_execution_processing_alert_paths(monkeypatch) -> None:

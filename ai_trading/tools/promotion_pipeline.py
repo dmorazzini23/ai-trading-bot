@@ -136,6 +136,45 @@ def _replay_gate(payload: Mapping[str, Any], *, label: str) -> dict[str, Any]:
     }
 
 
+def _evidence_authority_gate(payload: Mapping[str, Any], *, label: str) -> dict[str, Any]:
+    authority_raw = payload.get("authority")
+    authority = authority_raw if isinstance(authority_raw, Mapping) else {}
+    if not authority:
+        return {"ok": True, "label": label, "reason": "legacy_authority_missing"}
+    source_providers_raw = authority.get("source_providers", ())
+    if isinstance(source_providers_raw, str):
+        source_providers = {source_providers_raw.strip().lower()} if source_providers_raw.strip() else set()
+    else:
+        try:
+            source_providers = {
+                str(provider).strip().lower()
+                for provider in source_providers_raw
+                if str(provider).strip()
+            }
+        except TypeError:
+            source_providers = {str(source_providers_raw).strip().lower()}
+    source_providers.discard("")
+    timestamp_authoritative = bool(authority.get("timestamp_authoritative", True))
+    research_synthetic = bool(authority.get("research_synthetic", False))
+    yahoo_sourced = bool(source_providers.intersection({"yahoo", "yfinance", "yf"}))
+    ok = bool(timestamp_authoritative and not research_synthetic and not yahoo_sourced)
+    reasons: list[str] = []
+    if not timestamp_authoritative:
+        reasons.append("timestamp_authority_missing")
+    if research_synthetic:
+        reasons.append("research_synthetic_data")
+    if yahoo_sourced:
+        reasons.append("yahoo_research_boundary")
+    return {
+        "ok": ok,
+        "label": label,
+        "reason": "ok" if ok else ";".join(reasons),
+        "timestamp_authoritative": timestamp_authoritative,
+        "research_synthetic": research_synthetic,
+        "source_providers": sorted(source_providers),
+    }
+
+
 def _shadow_gate(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not payload:
         return {"ok": False, "reason": "shadow_report_missing"}
@@ -264,6 +303,17 @@ def build_promotion_report(
         "tail": _replay_gate(tail_replay or full_replay or {}, label="tail"),
         "recent": _replay_gate(recent_replay or tail_replay or full_replay or {}, label="recent"),
     }
+    authority_gates = {
+        "full_replay": _evidence_authority_gate(full_replay or {}, label="full_replay"),
+        "tail_replay": _evidence_authority_gate(
+            tail_replay or full_replay or {},
+            label="tail_replay",
+        ),
+        "recent_replay": _evidence_authority_gate(
+            recent_replay or tail_replay or full_replay or {},
+            label="recent_replay",
+        ),
+    }
     freshness_gates = {
         "full_replay": _freshness_gate(
             full_replay or {},
@@ -314,6 +364,9 @@ def build_promotion_report(
         "live_cost_model_acceptable": bool(live_cost_gate.get("ok")),
         "runtime_decay_controls_acceptable": bool(decay_gate.get("ok")),
         "evidence_fresh": all(bool(gate.get("ok")) for gate in freshness_gates.values()),
+        "evidence_authority_acceptable": all(
+            bool(gate.get("ok")) for gate in authority_gates.values()
+        ),
     }
     promotion_ready = all(gates.values())
     rollback = rollback_command or (
@@ -325,6 +378,12 @@ def build_promotion_report(
         "schema_version": "1.0.0",
         "artifact_type": "model_promotion_report",
         "generated_at": generated.isoformat().replace("+00:00", "Z"),
+        "authority": {
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+            "manual_approval_required": True,
+        },
         "strategy": str(strategy or "replay_aligned"),
         "model": {
             "path": str(model_path),
@@ -333,6 +392,7 @@ def build_promotion_report(
         },
         "manifest": manifest_gate,
         "replay": replay_gates,
+        "evidence_authority": authority_gates,
         "evidence_freshness": freshness_gates,
         "shadow": shadow_gate,
         "live_cost_model": live_cost_gate,
@@ -372,6 +432,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rollback-command", type=str, default="")
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args(argv)
+    output_json = (
+        args.output_json
+        if args.output_json.is_absolute()
+        else resolve_runtime_artifact_path(
+            args.output_json,
+            default_relative=str(args.output_json),
+            for_write=True,
+        )
+    )
 
     report = build_promotion_report(
         model_path=args.model_path,
@@ -395,12 +464,12 @@ def main(argv: list[str] | None = None) -> int:
         current_champion_path=str(args.current_champion_path or "").strip() or None,
         rollback_command=str(args.rollback_command or "").strip() or None,
     )
-    args.output_json.parent.mkdir(parents=True, exist_ok=True)
-    args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     sys.stdout.write(
         json.dumps(
             {
-                "path": str(args.output_json),
+                "path": str(output_json),
                 "promotion_ready": report["promotion_ready"],
                 "status": report["status"],
             },

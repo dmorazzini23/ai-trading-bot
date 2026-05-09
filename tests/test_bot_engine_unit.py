@@ -75,6 +75,10 @@ def test_execute_trades_sends_orders(monkeypatch):
     api = DummyAPI()
     ctx = types.SimpleNamespace(api=api)
     sig = pd.Series([1, 0, -1], index=["A", "B", "C"])
+    monkeypatch.setattr(
+        "ai_trading.services.execution.ExecutionService.submit_order",
+        lambda _self, ctx_, symbol, qty, side, **_kwargs: ctx_.api.submit_order(symbol, qty, side),
+    )
     orders = execute_trades(ctx, sig)
     assert orders == [("A", "buy"), ("C", "sell")]
     assert api.calls == [("A", 1.0, "buy"), ("C", 1.0, "sell")]
@@ -86,6 +90,10 @@ def test_run_trading_cycle_integration(monkeypatch):
     api = DummyAPI()
     ctx = types.SimpleNamespace(api=api)
     df = pd.DataFrame({"price": [1, 3, 2]}, index=["A", "B", "C"])
+    monkeypatch.setattr(
+        "ai_trading.services.execution.ExecutionService.submit_order",
+        lambda _self, ctx_, symbol, qty, side, **_kwargs: ctx_.api.submit_order(symbol, qty, side),
+    )
     orders = run_trading_cycle(ctx, df)
     assert orders == [("B", "buy"), ("C", "sell")]
 

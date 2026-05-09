@@ -102,8 +102,21 @@ def test_rebalance_portfolio_normalizes_weights(monkeypatch):
     state = np.random.rand(learner.state_dim)
     weights = learner.rebalance_portfolio(state)
     assert weights.shape[0] == learner.action_dim
+    assert learner.research_only is True
     assert isinstance(learner.actor.net[0], fake_torch.nn.Linear)
     assert np.isclose(weights.sum(), 1.0, atol=1e-6)
+
+
+def test_rebalance_portfolio_invalid_state_returns_zero_weights(monkeypatch):
+    from ai_trading.portfolio_rl import PortfolioReinforcementLearner
+
+    _stub_portfolio_rl_torch(monkeypatch)
+    learner = PortfolioReinforcementLearner()
+
+    weights = learner.rebalance_portfolio([np.nan])
+
+    assert weights.shape[0] == learner.action_dim
+    assert np.all(weights == 0.0)
 
 
 def test_import_error_when_torch_missing(monkeypatch):

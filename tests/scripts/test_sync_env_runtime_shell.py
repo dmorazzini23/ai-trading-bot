@@ -58,3 +58,32 @@ def test_sync_env_runtime_resolves_repo_relative_paths_from_other_cwd(tmp_path: 
 
     assert proc.returncode == 0, proc.stderr
     assert runtime_dst.exists()
+
+
+def test_sync_env_runtime_fails_when_packaged_runtime_dir_missing(tmp_path: Path) -> None:
+    env_src = tmp_path / "source.env"
+    packaged_dir = tmp_path / "run" / "ai-trading-bot"
+    runtime_dst = packaged_dir / "ai-trading-runtime.env"
+    env_src.write_text("ALPACA_API_KEY=key\nALPACA_SECRET_KEY=secret\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHON_BIN": sys.executable,
+            "AI_TRADING_ENV_SRC": str(env_src),
+            "AI_TRADING_PACKAGED_RUNTIME_DIR": str(packaged_dir),
+            "AI_TRADING_RUNTIME_ENV_DST": str(runtime_dst),
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", "scripts/sync_env_runtime.sh"],
+        cwd=_repo_root(),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 1
+    assert "packaged runtime env directory is missing" in proc.stderr
+    assert not runtime_dst.exists()

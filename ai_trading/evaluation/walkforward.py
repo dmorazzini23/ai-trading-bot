@@ -235,13 +235,13 @@ class WalkForwardEvaluator:
     def _calculate_fold_metrics(self, y_true: 'pd.Series', y_pred: np.ndarray, test_start: datetime, test_end: datetime) -> dict[str, float]:
         """Calculate performance metrics for a single fold."""
         try:
-            mse = np.mean((y_true - y_pred) ** 2)
-            mae = np.mean(np.abs(y_true - y_pred))
+            mse = float(np.mean((y_true - y_pred) ** 2))
+            mae = float(np.mean(np.abs(y_true - y_pred)))
             if len(y_pred) > 1 and np.std(y_true) > 0 and np.std(y_pred) > 0:
-                correlation = np.corrcoef(y_true, y_pred)[0, 1]
+                correlation = float(np.corrcoef(y_true, y_pred)[0, 1])
             else:
                 correlation = 0.0
-            directional_accuracy = np.mean(np.sign(y_pred) == np.sign(y_true))
+            directional_accuracy = float(np.mean(np.sign(y_pred) == np.sign(y_true)))
             information_ratio: float
             if np.std(y_pred) > 0:
                 information_ratio = float(np.mean(y_pred) / np.std(y_pred))
@@ -249,8 +249,8 @@ class WalkForwardEvaluator:
                 information_ratio = 0.0
             long_signals = y_pred > 0
             short_signals = y_pred < 0
-            hit_rate_long = np.mean(y_true[long_signals] > 0) if np.any(long_signals) else 0.0
-            hit_rate_short = np.mean(y_true[short_signals] < 0) if np.any(short_signals) else 0.0
+            hit_rate_long = float(np.mean(y_true[long_signals] > 0)) if np.any(long_signals) else 0.0
+            hit_rate_short = float(np.mean(y_true[short_signals] < 0)) if np.any(short_signals) else 0.0
             return {'mse': float(mse), 'mae': float(mae), 'correlation': float(correlation) if not np.isnan(correlation) else 0.0, 'directional_accuracy': float(directional_accuracy), 'information_ratio': float(information_ratio), 'hit_rate_long': float(hit_rate_long), 'hit_rate_short': float(hit_rate_short), 'n_long_signals': int(np.sum(long_signals)), 'n_short_signals': int(np.sum(short_signals)), 'period_days': (test_end - test_start).days}
         except (ValueError, TypeError) as e:
             logger.error(f'Error calculating fold metrics: {e}')
@@ -352,7 +352,29 @@ class WalkForwardEvaluator:
             )
             turnover = executed_turnover_units / max(1, total_days) * 252
             trades_annual = executed_trade_count / max(1, total_days) * 252
-            aggregate_metrics = {'net_sharpe': float(executed_sharpe), 'sortino_ratio': float(executed_sortino), 'calmar_ratio': float(calmar_ratio), 'max_drawdown': float(max_drawdown), 'turnover_annual': float(turnover), 'executed_trades_annual': float(trades_annual), 'correlation': float(correlation) if not np.isnan(correlation) else 0.0, 'directional_accuracy': float(directional_accuracy), 'mse': float(mse), 'mae': float(mae), 'total_predictions': int(n_predictions), 'evaluation_period_days': int(total_days), 'executed_total_return': float(executed_total_return), 'prediction_sharpe': float(prediction_sharpe), 'prediction_sortino': float(prediction_sortino), 'executed_trade_count': int(executed_trade_count), 'executed_turnover_units': float(executed_turnover_units), 'executed_cost_return': float(executed_cost_return)}
+            raw_prediction_diagnostics = {
+                "correlation": float(correlation) if not np.isnan(correlation) else 0.0,
+                "directional_accuracy": float(directional_accuracy),
+                "mse": float(mse),
+                "mae": float(mae),
+                "prediction_sharpe": float(prediction_sharpe),
+                "prediction_sortino": float(prediction_sortino),
+            }
+            aggregate_metrics = {
+                'net_sharpe': float(executed_sharpe),
+                'sortino_ratio': float(executed_sortino),
+                'calmar_ratio': float(calmar_ratio),
+                'max_drawdown': float(max_drawdown),
+                'turnover_annual': float(turnover),
+                'executed_trades_annual': float(trades_annual),
+                'total_predictions': int(n_predictions),
+                'evaluation_period_days': int(total_days),
+                'executed_total_return': float(executed_total_return),
+                'executed_trade_count': int(executed_trade_count),
+                'executed_turnover_units': float(executed_turnover_units),
+                'executed_cost_return': float(executed_cost_return),
+                'raw_prediction_diagnostics': raw_prediction_diagnostics,
+            }
             return aggregate_metrics
         except (ValueError, TypeError) as e:
             logger.error(f'Error calculating aggregate metrics: {e}')

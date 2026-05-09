@@ -225,16 +225,16 @@ def test_send_exit_order_uses_cancel_order_shim(monkeypatch):
 
     api.submit_order = submit_order  # type: ignore[attr-defined]
 
-    def fake_safe_submit_order(_api, _req):
+    def fake_submit_order(_ctx, *, symbol, qty, side, price=None, **_kwargs):
         if not limit_order_ids:
             order = SimpleNamespace(id="limit-001")
             api.orders[order.id] = SimpleNamespace(id=order.id, status="new")
             limit_order_ids.append(order.id)
             return order
-        market_calls.append(getattr(_req, "symbol", None))
+        market_calls.append(symbol)
         return SimpleNamespace(id="market-001")
 
-    monkeypatch.setattr(bot_engine, "safe_submit_order", fake_safe_submit_order)
+    monkeypatch.setattr("ai_trading.services.execution.submit_order", fake_submit_order)
     monkeypatch.setattr(execution_flow.pytime, "sleep", lambda _secs: None)
 
     execution_flow.send_exit_order(runtime, "AAPL", 5, 150.0, "manual_exit")
@@ -267,13 +267,13 @@ def test_send_exit_order_replaces_only_unfilled_qty_after_partial_fill(monkeypat
 
     submissions: list[dict[str, Any]] = []
 
-    def fake_safe_submit_order(_api, req):
+    def fake_submit_order(_ctx, *, symbol, qty, side, price=None, **_kwargs):
         submissions.append(
             {
-                "symbol": getattr(req, "symbol", None),
-                "qty": getattr(req, "qty", None),
-                "side": getattr(req, "side", None),
-                "limit_price": getattr(req, "limit_price", None),
+                "symbol": symbol,
+                "qty": qty,
+                "side": side,
+                "limit_price": price,
             }
         )
         order = SimpleNamespace(id=f"order-{len(submissions)}")
@@ -285,7 +285,7 @@ def test_send_exit_order_replaces_only_unfilled_qty_after_partial_fill(monkeypat
             )
         return order
 
-    monkeypatch.setattr(bot_engine, "safe_submit_order", fake_safe_submit_order)
+    monkeypatch.setattr("ai_trading.services.execution.submit_order", fake_submit_order)
     monkeypatch.setattr(execution_flow.pytime, "sleep", lambda _secs: None)
 
     execution_flow.send_exit_order(runtime, "AAPL", 5, 150.0, "manual_exit")
@@ -320,18 +320,18 @@ def test_send_exit_order_uses_raw_positions_snapshot_when_get_position_fails(mon
 
     submissions = []
 
-    def fake_safe_submit_order(_api, req):
+    def fake_submit_order(_ctx, *, symbol, qty, side, price=None, **_kwargs):
         submissions.append(
             {
-                "symbol": getattr(req, "symbol", None),
-                "qty": getattr(req, "qty", None),
-                "side": getattr(req, "side", None),
-                "limit_price": getattr(req, "limit_price", None),
+                "symbol": symbol,
+                "qty": qty,
+                "side": side,
+                "limit_price": price,
             }
         )
         return SimpleNamespace(id=f"order-{len(submissions)}")
 
-    monkeypatch.setattr(bot_engine, "safe_submit_order", fake_safe_submit_order)
+    monkeypatch.setattr("ai_trading.services.execution.submit_order", fake_submit_order)
     monkeypatch.setattr(execution_flow.pytime, "sleep", lambda _secs: None)
 
     raw_positions = [SimpleNamespace(symbol="AAPL", qty="7")]
