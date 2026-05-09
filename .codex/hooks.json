@@ -39,6 +39,33 @@
             "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--development-tools--command-logger\" && ./.codex/hooks/development-tools-command-logger-pretooluse-pretooluse-1-1.sh"
           }
         ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--quality-gates--plan-gate\" && ./.codex/hooks/quality-gates-plan-gate-pretooluse-posttooluse-1-1.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--quality-gates--plan-gate\" && ./.codex/hooks/quality-gates-plan-gate-pretooluse-posttooluse-2-1.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--quality-gates--plan-gate\" && ./.codex/hooks/quality-gates-plan-gate-pretooluse-posttooluse-3-1.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -75,6 +102,17 @@
           {
             "type": "command",
             "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--automation--change-logger\" && ./.codex/hooks/automation-change-logger-posttooluse-posttooluse-4-1.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"/home/aiuser/ai-trading-bot/.codex/hooks/aitmpl-codex--quality-gates--scope-guard\" && ./.codex/hooks/quality-gates-scope-guard-stop-stop-1-1.sh"
           }
         ]
       }
