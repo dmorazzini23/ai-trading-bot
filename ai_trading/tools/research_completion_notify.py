@@ -142,6 +142,16 @@ def build_research_completion_payload(
         if cadence == "daily" and not suppress_stale
         else {}
     )
+    hf_discovery = (
+        _read_json(_latest_path(report_root, cadence, "hf_discovery_latest.json"))
+        if not suppress_stale
+        else {}
+    )
+    hf_intake = (
+        _read_json(_latest_path(report_root, cadence, "hf_candidate_intake_latest.json"))
+        if not suppress_stale
+        else {}
+    )
     report_status = str(report.get("status") or summary.get("status") or "unknown")
     status = run_status or report_status
     if exit_code != 0 and report_status not in {"blocked", "failed"}:
@@ -177,6 +187,14 @@ def build_research_completion_payload(
         f"{evidence_starvation.get('status', 'n/a')} / "
         f"{evidence_starvation.get('recommendation', 'n/a')}"
     )
+    hf_summary = hf_discovery.get("summary") if isinstance(hf_discovery.get("summary"), Mapping) else {}
+    hf_intake_summary = hf_intake.get("summary") if isinstance(hf_intake.get("summary"), Mapping) else {}
+    hf_text = (
+        f"{hf_discovery.get('status', 'n/a')} / "
+        f"scanned={hf_summary.get('candidate_count', 'n/a')}, "
+        f"accepted={hf_intake_summary.get('accepted_for_offline_experiment', hf_summary.get('accepted_for_offline_experiment', 'n/a'))}, "
+        "runtime_authority=false"
+    )
     title = f"ai-trading research {cadence} finished: {status}"
     text = (
         f"{title}\n"
@@ -203,6 +221,7 @@ def build_research_completion_payload(
         _field("Symbol promotion", symbol_promotion_text),
         _field("Expected edge", edge_text),
         _field("Evidence starvation", starvation_text),
+        _field("Hugging Face research", hf_text),
         _field("Health/report summary", json.dumps(health_summary, sort_keys=True) if health_summary else "n/a"),
         _field("OpenClaw summary", openclaw_summary.get("summary") if openclaw_summary else "n/a"),
         _field("Run report", report.get("paths", {}).get("report") if isinstance(report.get("paths"), Mapping) else None),

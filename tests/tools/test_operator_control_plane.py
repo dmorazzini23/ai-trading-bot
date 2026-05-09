@@ -45,6 +45,7 @@ def test_operator_control_plane_aggregates_read_only_sections(monkeypatch) -> No
         risk_verifier={"status": "pass"},
         paper_sampling={"date": "2026-05-05", "count": 1},
         operator_actions={"actions": [{"id": "review-canary"}]},
+        huggingface_research={"status": "discovered", "summary": {"candidate_count": 2}},
     )
 
     assert report["status"] == "complete"
@@ -59,6 +60,8 @@ def test_operator_control_plane_aggregates_read_only_sections(monkeypatch) -> No
     assert report["orders_positions_oms"]["positions"]["reconciliation_consistent"] is True
     assert report["model_registry"]["artifact_status"] == "present"
     assert report["operator_actions"]["pending_actions"] == [{"id": "review-canary"}]
+    assert report["huggingface_research"]["artifact_status"] == "discovered"
+    assert report["huggingface_research"]["runtime_authority"] is False
 
 
 def test_operator_control_plane_cli_writes_partial_artifact(monkeypatch, tmp_path: Path) -> None:
@@ -95,6 +98,8 @@ def test_operator_control_plane_cli_writes_partial_artifact(monkeypatch, tmp_pat
             str(tmp_path / "missing_sampling.json"),
             "--operator-actions-json",
             str(tmp_path / "missing_actions.json"),
+            "--huggingface-research-json",
+            str(tmp_path / "missing_hf.json"),
             "--output-json",
             str(output),
         ]
@@ -105,4 +110,5 @@ def test_operator_control_plane_cli_writes_partial_artifact(monkeypatch, tmp_pat
     assert artifact["artifact_type"] == "operator_control_plane"
     assert artifact["status"] == "partial"
     assert "runtime_gonogo" in artifact["missing_sections"]
+    assert "huggingface_research" in artifact["missing_sections"]
     assert artifact["safety_contract"]["writes"] == ["output_artifact_only"]

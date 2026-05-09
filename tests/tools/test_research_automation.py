@@ -56,6 +56,9 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "symbol_promotion_comparison" in step_names
     assert "daily_research_pipeline" in step_names
     assert "live_capital_readiness" in step_names
+    assert "huggingface_research_discovery" in step_names
+    assert "huggingface_candidate_intake" in step_names
+    assert "huggingface_cache_materialization_plan" in step_names
     assert "evidence_manifest" in payload
     summary = _read(summary_path)
     assert summary["health_report_summary"]["daily_research"]["status"] == "missing"
@@ -79,6 +82,13 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "--expected-edge-calibration-json" in daily_research["command"]
     assert "--evidence-starvation-json" in daily_research["command"]
     assert "--paper-sampling-state-json" in daily_research["command"]
+    assert "--huggingface-discovery-json" in daily_research["command"]
+    hf_step = next(step for step in payload["steps"] if step["name"] == "huggingface_research_discovery")  # type: ignore[index]
+    assert hf_step["metadata"]["runtime_authority"] is False
+    assert hf_step["metadata"]["promotion_authority"] is False
+    assert hf_step["metadata"]["live_money_authority"] is False
+    hf_cache = next(step for step in payload["steps"] if step["name"] == "huggingface_cache_materialization_plan")  # type: ignore[index]
+    assert "--dry-run" in hf_cache["command"]
 
 
 def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(
@@ -120,6 +130,8 @@ def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(
     assert "multi_horizon_objective_search" in step_names
     assert "training_accelerator_weekly" in step_names
     assert "microstructure_replay_bridge" in step_names
+    assert "huggingface_research_discovery" in step_names
+    assert "huggingface_candidate_intake" in step_names
     bridge = next(step for step in payload["steps"] if step["name"] == "microstructure_replay_bridge")  # type: ignore[index]
     assert bridge["metadata"]["enforcement_authority"] is False
 

@@ -43,6 +43,12 @@ Use these latest pointers for current operational decisions:
   Completion notifications must use the automation latest pointer for run
   status and must not substitute stale daily readiness aliases after failed or
   locked launches.
+- Hugging Face research:
+  `/var/lib/ai-trading-bot/runtime/research_reports/latest/hf_discovery_latest.json`,
+  `hf_candidate_intake_latest.json`, and `hf_cache_materialization_latest.json`
+  are research-only idea-discovery artifacts. They may inform offline
+  experiments and model-registry provenance, but they never grant runtime,
+  promotion, provider, canary, or live-capital authority.
 
 ## Research Artifacts
 
@@ -72,3 +78,6 @@ documents as archival unless they are explicitly refreshed in the current task.
   execution authority.
 - RL and advanced models remain research/shadow unless a promotion report and
   live-readiness gate explicitly allow them.
+- Hugging Face models, datasets, cards, downloads, likes, tags, and cached files
+  are external research context only. Local replay, shadow, live-cost,
+  calibration, promotion, and live-capital readiness gates remain the authority.

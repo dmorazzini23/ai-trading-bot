@@ -78,6 +78,52 @@ def _summary_status(payload: Mapping[str, Any], default: str = "missing") -> str
     return str(status or default)
 
 
+def _hf_summary(
+    discovery: Mapping[str, Any],
+    intake: Mapping[str, Any],
+    cache: Mapping[str, Any],
+) -> dict[str, Any]:
+    discovery_summary = _nested(discovery, "summary")
+    intake_summary = _nested(intake, "summary")
+    cache_summary = _nested(cache, "summary")
+    blocker_reasons: list[str] = []
+    for payload in (discovery, intake, cache):
+        raw = payload.get("blocked_reasons") if isinstance(payload, Mapping) else []
+        if isinstance(raw, list):
+            blocker_reasons.extend(str(item) for item in raw if item not in (None, ""))
+    return {
+        "available": bool(discovery or intake or cache),
+        "status": {
+            "discovery": _summary_status(discovery),
+            "intake": _summary_status(intake),
+            "cache": _summary_status(cache),
+        },
+        "research_only": True,
+        "runtime_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+        "provider_authority": False,
+        "manual_approval_required": True,
+        "summary": {
+            "candidates_scanned": discovery_summary.get("candidate_count", 0),
+            "accepted_for_offline_experiment": (
+                intake_summary.get("accepted_for_offline_experiment")
+                or discovery_summary.get("accepted_for_offline_experiment")
+                or 0
+            ),
+            "blocked_candidates": intake_summary.get("blocked", 0),
+            "downloaded_to_cache": cache_summary.get("materialized", 0),
+            "top_blocker_reasons": sorted(set(blocker_reasons))[:10],
+        },
+        "operator_action": (
+            intake.get("operator_action")
+            or discovery.get("operator_action")
+            or cache.get("operator_action")
+            or "no_hf_action_required"
+        ),
+    }
+
+
 def _replay_status(payload: Mapping[str, Any]) -> dict[str, Any]:
     gate_raw = payload.get("replay_live_parity_gate")
     gate = dict(gate_raw) if isinstance(gate_raw, Mapping) else {}
@@ -212,6 +258,9 @@ def build_daily_research_report(
     adversarial_failure: Mapping[str, Any] | None = None,
     drift_monitor: Mapping[str, Any] | None = None,
     operator_control_plane: Mapping[str, Any] | None = None,
+    huggingface_discovery: Mapping[str, Any] | None = None,
+    huggingface_candidate_intake: Mapping[str, Any] | None = None,
+    huggingface_cache_materialization: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     health = health or {}
     live_cost_model = live_cost_model or {}
@@ -245,6 +294,14 @@ def build_daily_research_report(
     adversarial_failure = adversarial_failure or {}
     drift_monitor = drift_monitor or {}
     operator_control_plane = operator_control_plane or {}
+    huggingface_discovery = huggingface_discovery or {}
+    huggingface_candidate_intake = huggingface_candidate_intake or {}
+    huggingface_cache_materialization = huggingface_cache_materialization or {}
+    huggingface_research = _hf_summary(
+        huggingface_discovery,
+        huggingface_candidate_intake,
+        huggingface_cache_materialization,
+    )
     report: dict[str, Any] = {
         "schema_version": "1.0.0",
         "artifact_type": "daily_research_report",
@@ -503,6 +560,7 @@ def build_daily_research_report(
             "summary": _nested(operator_control_plane, "summary"),
             "read_only": bool(operator_control_plane.get("read_only", True)),
         },
+        "huggingface_research": huggingface_research,
     }
     allowed, reasons = _trade_allowed(report)
     profile_name = str(_nested(report, "launch_profile").get("name") or "paper_observe")
@@ -614,6 +672,13 @@ def build_daily_research_report(
             "status": _summary_status(_nested(report, "operator_control_plane")),
             "read_only": bool(_nested(report, "operator_control_plane").get("read_only", True)),
         },
+        "huggingface_research": {
+            "status": _nested(report, "huggingface_research").get("status"),
+            "summary": _nested(report, "huggingface_research").get("summary"),
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        },
     }
     report["openclaw_summary"] = {
         "service": "ai-trading-research",
@@ -687,6 +752,9 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Adversarial simulation: `{_nested(report, 'adversarial_failure_simulation').get('status', 'missing')}`",
             f"- Drift monitor: `{_nested(report, 'model_data_drift_monitor').get('status', 'missing')}`",
             f"- Operator control plane: `{_nested(report, 'operator_control_plane').get('status', 'missing')}`",
+            f"- Hugging Face research: `{_nested(report, 'huggingface_research', 'status').get('discovery', 'missing')}` "
+            f"accepted={_nested(report, 'huggingface_research', 'summary').get('accepted_for_offline_experiment', 0)} "
+            f"runtime_authority=false",
             f"- Health/report summary: `{_nested(report, 'health_report_summary').get('runtime_status', 'missing')}` "
             f"trade_allowed={str(report.get('trade_allowed')).lower()}",
             "",
@@ -729,6 +797,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--adversarial-failure-json", type=Path, default=None)
     parser.add_argument("--drift-monitor-json", type=Path, default=None)
     parser.add_argument("--operator-control-plane-json", type=Path, default=None)
+    parser.add_argument("--huggingface-discovery-json", type=Path, default=None)
+    parser.add_argument("--huggingface-candidate-intake-json", type=Path, default=None)
+    parser.add_argument("--huggingface-cache-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     parser.add_argument("--output-md", type=Path, default=None)
@@ -857,6 +928,18 @@ def main(argv: list[str] | None = None) -> int:
         operator_control_plane=_read_json(
             args.operator_control_plane_json
             or _default_path("runtime/operator_control_plane_latest.json")
+        ),
+        huggingface_discovery=_read_json(
+            args.huggingface_discovery_json
+            or _default_path("runtime/research_reports/latest/hf_discovery_latest.json")
+        ),
+        huggingface_candidate_intake=_read_json(
+            args.huggingface_candidate_intake_json
+            or _default_path("runtime/research_reports/latest/hf_candidate_intake_latest.json")
+        ),
+        huggingface_cache_materialization=_read_json(
+            args.huggingface_cache_json
+            or _default_path("runtime/research_reports/latest/hf_cache_materialization_latest.json")
         ),
     )
     output_json.parent.mkdir(parents=True, exist_ok=True)

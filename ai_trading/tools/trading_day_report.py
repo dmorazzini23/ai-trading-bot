@@ -86,6 +86,9 @@ def build_trading_day_report(
     adversarial_failure: Mapping[str, Any] | None = None,
     drift_monitor: Mapping[str, Any] | None = None,
     operator_control_plane: Mapping[str, Any] | None = None,
+    huggingface_discovery: Mapping[str, Any] | None = None,
+    huggingface_candidate_intake: Mapping[str, Any] | None = None,
+    huggingface_cache_materialization: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     intents = [row for row in order_intents if _date_match(row, report_date)]
     fill_rows = [row for row in fills if _date_match(row, report_date)]
@@ -244,6 +247,15 @@ def build_trading_day_report(
         "adversarial_failure_simulation": dict(adversarial_failure or {}),
         "model_data_drift_monitor": dict(drift_monitor or {}),
         "operator_control_plane": dict(operator_control_plane or {}),
+        "huggingface_research": {
+            "discovery": dict(huggingface_discovery or {}),
+            "candidate_intake": dict(huggingface_candidate_intake or {}),
+            "cache_materialization": dict(huggingface_cache_materialization or {}),
+            "research_only": True,
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        },
         "next_session_recommendation": "review_live_capital_readiness_before_live_trading",
     }
     report["health_report_summary"] = {
@@ -263,6 +275,8 @@ def build_trading_day_report(
         "adversarial_failure_status": _status(adversarial_failure or {}),
         "drift_monitor_status": _status(drift_monitor or {}),
         "operator_control_plane_status": _status(operator_control_plane or {}),
+        "huggingface_research_status": _status(huggingface_discovery or {}),
+        "huggingface_intake_status": _status(huggingface_candidate_intake or {}),
         "top_reject_reasons": dict(reject_reasons.most_common(5)),
         "symbols_with_activity": sorted(report["symbol_trade_flow"]),
     }
@@ -323,6 +337,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Adversarial simulation: `{report.get('adversarial_failure_simulation', {}).get('status', 'missing')}`",
             f"- Drift monitor: `{report.get('model_data_drift_monitor', {}).get('status', 'missing')}`",
             f"- Operator control plane: `{report.get('operator_control_plane', {}).get('status', 'missing')}`",
+            f"- Hugging Face research: `{report.get('huggingface_research', {}).get('discovery', {}).get('status', 'missing')}`",
             f"- Health/report summary: `{report.get('health_report_summary', {}).get('desired', 0)}` desired, "
             f"`{report.get('health_report_summary', {}).get('fills', 0)}` fills",
             f"- Next session: `{report.get('next_session_recommendation')}`",
@@ -356,6 +371,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--adversarial-failure-json", type=Path, default=None)
     parser.add_argument("--drift-monitor-json", type=Path, default=None)
     parser.add_argument("--operator-control-plane-json", type=Path, default=None)
+    parser.add_argument("--huggingface-discovery-json", type=Path, default=None)
+    parser.add_argument("--huggingface-candidate-intake-json", type=Path, default=None)
+    parser.add_argument("--huggingface-cache-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     parser.add_argument("--latest-md", type=Path, default=None)
@@ -388,6 +406,9 @@ def main(argv: list[str] | None = None) -> int:
         adversarial_failure=_read_json(args.adversarial_failure_json),
         drift_monitor=_read_json(args.drift_monitor_json),
         operator_control_plane=_read_json(args.operator_control_plane_json),
+        huggingface_discovery=_read_json(args.huggingface_discovery_json),
+        huggingface_candidate_intake=_read_json(args.huggingface_candidate_intake_json),
+        huggingface_cache_materialization=_read_json(args.huggingface_cache_json),
     )
     for path, content in (
         (output_json, json.dumps(report, indent=2, sort_keys=True) + "\n"),

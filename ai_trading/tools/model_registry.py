@@ -166,6 +166,7 @@ def build_model_registration(
     manual_approval_id: str | None = None,
     rollback_command: str | None = None,
     notes: str = "",
+    external_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a registry artifact after adding or updating one model entry."""
 
@@ -193,6 +194,18 @@ def build_model_registration(
     artifact_sha256 = _sha256_file(model_path.expanduser())
     if artifact_sha256 is None:
         blocked_reasons.append("model_artifact_missing")
+    external_payload = dict(external_metadata or {})
+    if external_payload:
+        external_source = str(external_payload.get("external_source") or "").strip().lower()
+        if external_source == "huggingface":
+            external_payload["local_validation_required"] = True
+            external_payload["runtime_authority"] = False
+            external_payload["promotion_authority"] = False
+            external_payload["live_money_authority"] = False
+        elif external_source:
+            external_payload["runtime_authority"] = False
+            external_payload["promotion_authority"] = False
+            external_payload["live_money_authority"] = False
 
     entry_status = "blocked" if blocked_reasons else "registered"
     entry = {
@@ -217,6 +230,7 @@ def build_model_registration(
             or "restore previous AI_TRADING_MODEL_PATH and restart ai-trading.service",
         },
         "notes": str(notes or ""),
+        "external_metadata": external_payload,
     }
 
     models = previous_models if blocked_reasons else _replace_model(previous_models, entry)
@@ -427,6 +441,7 @@ def main(argv: list[str] | None = None) -> int:
     register.add_argument("--manual-approval-id", default="")
     register.add_argument("--rollback-command", default="")
     register.add_argument("--notes", default="")
+    register.add_argument("--external-metadata-json", type=Path, default=None)
     register.add_argument("--max-evidence-age-hours", type=float, default=96.0)
     register.add_argument("--generated-at", default="")
     register.add_argument("--output-dir", default=None)
@@ -459,6 +474,7 @@ def main(argv: list[str] | None = None) -> int:
             manual_approval_id=str(args.manual_approval_id or "").strip() or None,
             rollback_command=str(args.rollback_command or "").strip() or None,
             notes=args.notes,
+            external_metadata=_read_json_mapping(args.external_metadata_json),
         )
         dated, latest = _write_outputs(
             payload=payload,

@@ -86,6 +86,14 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
         root / "latest" / "evidence_starvation_latest.json",
         {"status": "starved", "recommendation": "widen_paper_diagnostic_sampling"},
     )
+    _write_json(
+        root / "latest" / "hf_discovery_latest.json",
+        {"status": "discovered", "summary": {"candidate_count": 4, "accepted_for_offline_experiment": 1}},
+    )
+    _write_json(
+        root / "latest" / "hf_candidate_intake_latest.json",
+        {"status": "ready_for_manual_review", "summary": {"accepted_for_offline_experiment": 1}},
+    )
     _write_json(root / "daily" / "run" / "live_capital_readiness.json", {"status": "blocked"})
 
     payload = research_completion_notify.build_research_completion_payload(
@@ -120,6 +128,7 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
     assert "MSFT:collect_more_evidence/low" in field_text
     assert "overestimated / keep_tiny_sampling" in field_text
     assert "starved / widen_paper_diagnostic_sampling" in field_text
+    assert "discovered / scanned=4, accepted=1, runtime_authority=false" in field_text
     assert "research_automation cadence=daily workflow=daily status=complete" in field_text
     assert '"trade_allowed": true' in field_text
 

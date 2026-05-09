@@ -63,6 +63,7 @@ def test_trading_day_report_attributes_rejections_and_symbol_pnl():
             "status": "overestimated",
             "execution_capture_diagnosis": {"attribution_counts": {"weak_execution_capture": 3}},
         },
+        huggingface_discovery={"status": "discovered", "summary": {"candidate_count": 2}},
     )
 
     assert report["desired_trades"]["count"] == 1
@@ -86,6 +87,8 @@ def test_trading_day_report_attributes_rejections_and_symbol_pnl():
     assert report["health_report_summary"]["desired"] == 1
     assert report["health_report_summary"]["rejected"] == 3
     assert report["health_report_summary"]["expected_edge_calibration_status"] == "overestimated"
+    assert report["health_report_summary"]["huggingface_research_status"] == "discovered"
+    assert report["huggingface_research"]["runtime_authority"] is False
     assert report["openclaw_summary"]["severity"] == "warning"
     assert report["symbol_trade_flow"]["AAPL"] == {
         "desired": 1,
@@ -103,6 +106,7 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
     gates = tmp_path / "gates.jsonl"
     throttle = tmp_path / "throttle.json"
     calibration = tmp_path / "calibration.json"
+    hf_discovery = tmp_path / "hf_discovery.json"
     out = tmp_path / "trading_day.json"
     latest = tmp_path / "latest.json"
     md = tmp_path / "latest.md"
@@ -114,6 +118,7 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
         encoding="utf-8",
     )
     calibration.write_text(json.dumps({"status": "calibrated"}), encoding="utf-8")
+    hf_discovery.write_text(json.dumps({"status": "discovered"}), encoding="utf-8")
 
     rc = trading_day_report.main(
         [
@@ -129,6 +134,8 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
             str(throttle),
             "--expected-edge-calibration-json",
             str(calibration),
+            "--huggingface-discovery-json",
+            str(hf_discovery),
             "--output-json",
             str(out),
             "--latest-json",
@@ -143,9 +150,11 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
     assert payload["realized_fills"]["count"] == 1
     assert payload["regime_entry_throttle"]["actions"] == {"block_new_entries": 1}
     assert payload["expected_edge_calibration"]["status"] == "calibrated"
+    assert payload["huggingface_research"]["discovery"]["status"] == "discovered"
     assert payload["health_report_summary"]["fills"] == 1
     assert payload["openclaw_summary"]["service"] == "ai-trading-research"
     assert latest.is_file()
     markdown = md.read_text(encoding="utf-8")
     assert "Trading Day 2026-05-05" in markdown
     assert "Regime entry throttle" in markdown
+    assert "Hugging Face research" in markdown

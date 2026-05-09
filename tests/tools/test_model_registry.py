@@ -84,6 +84,35 @@ def test_register_challenger_blocks_stale_evidence(tmp_path: Path) -> None:
     assert report["registered_model"]["evidence_freshness"]["ok"] is False
 
 
+def test_register_challenger_records_huggingface_external_metadata_research_only(
+    tmp_path: Path,
+) -> None:
+    model = tmp_path / "challenger.joblib"
+    model.write_text("challenger", encoding="utf-8")
+
+    report = model_registry.build_model_registration(
+        model_id="challenger-hf-v1",
+        role="challenger",
+        model_path=model,
+        metrics=_metrics(2.5),
+        generated_at=datetime(2026, 5, 5, 21, 0, tzinfo=UTC),
+        external_metadata={
+            "external_source": "huggingface",
+            "external_repo_id": "open/finance-timeseries",
+            "external_revision": "abc123",
+            "external_license": "apache-2.0",
+            "external_card_hash": "cardhash",
+        },
+    )
+
+    external = report["registered_model"]["external_metadata"]
+    assert external["external_source"] == "huggingface"
+    assert external["local_validation_required"] is True
+    assert external["runtime_authority"] is False
+    assert external["promotion_authority"] is False
+    assert external["live_money_authority"] is False
+
+
 def test_evaluate_challenger_is_advisory_and_requires_manual_promotion(
     tmp_path: Path,
 ) -> None:
