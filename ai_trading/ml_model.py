@@ -273,7 +273,7 @@ def train_xgboost_with_optuna(
 
 
 def ensure_default_models(symbols: Sequence[str] | None = None) -> None:
-    """Ensure required model files exist under :data:`paths.MODELS_DIR`.
+    """Ensure research/test/shadow default model files exist.
 
     If a model file for a symbol is missing, this attempts to download a
     pre-trained model from ``DEFAULT_MODEL_URL``. If the download fails or no
@@ -283,6 +283,16 @@ def ensure_default_models(symbols: Sequence[str] | None = None) -> None:
 
     from ai_trading.config import management as config
     from ai_trading.model_loader import train_and_save_model
+
+    mode = str(
+        config.get_env("AI_TRADING_DEFAULT_MODEL_PROVISIONING_MODE", "", cast=str) or ""
+    ).strip().lower()
+    if mode not in {"research", "test", "shadow"}:
+        logger.warning(
+            "DEFAULT_MODEL_PROVISIONING_QUARANTINED",
+            extra={"mode": mode or "unset", "allowed_modes": ("research", "test", "shadow")},
+        )
+        return
 
     models_dir = paths.MODELS_DIR
     syms = list(symbols or getattr(config, "SYMBOLS", [])) or ["SPY"]

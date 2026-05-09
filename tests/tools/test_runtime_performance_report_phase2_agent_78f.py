@@ -144,6 +144,8 @@ def test_build_report_flattens_execution_fields_and_handles_invalid_optional_sta
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_SYMBOLS", "")
+    monkeypatch.setenv("AI_TRADING_CANARY_SYMBOLS", "")
     monkeypatch.setattr(
         rpr,
         "_summarize_broker_open_positions",

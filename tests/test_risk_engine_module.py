@@ -189,8 +189,8 @@ def test_position_size_invalid_min_usd_falls_back_once(caplog):
     with caplog.at_level(logging.WARNING):
         qty1 = eng.position_size(sig, cash=100, price=30)
         qty2 = eng.position_size(sig, cash=100, price=30)
-    assert qty1 >= 1
-    assert qty2 >= 1
+    assert qty1 == 0
+    assert qty2 == 0
     invalid_logs = [rec for rec in caplog.records if "Invalid position_size_min_usd" in rec.message]
     assert len(invalid_logs) == 1
 

@@ -6086,6 +6086,158 @@ def _live_execution_blocks_yahoo_fallback() -> bool:
     return _runtime_execution_mode() == "live"
 
 
+def _runtime_model_governance_required(
+    *,
+    execution_mode: str,
+    require_model: bool,
+) -> bool:
+    explicit = bool(
+        get_env("AI_TRADING_REQUIRE_MODEL_REGISTRY_APPROVAL", False, cast=bool)
+    )
+    return explicit or (execution_mode == "live" and bool(require_model))
+
+
+def _parse_model_governance_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _model_governance_is_fresh(info: Mapping[str, Any]) -> tuple[bool, str]:
+    max_age_days = int(
+        get_env("AI_TRADING_MODEL_MAX_AGE_DAYS", 14, cast=int)
+    )
+    if max_age_days <= 0:
+        return True, "freshness_disabled"
+    governance = info.get("governance", {})
+    runtime_promotion = (
+        governance.get("runtime_promotion", {})
+        if isinstance(governance, Mapping)
+        else {}
+    )
+    timestamp = None
+    if isinstance(runtime_promotion, Mapping):
+        timestamp = _parse_model_governance_timestamp(
+            runtime_promotion.get("promoted_at")
+        )
+    if timestamp is None:
+        timestamp = _parse_model_governance_timestamp(info.get("registered_at"))
+    if timestamp is None:
+        return False, "missing_model_governance_timestamp"
+    age_days = (datetime.now(UTC) - timestamp).total_seconds() / 86400.0
+    if age_days > float(max_age_days):
+        return False, "model_governance_stale"
+    return True, "fresh"
+
+
+def _find_registry_entry_for_model_path(model_path: str) -> tuple[str, dict[str, Any]] | None:
+    try:
+        from ai_trading.model_registry import ModelRegistry
+    except COMMON_EXC:
+        logger.debug("MODEL_REGISTRY_IMPORT_FAILED", exc_info=True)
+        return None
+    try:
+        registry = ModelRegistry()
+    except COMMON_EXC:
+        logger.debug("MODEL_REGISTRY_INIT_FAILED", exc_info=True)
+        return None
+    try:
+        resolved = str(Path(model_path).expanduser().resolve())
+    except OSError:
+        resolved = str(Path(model_path).expanduser())
+    for model_id, info in registry.model_index.items():
+        paths_to_check: list[str] = []
+        artifact_path = str(info.get("artifact_path", "") or "").strip()
+        if artifact_path:
+            paths_to_check.append(artifact_path)
+        governance = info.get("governance", {})
+        runtime_promotion = (
+            governance.get("runtime_promotion", {})
+            if isinstance(governance, Mapping)
+            else {}
+        )
+        if isinstance(runtime_promotion, Mapping):
+            promoted_path = str(runtime_promotion.get("model_path", "") or "").strip()
+            if promoted_path:
+                paths_to_check.append(promoted_path)
+        for candidate in paths_to_check:
+            try:
+                candidate_resolved = str(Path(candidate).expanduser().resolve())
+            except OSError:
+                candidate_resolved = str(Path(candidate).expanduser())
+            if candidate_resolved == resolved:
+                return str(model_id), dict(info)
+    return None
+
+
+def _enforce_runtime_model_governance(
+    *,
+    model_path: str,
+    source: str,
+    registry_meta: Mapping[str, Any] | None = None,
+) -> None:
+    registry_entry: tuple[str, dict[str, Any]] | None = None
+    if registry_meta and registry_meta.get("model_id"):
+        try:
+            from ai_trading.model_registry import ModelRegistry
+
+            registry = ModelRegistry()
+            model_id = str(registry_meta.get("model_id"))
+            info = registry.model_index.get(model_id)
+            if isinstance(info, dict):
+                registry_entry = (model_id, dict(info))
+        except COMMON_EXC:
+            registry_entry = None
+    if registry_entry is None:
+        registry_entry = _find_registry_entry_for_model_path(model_path)
+    if registry_entry is None:
+        logger.error(
+            "MODEL_GOVERNANCE_REJECTED",
+            extra={"model_path": model_path, "source": source, "reason_code": "registry_entry_missing"},
+        )
+        raise RuntimeError("MODEL_GOVERNANCE_REJECTED: registry_entry_missing")
+    model_id, info = registry_entry
+    governance = info.get("governance", {})
+    status = (
+        str(governance.get("status", "") or "").strip().lower()
+        if isinstance(governance, Mapping)
+        else ""
+    )
+    if status != "production":
+        logger.error(
+            "MODEL_GOVERNANCE_REJECTED",
+            extra={
+                "model_path": model_path,
+                "model_id": model_id,
+                "status": status or "missing",
+                "reason_code": "model_not_production",
+            },
+        )
+        raise RuntimeError("MODEL_GOVERNANCE_REJECTED: model_not_production")
+    fresh, reason = _model_governance_is_fresh(info)
+    if not fresh:
+        logger.error(
+            "MODEL_GOVERNANCE_REJECTED",
+            extra={
+                "model_path": model_path,
+                "model_id": model_id,
+                "reason_code": reason,
+            },
+        )
+        raise RuntimeError(f"MODEL_GOVERNANCE_REJECTED: {reason}")
+    logger.info(
+        "MODEL_GOVERNANCE_ACCEPTED",
+        extra={"model_path": model_path, "model_id": model_id, "source": source},
+    )
+
+
 def _auto_train_allowed(execution_mode: str, *, allow_paper_train: bool) -> bool:
     return execution_mode == "paper" and bool(allow_paper_train)
 
@@ -6246,6 +6398,10 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
     if path:
         execution_mode = _runtime_execution_mode()
         require_model = bool(get_env("AI_TRADING_REQUIRE_ML_MODEL", False, cast=bool))
+        require_governance = _runtime_model_governance_required(
+            execution_mode=execution_mode,
+            require_model=require_model,
+        )
         strict_runtime = execution_mode == "live" and not (
             _is_testing_env() or is_runtime_contract_testing_mode()
         )
@@ -6303,6 +6459,12 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
             active_path,
             manifest_path=manifest_override,
         )
+        if require_governance:
+            _enforce_runtime_model_governance(
+                model_path=active_path,
+                source=active_source,
+                registry_meta=registry_meta,
+            )
         if _model_payload_is_placeholder(mdl):
             registry_fallback = (
                 _resolve_registry_production_model_path(path)
@@ -6390,6 +6552,22 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
         )
 
     if modname:
+        execution_mode = _runtime_execution_mode()
+        require_model = bool(get_env("AI_TRADING_REQUIRE_ML_MODEL", False, cast=bool))
+        if _runtime_model_governance_required(
+            execution_mode=execution_mode,
+            require_model=require_model,
+        ) and not bool(get_env("AI_TRADING_MODEL_MODULE_APPROVED", False, cast=bool)):
+            logger.error(
+                "MODEL_GOVERNANCE_REJECTED",
+                extra={
+                    "model_module": modname,
+                    "reason_code": "module_requires_explicit_approval",
+                },
+            )
+            raise RuntimeError(
+                "MODEL_GOVERNANCE_REJECTED: module_requires_explicit_approval"
+            )
         try:
             mod = importlib.import_module(modname)
         except COMMON_EXC as e:  # noqa: BLE001
@@ -11151,9 +11329,17 @@ def ensure_finbert(cfg=None):
                 message=".*_register_pytree_node.*",
                 module="transformers.*",
             )
-            tok = transformers.AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
+            finbert_model_name = str(
+                get_env("AI_TRADING_FINBERT_MODEL_NAME", "yiyanghkust/finbert-tone")
+                or "yiyanghkust/finbert-tone"
+            )
+            tok = transformers.AutoTokenizer.from_pretrained(
+                finbert_model_name,
+                local_files_only=True,
+            )
             mdl = transformers.AutoModelForSequenceClassification.from_pretrained(
-                "yiyanghkust/finbert-tone"
+                finbert_model_name,
+                local_files_only=True,
             )
             mdl.eval()
         _finbert_tokenizer, _finbert_model = tok, mdl
@@ -11172,6 +11358,38 @@ def ensure_finbert(cfg=None):
     ) as e:  # AI-AGENT-REF: narrow exception
         logger.error("FinBERT lazy-load failed: %s", e)
         return None, None
+
+
+def _finbert_label_key(raw: Any) -> str | None:
+    token = str(raw or "").strip().lower().replace("_", "-")
+    if "positive" in token or token in {"pos", "bull", "bullish"}:
+        return "pos"
+    if "negative" in token or token in {"neg", "bear", "bearish"}:
+        return "neg"
+    if "neutral" in token or token == "neu":
+        return "neu"
+    return None
+
+
+def _finbert_pos_neg_from_probs(probs: Any, model: Any) -> tuple[float, float]:
+    values = [float(x) for x in probs.tolist()]
+    id2label = getattr(getattr(model, "config", None), "id2label", {}) or {}
+    mapped = {"pos": 0.0, "neg": 0.0}
+    used_mapping = False
+    for index, value in enumerate(values):
+        label = id2label.get(index)
+        if label is None and isinstance(id2label, dict):
+            label = id2label.get(str(index))
+        key = _finbert_label_key(label)
+        if key in {"pos", "neg"}:
+            mapped[key] = value
+            used_mapping = True
+    if used_mapping:
+        return mapped["pos"], mapped["neg"]
+    if len(values) >= 3:
+        neg, _neu, pos = values[:3]
+        return pos, neg
+    return 0.0, 0.0
 
 
 # REMOVED: module-scope get_disaster_dd_limit() = CFG.disaster_dd_limit
@@ -19214,7 +19432,7 @@ def predict_text_sentiment(text: str, cfg=None) -> float:
             logits = outputs.logits[0]  # shape = (3,)
             probs = torch.softmax(logits, dim=0)  # [p_neg, p_neu, p_pos]
 
-        neg, neu, pos = probs.tolist()
+        pos, neg = _finbert_pos_neg_from_probs(probs, model)
         return float(pos - neg)
     except (
         FileNotFoundError,
@@ -19246,8 +19464,9 @@ def analyze_sentiment(text: str, cfg=None) -> float:
     inputs = tok(text, return_tensors="pt", truncation=True, max_length=256)
     with torch.no_grad():
         logits = mdl(**inputs).logits
-    # assuming index 2 = positive per finbert-tone convention
-    return float(logits.softmax(dim=-1)[0, 2].item())
+    probs = logits.softmax(dim=-1)[0]
+    pos, _neg = _finbert_pos_neg_from_probs(probs, mdl)
+    return float(pos)
 
 
 def fetch_form4_filings(ticker: str) -> list[dict]:

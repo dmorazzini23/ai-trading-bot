@@ -86,9 +86,19 @@ def test_paper_sampling_symbol_short_size_and_daily_caps(monkeypatch, tmp_path) 
         qty=10,
         price=310.0,
     )
-    assert size_decision.allowed is True
-    assert size_decision.qty == 1
-    assert size_decision.details["one_share_fallback"] is True
+    assert size_decision.allowed is False
+    assert size_decision.reason == "PAPER_SAMPLING_MAX_NOTIONAL_BLOCK"
+    assert size_decision.qty == 0
+
+    capped_decision = evaluate_paper_sampling_order(
+        cfg,
+        symbol="AMZN",
+        side="buy",
+        qty=10,
+        price=100.0,
+    )
+    assert capped_decision.allowed is True
+    assert capped_decision.qty == 2
 
     now = datetime(2026, 5, 8, 15, 0, tzinfo=UTC)
     first = reserve_paper_sampling_order(

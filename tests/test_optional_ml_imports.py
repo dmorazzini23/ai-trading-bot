@@ -18,6 +18,10 @@ def test_optional_ml_imports(monkeypatch):
 
     from ai_trading.analysis import sentiment
 
+    sentiment._SENT_DEPS_LOGGED.clear()
+    sentiment._bs4 = None
+    sentiment._transformers_bundle = None
+
     res = sentiment.analyze_text("hello")
     sentiment.fetch_form4_filings("AAPL")
 

@@ -20,6 +20,10 @@ fi
 _load_env_file() {
   local env_file="$1"
   [[ -f "${env_file}" ]] || return 0
+  if [[ ! -r "${env_file}" ]]; then
+    echo "runtime env file is not readable: ${env_file}" >&2
+    return 1
+  fi
   local exports
   exports="$("${PYTHON_BIN}" - "${env_file}" <<'PY'
 from __future__ import annotations
@@ -56,7 +60,9 @@ for key, value in values.items():
     print(f"export {key}={shlex.quote(str(value))}")
 PY
 )"
-  eval "${exports}"
+  if [[ -n "${exports}" ]]; then
+    eval "${exports}"
+  fi
 }
 
 # Match the installed service's writable runtime locations.
@@ -98,9 +104,16 @@ mkdir -p \
 
 _load_env_file "${RUNTIME_ENV_FILE}"
 
+if [[ "${API_PORT:-}" == "${HEALTHCHECK_PORT:-}" && "${RUN_HEALTHCHECK:-0}" == "1" ]]; then
+  echo "RUN_HEALTHCHECK=1 requires HEALTHCHECK_PORT to differ from API_PORT" >&2
+  exit 1
+fi
+
 # Mirror the later systemd model override drop-in after runtime env is loaded.
 export AI_TRADING_MODEL_PATH="/var/lib/ai-trading-bot/models/trained_model.pkl"
 export AI_TRADING_MODEL_MODULE="ai_trading.simple_models"
+export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 
 cd "${ROOT_DIR}"
 

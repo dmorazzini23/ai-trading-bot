@@ -49,8 +49,8 @@ def test_minimum_quantity_uses_config_then_fallback_and_logs_once(
         first = risk_engine._derive_minimum_quantity(engine, price=100.0)
         second = risk_engine._derive_minimum_quantity(engine, price=100.0)
 
-    assert first == 3
-    assert second == 3
+    assert first == 0
+    assert second == 0
     assert sum("Invalid position_size_min_usd" in rec.message for rec in caplog.records) == 1
 
 
@@ -137,6 +137,20 @@ def test_apply_weight_limits_clamps_to_most_constrained_capacity() -> None:
     )
 
     assert engine._apply_weight_limits(signal) == pytest.approx(0.1)
+
+
+def test_apply_weight_limits_does_not_round_weak_weight_upward() -> None:
+    engine = _bare_risk_engine()
+    engine.global_limit = 0.50
+    signal = SimpleNamespace(
+        symbol="AAPL",
+        asset_class="equity",
+        strategy="momentum",
+        weight=0.04,
+        confidence=0.9,
+    )
+
+    assert engine._apply_weight_limits(signal) == pytest.approx(0.04)
 
 
 def test_compute_volatility_returns_stable_metrics_for_finite_returns() -> None:

@@ -1744,6 +1744,30 @@ def test_promotion_gate_bundle_can_ignore_sensitivity_gate(
     assert promotion["status"] == "production"
 
 
+def test_advanced_candidate_production_requires_explicit_approval(monkeypatch):
+    monkeypatch.delenv("AI_TRADING_AFTER_HOURS_APPROVE_ADVANCED_PRODUCTION", raising=False)
+
+    status, reason = after_hours._production_status_for_candidate(
+        requested_status="production",
+        candidate_name="xgboost",
+    )
+
+    assert status == "shadow"
+    assert reason == "advanced_candidate_requires_explicit_approval"
+
+
+def test_advanced_candidate_production_allows_explicit_approval(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_APPROVE_ADVANCED_PRODUCTION", "1")
+
+    status, reason = after_hours._production_status_for_candidate(
+        requested_status="production",
+        candidate_name="xgboost",
+    )
+
+    assert status == "production"
+    assert reason is None
+
+
 def test_promotion_confidence_gate_bundle_requires_effective_trades(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3075,6 +3099,22 @@ def test_cost_floor_estimate_falls_back_to_baseline_when_samples_low(
 
     value = after_hours._estimate_cost_floor_bps(records)
     assert value == pytest.approx(12.0, abs=0.001)
+
+
+def test_live_cost_bucket_diagnostics_groups_symbol_costs(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_BUCKET_MIN_SAMPLES", "2")
+
+    diagnostics = after_hours._live_cost_bucket_diagnostics(
+        [
+            {"symbol": "AAPL", "is_bps": 4.0},
+            {"symbol": "AAPL", "is_bps": 8.0},
+            {"symbol": "MSFT", "is_bps": 12.0},
+        ]
+    )
+
+    assert diagnostics["bucket_count"] == 1
+    assert diagnostics["buckets"]["AAPL"]["samples"] == 2
+    assert diagnostics["buckets"]["AAPL"]["mean_cost_bps"] == 6.0
 
 
 def test_maybe_train_rl_overlay_passes_price_series_and_registry_metadata(

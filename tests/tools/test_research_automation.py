@@ -592,6 +592,47 @@ def test_authority_artifact_copy_writes_live_readiness_latest(tmp_path: Path) ->
     assert (report_root / "latest" / "live_capital_readiness_latest.json").is_file()
 
 
+def test_blocked_authority_artifact_does_not_overwrite_existing_latest(tmp_path: Path) -> None:
+    report_root = tmp_path / "reports"
+    run_dir = report_root / "daily" / "run"
+    source = run_dir / "live_capital_readiness.json"
+    latest = report_root / "latest" / "live_capital_readiness_latest.json"
+    source.parent.mkdir(parents=True)
+    latest.parent.mkdir(parents=True)
+    source.write_text(json.dumps({"status": "blocked"}), encoding="utf-8")
+    latest.write_text(json.dumps({"status": "live_canary_allowed"}), encoding="utf-8")
+    config = research_automation.ResearchConfig(
+        cadence="daily",
+        workflow="daily",
+        report_root=report_root,
+        run_dir=run_dir,
+        run_id="run",
+        symbols="AAPL",
+        data_dir=None,
+        shadow_jsonl=tmp_path / "shadow.jsonl",
+        accepted_candidates_jsonl=None,
+        model_path=None,
+        manifest_path=None,
+        current_champion_path="",
+        report_date="2026-05-05",
+        plan_only=False,
+        dry_run=False,
+    )
+
+    research_automation._copy_authority_artifacts(
+        config=config,
+        step_results=[
+            {
+                "name": "live_capital_readiness",
+                "status": "blocked",
+                "output_path": str(source),
+            }
+        ],
+    )
+
+    assert json.loads(latest.read_text(encoding="utf-8")) == {"status": "live_canary_allowed"}
+
+
 def test_authority_artifact_copy_writes_daily_evidence_latest_paths(tmp_path: Path) -> None:
     report_root = tmp_path / "reports"
     run_dir = report_root / "daily" / "run"

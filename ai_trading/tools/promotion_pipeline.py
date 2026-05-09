@@ -74,8 +74,10 @@ def _freshness_gate(
             "max_age_hours": max_age_hours,
             "reason": "ok" if ok else ("evidence_future_dated" if future_dated else "evidence_stale"),
         }
-    nested_replay = payload.get("replay")
-    if isinstance(nested_replay, Mapping):
+    for nested_key in ("replay", "source", "source_artifact", "evidence", "payload"):
+        nested_replay = payload.get(nested_key)
+        if not isinstance(nested_replay, Mapping):
+            continue
         return _freshness_gate(
             nested_replay,
             label=label,
@@ -140,7 +142,7 @@ def _evidence_authority_gate(payload: Mapping[str, Any], *, label: str) -> dict[
     authority_raw = payload.get("authority")
     authority = authority_raw if isinstance(authority_raw, Mapping) else {}
     if not authority:
-        return {"ok": True, "label": label, "reason": "legacy_authority_missing"}
+        return {"ok": False, "label": label, "reason": "authority_metadata_missing"}
     source_providers_raw = authority.get("source_providers", ())
     if isinstance(source_providers_raw, str):
         source_providers = {source_providers_raw.strip().lower()} if source_providers_raw.strip() else set()

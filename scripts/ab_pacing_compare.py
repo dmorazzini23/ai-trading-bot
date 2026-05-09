@@ -7,6 +7,7 @@ import math
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,6 +55,8 @@ def _load_env_lines(path: Path) -> list[str]:
 
 
 def _upsert_env(path: Path, key: str, value: str) -> None:
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+        raise ValueError(f"Unsafe env key: {key}")
     pattern = re.compile(rf"^\s*{re.escape(key)}=")
     lines = _load_env_lines(path)
     replaced = False
@@ -63,10 +66,21 @@ def _upsert_env(path: Path, key: str, value: str) -> None:
             replaced = True
     if not replaced:
         lines.append(f"{key}={value}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=str(path.parent),
+        delete=False,
+    ) as handle:
+        handle.write("\n".join(lines) + "\n")
+        temp_name = handle.name
+    Path(temp_name).replace(path)
 
 
 def _backup_env(path: Path) -> Path:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing env file: {path}")
     stamp = _now_utc().strftime("%Y%m%d-%H%M%S")
     backup = path.with_name(f"{path.name}.bak.{stamp}")
     shutil.copy2(path, backup)

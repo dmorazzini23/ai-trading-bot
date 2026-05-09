@@ -24,3 +24,18 @@ def test_allocate_preserves_sell_short_side():
 
     assert len(out) == 1
     assert out[0].side == "sell_short"
+
+
+def test_allocate_blocks_sell_short_when_long_only_policy_set():
+    alloc = StrategyAllocator()
+    alloc.replace_config(
+        delta_threshold=0.0,
+        signal_confirmation_bars=1,
+        min_confidence=0.0,
+        allow_short=False,
+    )
+    signal = SimpleNamespace(symbol="MSFT", side="sell_short", confidence=0.8)
+
+    out = alloc.allocate({"pairs": [signal]})
+
+    assert out == []

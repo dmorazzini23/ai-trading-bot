@@ -197,6 +197,7 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
     # Minimal patches to isolate the order-check logic
     monkeypatch.setattr(eng, "_ensure_alpaca_classes", lambda: None)
     monkeypatch.setattr(eng, "_init_metrics", lambda: None)
+    monkeypatch.setattr(eng, "log_env_diag", lambda *_a, **_k: {})
     monkeypatch.setattr(eng, "is_market_open", lambda: True)
     monkeypatch.setattr(eng, "ensure_alpaca_attached", lambda runtime: None)
     monkeypatch.setattr(eng, "get_strategies", lambda: [])

@@ -828,8 +828,28 @@ def test_get_daily_df_forced_yahoo_and_fresh_memo(fetch_env: dict[str, Any], mon
     memo_frame = _frame(BASE_START, provider="memo")
     monkeypatch.setattr(fetch, "_env_source_override", lambda _tf: None)
     monkeypatch.setattr(fetch, "_is_fresh", lambda _ts: True)
+    monkeypatch.setattr(fetch, "_daily_frame_has_future_timestamp", lambda _frame: False)
     memo = {"df": memo_frame, "ts": datetime.now(tz=UTC)}
     assert fetch.get_daily_df("AAPL", BASE_START, BASE_END, memo=memo) is memo_frame
+
+
+def test_get_daily_df_rejects_future_memo_frame(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    future_memo = _frame(datetime.now(tz=UTC) + timedelta(minutes=1), provider="memo")
+    backup = _frame(BASE_START, provider="yahoo")
+
+    monkeypatch.setattr(fetch, "_env_source_override", lambda _tf: None)
+    monkeypatch.setattr(fetch, "should_import_alpaca_sdk", lambda: False)
+    monkeypatch.setattr(fetch, "_safe_backup_get_bars", lambda *_args, **_kwargs: backup)
+
+    result = fetch.get_daily_df(
+        "AAPL",
+        BASE_START,
+        BASE_END,
+        memo={"df": future_memo, "ts": datetime.now(tz=UTC)},
+    )
+
+    assert result is not future_memo
+    assert result.attrs["data_provider"] == "yahoo"
 
 
 def test_post_process_detects_all_nan_close_and_empty_slot_exhaustion(monkeypatch: pytest.MonkeyPatch) -> None:

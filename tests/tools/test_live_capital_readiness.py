@@ -58,6 +58,7 @@ def test_live_capital_readiness_allows_explicit_tiny_canary(monkeypatch):
         regime_champions={"generated_at": now, "status": "ready"},
         adversarial_failure={"generated_at": now, "status": "passed", "live_money_authority": False},
         drift_monitor={"generated_at": now, "status": "ok"},
+        approval_artifact={"generated_at": now, "approval_id": "approval-1", "status": "approved"},
     )
 
     assert report["status"] == "live_canary_allowed"
@@ -71,6 +72,33 @@ def test_live_capital_readiness_allows_explicit_tiny_canary(monkeypatch):
     assert report["canary_evidence"]["pretrade_risk_verifier"]["status"] == "passed"
     assert report["canary_evidence"]["model_data_drift_monitor"]["status"] == "ok"
     assert report["openclaw_summary"]["service"] == "ai-trading-live-capital"
+
+
+def test_live_capital_readiness_requires_approval_artifact(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", "1")
+    monkeypatch.setenv("AI_TRADING_LIVE_MAX_DAILY_LOSS", "25")
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    report = live_capital_readiness.build_live_capital_readiness(
+        health=_healthy_payload(),
+        live_cost_model={"generated_at": now, "status": {"available": True, "status": "ready", "breach_count": 0}},
+        promotion_report={"generated_at": now, "promotion_ready": True},
+        validation={"generated_at": now, "full_validation_green": True},
+        canary_plan={"generated_at": now, "paper_vs_live_canary_plan": "ready"},
+        edge_calibration={"generated_at": now, "status": "calibrated"},
+        execution_capture={"generated_at": now, "status": "acceptable"},
+        portfolio_edge={"generated_at": now, "status": "ok"},
+        pretrade_risk_verifier={"generated_at": now, "status": "passed"},
+        post_trade_surveillance={"generated_at": now, "status": "clean"},
+        walk_forward_capital={"generated_at": now, "status": "completed", "live_enabled": False},
+        order_type_optimizer={"generated_at": now, "status": "ready", "live_enabled": False},
+        adversarial_failure={"generated_at": now, "status": "passed", "live_money_authority": False},
+        drift_monitor={"generated_at": now, "status": "ok"},
+    )
+
+    assert report["status"] == "blocked"
+    assert "live_capital_approval_artifact_missing" in report["reasons"]
 
 
 def test_live_capital_readiness_blocks_stale_live_cost_evidence(monkeypatch):

@@ -896,15 +896,43 @@ def _runtime_decay_controls_usable(payload: Mapping[str, Any]) -> bool:
     return isinstance(status, Mapping) and bool(status.get("available", True))
 
 
+def _live_or_canary_opening(intent: OrderIntent, cfg: Any) -> bool:
+    if not bool(intent.opening_trade):
+        return False
+    execution_mode = str(getattr(cfg, "execution_mode", "") or "").strip().lower()
+    launch_profile = str(
+        getattr(
+            cfg,
+            "launch_profile",
+            get_env("AI_TRADING_LAUNCH_PROFILE", "", cast=str),
+        )
+        or ""
+    ).strip().lower()
+    return execution_mode == "live" or launch_profile == "live_canary" or launch_profile.startswith("live_")
+
+
 def _runtime_decay_pretrade_gate(
     intent: OrderIntent,
     *,
     ledger: Any,
+    cfg: Any,
 ) -> tuple[bool, str, dict[str, Any]] | None:
     if _intent_reduces_position(intent, ledger):
         return None
     payload = _runtime_decay_controls_payload()
-    if payload is None or not _runtime_decay_controls_usable(payload):
+    if payload is None:
+        return None
+    if not _runtime_decay_controls_usable(payload):
+        if _live_or_canary_opening(intent, cfg):
+            return (
+                False,
+                "RUNTIME_DECAY_ARTIFACT_STALE_BLOCK",
+                {
+                    "artifact_type": payload.get("artifact_type"),
+                    "generated_at": payload.get("generated_at"),
+                    "opening_trade": bool(intent.opening_trade),
+                },
+            )
         return None
     actions = payload.get("actions")
     if not isinstance(actions, Mapping):
@@ -964,6 +992,27 @@ def _live_cost_model_usable(payload: Mapping[str, Any]) -> bool:
     if require_ready and str(status.get("status") or "").lower() != "ready":
         return False
     return bool(status.get("available"))
+
+
+def _live_cost_artifact_pretrade_gate(
+    intent: OrderIntent,
+    *,
+    cfg: Any,
+) -> tuple[bool, str, dict[str, Any]] | None:
+    payload = _live_cost_model_payload()
+    if payload is None or _live_cost_model_usable(payload):
+        return None
+    if not _live_or_canary_opening(intent, cfg):
+        return None
+    return (
+        False,
+        "LIVE_COST_ARTIFACT_STALE_BLOCK",
+        {
+            "artifact_type": payload.get("artifact_type"),
+            "generated_at": payload.get("generated_at"),
+            "opening_trade": bool(intent.opening_trade),
+        },
+    )
 
 
 def _normalized_live_cost_side(side: str | None) -> str:
@@ -1728,7 +1777,14 @@ def validate_pretrade(
             )
         return False, str(intent.broker_ready_reason or "BROKER_NOT_READY_BLOCK"), details
 
-    runtime_decay_decision = _runtime_decay_pretrade_gate(intent, ledger=ledger)
+    try:
+        qty_value = int(intent.qty)
+    except (TypeError, ValueError):
+        return False, "INVALID_QTY_BLOCK", {"qty": intent.qty}
+    if qty_value <= 0:
+        return False, "INVALID_QTY_BLOCK", {"qty": qty_value}
+
+    runtime_decay_decision = _runtime_decay_pretrade_gate(intent, ledger=ledger, cfg=cfg)
     if runtime_decay_decision is not None:
         return runtime_decay_decision
 
@@ -1783,6 +1839,10 @@ def validate_pretrade(
                 },
             )
 
+    live_cost_artifact_decision = _live_cost_artifact_pretrade_gate(intent, cfg=cfg)
+    if live_cost_artifact_decision is not None:
+        return live_cost_artifact_decision
+
     execution_quality_decision = _execution_quality_gate(
         intent,
         cfg=cfg,
@@ -1810,7 +1870,7 @@ def validate_pretrade(
             },
         )
 
-    qty_abs = abs(int(intent.qty))
+    qty_abs = qty_value
     notional_abs = abs(float(intent.notional))
     if (max_order_shares > 0 and qty_abs > max_order_shares) or (
         max_order_dollars > 0 and notional_abs > max_order_dollars

@@ -67,7 +67,7 @@ def test_apply_weight_limits():
         asset_class='equity',
     )
     w = eng._apply_weight_limits(sig)
-    assert w == 0.1
+    assert w == pytest.approx(0.1)
 
 
 def test_compute_volatility_error(monkeypatch):

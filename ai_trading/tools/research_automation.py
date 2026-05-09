@@ -3074,6 +3074,8 @@ def _copy_authority_artifacts(
             )
         for target in targets:
             try:
+                if row.get("status") == "blocked" and target.exists():
+                    continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
             except OSError:

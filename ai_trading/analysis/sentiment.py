@@ -6,7 +6,8 @@ extracted from bot_engine.py to enable standalone imports and testing.
 """
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import time as pytime
-from datetime import datetime
+import json
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any, Literal, TypedDict, cast
 
@@ -70,6 +71,23 @@ class SentimentEvidence(TypedDict, total=False):
 
 
 _sentiment_evidence_cache: dict[str, SentimentEvidence] = {}
+_sentiment_proxy_provenance: dict[str, dict[str, Any]] = {}
+
+_DEFAULT_FORM4_CIK_MAP = {
+    "AAPL": "0000320193",
+    "MSFT": "0000789019",
+    "GOOGL": "0001652044",
+    "GOOG": "0001652044",
+    "AMZN": "0001018724",
+    "META": "0001326801",
+    "NVDA": "0001045810",
+    "TSLA": "0001318605",
+    "JPM": "0000019617",
+    "BAC": "0000070858",
+    "WFC": "0000072971",
+    "C": "0000831001",
+    "GS": "0000886982",
+}
 
 
 def _default_fail_closed_outside_tests() -> bool:
@@ -91,6 +109,36 @@ def _sentiment_fail_closed() -> bool:
 
 def _sentiment_runtime_enabled() -> bool:
     return bool(get_env("AI_TRADING_SENTIMENT_ENABLED", True, cast=bool))
+
+
+def _sentiment_min_scored_articles() -> int:
+    return max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_SENTIMENT_MIN_SCORED_ARTICLES",
+                1,
+                cast=int,
+                resolve_aliases=False,
+            )
+            or 1
+        ),
+    )
+
+
+def _form4_recency_days() -> int:
+    return max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_FORM4_RECENCY_DAYS",
+                30,
+                cast=int,
+                resolve_aliases=False,
+            )
+                or 30
+        ),
+    )
 
 
 def _record_sentiment_evidence(
@@ -161,6 +209,7 @@ def reset_sentiment_runtime_cache() -> None:
     """Clear lazily initialized sentiment runtime resources."""
     _set_sentiment_http_session_for_tests(None)
     _sentiment_evidence_cache.clear()
+    _sentiment_proxy_provenance.clear()
 
 def _load_bs4(log=logger):
     global _bs4, _SENT_DEPS_LOGGED
@@ -526,7 +575,20 @@ def _fetch_sentiment_once(ctx, ticker: str) -> float:
                     res = analyze_text(text)
                     if res.get('available'):
                         scores.append(float(res['pos'] - res['neg']))
-        news_score = float(sum(scores) / len(scores)) if scores else 0.0
+        min_scored_articles = _sentiment_min_scored_articles()
+        if len(scores) < min_scored_articles:
+            reason = "insufficient_newsapi_evidence"
+            logger.info(
+                "SENTIMENT_INSUFFICIENT_NEWSAPI_EVIDENCE",
+                extra={
+                    "ticker": ticker,
+                    "scored_article_count": len(scores),
+                    "min_scored_articles": min_scored_articles,
+                    "article_count": len(articles),
+                },
+            )
+            return _get_cached_or_neutral_sentiment(ticker, reason=reason)
+        news_score = float(sum(scores) / len(scores))
         form4_score = 0.0
         try:
             form4 = fetch_form4_filings(ticker)
@@ -556,8 +618,10 @@ def _fetch_sentiment_once(ctx, ticker: str) -> float:
             provenance={
                 "article_count": len(articles),
                 "scored_article_count": len(scores),
+                "min_scored_article_count": min_scored_articles,
                 "news_score": news_score,
                 "form4_score": form4_score,
+                "form4_count": len(form4) if "form4" in locals() else 0,
                 "news_weight": SENTIMENT_NEWS_WEIGHT,
                 "form4_weight": SENTIMENT_FORM4_WEIGHT,
                 "text_model": "finbert_local_files_only",
@@ -604,6 +668,7 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
     AI-AGENT-REF: Implements exponential backoff and multiple fallback data sources for critical sentiment rate limiting fix.
     """
     _record_sentiment_failure('rate_limit')
+    _sentiment_proxy_provenance.pop(ticker, None)
     fallback_sources = [
         (
             _try_alternative_sentiment_sources,
@@ -651,7 +716,10 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
                     source=source_name,
                     authoritative=False,
                     reason="rate_limit_fallback",
-                    provenance={"fallback": fallback_func.__name__},
+                    provenance={
+                        "fallback": fallback_func.__name__,
+                        **_sentiment_proxy_provenance.get(ticker, {}),
+                    },
                 )
                 return value
         except (ValueError, TypeError) as e:
@@ -716,11 +784,20 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
                 sentiment_score = float(data.get('sentiment_score', 0.0) or 0.0)
                 if -1.0 <= sentiment_score <= 1.0:
                     logger.info(f'ALTERNATIVE_SENTIMENT_SUCCESS | ticker={ticker} score={sentiment_score}')
+                    _sentiment_proxy_provenance[ticker] = {
+                        "provider": "alternative_sentiment",
+                        "primary_status_code": primary_resp.status_code,
+                        "alternative_status_code": alt_resp.status_code,
+                    }
                     return sentiment_score
         elif primary_resp.status_code == 200:
             data = primary_resp.json()
             sentiment_score = float(data.get('sentiment_score', 0.0) or 0.0)
             if -1.0 <= sentiment_score <= 1.0:
+                _sentiment_proxy_provenance[ticker] = {
+                    "provider": "primary_sentiment_score",
+                    "primary_status_code": primary_resp.status_code,
+                }
                 return sentiment_score
     except (ValueError, TypeError) as e:
         logger.debug(f'Alternative sentiment source failed for {ticker}: {e}')
@@ -738,6 +815,11 @@ def _try_cached_similar_symbols(ticker: str) -> float | None:
                 if pytime.time() - cache_ts < SENTIMENT_TTL_SEC:
                     logger.info(f'SENTIMENT_SIMILAR_SYMBOL_PROXY | ticker={ticker} proxy={similar_symbol} score={sentiment_val}')
                     proxy_sentiment = sentiment_val * 0.8
+                    _sentiment_proxy_provenance[ticker] = {
+                        "proxy_symbol": similar_symbol,
+                        "proxy_multiplier": 0.8,
+                        "proxy_cache_age_seconds": pytime.time() - cache_ts,
+                    }
                     return proxy_sentiment
     return None
 
@@ -753,6 +835,12 @@ def _try_sector_sentiment_proxy(ticker: str) -> float | None:
                     if pytime.time() - cache_ts < SENTIMENT_TTL_SEC * 2:
                         logger.info(f'SENTIMENT_SECTOR_PROXY | ticker={ticker} sector_etf={sector_etf} score={sentiment_val}')
                         sector_sentiment = sentiment_val * 0.6
+                        _sentiment_proxy_provenance[ticker] = {
+                            "proxy_symbol": sector_etf,
+                            "proxy_type": "sector_etf",
+                            "proxy_multiplier": 0.6,
+                            "proxy_cache_age_seconds": pytime.time() - cache_ts,
+                        }
                         return sector_sentiment
     return None
 
@@ -899,6 +987,37 @@ def _parse_form4_cells(cells: list[str]) -> dict[str, Any] | None:
     }
 
 
+def _resolve_form4_cik(ticker: str) -> tuple[str | None, dict[str, Any]]:
+    symbol = str(ticker or "").strip().upper()
+    if not symbol:
+        return None, {"reason": "empty_ticker"}
+    if symbol.isdigit():
+        return symbol.zfill(10), {"cik_source": "numeric_input"}
+    env_map_raw = str(
+        get_env(
+            "AI_TRADING_FORM4_CIK_MAP",
+            "",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or ""
+    ).strip()
+    if env_map_raw:
+        try:
+            env_map = json.loads(env_map_raw)
+        except json.JSONDecodeError:
+            logger.warning("FORM4_CIK_MAP_INVALID_JSON", extra={"ticker": symbol})
+            env_map = {}
+        if isinstance(env_map, dict):
+            cik = env_map.get(symbol) or env_map.get(symbol.replace(".", "-"))
+            if cik:
+                return str(cik).strip().zfill(10), {"cik_source": "env_map"}
+    cik = _DEFAULT_FORM4_CIK_MAP.get(symbol)
+    if cik:
+        return cik, {"cik_source": "built_in_map"}
+    return None, {"reason": "cik_unresolved"}
+
+
 def fetch_form4_filings(ticker: str) -> list[dict]:
     """
     Scrape SEC Form 4 filings for insider trade info.
@@ -914,9 +1033,14 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
     if soup_cls is None:
         logger.debug('BeautifulSoup not available, Form 4 parsing disabled')
         return []
-    url = f'https://www.sec.gov/cgi-bin/own-disp?action=getowner&CIK={ticker}&type=4'
+    cik, cik_provenance = _resolve_form4_cik(ticker)
+    if cik is None:
+        logger.debug("FORM4_CIK_UNRESOLVED", extra={"ticker": ticker, **cik_provenance})
+        return []
+    url = f'https://www.sec.gov/cgi-bin/own-disp?action=getowner&CIK={cik}&type=4'
     try:
         headers = {'User-Agent': 'AI Trading Bot'}
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=_form4_recency_days())
         backoff = 0.5
         for attempt in range(3):
             r = _get_sentiment_http_session().get(url, headers=headers, timeout=clamp_request_timeout(HTTP_TIMEOUT))
@@ -939,6 +1063,15 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
             cells = [col.get_text(strip=True) for col in cols]
             filing = _parse_form4_cells(cells)
             if filing is not None:
+                if filing["date"] < cutoff:
+                    continue
+                filing["ticker"] = ticker
+                filing["cik"] = cik
+                filing["provenance"] = {
+                    "source": "sec_own_disp_form4",
+                    "url": url,
+                    **cik_provenance,
+                }
                 filings.append(filing)
         return filings
     except (ValueError, TypeError) as e:

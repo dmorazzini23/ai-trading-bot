@@ -233,6 +233,23 @@ def test_calculate_optimal_rebalance_accepts_qty_payloads(portfolio_settings) ->
     assert plan["current_weights"]["OBJECT_QTY"] == pytest.approx(0.5)
 
 
+def test_calculate_optimal_rebalance_does_not_assume_missing_tax_basis(portfolio_settings) -> None:
+    tax = _tax_rebalancer(portfolio_settings)
+
+    plan = tax.calculate_optimal_rebalance(
+        {"AAPL": {"quantity": 100}},
+        {"AAPL": 0.10},
+        {"AAPL": 100.0},
+        account_equity=10_000.0,
+    )
+
+    trade = plan["rebalance_trades"][0]
+    assert trade["trade_quantity"] < 0
+    assert trade["tax_impact"]["tax_basis_available"] is False
+    assert trade["tax_impact"]["is_optimal_timing"] is False
+    assert trade["tax_impact"]["reason"] == "missing_rebalance_basis"
+
+
 def test_tax_efficiency_priority_and_recommendation_helpers(portfolio_settings) -> None:
     tax = _tax_rebalancer(portfolio_settings)
 

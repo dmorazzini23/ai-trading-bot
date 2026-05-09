@@ -98,6 +98,52 @@ def test_run_walkforward_respects_fold_boundaries_and_one_day_embargo(
     assert [trainer.kwargs["random_state"] for trainer in _BoundaryTrainer.instances] == [42, 43, 44]
 
 
+def test_run_walkforward_purges_training_rows_with_label_end_overlap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = _market_frame(periods=8)
+    data["label_end"] = data.index + pd.Timedelta(days=3)
+    _BoundaryTrainer.instances.clear()
+    monkeypatch.setattr(wf, "_get_ml_trainer", lambda: _BoundaryTrainer)
+    monkeypatch.setattr(
+        wf,
+        "walkforward_splits",
+        lambda **_kwargs: [
+            {
+                "train_start": data.index[0],
+                "train_end": data.index[4],
+                "test_start": data.index[4],
+                "test_end": data.index[6],
+            }
+        ],
+    )
+
+    result = _evaluator(tmp_path).run_walkforward(
+        data,
+        target_col="target",
+        save_results=False,
+        label_end_col="label_end",
+    )
+
+    assert result["fold_results"][0]["purged_train_samples"] == 3
+    assert result["fold_results"][0]["train_samples"] == 1
+
+
+def test_run_walkforward_can_require_label_end_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_WALK_FORWARD_REQUIRE_LABEL_END", "1")
+
+    with pytest.raises(ValueError, match="label-end metadata required"):
+        _evaluator(tmp_path).run_walkforward(
+            _market_frame(periods=8),
+            target_col="target",
+            save_results=False,
+        )
+
+
 @pytest.mark.parametrize(
     "kwargs,error_type",
     [

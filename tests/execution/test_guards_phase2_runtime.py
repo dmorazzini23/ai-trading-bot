@@ -23,6 +23,10 @@ def test_timestamp_coercion_and_quote_staleness_paths() -> None:
         False,
         None,
     )
+    assert guards._is_stale({"timestamp": now + timedelta(seconds=6)}, now, 10) == (
+        True,
+        "future_quote_timestamp",
+    )
     assert guards._is_stale({"ts": now - timedelta(seconds=11)}, now, 10) == (
         True,
         "stale_quote",
@@ -85,6 +89,10 @@ def test_can_execute_quote_gate_branches(monkeypatch: pytest.MonkeyPatch) -> Non
         False,
         "stale_quote",
     )
+    assert guards.can_execute({"bp": "1", "ap": "2", "t": now + timedelta(seconds=6)}, now=now) == (
+        False,
+        "future_quote_timestamp",
+    )
     assert guards.can_execute({"bid_price": "1", "ask_price": "2", "time": now}, now=now) == (
         True,
         None,
@@ -99,6 +107,7 @@ def test_quote_fresh_enough_and_cycle_state(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(guards, "_utcnow", lambda: now)
 
     assert guards.quote_fresh_enough(None, 10) is False
+    assert guards.quote_fresh_enough(now + timedelta(seconds=6), 10) is False
     assert guards.quote_fresh_enough(now.replace(tzinfo=None) - timedelta(seconds=5), 10) is True
     assert guards.quote_fresh_enough(now - timedelta(seconds=11), 10) is False
 

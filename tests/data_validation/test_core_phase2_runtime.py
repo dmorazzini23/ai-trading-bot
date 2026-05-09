@@ -41,6 +41,16 @@ def test_market_hours_thresholds_and_ohlcv_validation() -> None:
     assert core.is_valid_ohlcv(pd.DataFrame(), min_rows=1) is False
 
 
+def test_market_hours_use_calendar_for_holiday_and_early_close() -> None:
+    black_friday_after_early_close = datetime(2025, 11, 28, 18, 5, tzinfo=UTC)
+    independence_day = datetime(2025, 7, 4, 15, 0, tzinfo=UTC)
+
+    assert core.is_market_hours(black_friday_after_early_close) is False
+    assert core.get_staleness_threshold("AAPL", black_friday_after_early_close) == 120
+    assert core.is_market_hours(independence_day) is False
+    assert core.get_staleness_threshold("AAPL", independence_day) == 360
+
+
 def test_freshness_stale_symbols_and_validate_trading_data(monkeypatch: pytest.MonkeyPatch) -> None:
     now = datetime(2026, 4, 24, 15, 0, tzinfo=UTC)
 

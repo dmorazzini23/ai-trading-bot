@@ -121,7 +121,7 @@ target-version = ["py312"]
 target-version = "py312"
 line-length = 100
 src = ["ai_trading", "tests", "tools"]
-extend-exclude = ["**/.venv", "**/venv", "build", "dist", "notebooks", "artifacts", "TROUBLESHOOTING.md"]
+extend-exclude = ["**/.venv", "**/venv", "build", "dist", "notebooks", "artifacts", "plugins", "TROUBLESHOOTING.md"]
 
 # Keep the repo-wide gate focused on correctness checks that are green for the
 # current baseline. Broad style migrations such as import sorting, pyupgrade,

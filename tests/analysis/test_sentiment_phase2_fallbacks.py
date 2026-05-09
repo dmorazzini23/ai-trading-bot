@@ -106,6 +106,7 @@ def test_rate_limit_fallback_uses_similar_symbol_cache(monkeypatch: pytest.Monke
     assert evidence is not None
     assert evidence["source"] == "similar_symbol_proxy"
     assert evidence["authoritative"] is False
+    assert evidence["provenance"]["proxy_symbol"] == "MSFT"
 
 
 def test_rate_limit_fallback_uses_sector_proxy_and_final_neutral(
@@ -120,6 +121,7 @@ def test_rate_limit_fallback_uses_sector_proxy_and_final_neutral(
     assert evidence is not None
     assert evidence["source"] == "sector_proxy"
     assert evidence["authoritative"] is False
+    assert evidence["provenance"]["proxy_symbol"] == "XLK"
 
     sentiment._sentiment_cache.clear()
     monkeypatch.setattr(sentiment, "_try_alternative_sentiment_sources", lambda _ticker: None)
@@ -323,11 +325,22 @@ def test_fetch_form4_filings_retries_and_parses_table(monkeypatch: pytest.Monkey
     )
     monkeypatch.setattr(sentiment.pytime, "sleep", lambda _seconds: None)
 
-    assert sentiment.fetch_form4_filings("SPY") == [
-        {
-            "date": sentiment.datetime(2026, 4, 20),
-            "type": "buy",
-            "dollar_amount": 55_000.0,
-        }
-    ]
+    filings = sentiment.fetch_form4_filings("AAPL")
+    assert len(filings) == 1
+    assert filings[0]["date"] == sentiment.datetime(2026, 4, 20)
+    assert filings[0]["type"] == "buy"
+    assert filings[0]["dollar_amount"] == 55_000.0
+    assert filings[0]["cik"] == "0000320193"
+    assert filings[0]["provenance"]["cik_source"] == "built_in_map"
     assert responses == []
+
+
+def test_fetch_form4_filings_requires_resolved_cik(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(sentiment, "_load_bs4", lambda _logger=None: object)
+    sentiment._set_sentiment_http_session_for_tests(
+        SimpleNamespace(get=lambda url, **_kwargs: calls.append(url))
+    )
+
+    assert sentiment.fetch_form4_filings("UNKNOWN") == []
+    assert calls == []

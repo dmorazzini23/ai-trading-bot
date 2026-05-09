@@ -138,6 +138,24 @@ def test_pretrade_blocks_projected_symbol_notional() -> None:
     assert details["projected_symbol_notional"] == pytest.approx(1300.0)
 
 
+def test_pretrade_rejects_zero_or_negative_quantity() -> None:
+    cfg = SimpleNamespace()
+    ledger = _ExposureLedger()
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    for qty in (0, -3):
+        allowed, reason, details = validate_pretrade(
+            _intent(symbol="AAPL", side="buy", qty=qty, price=100.0),
+            cfg=cfg,
+            ledger=ledger,
+            rate_limiter=limiter,
+        )
+
+        assert allowed is False
+        assert reason == "INVALID_QTY_BLOCK"
+        assert details["qty"] == qty
+
+
 def test_pretrade_blocks_projected_gross_notional() -> None:
     cfg = SimpleNamespace(
         max_order_dollars=0.0,

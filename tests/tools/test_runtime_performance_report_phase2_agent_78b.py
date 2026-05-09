@@ -131,6 +131,8 @@ def test_trade_history_direct_rows_enriches_costs_and_rendering(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_SYMBOLS", "")
+    monkeypatch.setenv("AI_TRADING_CANARY_SYMBOLS", "")
     monkeypatch.setattr(
         rpr,
         "_summarize_broker_open_positions",

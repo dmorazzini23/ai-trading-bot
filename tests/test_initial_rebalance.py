@@ -64,4 +64,5 @@ def test_partial_initial_rebalance_fill(monkeypatch, api_cls):
 
     bot_engine.initial_rebalance(ctx, ["AAPL"])
     assert all(o[2] == "buy" for o in ctx.api.orders)
-    assert ctx.api.positions["AAPL"] == 10
+    assert ctx.api.orders[-1] == ("AAPL", 5, "buy")
+    assert ctx.api.positions["AAPL"] == 7

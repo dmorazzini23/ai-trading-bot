@@ -25,8 +25,10 @@ Run the standalone health app:
 ```bash
 RUN_HEALTHCHECK=1 python3 -m ai_trading.app &
 curl -s http://127.0.0.1:8081/healthz
-curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/metrics
 ```
+
+The standalone app is a lightweight health-only surface. The packaged service
+keeps `/healthz` and `/metrics` on the main API port, `:9001`.
 
 Run the main API/runtime surface:
 

@@ -172,10 +172,10 @@ def _resolve_setting(
     env_map: Mapping[str, str],
     default: str = "",
 ) -> str:
-    direct = os.getenv(name)
-    if direct is not None and direct.strip():
-        return direct.strip()
-    return str(env_map.get(name, default) or "").strip()
+    configured = str(env_map.get(name, "") or "").strip()
+    if configured:
+        return configured
+    return str(default or "").strip()
 
 
 def _write_runtime_env_atomic(dst: Path, rendered: str) -> None:

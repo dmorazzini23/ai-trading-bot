@@ -384,6 +384,36 @@ def submit_order_runtime(
     be = importlib.import_module("ai_trading.core.bot_engine")
     exec_kwargs = dict(exec_kwargs)
 
+    try:
+        validated_qty = int(qty)
+    except (TypeError, ValueError):
+        be.logger.warning(
+            "INVALID_QTY_BLOCK",
+            extra={"symbol": symbol, "qty": qty, "side": side},
+        )
+        _record_skip_submit(
+            be,
+            symbol=symbol,
+            side=str(side).lower(),
+            reason="INVALID_QTY_BLOCK",
+            detail=str(qty),
+        )
+        return None
+    if validated_qty <= 0:
+        be.logger.warning(
+            "INVALID_QTY_BLOCK",
+            extra={"symbol": symbol, "qty": qty, "side": side},
+        )
+        _record_skip_submit(
+            be,
+            symbol=symbol,
+            side=str(side).lower(),
+            reason="INVALID_QTY_BLOCK",
+            detail=str(qty),
+        )
+        return None
+    qty = validated_qty
+
     annotations = _mapping_dict(exec_kwargs.get("annotations"))
     metadata = _mapping_dict(exec_kwargs.get("metadata"))
 

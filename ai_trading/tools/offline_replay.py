@@ -305,6 +305,9 @@ def _policy_finalize_diagnostics(
         "opportunity_openings_only_skipped": int(
             counters.get("opportunity_openings_only_skipped", 0)
         ),
+        "opportunity_openings_only_pending": int(
+            counters.get("opportunity_openings_only_pending", 0)
+        ),
     }
 
 
@@ -1306,6 +1309,7 @@ def _summarize_markout_fill_metrics(
 
     net_edges: list[float] = []
     edge_weights: list[float] = []
+    cost_bps_values: list[float] = []
     per_symbol_samples: Counter[str] = Counter()
 
     for event in fill_events:
@@ -1331,11 +1335,14 @@ def _summarize_markout_fill_metrics(
         side = str(event.get("side", context.get("side", "buy"))).strip().lower()
         side_sign = 1.0 if side == "buy" else -1.0
         gross_edge_bps = ((markout_price / fill_price) - 1.0) * 10000.0 * side_sign
-        # One-bar markout approximates a full roundtrip by charging both legs.
-        net_edge_bps = float(gross_edge_bps - (2.0 * max(0.0, fee_bps)))
+        entry_cost_bps = max(0.0, float(context.get("entry_slippage_bps", 0.0) or 0.0))
+        exit_cost_bps = max(0.0, float(context.get("exit_slippage_bps", entry_cost_bps) or 0.0))
+        round_trip_cost_bps = float((2.0 * max(0.0, fee_bps)) + entry_cost_bps + exit_cost_bps)
+        net_edge_bps = float(gross_edge_bps - round_trip_cost_bps)
         weight = float(abs(fill_qty))
         net_edges.append(net_edge_bps)
         edge_weights.append(weight)
+        cost_bps_values.append(round_trip_cost_bps)
         symbol = str(event.get("symbol", "")).strip().upper()
         if symbol:
             per_symbol_samples[symbol] += 1
@@ -1349,6 +1356,7 @@ def _summarize_markout_fill_metrics(
             "profit_factor": 0.0,
             "expectancy_bps": 0.0,
             "net_pnl_bps": 0.0,
+            "mean_round_trip_cost_bps": 0.0,
             "per_symbol_samples": dict(per_symbol_samples),
         }
 
@@ -1377,6 +1385,7 @@ def _summarize_markout_fill_metrics(
         "profit_factor": profit_factor,
         "expectancy_bps": float((weighted_edge_sum / total_weight) if total_weight > 0.0 else 0.0),
         "net_pnl_bps": float(weighted_edge_sum),
+        "mean_round_trip_cost_bps": float(np.mean(np.asarray(cost_bps_values, dtype=float))),
         "per_symbol_samples": dict(per_symbol_samples),
     }
 
@@ -2154,6 +2163,7 @@ def _run_parity_simulation(
     markout_veto_config = _resolve_markout_veto_config(args)
     markout_veto_history: dict[str, deque[float]] = {}
     opportunity_opened_symbols: set[str] = set()
+    opportunity_pending_symbols: set[str] = set()
     synthetic_index = 0
     for symbol, csv_path in symbol_paths.items():
         frame, load_report = _load_replay_historical_bars(
@@ -2256,7 +2266,10 @@ def _run_parity_simulation(
             policy_counters["candidates"] += 1
             opportunity_gate_applied = not (
                 policy_profile.opportunity_openings_only
-                and symbol in opportunity_opened_symbols
+                and (
+                    symbol in opportunity_opened_symbols
+                    or symbol in opportunity_pending_symbols
+                )
             )
             if opportunity_gate_applied:
                 keep_count = _policy_keep_count(
@@ -2268,7 +2281,10 @@ def _run_parity_simulation(
                     policy_counters["reject_opportunity_quantile"] += 1
                     return None
             else:
-                policy_counters["opportunity_openings_only_skipped"] += 1
+                if symbol in opportunity_opened_symbols:
+                    policy_counters["opportunity_openings_only_skipped"] += 1
+                else:
+                    policy_counters["opportunity_openings_only_pending"] += 1
                 opportunity_gate_skipped = True
             if fill_prob_proxy < policy_profile.expected_capture_fill_prob_floor:
                 policy_counters["reject_fill_prob_floor"] += 1
@@ -2332,6 +2348,12 @@ def _run_parity_simulation(
             side=entry_side,
             ts=ts_iso,
         )
+        exit_slippage_bps = _replay_slippage_bps(
+            cfg,
+            symbol=symbol,
+            side="sell" if side == "buy" else "buy",
+            ts=ts_iso,
+        )
         size_multiplier, sizing_context = _sizing_multiplier(
             cfg,
             confidence=confidence,
@@ -2375,11 +2397,18 @@ def _run_parity_simulation(
             "rank_score_post_adjustments": float(adjusted_capture),
             "accepted_reason": "policy_controls" if policy_profile is not None else "thresholds",
             "opportunity_openings_only_skip": bool(opportunity_gate_skipped),
+            "opportunity_openings_only_pending": bool(
+                opportunity_gate_skipped and symbol in opportunity_pending_symbols
+            ),
             "veto_shadow_reason": veto_shadow_reason,
             "veto_bucket": veto_bucket,
+            "entry_slippage_bps": float(entry_slippage_bps),
+            "exit_slippage_bps": float(exit_slippage_bps),
             "size_multiplier": float(size_multiplier),
             "sizing": dict(sizing_context),
         }
+        if policy_profile is not None:
+            opportunity_pending_symbols.add(symbol)
         return {
             "symbol": symbol,
             "side": side,
@@ -2408,6 +2437,7 @@ def _run_parity_simulation(
             symbol_value = str(context.get("symbol") or event.get("symbol") or "").strip().upper()
             if symbol_value:
                 opportunity_opened_symbols.add(symbol_value)
+                opportunity_pending_symbols.discard(symbol_value)
 
     replay = ReplayEventLoop(
         strategy=strategy,
@@ -2457,6 +2487,7 @@ def _run_parity_simulation(
         "profit_factor": markout_metrics.get("profit_factor", 0.0),
         "expectancy_bps": float(markout_metrics.get("expectancy_bps", 0.0)),
         "net_pnl_bps": float(markout_metrics.get("net_pnl_bps", 0.0)),
+        "mean_round_trip_cost_bps": float(markout_metrics.get("mean_round_trip_cost_bps", 0.0)),
         "median_hold_bars": 1.0 if int(markout_metrics.get("samples", 0)) > 0 else 0.0,
         "churn_trades_per_100_bars": float((total_trades / max(total_bars, 1)) * 100.0),
         "exposure_ratio": 0.0,

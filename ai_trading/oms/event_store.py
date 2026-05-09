@@ -322,6 +322,7 @@ class EventStore:
                 if shared_bootstrap_key in _BOOTSTRAPPED_DATABASE_URLS:
                     return
                 with self._engine.begin() as conn:
+                    _EVENT_METADATA.create_all(conn, checkfirst=True)
                     self._ensure_append_only_guards(conn)
                 _BOOTSTRAPPED_DATABASE_URLS.add(shared_bootstrap_key)
             return

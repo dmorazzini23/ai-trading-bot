@@ -113,6 +113,43 @@ def test_prepare_netting_submit_prelude_allows_explicit_optimizer_init_fail_open
     assert result.snapshot_updates["portfolio_optimizer"]["fail_open_applied"] is True
 
 
+def test_prepare_netting_submit_prelude_blocks_opening_optimizer_decision_error() -> None:
+    kwargs = _base_kwargs()
+    kwargs["portfolio_optimizer_enabled"] = True
+    kwargs["portfolio_optimizer"] = object()
+    kwargs["portfolio_optimizer_allows_trade_func"] = lambda **_kwargs: (_ for _ in ()).throw(
+        RuntimeError("optimizer down")
+    )
+
+    result = prepare_netting_submit_prelude(**cast(Any, kwargs))
+
+    assert result.blocked_reason == "PORTFOLIO_OPTIMIZER_DECISION_ERROR"
+    assert result.blocked_metrics is not None
+    assert result.blocked_metrics["portfolio_optimizer"]["fail_closed"] is True
+    assert result.snapshot_updates["portfolio_optimizer"]["error_type"] == "RuntimeError"
+
+
+def test_prepare_netting_submit_prelude_blocks_live_optimizer_decision_error() -> None:
+    kwargs = _base_kwargs()
+    kwargs["opening_trade"] = False
+    kwargs["cfg"] = SimpleNamespace(
+        seed="seed",
+        execution_require_realtime_nbbo=True,
+        execution_mode="live",
+    )
+    kwargs["portfolio_optimizer_enabled"] = True
+    kwargs["portfolio_optimizer"] = object()
+    kwargs["portfolio_optimizer_allows_trade_func"] = lambda **_kwargs: (_ for _ in ()).throw(
+        ValueError("optimizer bad input")
+    )
+
+    result = prepare_netting_submit_prelude(**cast(Any, kwargs))
+
+    assert result.blocked_reason == "PORTFOLIO_OPTIMIZER_DECISION_ERROR"
+    assert result.blocked_metrics is not None
+    assert result.blocked_metrics["portfolio_optimizer"]["fail_closed"] is True
+
+
 def test_prepare_netting_submit_prelude_blocks_on_pretrade_and_exposes_order_intent() -> None:
     kwargs = _base_kwargs()
     kwargs["safe_validate_pretrade_func"] = lambda intent, **kwargs: (

@@ -10,7 +10,16 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 self_path = Path(__file__).resolve()
-EXCLUDED_DIRS = {".venv", "venv", "__pycache__", ".git", "site-packages"}
+EXCLUDED_DIRS = {
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".git",
+    "site-packages",
+    # Marketplace plugin bundles are third-party/operator tooling. Scan the
+    # project codebase, not vendored plugin internals.
+    "plugins",
+}
 pyfiles = [
     p
     for p in ROOT.rglob("*.py")

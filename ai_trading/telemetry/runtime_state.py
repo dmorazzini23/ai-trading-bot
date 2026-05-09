@@ -284,6 +284,7 @@ def update_data_provider_state(
                 "data_status": None,
                 "safe_mode": False,
                 "consecutive_failures": 0,
+                "backup": None,
             }
             for key, value in clear_defaults.items():
                 if key not in updates:

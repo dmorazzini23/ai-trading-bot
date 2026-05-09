@@ -115,29 +115,23 @@ def _derive_minimum_quantity(engine: "RiskEngine", price: float) -> int:
     min_usd_raw = getattr(
         engine.config,
         "position_size_min_usd",
-        POSITION_SIZE_MIN_USD_DEFAULT,
+        None,
     )
     try:
         min_usd_value = float(min_usd_raw)
     except (TypeError, ValueError):
         min_usd_value = None
 
-    fallback_usd = get_position_size_min_usd()
-    if fallback_usd <= 0:
-        fallback_usd = POSITION_SIZE_MIN_USD_DEFAULT
-    fallback_qty = max(int(fallback_usd / price), 1)
-
     if min_usd_value is not None and _is_finite_number(min_usd_value) and min_usd_value > 0:
         return max(int(min_usd_value / price), 1)
 
     if not getattr(engine, "_invalid_min_size_logged", False):
         logger.warning(
-            "Invalid position_size_min_usd=%s; using fallback of $%.2f",
+            "Invalid position_size_min_usd=%s; no minimum quantity floor applied",
             min_usd_raw,
-            fallback_usd,
         )
         engine._invalid_min_size_logged = True
-    return fallback_qty
+    return 0
 
 
 def _calculate_position_size(
@@ -1418,8 +1412,6 @@ class RiskEngine:
             qty = _calculate_position_size(self, raw_qty, price, signal)
             if qty <= 0:
                 return 0
-            if getattr(signal, "strategy", "") == "default":
-                qty = max(qty, 10)
             qty = _cap_final_position_size(
                 self,
                 qty,
@@ -1470,8 +1462,7 @@ class RiskEngine:
                 e,
             )
             requested_weight = 0.0
-        base_weight = min(requested_weight, max_allowed)
-        return round(base_weight, 1)
+        return min(requested_weight, max_allowed)
 
     def compute_volatility(self, returns: np.ndarray) -> dict:
         """Return multiple volatility estimates."""

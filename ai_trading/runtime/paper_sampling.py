@@ -135,7 +135,21 @@ def evaluate_paper_sampling_order(
         details.update({"qty": requested_qty, "price": price})
         return PaperSamplingDecision(True, False, 0, "PAPER_SAMPLING_INPUT_BLOCK", details)
 
-    max_qty = max(1, int(math.floor(max_notional / price_value)))
+    if not math.isfinite(max_notional) or max_notional <= 0.0:
+        details.update({"qty": requested_qty, "price": price_value, "max_notional_per_order": max_notional})
+        return PaperSamplingDecision(True, False, 0, "PAPER_SAMPLING_INPUT_BLOCK", details)
+    if price_value > max_notional:
+        details.update(
+            {
+                "requested_qty": requested_qty,
+                "adjusted_qty": 0,
+                "price": price_value,
+                "max_notional_per_order": max_notional,
+            }
+        )
+        return PaperSamplingDecision(True, False, 0, "PAPER_SAMPLING_MAX_NOTIONAL_BLOCK", details)
+
+    max_qty = int(math.floor(max_notional / price_value))
     adjusted_qty = min(requested_qty, max_qty)
     details.update(
         {

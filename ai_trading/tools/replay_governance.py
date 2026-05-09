@@ -133,6 +133,7 @@ def _collect_replay_snapshot(path: Path) -> dict[str, Any]:
             "violations_by_code": dict(payload.get("violations_by_code", {}) or {}),
             "counterfactual_passed": counterfactual_passed is True,
             "counterfactual_available": "passed" in counterfactual_mapping,
+            "counterfactual_reason": counterfactual_mapping.get("reason"),
         }
     )
     live_cost_alignment = payload.get("live_cost_alignment")
@@ -270,8 +271,17 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
             and after_mtime_ns is not None
             and (before_mtime_ns is None or after_mtime_ns > before_mtime_ns)
         )
+        counterfactual_passed = bool(replay_snapshot.get("counterfactual_passed"))
+        counterfactual_available = bool(replay_snapshot.get("counterfactual_available"))
+        no_baseline_counterfactual = (
+            str(replay_snapshot.get("counterfactual_reason") or "") == "no_baseline_summary"
+        )
+        blocked_counterfactual = bool(
+            fresh_artifact
+            and (not counterfactual_passed or not counterfactual_available or no_baseline_counterfactual)
+        )
         payload: dict[str, Any] = {
-            "status": "ok" if fresh_artifact else "failed",
+            "status": "blocked" if blocked_counterfactual else ("ok" if fresh_artifact else "failed"),
             "now": now.isoformat(),
             "force": bool(args.force),
             "market_open_now": bool(args.market_open_now),
@@ -285,6 +295,13 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
         }
         if not fresh_artifact:
             payload["reason"] = "missing_fresh_replay_artifact"
+            payload["elapsed_sec"] = max(0.0, time.monotonic() - started_mono)
+        elif blocked_counterfactual:
+            payload["reason"] = (
+                "counterfactual_no_baseline"
+                if no_baseline_counterfactual
+                else "counterfactual_non_regression_insufficient"
+            )
             payload["elapsed_sec"] = max(0.0, time.monotonic() - started_mono)
         if args.summary_json is not None:
             _write_summary(Path(args.summary_json), payload)

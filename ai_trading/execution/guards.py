@@ -27,6 +27,7 @@ class SafetyState:
 
 STATE = SafetyState()
 logger = get_logger(__name__)
+MAX_FUTURE_QUOTE_SKEW_SECONDS = 5.0
 
 
 def _now() -> _dt.datetime:
@@ -74,6 +75,8 @@ def _is_stale(quote: dict[str, Any], now: _dt.datetime, max_age_sec: int) -> Tup
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         logger.debug("QUOTE_STALENESS_AGE_COMPUTE_FAILED", exc_info=True)
         return True, "quote_timestamp_missing"
+    if age < -MAX_FUTURE_QUOTE_SKEW_SECONDS:
+        return True, "future_quote_timestamp"
     if age > float(max_age_sec):
         return True, "stale_quote"
     return False, None
@@ -160,7 +163,7 @@ def quote_fresh_enough(
     if quote_ts_utc.tzinfo is None:
         quote_ts_utc = quote_ts_utc.replace(tzinfo=_dt.timezone.utc)
     age = (_utcnow() - quote_ts_utc).total_seconds()
-    return age <= max_age_sec
+    return -MAX_FUTURE_QUOTE_SKEW_SECONDS <= age <= max_age_sec
 
 
 def begin_cycle(universe_size: int, degraded: bool) -> None:

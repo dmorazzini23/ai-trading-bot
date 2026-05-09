@@ -284,6 +284,9 @@ Plan, but do not download, optional cache materialization:
 Actual downloads require `AI_TRADING_HF_ALLOW_DOWNLOADS=1` or
 `--allow-downloads`, and cached files stay under the configured Hugging Face
 research cache. They must never overwrite production model artifacts.
+Runtime sentiment model loading is local-only; FinBERT weights must already be
+present in the configured cache/model path, and runtime code must not download
+Hugging Face artifacts on demand.
 
 Safe Hugging Face knobs:
 
@@ -325,6 +328,10 @@ the candidate path is visible in shell history and the generated report.
 - Hugging Face artifacts are external research context only. They must retain
   `runtime_authority=false`, `promotion_authority=false`, and
   `live_money_authority=false`.
+- Hugging Face downloads are allowed only for explicit research cache
+  materialization. Runtime startup, sentiment scoring, and trading decisions
+  must use local artifacts or fail closed/degrade according to their runtime
+  policy.
 - Hugging Face tokens, if needed for gated/private metadata, should be provided
   through managed secrets. Do not place tokens in Slack messages, logs, health
   payloads, or committed files.

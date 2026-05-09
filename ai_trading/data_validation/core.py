@@ -6,6 +6,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
+from ai_trading.utils import market_calendar
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.validation.require_env import should_halt_trading
 
@@ -32,16 +34,24 @@ MAX_FUTURE_CLOCK_SKEW_SECONDS = 5
 
 
 def is_market_hours(ts: datetime | None=None) -> bool:
-    """Return ``True`` during regular US market hours (09:30-16:00 ET weekdays)."""
+    """Return ``True`` during the exchange regular session."""
     now = ts or datetime.now(UTC)
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
-    eastern = now.astimezone(_MARKET_TZ)
-    if eastern.weekday() >= 5:
-        return False
-    open_ts = eastern.replace(hour=9, minute=30, second=0, microsecond=0)
-    close_ts = eastern.replace(hour=16, minute=0, second=0, microsecond=0)
-    return bool(open_ts <= eastern <= close_ts)
+    now_utc = now.astimezone(UTC)
+    session_day = now_utc.astimezone(_MARKET_TZ).date()
+    try:
+        if not market_calendar.is_trading_day(session_day):
+            return False
+        open_ts, close_ts = market_calendar.rth_session_utc(session_day)
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        eastern = now_utc.astimezone(_MARKET_TZ)
+        if eastern.weekday() >= 5:
+            return False
+        open_ts = eastern.replace(hour=9, minute=30, second=0, microsecond=0)
+        close_ts = eastern.replace(hour=16, minute=0, second=0, microsecond=0)
+        return bool(open_ts <= eastern <= close_ts)
+    return bool(open_ts <= now_utc <= close_ts)
 
 
 def get_staleness_threshold(symbol: str, ts: datetime | None=None) -> int:
@@ -50,8 +60,13 @@ def get_staleness_threshold(symbol: str, ts: datetime | None=None) -> int:
     now = ts or datetime.now(UTC)
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
-    eastern = now.astimezone(_MARKET_TZ)
-    if eastern.weekday() >= 5:
+    now = now.astimezone(UTC)
+    session_day = now.astimezone(_MARKET_TZ).date()
+    try:
+        trading_day = bool(market_calendar.is_trading_day(session_day))
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        trading_day = now.astimezone(_MARKET_TZ).weekday() < 5
+    if not trading_day:
         return 360
     if is_market_hours(now):
         return 15

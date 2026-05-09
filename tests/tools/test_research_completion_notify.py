@@ -18,6 +18,7 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
         root / "latest" / "daily_research_automation_latest.json",
         {
             "status": "complete",
+            "config": {"run_id": "daily-20260505T210000Z", "run_dir": "/runtime/research/daily/run"},
             "paths": {"report": "/runtime/research/research_automation_report.json"},
             "steps": [
                 {
@@ -120,6 +121,8 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
         for field in block.get("fields", [])
     )
     assert "paper_trade" in field_text
+    assert "daily:daily:daily-20260505T210000Z" in field_text
+    assert "/runtime/research/daily/run" in field_text
     assert "blocked" in field_text
     assert "multi_horizon_lightweight" in field_text
     assert "runtime_gonogo_status" in field_text

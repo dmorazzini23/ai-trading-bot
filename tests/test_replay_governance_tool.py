@@ -217,6 +217,40 @@ def test_replay_governance_main_returns_two_for_policy_regression(
     assert exit_code == 2
 
 
+def test_replay_governance_blocks_no_baseline_counterfactual(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def _fake_run(state, *, now: datetime, **_kwargs) -> None:
+        output_dir = tmp_path / "replay_outputs"
+        output_dir.mkdir(parents=True)
+        (output_dir / f"replay_hash_{now.strftime('%Y%m%d')}.json").write_text(
+            json.dumps(
+                {
+                    "ts": now.isoformat(),
+                    "rows": 12,
+                    "orders_submitted": 8,
+                    "fill_events": 7,
+                    "violations": [],
+                    "counterfactual": {"passed": True, "reason": "no_baseline_summary"},
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        state.last_replay_run_date = now.date()
+
+    monkeypatch.setattr(tool.bot_engine, "_run_replay_governance", _fake_run)
+    monkeypatch.setattr(tool, "ensure_dotenv_loaded", lambda: None)
+
+    payload = tool.run_replay_governance(
+        ["--force", "--replay-output-dir", str(tmp_path / "replay_outputs")]
+    )
+
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == "counterfactual_no_baseline"
+
+
 def test_replay_governance_timer_treats_blocked_as_success() -> None:
     unit = Path("packaging/systemd/ai-trading-replay-governance.service").read_text(
         encoding="utf-8"

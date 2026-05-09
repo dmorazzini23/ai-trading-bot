@@ -66,6 +66,57 @@ def test_load_model_from_module(monkeypatch, tmp_path):
     assert isinstance(mdl, Dummy)
 
 
+def test_governance_required_rejects_unregistered_configured_model(monkeypatch, tmp_path):
+    be = reload_bot_engine()
+    mpath = tmp_path / "m.pkl"
+    joblib.dump({"ok": True}, mpath)
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(mpath))
+    monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
+    monkeypatch.setenv("AI_TRADING_REQUIRE_MODEL_REGISTRY_APPROVAL", "1")
+    monkeypatch.setenv("MODEL_REGISTRY_DIR", str(tmp_path / "registry"))
+
+    with pytest.raises(RuntimeError, match="registry_entry_missing"):
+        be._load_required_model()
+
+
+def test_governance_required_accepts_fresh_production_registry_model(monkeypatch, tmp_path):
+    from ai_trading.model_registry import ModelRegistry
+
+    be = reload_bot_engine()
+    mpath = tmp_path / "m.pkl"
+    joblib.dump({"ok": True}, mpath)
+    registry = ModelRegistry(tmp_path / "registry")
+    model_id = registry.register_model(
+        {"artifact_path": str(mpath)},
+        "ml_edge",
+        "dict",
+        metadata={"model_path": str(mpath)},
+    )
+    registry.update_governance_status(model_id, "production")
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(mpath))
+    monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
+    monkeypatch.setenv("AI_TRADING_REQUIRE_MODEL_REGISTRY_APPROVAL", "1")
+    monkeypatch.setenv("MODEL_REGISTRY_DIR", str(tmp_path / "registry"))
+
+    mdl = be._load_required_model()
+
+    assert mdl == {"ok": True}
+
+
+def test_governance_required_rejects_unapproved_module(monkeypatch):
+    be = reload_bot_engine()
+    mod = types.ModuleType("fake_model_unapproved")
+    setattr(mod, "get_model", lambda: object())
+    sys.modules["fake_model_unapproved"] = mod
+    monkeypatch.delenv("AI_TRADING_MODEL_PATH", raising=False)
+    monkeypatch.setenv("AI_TRADING_MODEL_MODULE", "fake_model_unapproved")
+    monkeypatch.setenv("AI_TRADING_REQUIRE_MODEL_REGISTRY_APPROVAL", "1")
+    monkeypatch.delenv("AI_TRADING_MODEL_MODULE_APPROVED", raising=False)
+
+    with pytest.raises(RuntimeError, match="module_requires_explicit_approval"):
+        be._load_required_model()
+
+
 def test_model_missing_raises(monkeypatch):
     be = reload_bot_engine()
     monkeypatch.delenv("AI_TRADING_MODEL_PATH", raising=False)

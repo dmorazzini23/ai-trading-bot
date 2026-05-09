@@ -10,7 +10,16 @@ from ai_trading.config.management import get_env
 from ai_trading.core.errors import ErrorCategory
 
 _NON_ACCEPTED_ORDER_STATUSES = frozenset(
-    {"rejected", "canceled", "cancelled", "expired", "done_for_day", "skipped"}
+    {
+        "rejected",
+        "canceled",
+        "cancelled",
+        "expired",
+        "done_for_day",
+        "skipped",
+        "failed",
+        "error",
+    }
 )
 
 

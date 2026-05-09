@@ -127,8 +127,9 @@ def test_env_override_path_preferred(tmp_path: Path, monkeypatch: pytest.MonkeyP
         monkeypatch.delenv("AI_TRADING_TICKERS_FILE", raising=False)
 
 
-def test_packaged_loads_packaged_csv():
+def test_packaged_loads_packaged_csv(monkeypatch: pytest.MonkeyPatch):
     """Uses packaged CSV when env not set."""  # AI-AGENT-REF: ensure packaged loader
+    monkeypatch.setattr(universe, "get_env", lambda *_a, **_k: "")
     path = universe.locate_tickers_csv()
     assert path is not None and path.endswith("ai_trading/data/tickers.csv")
     symbols = universe.load_universe()

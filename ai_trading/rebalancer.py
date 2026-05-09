@@ -122,6 +122,31 @@ def _finite_positive(value: Any) -> float | None:
     return numeric
 
 
+def _rebalance_basis(position: Any) -> tuple[float | None, datetime | None]:
+    if isinstance(position, dict):
+        raw_price = position.get('entry_price', position.get('purchase_price'))
+        raw_date = position.get('entry_date', position.get('purchase_date'))
+    else:
+        raw_price = getattr(position, 'entry_price', getattr(position, 'purchase_price', None))
+        raw_date = getattr(position, 'entry_date', getattr(position, 'purchase_date', None))
+    entry_price = _finite_positive(raw_price)
+    if isinstance(raw_date, datetime):
+        entry_date = raw_date if raw_date.tzinfo is not None else raw_date.replace(tzinfo=UTC)
+    else:
+        try:
+            entry_date = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            entry_date = None
+        if entry_date is not None and entry_date.tzinfo is None:
+            entry_date = entry_date.replace(tzinfo=UTC)
+    return entry_price, entry_date
+
+
+def _has_rebalance_basis(position: Any) -> bool:
+    entry_price, entry_date = _rebalance_basis(position)
+    return entry_price is not None and entry_date is not None
+
+
 class TaxAwareRebalancer:
     """
     Tax-aware portfolio rebalancing with loss harvesting and wash sale avoidance.
@@ -301,29 +326,44 @@ class TaxAwareRebalancer:
                         position = current_positions.get(symbol, {})
                         if not isinstance(position, dict):
                             position = {
+                                'quantity': _extract_position_quantity(position),
                                 'entry_price': getattr(position, 'entry_price', getattr(position, 'purchase_price', 0.0)),
                                 'entry_date': getattr(position, 'entry_date', getattr(position, 'purchase_date', None)),
                             }
                         current_quantity = _extract_position_quantity(position)
                         order_side = _rebalance_order_side(current_quantity, trade_quantity)
-                        tax_impact = {'tax_liability': 0, 'is_optimal_timing': True}
+                        has_rebalance_basis = _has_rebalance_basis(position)
+                        tax_impact: dict[str, Any] = {
+                            'tax_liability': 0,
+                            'is_optimal_timing': True,
+                            'tax_basis_available': has_rebalance_basis,
+                        }
                         if trade_quantity > 0 and self._has_recent_loss_sale(position):
                             logger.info('REBALANCE_BUY_SKIPPED_WASH_SALE', extra={'symbol': symbol})
                             continue
                         if trade_quantity < 0 and current_quantity > 0.0 and symbol in current_positions:
-                            sell_quantity = min(abs(trade_quantity), current_quantity)
-                            partial_position = position.copy()
-                            partial_position['quantity'] = sell_quantity
-                            tax_impact = self.calculate_tax_impact(partial_position, current_price)
-                            total_tax_impact += tax_impact.get('tax_liability', 0)
-                            holding_days = tax_impact.get('holding_days', 0)
-                            total_gain_loss = tax_impact.get('total_gain_loss', 0)
-                            if total_gain_loss < 0 and self._has_recent_replacement_purchase(position):
-                                logger.info('REBALANCE_SELL_SKIPPED_WASH_SALE', extra={'symbol': symbol})
-                                continue
-                            if holding_days > 300 and holding_days < 365 and (total_gain_loss > 0) and (not tax_impact.get('is_long_term', False)):
-                                tax_impact['is_optimal_timing'] = False
-                                tax_impact['delay_recommendation'] = 365 - holding_days
+                            if has_rebalance_basis:
+                                sell_quantity = min(abs(trade_quantity), current_quantity)
+                                partial_position = position.copy()
+                                partial_position['quantity'] = sell_quantity
+                                tax_impact = self.calculate_tax_impact(partial_position, current_price)
+                                tax_impact['tax_basis_available'] = True
+                                total_tax_impact += tax_impact.get('tax_liability', 0)
+                                holding_days = tax_impact.get('holding_days', 0)
+                                total_gain_loss = tax_impact.get('total_gain_loss', 0)
+                                if total_gain_loss < 0 and self._has_recent_replacement_purchase(position):
+                                    logger.info('REBALANCE_SELL_SKIPPED_WASH_SALE', extra={'symbol': symbol})
+                                    continue
+                                if holding_days > 300 and holding_days < 365 and (total_gain_loss > 0) and (not tax_impact.get('is_long_term', False)):
+                                    tax_impact['is_optimal_timing'] = False
+                                    tax_impact['delay_recommendation'] = 365 - holding_days
+                            else:
+                                tax_impact = {
+                                    'tax_liability': 0,
+                                    'is_optimal_timing': False,
+                                    'tax_basis_available': False,
+                                    'reason': 'missing_rebalance_basis',
+                                }
                         trade = {'symbol': symbol, 'current_weight': current_weight, 'target_weight': target_weight, 'weight_diff': weight_diff, 'trade_quantity': trade_quantity, 'trade_value': trade_value, 'current_price': current_price, 'side': order_side, 'tax_impact': tax_impact, 'priority': self._calculate_rebalance_priority(weight_diff, tax_impact)}
                         rebalance_trades.append(trade)
             rebalance_trades.sort(key=lambda x: float(x.get('priority', 0.0)), reverse=True)
@@ -544,8 +584,6 @@ def portfolio_first_rebalance(ctx) -> None:
                         continue
                     formatted_positions[symbol] = {
                         'quantity': quantity,
-                        'purchase_price': current_price,
-                        'purchase_date': datetime.now(UTC) - timedelta(days=100),
                     }
             rebalance_plan = _rebalancer.calculate_optimal_rebalance(
                 formatted_positions, target_weights, current_prices, account_equity

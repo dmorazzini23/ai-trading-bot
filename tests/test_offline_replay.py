@@ -12,6 +12,8 @@ import pandas as pd
 import pytest
 
 from ai_trading.models.artifacts import write_artifact_manifest
+from ai_trading.execution.simulated_broker import SimulatedBroker
+from ai_trading.replay.event_loop import ReplayEventLoop
 from ai_trading.tools import offline_replay as replay_tool
 from ai_trading.tools.offline_replay import (
     _accepted_candidate_row,
@@ -63,6 +65,65 @@ class _ConstantEdgeModel:
     def predict(self, X: Any) -> np.ndarray:
         probs = self.predict_proba(X)[:, 1]
         return cast(np.ndarray, (probs >= 0.5).astype(int))
+
+
+def test_replay_event_loop_allows_long_short_netting_reductions() -> None:
+    bars = [{"ts": "2026-05-05T14:30:00Z", "symbol": "AAPL", "close": 100.0}]
+
+    for initial_qty, side, expected_qty in ((10.0, "sell", 5.0), (-10.0, "buy", -5.0)):
+        loop = ReplayEventLoop(
+            strategy=lambda _bar, side=side: {
+                "symbol": "AAPL",
+                "side": side,
+                "qty": 5.0,
+                "type": "limit",
+                "price": 100.0,
+            },
+            broker=SimulatedBroker(
+                seed=7,
+                fill_probability=1.0,
+                partial_fill_probability=0.0,
+                min_fill_delay_ms=0,
+                max_fill_delay_ms=0,
+            ),
+            max_symbol_notional=800.0,
+            max_gross_notional=800.0,
+            initial_positions={"AAPL": initial_qty},
+            clip_intents_to_caps=True,
+        )
+
+        payload = loop.run(bars)
+
+        assert payload["violations"] == []
+        assert payload["cap_adjustments"] == []
+        assert payload["orders"][0]["qty"] == pytest.approx(5.0)
+        assert payload["positions"]["AAPL"] == pytest.approx(expected_qty)
+
+
+def test_replay_markout_metrics_subtract_live_round_trip_costs() -> None:
+    metrics = replay_tool._summarize_markout_fill_metrics(
+        fill_events=[
+            {
+                "event_type": "fill",
+                "client_order_id": "order-1",
+                "symbol": "AAPL",
+                "side": "buy",
+                "fill_qty": 2.0,
+                "fill_price": 100.0,
+            }
+        ],
+        order_context_by_client_id={
+            "order-1": {
+                "markout_price": 101.0,
+                "entry_slippage_bps": 4.0,
+                "exit_slippage_bps": 6.0,
+            }
+        },
+        fee_bps=1.0,
+    )
+
+    assert metrics["expectancy_bps"] == pytest.approx(88.0)
+    assert metrics["mean_round_trip_cost_bps"] == pytest.approx(12.0)
 
 
 def _write_model(

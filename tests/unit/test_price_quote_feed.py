@@ -64,6 +64,10 @@ from ai_trading.utils import base as utils_base
 @pytest.fixture(autouse=True)
 def _clear_price_source(monkeypatch):
     monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {})
+    monkeypatch.setenv("AI_TRADING_EXECUTION_REQUIRE_SUBMIT_CONTEXT", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_REQUIRE_SUBMIT_CONTEXT_LIVE", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_WARN_MISSING_SUBMIT_CONTEXT", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "0")
     yield
 
 

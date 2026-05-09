@@ -173,6 +173,86 @@ def test_initial_rebalance_runtime_skips_bad_symbol_and_continues(monkeypatch):
     ]
 
 
+def test_initial_rebalance_runtime_buys_delta_for_existing_long(monkeypatch):
+    from ai_trading.core import bot_engine
+
+    ctx = types.SimpleNamespace(
+        api=_DummyAPI(),
+        data_fetcher=_DummyFetcher(),
+        rebalance_ids={},
+        rebalance_attempts={},
+        rebalance_buys={},
+    )
+    ctx.api.positions["AAPL"] = 4
+    submitted: list[tuple[str, int, str]] = []
+
+    class FakeDateTime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.datetime(2025, 7, 26, 0, 16, tzinfo=datetime.UTC)
+
+    def _submit_order(ctx_, symbol, qty, side):
+        submitted.append((symbol, qty, side))
+        ctx_.api.positions[symbol] += qty
+        return object()
+
+    monkeypatch.setattr(bot_engine, "datetime", FakeDateTime)
+    monkeypatch.setattr("ai_trading.services.execution.submit_order", _submit_order)
+
+    initial_rebalance_runtime(ctx, ["AAPL"])
+
+    assert submitted == [("AAPL", 6, "buy")]
+    assert ctx.api.positions["AAPL"] == 10
+
+
+def test_initial_rebalance_runtime_treats_short_side_as_signed(monkeypatch):
+    from ai_trading.core import bot_engine
+
+    class _ShortAPI(_DummyAPI):
+        def __init__(self) -> None:
+            super().__init__()
+            self.positions["AAPL"] = -5
+
+        def list_positions(self):
+            return [
+                types.SimpleNamespace(
+                    symbol=s,
+                    qty=abs(q),
+                    side=("short" if q < 0 else "long"),
+                )
+                for s, q in self.positions.items()
+            ]
+
+    ctx = types.SimpleNamespace(
+        api=_ShortAPI(),
+        data_fetcher=_DummyFetcher(),
+        rebalance_ids={},
+        rebalance_attempts={},
+        rebalance_buys={},
+    )
+    submitted: list[tuple[str, int, str]] = []
+
+    class FakeDateTime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.datetime(2025, 7, 26, 0, 16, tzinfo=datetime.UTC)
+
+    def _submit_order(ctx_, symbol, qty, side):
+        submitted.append((symbol, qty, side))
+        ctx_.api.positions[symbol] += qty
+        return object()
+
+    monkeypatch.setattr(bot_engine, "datetime", FakeDateTime)
+    monkeypatch.setattr("ai_trading.services.execution.submit_order", _submit_order)
+
+    initial_rebalance_runtime(ctx, ["AAPL"])
+
+    assert submitted == [("AAPL", 15, "buy")]
+    assert ctx.api.positions["AAPL"] == 10
+    assert bot_engine.state.position_cache["AAPL"] == 10
+    assert "AAPL" not in bot_engine.state.short_positions
+
+
 def test_configure_main_runtime_jobs_is_idempotent(monkeypatch):
     from ai_trading.core import bot_engine
 

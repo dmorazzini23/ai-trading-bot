@@ -26,6 +26,10 @@ if [[ ! -f "${ENV_SRC}" ]]; then
   echo "AI_TRADING_ENV_SRC does not exist: ${ENV_SRC}" >&2
   exit 1
 fi
+if [[ ! -r "${ENV_SRC}" ]]; then
+  echo "AI_TRADING_ENV_SRC is not readable: ${ENV_SRC}" >&2
+  exit 1
+fi
 PACKAGED_RUNTIME_DIR="${AI_TRADING_PACKAGED_RUNTIME_DIR:-/run/ai-trading-bot}"
 if [[ -n "${AI_TRADING_RUNTIME_ENV_DST:-}" ]]; then
   RUNTIME_ENV_DST="${AI_TRADING_RUNTIME_ENV_DST}"
@@ -35,6 +39,12 @@ else
   RUNTIME_ENV_DST="runtime/ai-trading-runtime.env"
 fi
 RUNTIME_ENV_DIR="$(dirname "${RUNTIME_ENV_DST}")"
+case "${RUNTIME_ENV_DST}" in
+  ""|"/"|".env"|"${ENV_SRC}")
+    echo "refusing unsafe runtime env destination: ${RUNTIME_ENV_DST}" >&2
+    exit 1
+    ;;
+esac
 case "${RUNTIME_ENV_DST}" in
   "${PACKAGED_RUNTIME_DIR}"/*)
     if [[ ! -d "${RUNTIME_ENV_DIR}" ]]; then

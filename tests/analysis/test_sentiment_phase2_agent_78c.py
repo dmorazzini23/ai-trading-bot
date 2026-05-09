@@ -173,6 +173,27 @@ def test_fetch_sentiment_rate_limit_delegates_to_enhanced_fallback(
     assert called == ["QQQ"]
 
 
+def test_fetch_sentiment_requires_minimum_scored_news_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentiment._set_sentiment_http_session_for_tests(
+        SimpleNamespace(
+            get=lambda *_a, **_k: _Response(
+                payload={"articles": [{"title": "", "description": ""}]}
+            )
+        )
+    )
+    monkeypatch.setattr(sentiment, "fetch_form4_filings", lambda _ticker: [])
+    monkeypatch.setattr(sentiment.pytime, "time", lambda: 1000.0)
+
+    assert sentiment.fetch_sentiment(None, "AAPL") == 0.0
+    assert "AAPL" not in sentiment._sentiment_cache
+    evidence = sentiment.get_sentiment_evidence("AAPL")
+    assert evidence is not None
+    assert evidence["authoritative"] is False
+    assert evidence["reason"] == "insufficient_newsapi_evidence"
+
+
 def test_fetch_sentiment_preserves_special_ticker_cache_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

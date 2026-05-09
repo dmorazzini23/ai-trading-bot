@@ -146,3 +146,80 @@ def test_safe_validate_pretrade_fails_closed_on_unexpected_limiter_error() -> No
     assert reason == "PRETRADE_VALIDATION_ERROR"
     assert details["symbol"] == "AAPL"
     assert details["fail_closed"] is True
+
+
+@pytest.mark.parametrize("qty", [0, -1])
+def test_validate_pretrade_blocks_non_positive_qty(qty: int) -> None:
+    allowed, reason, details = pretrade.validate_pretrade(
+        _intent(qty=qty),
+        cfg=_cfg(),
+        ledger=_Ledger(),
+        rate_limiter=SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100),
+    )
+
+    assert allowed is False
+    assert reason == "INVALID_QTY_BLOCK"
+    assert details["qty"] == qty
+
+
+def test_stale_decay_artifact_blocks_live_canary_opening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PRETRADE_RUNTIME_DECAY_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_DECAY_CONTROLS_MAX_AGE_MINUTES", "1")
+    monkeypatch.setenv("AI_TRADING_PRETRADE_LIVE_COST_MODEL_GATE_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setattr(
+        pretrade,
+        "_runtime_decay_controls_payload",
+        lambda: {
+            "artifact_type": "runtime_decay_controls",
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "status": {"available": True},
+            "actions": {"entries_allowed": True, "max_action": "normal"},
+        },
+    )
+    monkeypatch.setattr(pretrade, "_runtime_decay_controls_usable", lambda _payload: False)
+
+    allowed, reason, details = pretrade.validate_pretrade(
+        _intent(opening_trade=True),
+        cfg=_cfg(execution_mode="live", launch_profile="live_canary"),
+        ledger=_Ledger(),
+        rate_limiter=SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100),
+    )
+
+    assert allowed is False
+    assert reason == "RUNTIME_DECAY_ARTIFACT_STALE_BLOCK"
+    assert details["opening_trade"] is True
+
+
+def test_stale_live_cost_artifact_blocks_live_opening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PRETRADE_RUNTIME_DECAY_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_DECAY_CONTROLS_MAX_AGE_MINUTES", "0")
+    monkeypatch.setenv("AI_TRADING_PRETRADE_LIVE_COST_MODEL_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PRETRADE_LIVE_COST_MODEL_MAX_AGE_MINUTES", "1")
+    monkeypatch.setattr(pretrade, "_runtime_decay_controls_payload", lambda: None)
+    monkeypatch.setattr(
+        pretrade,
+        "_live_cost_model_payload",
+        lambda: {
+            "artifact_type": "live_cost_model",
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "status": {"available": True, "status": "ready"},
+            "by_symbol_side_session": [],
+        },
+    )
+    monkeypatch.setattr(pretrade, "_live_cost_model_usable", lambda _payload: False)
+
+    allowed, reason, details = pretrade.validate_pretrade(
+        _intent(opening_trade=True),
+        cfg=_cfg(execution_mode="live", launch_profile="live_trade"),
+        ledger=_Ledger(),
+        rate_limiter=SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100),
+    )
+
+    assert allowed is False
+    assert reason == "LIVE_COST_ARTIFACT_STALE_BLOCK"
+    assert details["opening_trade"] is True

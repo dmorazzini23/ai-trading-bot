@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 from ai_trading.core.errors import ErrorCategory
 from ai_trading.core.netting_submit_execution import execute_netting_submission
 
@@ -176,3 +178,38 @@ def test_execute_netting_submission_does_not_count_rejected_order_as_submitted()
     assert recorded_success == []
     assert tca_calls
     assert tca_calls[0]["order_lineage_metadata"] == {"decision_trace_id": "trace-1"}
+
+
+@pytest.mark.parametrize(
+    ("status_token", "reason_code"),
+    [
+        ("failed", "BROKER_ORDER_FAILED"),
+        ("error", "BROKER_ORDER_ERROR"),
+    ],
+)
+def test_execute_netting_submission_does_not_count_failed_or_error_order_as_submitted(
+    status_token: str,
+    reason_code: str,
+) -> None:
+    kwargs = _base_kwargs()
+    recorded_success: list[dict[str, Any]] = []
+    cooldowns: list[dict[str, Any]] = []
+    kwargs["normalize_submitted_order_func"] = lambda order, **kwargs: SimpleNamespace(
+        status_text=status_token,
+        status_token=status_token,
+    )
+    kwargs["record_successful_submission_func"] = lambda **record_kwargs: recorded_success.append(
+        dict(record_kwargs)
+    )
+    kwargs["record_auth_forbidden_cooldown_func"] = (
+        lambda *args, **call_kwargs: cooldowns.append(dict(call_kwargs))
+    )
+
+    result = execute_netting_submission(**cast(Any, kwargs))
+
+    assert result.status == status_token
+    assert result.gates_added == (reason_code,)
+    assert result.attempted_increment == 1
+    assert result.submitted_increment == 0
+    assert recorded_success == []
+    assert cooldowns[0]["reason"] == reason_code

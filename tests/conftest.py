@@ -342,6 +342,7 @@ def _env_defaults(
     runtime_data_dir = tmp_path / "runtime_data"
     runtime_data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("AI_TRADING_DATA_DIR", str(runtime_data_dir))
+    monkeypatch.setenv("AI_TRADING_PAPER_SAMPLING_ENABLED", "0")
     monkeypatch.delenv("STATE_DIRECTORY", raising=False)
     # Enforce canonical env contract in tests; legacy aliases must not leak
     # from developer shells or prior tests.

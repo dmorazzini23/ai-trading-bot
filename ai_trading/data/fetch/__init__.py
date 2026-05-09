@@ -482,15 +482,56 @@ def _normalize_daily_memo(memo: Any) -> dict[str, Any] | None:
 
 def _is_fresh(ts: datetime) -> bool:
     """Return ``True`` when *ts* is within the provider decision TTL window."""
-    ttl = _env_int("AI_TRADING_PROVIDER_DECISION_SECS", 300)
-    if ttl <= 0:
-        return True
     try:
         ts_utc = ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
         age = (datetime.now(UTC) - ts_utc.astimezone(UTC)).total_seconds()
     except FETCH_FALLBACK_EXCEPTIONS:
         return False
+    if age < -5.0:
+        return False
+    ttl = _env_int("AI_TRADING_PROVIDER_DECISION_SECS", 300)
+    if ttl <= 0:
+        return True
     return age <= ttl
+
+
+def _daily_frame_has_future_timestamp(frame: Any, *, now: datetime | None = None) -> bool:
+    """Return ``True`` when a daily memo frame contains future timestamps."""
+    pd_local = _ensure_pandas()
+    if pd_local is None or frame is None or getattr(frame, "empty", True):
+        return False
+    if now is None:
+        now = datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    now_utc = now.astimezone(UTC)
+    try:
+        if hasattr(frame, "columns") and "timestamp" in frame.columns:
+            raw_ts = frame["timestamp"]
+        else:
+            index = getattr(frame, "index", None)
+            if isinstance(index, pd_local.RangeIndex):
+                return False
+            raw_ts = index
+        parsed = pd_local.to_datetime(raw_ts, utc=True, errors="coerce")
+        if isinstance(parsed, pd_local.Series):
+            parsed = parsed.dropna()
+        else:
+            parsed = pd_local.DatetimeIndex(parsed).dropna()
+        if len(parsed) == 0:
+            return False
+        latest = parsed.max()
+        if hasattr(latest, "to_pydatetime"):
+            latest_dt = latest.to_pydatetime()
+        elif isinstance(latest, datetime):
+            latest_dt = latest
+        else:
+            return False
+        if latest_dt.tzinfo is None:
+            latest_dt = latest_dt.replace(tzinfo=UTC)
+        return bool((latest_dt.astimezone(UTC) - now_utc).total_seconds() > 5.0)
+    except FETCH_FALLBACK_EXCEPTIONS:
+        return False
 
 
 def _rate_limit_cooldown(resp: Any | None = None) -> float:
@@ -7127,6 +7168,8 @@ def _repair_rth_minute_gaps(
                 source = frame["timestamp"]
             else:
                 source = frame.index
+                if isinstance(source, pd_local.RangeIndex):
+                    return empty_index, empty_index
         except FETCH_FALLBACK_EXCEPTIONS:
             return empty_index, empty_index
         try:
@@ -7516,6 +7559,59 @@ def _repair_rth_minute_gaps(
         )
 
     return (work_df if mutated else df), metadata, used_backup
+
+
+def _yahoo_chunked_coverage_meta(
+    df: pd.DataFrame | None,
+    *,
+    start: _dt.datetime,
+    end: _dt.datetime,
+    tz: ZoneInfo,
+) -> dict[str, object]:
+    """Return RTH coverage metadata for chunked Yahoo minute frames."""
+
+    pd_local = _ensure_pandas()
+    metadata: dict[str, object] = {"expected": 0, "missing_after": 0, "gap_ratio": 0.0}
+    if pd_local is None or df is None or getattr(df, "empty", True):
+        return metadata
+    try:
+        expected_local, _, _ = _normalize_window_bounds(start, end, tz)
+        expected_utc = expected_local.tz_convert("UTC")
+        expected_count = int(expected_utc.size)
+    except FETCH_FALLBACK_EXCEPTIONS:
+        expected_utc = pd_local.DatetimeIndex([], tz="UTC")
+        expected_count = 0
+    if expected_count <= 0:
+        metadata["expected"] = int(len(getattr(df, "index", [])))
+        return metadata
+    try:
+        raw_ts = df["timestamp"] if "timestamp" in df.columns else df.index
+        if isinstance(raw_ts, pd_local.RangeIndex):
+            observed = pd_local.DatetimeIndex([], tz="UTC")
+        else:
+            observed_values = pd_local.to_datetime(raw_ts, utc=True, errors="coerce")
+            observed = pd_local.DatetimeIndex(observed_values).dropna().unique()
+    except FETCH_FALLBACK_EXCEPTIONS:
+        observed = pd_local.DatetimeIndex([], tz="UTC")
+    try:
+        observed = observed.sort_values()
+    except FETCH_FALLBACK_EXCEPTIONS:
+        pass
+    missing_after = int(expected_utc.difference(observed).size)
+    gap_ratio = (missing_after / expected_count) if expected_count else 0.0
+    metadata.update(
+        {
+            "expected": expected_count,
+            "missing_after": missing_after,
+            "gap_ratio": gap_ratio,
+            "provider": "yahoo",
+            "provider_canonical": "yahoo",
+            "using_fallback_provider": True,
+            "yf_1m_range_split": True,
+            "residual_gap": missing_after > 0,
+        },
+    )
+    return metadata
 
 
 def _read_env_float(key: str) -> float | None:
@@ -13741,9 +13837,12 @@ def get_minute_df(
             tz=tz_info,
         )
     elif isinstance(df, pd.DataFrame):
-        coverage_meta["expected"] = int(len(df.index))
-        coverage_meta["missing_after"] = 0
-        coverage_meta["gap_ratio"] = 0.0
+        coverage_meta = _yahoo_chunked_coverage_meta(
+            df,
+            start=start_dt,
+            end=end_dt,
+            tz=ZoneInfo("America/New_York"),
+        )
     if repair_used_backup:
         used_backup = True
     try:
@@ -14144,11 +14243,12 @@ def get_daily_df(
     memo_info = _normalize_daily_memo(memo)
     if memo_info is not None:
         ts = memo_info.get("ts")
-        if isinstance(ts, datetime) and _is_fresh(ts):
+        frame = memo_info.get("df")
+        if isinstance(ts, datetime) and _is_fresh(ts) and not _daily_frame_has_future_timestamp(frame):
             meta = _state.setdefault("meta", {})
             meta["memo"] = True
             meta.pop("cache", None)
-            return memo_info.get("df")
+            return frame
 
     resolved_adjustment = adjustment or "raw"
     if isinstance(resolved_adjustment, str):

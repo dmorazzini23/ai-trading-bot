@@ -538,6 +538,42 @@ def _estimate_cost_floor_bps(tca_records: list[dict[str, Any]]) -> float:
     return stabilized
 
 
+def _live_cost_bucket_diagnostics(tca_records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize live implementation costs by symbol buckets."""
+
+    min_samples = max(
+        1,
+        int(get_env("AI_TRADING_AFTER_HOURS_COST_BUCKET_MIN_SAMPLES", 3, cast=int)),
+    )
+    buckets: dict[str, list[float]] = {}
+    for row in tca_records:
+        symbol = str(row.get("symbol", "") or "").strip().upper() or "UNKNOWN"
+        try:
+            value = abs(float(row.get("is_bps", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(value):
+            continue
+        buckets.setdefault(symbol, []).append(value)
+    bucket_payload: dict[str, dict[str, float | int]] = {}
+    for symbol, values in sorted(buckets.items()):
+        if len(values) < min_samples:
+            continue
+        arr = np.asarray(values, dtype=float)
+        bucket_payload[symbol] = {
+            "samples": int(arr.size),
+            "mean_cost_bps": float(np.mean(arr)),
+            "p75_cost_bps": float(np.percentile(arr, 75)),
+            "p95_cost_bps": float(np.percentile(arr, 95)),
+        }
+    return {
+        "bucket_key": "symbol",
+        "min_samples": int(min_samples),
+        "bucket_count": int(len(bucket_payload)),
+        "buckets": bucket_payload,
+    }
+
+
 def _infer_regime(close: np.ndarray) -> np.ndarray:
     if close.size == 0:
         return cast(np.ndarray, np.array([], dtype=object))
@@ -4689,6 +4725,29 @@ def _candidate_names() -> list[str]:
     return names
 
 
+def _production_status_for_candidate(
+    *,
+    requested_status: str,
+    candidate_name: str,
+) -> tuple[str, str | None]:
+    """Keep advanced candidates in shadow unless production is explicitly approved."""
+
+    status = str(requested_status or "shadow").strip().lower() or "shadow"
+    advanced = str(candidate_name or "").strip().lower() in {"histgb", "lightgbm", "xgboost"}
+    if status != "production" or not advanced:
+        return status, None
+    approved = bool(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_APPROVE_ADVANCED_PRODUCTION",
+            False,
+            cast=bool,
+        )
+    )
+    if approved:
+        return status, None
+    return "shadow", "advanced_candidate_requires_explicit_approval"
+
+
 def _serialize_candidate_metrics(
     candidates: list[CandidateMetrics],
     *,
@@ -6105,6 +6164,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     )
     fill_quality = _build_fill_quality_metrics(tca_records)
     cost_floor_bps = _estimate_cost_floor_bps(tca_records)
+    live_cost_buckets = _live_cost_bucket_diagnostics(tca_records)
     lookback_days = int(get_env("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", 540, cast=int))
     dataset = _build_training_dataset(
         symbols,
@@ -6372,7 +6432,23 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         previous_state=training_state,
         run_date=now_utc.date(),
     )
-    status = str(promotion["status"])
+    status, approval_block_reason = _production_status_for_candidate(
+        requested_status=str(promotion["status"]),
+        candidate_name=best.name,
+    )
+    if approval_block_reason:
+        promotion = dict(promotion)
+        promotion["status"] = status
+        promotion["approval_gate"] = {
+            "advanced_candidate": True,
+            "approved": False,
+            "reason": approval_block_reason,
+        }
+        promotion["combined_gates"] = {
+            **dict(promotion.get("combined_gates", {})),
+            "advanced_candidate_approval": False,
+        }
+        promotion["gate_passed"] = False
     logger.info(
         "AFTER_HOURS_PHASE1_GATE_EVAL",
         extra={
@@ -6452,6 +6528,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     manifest_metadata["label_quality"] = dict(label_quality)
     manifest_metadata["negative_symbol_penalties"] = dict(negative_symbol_penalties)
     manifest_metadata["edge_model_v2"] = dict(edge_model_v2_report)
+    manifest_metadata["live_cost_buckets"] = dict(live_cost_buckets)
     requested_model_dir = _resolve_after_hours_output_path(
         str(get_env("AI_TRADING_AFTER_HOURS_MODEL_DIR", "models/after_hours", cast=str) or ""),
         default_relative="models/after_hours",
@@ -6508,6 +6585,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "edge_model_v2": edge_model_v2_report,
             "model_quality": model_quality,
             "label_quality": label_quality,
+            "live_cost_buckets": live_cost_buckets,
         },
         dataset_fingerprint=dataset_fp,
         tags=["after_hours", "cost_aware", "purged_walk_forward"],
@@ -6667,6 +6745,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "edge_model_v2": edge_model_v2_report,
         "model_quality": model_quality,
         "label_quality": label_quality,
+        "live_cost_buckets": live_cost_buckets,
         "runtime_promotion": {
             "model_path": promoted_model_path,
             "manifest_path": promoted_manifest_path,

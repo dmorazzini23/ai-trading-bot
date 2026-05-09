@@ -153,6 +153,10 @@ def build_research_completion_payload(
         else {}
     )
     report_status = str(report.get("status") or summary.get("status") or "unknown")
+    report_config = report.get("config") if isinstance(report.get("config"), Mapping) else {}
+    run_id = str(report_config.get("run_id") or report.get("run_id") or "n/a")
+    run_dir = str(report_config.get("run_dir") or "n/a")
+    correlation_id = f"{cadence}:{workflow}:{run_id}"
     status = run_status or report_status
     if exit_code != 0 and report_status not in {"blocked", "failed"}:
         status = run_status or "failed"
@@ -210,12 +214,15 @@ def build_research_completion_payload(
     text = (
         f"{title}\n"
         f"Workflow: {workflow}\n"
+        f"Run: {run_id}\n"
         f"Exit code: {exit_code}\n"
         f"Live-capital readiness: {readiness_status}\n"
         f"Recommended mode: {recommended_mode}"
     )
     fields = [
         _field("Workflow", workflow),
+        _field("Run correlation", correlation_id),
+        _field("Run directory", run_dir),
         _field("Run status", run_status or "n/a"),
         _field("Exit code", exit_code),
         _field("Report status", report_status),

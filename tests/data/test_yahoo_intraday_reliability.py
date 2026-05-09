@@ -55,3 +55,32 @@ def test_backup_split_large_intraday_window(monkeypatch, days):
     assert calls  # backup provider should be exercised
     max_span = max((end - start for start, end in calls), default=timedelta())
     assert max_span <= timedelta(days=10)
+
+
+def test_chunked_yahoo_sparse_coverage_meta_marks_gap() -> None:
+    pd = pytest.importorskip("pandas")
+
+    start = datetime(2025, 8, 20, 13, 30, tzinfo=UTC)
+    end = datetime(2025, 8, 20, 20, 0, tzinfo=UTC)
+    frame = pd.DataFrame(
+        {
+            "timestamp": [start, start + timedelta(minutes=1)],
+            "open": [1.0, 1.0],
+            "high": [1.0, 1.0],
+            "low": [1.0, 1.0],
+            "close": [1.0, 1.0],
+            "volume": [1, 1],
+        },
+    )
+    frame.attrs["yf_1m_range_split"] = True
+
+    meta = fetch_mod._yahoo_chunked_coverage_meta(
+        frame,
+        start=start,
+        end=end,
+        tz=fetch_mod.ZoneInfo("America/New_York"),
+    )
+
+    assert meta["expected"] == 390
+    assert meta["missing_after"] == 388
+    assert meta["gap_ratio"] > 0.99

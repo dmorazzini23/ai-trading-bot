@@ -118,6 +118,24 @@ def _summary_status(payload: Mapping[str, Any], default: str = "missing") -> str
     return str(raw or default)
 
 
+def _approval_artifact_approved(payload: Mapping[str, Any]) -> bool:
+    if not payload:
+        return False
+    manual = payload.get("manual_approval")
+    manual_payload = manual if isinstance(manual, Mapping) else {}
+    if bool(payload.get("approved")) or bool(manual_payload.get("approved")):
+        return True
+    approval_id = str(
+        payload.get("approval_id")
+        or payload.get("manual_approval_id")
+        or manual_payload.get("approval_id")
+        or manual_payload.get("id")
+        or ""
+    ).strip()
+    status = str(payload.get("status") or manual_payload.get("status") or "").strip().lower()
+    return bool(approval_id and status in {"approved", "accepted", "signed"})
+
+
 def build_live_capital_readiness(
     *,
     health: Mapping[str, Any],
@@ -136,6 +154,7 @@ def build_live_capital_readiness(
     regime_champions: Mapping[str, Any] | None = None,
     adversarial_failure: Mapping[str, Any] | None = None,
     drift_monitor: Mapping[str, Any] | None = None,
+    approval_artifact: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     validation = validation or {}
     canary_plan = canary_plan or {}
@@ -150,6 +169,7 @@ def build_live_capital_readiness(
     regime_champions = regime_champions or {}
     adversarial_failure = adversarial_failure or {}
     drift_monitor = drift_monitor or {}
+    approval_artifact = approval_artifact or {}
     profile = resolve_launch_profile()
     profile_payload = launch_profile_payload(profile)
     reasons: list[str] = []
@@ -267,6 +287,9 @@ def build_live_capital_readiness(
     if not _env_bool("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", False):
         reasons.append("live_account_not_explicitly_confirmed")
         actions.append("set AI_TRADING_LIVE_ACCOUNT_CONFIRMED=1 only after account review")
+    if profile.name.startswith("live_") and not _approval_artifact_approved(approval_artifact):
+        reasons.append("live_capital_approval_artifact_missing")
+        actions.append("record an approved live-capital approval artifact before live cutover")
     if not canary_plan and profile.name == "live_canary":
         reasons.append("paper_vs_live_canary_plan_missing")
     elif profile.name == "live_canary" and not freshness["canary_plan"]["fresh"]:
@@ -365,6 +388,7 @@ def build_live_capital_readiness(
             "live_cost_ready": bool(live_status.get("available", bool(live_cost_model))),
             "daily_loss_configured": _daily_loss_configured() or profile.max_daily_loss is not None,
             "live_account_confirmed": _env_bool("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", False),
+            "live_capital_approval_artifact": _approval_artifact_approved(approval_artifact),
         },
     }
     report["canary_evidence"] = {
@@ -494,6 +518,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--regime-champions-json", type=Path, default=None)
     parser.add_argument("--adversarial-failure-json", type=Path, default=None)
     parser.add_argument("--drift-monitor-json", type=Path, default=None)
+    parser.add_argument("--approval-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--success-on-blocked", action="store_true")
     args = parser.parse_args(argv)
@@ -521,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
         regime_champions=_read_json(args.regime_champions_json),
         adversarial_failure=_read_json(args.adversarial_failure_json),
         drift_monitor=_read_json(args.drift_monitor_json),
+        approval_artifact=_read_json(args.approval_json),
     )
     output = args.output_json or _default_output()
     output.parent.mkdir(parents=True, exist_ok=True)

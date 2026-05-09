@@ -129,7 +129,7 @@ class WalkForwardEvaluator:
         }
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def run_walkforward(self, data: 'pd.DataFrame', target_col: str, feature_cols: list[str] | None=None, model_type: str='lightgbm', feature_pipeline_params: dict[str, Any] | None=None, save_results: bool=True) -> dict[str, Any]:
+    def run_walkforward(self, data: 'pd.DataFrame', target_col: str, feature_cols: list[str] | None=None, model_type: str='lightgbm', feature_pipeline_params: dict[str, Any] | None=None, save_results: bool=True, label_end_col: str | None=None) -> dict[str, Any]:
         """
         Run walk-forward analysis.
 
@@ -148,10 +148,15 @@ class WalkForwardEvaluator:
             import pandas as pd
 
             logger.info(f'Starting {self.mode} walk-forward analysis')
+            label_end_col = self._resolve_label_end_col(data, label_end_col)
             if feature_cols is None:
-                feature_cols = [col for col in data.columns if col != target_col]
+                excluded = {target_col}
+                if label_end_col:
+                    excluded.add(label_end_col)
+                feature_cols = [col for col in data.columns if col not in excluded]
             X = data[feature_cols]
             y = data[target_col]
+            label_end = data[label_end_col] if label_end_col else None
             splits = walkforward_splits(dates=data.index, mode=self.mode, train_span=self.train_span, test_span=self.test_span, embargo_pct=self.embargo_pct)
             logger.info(f'Generated {len(splits)} walk-forward periods')
             self.fold_results = []
@@ -161,7 +166,7 @@ class WalkForwardEvaluator:
             equity_values = [100.0]
             for fold_idx, split_info in enumerate(splits):
                 logger.debug(f'Processing fold {fold_idx + 1}/{len(splits)}')
-                fold_result = self._run_single_fold(X, y, split_info, model_type, feature_pipeline_params, fold_idx)
+                fold_result = self._run_single_fold(X, y, split_info, model_type, feature_pipeline_params, fold_idx, label_end=label_end)
                 self.fold_results.append(fold_result)
                 if 'predictions' in fold_result and 'actual' in fold_result:
                     predictions_all.extend(fold_result['predictions'])
@@ -193,7 +198,23 @@ class WalkForwardEvaluator:
             logger.error(f'Error in walk-forward analysis: {e}')
             raise
 
-    def _run_single_fold(self, X: 'pd.DataFrame', y: 'pd.Series', split_info: dict[str, Any], model_type: str, feature_pipeline_params: dict[str, Any] | None, fold_idx: int) -> dict[str, Any]:
+    def _resolve_label_end_col(self, data: 'pd.DataFrame', label_end_col: str | None) -> str | None:
+        """Return label-end metadata column or reject missing required metadata."""
+        if label_end_col:
+            if label_end_col not in data.columns:
+                raise ValueError(f"label_end_col missing from data: {label_end_col}")
+            return label_end_col
+        for candidate in ("label_end", "label_end_ts", "label_ts"):
+            if candidate in data.columns:
+                return candidate
+        require_metadata = bool(
+            get_env("AI_TRADING_WALK_FORWARD_REQUIRE_LABEL_END", False, cast=bool)
+        )
+        if require_metadata:
+            raise ValueError("label-end metadata required for purged walk-forward")
+        return None
+
+    def _run_single_fold(self, X: 'pd.DataFrame', y: 'pd.Series', split_info: dict[str, Any], model_type: str, feature_pipeline_params: dict[str, Any] | None, fold_idx: int, *, label_end: 'pd.Series | None'=None) -> dict[str, Any]:
         """Run single fold of walk-forward analysis."""
         try:
             train_start = split_info['train_start']
@@ -201,6 +222,19 @@ class WalkForwardEvaluator:
             test_start = split_info['test_start']
             test_end = split_info['test_end']
             train_mask = (X.index >= train_start) & (X.index < train_end)
+            purged_train_samples = 0
+            if label_end is not None:
+                import pandas as pd
+
+                label_end_ts = pd.to_datetime(label_end, utc=True)
+                test_start_ts = pd.Timestamp(test_start)
+                if test_start_ts.tzinfo is None:
+                    test_start_ts = test_start_ts.tz_localize("UTC")
+                else:
+                    test_start_ts = test_start_ts.tz_convert("UTC")
+                overlap_mask = train_mask & (label_end_ts >= test_start_ts)
+                purged_train_samples = int(overlap_mask.sum())
+                train_mask = train_mask & ~overlap_mask
             X_train = X[train_mask]
             y_train = y[train_mask]
             test_mask = (X.index >= test_start) & (X.index < test_end)
@@ -226,7 +260,7 @@ class WalkForwardEvaluator:
                 y_true=y_test,
                 y_pred=predictions,
             )
-            fold_result = {'fold': fold_idx, 'train_start': train_start.isoformat(), 'train_end': train_end.isoformat(), 'test_start': test_start.isoformat(), 'test_end': test_end.isoformat(), 'train_samples': len(X_train), 'test_samples': len(X_test), 'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else list(predictions), 'actual': y_test.values.tolist(), 'metrics': fold_metrics, 'trade_metrics': trade_metrics, 'model_params': trainer.best_params}
+            fold_result = {'fold': fold_idx, 'train_start': train_start.isoformat(), 'train_end': train_end.isoformat(), 'test_start': test_start.isoformat(), 'test_end': test_end.isoformat(), 'train_samples': len(X_train), 'test_samples': len(X_test), 'purged_train_samples': int(purged_train_samples), 'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else list(predictions), 'actual': y_test.values.tolist(), 'metrics': fold_metrics, 'trade_metrics': trade_metrics, 'model_params': trainer.best_params}
             return fold_result
         except (KeyError, ValueError, TypeError) as e:
             logger.error(f'Error in fold {fold_idx}: {e}')

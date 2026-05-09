@@ -5,6 +5,9 @@ not mistaken for canonical runtime implementations.
 
 ## Retained Thin Surfaces
 
+- Legacy demo and one-off validation scripts that seed dummy/test credentials
+  are archival only. They are not production smoke tests and must not be used
+  as deployment authority without first removing seeded environment values.
 - `scripts/health_check.py`: legacy CLI wrapper around the current health
   monitor. It returns a non-zero process status only when the overall status is
   critical.
@@ -31,3 +34,6 @@ not mistaken for canonical runtime implementations.
 - Standalone health on `HEALTHCHECK_PORT` is only for
   `RUN_HEALTHCHECK=1 python -m ai_trading.app` and must not be presented as the
   packaged service default.
+- Hugging Face artifacts are research inputs only. They must remain outside
+  production model paths and carry no runtime, promotion, or live-money
+  authority.

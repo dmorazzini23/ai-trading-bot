@@ -124,7 +124,13 @@ def test_ensure_default_models_writes_manifest_for_downloaded_default_url(
     monkeypatch.setattr(ml_model.paths, "MODELS_DIR", tmp_path)
     monkeypatch.setattr(
         "ai_trading.config.management.get_env",
-        lambda key, default="": "https://example.test/model.pkl" if key == "DEFAULT_MODEL_URL" else default,
+        lambda key, default="", **_kwargs: (
+            "research"
+            if key == "AI_TRADING_DEFAULT_MODEL_PROVISIONING_MODE"
+            else "https://example.test/model.pkl"
+            if key == "DEFAULT_MODEL_URL"
+            else default
+        ),
     )
     monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: Response())
     train_calls: list[str] = []
@@ -140,3 +146,18 @@ def test_ensure_default_models_writes_manifest_for_downloaded_default_url(
     assert model_path.read_bytes() == b"downloaded-model"
     assert default_manifest_path(model_path).exists()
     assert train_calls == []
+
+
+def test_ensure_default_models_quarantines_unapproved_runtime_provisioning(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(ml_model.paths, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr(
+        "ai_trading.config.management.get_env",
+        lambda key, default="", **_kwargs: default,
+    )
+
+    ml_model.ensure_default_models(["SPY"])
+
+    assert not (tmp_path / "SPY.pkl").exists()

@@ -27,9 +27,9 @@ of silently writing a repo-local fallback env file.
 
 Use `RUN_HEALTHCHECK=1 python -m ai_trading.app` only when you want the
 standalone lightweight health app. In that mode the standalone health server
-binds to `HEALTHCHECK_PORT` (default `8081`) and exposes only `/healthz` and
-`/metrics`. In the main runtime path, `RUN_HEALTHCHECK=1` requires
-`HEALTHCHECK_PORT != API_PORT`.
+binds to `HEALTHCHECK_PORT` (default `8081`) and exposes `/healthz`; the
+packaged service's metrics endpoint remains on the main API port. In the main
+runtime path, `RUN_HEALTHCHECK=1` requires `HEALTHCHECK_PORT != API_PORT`.
 
 ### Singleton Guard
 

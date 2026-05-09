@@ -36,6 +36,15 @@ def _ensure_rebalance_tracking(ctx: Any) -> None:
         setattr(ctx, attr_name, {})
 
 
+def _parse_position_quantity(raw_position: Any) -> int:
+    raw_qty = getattr(raw_position, "qty", 0) or 0
+    qty = int(float(raw_qty))
+    side = str(getattr(raw_position, "side", "") or "").strip().lower()
+    if side in {"short", "sell_short"}:
+        return -abs(qty)
+    return qty
+
+
 def _update_service_status_safe(be: Any, *, status: str, reason: str) -> None:
     runtime_state = getattr(be, "runtime_state", None)
     update_service_status = getattr(runtime_state, "update_service_status", None)
@@ -200,7 +209,7 @@ def initial_rebalance_runtime(ctx: Any, symbols: list[str]) -> None:
                 if not position_symbol:
                     continue
                 try:
-                    positions[position_symbol] = int(float(getattr(raw_position, "qty", 0) or 0))
+                    positions[position_symbol] = _parse_position_quantity(raw_position)
                 except (TypeError, ValueError):
                     be.logger.warning(
                         "INITIAL_REBALANCE_POSITION_PARSE_FAILED",
@@ -211,7 +220,7 @@ def initial_rebalance_runtime(ctx: Any, symbols: list[str]) -> None:
                 target_qty = max(1, int((total_capital * weight_per) / price))
                 current_qty = int(positions.get(sym, 0))
                 if current_qty < target_qty:
-                    qty_to_buy = target_qty
+                    qty_to_buy = target_qty - current_qty
                     if qty_to_buy < 1:
                         continue
                     try:
@@ -269,9 +278,7 @@ def initial_rebalance_runtime(ctx: Any, symbols: list[str]) -> None:
             if not position_symbol:
                 continue
             try:
-                refreshed_positions[position_symbol] = int(
-                    float(getattr(raw_position, "qty", 0) or 0)
-                )
+                refreshed_positions[position_symbol] = _parse_position_quantity(raw_position)
             except (TypeError, ValueError):
                 be.logger.warning(
                     "INITIAL_REBALANCE_REFRESH_POSITION_PARSE_FAILED",

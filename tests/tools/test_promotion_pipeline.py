@@ -23,6 +23,11 @@ def _replay_payload(expectancy_bps: float = 5.0) -> dict[str, object]:
     return {
         "artifact_type": "offline_replay_summary",
         "generated_at": "2026-05-05T20:00:00Z",
+        "authority": {
+            "timestamp_authoritative": True,
+            "research_synthetic": False,
+            "source_providers": ["alpaca"],
+        },
         "aggregate": {
             "expectancy_bps": expectancy_bps,
             "total_trades": 25,
@@ -98,6 +103,63 @@ def test_promotion_report_blocks_bad_replay_and_missing_shadow(tmp_path: Path) -
     assert report["status"] == "blocked"
     assert report["gates"]["full_replay_positive"] is False
     assert report["gates"]["shadow_telemetry_acceptable"] is False
+
+
+def test_promotion_report_blocks_missing_replay_authority_metadata(tmp_path: Path) -> None:
+    model = tmp_path / "candidate.joblib"
+    manifest = _write_model(model)
+    replay = _replay_payload()
+    replay.pop("authority", None)
+
+    report = promotion_pipeline.build_promotion_report(
+        model_path=model,
+        manifest_path=manifest,
+        full_replay=replay,
+        tail_replay=_replay_payload(),
+        recent_replay=_replay_payload(),
+        shadow_report=_shadow_payload(),
+        live_cost_model={
+            "generated_at": "2026-05-05T20:00:00Z",
+            "status": {"available": True, "status": "ready", "breach_count": 0},
+        },
+        runtime_decay_controls={
+            "generated_at": "2026-05-05T20:00:00Z",
+            "actions": {"entries_allowed": True, "max_action": "normal"},
+        },
+        generated_at=datetime(2026, 5, 5, 21, 0, tzinfo=UTC),
+    )
+
+    assert report["status"] == "blocked"
+    assert report["gates"]["evidence_authority_acceptable"] is False
+    assert report["evidence_authority"]["full_replay"]["reason"] == "authority_metadata_missing"
+
+
+def test_promotion_freshness_reads_nested_source_timestamp(tmp_path: Path) -> None:
+    model = tmp_path / "candidate.joblib"
+    manifest = _write_model(model)
+    shadow = _shadow_payload()
+    shadow.pop("generated_at", None)
+    shadow["source"] = {"generated_at": "2026-05-05T20:00:00Z"}
+
+    report = promotion_pipeline.build_promotion_report(
+        model_path=model,
+        manifest_path=manifest,
+        full_replay=_replay_payload(),
+        tail_replay=_replay_payload(),
+        recent_replay=_replay_payload(),
+        shadow_report=shadow,
+        live_cost_model={
+            "generated_at": "2026-05-05T20:00:00Z",
+            "status": {"available": True, "status": "ready", "breach_count": 0},
+        },
+        runtime_decay_controls={
+            "generated_at": "2026-05-05T20:00:00Z",
+            "actions": {"entries_allowed": True, "max_action": "normal"},
+        },
+        generated_at=datetime(2026, 5, 5, 21, 0, tzinfo=UTC),
+    )
+
+    assert report["evidence_freshness"]["shadow_report"]["ok"] is True
 
 
 def test_promotion_report_blocks_warming_live_cost_and_stale_evidence(

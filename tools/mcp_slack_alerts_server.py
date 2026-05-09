@@ -1254,18 +1254,16 @@ def _material_incident_triggers_for_dedupe(triggers: list[str] | set[str]) -> li
 
 
 def _incident_repeat_cooldown_minutes(args: dict[str, Any]) -> int:
-    raw = (
-        args.get("repeat_cooldown_minutes")
-        or os.getenv("AI_TRADING_SLACK_INCIDENT_REPEAT_COOLDOWN_MINUTES")
-    )
+    raw = args.get("repeat_cooldown_minutes")
+    if raw is None:
+        raw = os.getenv("AI_TRADING_SLACK_INCIDENT_REPEAT_COOLDOWN_MINUTES")
     return max(0, _int_arg(raw, default=_DEFAULT_INCIDENT_REPEAT_COOLDOWN_MINUTES))
 
 
 def _incident_min_interval_minutes(args: dict[str, Any]) -> int:
-    raw = (
-        args.get("min_interval_minutes")
-        or os.getenv("AI_TRADING_SLACK_INCIDENT_MIN_INTERVAL_MINUTES")
-    )
+    raw = args.get("min_interval_minutes")
+    if raw is None:
+        raw = os.getenv("AI_TRADING_SLACK_INCIDENT_MIN_INTERVAL_MINUTES")
     return max(0, _int_arg(raw, default=0))
 
 
@@ -1912,6 +1910,22 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
                 "snapshot": snapshot,
             }
 
+    if on_change_only and prior_sent_at is not None and not force and not trigger_set_changed:
+        if repeat_cooldown_minutes > 0:
+            elapsed = now - prior_sent_at
+            cooldown = timedelta(minutes=repeat_cooldown_minutes)
+            if elapsed < cooldown:
+                next_eligible_at = (prior_sent_at + cooldown).isoformat().replace("+00:00", "Z")
+                return {
+                    "sent": False,
+                    "reason": "repeat_cooldown_active",
+                    "fingerprint": fingerprint,
+                    "incident_signature": signature,
+                    "state_path": str(state_path),
+                    "triggers": triggers,
+                    "snapshot": snapshot,
+                    "next_eligible_at": next_eligible_at,
+                }
     if (
         min_interval_minutes > 0
         and prior_sent_at is not None

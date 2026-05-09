@@ -530,7 +530,7 @@ def test_position_size_atr_fallback_and_final_error(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(engine, "_get_atr_data", lambda _symbol: (_ for _ in ()).throw(ValueError("atr bad")))
     monkeypatch.setattr(engine, "_apply_weight_limits", lambda _signal: 0.10)
-    assert engine.position_size(_signal(strategy="default"), 1_000.0, 100.0) == 5
+    assert engine.position_size(_signal(strategy="default"), 1_000.0, 100.0) == 1
 
     monkeypatch.setattr(risk_engine, "_calculate_position_size", lambda *_args: (_ for _ in ()).throw(ValueError("qty bad")))
     assert engine.position_size(_signal(), 1_000.0, 100.0) == 0

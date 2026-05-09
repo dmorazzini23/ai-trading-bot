@@ -26,6 +26,21 @@ class NettingSubmitPreludeResult:
     blocked_order_intent: Any | None
 
 
+def _fail_closed_on_optimizer_error(*, cfg: Any, opening_trade: bool) -> bool:
+    if bool(opening_trade):
+        return True
+    execution_mode = str(getattr(cfg, "execution_mode", "") or "").strip().lower()
+    launch_profile = str(
+        getattr(
+            cfg,
+            "launch_profile",
+            get_env("AI_TRADING_LAUNCH_PROFILE", "", cast=str),
+        )
+        or ""
+    ).strip().lower()
+    return execution_mode == "live" or launch_profile == "live_canary" or launch_profile.startswith("live_")
+
+
 def prepare_netting_submit_prelude(
     *,
     state: Any,
@@ -108,13 +123,42 @@ def prepare_netting_submit_prelude(
             current_shares=float(current_shares),
         )
         proposed_position = float(current_shares + delta_shares)
-        opt_allowed, opt_context = portfolio_optimizer_allows_trade_func(
-            optimizer=portfolio_optimizer,
-            symbol=symbol,
-            proposed_position=float(proposed_position),
-            current_positions=current_positions_for_optimizer,
-            market_data=portfolio_optimizer_market_data,
-        )
+        try:
+            opt_allowed, opt_context = portfolio_optimizer_allows_trade_func(
+                optimizer=portfolio_optimizer,
+                symbol=symbol,
+                proposed_position=float(proposed_position),
+                current_positions=current_positions_for_optimizer,
+                market_data=portfolio_optimizer_market_data,
+            )
+        except (RuntimeError, ValueError, TypeError, KeyError, OSError) as exc:
+            opt_context = {
+                "decision": "error",
+                "error_type": exc.__class__.__name__,
+                "error": str(exc),
+                "fail_closed": _fail_closed_on_optimizer_error(
+                    cfg=cfg,
+                    opening_trade=opening_trade,
+                ),
+            }
+            snapshot_updates["portfolio_optimizer"] = dict(portfolio_optimizer_context | opt_context)
+            if bool(opt_context["fail_closed"]):
+                blocked_reason = "PORTFOLIO_OPTIMIZER_DECISION_ERROR"
+                gates_added.append(blocked_reason)
+                return NettingSubmitPreludeResult(
+                    execution_intent_context=None,
+                    submit_quote_source=None,
+                    submit_bid_at_arrival=None,
+                    submit_ask_at_arrival=None,
+                    submit_mid_at_arrival=None,
+                    submit_arrival_price=None,
+                    gates_added=tuple(gates_added),
+                    snapshot_updates=snapshot_updates,
+                    blocked_reason=blocked_reason,
+                    blocked_metrics={"portfolio_optimizer": dict(opt_context)},
+                    blocked_order_intent=None,
+                )
+            opt_allowed = True
         snapshot_updates["portfolio_optimizer"] = dict(portfolio_optimizer_context | opt_context)
         if not opt_allowed:
             decision_token = str(opt_context.get("decision") or "reject").strip().lower()

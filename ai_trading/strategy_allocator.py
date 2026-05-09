@@ -199,6 +199,34 @@ class StrategyAllocator:
                     },
                 )
 
+    def _short_policy_allows(self, signal: Any, strategy: str) -> bool:
+        side = str(getattr(signal, "side", "") or "").strip().lower()
+        if side != "sell_short":
+            return True
+        raw_policy = getattr(self.config, "short_policy", None)
+        if raw_policy is None:
+            raw_policy = getattr(self.config, "allow_short", None)
+        if raw_policy is None:
+            try:
+                raw_policy = get_env("AI_TRADING_ALLOW_SHORT", True, cast=bool)
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
+                raw_policy = True
+        if isinstance(raw_policy, str):
+            allowed = raw_policy.strip().lower() in {"1", "true", "yes", "on", "allow", "allowed"}
+        else:
+            allowed = bool(raw_policy)
+        if allowed:
+            return True
+        logger.info(
+            "SHORT_SIGNAL_BLOCKED",
+            extra={
+                "strategy": strategy,
+                "symbol": getattr(signal, "symbol", "?"),
+                "policy": "long_only",
+            },
+        )
+        return False
+
     def replace_config(self, **changes: Any) -> Any:
         """Return a new config object with ``changes`` applied and set it."""
         if isinstance(self.config, TradingConfig):
@@ -339,6 +367,8 @@ class StrategyAllocator:
                         continue
 
                 self._normalize_signal_reliability(s)
+                if not self._short_policy_allows(s, strategy):
+                    continue
 
                 try:
                     original = float(s.confidence)

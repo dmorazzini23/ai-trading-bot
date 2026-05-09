@@ -45,6 +45,12 @@ if [[ -n "${AI_TRADING_RUNTIME_DIR:-}" ]]; then
 else
   RUNTIME_DIR="${DATA_ROOT}/runtime"
 fi
+case "${RUNTIME_DIR}" in
+  ""|"/"|"${ROOT_DIR}"|"${ROOT_DIR}/")
+    echo "refusing unsafe runtime directory: ${RUNTIME_DIR}" >&2
+    exit 1
+    ;;
+esac
 if [[ -n "${AI_TRADING_RUNTIME_OWNER:-}" ]]; then
   RUNTIME_OWNER="${AI_TRADING_RUNTIME_OWNER}"
 else
@@ -145,7 +151,12 @@ if [[ "${CONFIRM}" != "1" ]]; then
   exit 0
 fi
 
-mkdir -p "${RUNTIME_DIR}" "${ARCHIVE_DIR}"
+mkdir -p "${RUNTIME_DIR}"
+if [[ -e "${ARCHIVE_DIR}" ]]; then
+  echo "archive directory already exists: ${ARCHIVE_DIR}" >&2
+  exit 1
+fi
+mkdir -p "${ARCHIVE_DIR}"
 
 echo "[runtime-reset] archiving tracked runtime artifacts -> ${ARCHIVE_DIR}"
 for name in "${tracked_artifacts[@]}"; do
@@ -253,5 +264,9 @@ echo "[runtime-reset] runtime performance snapshot"
   --go-no-go \
   --require-gate-valid || true
 
-chown -R "${RUNTIME_OWNER}" "${RUNTIME_DIR}" 2>/dev/null || true
+if [[ "$(id -u)" == "0" ]]; then
+  chown -R "${RUNTIME_OWNER}" "${RUNTIME_DIR}"
+else
+  echo "[runtime-reset] ownership unchanged; run as root only if system runtime ownership must be repaired"
+fi
 echo "[runtime-reset] done"
