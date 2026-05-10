@@ -529,6 +529,7 @@ def build_huggingface_sentiment_benchmark(
                 "runtime_authority": False,
                 "promotion_authority": False,
                 "live_money_authority": False,
+                "provider_authority": False,
                 "recommendation": _candidate_recommendation(
                     result,
                     current_accuracy=current_accuracy,

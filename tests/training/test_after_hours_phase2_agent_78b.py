@@ -446,6 +446,39 @@ def test_promotion_state_and_new_rows_helpers(monkeypatch: pytest.MonkeyPatch) -
     assert ah._parse_iso_date("2026-04-21T23:59:00Z") == date(2026, 4, 21)
     assert ah._parse_iso_date("bad") is None
 
+    inverse_candidate = _candidate("inverse", expectancy=5.0)
+    inverse_candidate.score_orientation = "inverse"
+    inverse_candidate.score_orientation_report = {"inverse_applied": True}
+    inverse_guard = ah._oof_promotion_authority_guard(
+        best=inverse_candidate,
+        default_threshold=0.5,
+        live_execution_quality_gate={},
+        champion_challenger_ab={},
+        promotion_confidence_gate={},
+    )
+    assert inverse_guard["gate_passed"] is False
+    assert inverse_guard["reasons"] == ["inverse_global_oof_orientation_shadow_only"]
+
+    tuned_candidate = _candidate("tuned", expectancy=5.0)
+    tuned_candidate.selected_threshold = 0.65
+    tuned_guard = ah._oof_promotion_authority_guard(
+        best=tuned_candidate,
+        default_threshold=0.5,
+        live_execution_quality_gate={},
+        champion_challenger_ab={},
+        promotion_confidence_gate={},
+    )
+    assert tuned_guard["gate_passed"] is False
+    assert "threshold_tuning_requires_holdout_or_live_shadow_confirmation" in tuned_guard["reasons"]
+    confirmed_guard = ah._oof_promotion_authority_guard(
+        best=tuned_candidate,
+        default_threshold=0.5,
+        live_execution_quality_gate={"gate_passed": True},
+        champion_challenger_ab={},
+        promotion_confidence_gate={},
+    )
+    assert confirmed_guard["gate_passed"] is True
+
     sanitized = ah._sanitize_after_hours_training_state_payload(
         {
             "report_path": "/tmp/pytest-of-aiuser/run/report.json",

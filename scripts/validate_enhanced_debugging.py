@@ -2,6 +2,9 @@ import logging
 'Simple test to validate enhanced execution debugging functionality.'
 import os
 import sys
+from legacy_guard import require_legacy_demo_flag
+
+require_legacy_demo_flag("scripts/validate_enhanced_debugging.py")
 os.environ['ALPACA_API_KEY'] = 'test_key'
 os.environ['ALPACA_SECRET_KEY'] = 'test_secret'
 os.environ['ALPACA_BASE_URL'] = 'https://paper-api.alpaca.markets'

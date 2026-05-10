@@ -2793,6 +2793,44 @@ def _select_candidate_threshold(
     return dict(selected or {})
 
 
+def _oof_promotion_authority_guard(
+    *,
+    best: CandidateMetrics,
+    default_threshold: float,
+    live_execution_quality_gate: Mapping[str, Any],
+    champion_challenger_ab: Mapping[str, Any],
+    promotion_confidence_gate: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Gate production authority when OOF transformations need live confirmation."""
+
+    reasons: list[str] = []
+    inverse_global = str(best.score_orientation).strip().lower() == "inverse" or bool(
+        best.score_orientation_report.get("inverse_applied", False)
+    )
+    if inverse_global:
+        reasons.append("inverse_global_oof_orientation_shadow_only")
+    threshold_tuned = abs(float(best.selected_threshold) - float(default_threshold)) > 1e-9
+    confirmation_gate_passed = any(
+        bool(gate.get("gate_passed", False))
+        for gate in (
+            live_execution_quality_gate,
+            champion_challenger_ab,
+            promotion_confidence_gate,
+        )
+    )
+    if threshold_tuned and not confirmation_gate_passed:
+        reasons.append("threshold_tuning_requires_holdout_or_live_shadow_confirmation")
+    return {
+        "gate_passed": not reasons,
+        "reasons": reasons,
+        "inverse_global_orientation": bool(inverse_global),
+        "threshold_tuned": bool(threshold_tuned),
+        "confirmation_gate_passed": bool(confirmation_gate_passed),
+        "default_threshold": float(default_threshold),
+        "selected_threshold": float(best.selected_threshold),
+    }
+
+
 def _run_sensitivity_sweep(
     dataset: Any,
     probabilities: np.ndarray,
@@ -6432,6 +6470,22 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         previous_state=training_state,
         run_date=now_utc.date(),
     )
+    oof_authority_gate = _oof_promotion_authority_guard(
+        best=best,
+        default_threshold=default_threshold,
+        live_execution_quality_gate=live_execution_quality_gate,
+        champion_challenger_ab=champion_challenger_ab,
+        promotion_confidence_gate=promotion_confidence_gate,
+    )
+    if not bool(oof_authority_gate.get("gate_passed", False)):
+        promotion = dict(promotion)
+        promotion["status"] = "shadow"
+        promotion["oof_authority_gate"] = oof_authority_gate
+        promotion["combined_gates"] = {
+            **dict(promotion.get("combined_gates", {})),
+            "oof_authority": False,
+        }
+        promotion["gate_passed"] = False
     status, approval_block_reason = _production_status_for_candidate(
         requested_status=str(promotion["status"]),
         candidate_name=best.name,
@@ -6472,6 +6526,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "live_execution_quality_gate": live_execution_quality_gate,
             "champion_challenger_ab": champion_challenger_ab,
             "promotion_confidence_gate": promotion_confidence_gate,
+            "oof_authority_gate": oof_authority_gate,
         },
     )
 
@@ -6627,11 +6682,13 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 "live_execution_quality": live_execution_quality_gate,
                 "champion_challenger_ab": champion_challenger_ab,
                 "promotion_confidence": promotion_confidence_gate,
+                "oof_authority": oof_authority_gate,
             },
             "runtime_performance_gate": runtime_performance_gate,
             "live_execution_quality_gate": live_execution_quality_gate,
             "champion_challenger_ab": champion_challenger_ab,
             "promotion_confidence_gate": promotion_confidence_gate,
+            "oof_authority_gate": oof_authority_gate,
         },
     )
     require_runtime_promotion_gate = bool(

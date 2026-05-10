@@ -157,6 +157,8 @@ def _intake_candidate(
         "repo_id": str(candidate.get("repo_id") or candidate.get("hf_id") or ""),
         "hf_id": str(candidate.get("hf_id") or candidate.get("repo_id") or ""),
         "resource_type": str(candidate.get("resource_type") or candidate.get("repo_type") or "model"),
+        "sha": candidate.get("sha"),
+        "revision": str(candidate.get("sha") or candidate.get("revision") or "").strip() or None,
         "license": _license(candidate) or None,
         "gated": bool(candidate.get("gated")),
         "private": bool(candidate.get("private")),
@@ -175,6 +177,7 @@ def _intake_candidate(
         "runtime_authority": False,
         "promotion_authority": False,
         "live_money_authority": False,
+        "provider_authority": False,
     }
 
 

@@ -219,6 +219,15 @@ def normalize_ohlcv_df(
 
     frame = frame.loc[:, ~pd.Index(frame.columns).duplicated()]
 
+    if "timestamp" not in frame.columns and isinstance(frame.index, pd.RangeIndex):
+        allow_synthetic = bool(
+            attrs.get("allow_research_synthetic_timestamp")
+            or attrs.get("allow_research_synthetic_timestamps")
+            or attrs.get("research_synthetic")
+        )
+        if not allow_synthetic:
+            return _empty_frame(include_timestamp=include_timestamp)
+
     had_trade_count_column = "trade_count" in frame.columns
     if "adj close" in frame.columns and "close" not in frame.columns:
         frame["close"] = frame["adj close"]

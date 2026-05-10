@@ -534,6 +534,78 @@ def _daily_frame_has_future_timestamp(frame: Any, *, now: datetime | None = None
         return False
 
 
+_MAX_FUTURE_BAR_SKEW_SECONDS = 5.0
+
+
+def _drop_future_minute_bars(
+    frame: Any,
+    *,
+    symbol: str | None = None,
+    timeframe: str | None = None,
+    now: datetime | None = None,
+) -> Any:
+    """Drop normalized minute bars beyond allowed future clock skew."""
+    tf_norm = str(timeframe or "").strip().lower()
+    if tf_norm not in {"1min", "1m", "minute", "min"}:
+        return frame
+    pd_local = _ensure_pandas()
+    if pd_local is None or frame is None or not isinstance(frame, pd_local.DataFrame) or frame.empty:
+        return frame
+    if now is None:
+        now = datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    now_utc = now.astimezone(UTC)
+    try:
+        if "timestamp" in frame.columns:
+            parsed = pd_local.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+        elif isinstance(frame.index, pd_local.DatetimeIndex):
+            parsed = pd_local.Series(frame.index, index=frame.index)
+            parsed = pd_local.to_datetime(parsed, utc=True, errors="coerce")
+        else:
+            return frame
+    except FETCH_FALLBACK_EXCEPTIONS:
+        return frame
+    cutoff = pd_local.Timestamp(now_utc + _dt.timedelta(seconds=_MAX_FUTURE_BAR_SKEW_SECONDS))
+    try:
+        future_mask = parsed > cutoff
+    except FETCH_FALLBACK_EXCEPTIONS:
+        return frame
+    try:
+        future_count = int(future_mask.sum())
+    except FETCH_FALLBACK_EXCEPTIONS:
+        future_count = 0
+    if future_count <= 0:
+        return frame
+    try:
+        latest_future = parsed[future_mask].max()
+    except FETCH_FALLBACK_EXCEPTIONS:
+        latest_future = None
+    logger.warning(
+        "future_bar_timestamp",
+        extra={
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "future_rows": future_count,
+            "max_timestamp": latest_future.isoformat() if hasattr(latest_future, "isoformat") else None,
+            "now": now_utc.isoformat(),
+            "allowed_future_skew_seconds": _MAX_FUTURE_BAR_SKEW_SECONDS,
+        },
+    )
+    try:
+        filtered = frame.loc[~future_mask.to_numpy()].copy()
+    except FETCH_FALLBACK_EXCEPTIONS:
+        try:
+            filtered = frame.loc[~future_mask].copy()
+        except FETCH_FALLBACK_EXCEPTIONS:
+            return frame
+    try:
+        filtered.attrs.update(getattr(frame, "attrs", {}) or {})
+    except FETCH_FALLBACK_EXCEPTIONS:
+        pass
+    return filtered
+
+
 def _rate_limit_cooldown(resp: Any | None = None) -> float:
     """Return cooldown seconds applied after HTTP 429 responses."""
     retry_after: float | None = None
@@ -5089,7 +5161,21 @@ def get_cached_minute_timestamp(symbol: str) -> int | None:
 def set_cached_minute_timestamp(symbol: str, ts_epoch_s: int) -> None:
     """Store last bar timestamp with current insertion time."""
     now_s = int(_dt.datetime.now(tz=UTC).timestamp())
-    _MINUTE_CACHE[symbol] = (int(ts_epoch_s), now_s)
+    ts_s = int(ts_epoch_s)
+    if ts_s - now_s > int(_MAX_FUTURE_BAR_SKEW_SECONDS):
+        logger.warning(
+            "future_bar_timestamp",
+            extra={
+                "symbol": symbol,
+                "timeframe": "1Min",
+                "timestamp_epoch_s": ts_s,
+                "now_epoch_s": now_s,
+                "allowed_future_skew_seconds": _MAX_FUTURE_BAR_SKEW_SECONDS,
+                "cache_update": False,
+            },
+        )
+        return
+    _MINUTE_CACHE[symbol] = (ts_s, now_s)
 
 
 def clear_cached_minute_timestamp(symbol: str) -> None:
@@ -5112,7 +5198,20 @@ def last_minute_bar_age_seconds(symbol: str) -> int | None:
     if ts is None:
         return None
     now_s = int(_dt.datetime.now(tz=UTC).timestamp())
-    return max(0, now_s - int(ts))
+    age = now_s - int(ts)
+    if age < 0:
+        logger.warning(
+            "future_bar_timestamp",
+            extra={
+                "symbol": symbol,
+                "timeframe": "1Min",
+                "timestamp_epoch_s": int(ts),
+                "now_epoch_s": now_s,
+                "future_skew_seconds": abs(age),
+            },
+        )
+        return None
+    return age
 
 
 _DEFAULT_FEED = "iex"
@@ -6384,7 +6483,8 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
     if end is None:
         raise ValueError("end_required")
     start_dt = ensure_datetime(start)
-    end_dt = ensure_datetime(end)
+    requested_end_dt = ensure_datetime(end)
+    end_dt = requested_end_dt
     interval_norm = str(interval).lower()
 
     if interval_norm in {"1m", "1min", "1minute"}:
@@ -6502,7 +6602,8 @@ def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Da
             return []  # type: ignore[return-value]
         return pd_local.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
     start_dt = ensure_datetime(start)
-    end_dt = ensure_datetime(end)
+    requested_end_dt = ensure_datetime(end)
+    end_dt = requested_end_dt
     try:
         df = fetcher.fetch(symbol, start_dt, end_dt, resolution=resolution)
         if isinstance(df, pd_local.DataFrame):
@@ -6776,6 +6877,7 @@ def _post_process(
     *,
     symbol: str | None = None,
     timeframe: str | None = None,
+    now: datetime | None = None,
 ) -> pd.DataFrame | None:
     """Normalize OHLCV DataFrame while preserving explicit empties."""
 
@@ -6825,6 +6927,8 @@ def _post_process(
         normalized = normalize_ohlcv_df(candidate, include_columns=("timestamp",))
     except FETCH_FALLBACK_EXCEPTIONS:
         normalized = candidate
+
+    normalized = _drop_future_minute_bars(normalized, symbol=symbol, timeframe=timeframe, now=now)
 
     if normalized is None:
         return None
@@ -7295,6 +7399,7 @@ def _repair_rth_minute_gaps(
                     fallback_df,
                     symbol=symbol,
                     timeframe="1Min",
+                    now=missing_end,
                 )
             if fallback_df is not None and not getattr(fallback_df, "empty", True):
                 fb_raw_index, _ = _extract_minute_indexes(fallback_df)
@@ -7390,6 +7495,7 @@ def _repair_rth_minute_gaps(
                 fallback_full,
                 symbol=symbol,
                 timeframe="1Min",
+                now=end_utc.to_pydatetime(),
             )
         if fallback_full is not None and not getattr(fallback_full, "empty", True):
             fb_raw_full, _ = _extract_minute_indexes(fallback_full)
@@ -12266,7 +12372,8 @@ def get_minute_df(
             return value
 
     start_dt = ensure_datetime(start)
-    end_dt = ensure_datetime(end)
+    requested_end_dt = ensure_datetime(end)
+    end_dt = requested_end_dt
     normalized_role = normalize_feed_role(feed_role)
     if normalized_role == "execution" and is_delayed_feed(feed):
         normalized_role = "reference"
@@ -12933,7 +13040,7 @@ def get_minute_df(
             force_primary_fetch = True
             _mark_primary_probe_due(route="provider_monitor_backup")
             skip_primary_due_to_fallback = False
-        if active_provider == backup_label:
+        if active_provider == backup_label and (requested_end_dt - start_dt) <= _dt.timedelta(days=7):
             try:
                 refreshed_last_minute = _evaluate_last_complete(last_complete_minute)
             except FETCH_FALLBACK_EXCEPTIONS:
@@ -13668,7 +13775,7 @@ def get_minute_df(
             df = pd.DataFrame() if pd is not None else []  # type: ignore[assignment]
 
     if used_backup and df is not None and not getattr(df, "empty", True):
-        processed_df = _post_process(df, symbol=symbol, timeframe="1Min")
+        processed_df = _post_process(df, symbol=symbol, timeframe="1Min", now=requested_end_dt)
         candidate_df = df
         if processed_df is not None and not getattr(processed_df, "empty", True):
             candidate_df = processed_df
@@ -13782,7 +13889,8 @@ def get_minute_df(
             raise last_empty_error
 
     try:
-        df = _post_process(original_df, symbol=symbol, timeframe="1Min")
+        post_process_now = requested_end_dt if used_backup else end_dt
+        df = _post_process(original_df, symbol=symbol, timeframe="1Min", now=post_process_now)
     except DataFetchError as exc:
         if used_backup:
             logger.warning(
@@ -14152,6 +14260,11 @@ def get_minute_df(
         df = _mutate_dataframe_in_place(df, ensured_df)
 
         normalized_df = normalize_ohlcv_df(df, include_columns=("timestamp",))
+        normalized_df = _drop_future_minute_bars(
+            normalized_df,
+            symbol=symbol,
+            timeframe="1Min",
+        )
         df = _mutate_dataframe_in_place(df, normalized_df)
 
         restored_df = _restore_timestamp_column(df)
@@ -14241,14 +14354,6 @@ def get_daily_df(
             normalized_feed = _normalize_feed_value(override)
 
     memo_info = _normalize_daily_memo(memo)
-    if memo_info is not None:
-        ts = memo_info.get("ts")
-        frame = memo_info.get("df")
-        if isinstance(ts, datetime) and _is_fresh(ts) and not _daily_frame_has_future_timestamp(frame):
-            meta = _state.setdefault("meta", {})
-            meta["memo"] = True
-            meta.pop("cache", None)
-            return frame
 
     resolved_adjustment = adjustment or "raw"
     if isinstance(resolved_adjustment, str):
@@ -14506,6 +14611,24 @@ def get_daily_df(
         )
         normalized = normalize_ohlcv_df(normalized, include_columns=("timestamp",))
         return _restore_timestamp_column(normalized)
+
+    if memo_info is not None:
+        ts = memo_info.get("ts")
+        frame = memo_info.get("df")
+        if isinstance(ts, datetime) and _is_fresh(ts):
+            try:
+                memo_frame = _normalize_daily_frame(frame, "memo")
+            except (MissingOHLCVColumnsError, DataFetchError, ValueError, TypeError):
+                memo_frame = None
+            if (
+                isinstance(memo_frame, pd_mod.DataFrame)
+                and not memo_frame.empty
+                and not _daily_frame_has_future_timestamp(memo_frame)
+            ):
+                meta = _state.setdefault("meta", {})
+                meta["memo"] = True
+                meta.pop("cache", None)
+                return memo_frame
 
     if forced_daily_provider == "finnhub":
         finnhub_daily = df

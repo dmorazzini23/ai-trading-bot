@@ -60,6 +60,19 @@ _SENT_DEPS_LOGGED: set[str] = set()
 _SENTIMENT_STUB_LOGGED = False
 
 
+def _finbert_revision_kwargs() -> dict[str, str]:
+    revision = str(
+        get_env(
+            "AI_TRADING_FINBERT_MODEL_REVISION",
+            "",
+            cast=str,
+            resolve_aliases=False,
+        )
+        or ""
+    ).strip()
+    return {"revision": revision} if revision else {}
+
+
 class SentimentEvidence(TypedDict, total=False):
     ticker: str
     score: float
@@ -241,19 +254,34 @@ def _load_transformers(log=logger):
             )
             or "yiyanghkust/finbert-tone"
         )
+        revision_kwargs = _finbert_revision_kwargs()
+        tokenizer_cls = cast(Any, AutoTokenizer)
+        model_cls = cast(Any, AutoModelForSequenceClassification)
         try:
-            tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
-            model = AutoModelForSequenceClassification.from_pretrained(
+            tokenizer = tokenizer_cls.from_pretrained(
                 model_name,
                 local_files_only=True,
+                **revision_kwargs,
+            )
+            model = model_cls.from_pretrained(
+                model_name,
+                local_files_only=True,
+                **revision_kwargs,
             )
         except ValueError:
             from transformers import BertForSequenceClassification, BertTokenizer
 
-            tokenizer = BertTokenizer.from_pretrained(model_name, local_files_only=True)
-            model = BertForSequenceClassification.from_pretrained(
+            bert_tokenizer_cls = cast(Any, BertTokenizer)
+            bert_model_cls = cast(Any, BertForSequenceClassification)
+            tokenizer = bert_tokenizer_cls.from_pretrained(
                 model_name,
                 local_files_only=True,
+                **revision_kwargs,
+            )
+            model = bert_model_cls.from_pretrained(
+                model_name,
+                local_files_only=True,
+                **revision_kwargs,
             )
         model.to(_device)
         model.eval()
@@ -682,13 +710,6 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
             _try_sector_sentiment_proxy,
             lambda: _try_sector_sentiment_proxy(ticker),
         ),
-        (
-            _get_cached_or_neutral_sentiment,
-            lambda: _get_cached_or_neutral_sentiment(
-                ticker,
-                reason="rate_limit_without_cache",
-            ),
-        ),
     ]
     for fallback_func, fallback_call in fallback_sources:
         try:
@@ -746,7 +767,7 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
     logger.warning('SENTIMENT_RATE_LIMIT_ALL_FALLBACKS_EXHAUSTED', extra={'ticker': ticker, 'fallback_strategies_tried': len(fallback_sources), 'cache_ttl_hours': SENTIMENT_RATE_LIMITED_TTL_SEC / 3600, 'recommendation': 'Consider upgrading NewsAPI plan, adding alternative sentiment sources, or reviewing rate limits'})
     return _get_cached_or_neutral_sentiment(
         ticker,
-        reason="rate_limit_all_fallbacks_exhausted",
+        reason="rate_limit_without_cache",
     )
 
 def _try_alternative_sentiment_sources(ticker: str) -> float | None:
@@ -763,43 +784,26 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
         cast=str,
         resolve_aliases=False,
     )
-    primary_url = get_env(
-        "SENTIMENT_API_URL",
-        "https://newsapi.org/v2/everything",
-        cast=str,
-        resolve_aliases=False,
-    )
-    primary_key = get_env("SENTIMENT_API_KEY", None, cast=str, resolve_aliases=False)
+    if not alt_api_key or not alt_api_url:
+        return None
     try:
-        primary_url_full = f'{primary_url}?symbol={ticker}&apikey={primary_key}'
         timeout_v = HTTP_TIMEOUT
         session = _get_sentiment_http_session()
-        primary_resp = session.get(primary_url_full, timeout=clamp_request_timeout(timeout_v))
-        if primary_resp.status_code in {429, 500, 502, 503, 504} and alt_api_key and alt_api_url:
-            pytime.sleep(0.5)
-            alt_url = f'{alt_api_url}?symbol={ticker}&apikey={alt_api_key}'
-            alt_resp = session.get(alt_url, timeout=clamp_request_timeout(timeout_v))
-            if alt_resp.status_code == 200:
-                data = alt_resp.json()
-                sentiment_score = float(data.get('sentiment_score', 0.0) or 0.0)
-                if -1.0 <= sentiment_score <= 1.0:
-                    logger.info(f'ALTERNATIVE_SENTIMENT_SUCCESS | ticker={ticker} score={sentiment_score}')
-                    _sentiment_proxy_provenance[ticker] = {
-                        "provider": "alternative_sentiment",
-                        "primary_status_code": primary_resp.status_code,
-                        "alternative_status_code": alt_resp.status_code,
-                    }
-                    return sentiment_score
-        elif primary_resp.status_code == 200:
-            data = primary_resp.json()
+        alt_url = f'{alt_api_url}?symbol={ticker}&apikey={alt_api_key}'
+        alt_resp = session.get(alt_url, timeout=clamp_request_timeout(timeout_v))
+        if alt_resp.status_code == 200:
+            data = alt_resp.json()
+            if not isinstance(data, dict):
+                return None
             sentiment_score = float(data.get('sentiment_score', 0.0) or 0.0)
             if -1.0 <= sentiment_score <= 1.0:
+                logger.info(f'ALTERNATIVE_SENTIMENT_SUCCESS | ticker={ticker} score={sentiment_score}')
                 _sentiment_proxy_provenance[ticker] = {
-                    "provider": "primary_sentiment_score",
-                    "primary_status_code": primary_resp.status_code,
+                    "provider": "alternative_sentiment",
+                    "alternative_status_code": alt_resp.status_code,
                 }
                 return sentiment_score
-    except (ValueError, TypeError) as e:
+    except (RequestException, HTTPError, ValueError, TypeError) as e:
         logger.debug(f'Alternative sentiment source failed for {ticker}: {e}')
     return None
 

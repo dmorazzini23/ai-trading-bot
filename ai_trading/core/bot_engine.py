@@ -5848,6 +5848,85 @@ def maybe_init_brokers() -> None:
 # Simple cache exposed for tests
 
 
+def _canonical_sentiment_module() -> Any:
+    from ai_trading.analysis import sentiment as sentiment_module
+
+    return sentiment_module
+
+
+def _sync_legacy_sentiment_state(ticker: str) -> None:
+    sentiment_module = _canonical_sentiment_module()
+    canonical_cache = getattr(sentiment_module, "_sentiment_cache", {})
+    cached = canonical_cache.get(ticker) if isinstance(canonical_cache, dict) else None
+    if cached is not None:
+        _SENTIMENT_CACHE[ticker] = cached
+    canonical_cb = getattr(sentiment_module, "_sentiment_circuit_breaker", None)
+    legacy_cb = globals().get("_SENTIMENT_CIRCUIT_BREAKER")
+    if isinstance(canonical_cb, dict) and isinstance(legacy_cb, dict):
+        for key in ("failures", "last_failure", "state", "next_retry"):
+            if key in canonical_cb:
+                legacy_cb[key] = canonical_cb[key]
+        if "opened_at" in legacy_cb and canonical_cb.get("state") != "open":
+            legacy_cb["opened_at"] = 0
+
+
+def _legacy_sentiment_session_fallback(
+    ticker: str,
+    *,
+    session: Any | None,
+) -> float | None:
+    """Minimal legacy HTTP fallback for tests and older direct callers."""
+    global _SENTIMENT_FAILURES
+    if not SENTIMENT_API_KEY or not SENTIMENT_API_URL:
+        return None
+    candidates: list[Any] = []
+    if session is not None:
+        candidates.append(session)
+    if _HTTP_SESSION not in candidates:
+        candidates.append(_HTTP_SESSION)
+    if requests not in candidates:
+        candidates.append(requests)
+    params = {"symbol": ticker, "apikey": SENTIMENT_API_KEY}
+    saw_callable = False
+    legacy_request_exception = getattr(
+        getattr(requests, "exceptions", None),
+        "RequestException",
+        RequestException,
+    )
+    for candidate in candidates:
+        get = getattr(candidate, "get", None)
+        if not callable(get):
+            continue
+        saw_callable = True
+        try:
+            resp = get(
+                SENTIMENT_API_URL,
+                params=params,
+                timeout=clamp_request_timeout(HTTP_TIMEOUT),
+            )
+            if resp.status_code in {429, 500, 502, 503, 504}:
+                return _cache_sentiment_score(ticker, 0.0)
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, Mapping):
+                return _cache_sentiment_score(ticker, 0.0)
+            raw_score = data.get("sentiment", data.get("sentiment_score", 0.0))
+            return _cache_sentiment_score(ticker, float(raw_score or 0.0))
+        except (
+            RequestException,
+            legacy_request_exception,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            OSError,
+        ):
+            continue
+    if saw_callable:
+        _SENTIMENT_FAILURES += 1
+        return _cache_sentiment_score(ticker, 0.0)
+    return None
+
+
 def fetch_sentiment(
     symbol_or_ctx,
     symbol: str | None = None,
@@ -5855,98 +5934,60 @@ def fetch_sentiment(
     ttl_s: int = 300,
     session: Any | None = None,
 ) -> float:
-    global _SENTIMENT_FAILURES
-    """Fetch sentiment score with basic caching and failure tracking.
-
-    Parameters
-    ----------
-    symbol_or_ctx : Any
-        Historical signature kept for backwards compatibility. When ``symbol``
-        is ``None`` the value is treated as the ticker symbol.
-    symbol : str | None, optional
-        Explicit ticker symbol. Defaults to ``None`` to support the legacy
-        signature.
-    ttl_s : int, optional
-        Cache TTL for failed lookups. Defaults to ``300`` seconds.
-    session : Any, optional
-        Object providing a ``.get`` method. Tests may pass a stub (for example
-        ``session=be.requests`` after monkeypatching ``be.requests``) so network
-        guards never reach the real socket layer. When ``None`` the function
-        first tries the module-level ``_HTTP_SESSION`` and falls back to the
-        (possibly monkeypatched) ``requests`` module.
-    """
-    if symbol is None:
-        symbol = symbol_or_ctx  # backward compat: first arg was context
+    """Delegate legacy bot-engine sentiment calls to the canonical analyzer."""
+    ctx = symbol_or_ctx if symbol is not None else None
+    ticker = str(symbol if symbol is not None else symbol_or_ctx)
     now = time.time()
-    cached = _SENTIMENT_CACHE.get(symbol)
+    cached = _SENTIMENT_CACHE.get(ticker)
     if cached:
         cache_ttl = SENTIMENT_SUCCESS_TTL_SEC if cached[1] != 0.0 else ttl_s
         if now - cached[0] < cache_ttl:
             return cached[1]
-    if _SENTIMENT_FAILURES >= SENTIMENT_FAILURE_THRESHOLD or not SENTIMENT_API_KEY:
-        return _cache_sentiment_score(symbol, 0.0)
 
-    if SENTIMENT_MAX_CALLS_PER_MIN > 0:
-        cutoff = now - 60
-        while _SENTIMENT_CALL_TIMES and _SENTIMENT_CALL_TIMES[0] < cutoff:
-            _SENTIMENT_CALL_TIMES.popleft()
-        if len(_SENTIMENT_CALL_TIMES) >= SENTIMENT_MAX_CALLS_PER_MIN:
-            return _cache_sentiment_score(symbol, cached[1] if cached else 0.0)
-
-    params = {"symbol": symbol, "apikey": SENTIMENT_API_KEY}
-    session_candidates: list[Any] = []
-    if session is not None:
-        session_candidates.append(session)
-    else:
-        session_candidates.append(_HTTP_SESSION)
-        if requests is not _HTTP_SESSION:
-            session_candidates.append(requests)
-
-    exception_types: tuple[type[BaseException], ...] = COMMON_EXC
-    dynamic_exceptions: list[type[BaseException]] = []
-    if isinstance(RequestException, type) and RequestException not in exception_types:
-        dynamic_exceptions.append(RequestException)
-    if RuntimeError not in exception_types:
-        dynamic_exceptions.append(RuntimeError)
-    if dynamic_exceptions:
-        exception_types = (*exception_types, *dynamic_exceptions)
-
-    for attempt in range(1, SENTIMENT_MAX_RETRIES + 1):
-        call_recorded = False
-        for candidate in session_candidates:
-            get = getattr(candidate, "get", None)
-            if not callable(get):
-                continue
-            if not call_recorded:
-                _SENTIMENT_CALL_TIMES.append(time.time())
-                call_recorded = True
-            try:
-                # fmt: off
-                resp = get(
-                    SENTIMENT_API_URL,
-                    params=params,
-                    timeout=clamp_request_timeout(HTTP_TIMEOUT),
-                )
-                # fmt: on
-                if resp.status_code in {429, 500, 502, 503, 504}:
-                    return _cache_sentiment_score(symbol, 0.0)
-                resp.raise_for_status()
-                data = resp.json()
-                score = float(data.get("sentiment", 0.0))
-                return _cache_sentiment_score(symbol, score)
-            # Dynamic exception tuple built from optional dependency classes.
-            except exception_types:  # type: ignore[misc]
-                continue
-
-        _SENTIMENT_FAILURES += 1
-        if (
-            _SENTIMENT_FAILURES >= SENTIMENT_FAILURE_THRESHOLD
-            or attempt == SENTIMENT_MAX_RETRIES
-        ):
-            return _cache_sentiment_score(symbol, 0.0)
-        sleep_s = SENTIMENT_BACKOFF_BASE * (2 ** (attempt - 1)) + random.uniform(0, SENTIMENT_BACKOFF_BASE)
-        time.sleep(sleep_s)
-    return _cache_sentiment_score(symbol, 0.0)
+    sentiment_module = _canonical_sentiment_module()
+    restore_session = False
+    previous_session = None
+    legacy_session = session if session is not None else _HTTP_SESSION
+    if legacy_session is not None:
+        previous_session = getattr(sentiment_module, "_http_session", None)
+        sentiment_module._set_sentiment_http_session_for_tests(legacy_session)
+        restore_session = True
+    canonical_request_exception = getattr(
+        sentiment_module,
+        "RequestException",
+        RequestException,
+    )
+    legacy_request_exception = getattr(
+        getattr(requests, "exceptions", None),
+        "RequestException",
+        RequestException,
+    )
+    try:
+        try:
+            score = float(sentiment_module.fetch_sentiment(ctx, ticker))
+        except (
+            RequestException,
+            canonical_request_exception,
+            legacy_request_exception,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            OSError,
+        ) as exc:
+            fallback = _legacy_sentiment_session_fallback(ticker, session=session)
+            if fallback is not None:
+                return fallback
+            logger.debug(
+                "Legacy sentiment delegate failed closed for %s: %s",
+                ticker,
+                exc,
+            )
+            score = 0.0
+    finally:
+        if restore_session:
+            sentiment_module._set_sentiment_http_session_for_tests(previous_session)
+    _sync_legacy_sentiment_state(ticker)
+    return _cache_sentiment_score(ticker, max(-1.0, min(1.0, score)))
 
 
 def _sha256_file(path: str) -> str:
@@ -9289,19 +9330,27 @@ def _load_ml_model(symbol: str):
     # AI-AGENT-REF: Check cache size and cleanup if needed
     _cleanup_ml_model_cache()
 
+    from ai_trading import model_loader as _model_loader
+
     cached = _ML_MODEL_CACHE.get(symbol)
     if cached is not None:
-        module = sys.modules.get("ai_trading.model_loader")
-        if module is not None:
-            registry = getattr(module, "ML_MODELS", None)
-            if isinstance(registry, dict):
-                registry[symbol] = cached
-        return cached
-
-    from ai_trading import model_loader as _model_loader
+        if _model_loader.validate_cached_model(symbol):
+            module = sys.modules.get("ai_trading.model_loader")
+            if module is not None:
+                registry = getattr(module, "ML_MODELS", None)
+                if isinstance(registry, dict):
+                    registry[symbol] = cached
+            return cached
+        _ML_MODEL_CACHE.pop(symbol, None)
+        _model_loader.ML_MODELS.pop(symbol, None)
+        _model_loader.ML_MODEL_CACHE_META.pop(symbol, None)
 
     registry = _model_loader.ML_MODELS
     model = registry.get(symbol)
+    if model is not None and not _model_loader.validate_cached_model(symbol):
+        registry.pop(symbol, None)
+        _model_loader.ML_MODEL_CACHE_META.pop(symbol, None)
+        model = None
     if model is None:
         try:
             model = _model_loader.load_model(symbol)
@@ -9327,6 +9376,7 @@ def _load_ml_model(symbol: str):
     if model is None:
         registry.pop(symbol, None)
         _ML_MODEL_CACHE.pop(symbol, None)
+        _model_loader.ML_MODEL_CACHE_META.pop(symbol, None)
         return None
 
     registry[symbol] = model
@@ -16784,41 +16834,17 @@ def validate_open_orders(ctx: Any) -> None:
                     cancel_order(order_id)
                 else:
                     raise AttributeError("Alpaca client missing cancel_order_by_id")
-                try:
-                    qty = int(float(getattr(od, "qty", 0) or 0))
-                except (TypeError, ValueError):
-                    qty = 0
-                get_order_by_id = getattr(ctx.api, "get_order_by_id", None)
-                get_order = getattr(ctx.api, "get_order", None)
-                refreshed = None
-                if order_id and callable(get_order_by_id):
-                    refreshed = get_order_by_id(order_id)
-                elif order_id and callable(get_order):
-                    refreshed = get_order(order_id)
-                filled_qty_raw = getattr(refreshed, "filled_qty", getattr(od, "filled_qty", 0))
-                try:
-                    filled_qty = int(float(filled_qty_raw or 0))
-                except (TypeError, ValueError):
-                    filled_qty = 0
-                qty = max(qty - filled_qty, 0)
-                side = getattr(od, "side", "")
-                side = str(getattr(side, "value", side)).lower()
-                if qty > 0 and side in {"buy", "sell"}:
-                    order_side = (
-                        OrderSide.BUY
-                        if side == "buy" and OrderSide is not None
-                        else OrderSide.SELL
-                        if side == "sell" and OrderSide is not None
-                        else side
-                    )
-                    time_in_force = TimeInForce.DAY if TimeInForce is not None else "day"
-                    req = MarketOrderRequest(
-                        symbol=od.symbol,
-                        qty=qty,
-                        side=order_side,
-                        time_in_force=time_in_force,
-                    )
-                    safe_submit_order(ctx.api, req)
+                logger.warning(
+                    "VALIDATE_OPEN_ORDERS_STALE_ORDER_CANCELLED",
+                    extra={
+                        "order_id": order_id,
+                        "symbol": getattr(od, "symbol", None),
+                        "status": getattr(od, "status", None),
+                        "age_minutes": age,
+                        "replacement_submitted": False,
+                        "reason": "cancel_only_legacy_open_order_validation",
+                    },
+                )
             except (
                 FileNotFoundError,
                 PermissionError,
@@ -19257,279 +19283,51 @@ def _record_sentiment_failure(
     retry=retry_if_exception_type((requests.exceptions.RequestException,)),
 )
 def _fetch_sentiment_ctx(ctx: BotContext, ticker: str) -> float:
-    """
-    Fetch sentiment via NewsAPI + FinBERT + Form 4 signal.
-    Uses a simple in-memory TTL cache to avoid hitting NewsAPI too often.
-    If FinBERT isn’t available, return neutral 0.0.
-    """
-    from ai_trading.config.settings import get_settings  # AI-AGENT-REF: modern settings source
-
-    settings = get_settings()
-    # AI-AGENT-REF: guard missing attributes across older Settings versions
-    api_key = (
-        getattr(settings, "sentiment_api_key", None)
-        or getattr(settings, "azure_language_key", None)
-        or getattr(settings, "news_api_key", None)
-        or get_news_api_key()
-    )
-    if not api_key:
-        logger.debug(
-            "No sentiment API key configured (checked settings.sentiment_api_key, azure_language_key, news_api_key; env fallback)"
-        )
-        return 0.0
-
-    now_ts = pytime.time()
-
-    # AI-AGENT-REF: Enhanced caching with longer TTL during rate limiting
-    with sentiment_lock:
-        cached = _SENTIMENT_CACHE.get(ticker)
-        if cached:
-            last_ts, last_score = cached
-            # Use longer cache during circuit breaker open state
-            cache_ttl = (
-                SENTIMENT_RATE_LIMITED_TTL_SEC
-                if _SENTIMENT_CIRCUIT_BREAKER["state"] == "open"
-                else SENTIMENT_TTL_SEC
-            )
-            if now_ts - last_ts < cache_ttl:
-                logger.debug(
-                    f"Sentiment cache hit for {ticker} (age: {(now_ts - last_ts) / 60:.1f}m)"
-                )
-                return last_score
-
-    # Cache miss or stale → fetch fresh
-    # AI-AGENT-REF: Circuit breaker pattern for graceful degradation
-    if not _check_sentiment_circuit_breaker():
-        logger.info(
-            f"Sentiment circuit breaker open, returning cached/neutral for {ticker}"
-        )
-        with sentiment_lock:
-            # Try to use any existing cache, even if stale
-            cached = _SENTIMENT_CACHE.get(ticker)
-            if cached:
-                _, last_score = cached
-                logger.debug(f"Using stale cached sentiment {last_score} for {ticker}")
-                return last_score
-            # No cache available, store and return neutral
-            _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
-            return 0.0
-
-    try:
-        # 1) Fetch NewsAPI articles using configurable URL
-        url = (
-            f"{settings.sentiment_api_url}?"
-            f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
-            f"&apiKey={api_key}"
-        )
-        resp = http.get(url, timeout=clamp_request_timeout(HTTP_TIMEOUT))  # AI-AGENT-REF: explicit timeout
-
-        if resp.status_code == 429:
-            # AI-AGENT-REF: Enhanced rate limiting handling
-            logger.warning(
-                f"fetch_sentiment({ticker}) rate-limited → caching neutral with extended TTL"
-            )
-            _record_sentiment_failure("rate_limit")
-            with sentiment_lock:
-                # Cache neutral score with extended TTL during rate limiting
-                _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
-            return 0.0
-
-        resp.raise_for_status()
-
-        payload = resp.json()
-        articles = payload.get("articles", [])
-        scores = []
-        if articles:
-            for art in articles:
-                text = (art.get("title") or "") + ". " + (art.get("description") or "")
-                if text.strip():
-                    scores.append(predict_text_sentiment(text))
-        news_score = float(sum(scores) / len(scores)) if scores else 0.0
-
-        # 2) Fetch Form 4 data (insider trades) - with error handling
-        form4_score = 0.0
-        try:
-            form4 = fetch_form4_filings(ticker)
-            # If any insider buy in last 7 days > $50k, boost sentiment
-            for filing in form4:
-                if filing["type"] == "buy" and filing["dollar_amount"] > 50_000:
-                    form4_score += 0.1
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            logger.debug(
-                f"Form4 fetch failed for {ticker}: {e}"
-            )  # Reduced to debug level
-
-        final_score = 0.8 * news_score + 0.2 * form4_score
-        final_score = max(-1.0, min(1.0, final_score))
-
-        # AI-AGENT-REF: Record success and update cache
-        _record_sentiment_success()
-        with sentiment_lock:
-            _SENTIMENT_CACHE[ticker] = (now_ts, final_score)
-        return final_score
-
-    except requests.exceptions.RequestException as e:
-        logger.warning(f"Sentiment API request failed for {ticker}: {e}")
-        _record_sentiment_failure("api_error", str(e))
-
-        # AI-AGENT-REF: Fallback to cached data or neutral if no cache
-        with sentiment_lock:
-            cached = _SENTIMENT_CACHE.get(ticker)
-            if cached:
-                _, last_score = cached
-                logger.debug(f"Using cached sentiment fallback {last_score} for {ticker}")
-                return last_score
-            # No cache available, return neutral
-            _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
-            return 0.0
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.error(f"Unexpected error fetching sentiment for {ticker}: {e}")
-        _record_sentiment_failure("unexpected_error", str(e))
-        with sentiment_lock:
-            _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
-        return 0.0
+    """Compatibility wrapper for the canonical sentiment implementation."""
+    return fetch_sentiment(ctx, ticker, ttl_s=SENTIMENT_TTL_SEC, session=http)
 
 
 def predict_text_sentiment(text: str, cfg=None) -> float:
     """
-    Uses FinBERT (if available) to assign a sentiment score ∈ [–1, +1].
-    FinBERT-backed sentiment; neutral fallback if disabled/unavailable.
-    Returns positive probability (or 0.0 neutral when disabled/missing).
+    Compatibility wrapper around canonical FinBERT text sentiment.
+
+    Returns a signed sentiment score in [-1, 1].
     """
-    pair = ensure_finbert(cfg)
-    if not pair or pair[0] is None or pair[1] is None:
-        return 0.0  # neutral fallback
-    tokenizer, model = pair
-    import torch  # safe: ensure_finbert verified presence
-
+    _ = cfg
     try:
-        inputs = tokenizer(
-            text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=128,
-        )
-        with torch.no_grad():
-            outputs = model(**inputs)
-            logits = outputs.logits[0]  # shape = (3,)
-            probs = torch.softmax(logits, dim=0)  # [p_neg, p_neu, p_pos]
-
-        pos, neg = _finbert_pos_neg_from_probs(probs, model)
-        return float(pos - neg)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
+        result = _canonical_sentiment_module().analyze_text(text)
+        return float(result.get("pos", 0.0) - result.get("neg", 0.0))
+    except (RuntimeError, ValueError, TypeError) as e:
         logger.warning(
-            f"[predict_text_sentiment] FinBERT inference failed ({e}); returning neutral"
+            "[predict_text_sentiment] canonical sentiment failed (%s); returning neutral",
+            e,
         )
         return 0.0
 
 
 def analyze_sentiment(text: str, cfg=None) -> float:
     """
-    FinBERT-backed sentiment; neutral fallback if disabled/unavailable.
-    Returns positive probability or a sentiment score.
-    """
-    pair = ensure_finbert(cfg)
-    if not pair or pair[0] is None or pair[1] is None:
-        return 0.0  # neutral fallback
-    tok, mdl = pair
-    import torch  # safe: ensure_finbert verified presence
+    Compatibility wrapper around canonical FinBERT text sentiment.
 
-    inputs = tok(text, return_tensors="pt", truncation=True, max_length=256)
-    with torch.no_grad():
-        logits = mdl(**inputs).logits
-    probs = logits.softmax(dim=-1)[0]
-    pos, _neg = _finbert_pos_neg_from_probs(probs, mdl)
-    return float(pos)
+    Returns positive probability or neutral when unavailable.
+    """
+    _ = cfg
+    try:
+        result = _canonical_sentiment_module().analyze_text(text)
+        return float(result.get("pos", 0.0))
+    except (RuntimeError, ValueError, TypeError) as e:
+        logger.warning(
+            "[analyze_sentiment] canonical sentiment failed (%s); returning neutral",
+            e,
+        )
+        return 0.0
 
 
 def fetch_form4_filings(ticker: str) -> list[dict]:
     """
-    Scrape SEC Form 4 filings for insider trade info.
-    Returns a list of dicts: {"date": datetime, "type": "buy"/"sell", "dollar_amount": float}.
+    Delegate Form 4 lookup to the canonical sentiment module.
     """
-    url = f"https://www.sec.gov/cgi-bin/own-disp?action=getowner&CIK={ticker}&type=4"
-    r = http.get(
-        url,
-        headers={"User-Agent": "AI Trading Bot"},
-        timeout=clamp_request_timeout(HTTP_TIMEOUT),  # AI-AGENT-REF: explicit timeout
-    )
-    r.raise_for_status()
-    soup = BeautifulSoup(r.content, "lxml")
-    filings: list[dict[str, Any]] = []
-    # Parse table rows (approximate)
-    table = soup.find("table", {"class": "tableFile2"})
-    if not table:
-        return filings
-    table_obj = cast(Any, table)
-    rows = table_obj.find_all("tr")[1:]  # skip header
-    for row in rows:
-        cols = row.find_all("td")
-        if len(cols) < 6:
-            continue
-        date_str = cols[3].get_text(strip=True)
-        try:
-            fdate = datetime.strptime(date_str, "%Y-%m-%d")
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ):  # AI-AGENT-REF: narrow exception
-            continue
-        txn_type = cols[4].get_text(strip=True).lower()  # "purchase" or "sale"
-        amt_str = cols[5].get_text(strip=True).replace("$", "").replace(",", "")
-        try:
-            amt = float(amt_str)
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ):  # AI-AGENT-REF: narrow exception
-            amt = 0.0
-        filings.append(
-            {
-                "date": fdate,
-                "type": ("buy" if "purchase" in txn_type else "sell"),
-                "dollar_amount": amt,
-            }
-        )
-    return filings
+    return list(_canonical_sentiment_module().fetch_form4_filings(ticker))
 
 
 def _can_fetch_events(symbol: str) -> bool:

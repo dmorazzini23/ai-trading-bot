@@ -109,6 +109,11 @@ def _safe_name(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in value)[:120] or "hf_candidate"
 
 
+def _pinned_revision(candidate: Mapping[str, Any], fallback: str = "") -> str:
+    revision = str(candidate.get("sha") or candidate.get("revision") or fallback or "").strip()
+    return "" if revision.lower() in {"", "main", "master", "latest"} else revision
+
+
 def _sha256_file(path: Path) -> str | None:
     if not path.is_file():
         return None
@@ -216,21 +221,29 @@ def build_huggingface_cache_materialization(
     for candidate in candidates:
         repo_id = str(candidate.get("repo_id") or candidate.get("hf_id") or "")
         repo_type = str(candidate.get("resource_type") or "model")
+        candidate_revision = _pinned_revision(candidate, revision)
         target = cache_dir / _safe_name(repo_id)
         row: dict[str, Any] = {
             "repo_id": repo_id,
             "hf_id": repo_id,
             "resource_type": repo_type,
-            "revision": revision or "main",
+            "revision": candidate_revision or None,
             "local_path": str(target),
             "runtime_use_allowed": False,
+            "runtime_authority": False,
             "promotion_authority": False,
             "live_money_authority": False,
+            "provider_authority": False,
         }
         if dry_run:
-            row.update({"status": "planned", "manifest": {"file_count": 0, "size_bytes": 0, "files": []}})
+            status = "planned" if candidate_revision else "blocked"
+            row.update({"status": status, "manifest": {"file_count": 0, "size_bytes": 0, "files": []}})
+            if not candidate_revision:
+                row["blocked_reasons"] = ["hf_revision_unpinned"]
         elif not allow_downloads:
             row.update({"status": "blocked", "blocked_reasons": ["hf_downloads_disabled"]})
+        elif not candidate_revision:
+            row.update({"status": "blocked", "blocked_reasons": ["hf_revision_unpinned"]})
         elif local_source_dir is not None:
             source = local_source_dir / _safe_name(repo_id)
             result = _copy_local_source(source, target)
@@ -241,7 +254,7 @@ def build_huggingface_cache_materialization(
                     repo_id=repo_id,
                     repo_type=repo_type,
                     target=target,
-                    revision=revision,
+                    revision=candidate_revision,
                     allow_patterns=list(allow_patterns or []),
                     ignore_patterns=list(ignore_patterns or []),
                 )

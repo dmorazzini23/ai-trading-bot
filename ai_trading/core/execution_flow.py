@@ -816,6 +816,12 @@ def exit_all_positions(ctx: Any) -> None:
         qty = abs(signed_qty)
         if qty:
             execute_order = getattr(ctx, "execute_order", None)
+            if not callable(execute_order):
+                exec_engine = getattr(ctx, "exec_engine", None)
+                execute_order = getattr(exec_engine, "execute_order", None)
+            if not callable(execute_order):
+                execution_engine = getattr(ctx, "execution_engine", None)
+                execute_order = getattr(execution_engine, "execute_order", None)
             if callable(execute_order):
                 side = "sell" if signed_qty > 0 else "buy"
                 execute_order(

@@ -1436,6 +1436,19 @@ def test_after_hours_strict_promotion_policy_blocks_when_min_rows_not_met(
     monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MIN_HIT_RATE_STABILITY", "0.0")
     monkeypatch.setattr(
         after_hours,
+        "_orient_probabilities_for_edge",
+        lambda probabilities, _edge_bps: (
+            probabilities,
+            {
+                "orientation": "direct",
+                "inverse_applied": False,
+                "valid_samples": len(probabilities),
+                "expectancy_delta_bps": 1.0,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        after_hours,
         "_fetch_daily_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
@@ -1477,6 +1490,7 @@ def test_after_hours_strict_promotion_policy_can_promote_when_all_gates_pass(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLDS", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLD_RATIO", "0.0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_PRIOR_IMPROVEMENT", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_APPROVE_ADVANCED_PRODUCTION", "1")
     monkeypatch.setenv("AI_TRADING_POLICY_PROMOTION_MIN_OOS_SAMPLES", "1")
     monkeypatch.setenv("AI_TRADING_POLICY_PROMOTION_MIN_OOS_NET_BPS", "-9999")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SENSITIVITY_SWEEP_ENABLED", "0")
@@ -1484,6 +1498,19 @@ def test_after_hours_strict_promotion_policy_can_promote_when_all_gates_pass(
     monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_DRAWDOWN_BPS", "999999")
     monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_TURNOVER_RATIO", "1.0")
     monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MIN_HIT_RATE_STABILITY", "0.0")
+    monkeypatch.setattr(
+        after_hours,
+        "_orient_probabilities_for_edge",
+        lambda probabilities, _edge_bps: (
+            probabilities,
+            {
+                "orientation": "direct",
+                "inverse_applied": False,
+                "valid_samples": len(probabilities),
+                "expectancy_delta_bps": 1.0,
+            },
+        ),
+    )
     monkeypatch.setattr(
         after_hours,
         "_fetch_daily_bars",
@@ -1534,6 +1561,7 @@ def test_after_hours_runtime_promotion_records_registry_metadata(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLDS", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLD_RATIO", "0.0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_PRIOR_IMPROVEMENT", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_APPROVE_ADVANCED_PRODUCTION", "1")
     monkeypatch.setenv("AI_TRADING_POLICY_PROMOTION_MIN_OOS_SAMPLES", "1")
     monkeypatch.setenv("AI_TRADING_POLICY_PROMOTION_MIN_OOS_NET_BPS", "-9999")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SENSITIVITY_SWEEP_ENABLED", "0")
@@ -1541,6 +1569,19 @@ def test_after_hours_runtime_promotion_records_registry_metadata(
     monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_DRAWDOWN_BPS", "999999")
     monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_TURNOVER_RATIO", "1.0")
     monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MIN_HIT_RATE_STABILITY", "0.0")
+    monkeypatch.setattr(
+        after_hours,
+        "_orient_probabilities_for_edge",
+        lambda probabilities, _edge_bps: (
+            probabilities,
+            {
+                "orientation": "direct",
+                "inverse_applied": False,
+                "valid_samples": len(probabilities),
+                "expectancy_delta_bps": 1.0,
+            },
+        ),
+    )
     monkeypatch.setattr(
         after_hours,
         "_fetch_daily_bars",

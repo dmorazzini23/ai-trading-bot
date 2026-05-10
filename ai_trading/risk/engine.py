@@ -134,6 +134,19 @@ def _derive_minimum_quantity(engine: "RiskEngine", price: float) -> int:
     return 0
 
 
+def _minimum_allocation_notional(engine: "RiskEngine") -> float:
+    candidates: list[float] = []
+    for attr in ("min_order_value", "position_size_min_usd"):
+        raw_value = getattr(engine.config, attr, None)
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if _is_finite_number(value) and value > 0:
+            candidates.append(value)
+    return max(candidates, default=0.0)
+
+
 def _calculate_position_size(
     engine: "RiskEngine",
     raw_qty: float,
@@ -158,6 +171,14 @@ def _calculate_position_size(
     if raw_qty == 0:
         logger.warning(
             "Zero raw_qty for %s; returning 0",
+            symbol,
+        )
+        return 0
+
+    if int(raw_qty) <= 0:
+        logger.warning(
+            "Sub-share raw_qty %s for %s below minimum allocation authority; returning 0",
+            raw_qty,
             symbol,
         )
         return 0
@@ -1390,21 +1411,50 @@ class RiskEngine:
             if not hasattr(signal, "symbol"):
                 logger.warning("Invalid signal object missing symbol attribute")
                 return 0
+            try:
+                bounded_weight = self._apply_weight_limits(signal)
+            except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:
+                logger.warning("Failed to validate signal allocation for %s: %s", getattr(signal, "symbol", "UNKNOWN"), exc)
+                return 0
+            direction = str(getattr(signal, "side", "") or "").strip().lower()
+            effective_weight = abs(bounded_weight) if direction == "sell_short" else bounded_weight
+            try:
+                confidence = float(getattr(signal, "confidence", 0.0))
+            except (TypeError, ValueError):
+                confidence = 0.0
+            if (
+                not _is_finite_number(effective_weight)
+                or not _is_finite_number(confidence)
+                or effective_weight <= 0
+                or confidence <= 0
+            ):
+                logger.warning(
+                    "Insufficient signal allocation authority for %s; weight=%s confidence=%s returning 0",
+                    getattr(signal, "symbol", "UNKNOWN"),
+                    effective_weight,
+                    confidence,
+                )
+                return 0
+            minimum_notional = _minimum_allocation_notional(self)
+            if minimum_notional > 0 and total_equity * effective_weight < minimum_notional:
+                logger.warning(
+                    "Signal allocation below minimum notional for %s; allocation_notional=%.4f minimum_notional=%.4f returning 0",
+                    getattr(signal, "symbol", "UNKNOWN"),
+                    total_equity * effective_weight,
+                    minimum_notional,
+                )
+                return 0
             atr_data = self._get_atr_data(signal.symbol)
             if atr_data and atr_data > 0:
                 risk_per_trade = total_equity * 0.01
                 stop_distance = atr_data * self.config.atr_multiplier
                 raw_qty = risk_per_trade / stop_distance
             else:
-                weight = self._apply_weight_limits(signal)
-                direction = str(getattr(signal, "side", "") or "").strip().lower()
-                raw_qty = total_equity * (abs(weight) if direction == "sell_short" else weight) / price
+                raw_qty = total_equity * effective_weight / price
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:
             logger.warning("ATR calculation failed for %s: %s", getattr(signal, "symbol", "UNKNOWN"), exc)
             try:
-                weight = self._apply_weight_limits(signal)
-                direction = str(getattr(signal, "side", "") or "").strip().lower()
-                raw_qty = total_equity * (abs(weight) if direction == "sell_short" else weight) / price
+                raw_qty = total_equity * effective_weight / price
             except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError):
                 logger.warning("Failed to calculate position size, returning 0")
                 return 0

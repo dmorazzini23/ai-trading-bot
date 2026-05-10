@@ -32,7 +32,6 @@ _EXPORTS = {
     "portfolio": "ai_trading.portfolio",
     "position_sizing": "ai_trading.position_sizing",
     "predict": "ai_trading.predict",
-    "production_system": "ai_trading.production_system",
     "rebalancer": "ai_trading.rebalancer",
     "settings": "ai_trading.settings",
     "signals": "ai_trading.signals",

@@ -1,6 +1,9 @@
 import logging
 '\nExample usage of the no-trade bands functionality for transaction cost optimization.\nThis demonstrates how to use the new no-trade bands to avoid churn on tiny weight deltas.\n'
 import os
+from legacy_guard import require_legacy_demo_flag
+
+require_legacy_demo_flag("scripts/demo_no_trade_bands.py")
 os.environ['ALPACA_API_KEY'] = 'demo'
 os.environ['ALPACA_SECRET_KEY'] = 'demo'
 os.environ['ALPACA_BASE_URL'] = 'demo'

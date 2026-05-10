@@ -123,7 +123,8 @@ def test_freshness_rejects_future_dated_timestamp(monkeypatch: pytest.MonkeyPatc
 
     assert info["is_fresh"] is False
     assert info["reason"] == "future_timestamp"
-    assert info["minutes_stale"] < 0
+    assert info["minutes_stale"] == float("inf")
+    assert info["future_skew_seconds"] == pytest.approx(120.0)
 
 
 def test_emergency_data_check_and_market_data_validator() -> None:

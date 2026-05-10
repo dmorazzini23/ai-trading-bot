@@ -5,6 +5,9 @@ import sys
 import tempfile
 import traceback
 from datetime import UTC, datetime
+from legacy_guard import require_legacy_demo_flag
+
+require_legacy_demo_flag("scripts/validate_startup_fixes.py")
 
 def test_no_import_time_crashes():
     """Test that imports don't crash without credentials."""

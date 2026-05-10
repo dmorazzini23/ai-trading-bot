@@ -364,6 +364,11 @@ class TaxAwareRebalancer:
                                     'tax_basis_available': False,
                                     'reason': 'missing_rebalance_basis',
                                 }
+                                logger.info(
+                                    'REBALANCE_SELL_SKIPPED_MISSING_BASIS',
+                                    extra={'symbol': symbol},
+                                )
+                                continue
                         trade = {'symbol': symbol, 'current_weight': current_weight, 'target_weight': target_weight, 'weight_diff': weight_diff, 'trade_quantity': trade_quantity, 'trade_value': trade_value, 'current_price': current_price, 'side': order_side, 'tax_impact': tax_impact, 'priority': self._calculate_rebalance_priority(weight_diff, tax_impact)}
                         rebalance_trades.append(trade)
             rebalance_trades.sort(key=lambda x: float(x.get('priority', 0.0)), reverse=True)

@@ -68,7 +68,7 @@ def test_load_historical_bars_drops_non_positive_rows(tmp_path: Path) -> None:
     assert report.non_positive_rows_dropped == 1
 
 
-def test_load_historical_bars_uses_range_index_when_no_datetime_column(tmp_path: Path) -> None:
+def test_load_historical_bars_rejects_range_index_without_research_flag(tmp_path: Path) -> None:
     csv_path = tmp_path / "range.csv"
     pd.DataFrame(
         {
@@ -80,7 +80,14 @@ def test_load_historical_bars_uses_range_index_when_no_datetime_column(tmp_path:
         }
     ).to_csv(csv_path, index=False)
 
-    frame, report = load_historical_bars(csv_path, timestamp_col="event_time")
+    with pytest.raises(ValueError, match="allow_research_synthetic=True"):
+        load_historical_bars(csv_path, timestamp_col="event_time")
+
+    frame, report = load_historical_bars(
+        csv_path,
+        timestamp_col="event_time",
+        allow_research_synthetic=True,
+    )
 
     assert list(frame.index) == [0, 1, 2]
     assert report.inferred_range_index is True
@@ -167,7 +174,11 @@ def test_filter_historical_bars_window_rejects_range_index_with_date_filters(tmp
         }
     ).to_csv(csv_path, index=False)
 
-    frame, _report = load_historical_bars(csv_path, timestamp_col="event_time")
+    frame, _report = load_historical_bars(
+        csv_path,
+        timestamp_col="event_time",
+        allow_research_synthetic=True,
+    )
     with pytest.raises(ValueError, match="date filters require timestamped historical bars"):
         filter_historical_bars_window(frame, start="2025-01-01")
 

@@ -1,14 +1,13 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-import pytest
-
 from ai_trading.core import bot_engine
 
 
-def test_validate_open_orders_preserves_original_submit_error(monkeypatch):
-    """Inner order-submit failures should not be masked by local logger scope issues."""
+def test_validate_open_orders_cancel_only_does_not_submit_replacement(monkeypatch):
+    """Stale open-order validation is cancel-only and never replaces via legacy submit."""
 
+    calls: dict[str, int] = {"submitted": 0}
     monkeypatch.setattr(bot_engine, "_parse_local_positions", lambda: {"AAPL": 1})
     monkeypatch.setattr(bot_engine, "_ensure_alpaca_classes", lambda: None)
     monkeypatch.setattr(bot_engine, "audit_positions", lambda _ctx: None)
@@ -34,13 +33,13 @@ def test_validate_open_orders_preserves_original_submit_error(monkeypatch):
     monkeypatch.setattr(
         bot_engine,
         "safe_submit_order",
-        lambda *_a, **_k: (_ for _ in ()).throw(ValueError("submit failed")),
+        lambda *_a, **_k: calls.__setitem__("submitted", calls["submitted"] + 1),
     )
 
     ctx = SimpleNamespace(api=SimpleNamespace(cancel_order=lambda _oid: None))
+    bot_engine.validate_open_orders(ctx)
 
-    with pytest.raises(ValueError, match="submit failed"):
-        bot_engine.validate_open_orders(ctx)
+    assert calls["submitted"] == 0
 
 
 def test_validate_open_orders_handles_fractional_qty_payload(monkeypatch):

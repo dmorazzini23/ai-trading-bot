@@ -146,9 +146,10 @@ def test_rate_limit_fallback_respects_fail_closed_without_cache(
     assert "UNKNOWN" not in sentiment._sentiment_cache
 
 
-def test_alternative_sentiment_sources_primary_and_alt(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_alternative_sentiment_sources_call_alt_without_primary_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     responses = [
-        SimpleNamespace(status_code=429, json=lambda: {}),
         SimpleNamespace(status_code=200, json=lambda: {"sentiment_score": "0.7"}),
     ]
     urls: list[str] = []
@@ -159,14 +160,11 @@ def test_alternative_sentiment_sources_primary_and_alt(monkeypatch: pytest.Monke
 
     monkeypatch.setenv("ALTERNATIVE_SENTIMENT_API_KEY", "alt-key")
     monkeypatch.setenv("ALTERNATIVE_SENTIMENT_API_URL", "https://alt.example/sent")
-    monkeypatch.setenv("SENTIMENT_API_URL", "https://primary.example/sent")
-    monkeypatch.setenv("SENTIMENT_API_KEY", "primary-key")
     sentiment._set_sentiment_http_session_for_tests(SimpleNamespace(get=fake_get))
     monkeypatch.setattr(sentiment.pytime, "sleep", lambda _seconds: None)
 
     assert sentiment._try_alternative_sentiment_sources("SPY") == 0.7
     assert urls == [
-        "https://primary.example/sent?symbol=SPY&apikey=primary-key",
         "https://alt.example/sent?symbol=SPY&apikey=alt-key",
     ]
 
@@ -179,6 +177,17 @@ def test_alternative_sentiment_sources_primary_and_alt(monkeypatch: pytest.Monke
         )
     )
     assert sentiment._try_alternative_sentiment_sources("SPY") == -0.25
+
+
+def test_form4_cik_resolution_uses_env_map_before_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_FORM4_CIK_MAP", '{"BRK.B": "1067983"}')
+
+    cik, provenance = sentiment._resolve_form4_cik("BRK.B")
+
+    assert cik == "0001067983"
+    assert provenance == {"cik_source": "env_map"}
 
 
 def test_analyze_text_success_with_fake_transformer_stack(monkeypatch: pytest.MonkeyPatch) -> None:

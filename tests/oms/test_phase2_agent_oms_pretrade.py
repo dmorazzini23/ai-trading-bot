@@ -223,3 +223,44 @@ def test_stale_live_cost_artifact_blocks_live_opening(
     assert allowed is False
     assert reason == "LIVE_COST_ARTIFACT_STALE_BLOCK"
     assert details["opening_trade"] is True
+
+
+def test_missing_live_cost_artifact_blocks_live_opening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PRETRADE_RUNTIME_DECAY_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PRETRADE_LIVE_COST_MODEL_GATE_ENABLED", "1")
+    monkeypatch.setattr(pretrade, "_runtime_decay_controls_payload", lambda: None)
+    monkeypatch.setattr(pretrade, "_live_cost_model_payload", lambda: None)
+
+    allowed, reason, details = pretrade.validate_pretrade(
+        _intent(opening_trade=True),
+        cfg=_cfg(execution_mode="live", launch_profile="live_canary"),
+        ledger=_Ledger(),
+        rate_limiter=SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100),
+    )
+
+    assert allowed is False
+    assert reason == "LIVE_COST_ARTIFACT_MISSING_BLOCK"
+    assert details["opening_trade"] is True
+
+
+def test_canonical_daily_loss_limit_blocks_pretrade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PRETRADE_RUNTIME_DECAY_GATE_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_PRETRADE_LIVE_COST_MODEL_GATE_ENABLED", "0")
+    ledger = _Ledger()
+    ledger.daily_loss_pct = 0.06
+
+    allowed, reason, details = pretrade.validate_pretrade(
+        _intent(opening_trade=True),
+        cfg=_cfg(daily_loss_limit=0.05, daily_loss_limit_pct=0.0),
+        ledger=ledger,
+        rate_limiter=SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100),
+    )
+
+    assert allowed is False
+    assert reason == "DAILY_RISK_BUDGET_BLOCK"
+    assert details["daily_loss_pct"] == pytest.approx(0.06)
+    assert details["max_daily_loss_pct"] == pytest.approx(0.05)

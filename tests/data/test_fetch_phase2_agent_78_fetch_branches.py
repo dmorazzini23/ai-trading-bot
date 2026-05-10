@@ -266,3 +266,36 @@ def test_normalize_ohlcv_df_returns_empty_timestamp_frame_for_unusable_payload()
 
     assert normalized.empty
     assert list(normalized.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+
+
+def test_normalize_ohlcv_df_rejects_range_index_without_timestamp_column() -> None:
+    raw = pd.DataFrame(
+        {
+            "open": [10.0],
+            "high": [10.5],
+            "low": [9.5],
+            "close": [10.2],
+            "volume": [100],
+        }
+    )
+
+    normalized = normalize_ohlcv_df(raw, include_columns=("timestamp",))
+
+    assert isinstance(raw.index, pd.RangeIndex)
+    assert normalized.empty
+    assert list(normalized.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+
+
+def test_last_minute_bar_age_ignores_future_cached_timestamp(caplog) -> None:
+    fetch._MINUTE_CACHE.pop("AAPL", None)
+    caplog.set_level("WARNING", logger="ai_trading.data.fetch")
+    try:
+        fetch._MINUTE_CACHE["AAPL"] = (
+            int(datetime.now(tz=UTC).timestamp()) + 60,
+            int(datetime.now(tz=UTC).timestamp()),
+        )
+
+        assert fetch.last_minute_bar_age_seconds("AAPL") is None
+        assert any(record.message == "future_bar_timestamp" for record in caplog.records)
+    finally:
+        fetch._MINUTE_CACHE.pop("AAPL", None)

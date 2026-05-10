@@ -4,6 +4,9 @@ import os
 import sys
 import time
 from unittest.mock import Mock, patch
+from legacy_guard import require_legacy_demo_flag
+
+require_legacy_demo_flag("scripts/demo_short_selling_implementation.py")
 os.environ['ALPACA_API_KEY'] = 'test_key'
 os.environ['ALPACA_SECRET_KEY'] = 'test_secret'
 os.environ['ALPACA_BASE_URL'] = 'https://paper-api.alpaca.markets'
@@ -16,6 +19,7 @@ def demonstrate_short_selling():
     logging.info('=== Short Selling Capability Demonstration ===')
     try:
         from ai_trading.execution.engine import ExecutionEngine
+        from ai_trading.order.types import OrderSide
         mock_ctx = Mock()
         mock_api = Mock()
         mock_account = Mock()
@@ -31,21 +35,24 @@ def demonstrate_short_selling():
         logging.info('✓ ExecutionEngine created successfully')
         with patch.object(engine, '_available_qty', return_value=0):
             with patch.object(engine, '_select_api', return_value=mock_api):
-                result = engine.execute_order('AAPL', 'sell', 10)
+                result = engine.execute_order('AAPL', OrderSide.SELL, 10)
                 logging.info(f'✓ Regular sell order with no position: {result} (correctly blocked)')
         with patch.object(engine, '_available_qty', return_value=0):
             with patch.object(engine, '_select_api', return_value=mock_api):
                 with patch.object(engine, '_validate_short_selling', return_value=True):
                     with patch.object(engine, '_assess_liquidity', side_effect=Exception('Stopped at liquidity check')):
                         try:
-                            result = engine.execute_order('AAPL', 'sell_short', 10)
+                            result = engine.execute_order('AAPL', OrderSide.SELL_SHORT, 10)
                         except (KeyError, ValueError, TypeError):
                             pass
                         logging.info('✓ sell_short order bypassed position checks and reached validation')
         mock_order = Mock()
         mock_order.id = 'demo_order_123'
+        mock_order.symbol = 'AAPL'
+        mock_order.side = OrderSide.SELL_SHORT
+        mock_order.quantity = 10
         mock_order.status = 'new'
-        engine._track_order(mock_order, 'AAPL', 'sell_short', 10)
+        engine.track_order(mock_order)
         pending_orders = engine.get_pending_orders()
         logging.info(f'✓ Order tracking: {len(pending_orders)} orders tracked')
         engine._update_order_status('demo_order_123', 'filled')
@@ -66,14 +73,18 @@ def demonstrate_order_monitoring():
             _active_orders,
             _order_tracking_lock,
         )
+        from ai_trading.order.types import OrderSide
         mock_ctx = Mock()
         mock_ctx.api = Mock()
         engine = ExecutionEngine(mock_ctx)
         engine.logger = Mock()
         mock_order = Mock()
         mock_order.id = 'monitor_test_456'
+        mock_order.symbol = 'MSFT'
+        mock_order.side = OrderSide.BUY
+        mock_order.quantity = 5
         mock_order.status = 'new'
-        engine._track_order(mock_order, 'MSFT', 'buy', 5)
+        engine.track_order(mock_order)
         logging.info('✓ Order added to tracking system')
         current_time = time.time()
         with _order_tracking_lock:

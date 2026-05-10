@@ -34,9 +34,11 @@ def isolated_model_loader_state(tmp_path, monkeypatch):
     importlib.reload(paths)
     importlib.reload(model_loader)
     model_loader.ML_MODELS.clear()
+    model_loader.ML_MODEL_CACHE_META.clear()
     bot_engine._ML_MODEL_CACHE.clear()
     yield
     model_loader.ML_MODELS.clear()
+    model_loader.ML_MODEL_CACHE_META.clear()
     bot_engine._ML_MODEL_CACHE.clear()
 
 
@@ -73,12 +75,22 @@ def test_load_corrupt_logs_error(tmp_path, monkeypatch, caplog):
     assert any(r.message.startswith("MODEL_LOAD_ERROR") for r in caplog.records)
 
 
-def test_load_real_model():
+def test_load_real_model(monkeypatch):
     model = DummyClassifier(strategy="most_frequent")
     X = np.array([[0], [1]])
     y = np.array([0, 1])
     model.fit(X, y)
+    meta = _active_registry_meta("/tmp/TESTSYM.pkl")
+    model_loader.ML_MODEL_CACHE_META["TESTSYM"] = {
+        "path": meta["path"],
+        "manifest_path": meta["manifest_path"],
+        "trained_at": meta["trained_at"],
+    }
     model_loader.ML_MODELS["TESTSYM"] = model
+    monkeypatch.setattr(
+        "ai_trading.model_registry.get_active_model_meta",
+        lambda symbol: meta if symbol == "TESTSYM" else None,
+    )
     loaded = bot_engine._load_ml_model("TESTSYM")
     assert loaded is not None
     pred = loaded.predict([[0]])[0]
@@ -95,10 +107,21 @@ def test_load_ml_model_uses_cached_registry(monkeypatch):
 
     cached_model = DummyModel()
 
+    meta = _active_registry_meta("/tmp/CACHE.pkl")
+
     def fail_load(symbol: str):  # pragma: no cover - should not be invoked
         raise AssertionError("load_model should not be called when cache is primed")
 
     monkeypatch.setattr(model_loader, "load_model", fail_load)
+    monkeypatch.setattr(
+        "ai_trading.model_registry.get_active_model_meta",
+        lambda symbol: meta if symbol == "CACHE" else None,
+    )
+    model_loader.ML_MODEL_CACHE_META["CACHE"] = {
+        "path": meta["path"],
+        "manifest_path": meta["manifest_path"],
+        "trained_at": meta["trained_at"],
+    }
     model_loader.ML_MODELS["CACHE"] = cached_model
 
     loaded = bot_engine._load_ml_model("CACHE")
@@ -106,6 +129,35 @@ def test_load_ml_model_uses_cached_registry(monkeypatch):
     assert loaded is cached_model
     assert bot_engine._ML_MODEL_CACHE["CACHE"] is cached_model
     assert model_loader.ML_MODELS["CACHE"] is cached_model
+
+
+def test_load_ml_model_rejects_replaced_cached_registry(monkeypatch):
+    class DummyModel:
+        def predict(self, X):  # pragma: no cover - simple stub
+            return X
+
+        def predict_proba(self, X):  # pragma: no cover - simple stub
+            return X
+
+    cached_model = DummyModel()
+    active_meta = _active_registry_meta("/tmp/new-cache.pkl")
+    model_loader.ML_MODELS["CACHE"] = cached_model
+    model_loader.ML_MODEL_CACHE_META["CACHE"] = {
+        "path": "/tmp/old-cache.pkl",
+        "manifest_path": None,
+        "trained_at": active_meta["trained_at"],
+    }
+    bot_engine._ML_MODEL_CACHE["CACHE"] = cached_model
+    monkeypatch.setattr(
+        "ai_trading.model_registry.get_active_model_meta",
+        lambda symbol: active_meta if symbol == "CACHE" else None,
+    )
+
+    loaded_model = DummyModel()
+    monkeypatch.setattr(model_loader, "load_model", lambda symbol: loaded_model)
+
+    assert bot_engine._load_ml_model("CACHE") is loaded_model
+    assert bot_engine._ML_MODEL_CACHE["CACHE"] is loaded_model
 
 
 def test_signal_ml_returns_prediction_and_probability():

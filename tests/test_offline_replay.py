@@ -377,6 +377,11 @@ def test_offline_replay_live_cost_model_updates_slippage_assumptions(
     assert config["enabled"] is True
     assert config["path"] == str(live_cost_model)
     assert config["bucket_count"] == 9
+    assert config["source_hash"]
+    assert config["source_fingerprint"] == config["source_hash"]
+    assert config["source_timestamp"] == "2026-01-02T21:00:00Z"
+    assert config["freshness_status"] in {"fresh", "stale"}
+    assert config["alignment_status"] == "unchecked"
 
 
 def test_offline_replay_confidence_sizing_policy_records_scaled_trades(

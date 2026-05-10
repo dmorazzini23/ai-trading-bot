@@ -22,6 +22,7 @@ def _fixture_results() -> dict[str, object]:
                 "pipeline_tag": "tabular-classification",
                 "downloads": 2500,
                 "likes": 12,
+                "sha": "0123456789abcdef0123456789abcdef01234567",
                 "cardData": {"license": "apache-2.0"},
             },
             {
@@ -200,6 +201,9 @@ def test_huggingface_cache_materializer_dry_run_does_not_create_cache(tmp_path: 
     assert report["status"] == "planned"
     assert report["summary"]["dry_run"] is True
     assert report["artifacts"][0]["runtime_use_allowed"] is False
+    assert report["artifacts"][0]["runtime_authority"] is False
+    assert report["artifacts"][0]["provider_authority"] is False
+    assert report["artifacts"][0]["revision"] == "0123456789abcdef0123456789abcdef01234567"
     assert not cache_dir.exists()
 
 
@@ -229,6 +233,7 @@ def test_huggingface_cache_materializer_local_source_records_manifest(tmp_path: 
     assert report["summary"]["materialized"] == 1
     assert report["artifacts"][0]["manifest"]["file_count"] == 1
     assert report["live_money_authority"] is False
+    assert report["artifacts"][0]["provider_authority"] is False
 
 
 def _sentiment_intake_fixture() -> dict[str, object]:
@@ -242,6 +247,7 @@ def _sentiment_intake_fixture() -> dict[str, object]:
                     "tags": ["finance", "sentiment", "license:apache-2.0"],
                     "pipeline_tag": "text-classification",
                     "downloads": 100,
+                    "sha": "fedcba9876543210fedcba9876543210fedcba98",
                     "cardData": {"license": "apache-2.0"},
                 }
             ]
@@ -294,6 +300,7 @@ def test_huggingface_sentiment_benchmark_scores_current_path_with_fake_analyzer(
     assert report["runtime_authority"] is False
     assert report["promotion_authority"] is False
     assert report["live_money_authority"] is False
+    assert report["candidate_results"][0]["provider_authority"] is False
     assert report["current_sentiment_path"]["coverage"] == 1.0
     assert report["current_sentiment_path"]["accuracy_on_covered"] == 1.0
     assert report["summary"]["candidates_needing_predictions"] == 1
@@ -433,7 +440,7 @@ def test_huggingface_sentiment_predictions_require_explicit_download_opt_in(tmp_
         intake=_sentiment_intake_fixture(),
         cache_dir=tmp_path / "cache",
         allow_downloads=False,
-        pipeline_factory=lambda repo_id, _cache_dir, _allow_downloads: calls.append(repo_id) or (lambda _text: []),
+        pipeline_factory=lambda repo_id, _cache_dir, _allow_downloads, _revision: calls.append(repo_id) or (lambda _text: []),
     )
 
     assert report["status"] == "blocked"
@@ -446,8 +453,9 @@ def test_huggingface_sentiment_predictions_require_explicit_download_opt_in(tmp_
 
 
 def test_huggingface_sentiment_predictions_generate_fixture_predictions(tmp_path: Path) -> None:
-    def fake_pipeline_factory(_repo_id: str, _cache_dir: Path, allow_downloads: bool):
+    def fake_pipeline_factory(_repo_id: str, _cache_dir: Path, allow_downloads: bool, revision: str):
         assert allow_downloads is True
+        assert revision == "fedcba9876543210fedcba9876543210fedcba98"
 
         def classify(text: str):
             if any(
@@ -506,6 +514,8 @@ def test_huggingface_sentiment_predictions_generate_fixture_predictions(tmp_path
     assert report["summary"]["evaluated_candidates"] == 1
     assert report["predictions"][0]["samples"][0]["label"] == "positive"
     assert report["predictions"][0]["runtime_authority"] is False
+    assert report["predictions"][0]["provider_authority"] is False
+    assert report["predictions"][0]["revision"] == "fedcba9876543210fedcba9876543210fedcba98"
 
 
 def test_huggingface_sentiment_predictions_cli_writes_artifacts(tmp_path: Path) -> None:

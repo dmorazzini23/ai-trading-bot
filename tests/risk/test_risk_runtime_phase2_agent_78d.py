@@ -542,6 +542,30 @@ def test_position_size_atr_fallback_and_final_error(monkeypatch: pytest.MonkeyPa
     assert engine.position_size(_signal(), 1_000.0, 100.0) == 0
 
 
+def test_position_size_rejects_zero_weight_even_with_atr(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = _bare_engine(position_size_min_usd=100.0, max_symbol_exposure=1.0)
+    monkeypatch.setattr(engine, "can_trade", lambda _signal: True)
+    monkeypatch.setattr(engine, "_get_atr_data", lambda _symbol: 2.0)
+
+    assert engine.position_size(_signal(weight=0.0), 10_000.0, 100.0) == 0
+    assert engine.position_size(_signal(weight=0.10, confidence=0.0), 10_000.0, 100.0) == 0
+
+
+def test_position_size_rejects_tiny_weight_before_minimum_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = _bare_engine(position_size_min_usd=250.0, min_order_value=100.0, max_symbol_exposure=1.0)
+    monkeypatch.setattr(engine, "can_trade", lambda _signal: True)
+    monkeypatch.setattr(engine, "_get_atr_data", lambda _symbol: None)
+    monkeypatch.setattr(engine, "_apply_weight_limits", lambda _signal: 0.00001)
+
+    assert engine.position_size(_signal(weight=0.00001), 10_000.0, 100.0) == 0
+
+
+def test_position_size_rejects_sub_share_raw_qty_before_floor() -> None:
+    engine = _bare_engine(position_size_min_usd=100.0, min_order_value=100.0)
+
+    assert risk_engine._calculate_position_size(engine, 0.5, 100.0, _signal()) == 0
+
+
 def test_position_size_uses_account_fallback_and_rejects_bad_equity(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _bare_engine(position_size_min_usd=100.0)
     monkeypatch.setattr(engine, "can_trade", lambda _signal: True)

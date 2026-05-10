@@ -28,6 +28,15 @@ def test_simulate_fold_trades_applies_costs(tmp_path) -> None:
     assert metrics["net_return"] < metrics["gross_return"]
 
 
+def test_walkforward_defaults_to_long_only_when_short_policy_unset(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AI_TRADING_WALK_FORWARD_ALLOW_SHORT", raising=False)
+    monkeypatch.delenv("TRADING__ALLOW_SHORTS", raising=False)
+
+    evaluator = WalkForwardEvaluator(output_dir=str(tmp_path))
+
+    assert evaluator.trade_simulation_params["allow_short"] is False
+
+
 def test_simulate_fold_trades_respects_no_short_mode(tmp_path) -> None:
     evaluator = WalkForwardEvaluator(output_dir=str(tmp_path))
     evaluator.trade_simulation_params = {

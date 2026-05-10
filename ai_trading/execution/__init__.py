@@ -257,7 +257,6 @@ MarketHours: Any
 PnLEvent: Any
 PnLSource: Any
 PositionDiscrepancy: Any
-ProductionExecutionCoordinator: Any
 SwingTradingMode: Any
 
 # Optional submodule: algorithms
@@ -342,11 +341,6 @@ except _OPTIONAL_IMPORT_EXCEPTIONS:
     estimate_cost = None
 
 try:  # pragma: no cover - optional dependency
-    from .production_engine import ProductionExecutionCoordinator
-except _OPTIONAL_IMPORT_EXCEPTIONS:
-    ProductionExecutionCoordinator = None
-
-try:  # pragma: no cover - optional dependency
     from .swing_mode import SwingTradingMode, disable_swing_mode, enable_swing_mode, get_swing_mode
 except _OPTIONAL_IMPORT_EXCEPTIONS:
     SwingTradingMode = None
@@ -358,7 +352,6 @@ __all__ = [
     "ExecutionAlgorithm",
     "ExecutionEngine",
     "select_execution_engine",
-    "ProductionExecutionCoordinator",
     "ExecutionResult",
     "OrderRequest",
     "algorithms",

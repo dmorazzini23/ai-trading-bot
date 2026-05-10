@@ -119,6 +119,7 @@ def test_fetch_sentiment_graceful_when_requests_unavailable(monkeypatch):
     monkeypatch.setenv("SENTIMENT_API_KEY", "dummy")
     monkeypatch.setattr(be, "SENTIMENT_API_KEY", "dummy", raising=False)
     be.SENTIMENT_API_URL = "http://127.0.0.1:1"
+    be._SENTIMENT_CACHE.clear()
     be._SENTIMENT_FAILURES = 0
     out = be.fetch_sentiment("AAPL")
     assert isinstance(out, float) and out == 0.0

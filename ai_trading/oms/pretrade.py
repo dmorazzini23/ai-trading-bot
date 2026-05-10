@@ -688,7 +688,7 @@ def _parse_utc_datetime_text(value: Any) -> datetime | None:
 
 
 def _live_cost_model_payload() -> Mapping[str, Any] | None:
-    if not bool(get_env("AI_TRADING_PRETRADE_LIVE_COST_MODEL_GATE_ENABLED", True, cast=bool)):
+    if not _live_cost_model_gate_enabled():
         return None
     configured_path = str(
         get_env(
@@ -727,6 +727,10 @@ def _live_cost_model_payload() -> Mapping[str, Any] | None:
             }
         )
     return payload
+
+
+def _live_cost_model_gate_enabled() -> bool:
+    return bool(get_env("AI_TRADING_PRETRADE_LIVE_COST_MODEL_GATE_ENABLED", True, cast=bool))
 
 
 _SYMBOL_UNIVERSE_SCORECARD_LOCK = RLock()
@@ -999,8 +1003,20 @@ def _live_cost_artifact_pretrade_gate(
     *,
     cfg: Any,
 ) -> tuple[bool, str, dict[str, Any]] | None:
+    if not _live_cost_model_gate_enabled():
+        return None
     payload = _live_cost_model_payload()
-    if payload is None or _live_cost_model_usable(payload):
+    if payload is None:
+        if not _live_or_canary_opening(intent, cfg):
+            return None
+        return (
+            False,
+            "LIVE_COST_ARTIFACT_MISSING_BLOCK",
+            {
+                "opening_trade": bool(intent.opening_trade),
+            },
+        )
+    if _live_cost_model_usable(payload):
         return None
     if not _live_or_canary_opening(intent, cfg):
         return None
@@ -1993,6 +2009,16 @@ def validate_pretrade(
             cast=float,
         )
     )
+    if daily_loss_limit_pct <= 0:
+        daily_loss_limit_pct = float(
+            _cfg_value(
+                cfg,
+                field="daily_loss_limit",
+                env_keys=("AI_TRADING_DAILY_LOSS_LIMIT",),
+                default=0.0,
+                cast=float,
+            )
+        )
     daily_loss_limit_abs = float(
         _cfg_value(
             cfg,

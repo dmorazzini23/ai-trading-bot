@@ -27,6 +27,7 @@ from ai_trading.models.contracts import (
 
 logger = get_logger(__name__)
 ML_MODELS: dict[str, object | None] = {}
+ML_MODEL_CACHE_META: dict[str, dict[str, str | None]] = {}
 
 DEFAULT_MODEL_MAX_AGE_DAYS = 14
 
@@ -158,6 +159,47 @@ def _validate_active_model_freshness(symbol: str, meta: dict[str, Any]) -> None:
         raise RuntimeError(
             f"Active model for '{symbol}' is stale: trained_at={trained_at.isoformat()}"
         )
+
+
+def _cache_meta_from_registry(meta: dict[str, Any]) -> dict[str, str | None]:
+    trained_at = _active_model_timestamp(meta).isoformat()
+    return {
+        "path": str(meta.get("path") or ""),
+        "manifest_path": str(meta.get("manifest_path") or "") or None,
+        "trained_at": trained_at,
+    }
+
+
+def validate_cached_model(symbol: str) -> bool:
+    """Return True when the cached model still matches active fresh registry metadata."""
+
+    from ai_trading.model_registry import get_active_model_meta
+
+    meta = get_active_model_meta(symbol)
+    if not isinstance(meta, dict) or not meta.get("path"):
+        logger.error("MODEL_CACHE_REGISTRY_ACTIVE_MISSING", extra={"symbol": symbol})
+        return False
+    try:
+        _validate_active_model_freshness(symbol, meta)
+        active_cache_meta = _cache_meta_from_registry(meta)
+    except RuntimeError as exc:
+        logger.error(
+            "MODEL_CACHE_REGISTRY_INVALID",
+            extra={"symbol": symbol, "error": str(exc)},
+        )
+        return False
+    cached_meta = ML_MODEL_CACHE_META.get(symbol)
+    if cached_meta != active_cache_meta:
+        logger.warning(
+            "MODEL_CACHE_REGISTRY_MISMATCH",
+            extra={
+                "symbol": symbol,
+                "cached_path": (cached_meta or {}).get("path") if cached_meta else None,
+                "active_path": active_cache_meta.get("path"),
+            },
+        )
+        return False
+    return True
 
 
 def train_and_save_model(symbol: str, models_dir: Path) -> object:
@@ -316,6 +358,7 @@ def load_model(symbol: str) -> object:
         )
         raise RuntimeError(msg) from exc
     ML_MODELS[symbol] = model
+    ML_MODEL_CACHE_META[symbol] = _cache_meta_from_registry(meta)
     return model
 
 

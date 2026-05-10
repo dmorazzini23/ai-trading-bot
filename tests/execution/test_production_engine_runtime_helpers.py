@@ -49,6 +49,12 @@ def _order(
     )
 
 
+def _attach_market_evidence(order: Order) -> Order:
+    setattr(order, "market_data", {"atr": 2.0, "volume": 1_000_000})
+    setattr(order, "historical_data", {"returns": [0.01, -0.005] * 5})
+    return order
+
+
 def test_run_helper_returns_coordinator() -> None:
     coordinator = _run(pe.run(account_equity=12_345.0, risk_level=RiskLevel.CONSERVATIVE))
 
@@ -256,6 +262,17 @@ def test_comprehensive_safety_check_branches(monkeypatch) -> None:
     assert duplicate["reason"] == "Similar order recently submitted"
 
 
+def test_comprehensive_safety_check_rejects_missing_real_price(monkeypatch) -> None:
+    coordinator = _coordinator(monkeypatch)
+
+    result = _run(coordinator._comprehensive_safety_check(_order(price=None)))
+
+    assert result == {
+        "approved": False,
+        "reason": "Real order price required for risk assessment",
+    }
+
+
 def test_optimize_order_size_applies_position_multiplier(monkeypatch) -> None:
     coordinator = _coordinator(monkeypatch)
     monkeypatch.setattr(
@@ -269,7 +286,7 @@ def test_optimize_order_size_applies_position_multiplier(monkeypatch) -> None:
         lambda: {"trading_allowed": True, "position_size_multiplier": 0.5},
     )
 
-    result = _run(coordinator._optimize_order_size(_order(quantity=10)))
+    result = _run(coordinator._optimize_order_size(_attach_market_evidence(_order(quantity=10))))
 
     assert result["original_quantity"] == 10
     assert result["recommended_quantity"] == 8
@@ -290,10 +307,24 @@ def test_optimize_order_size_blocks_weak_evidence_warning(monkeypatch) -> None:
         lambda: {"trading_allowed": True, "position_size_multiplier": 1.0},
     )
 
-    result = _run(coordinator._optimize_order_size(_order(quantity=10)))
+    result = _run(coordinator._optimize_order_size(_attach_market_evidence(_order(quantity=10))))
 
     assert result["final_quantity"] == 0
     assert result["sizing_warnings"] == ["weak evidence sizing"]
+
+
+def test_optimize_order_size_rejects_without_real_market_evidence(monkeypatch) -> None:
+    coordinator = _coordinator(monkeypatch)
+
+    no_atr = _run(coordinator._optimize_order_size(_order(quantity=10)))
+    no_history_order = _order(quantity=10)
+    setattr(no_history_order, "market_data", {"atr": 2.0})
+    no_history = _run(coordinator._optimize_order_size(no_history_order))
+
+    assert no_atr["final_quantity"] == 0
+    assert no_atr["sizing_warnings"] == ["Real ATR market data required for position sizing"]
+    assert no_history["final_quantity"] == 0
+    assert no_history["sizing_warnings"] == ["Real return history required for position sizing"]
 
 
 def test_market_impact_and_execution_monitoring(monkeypatch) -> None:
@@ -312,6 +343,7 @@ def test_market_impact_and_execution_monitoring(monkeypatch) -> None:
         return None
 
     monkeypatch.setattr(pe.asyncio, "sleep", _sleep)
+    coordinator.execution_mode = "sim"
     order = _order(quantity=10, price=100.0)
     result = _run(coordinator._execute_order_with_monitoring(order, {"estimated_slippage_bps": 5}))
 

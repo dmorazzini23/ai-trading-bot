@@ -26,7 +26,7 @@ _SCHEMA_VERSION = "1.0.0"
 _DEFAULT_OUTPUT_DIR = "runtime/research_reports/huggingface"
 _DEFAULT_CACHE_DIR = "runtime/research_reports/huggingface/cache"
 
-PipelineFactory = Callable[[str, Path, bool], Callable[[str], Any]]
+PipelineFactory = Callable[[str, Path, bool, str], Callable[[str], Any]]
 
 
 def _utc_now() -> datetime:
@@ -99,6 +99,11 @@ def _candidate_repo_id(row: Mapping[str, Any]) -> str:
     return str(row.get("repo_id") or row.get("hf_id") or "").strip()
 
 
+def _candidate_revision(row: Mapping[str, Any]) -> str:
+    revision = str(row.get("sha") or row.get("revision") or "").strip()
+    return "" if revision.lower() in {"", "main", "master", "latest"} else revision
+
+
 def _approved_candidates(
     intake: Mapping[str, Any],
     *,
@@ -128,7 +133,12 @@ def _approved_candidates(
     return approved[: max(0, int(max_candidates))]
 
 
-def _default_pipeline_factory(repo_id: str, cache_dir: Path, allow_downloads: bool) -> Callable[[str], Any]:
+def _default_pipeline_factory(
+    repo_id: str,
+    cache_dir: Path,
+    allow_downloads: bool,
+    revision: str,
+) -> Callable[[str], Any]:
     try:
         from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
     except ImportError as exc:
@@ -137,11 +147,13 @@ def _default_pipeline_factory(repo_id: str, cache_dir: Path, allow_downloads: bo
         repo_id,
         cache_dir=str(cache_dir),
         local_files_only=not allow_downloads,
+        revision=revision,
     )
     tokenizer = AutoTokenizer.from_pretrained(
         repo_id,
         cache_dir=str(cache_dir),
         local_files_only=not allow_downloads,
+        revision=revision,
     )
     return pipeline(
         "text-classification",
@@ -219,6 +231,7 @@ def _prediction_from_output(output: Any) -> dict[str, Any]:
 def _predict_samples(
     *,
     repo_id: str,
+    revision: str,
     samples: Sequence[Mapping[str, Any]],
     cache_dir: Path,
     allow_downloads: bool,
@@ -226,10 +239,11 @@ def _predict_samples(
 ) -> dict[str, Any]:
     started_model = time.perf_counter()
     try:
-        classifier = pipeline_factory(repo_id, cache_dir, allow_downloads)
+        classifier = pipeline_factory(repo_id, cache_dir, allow_downloads, revision)
     except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
         return {
             "repo_id": repo_id,
+            "revision": revision,
             "status": "blocked",
             "blocked_reasons": [f"pipeline_unavailable:{type(exc).__name__}"],
             "samples": [],
@@ -237,6 +251,7 @@ def _predict_samples(
             "runtime_authority": False,
             "promotion_authority": False,
             "live_money_authority": False,
+            "provider_authority": False,
         }
     predictions: list[dict[str, Any]] = []
     failures = 0
@@ -268,6 +283,7 @@ def _predict_samples(
     blocked_reasons = ["all_predictions_unavailable"] if not covered else []
     return {
         "repo_id": repo_id,
+        "revision": revision,
         "status": status,
         "blocked_reasons": blocked_reasons,
         "sample_count": len(samples),
@@ -278,6 +294,7 @@ def _predict_samples(
         "runtime_authority": False,
         "promotion_authority": False,
         "live_money_authority": False,
+        "provider_authority": False,
     }
 
 
@@ -302,22 +319,41 @@ def build_huggingface_sentiment_predictions(
     predictions: list[dict[str, Any]] = []
     for candidate in candidates:
         repo_id = _candidate_repo_id(candidate)
+        revision = _candidate_revision(candidate)
         if not allow_downloads:
             predictions.append(
                 {
                     "repo_id": repo_id,
+                    "revision": revision or None,
                     "status": "blocked",
                     "blocked_reasons": ["hf_downloads_disabled"],
                     "samples": [],
                     "runtime_authority": False,
                     "promotion_authority": False,
                     "live_money_authority": False,
+                    "provider_authority": False,
+                }
+            )
+            continue
+        if not revision:
+            predictions.append(
+                {
+                    "repo_id": repo_id,
+                    "revision": None,
+                    "status": "blocked",
+                    "blocked_reasons": ["hf_revision_unpinned"],
+                    "samples": [],
+                    "runtime_authority": False,
+                    "promotion_authority": False,
+                    "live_money_authority": False,
+                    "provider_authority": False,
                 }
             )
             continue
         predictions.append(
             _predict_samples(
                 repo_id=repo_id,
+                revision=revision,
                 samples=samples,
                 cache_dir=cache_dir,
                 allow_downloads=allow_downloads,

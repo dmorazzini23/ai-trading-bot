@@ -315,6 +315,7 @@ def _normalize_candidate(
         "runtime_authority": False,
         "promotion_authority": False,
         "live_money_authority": False,
+        "provider_authority": False,
     }
     return candidate
 

@@ -3,6 +3,9 @@ import logging
 import csv
 import os
 import sys
+from legacy_guard import require_legacy_demo_flag
+
+require_legacy_demo_flag("scripts/final_validation.py")
 
 def test_ticker_loading():
     """Test the actual ticker loading function from bot_engine."""

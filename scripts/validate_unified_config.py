@@ -2,6 +2,9 @@ import logging
 '\nTest script to validate settings singleton, Money math, and rate limiting.\n\nValidates the critical features required by the problem statement:\n- Settings singleton\n- Money math with quantization\n- Rate limiter functionality\n- Final-bar gating\n- Hyperparams schema\n'
 import os
 import sys
+from legacy_guard import require_legacy_demo_flag
+
+require_legacy_demo_flag("scripts/validate_unified_config.py")
 sys.path.append('.')
 
 def test_settings_singleton():

@@ -19,6 +19,14 @@ def _write_model(path: Path) -> Path:
     )
 
 
+def _live_cost_payload() -> dict[str, object]:
+    return {
+        "generated_at": "2026-05-05T20:00:00Z",
+        "source_hash": "live-cost-sha",
+        "status": {"available": True, "status": "ready", "breach_count": 0},
+    }
+
+
 def _replay_payload(expectancy_bps: float = 5.0) -> dict[str, object]:
     return {
         "artifact_type": "offline_replay_summary",
@@ -32,6 +40,14 @@ def _replay_payload(expectancy_bps: float = 5.0) -> dict[str, object]:
             "expectancy_bps": expectancy_bps,
             "total_trades": 25,
             "violation_count": 0,
+            "config": {
+                "live_cost_model": {
+                    "enabled": True,
+                    "source_hash": "live-cost-sha",
+                    "source_timestamp": "2026-05-05T20:00:00Z",
+                    "freshness_status": "fresh",
+                }
+            },
         },
     }
 
@@ -56,10 +72,7 @@ def test_promotion_report_passes_when_all_hard_gates_pass(tmp_path: Path) -> Non
         tail_replay=_replay_payload(),
         recent_replay=_replay_payload(),
         shadow_report=_shadow_payload(),
-        live_cost_model={
-            "generated_at": "2026-05-05T20:00:00Z",
-            "status": {"available": True, "status": "ready", "breach_count": 0},
-        },
+        live_cost_model=_live_cost_payload(),
         runtime_decay_controls={
             "generated_at": "2026-05-05T20:00:00Z",
             "actions": {"entries_allowed": True, "max_action": "reduce_size", "size_scale": 0.85}
@@ -88,10 +101,7 @@ def test_promotion_report_blocks_bad_replay_and_missing_shadow(tmp_path: Path) -
         tail_replay=_replay_payload(),
         recent_replay=_replay_payload(),
         shadow_report={},
-        live_cost_model={
-            "generated_at": "2026-05-05T20:00:00Z",
-            "status": {"available": True, "status": "ready", "breach_count": 0},
-        },
+        live_cost_model=_live_cost_payload(),
         runtime_decay_controls={
             "generated_at": "2026-05-05T20:00:00Z",
             "actions": {"entries_allowed": True, "max_action": "normal"},
@@ -118,10 +128,7 @@ def test_promotion_report_blocks_missing_replay_authority_metadata(tmp_path: Pat
         tail_replay=_replay_payload(),
         recent_replay=_replay_payload(),
         shadow_report=_shadow_payload(),
-        live_cost_model={
-            "generated_at": "2026-05-05T20:00:00Z",
-            "status": {"available": True, "status": "ready", "breach_count": 0},
-        },
+        live_cost_model=_live_cost_payload(),
         runtime_decay_controls={
             "generated_at": "2026-05-05T20:00:00Z",
             "actions": {"entries_allowed": True, "max_action": "normal"},
@@ -148,10 +155,7 @@ def test_promotion_freshness_reads_nested_source_timestamp(tmp_path: Path) -> No
         tail_replay=_replay_payload(),
         recent_replay=_replay_payload(),
         shadow_report=shadow,
-        live_cost_model={
-            "generated_at": "2026-05-05T20:00:00Z",
-            "status": {"available": True, "status": "ready", "breach_count": 0},
-        },
+        live_cost_model=_live_cost_payload(),
         runtime_decay_controls={
             "generated_at": "2026-05-05T20:00:00Z",
             "actions": {"entries_allowed": True, "max_action": "normal"},
@@ -177,6 +181,7 @@ def test_promotion_report_blocks_warming_live_cost_and_stale_evidence(
         shadow_report=_shadow_payload(),
         live_cost_model={
             "generated_at": "2026-05-01T20:00:00Z",
+            "source_hash": "live-cost-sha",
             "status": {"available": True, "status": "warming_up", "breach_count": 0},
         },
         runtime_decay_controls={
@@ -211,10 +216,7 @@ def test_promotion_report_rejects_replay_governance_schema_for_replay_evidence(
         tail_replay=_replay_payload(),
         recent_replay=_replay_payload(),
         shadow_report=_shadow_payload(),
-        live_cost_model={
-            "generated_at": "2026-05-05T20:00:00Z",
-            "status": {"available": True, "status": "ready", "breach_count": 0},
-        },
+        live_cost_model=_live_cost_payload(),
         runtime_decay_controls={
             "generated_at": "2026-05-05T20:00:00Z",
             "actions": {"entries_allowed": True, "max_action": "normal"},
@@ -246,10 +248,7 @@ def test_promotion_report_blocks_explicit_yahoo_or_synthetic_replay_authority(
         tail_replay=_replay_payload(),
         recent_replay=_replay_payload(),
         shadow_report=_shadow_payload(),
-        live_cost_model={
-            "generated_at": "2026-05-05T20:00:00Z",
-            "status": {"available": True, "status": "ready", "breach_count": 0},
-        },
+        live_cost_model=_live_cost_payload(),
         runtime_decay_controls={
             "generated_at": "2026-05-05T20:00:00Z",
             "actions": {"entries_allowed": True, "max_action": "normal"},
@@ -273,12 +272,7 @@ def test_promotion_pipeline_cli_writes_report_and_returns_blocked(tmp_path: Path
     replay.write_text(json.dumps(_replay_payload(expectancy_bps=-2.0)), encoding="utf-8")
     shadow.write_text(json.dumps(_shadow_payload()), encoding="utf-8")
     live_cost.write_text(
-        json.dumps(
-            {
-                "generated_at": "2026-05-05T20:00:00Z",
-                "status": {"available": True, "status": "ready", "breach_count": 0},
-            }
-        ),
+        json.dumps(_live_cost_payload()),
         encoding="utf-8",
     )
     decay.write_text(
@@ -314,3 +308,79 @@ def test_promotion_pipeline_cli_writes_report_and_returns_blocked(tmp_path: Path
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["artifact_type"] == "model_promotion_report"
     assert payload["promotion_ready"] is False
+
+
+def test_promotion_report_blocks_missing_offline_replay_artifact_type(
+    tmp_path: Path,
+) -> None:
+    model = tmp_path / "candidate.joblib"
+    manifest = _write_model(model)
+    replay = _replay_payload()
+    replay.pop("artifact_type", None)
+
+    report = promotion_pipeline.build_promotion_report(
+        model_path=model,
+        manifest_path=manifest,
+        full_replay=replay,
+        tail_replay=_replay_payload(),
+        recent_replay=_replay_payload(),
+        shadow_report=_shadow_payload(),
+        live_cost_model=_live_cost_payload(),
+        runtime_decay_controls={
+            "generated_at": "2026-05-05T20:00:00Z",
+            "actions": {"entries_allowed": True, "max_action": "normal"},
+        },
+        generated_at=datetime(2026, 5, 5, 21, 0, tzinfo=UTC),
+    )
+
+    assert report["replay"]["full"]["reason"] == "unsupported_replay_schema"
+    assert report["replay"]["full"]["artifact_type"] == "missing"
+
+
+def test_promotion_report_requires_matching_replay_live_cost_provenance_or_alignment(
+    tmp_path: Path,
+) -> None:
+    model = tmp_path / "candidate.joblib"
+    manifest = _write_model(model)
+    stale_replay = _replay_payload()
+    config = stale_replay["aggregate"]["config"]["live_cost_model"]  # type: ignore[index]
+    config["source_hash"] = "old-live-cost-sha"  # type: ignore[index]
+    config["freshness_status"] = "stale"  # type: ignore[index]
+
+    blocked = promotion_pipeline.build_promotion_report(
+        model_path=model,
+        manifest_path=manifest,
+        full_replay=stale_replay,
+        tail_replay=_replay_payload(),
+        recent_replay=_replay_payload(),
+        shadow_report=_shadow_payload(),
+        live_cost_model=_live_cost_payload(),
+        runtime_decay_controls={
+            "generated_at": "2026-05-05T20:00:00Z",
+            "actions": {"entries_allowed": True, "max_action": "normal"},
+        },
+        generated_at=datetime(2026, 5, 5, 21, 0, tzinfo=UTC),
+    )
+    assert blocked["gates"]["replay_cost_provenance_acceptable"] is False
+    assert blocked["replay_cost_provenance"]["replays"]["full"]["ok"] is False
+
+    aligned = promotion_pipeline.build_promotion_report(
+        model_path=model,
+        manifest_path=manifest,
+        full_replay=stale_replay,
+        tail_replay=_replay_payload(),
+        recent_replay=_replay_payload(),
+        shadow_report=_shadow_payload(),
+        live_cost_model=_live_cost_payload(),
+        replay_live_cost_alignment={
+            "artifact_type": "replay_live_cost_alignment_report",
+            "generated_at": "2026-05-05T20:00:00Z",
+            "cost_realism": {"acceptable": True},
+        },
+        runtime_decay_controls={
+            "generated_at": "2026-05-05T20:00:00Z",
+            "actions": {"entries_allowed": True, "max_action": "normal"},
+        },
+        generated_at=datetime(2026, 5, 5, 21, 0, tzinfo=UTC),
+    )
+    assert aligned["gates"]["replay_cost_provenance_acceptable"] is True

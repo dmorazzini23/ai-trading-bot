@@ -78,16 +78,13 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
             'ALTERNATIVE_SENTIMENT_API_KEY': 'test_key',
             'ALTERNATIVE_SENTIMENT_API_URL': 'https://alt-api.com/sentiment'
         }):
-            # Primary source fails with rate limiting
-            mock_response_primary = Mock()
-            mock_response_primary.status_code = 429
-
-            # Alternative source succeeds
+            # Alternative source succeeds directly after the primary caller has
+            # already classified the primary response as rate-limited.
             mock_response_alt = Mock()
             mock_response_alt.status_code = 200
             mock_response_alt.json.return_value = {'sentiment_score': 0.7}
 
-            mock_get.side_effect = [mock_response_primary, mock_response_alt]
+            mock_get.return_value = mock_response_alt
 
             result = sentiment._try_alternative_sentiment_sources('AAPL')
             self.assertEqual(result, 0.7)

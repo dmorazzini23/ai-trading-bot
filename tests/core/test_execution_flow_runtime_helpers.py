@@ -200,6 +200,56 @@ def test_liquidate_positions_if_needed_returns_when_no_active_positions(monkeypa
     assert calls == []
 
 
+def test_exit_all_positions_uses_runtime_exec_engine_when_execute_order_absent(monkeypatch):
+    calls: list[dict[str, object]] = []
+    runtime = SimpleNamespace(
+        api=SimpleNamespace(
+            list_positions=lambda: [
+                SimpleNamespace(symbol="AAPL", qty="3", side="long"),
+                SimpleNamespace(symbol="MSFT", qty="2", side="short"),
+            ]
+        ),
+        exec_engine=SimpleNamespace(
+            execute_order=lambda symbol, side, qty, **kwargs: calls.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": qty,
+                    **kwargs,
+                }
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        execution_flow,
+        "send_exit_order",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy exit fallback used")),
+    )
+
+    execution_flow.exit_all_positions(runtime)
+
+    assert calls == [
+        {
+            "symbol": "AAPL",
+            "side": "sell",
+            "qty": 3.0,
+            "order_type": "market",
+            "closing_position": True,
+            "reduce_only": True,
+            "metadata": {"reason": "eod_exit"},
+        },
+        {
+            "symbol": "MSFT",
+            "side": "buy",
+            "qty": 2.0,
+            "order_type": "market",
+            "closing_position": True,
+            "reduce_only": True,
+            "metadata": {"reason": "eod_exit"},
+        },
+    ]
+
+
 def test_liquidate_positions_if_needed_throttles_recent_attempt(monkeypatch):
     monkeypatch.setattr(bot_engine, "check_halt_flag", lambda _runtime: False)
     monkeypatch.setattr(

@@ -55,6 +55,24 @@ def _coerce_timestamp(value: Any) -> _dt.datetime | None:
         except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("TIMESTAMP_TZ_NORMALIZE_FAILED", extra={"value": value}, exc_info=True)
             return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = _dt.datetime.fromisoformat(text)
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            logger.debug("TIMESTAMP_FROM_ISO_FAILED", extra={"value": value}, exc_info=True)
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=_dt.timezone.utc)
+        try:
+            return parsed.astimezone(_dt.timezone.utc)
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            logger.debug("TIMESTAMP_TZ_NORMALIZE_FAILED", extra={"value": value}, exc_info=True)
+            return None
     return None
 
 

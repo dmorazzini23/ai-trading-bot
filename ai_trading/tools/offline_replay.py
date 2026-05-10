@@ -74,6 +74,10 @@ class LiveCostReplayModel:
     status: str
     bucket_count: int
     buckets: dict[tuple[str, str, str], LiveCostReplayBucket]
+    source_sha256: str
+    loaded_at: str
+    freshness_status: str
+    age_seconds: float | None
 
 
 @dataclass(frozen=True)
@@ -997,7 +1001,8 @@ def _load_live_cost_replay_model(args: argparse.Namespace) -> LiveCostReplayMode
         )
     )
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw_bytes = path.read_bytes()
+        payload = json.loads(raw_bytes.decode("utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         return None
     if not isinstance(payload, Mapping) or payload.get("artifact_type") != "live_cost_model":
@@ -1033,14 +1038,35 @@ def _load_live_cost_replay_model(args: argparse.Namespace) -> LiveCostReplayMode
         )
     if not buckets:
         return None
+    loaded_at_dt = datetime.now(UTC)
+    generated_at_text = str(payload.get("generated_at")) if payload.get("generated_at") else None
+    generated_at_dt = _parse_utc_datetime_text(generated_at_text)
+    age_seconds = (
+        max(0.0, float((loaded_at_dt - generated_at_dt).total_seconds()))
+        if generated_at_dt is not None
+        else None
+    )
+    max_age_hours = max(
+        0.0,
+        float(get_env("AI_TRADING_REPLAY_LIVE_COST_MAX_AGE_HOURS", 96.0, cast=float)),
+    )
+    freshness_status = "timestamp_missing"
+    if age_seconds is not None:
+        freshness_status = (
+            "fresh"
+            if age_seconds <= max_age_hours * 3600.0 and generated_at_dt <= loaded_at_dt
+            else "stale"
+        )
     return LiveCostReplayModel(
         path=str(path),
-        generated_at=(
-            str(payload.get("generated_at")) if payload.get("generated_at") else None
-        ),
+        generated_at=generated_at_text,
         status=str(status.get("status") or "ready"),
         bucket_count=len(buckets),
         buckets=buckets,
+        source_sha256=hashlib.sha256(raw_bytes).hexdigest(),
+        loaded_at=loaded_at_dt.isoformat().replace("+00:00", "Z"),
+        freshness_status=freshness_status,
+        age_seconds=age_seconds,
     )
 
 
@@ -1216,6 +1242,13 @@ def _live_cost_model_config_payload(model: LiveCostReplayModel | None) -> dict[s
         "generated_at": model.generated_at,
         "status": model.status,
         "bucket_count": model.bucket_count,
+        "source_fingerprint": model.source_sha256,
+        "source_hash": model.source_sha256,
+        "source_timestamp": model.generated_at,
+        "loaded_at": model.loaded_at,
+        "freshness_status": model.freshness_status,
+        "age_seconds": model.age_seconds,
+        "alignment_status": "unchecked",
     }
 
 

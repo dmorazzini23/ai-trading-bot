@@ -110,14 +110,15 @@ def check_data_freshness(df: DataFrame | None, symbol: str, *, max_staleness_min
             last_ts = last_ts.replace(tzinfo=UTC)
         age = now - last_ts.astimezone(UTC)
         age_seconds = age.total_seconds()
-        if age_seconds < -MAX_FUTURE_CLOCK_SKEW_SECONDS:
+        if age_seconds < 0:
             return {
                 'symbol': symbol,
                 'is_fresh': False,
-                'minutes_stale': age_seconds / 60.0,
+                'minutes_stale': float('inf'),
                 'market_hours': market_open,
                 'staleness_threshold': threshold,
                 'reason': 'future_timestamp',
+                'future_skew_seconds': abs(age_seconds),
             }
         minutes = age.total_seconds() / 60.0
         return {

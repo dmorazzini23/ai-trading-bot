@@ -25,7 +25,6 @@ EXPECTED = {
         'portfolio',
         'position_sizing',
         'predict',
-        'production_system',
         'rebalancer',
         'settings',
         'signals',
@@ -134,6 +133,26 @@ def test_legacy_live_api_exports_warn_as_research_only():
     vars(ai_trading).pop("trade_logic", None)
     with pytest.warns(DeprecationWarning, match="research utilities"):
         assert ai_trading.trade_logic is import_module("ai_trading.trade_logic")
+
+
+def test_legacy_production_surfaces_are_not_package_exports():
+    import ai_trading
+    import ai_trading.execution as execution_mod
+
+    importlib.reload(ai_trading)
+    importlib.reload(execution_mod)
+    vars(ai_trading).pop("production_system", None)
+    vars(execution_mod).pop("ProductionExecutionCoordinator", None)
+
+    assert "production_system" not in ai_trading.__all__
+    assert "ProductionExecutionCoordinator" not in execution_mod.__all__
+    assert not hasattr(ai_trading, "production_system")
+    assert not hasattr(execution_mod, "ProductionExecutionCoordinator")
+    production_system = import_module("ai_trading.production_system")
+    production_engine = import_module("ai_trading.execution.production_engine")
+    assert production_system.RESEARCH_ONLY is True
+    assert production_engine.RESEARCH_ONLY is True
+    assert production_engine.LIVE_EXECUTION_AUTHORITY == "canonical_oms_pretrade"
 
 
 def test_root_execution_engine_export_uses_runtime_selector(monkeypatch):

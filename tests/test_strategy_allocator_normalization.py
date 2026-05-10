@@ -15,7 +15,20 @@ def test_allocate_normalizes_confidence():
     assert low.confidence == 0.01
 
 
-def test_allocate_preserves_sell_short_side():
+def test_allocate_blocks_sell_short_by_default(monkeypatch):
+    monkeypatch.delenv("TRADING__ALLOW_SHORTS", raising=False)
+    monkeypatch.delenv("AI_TRADING_ALLOW_SHORT", raising=False)
+    alloc = StrategyAllocator()
+    alloc.replace_config(delta_threshold=0.0, signal_confirmation_bars=1, min_confidence=0.0)
+    signal = SimpleNamespace(symbol="MSFT", side="sell_short", confidence=0.8)
+
+    out = alloc.allocate({"pairs": [signal]})
+
+    assert out == []
+
+
+def test_allocate_preserves_sell_short_side_when_canonical_short_policy_enabled(monkeypatch):
+    monkeypatch.setenv("TRADING__ALLOW_SHORTS", "1")
     alloc = StrategyAllocator()
     alloc.replace_config(delta_threshold=0.0, signal_confirmation_bars=1, min_confidence=0.0)
     signal = SimpleNamespace(symbol="MSFT", side="sell_short", confidence=0.8)

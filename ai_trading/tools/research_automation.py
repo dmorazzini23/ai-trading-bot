@@ -2704,7 +2704,7 @@ def _copy_authority_artifacts(
     copied: dict[str, str] = {}
     latest_dir = config.report_root / "latest"
     for row in step_results:
-        if row.get("status") not in {"passed", "blocked"}:
+        if row.get("status") != "passed":
             continue
         name = str(row.get("name") or "")
         raw_path = str(row.get("output_path") or row.get("stdout_path") or "").strip()

@@ -5,7 +5,7 @@ from collections import UserDict
 from types import SimpleNamespace
 from typing import Any, cast
 
-from ai_trading import production_system as ps
+import ai_trading.production_system as ps
 from ai_trading.core.enums import OrderSide, OrderType, RiskLevel
 
 

@@ -1,4 +1,5 @@
 import math
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -117,3 +118,32 @@ def test_post_process_handles_compact_column_names(caplog):
     assert result["low"].tolist() == pytest.approx([9.9, 10.3, 10.8])
     assert result["volume"].tolist() == pytest.approx([1_000, 1_100, 1_050])
     # no recovery log is necessary; ensure data parsed without raising
+
+
+def test_post_process_drops_future_minute_bars_after_normalization(monkeypatch, caplog):
+    pd = load_pandas()
+    now = datetime(2026, 4, 24, 15, 0, tzinfo=UTC)
+    df = pd.DataFrame(
+        {
+            "timestamp": [now - timedelta(minutes=1), now + timedelta(minutes=10)],
+            "open": [10.0, 11.0],
+            "high": [10.5, 11.5],
+            "low": [9.5, 10.5],
+            "close": [10.2, 11.2],
+            "volume": [100, 200],
+        }
+    )
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return now if tz is not None else now.replace(tzinfo=None)
+
+    monkeypatch.setattr("ai_trading.data.fetch.datetime", FixedDatetime)
+    caplog.set_level("WARNING", logger="ai_trading.data.fetch")
+
+    result = _post_process(df, symbol="AAPL", timeframe="1Min")
+
+    assert result is not None
+    assert result["close"].tolist() == [10.2]
+    assert any(record.message == "future_bar_timestamp" for record in caplog.records)

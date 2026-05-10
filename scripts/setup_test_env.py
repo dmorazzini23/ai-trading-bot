@@ -2,6 +2,9 @@
 Setup test environment with required environment variables.
 """
 import os
+from legacy_guard import require_legacy_demo_flag
+
+require_legacy_demo_flag("scripts/setup_test_env.py")
 os.environ.setdefault('ALPACA_API_KEY', 'test_key')
 os.environ.setdefault('ALPACA_SECRET_KEY', 'test_secret')
 os.environ.setdefault('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')

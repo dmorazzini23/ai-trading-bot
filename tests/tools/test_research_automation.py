@@ -553,7 +553,7 @@ def test_run_status_is_blocked_when_any_step_blocks(tmp_path: Path, monkeypatch)
     assert report["step_results"][0]["status"] == "blocked"
 
 
-def test_authority_artifact_copy_writes_live_readiness_latest(tmp_path: Path) -> None:
+def test_blocked_authority_artifact_copy_does_not_seed_live_readiness_latest(tmp_path: Path) -> None:
     report_root = tmp_path / "reports"
     run_dir = report_root / "daily" / "run"
     source = run_dir / "live_capital_readiness.json"
@@ -588,8 +588,8 @@ def test_authority_artifact_copy_writes_live_readiness_latest(tmp_path: Path) ->
         ],
     )
 
-    assert "live_capital_readiness" in copied
-    assert (report_root / "latest" / "live_capital_readiness_latest.json").is_file()
+    assert "live_capital_readiness" not in copied
+    assert not (report_root / "latest" / "live_capital_readiness_latest.json").exists()
 
 
 def test_blocked_authority_artifact_does_not_overwrite_existing_latest(tmp_path: Path) -> None:

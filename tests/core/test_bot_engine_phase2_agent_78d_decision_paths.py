@@ -799,6 +799,7 @@ def test_sentiment_fetch_cache_circuit_rate_limit_and_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import ai_trading.config.settings as settings_mod
+    from ai_trading.analysis import sentiment as sentiment_mod
 
     settings = SimpleNamespace(
         sentiment_api_key="key",
@@ -807,19 +808,28 @@ def test_sentiment_fetch_cache_circuit_rate_limit_and_success(
         sentiment_api_url="https://news.example.test",
     )
     monkeypatch.setattr(settings_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(sentiment_mod, "get_settings", lambda: settings)
     monkeypatch.setattr(bot_engine, "get_news_api_key", lambda: None)
     monkeypatch.setattr(bot_engine.pytime, "time", lambda: 1000.0)
-    monkeypatch.setattr(bot_engine, "_check_sentiment_circuit_breaker", lambda: True)
-    monkeypatch.setattr(bot_engine, "_record_sentiment_success", lambda: None)
-    monkeypatch.setattr(bot_engine, "_record_sentiment_failure", lambda *args, **kwargs: None)
-    monkeypatch.setattr(bot_engine, "predict_text_sentiment", lambda text: 0.5)
+    monkeypatch.setattr(sentiment_mod, "_sentiment_initialized", True)
+    monkeypatch.setattr(sentiment_mod, "_device", "cpu")
+    monkeypatch.setattr(sentiment_mod, "_check_sentiment_circuit_breaker", lambda: True)
+    monkeypatch.setattr(sentiment_mod, "_record_sentiment_success", lambda: None)
+    monkeypatch.setattr(sentiment_mod, "_record_sentiment_failure", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        bot_engine,
+        sentiment_mod,
+        "analyze_text",
+        lambda text: {"available": True, "pos": 0.75, "neg": 0.25, "neu": 0.0},
+    )
+    monkeypatch.setattr(
+        sentiment_mod,
         "fetch_form4_filings",
         lambda ticker: [{"type": "buy", "dollar_amount": 60_000}],
     )
     bot_engine._SENTIMENT_CACHE.clear()
+    sentiment_mod._sentiment_cache.clear()
     bot_engine._SENTIMENT_CIRCUIT_BREAKER["state"] = "closed"
+    sentiment_mod._sentiment_circuit_breaker["state"] = "closed"
 
     class Response:
         status_code = 200
@@ -840,12 +850,14 @@ def test_sentiment_fetch_cache_circuit_rate_limit_and_success(
         status_code = 429
 
     bot_engine._SENTIMENT_CACHE.clear()
+    sentiment_mod._sentiment_cache.clear()
     monkeypatch.setattr(bot_engine.http, "get", lambda *args, **kwargs: RateLimited())
     assert bot_engine._fetch_sentiment_ctx(SimpleNamespace(), "MSFT") == 0.0
     assert bot_engine._SENTIMENT_CACHE["MSFT"][1] == 0.0
 
-    bot_engine._SENTIMENT_CACHE["TSLA"] = (100.0, -0.3)
-    monkeypatch.setattr(bot_engine, "_check_sentiment_circuit_breaker", lambda: False)
+    bot_engine._SENTIMENT_CACHE["TSLA"] = (999.0, -0.3)
+    sentiment_mod._sentiment_cache["TSLA"] = (999.0, -0.3)
+    monkeypatch.setattr(sentiment_mod, "_check_sentiment_circuit_breaker", lambda: False)
     assert bot_engine._fetch_sentiment_ctx(SimpleNamespace(), "TSLA") == -0.3
 
 
@@ -853,6 +865,7 @@ def test_sentiment_missing_key_and_request_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import ai_trading.config.settings as settings_mod
+    from ai_trading.analysis import sentiment as sentiment_mod
 
     missing_settings = SimpleNamespace(
         sentiment_api_key=None,
@@ -861,6 +874,7 @@ def test_sentiment_missing_key_and_request_fallback(
         sentiment_api_url="https://news.example.test",
     )
     monkeypatch.setattr(settings_mod, "get_settings", lambda: missing_settings)
+    monkeypatch.setattr(sentiment_mod, "get_settings", lambda: missing_settings)
     monkeypatch.setattr(bot_engine, "get_news_api_key", lambda: None)
     assert bot_engine._fetch_sentiment_ctx(SimpleNamespace(), "AAPL") == 0.0
 
@@ -871,10 +885,12 @@ def test_sentiment_missing_key_and_request_fallback(
         sentiment_api_url="https://news.example.test",
     )
     monkeypatch.setattr(settings_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(sentiment_mod, "get_settings", lambda: settings)
     monkeypatch.setattr(bot_engine.pytime, "time", lambda: 2000.0)
     monkeypatch.setattr(bot_engine, "_check_sentiment_circuit_breaker", lambda: True)
     monkeypatch.setattr(bot_engine, "_record_sentiment_failure", lambda *args, **kwargs: None)
     bot_engine._SENTIMENT_CACHE.clear()
+    sentiment_mod._sentiment_cache.clear()
 
     def raise_request(*args: Any, **kwargs: Any) -> None:
         raise bot_engine.requests.exceptions.RequestException("down")

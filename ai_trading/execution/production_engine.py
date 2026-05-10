@@ -1,8 +1,9 @@
 """
-Production execution coordinator that integrates risk management and monitoring.
+Research/test-only execution coordinator with risk and monitoring integration.
 
-Enhances the existing execution engine with comprehensive safety checks,
-real-time monitoring, and advanced risk management capabilities.
+This module is retained for legacy tests and offline research harnesses. It is
+not an authoritative live execution path; paper/live orders must route through
+the canonical OMS/pretrade flow.
 """
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import asyncio
@@ -27,13 +28,16 @@ from ai_trading.paths import LOG_DIR
 import os
 import csv
 
+RESEARCH_ONLY = True
+LIVE_EXECUTION_AUTHORITY = "canonical_oms_pretrade"
+
 
 class ProductionExecutionCoordinator:
     """
-    Production execution coordinator with comprehensive safety integration.
+    Research/test execution coordinator with comprehensive safety integration.
 
     Wraps the core execution engine with advanced risk management,
-    monitoring, and safety mechanisms for production trading.
+    monitoring, and safety mechanisms for offline research simulations.
     """
 
     def __init__(
@@ -75,7 +79,25 @@ class ProductionExecutionCoordinator:
                     csv.writer(f).writerow(["timestamp", "symbol", "expected", "actual", "slippage_cents"])
         except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("PRODUCTION_SLIPPAGE_LOG_INIT_FAILED", exc_info=True)
+        logger.warning(
+            "PRODUCTION_EXECUTION_COORDINATOR_RESEARCH_ONLY",
+            extra={"live_execution_authority": LIVE_EXECUTION_AUTHORITY},
+        )
         logger.info(f'ProductionExecutionCoordinator initialized with equity=${account_equity:,.2f}')
+
+    @staticmethod
+    def _positive_float_or_none(value: Any) -> float | None:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed <= 0:
+            return None
+        return parsed
+
+    @classmethod
+    def _order_price_value(cls, order: Order) -> float | None:
+        return cls._positive_float_or_none(getattr(order.price, "amount", order.price))
 
     async def submit_order_request(self, order_request: OrderRequest) -> ExecutionResult:
         """
@@ -138,6 +160,8 @@ class ProductionExecutionCoordinator:
                 order_type = OrderType.LIMIT
                 price = float(price_hint)
             order = Order(symbol=symbol, side=side, quantity=quantity, order_type=order_type, price=cast(Any, price), strategy_id=strategy, **md)
+            setattr(order, "market_data", md.get("market_data"))
+            setattr(order, "historical_data", md.get("historical_data"))
             safety_result = await self._comprehensive_safety_check(order)
             if not safety_result['approved']:
                 await self._handle_order_rejection(order, safety_result['reason'])
@@ -180,11 +204,12 @@ class ProductionExecutionCoordinator:
             if order.quantity > EXECUTION_PARAMETERS['MAX_ORDER_SIZE']:
                 return {'approved': False, 'reason': 'Quantity exceeds maximum limit'}
             position_history = self._get_symbol_history(order.symbol)
-            order_price = getattr(order.price, 'amount', order.price)
-            try:
-                order_price_value = float(order_price if order_price is not None else 100.0)
-            except (TypeError, ValueError):
-                order_price_value = 100.0
+            order_price_value = self._order_price_value(order)
+            if order_price_value is None:
+                return {
+                    'approved': False,
+                    'reason': 'Real order price required for risk assessment',
+                }
             risk_assessment = self.risk_manager.assess_trade_risk(
                 order.symbol,
                 order.quantity,
@@ -204,13 +229,29 @@ class ProductionExecutionCoordinator:
     async def _optimize_order_size(self, order: Order) -> dict[str, Any]:
         """Optimize order size using dynamic position sizing."""
         try:
-            order_price = getattr(order.price, 'amount', order.price)
-            try:
-                current_price = float(order_price if order_price is not None else 100.0)
-            except (TypeError, ValueError):
-                current_price = 100.0
-            market_data = {'current_price': current_price, 'atr': 2.0, 'volume': 1000000}
-            historical_data: dict[str, Any] = {'returns': [], 'trade_history': []}
+            current_price = self._order_price_value(order)
+            if current_price is None:
+                return {
+                    'final_quantity': 0,
+                    'sizing_warnings': ['Real order price required for position sizing'],
+                }
+            raw_market_data = getattr(order, "market_data", None)
+            market_data = raw_market_data if isinstance(raw_market_data, dict) else {}
+            atr_value = self._positive_float_or_none(market_data.get("atr"))
+            if atr_value is None:
+                return {
+                    'final_quantity': 0,
+                    'sizing_warnings': ['Real ATR market data required for position sizing'],
+                }
+            raw_historical_data = getattr(order, "historical_data", None)
+            historical_data = raw_historical_data if isinstance(raw_historical_data, dict) else {}
+            returns = historical_data.get("returns", [])
+            if not isinstance(returns, list) or len(returns) < 10:
+                return {
+                    'final_quantity': 0,
+                    'sizing_warnings': ['Real return history required for position sizing'],
+                }
+            market_data = {**market_data, "current_price": current_price, "atr": atr_value}
             sizing_result = self.position_sizer.calculate_optimal_position(order.symbol, self.account_equity, market_data['current_price'], market_data, historical_data)
             halt_status = self.halt_manager.is_trading_allowed()
             position_multiplier = halt_status.get('position_size_multiplier', 1.0)
@@ -235,7 +276,13 @@ class ProductionExecutionCoordinator:
     async def _analyze_market_impact(self, order: Order) -> dict[str, Any]:
         """Analyze potential market impact of the order."""
         try:
-            current_price = order.price or 100.0
+            current_price = self._order_price_value(order)
+            if current_price is None:
+                return {
+                    'impact_level': 'unknown',
+                    'estimated_slippage_bps': 0,
+                    'reason': 'Real order price required for market impact analysis',
+                }
             notional_value = order.quantity * current_price
             if notional_value > 1000000:
                 impact_level = 'high'
@@ -281,7 +328,21 @@ class ProductionExecutionCoordinator:
                 )
             self.pending_orders[order.id] = order
             await asyncio.sleep(0.1)
-            fill_price = float(order.price or 100.0)
+            fill_price = self._order_price_value(order)
+            if fill_price is None:
+                message = "Real order price required for research execution simulation"
+                order.status = OrderStatus.REJECTED
+                self.rejected_orders[order.id] = order
+                self.pending_orders.pop(order.id, None)
+                return ExecutionResult(
+                    status="failed",
+                    order_id=order.id,
+                    symbol=order.symbol,
+                    side=order.side.value if isinstance(order.side, OrderSide) else order.side,
+                    quantity=order.quantity,
+                    message=message,
+                    error_code="real_market_data_required",
+                )
             if order.side == OrderSide.BUY:
                 fill_price *= 1 + impact_analysis['estimated_slippage_bps'] / 10000
             else:
@@ -293,7 +354,7 @@ class ProductionExecutionCoordinator:
             self.completed_orders[order.id] = order
             del self.pending_orders[order.id]
             self._update_position_tracking(order)
-            expected_price = float(order.price or fill_price)
+            expected_price = self._order_price_value(order) or fill_price
             actual_slippage_bps = float(abs(fill_price - expected_price) / expected_price * 10000)
             notional_value = float(order.quantity * fill_price)
             return ExecutionResult(status='success', order_id=order.id, symbol=order.symbol, side=order.side.value if isinstance(order.side, OrderSide) else order.side, quantity=order.quantity, fill_price=fill_price, execution_time=order.executed_at, message=f'Order executed successfully at ${fill_price:.2f}', actual_slippage_bps=actual_slippage_bps, notional_value=notional_value)

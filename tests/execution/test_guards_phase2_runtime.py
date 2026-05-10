@@ -17,7 +17,7 @@ def test_timestamp_coercion_and_quote_staleness_paths() -> None:
     assert guards._coerce_timestamp(0) == datetime(1970, 1, 1, tzinfo=UTC)
     assert guards._coerce_timestamp(datetime(2026, 4, 25, 16, 0)) == now
     assert guards._coerce_timestamp(datetime(2026, 4, 25, 12, 0, tzinfo=timezone(timedelta(hours=-4)))) == now
-    assert guards._coerce_timestamp("2026-04-25T16:00:00Z") is None
+    assert guards._coerce_timestamp("2026-04-25T16:00:00Z") == now
 
     assert guards._is_stale({"timestamp": now - timedelta(seconds=5)}, now, 10) == (
         False,

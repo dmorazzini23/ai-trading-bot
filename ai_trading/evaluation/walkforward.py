@@ -121,7 +121,13 @@ class WalkForwardEvaluator:
                 0.0,
                 float(get_env("AI_TRADING_WALK_FORWARD_SLIPPAGE_BPS", 5.0, cast=float)),
             ),
-            "allow_short": bool(get_env("AI_TRADING_WALK_FORWARD_ALLOW_SHORT", True, cast=bool)),
+            "allow_short": bool(
+                get_env(
+                    "AI_TRADING_WALK_FORWARD_ALLOW_SHORT",
+                    get_env("TRADING__ALLOW_SHORTS", False, cast=bool),
+                    cast=bool,
+                )
+            ),
             "max_abs_position": max(
                 0.0,
                 float(get_env("AI_TRADING_WALK_FORWARD_MAX_ABS_POSITION", 1.0, cast=float)),

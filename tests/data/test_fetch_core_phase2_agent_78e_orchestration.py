@@ -468,10 +468,10 @@ def test_get_minute_df_reference_role_delegates_to_reference_fetch(fetch_env: di
 
 def test_get_minute_df_forced_yahoo_provider_uses_backup_and_records_metrics(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fetch, "_env_source_override", lambda _tf: ("yahoo", "DATA_SOURCE"))
-    monkeypatch.setattr(fetch, "_yahoo_get_bars", lambda *_args, **_kwargs: _frame(provider="yahoo"))
+    monkeypatch.setattr(fetch, "_yahoo_get_bars", lambda *_args, **_kwargs: _frame(ts=PAST_START, provider="yahoo"))
     monkeypatch.setattr(fetch, "_fetch_bars", lambda *_args, **_kwargs: pytest.fail("primary should be skipped"))
 
-    result = fetch.get_minute_df("AAPL", BASE_START, BASE_END)
+    result = fetch.get_minute_df("AAPL", PAST_START, PAST_END)
 
     assert not result.empty
     assert result.attrs["data_provider"] == "yahoo"
@@ -482,10 +482,10 @@ def test_get_minute_df_forced_yahoo_provider_uses_backup_and_records_metrics(fet
 def test_get_minute_df_provider_monitor_backup_choice_skips_primary(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     monitor = fetch.provider_monitor
     monitor.active_choice = "yahoo"
-    monkeypatch.setattr(fetch, "_safe_backup_get_bars", lambda *_args, **_kwargs: _frame(provider="yahoo"))
+    monkeypatch.setattr(fetch, "_safe_backup_get_bars", lambda *_args, **_kwargs: _frame(ts=PAST_START, provider="yahoo"))
     monkeypatch.setattr(fetch, "_fetch_bars", lambda *_args, **_kwargs: pytest.fail("monitor selected backup"))
 
-    result = fetch.get_minute_df("AAPL", BASE_START, BASE_END, feed="iex")
+    result = fetch.get_minute_df("AAPL", PAST_START, PAST_END, feed="iex")
 
     assert not result.empty
     assert monitor.health_updates
@@ -497,15 +497,15 @@ def test_get_minute_df_backup_skip_probe_forces_primary_with_bypass(fetch_env: d
     fetch._BACKUP_SKIP_UNTIL[("AAPL", "1Min")] = datetime.now(tz=UTC) + timedelta(minutes=5)
     fetch._SKIPPED_SYMBOLS.add(("AAPL", "1Min"))
     monkeypatch.setattr(fetch, "_backup_primary_probe_due", lambda *_args: True)
-    monkeypatch.setattr(fetch, "_safe_backup_get_bars", lambda *_args, **_kwargs: _frame(provider="yahoo"))
+    monkeypatch.setattr(fetch, "_safe_backup_get_bars", lambda *_args, **_kwargs: _frame(ts=PAST_START, provider="yahoo"))
 
     def fake_fetch_bars(*args: Any, **kwargs: Any) -> pd.DataFrame:
         calls.append({"args": args, "kwargs": kwargs})
-        return _frame(provider="alpaca")
+        return _frame(ts=PAST_START, provider="alpaca")
 
     monkeypatch.setattr(fetch, "_fetch_bars", fake_fetch_bars)
 
-    result = fetch.get_minute_df("AAPL", BASE_START, BASE_END, feed="iex")
+    result = fetch.get_minute_df("AAPL", PAST_START, PAST_END, feed="iex")
 
     assert not result.empty
     assert calls and calls[0]["kwargs"]["bypass_backup_skip"] is True
@@ -548,9 +548,9 @@ def test_fetch_bars_recovery_probe_bypasses_fallback_ttl_and_exact_window(fetch_
 
 
 def test_get_minute_df_primary_success_does_not_schedule_backup_skip(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(fetch, "_fetch_bars", lambda *_args, **_kwargs: _frame(provider="alpaca"))
+    monkeypatch.setattr(fetch, "_fetch_bars", lambda *_args, **_kwargs: _frame(ts=PAST_START, provider="alpaca"))
 
-    result = fetch.get_minute_df("AAPL", BASE_START, BASE_END, feed="iex")
+    result = fetch.get_minute_df("AAPL", PAST_START, PAST_END, feed="iex")
 
     assert not result.empty
     assert ("AAPL", "1Min") not in fetch._BACKUP_SKIP_UNTIL
@@ -578,7 +578,7 @@ def test_get_minute_df_empty_primary_switches_to_alt_feed_success(fetch_env: dic
 def test_get_minute_df_empty_threshold_uses_yahoo_backup_and_marks_skip(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     fetch._EMPTY_BAR_COUNTS[("AAPL", "1Min")] = 3
     monkeypatch.setattr(fetch, "_fetch_bars", lambda *_args, **_kwargs: (_ for _ in ()).throw(fetch.EmptyBarsError("empty")))
-    monkeypatch.setattr(fetch, "_safe_backup_get_bars", lambda *_args, **_kwargs: _frame(provider="yahoo"))
+    monkeypatch.setattr(fetch, "_safe_backup_get_bars", lambda *_args, **_kwargs: _frame(ts=PAST_START, provider="yahoo"))
     monkeypatch.setattr(fetch, "_sip_configured", lambda: False)
     monkeypatch.setattr(fetch, "_sip_allowed", lambda: False)
 
@@ -825,12 +825,14 @@ def test_get_daily_df_forced_yahoo_and_fresh_memo(fetch_env: dict[str, Any], mon
     assert not result.empty
     assert result.attrs["data_provider"] == "yahoo"
 
-    memo_frame = _frame(BASE_START, provider="memo")
+    memo_frame = _frame(PAST_START, provider="memo")
     monkeypatch.setattr(fetch, "_env_source_override", lambda _tf: None)
     monkeypatch.setattr(fetch, "_is_fresh", lambda _ts: True)
-    monkeypatch.setattr(fetch, "_daily_frame_has_future_timestamp", lambda _frame: False)
     memo = {"df": memo_frame, "ts": datetime.now(tz=UTC)}
-    assert fetch.get_daily_df("AAPL", BASE_START, BASE_END, memo=memo) is memo_frame
+    memo_result = fetch.get_daily_df("AAPL", BASE_START, BASE_END, memo=memo)
+    assert memo_result is not memo_frame
+    assert list(memo_result.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+    assert memo_result.attrs["data_provider"] == "memo"
 
 
 def test_get_daily_df_rejects_future_memo_frame(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -849,6 +851,34 @@ def test_get_daily_df_rejects_future_memo_frame(fetch_env: dict[str, Any], monke
     )
 
     assert result is not future_memo
+    assert result.attrs["data_provider"] == "yahoo"
+
+
+def test_get_daily_df_rejects_malformed_memo_frame(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    malformed_memo = pd.DataFrame(
+        {
+            "open": [100.0],
+            "high": [102.0],
+            "low": [99.0],
+            "close": [101.0],
+            "volume": [1000],
+        },
+    )
+    backup = _frame(BASE_START, provider="yahoo")
+
+    monkeypatch.setattr(fetch, "_env_source_override", lambda _tf: None)
+    monkeypatch.setattr(fetch, "should_import_alpaca_sdk", lambda: False)
+    monkeypatch.setattr(fetch, "_safe_backup_get_bars", lambda *_args, **_kwargs: backup)
+    monkeypatch.setattr(fetch, "_is_fresh", lambda _ts: True)
+
+    result = fetch.get_daily_df(
+        "AAPL",
+        BASE_START,
+        BASE_END,
+        memo={"df": malformed_memo, "ts": datetime.now(tz=UTC)},
+    )
+
+    assert result is not malformed_memo
     assert result.attrs["data_provider"] == "yahoo"
 
 

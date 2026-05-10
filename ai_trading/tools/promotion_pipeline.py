@@ -98,12 +98,12 @@ def _replay_gate(payload: Mapping[str, Any], *, label: str) -> dict[str, Any]:
     if not payload:
         return {"ok": False, "label": label, "reason": "replay_evidence_missing"}
     artifact_type = str(payload.get("artifact_type") or "").strip()
-    if artifact_type and artifact_type != "offline_replay_summary":
+    if artifact_type != "offline_replay_summary":
         return {
             "ok": False,
             "label": label,
             "reason": "unsupported_replay_schema",
-            "artifact_type": artifact_type,
+            "artifact_type": artifact_type or "missing",
         }
     if "replay" in payload and "aggregate" not in payload:
         return {
@@ -135,6 +135,119 @@ def _replay_gate(payload: Mapping[str, Any], *, label: str) -> dict[str, Any]:
         "total_trades": total_trades,
         "violations": violations,
         "reason": "ok" if ok else "replay_gate_failed",
+    }
+
+
+def _live_cost_source_hash(payload: Mapping[str, Any]) -> str:
+    for key in ("source_hash", "source_fingerprint", "sha256", "checksum_sha256"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _live_cost_source_timestamp(payload: Mapping[str, Any]) -> str:
+    for key in ("source_timestamp", "generated_at", "as_of", "timestamp"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _replay_live_cost_config(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    aggregate = payload.get("aggregate")
+    if not isinstance(aggregate, Mapping):
+        return {}
+    config = aggregate.get("config")
+    if not isinstance(config, Mapping):
+        return {}
+    live_cost = config.get("live_cost_model")
+    return live_cost if isinstance(live_cost, Mapping) else {}
+
+
+def _alignment_artifact_gate(
+    payload: Mapping[str, Any],
+    *,
+    now: datetime,
+    max_age_hours: float,
+) -> dict[str, Any]:
+    if not payload:
+        return {"ok": False, "reason": "alignment_artifact_missing"}
+    if str(payload.get("artifact_type") or "").strip() != "replay_live_cost_alignment_report":
+        return {"ok": False, "reason": "alignment_artifact_schema_invalid"}
+    freshness = _freshness_gate(
+        payload,
+        label="replay_live_cost_alignment",
+        now=now,
+        max_age_hours=max_age_hours,
+    )
+    realism_raw = payload.get("cost_realism")
+    realism = realism_raw if isinstance(realism_raw, Mapping) else {}
+    ok = bool(freshness.get("ok") and realism.get("acceptable", False))
+    return {
+        "ok": ok,
+        "reason": "ok" if ok else "alignment_artifact_failed",
+        "freshness": freshness,
+        "cost_realism": dict(realism),
+    }
+
+
+def _replay_cost_provenance_gate(
+    *,
+    replay_payloads: Mapping[str, Mapping[str, Any]],
+    live_cost_model: Mapping[str, Any],
+    alignment_artifact: Mapping[str, Any],
+    now: datetime,
+    max_age_hours: float,
+) -> dict[str, Any]:
+    alignment_gate = _alignment_artifact_gate(
+        alignment_artifact,
+        now=now,
+        max_age_hours=max_age_hours,
+    )
+    if bool(alignment_gate.get("ok", False)):
+        return {
+            "ok": True,
+            "reason": "alignment_artifact_passed",
+            "alignment": alignment_gate,
+            "replays": {},
+        }
+    live_hash = _live_cost_source_hash(live_cost_model)
+    live_timestamp = _live_cost_source_timestamp(live_cost_model)
+    replay_results: dict[str, dict[str, Any]] = {}
+    ok = True
+    reasons: list[str] = []
+    for label, replay in replay_payloads.items():
+        config = _replay_live_cost_config(replay)
+        if not config or not bool(config.get("enabled", False)):
+            ok = False
+            reasons.append(f"{label}:missing_live_cost_provenance")
+            replay_results[label] = {"ok": False, "reason": "missing_live_cost_provenance"}
+            continue
+        replay_hash = _live_cost_source_hash(config)
+        replay_timestamp = _live_cost_source_timestamp(config)
+        freshness_status = str(config.get("freshness_status") or "").strip().lower()
+        hash_matches = bool(live_hash and replay_hash and live_hash == replay_hash)
+        timestamp_matches = bool(
+            live_timestamp and replay_timestamp and live_timestamp == replay_timestamp
+        )
+        fresh = freshness_status in {"fresh", "ok"}
+        replay_ok = bool((hash_matches or timestamp_matches) and fresh)
+        if not replay_ok:
+            ok = False
+            reasons.append(f"{label}:live_cost_provenance_mismatch_or_stale")
+        replay_results[label] = {
+            "ok": replay_ok,
+            "reason": "ok" if replay_ok else "live_cost_provenance_mismatch_or_stale",
+            "hash_matches": hash_matches,
+            "timestamp_matches": timestamp_matches,
+            "freshness_status": freshness_status or None,
+        }
+    return {
+        "ok": ok,
+        "reason": "ok" if ok else ";".join(reasons),
+        "alignment": alignment_gate,
+        "replays": replay_results,
     }
 
 
@@ -275,6 +388,7 @@ def build_promotion_report(
     recent_replay: Mapping[str, Any] | None = None,
     shadow_report: Mapping[str, Any] | None = None,
     live_cost_model: Mapping[str, Any] | None = None,
+    replay_live_cost_alignment: Mapping[str, Any] | None = None,
     runtime_decay_controls: Mapping[str, Any] | None = None,
     current_champion_path: str | None = None,
     rollback_command: str | None = None,
@@ -356,6 +470,17 @@ def build_promotion_report(
     }
     shadow_gate = _shadow_gate(shadow_report or {})
     live_cost_gate = _live_cost_gate(live_cost_model or {})
+    replay_cost_provenance_gate = _replay_cost_provenance_gate(
+        replay_payloads={
+            "full": full_replay or {},
+            "tail": tail_replay or full_replay or {},
+            "recent": recent_replay or tail_replay or full_replay or {},
+        },
+        live_cost_model=live_cost_model or {},
+        alignment_artifact=replay_live_cost_alignment or {},
+        now=generated,
+        max_age_hours=max_age_hours,
+    )
     decay_gate = _decay_gate(runtime_decay_controls or {})
     gates = {
         "manifest_verified": bool(manifest_gate.get("ok")),
@@ -364,6 +489,9 @@ def build_promotion_report(
         "recent_replay_positive": bool(replay_gates["recent"].get("ok")),
         "shadow_telemetry_acceptable": bool(shadow_gate.get("ok")),
         "live_cost_model_acceptable": bool(live_cost_gate.get("ok")),
+        "replay_cost_provenance_acceptable": bool(
+            replay_cost_provenance_gate.get("ok")
+        ),
         "runtime_decay_controls_acceptable": bool(decay_gate.get("ok")),
         "evidence_fresh": all(bool(gate.get("ok")) for gate in freshness_gates.values()),
         "evidence_authority_acceptable": all(
@@ -398,6 +526,7 @@ def build_promotion_report(
         "evidence_freshness": freshness_gates,
         "shadow": shadow_gate,
         "live_cost_model": live_cost_gate,
+        "replay_cost_provenance": replay_cost_provenance_gate,
         "runtime_decay_controls": decay_gate,
         "gates": gates,
         "promotion_ready": bool(promotion_ready),
@@ -429,6 +558,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--recent-replay-json", type=Path, default=None)
     parser.add_argument("--shadow-report-json", type=Path, default=None)
     parser.add_argument("--live-cost-model-json", type=Path, default=None)
+    parser.add_argument("--replay-live-cost-alignment-json", type=Path, default=None)
     parser.add_argument("--runtime-decay-controls-json", type=Path, default=None)
     parser.add_argument("--current-champion-path", type=str, default="")
     parser.add_argument("--rollback-command", type=str, default="")
@@ -456,6 +586,7 @@ def main(argv: list[str] | None = None) -> int:
             args.live_cost_model_json
             or _default_runtime_path("AI_TRADING_LIVE_COST_MODEL_PATH", "runtime/live_cost_model_latest.json")
         ),
+        replay_live_cost_alignment=_read_json_mapping(args.replay_live_cost_alignment_json),
         runtime_decay_controls=_read_json_mapping(
             args.runtime_decay_controls_json
             or _default_runtime_path(

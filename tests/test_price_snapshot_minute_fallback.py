@@ -91,11 +91,12 @@ def test_yahoo_minute_split_long_range(monkeypatch, caplog):
     with caplog.at_level("WARNING"):
         df = data_fetcher.get_minute_df("AAPL", start, end)
 
-    assert list(df["close"]) == [1.0, 2.0, 3.0]
+    assert list(df["close"]) == [1.0]
     assert len(calls) == 3
     for s, e in calls:
         assert e - s <= dt.timedelta(days=8)
     assert any("YF_1" in str(r.msg) for r in caplog.records)
+    assert any("future_bar_timestamp" in str(r.msg) for r in caplog.records)
 
 
 def test_price_snapshot_minute_fallback_skips_none_and_provider_errors(monkeypatch):

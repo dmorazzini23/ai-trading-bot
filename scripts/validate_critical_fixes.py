@@ -4,6 +4,9 @@ import os
 import sys
 import traceback
 from pathlib import Path
+from legacy_guard import require_legacy_demo_flag
+
+require_legacy_demo_flag("scripts/validate_critical_fixes.py")
 os.environ.setdefault('ALPACA_API_KEY', 'test')
 os.environ.setdefault('ALPACA_SECRET_KEY', 'test')
 os.environ.setdefault('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')

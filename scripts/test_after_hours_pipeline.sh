@@ -51,6 +51,15 @@ CANARY_USING_DUMMY_CREDS=0
 if [[ "${CANARY_ALPACA_API_KEY}" == DUMMY* || "${CANARY_ALPACA_SECRET_KEY}" == DUMMY* ]]; then
   CANARY_USING_DUMMY_CREDS=1
 fi
+if [[ "${CANARY_USING_DUMMY_CREDS}" -eq 1 ]]; then
+  case "${AI_TRADING_ENABLE_LEGACY_DEMO:-0}" in
+    1|true|TRUE|yes|YES|on|ON) ;;
+    *)
+      echo "after-hours canary would use dummy credentials; set AI_TRADING_ENABLE_LEGACY_DEMO=1 to acknowledge legacy/demo mode" >&2
+      exit 2
+      ;;
+  esac
+fi
 
 set +e
 TESTING=1 \

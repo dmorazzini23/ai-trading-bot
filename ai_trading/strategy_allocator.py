@@ -208,9 +208,9 @@ class StrategyAllocator:
             raw_policy = getattr(self.config, "allow_short", None)
         if raw_policy is None:
             try:
-                raw_policy = get_env("AI_TRADING_ALLOW_SHORT", True, cast=bool)
+                raw_policy = get_env("TRADING__ALLOW_SHORTS", False, cast=bool)
             except AI_TRADING_FALLBACK_EXCEPTIONS:
-                raw_policy = True
+                raw_policy = False
         if isinstance(raw_policy, str):
             allowed = raw_policy.strip().lower() in {"1", "true", "yes", "on", "allow", "allowed"}
         else:

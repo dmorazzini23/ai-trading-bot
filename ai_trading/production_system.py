@@ -1,8 +1,9 @@
 """
-Production trading system integration module.
+Legacy research/test trading-system integration module.
 
-Integrates all production-ready components into a unified trading system
-with comprehensive risk management, monitoring, and execution capabilities.
+This surface is retained for tests and offline research harnesses. It is not a
+live execution authority; paper/live trading must route through canonical
+OMS/pretrade.
 """
 from datetime import UTC, datetime
 import inspect
@@ -18,6 +19,9 @@ from ai_trading.monitoring.performance_dashboard import PerformanceDashboard
 from ai_trading.risk import DynamicPositionSizer, RiskManager, TradingHaltManager
 from ai_trading.strategies.multi_timeframe import MultiTimeframeAnalyzer
 from ai_trading.strategies.regime_detector import RegimeDetector
+
+RESEARCH_ONLY = True
+LIVE_EXECUTION_AUTHORITY = "canonical_oms_pretrade"
 
 class ProductionTradingSystem:
     """

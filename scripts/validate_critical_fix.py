@@ -2,6 +2,8 @@ import logging
 "\nCritical Fix Validation - Type Conversion in Order Fill Reconciliation\n\nThis script validates that the critical TypeError fix in _reconcile_partial_fills\nproperly handles string values from Alpaca API's order.filled_qty attribute.\n\nProduction Issue: TypeError: '>' not supported between instances of 'str' and 'int'\nFix: Safe string-to-numeric conversion before comparison\n\nBEFORE FIX: Every successful trade crashed during reconciliation\nAFTER FIX: All trades complete successfully with proper reconciliation\n"
 import os
 import sys
+from legacy_guard import require_legacy_demo_flag
+require_legacy_demo_flag("scripts/validate_critical_fix.py")
 os.environ.update({'ALPACA_API_KEY': 'test_key', 'ALPACA_SECRET_KEY': 'test_secret', 'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets', 'WEBHOOK_SECRET': 'test_webhook', 'FLASK_PORT': '5000'})
 sys.path.append('.')
 from ai_trading.execution import ExecutionEngine

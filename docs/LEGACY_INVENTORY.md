@@ -7,7 +7,15 @@ not mistaken for canonical runtime implementations.
 
 - Legacy demo and one-off validation scripts that seed dummy/test credentials
   are archival only. They are not production smoke tests and must not be used
-  as deployment authority without first removing seeded environment values.
+  as deployment authority. Scripts that still seed dummy credentials,
+  deprecated `ALPACA_BASE_URL`, or old `FLASK_PORT` defaults must call
+  `scripts/legacy_guard.py` before seeding values and require
+  `--allow-legacy-demo` or `AI_TRADING_ENABLE_LEGACY_DEMO=1`.
+- `ai_trading.production_system` and
+  `ai_trading.execution.production_engine` are retained for research/test
+  harnesses only. They are not package-level public API exports and have no
+  live execution authority; paper/live execution must use canonical
+  OMS/pretrade.
 - `scripts/health_check.py`: legacy CLI wrapper around the current health
   monitor. It returns a non-zero process status only when the overall status is
   critical.

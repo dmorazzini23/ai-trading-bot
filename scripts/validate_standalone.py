@@ -7,7 +7,9 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
+from legacy_guard import require_legacy_demo_flag
 
+require_legacy_demo_flag("scripts/validate_standalone.py")
 os.environ['ALPACA_API_KEY'] = 'dummy'
 os.environ['ALPACA_SECRET_KEY'] = 'dummy'
 os.environ['ALPACA_BASE_URL'] = 'dummy'

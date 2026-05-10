@@ -3,6 +3,9 @@ import logging
 import os
 import time
 from datetime import UTC, datetime
+from legacy_guard import require_legacy_demo_flag
+
+require_legacy_demo_flag("scripts/demo_enhanced_debugging.py")
 os.environ.setdefault('ALPACA_API_KEY', 'demo_key')
 os.environ.setdefault('ALPACA_SECRET_KEY', 'demo_secret')
 os.environ.setdefault('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
@@ -62,7 +65,7 @@ def demonstrate_position_reconciliation():
 
     def mock_broker_positions():
         return {'AAPL': 100, 'MSFT': 50, 'GOOGL': 25, 'TSLA': 50, 'NVDA': 30}
-    reconciler.get_broker_positions = mock_broker_positions
+    setattr(reconciler, 'get_broker_positions', mock_broker_positions)
     logging.info(f'Simulated broker positions: {mock_broker_positions()}')
     logging.info('\nRunning position reconciliation...')
     discrepancies = force_position_reconciliation()
@@ -100,7 +103,7 @@ def demonstrate_pnl_attribution():
     for symbol in ['AAPL', 'TSLA']:
         breakdown = get_symbol_pnl_breakdown(symbol)
         logging.info(f'\n{symbol}:')
-        total = 0
+        total = 0.0
         for source, amount in breakdown.items():
             if amount != 0:
                 logging.info(f'  {source}: ${amount:+.2f}')
