@@ -44,6 +44,25 @@ DEFAULT_REQUIRED_CONTROLS = (
 PASS_TOKENS = {"ok", "pass", "passed", "enabled", "active", "allow", "allowed"}
 UNKNOWN_TOKENS = {"", "unknown", "missing", "unconfigured", "not_configured", "na", "n/a", "none"}
 FAIL_OPEN_MODES = {"observe", "observe_only", "warn", "warn_only", "shadow"}
+LIFECYCLE_ONLY_EVENTS = {
+    "ack",
+    "final_state",
+    "order_status",
+    "status_transition",
+    "terminal_state",
+}
+LIFECYCLE_ONLY_STATUSES = {
+    "accepted",
+    "canceled",
+    "cancelled",
+    "expired",
+    "filled",
+    "new",
+    "partially_filled",
+    "pending_cancel",
+    "pending_new",
+    "rejected",
+}
 
 
 def _positive_float(value: Any) -> float | None:
@@ -358,6 +377,16 @@ def _intent_control_status(value: Any) -> str:
     return text or "unknown"
 
 
+def _lifecycle_row_without_controls(row: Mapping[str, Any]) -> bool:
+    """Return true for broker/OMS lifecycle rows that are not pretrade evidence."""
+
+    event = str(row.get("event") or row.get("type") or "").strip().lower()
+    if event in LIFECYCLE_ONLY_EVENTS:
+        return True
+    status = str(row.get("status") or row.get("new_status") or "").strip().lower()
+    return bool(row.get("order_id") and status in LIFECYCLE_ONLY_STATUSES)
+
+
 def build_pretrade_risk_control_verification(
     *,
     report_date: str,
@@ -370,6 +399,10 @@ def build_pretrade_risk_control_verification(
     required = tuple(str(control).strip().lower() for control in required_controls if str(control).strip())
     violations: list[dict[str, Any]] = []
     control_statuses: dict[str, dict[str, Any]] = {}
+    checked_intent_ids: set[str] = set()
+    missing_control_intent_ids: set[str] = set()
+    lifecycle_rows_ignored = 0
+    duplicate_intent_rows_ignored = 0
 
     for control_name in sorted(controls):
         spec = controls[control_name]
@@ -407,8 +440,19 @@ def build_pretrade_risk_control_verification(
         row_controls = _intent_controls(row)
         row_id = _intent_id(row) or "unknown"
         if not row_controls:
+            if _lifecycle_row_without_controls(row):
+                lifecycle_rows_ignored += 1
+                continue
+            if row_id in missing_control_intent_ids:
+                duplicate_intent_rows_ignored += 1
+                continue
+            missing_control_intent_ids.add(row_id)
             violations.append({"kind": "intent_controls_missing", "intent_id": row_id})
             continue
+        if row_id in checked_intent_ids:
+            duplicate_intent_rows_ignored += 1
+            continue
+        checked_intent_ids.add(row_id)
         normalised_row_controls = {str(key).strip().lower(): value for key, value in row_controls.items()}
         for control_name in required:
             if control_name not in normalised_row_controls:
@@ -453,7 +497,11 @@ def build_pretrade_risk_control_verification(
         "required_controls": list(required),
         "summary": {
             "configured_controls": len(controls),
-            "intents_checked": len(intents),
+            "event_rows_seen": len(intents),
+            "intents_checked": len(checked_intent_ids) + len(missing_control_intent_ids),
+            "intents_with_control_evidence": len(checked_intent_ids),
+            "lifecycle_rows_ignored": lifecycle_rows_ignored,
+            "duplicate_intent_rows_ignored": duplicate_intent_rows_ignored,
             "runtime_controls_auto_detected": auto_detected,
             "violations": len(violations),
             "unknown_controls": sum(1 for item in violations if str(item.get("kind")) == "unknown_control"),

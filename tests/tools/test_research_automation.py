@@ -74,6 +74,10 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "--gate-jsonl" in trading_day["command"]
     assert "--regime-entry-throttle-json" in trading_day["command"]
     assert "--expected-edge-calibration-json" in trading_day["command"]
+    enriched_trading_day = next(
+        step for step in payload["steps"] if step["name"] == "trading_day_report_enriched"
+    )  # type: ignore[index]
+    assert "--weekend-research-json" in enriched_trading_day["command"]
     daily_research = next(step for step in payload["steps"] if step["name"] == "daily_research_pipeline")  # type: ignore[index]
     assert "--symbol-promotion-json" in daily_research["command"]
     assert "--replay-live-cost-alignment-json" in daily_research["command"]

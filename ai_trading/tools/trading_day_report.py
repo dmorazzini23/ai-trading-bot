@@ -86,6 +86,7 @@ def build_trading_day_report(
     adversarial_failure: Mapping[str, Any] | None = None,
     drift_monitor: Mapping[str, Any] | None = None,
     operator_control_plane: Mapping[str, Any] | None = None,
+    weekend_research: Mapping[str, Any] | None = None,
     huggingface_discovery: Mapping[str, Any] | None = None,
     huggingface_candidate_intake: Mapping[str, Any] | None = None,
     huggingface_cache_materialization: Mapping[str, Any] | None = None,
@@ -247,6 +248,7 @@ def build_trading_day_report(
         "adversarial_failure_simulation": dict(adversarial_failure or {}),
         "model_data_drift_monitor": dict(drift_monitor or {}),
         "operator_control_plane": dict(operator_control_plane or {}),
+        "weekend_research": dict(weekend_research or {}),
         "huggingface_research": {
             "discovery": dict(huggingface_discovery or {}),
             "candidate_intake": dict(huggingface_candidate_intake or {}),
@@ -371,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--adversarial-failure-json", type=Path, default=None)
     parser.add_argument("--drift-monitor-json", type=Path, default=None)
     parser.add_argument("--operator-control-plane-json", type=Path, default=None)
+    parser.add_argument("--weekend-research-json", type=Path, default=None)
     parser.add_argument("--huggingface-discovery-json", type=Path, default=None)
     parser.add_argument("--huggingface-candidate-intake-json", type=Path, default=None)
     parser.add_argument("--huggingface-cache-json", type=Path, default=None)
@@ -406,6 +409,7 @@ def main(argv: list[str] | None = None) -> int:
         adversarial_failure=_read_json(args.adversarial_failure_json),
         drift_monitor=_read_json(args.drift_monitor_json),
         operator_control_plane=_read_json(args.operator_control_plane_json),
+        weekend_research=_read_json(args.weekend_research_json),
         huggingface_discovery=_read_json(args.huggingface_discovery_json),
         huggingface_candidate_intake=_read_json(args.huggingface_candidate_intake_json),
         huggingface_cache_materialization=_read_json(args.huggingface_cache_json),

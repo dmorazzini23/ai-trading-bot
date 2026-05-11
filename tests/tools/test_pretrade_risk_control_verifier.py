@@ -155,3 +155,53 @@ def test_pretrade_verifier_auto_detection_fails_closed_when_limits_missing(monke
         ("control_status_not_passed", "max_daily_loss", "unknown"),
         ("control_status_not_passed", "max_position_notional", "unknown"),
     }
+
+
+def test_pretrade_verifier_ignores_order_lifecycle_rows_without_controls() -> None:
+    payload = verifier.build_pretrade_risk_control_verification(
+        report_date="2026-05-05",
+        controls_config={"controls": _passing_controls()},
+        intents=[
+            {
+                "ts": "2026-05-05T14:00:00Z",
+                "event": "status_transition",
+                "status": "pending_new",
+                "client_order_id": "intent-1",
+                "order_id": "broker-1",
+            },
+            {
+                "ts": "2026-05-05T14:00:01Z",
+                "event": "final_state",
+                "status": "filled",
+                "client_order_id": "intent-1",
+                "order_id": "broker-1",
+            },
+        ],
+    )
+
+    assert payload["status"] == "passed"
+    assert payload["summary"]["event_rows_seen"] == 2
+    assert payload["summary"]["intents_checked"] == 0
+    assert payload["summary"]["lifecycle_rows_ignored"] == 2
+    assert payload["violations"] == []
+
+
+def test_pretrade_verifier_deduplicates_control_evidence_by_intent() -> None:
+    controls = _passing_controls()
+    row = {
+        "ts": "2026-05-05T14:00:00Z",
+        "intent_id": "intent-1",
+        "controls": {name: "passed" for name in verifier.DEFAULT_REQUIRED_CONTROLS},
+    }
+
+    payload = verifier.build_pretrade_risk_control_verification(
+        report_date="2026-05-05",
+        controls_config={"controls": controls},
+        intents=[row, dict(row)],
+    )
+
+    assert payload["status"] == "passed"
+    assert payload["summary"]["event_rows_seen"] == 2
+    assert payload["summary"]["intents_checked"] == 1
+    assert payload["summary"]["intents_with_control_evidence"] == 1
+    assert payload["summary"]["duplicate_intent_rows_ignored"] == 1
