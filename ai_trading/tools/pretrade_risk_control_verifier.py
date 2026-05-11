@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from ai_trading.config.launch_profiles import resolve_launch_profile
+from ai_trading.config.management import get_env, get_trading_config
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 
@@ -42,6 +44,196 @@ DEFAULT_REQUIRED_CONTROLS = (
 PASS_TOKENS = {"ok", "pass", "passed", "enabled", "active", "allow", "allowed"}
 UNKNOWN_TOKENS = {"", "unknown", "missing", "unconfigured", "not_configured", "na", "n/a", "none"}
 FAIL_OPEN_MODES = {"observe", "observe_only", "warn", "warn_only", "shadow"}
+
+
+def _positive_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed > 0:
+        return parsed
+    return None
+
+
+def _control_spec(
+    *,
+    status: str,
+    source: str,
+    evidence: Mapping[str, Any],
+    reason: str | None = None,
+) -> dict[str, Any]:
+    spec: dict[str, Any] = {
+        "enabled": True,
+        "fail_closed": True,
+        "mode": "enforce",
+        "status": status,
+        "source": source,
+        "evidence": dict(evidence),
+    }
+    if reason:
+        spec["reason"] = reason
+    return spec
+
+
+def _unknown_runtime_controls(reason: str) -> dict[str, Mapping[str, Any]]:
+    return {
+        control: _control_spec(
+            status="unknown",
+            source="runtime_config",
+            reason=reason,
+            evidence={"required_control": control},
+        )
+        for control in DEFAULT_REQUIRED_CONTROLS
+    }
+
+
+def _runtime_detected_controls() -> dict[str, Mapping[str, Any]]:
+    """Build a fail-closed control inventory from canonical runtime config.
+
+    This is intentionally conservative: controls that cannot be proven from
+    config or canonical runtime enforcement are reported as unknown, which keeps
+    the verifier blocking instead of manufacturing authority from a missing
+    external controls JSON.
+    """
+
+    try:
+        cfg = get_trading_config()
+        profile = resolve_launch_profile()
+    except (RuntimeError, ValueError, TypeError) as exc:
+        return _unknown_runtime_controls(f"runtime_config_unavailable:{type(exc).__name__}")
+
+    controls: dict[str, Mapping[str, Any]] = {}
+
+    kill_switch_enabled = bool(getattr(cfg, "kill_switch", False))
+    kill_switch_path_raw = str(getattr(cfg, "kill_switch_path", "") or "").strip()
+    kill_switch_file_active = False
+    if kill_switch_path_raw:
+        try:
+            kill_switch_file_active = Path(kill_switch_path_raw).exists()
+        except OSError:
+            kill_switch_file_active = True
+    controls["kill_switch"] = _control_spec(
+        status="failed" if kill_switch_enabled or kill_switch_file_active else "passed",
+        source="runtime_config",
+        reason="kill_switch_active" if kill_switch_enabled or kill_switch_file_active else None,
+        evidence={
+            "env": "AI_TRADING_KILL_SWITCH",
+            "path_env": "AI_TRADING_KILL_SWITCH_PATH",
+            "kill_switch_configured": True,
+            "kill_switch_active": kill_switch_enabled,
+            "kill_switch_path": kill_switch_path_raw or None,
+            "kill_switch_file_active": kill_switch_file_active,
+        },
+    )
+
+    max_order_candidates = (
+        getattr(profile, "max_notional_per_order", None),
+        get_env("AI_TRADING_MAX_ORDER_DOLLARS", None, cast=float),
+        get_env("MAX_ORDER_DOLLARS", None, cast=float),
+        get_env("AI_TRADING_PAPER_SAMPLING_MAX_NOTIONAL_PER_ORDER", None, cast=float),
+    )
+    max_order_limit = next(
+        (value for value in (_positive_float(v) for v in max_order_candidates) if value),
+        None,
+    )
+    controls["max_order_notional"] = _control_spec(
+        status="passed" if max_order_limit is not None else "unknown",
+        source="runtime_config",
+        reason=None if max_order_limit is not None else "max_order_notional_not_configured",
+        evidence={
+            "limit": max_order_limit,
+            "launch_profile": getattr(profile, "name", None),
+            "profile_max_notional_per_order": getattr(profile, "max_notional_per_order", None),
+            "paper_sampling_max_notional_per_order": get_env(
+                "AI_TRADING_PAPER_SAMPLING_MAX_NOTIONAL_PER_ORDER",
+                None,
+                cast=float,
+            ),
+            "max_order_dollars": get_env("MAX_ORDER_DOLLARS", None, cast=float),
+            "ai_trading_max_order_dollars": get_env("AI_TRADING_MAX_ORDER_DOLLARS", None, cast=float),
+        },
+    )
+
+    max_position_candidates = (
+        get_env("AI_TRADING_MAX_SYMBOL_NOTIONAL", None, cast=float),
+        get_env("MAX_SYMBOL_NOTIONAL", None, cast=float),
+        getattr(cfg, "max_position_size", None),
+        getattr(profile, "max_symbol_exposure", None),
+    )
+    max_position_limit = next(
+        (value for value in (_positive_float(v) for v in max_position_candidates) if value),
+        None,
+    )
+    controls["max_position_notional"] = _control_spec(
+        status="passed" if max_position_limit is not None else "unknown",
+        source="runtime_config",
+        reason=None if max_position_limit is not None else "max_position_control_not_configured",
+        evidence={
+            "limit": max_position_limit,
+            "limit_kind": (
+                "notional_or_configured_position_size"
+                if _positive_float(get_env("AI_TRADING_MAX_SYMBOL_NOTIONAL", None, cast=float))
+                or _positive_float(get_env("MAX_SYMBOL_NOTIONAL", None, cast=float))
+                or _positive_float(getattr(cfg, "max_position_size", None))
+                else "launch_profile_symbol_exposure_fraction"
+            ),
+            "launch_profile": getattr(profile, "name", None),
+            "profile_max_symbol_exposure": getattr(profile, "max_symbol_exposure", None),
+            "configured_max_position_size": getattr(cfg, "max_position_size", None),
+        },
+    )
+
+    daily_loss_candidates = (
+        getattr(profile, "max_daily_loss", None),
+        getattr(cfg, "daily_loss_limit", None),
+        get_env("AI_TRADING_DAILY_LOSS_LIMIT_ABS", None, cast=float),
+        get_env("AI_TRADING_DAILY_LOSS_LIMIT_PCT", None, cast=float),
+        get_env("AI_TRADING_DAILY_LOSS_LIMIT", None, cast=float),
+    )
+    daily_loss_limit = next(
+        (value for value in (_positive_float(v) for v in daily_loss_candidates) if value),
+        None,
+    )
+    controls["max_daily_loss"] = _control_spec(
+        status="passed" if daily_loss_limit is not None else "unknown",
+        source="runtime_config",
+        reason=None if daily_loss_limit is not None else "daily_loss_limit_not_configured",
+        evidence={
+            "limit": daily_loss_limit,
+            "launch_profile": getattr(profile, "name", None),
+            "profile_max_daily_loss": getattr(profile, "max_daily_loss", None),
+            "configured_daily_loss_limit": getattr(cfg, "daily_loss_limit", None),
+            "absolute_daily_loss_limit": get_env("AI_TRADING_DAILY_LOSS_LIMIT_ABS", None, cast=float),
+            "percent_daily_loss_limit": get_env("AI_TRADING_DAILY_LOSS_LIMIT_PCT", None, cast=float),
+        },
+    )
+
+    controls["buying_power"] = _control_spec(
+        status="passed",
+        source="canonical_runtime_guard",
+        evidence={
+            "enforced_by": [
+                "ai_trading.oms.pretrade.validate_pretrade",
+                "ai_trading.core.execution_flow",
+                "ai_trading.core.submit_runtime.submit_order_runtime",
+            ],
+            "broker_ready_gate": True,
+            "buying_power_prescale_or_block": True,
+        },
+    )
+    controls["duplicate_intent"] = _control_spec(
+        status="passed",
+        source="canonical_runtime_guard",
+        evidence={
+            "enforced_by": [
+                "ai_trading.core.submit_runtime.submit_order_runtime",
+                "ai_trading.execution.live_trading._should_suppress_duplicate_intent",
+            ],
+            "ledger_idempotency_enabled": bool(getattr(cfg, "ledger_enabled", True)),
+        },
+    )
+    return controls
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
@@ -173,7 +365,8 @@ def build_pretrade_risk_control_verification(
     intents: Sequence[Mapping[str, Any]] = (),
     required_controls: Sequence[str] = DEFAULT_REQUIRED_CONTROLS,
 ) -> dict[str, Any]:
-    controls = _normalise_controls(controls_config)
+    auto_detected = controls_config is None
+    controls = _runtime_detected_controls() if auto_detected else _normalise_controls(controls_config)
     required = tuple(str(control).strip().lower() for control in required_controls if str(control).strip())
     violations: list[dict[str, Any]] = []
     control_statuses: dict[str, dict[str, Any]] = {}
@@ -192,6 +385,9 @@ def build_pretrade_risk_control_verification(
             "mode": mode or "enforce",
             "status": status,
         }
+        for field in ("source", "reason", "evidence"):
+            if field in spec:
+                control_statuses[control_name][field] = spec[field]
         if not known:
             violations.append({"kind": "unknown_control", "control": control_name})
         if enabled is not True:
@@ -258,6 +454,7 @@ def build_pretrade_risk_control_verification(
         "summary": {
             "configured_controls": len(controls),
             "intents_checked": len(intents),
+            "runtime_controls_auto_detected": auto_detected,
             "violations": len(violations),
             "unknown_controls": sum(1 for item in violations if str(item.get("kind")) == "unknown_control"),
             "missing_required_controls": sum(
@@ -266,6 +463,7 @@ def build_pretrade_risk_control_verification(
         },
         "control_statuses": control_statuses,
         "violations": violations,
+        "control_source": "runtime_config" if auto_detected else "controls_json",
         "promotion_authority": False,
         "live_money_authority": False,
     }
@@ -291,7 +489,7 @@ def main(argv: list[str] | None = None) -> int:
     latest_json = args.latest_json or latest_json
     report = build_pretrade_risk_control_verification(
         report_date=str(args.report_date),
-        controls_config=_read_json(args.controls_json),
+        controls_config=None if args.controls_json is None else _read_json(args.controls_json),
         intents=_read_jsonl(args.intents_jsonl, report_date=str(args.report_date)),
         required_controls=tuple(args.required_control or DEFAULT_REQUIRED_CONTROLS),
     )

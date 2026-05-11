@@ -1007,7 +1007,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         env=("AI_TRADING_PAPER_SAMPLING_MAX_NOTIONAL_PER_ORDER",),
         cast="float",
         default=250.0,
-        description="Maximum diagnostic paper-sampling order notional before 1-share fallback.",
+        description="Maximum diagnostic paper-sampling order notional; orders above the cap are blocked.",
         min_value=0.01,
     ),
     ConfigSpec(
