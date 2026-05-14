@@ -544,6 +544,58 @@ def _openclaw_material_change(
     return dict(prior_material) != _openclaw_blocker_material(snapshot)
 
 
+def _openclaw_incident_state_path(args: Mapping[str, Any]) -> Path:
+    raw = str(args.get("state_path") or "").strip()
+    return Path(raw) if raw else Path("/var/lib/ai-trading-bot/runtime/openclaw_incident_state.json")
+
+
+def _record_openclaw_incident_clear(
+    args: Mapping[str, Any],
+    snapshot_result: Mapping[str, Any],
+    *,
+    reason: str,
+    severity: str,
+) -> dict[str, Any]:
+    triggers_raw = snapshot_result.get("triggers")
+    triggers = [
+        str(item).strip()
+        for item in triggers_raw
+        if str(item).strip()
+    ] if isinstance(triggers_raw, list) else []
+    fingerprint = str(snapshot_result.get("fingerprint") or "").strip()
+    signature = str(snapshot_result.get("incident_signature") or fingerprint)
+    snapshot = (
+        snapshot_result.get("snapshot")
+        if isinstance(snapshot_result.get("snapshot"), dict)
+        else {}
+    )
+    state_path = _openclaw_incident_state_path(args)
+    state_payload = {
+        "fingerprint": fingerprint,
+        "incident_signature": signature,
+        "checked_at": _utc_now_iso(),
+        "sent_at": None,
+        "sent": False,
+        "reason": reason,
+        "triggers": triggers,
+        "snapshot": snapshot,
+        "severity": severity,
+        "material": _openclaw_blocker_material(snapshot),
+        "status": "clear",
+    }
+    _save_state(state_path, state_payload)
+    return {
+        "sent": False,
+        "reason": reason,
+        "fingerprint": fingerprint,
+        "incident_signature": signature,
+        "snapshot": snapshot,
+        "triggers": triggers,
+        "severity": severity,
+        "state_path": str(state_path),
+    }
+
+
 def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
     snapshot_result = args.get("snapshot_result")
     if not isinstance(snapshot_result, dict):
@@ -560,17 +612,14 @@ def _notify_openclaw_incident(args: dict[str, Any]) -> dict[str, Any]:
     snapshot = snapshot_result.get("snapshot") if isinstance(snapshot_result.get("snapshot"), dict) else {}
     severity = _openclaw_incident_severity(snapshot_result)
     if not should_alert:
-        return {
-            "sent": False,
-            "reason": "no_incident_triggered",
-            "fingerprint": fingerprint,
-            "incident_signature": signature,
-            "snapshot": snapshot,
-            "triggers": triggers,
-        }
+        return _record_openclaw_incident_clear(
+            args,
+            snapshot_result,
+            reason="no_incident_triggered",
+            severity=severity,
+        )
 
-    state_path_raw = str(args.get("state_path") or "").strip()
-    state_path = Path(state_path_raw) if state_path_raw else Path("/var/lib/ai-trading-bot/runtime/openclaw_incident_state.json")
+    state_path = _openclaw_incident_state_path(args)
     prior = _load_state(state_path)
     prior_fp = str(prior.get("fingerprint") or "").strip()
     prior_signature = str(prior.get("incident_signature") or "").strip()
@@ -1171,16 +1220,14 @@ def run_dispatch(
             if _severity_at_least(incident_severity, openclaw_min_severity):
                 summary["openclaw"]["result"] = openclaw_notifier(openclaw_args)
             else:
-                summary["openclaw"]["result"] = {
-                    "sent": False,
-                    "reason": "below_min_severity",
-                    "severity": incident_severity,
-                    "min_severity": openclaw_min_severity,
-                    "fingerprint": snapshot_result.get("fingerprint"),
-                    "incident_signature": snapshot_result.get("incident_signature")
-                    or snapshot_result.get("fingerprint"),
-                    "triggers": snapshot_result.get("triggers") or [],
-                }
+                result = _record_openclaw_incident_clear(
+                    openclaw_args,
+                    snapshot_result,
+                    reason="below_min_severity",
+                    severity=incident_severity,
+                )
+                result["min_severity"] = openclaw_min_severity
+                summary["openclaw"]["result"] = result
         except Exception as exc:  # pragma: no cover - runtime guard
             summary["openclaw"]["error"] = str(exc)
             summary["errors"].append(

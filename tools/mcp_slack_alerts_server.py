@@ -708,6 +708,114 @@ def _daily_trade_row_for_report_date(
     return {}
 
 
+def _same_day_fill_round_trip_summary(args: dict[str, Any], report_date: str) -> dict[str, Any]:
+    if not report_date:
+        return {"status": "missing_report_date"}
+    try:
+        report_day = datetime.fromisoformat(report_date).date()
+    except ValueError:
+        return {"status": "invalid_report_date", "report_date": report_date}
+    fill_events_path = _runtime_event_path(
+        args,
+        env_key="AI_TRADING_FILL_EVENTS_PATH",
+        default_relative="runtime/fill_events.jsonl",
+    )
+    max_rows = _int_arg(args.get("fill_event_max_rows"), default=20000)
+    rows = _tail_jsonl_rows(fill_events_path, max_rows=max_rows)
+    if not rows:
+        return {
+            "status": "no_fill_events",
+            "path": str(fill_events_path),
+            "report_date": report_date,
+        }
+
+    events: list[tuple[datetime, int, dict[str, Any]]] = []
+    for index, row in enumerate(rows):
+        ts = _parse_iso_ts(row.get("ts") or row.get("entry_time") or row.get("timestamp"))
+        if ts is None or ts.date() != report_day:
+            continue
+        side = str(row.get("side") or "").strip().lower()
+        if side not in {"buy", "sell", "sell_short"}:
+            continue
+        qty = _float_or_none(row.get("fill_qty") or row.get("qty") or row.get("quantity"))
+        price = _float_or_none(row.get("fill_price") or row.get("entry_price") or row.get("price"))
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol or qty is None or price is None or qty <= 0 or price <= 0:
+            continue
+        events.append(
+            (
+                ts,
+                index,
+                {
+                    "symbol": symbol,
+                    "side": "sell" if side == "sell_short" else side,
+                    "qty": float(qty),
+                    "price": float(price),
+                },
+            )
+        )
+    events.sort(key=lambda item: (item[0], item[1]))
+    if not events:
+        return {
+            "status": "no_same_day_fills",
+            "path": str(fill_events_path),
+            "report_date": report_date,
+            "fill_rows_seen": int(len(rows)),
+        }
+
+    books: dict[str, list[dict[str, float | str]]] = {}
+    pnl_by_symbol: dict[str, float] = {}
+    closed_trades = 0
+    for _ts, _index, event in events:
+        symbol = str(event["symbol"])
+        side = str(event["side"])
+        remaining = float(event["qty"])
+        price = float(event["price"])
+        book = books.setdefault(symbol, [])
+        while remaining > 0 and book and str(book[0].get("side")) != side:
+            lot = book[0]
+            lot_qty = float(lot.get("qty") or 0.0)
+            lot_price = float(lot.get("price") or 0.0)
+            close_qty = min(remaining, lot_qty)
+            if str(lot.get("side")) == "buy" and side == "sell":
+                pnl = (price - lot_price) * close_qty
+            else:
+                pnl = (lot_price - price) * close_qty
+            pnl_by_symbol[symbol] = pnl_by_symbol.get(symbol, 0.0) + pnl
+            closed_trades += 1
+            remaining -= close_qty
+            lot["qty"] = lot_qty - close_qty
+            if float(lot["qty"]) <= 1e-9:
+                book.pop(0)
+        if remaining > 1e-9:
+            book.append({"side": side, "qty": remaining, "price": price})
+
+    open_qty_by_symbol: dict[str, float] = {}
+    for symbol, lots in books.items():
+        net_qty = 0.0
+        for lot in lots:
+            qty = float(lot.get("qty") or 0.0)
+            net_qty += qty if str(lot.get("side")) == "buy" else -qty
+        if abs(net_qty) > 1e-9:
+            open_qty_by_symbol[symbol] = net_qty
+    top_losses = [
+        {"symbol": symbol, "net_pnl": pnl}
+        for symbol, pnl in sorted(pnl_by_symbol.items(), key=lambda item: (item[1], item[0]))
+        if pnl < 0
+    ][:3]
+    return {
+        "status": "ready",
+        "path": str(fill_events_path),
+        "report_date": report_date,
+        "fill_rows_seen": int(len(rows)),
+        "same_day_fill_events": int(len(events)),
+        "closed_trades": int(closed_trades),
+        "net_pnl": float(sum(pnl_by_symbol.values())),
+        "open_qty_by_symbol": open_qty_by_symbol,
+        "top_loss_symbols": top_losses,
+    }
+
+
 def _collect_learning_snapshot(args: dict[str, Any], health: dict[str, Any]) -> dict[str, Any]:
     runtime_root = _runtime_root(args)
     after_hours = _read_json_object(runtime_root / "after_hours_training_state.json")
@@ -840,12 +948,26 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     closed_trades = daily_trade_row.get("trades")
     if closed_trades is None and observed_trade_kpis_current:
         closed_trades = observed_obj.get("closed_trades")
+    same_day_fill_summary = _same_day_fill_round_trip_summary(args, report_date)
+    same_day_net_pnl = _float_or_none(same_day_fill_summary.get("net_pnl"))
+    pnl_discrepancy: dict[str, Any] | None = None
+    if net_pnl is not None and same_day_net_pnl is not None:
+        delta = float(net_pnl) - float(same_day_net_pnl)
+        pnl_discrepancy = {
+            "status": "mismatch" if abs(delta) > 0.01 else "matched",
+            "accounting_net_pnl": float(net_pnl),
+            "same_day_fill_net_pnl": float(same_day_net_pnl),
+            "delta": float(delta),
+        }
 
     snapshot = {
         "report_date": report_date,
         "go_no_go_gate_passed": go_no_go_obj.get("gate_passed"),
         "go_no_go_failed_checks": list(go_no_go_obj.get("failed_checks") or []),
         "net_pnl": net_pnl,
+        "pnl_basis": "fifo_accounting_daily_trade_stats",
+        "same_day_fill_summary": same_day_fill_summary,
+        "pnl_discrepancy": pnl_discrepancy,
         "profit_factor": profit_factor,
         "win_rate": win_rate,
         "closed_trades": closed_trades,
@@ -949,6 +1071,20 @@ def _should_suppress_startup_warmup_health_alert(
         return False
     if provider_status == "warming_up":
         return True
+    service_phase = str(snapshot.get("service_phase") or "").strip().lower()
+    service_reason = str(snapshot.get("service_reason") or "").strip().lower()
+    service_starting = service_phase in {"bootstrap", "starting", "startup"} or service_reason in {
+        "startup",
+        "bootstrap",
+        "starting",
+    }
+    if service_starting and health_reason in {
+        "provider_status_unknown",
+        "provider_state_unknown",
+        "data_provider_unknown",
+        "health_payload_unavailable",
+    }:
+        return True
     return health_reason in {
         "broker_status_unknown",
         "startup_config_resolved",
@@ -1009,6 +1145,7 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
     triggers: list[str] = []
     health_reason = str(snapshot.get("health_reason") or "").strip().lower()
     startup_or_warmup = health_reason in _STARTUP_WARMUP_HEALTH_REASONS
+    startup_grace_active = _within_incident_startup_grace(snapshot, args)
     market_closed = _market_closed_snapshot(snapshot)
 
     runtime_gonogo_block_openings_enabled = _bool_arg(
@@ -1045,6 +1182,7 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
         capture_ratio is not None
         and capture_ratio < min_capture
         and not startup_or_warmup
+        and not startup_grace_active
         and not market_closed
     ):
         triggers.append("execution_capture_ratio_low")
@@ -1104,6 +1242,7 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
         and precheck_failure_ratio >= precheck_spike_min_ratio
         and not fill_ratio_healthy
         and not startup_or_warmup
+        and not startup_grace_active
         and not market_closed
     ):
         triggers.append("pre_execution_checks_spike")
@@ -1132,6 +1271,7 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
         and gate_rejected_records >= max(1, min_rejected_records_for_concentration)
         and top_rejection_concentration_ratio >= max_rejection_concentration_ratio
         and not startup_or_warmup
+        and not startup_grace_active
         and not market_closed
     ):
         triggers.append("rejection_concentration_high")
@@ -1158,6 +1298,7 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
         and expected_edge_per_accept_bps >= float(min_expected_edge_bps_for_realism)
         and edge_realism_gap_ratio < float(min_edge_realism_ratio)
         and not startup_or_warmup
+        and not startup_grace_active
         and not market_closed
     ):
         triggers.append("edge_realism_gap_high")
@@ -1168,7 +1309,7 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
     if health_degraded and not _should_suppress_startup_warmup_health_alert(snapshot, args):
         triggers.append("health_degraded")
 
-    if bool(snapshot.get("using_backup", False)):
+    if bool(snapshot.get("using_backup", False)) and not startup_grace_active:
         triggers.append("data_provider_backup_active")
 
     broker_status = str(snapshot.get("broker_status") or "unknown").lower()
@@ -1539,6 +1680,8 @@ def _eod_fingerprint(snapshot: dict[str, Any]) -> str:
         "win_rate": _float_or_none(snapshot.get("win_rate")),
         "execution_capture_ratio": _float_or_none(snapshot.get("execution_capture_ratio")),
         "slippage_drag_bps": _float_or_none(snapshot.get("slippage_drag_bps")),
+        "same_day_fill_summary": snapshot.get("same_day_fill_summary"),
+        "pnl_discrepancy": snapshot.get("pnl_discrepancy"),
         "learning": snapshot.get("learning"),
     }
     encoded = json.dumps(material, sort_keys=True).encode("utf-8")
@@ -1612,6 +1755,13 @@ def _eod_message_text(snapshot: dict[str, Any]) -> str:
     )
     if not losses_text:
         losses_text = "none"
+    same_day_fill = snapshot.get("same_day_fill_summary")
+    same_day_fill_obj = same_day_fill if isinstance(same_day_fill, dict) else {}
+    pnl_discrepancy = snapshot.get("pnl_discrepancy")
+    pnl_discrepancy_obj = pnl_discrepancy if isinstance(pnl_discrepancy, dict) else {}
+    pnl_check = str(pnl_discrepancy_obj.get("status") or same_day_fill_obj.get("status") or "n/a")
+    if pnl_discrepancy_obj.get("delta") is not None:
+        pnl_check = f"{pnl_check}, delta={_fmt_currency(pnl_discrepancy_obj.get('delta'))}"
 
     learning = snapshot.get("learning")
     learning_obj = learning if isinstance(learning, dict) else {}
@@ -1635,7 +1785,9 @@ def _eod_message_text(snapshot: dict[str, Any]) -> str:
             ),
             "",
             "💰 Day performance:",
-            f"- Net PnL: {_fmt_currency(snapshot.get('net_pnl'))}",
+            f"- Accounting net PnL: {_fmt_currency(snapshot.get('net_pnl'))}",
+            f"- Same-day fill PnL: {_fmt_currency(same_day_fill_obj.get('net_pnl'))}",
+            f"- PnL check: {pnl_check}",
             f"- Profit factor: {_fmt_num(snapshot.get('profit_factor'), digits=3)}",
             f"- Win rate: {_fmt_pct(snapshot.get('win_rate'), digits=1, assume_ratio=True)}",
             f"- Closed trades: {_fmt_count(snapshot.get('closed_trades'))}",
@@ -1715,6 +1867,13 @@ def _eod_message_blocks(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     )
     if not losses_text:
         losses_text = "none"
+    same_day_fill = snapshot.get("same_day_fill_summary")
+    same_day_fill_obj = same_day_fill if isinstance(same_day_fill, dict) else {}
+    pnl_discrepancy = snapshot.get("pnl_discrepancy")
+    pnl_discrepancy_obj = pnl_discrepancy if isinstance(pnl_discrepancy, dict) else {}
+    pnl_check = str(pnl_discrepancy_obj.get("status") or same_day_fill_obj.get("status") or "n/a")
+    if pnl_discrepancy_obj.get("delta") is not None:
+        pnl_check = f"{pnl_check}, delta={_fmt_currency(pnl_discrepancy_obj.get('delta'))}"
 
     learning = snapshot.get("learning")
     learning_obj = learning if isinstance(learning, dict) else {}
@@ -1740,7 +1899,9 @@ def _eod_message_blocks(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         _slack_section(
             "*Day performance*",
             fields=[
-                _slack_field("Net PnL", _fmt_currency(snapshot.get("net_pnl"))),
+                _slack_field("Accounting net PnL", _fmt_currency(snapshot.get("net_pnl"))),
+                _slack_field("Same-day fill PnL", _fmt_currency(same_day_fill_obj.get("net_pnl"))),
+                _slack_field("PnL check", pnl_check),
                 _slack_field("Closed trades", _fmt_count(snapshot.get("closed_trades"))),
                 _slack_field("Win rate", _fmt_pct(snapshot.get("win_rate"), digits=1, assume_ratio=True)),
                 _slack_field("Profit factor", _fmt_num(snapshot.get("profit_factor"), digits=3)),

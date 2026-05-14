@@ -2512,7 +2512,13 @@ def _aggregate_closed_trades(
         "reconstructed_open_position_count": int(len(reconstructed_open_positions)),
         "reconstructed_open_positions": reconstructed_open_positions,
         "open_lot_count": int(open_lot_count),
-        "open_positions": reconstructed_open_positions,
+        "open_positions": dict(sorted(reconciliation_positions.items())),
+        "open_positions_basis": str(reconciliation_source or "trade_history"),
+        "reconstructed_open_positions_authority": (
+            "diagnostic_only"
+            if str(reconciliation_source or "trade_history") != "trade_history"
+            else "current_basis"
+        ),
         "reconciliation_open_positions_source": str(
             reconciliation_source or "trade_history"
         ),
@@ -2761,6 +2767,7 @@ def _aggregate_closed_trades(
                     "losses": losses,
                     "gross_win_pnl": gross_win_pnl,
                     "gross_loss_pnl": gross_loss_pnl,
+                    "gross_pnl": float(bucket.get("gross_pnl", 0.0) or 0.0),
                     "net_pnl": float(bucket.get("net_pnl", 0.0) or 0.0),
                     "fee_cost": float(bucket.get("fee_cost", 0.0) or 0.0),
                     "slippage_cost": float(bucket.get("slippage_cost", 0.0) or 0.0),
@@ -2903,6 +2910,82 @@ def _aggregate_closed_trades(
         }
     )
     return summary
+
+
+def _same_day_closed_trades_from_events(
+    events: Sequence[_FillEvent],
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, float]]]:
+    by_day: dict[str, list[_FillEvent]] = defaultdict(list)
+    undated: list[_FillEvent] = []
+    for event in events:
+        if event.timestamp is None:
+            undated.append(event)
+            continue
+        by_day[event.timestamp.date().isoformat()].append(event)
+
+    closed: list[dict[str, Any]] = []
+    open_by_day: dict[str, dict[str, float]] = {}
+    for day, day_events in sorted(by_day.items()):
+        day_closed, day_open, _open_lots = _reconstruct_closed_trades(day_events)
+        closed.extend(day_closed)
+        if day_open:
+            open_by_day[day] = dict(sorted(day_open.items()))
+    if undated:
+        day_closed, day_open, _open_lots = _reconstruct_closed_trades(undated)
+        closed.extend(day_closed)
+        if day_open:
+            open_by_day["unknown"] = dict(sorted(day_open.items()))
+    return closed, open_by_day
+
+
+def _daily_rows_by_date(rows: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+    out: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        date = str(row.get("date") or "").strip()
+        if date:
+            out[date] = row
+    return out
+
+
+def _pnl_reconciliation_rows(
+    *,
+    accounting_rows: Sequence[Mapping[str, Any]],
+    same_day_rows: Sequence[Mapping[str, Any]],
+    tolerance: float = 0.01,
+) -> list[dict[str, Any]]:
+    accounting_by_date = _daily_rows_by_date(accounting_rows)
+    same_day_by_date = _daily_rows_by_date(same_day_rows)
+    rows: list[dict[str, Any]] = []
+    for date in sorted(set(accounting_by_date) | set(same_day_by_date)):
+        accounting = accounting_by_date.get(date, {})
+        same_day = same_day_by_date.get(date, {})
+        accounting_pnl = _as_float(accounting.get("net_pnl"))
+        same_day_pnl = _as_float(same_day.get("net_pnl"))
+        accounting_gross = _as_float(accounting.get("gross_pnl"))
+        same_day_gross = _as_float(same_day.get("gross_pnl"))
+        delta = None
+        status = "missing"
+        if accounting_pnl is not None and same_day_pnl is not None:
+            delta = float(accounting_pnl - same_day_pnl)
+            status = "matched" if abs(delta) <= float(tolerance) else "mismatch"
+        elif accounting_pnl is not None:
+            status = "same_day_fill_missing"
+        elif same_day_pnl is not None:
+            status = "accounting_missing"
+        rows.append(
+            {
+                "date": date,
+                "status": status,
+                "accounting_net_pnl": accounting_pnl,
+                "same_day_fill_net_pnl": same_day_pnl,
+                "accounting_gross_pnl": accounting_gross,
+                "same_day_fill_gross_pnl": same_day_gross,
+                "delta": delta,
+                "accounting_trades": _as_int(accounting.get("trades")) or 0,
+                "same_day_fill_trades": _as_int(same_day.get("trades")) or 0,
+            }
+        )
+    return rows
 
 
 def _normalise_position_map(values: Mapping[str, Any] | None) -> dict[str, float]:
@@ -3108,6 +3191,8 @@ def summarize_trade_history(
 
     fill_records: list[dict[str, Any]] = []
     fill_events: list[_FillEvent] = []
+    same_day_fill_closed_trades: list[dict[str, Any]] = []
+    same_day_fill_open_positions_by_date: dict[str, dict[str, float]] = {}
     fill_open_positions: dict[str, float] = {}
     fill_open_lot_count = 0
     if resolved_fill_events_path.exists():
@@ -3129,6 +3214,10 @@ def summarize_trade_history(
                 order_source_lookup=order_source_lookup,
             )
             if fill_events:
+                (
+                    same_day_fill_closed_trades,
+                    same_day_fill_open_positions_by_date,
+                ) = _same_day_closed_trades_from_events(fill_events)
                 (
                     _fill_closed_trades,
                     fill_open_positions,
@@ -3185,14 +3274,35 @@ def summarize_trade_history(
         )
         if cost_enrichment is not None:
             aggregated["cost_enrichment"] = cost_enrichment
+        if same_day_fill_closed_trades:
+            same_day_aggregated = _aggregate_closed_trades(
+                records_count=len(fill_records),
+                source="same_day_fill_pairs",
+                closed_trades=same_day_fill_closed_trades,
+                open_positions={},
+                open_lot_count=0,
+                broker_open_positions=summary.get("broker_open_positions"),
+                broker_open_positions_available=bool(summary.get("broker_open_positions_available")),
+                reconciliation_open_positions=reconciliation_positions,
+                reconciliation_source=reconciliation_source,
+            )
+            aggregated["same_day_fill_pair_stats"] = {
+                "pnl_source": "same_day_fill_pairs",
+                "daily_trade_stats": same_day_aggregated.get("daily_trade_stats", []),
+                "daily_expectancy": same_day_aggregated.get("daily_expectancy", []),
+                "open_positions_by_date": same_day_fill_open_positions_by_date,
+            }
+            aggregated["daily_pnl_reconciliation"] = _pnl_reconciliation_rows(
+                accounting_rows=aggregated.get("daily_trade_stats", []),
+                same_day_rows=same_day_aggregated.get("daily_trade_stats", []),
+            )
         summary.update(aggregated)
         return summary
 
     if not trade_events:
         summary["pnl_available"] = False
         return summary
-    summary.update(
-        _aggregate_closed_trades(
+    aggregated = _aggregate_closed_trades(
             records_count=len(records),
             source="fifo_reconstructed_from_fills",
             closed_trades=trade_closed_reconstructed,
@@ -3203,7 +3313,29 @@ def summarize_trade_history(
             reconciliation_open_positions=reconciliation_positions,
             reconciliation_source=reconciliation_source,
         )
-    )
+    if same_day_fill_closed_trades:
+        same_day_aggregated = _aggregate_closed_trades(
+            records_count=len(fill_records),
+            source="same_day_fill_pairs",
+            closed_trades=same_day_fill_closed_trades,
+            open_positions={},
+            open_lot_count=0,
+            broker_open_positions=summary.get("broker_open_positions"),
+            broker_open_positions_available=bool(summary.get("broker_open_positions_available")),
+            reconciliation_open_positions=reconciliation_positions,
+            reconciliation_source=reconciliation_source,
+        )
+        aggregated["same_day_fill_pair_stats"] = {
+            "pnl_source": "same_day_fill_pairs",
+            "daily_trade_stats": same_day_aggregated.get("daily_trade_stats", []),
+            "daily_expectancy": same_day_aggregated.get("daily_expectancy", []),
+            "open_positions_by_date": same_day_fill_open_positions_by_date,
+        }
+        aggregated["daily_pnl_reconciliation"] = _pnl_reconciliation_rows(
+            accounting_rows=aggregated.get("daily_trade_stats", []),
+            same_day_rows=same_day_aggregated.get("daily_trade_stats", []),
+        )
+    summary.update(aggregated)
     return summary
 
 

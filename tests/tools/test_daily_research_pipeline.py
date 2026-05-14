@@ -29,6 +29,7 @@ def test_daily_research_report_blocks_live_profile_without_promotion(monkeypatch
     )
 
     assert report["trade_allowed"] is False
+    assert report["status"] == "blocked"
     assert "promotion_not_ready" in report["blocked_reasons"]
     assert report["recommended_next_session_mode"] == "paper_only"
     assert report["memory_status"]["status"] == "ok"
@@ -66,6 +67,7 @@ def test_daily_research_report_blocks_on_runtime_gonogo_failure(monkeypatch):
     )
 
     assert report["trade_allowed"] is False
+    assert report["status"] == "blocked"
     assert "runtime_gonogo_failed" in report["blocked_reasons"]
     assert report["expected_edge_calibration"]["status"] == "overestimated"
     assert report["evidence_starvation"]["recommendation"] == "widen_paper_diagnostic_sampling"
@@ -357,6 +359,7 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["artifact_type"] == "daily_research_report"
     assert payload["trade_allowed"] is True
+    assert payload["status"] == "ready"
     assert payload["memory_status"]["status"] == "ok"
     assert payload["symbol_promotion"]["digest"] == "MSFT:collect_more_evidence/low"
     assert payload["expected_edge_calibration"]["status"] == "calibrated"

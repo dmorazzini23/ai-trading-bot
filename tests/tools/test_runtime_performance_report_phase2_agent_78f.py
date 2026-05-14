@@ -111,7 +111,7 @@ def test_fifo_reconstruction_aggregates_partial_lots_and_fill_source_rollups(
         ],
     )
 
-    summary = rpr.summarize_trade_history(trades_path)
+    summary = rpr.summarize_trade_history(trades_path, fill_events_path=trades_path)
 
     assert summary["pnl_source"] == "fifo_reconstructed_from_fills"
     assert summary["closed_trades"] == 1
@@ -127,6 +127,7 @@ def test_fifo_reconstruction_aggregates_partial_lots_and_fill_source_rollups(
             "losses": 0,
             "gross_win_pnl": pytest.approx(5.9088086884),
             "gross_loss_pnl": 0.0,
+            "gross_pnl": pytest.approx(9.0),
             "net_pnl": pytest.approx(5.9088086884),
             "fee_cost": pytest.approx(0.0909),
             "slippage_cost": pytest.approx(3.0002913116),
@@ -135,9 +136,83 @@ def test_fifo_reconstruction_aggregates_partial_lots_and_fill_source_rollups(
         }
     ]
     assert summary["reconstructed_open_positions"] == {"AAPL": 2.0}
+    assert summary["open_positions"] == {"AAPL": 2.0}
+    assert summary["open_positions_basis"] == "trade_history"
     assert summary["open_position_reconciliation"]["symbol_mismatch_count"] == 0
     assert summary["slippage_root_cause_attribution"]["overall_slippage_drag_bps"] == pytest.approx(100.0097103877)
     rpr._runtime_fee_bps_fallback.cache_clear()
+
+
+def test_runtime_report_exposes_same_day_fill_pnl_and_broker_position_basis(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        rpr,
+        "_summarize_broker_open_positions",
+        lambda: {
+            "broker_open_positions_available": True,
+            "broker_open_position_count": 0,
+            "broker_open_positions": {},
+            "broker_open_position_snapshots": {},
+            "broker_open_positions_error": None,
+        },
+    )
+    monkeypatch.setattr(
+        rpr,
+        "get_env",
+        lambda name, default=None, cast=None, resolve_aliases=True: {
+            "AI_TRADING_RUNTIME_PERF_RECONCILIATION_FALLBACK_TO_BROKER_ENABLED": True,
+            "AI_TRADING_RUNTIME_PERF_RECONCILIATION_FALLBACK_TO_BROKER_ABS_DELTA_RATIO": 0.5,
+            "AI_TRADING_RUNTIME_PERF_RECONCILIATION_FALLBACK_TO_BROKER_MISMATCH_COUNT": 1,
+        }.get(name, default),
+    )
+    fills = _write_jsonl(
+        tmp_path / "fills.jsonl",
+        [
+            {
+                "symbol": "AMZN",
+                "side": "buy",
+                "qty": 1,
+                "fill_price": 272.43,
+                "ts": "2026-05-11T16:21:24Z",
+                "source": "live",
+            },
+            {
+                "symbol": "AMZN",
+                "side": "buy",
+                "qty": 1,
+                "fill_price": 265.41,
+                "ts": "2026-05-12T13:43:42Z",
+                "source": "live",
+            },
+            {
+                "symbol": "AMZN",
+                "side": "sell",
+                "qty": 1,
+                "fill_price": 265.22,
+                "ts": "2026-05-12T13:45:18Z",
+                "source": "live",
+            },
+        ],
+    )
+
+    summary = rpr.summarize_trade_history(fills, fill_events_path=fills)
+
+    assert summary["open_positions_basis"] == "broker_open_positions"
+    assert summary["open_positions"] == {}
+    same_day_rows = {
+        row["date"]: row
+        for row in summary["same_day_fill_pair_stats"]["daily_trade_stats"]
+    }
+    assert same_day_rows["2026-05-12"]["net_pnl"] == pytest.approx(-0.19)
+    reconciliation = {
+        row["date"]: row
+        for row in summary["daily_pnl_reconciliation"]
+    }
+    assert reconciliation["2026-05-12"]["status"] == "mismatch"
+    assert reconciliation["2026-05-12"]["accounting_net_pnl"] == pytest.approx(-7.21)
+    assert reconciliation["2026-05-12"]["same_day_fill_gross_pnl"] == pytest.approx(-0.19)
 
 
 def test_build_report_flattens_execution_fields_and_handles_invalid_optional_states(

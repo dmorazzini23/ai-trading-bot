@@ -461,6 +461,43 @@ def test_evaluate_incident_triggers_suppresses_transient_startup_health_with_gra
     assert "health_degraded" not in triggers
 
 
+def test_evaluate_incident_triggers_suppresses_restart_bootstrap_provider_unknown() -> None:
+    now = datetime.now(UTC)
+    snapshot = {
+        "runtime_gonogo_block_openings_enabled": True,
+        "go_no_go_gate_passed": False,
+        "go_no_go_failed_checks": ["win_rate", "live_samples_sufficient"],
+        "expected_edge_per_accept_bps": 30.55,
+        "edge_realism_gap_ratio": 0.25,
+        "execution_capture_ratio": 0.49,
+        "health_ok": False,
+        "health_status": "degraded",
+        "health_reason": "provider_status_unknown",
+        "provider_status": "unknown",
+        "provider_active": "unknown",
+        "provider_reason": "unknown",
+        "using_backup": False,
+        "broker_status": "unknown",
+        "service_status": "warming_up",
+        "service_phase": "bootstrap",
+        "service_reason": "startup",
+        "service_phase_since": (now - timedelta(seconds=13)).isoformat(),
+        "timestamp": now.isoformat(),
+    }
+
+    triggers = slack_srv._evaluate_incident_triggers(
+        snapshot,
+        {
+            "startup_grace_seconds": 300,
+            "min_capture_ratio": 0.08,
+            "min_edge_realism_ratio": 0.35,
+            "min_expected_edge_bps_for_realism": 0.5,
+        },
+    )
+
+    assert triggers == []
+
+
 def test_evaluate_incident_triggers_allows_degraded_health_after_startup_grace() -> None:
     now = datetime.now(UTC)
     snapshot = {
@@ -1768,8 +1805,91 @@ def test_collect_eod_summary_uses_nested_report_daily_trade_stats(monkeypatch) -
     assert snapshot["top_loss_symbols"] == [{"symbol": "AMZN", "net_pnl": -3.54}]
     message = slack_srv._eod_message_text(snapshot)
     assert "💰 Day performance:" in message
-    assert "- Net PnL: $-0.45" in message
+    assert "- Accounting net PnL: $-0.45" in message
     assert "- Closed trades: 24" in message
+
+
+def test_collect_eod_summary_flags_same_day_fill_pnl_mismatch(
+    monkeypatch, tmp_path: Path
+) -> None:
+    fill_events_path = tmp_path / "fill_events.jsonl"
+    fill_events_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "ts": "2026-05-04T13:45:00+00:00",
+                        "symbol": "AMZN",
+                        "side": "buy",
+                        "fill_qty": 1,
+                        "fill_price": 265.41,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-05-04T13:47:00+00:00",
+                        "symbol": "AMZN",
+                        "side": "sell",
+                        "fill_qty": 1,
+                        "fill_price": 265.22,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def _fake_runtime_report() -> dict[str, Any]:
+        return {
+            "report": {
+                "go_no_go": {"gate_passed": False, "failed_checks": ["win_rate"]},
+                "execution_vs_alpha": {
+                    "execution_capture_ratio": 0.565,
+                    "slippage_drag_bps": 8.613,
+                    "daily": [{"date": "2026-05-04"}],
+                },
+                "trade_history": {
+                    "daily_trade_stats": [
+                        {
+                            "date": "2026-05-04",
+                            "net_pnl": -7.41,
+                            "profit_factor": 0.0,
+                            "win_rate": 0.0,
+                            "trades": 1,
+                        }
+                    ],
+                },
+            },
+        }
+
+    def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
+        assert port == 9001
+        assert timeout_s == 2.0
+        return {
+            "status": "healthy",
+            "reason": "market_closed",
+            "data_provider": {"status": "warming_up", "active": "alpaca-iex", "using_backup": False},
+            "broker": {"status": "connected"},
+            "model_liveness": {},
+            "timestamp": "2026-05-04T20:01:00Z",
+        }
+
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", str(fill_events_path))
+    monkeypatch.setattr(slack_srv, "_runtime_report_payload", _fake_runtime_report)
+    monkeypatch.setattr(slack_srv, "_health_payload", _fake_health_payload)
+
+    snapshot = slack_srv._collect_eod_summary_snapshot({})
+
+    assert snapshot["net_pnl"] == -7.41
+    assert snapshot["same_day_fill_summary"]["net_pnl"] == -0.18999999999999773
+    assert snapshot["same_day_fill_summary"]["closed_trades"] == 1
+    assert snapshot["same_day_fill_summary"]["open_qty_by_symbol"] == {}
+    assert snapshot["pnl_discrepancy"]["status"] == "mismatch"
+    message = slack_srv._eod_message_text(snapshot)
+    assert "- Accounting net PnL: $-7.41" in message
+    assert "- Same-day fill PnL: $-0.19" in message
+    assert "- PnL check: mismatch" in message
 
 
 def test_collect_eod_summary_degrades_when_health_payload_fails(monkeypatch) -> None:

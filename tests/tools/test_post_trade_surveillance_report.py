@@ -78,3 +78,23 @@ def test_post_trade_surveillance_cli_writes_latest(tmp_path: Path) -> None:
     assert rc == 0
     assert json.loads(output.read_text(encoding="utf-8"))["status"] == "watchlist"
     assert latest.is_file()
+
+
+def test_post_trade_surveillance_labels_single_adverse_fill_as_insufficient_sample_warning() -> None:
+    payload = surveillance.build_post_trade_surveillance_report(
+        report_date="2026-05-12",
+        fills=[
+            {
+                "client_order_id": "fill-1",
+                "symbol": "AMZN",
+                "expected_net_edge_bps": 8.0,
+                "realized_net_edge_bps": -2.0,
+            }
+        ],
+        min_adverse_selection_fills=5,
+    )
+
+    assert payload["status"] == "insufficient_samples"
+    assert payload["summary"]["evidence_state"] == "insufficient_fill_samples"
+    assert payload["findings"][0]["category"] == "adverse_selection"
+    assert payload["findings"][0]["severity"] == "warning"

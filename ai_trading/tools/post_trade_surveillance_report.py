@@ -222,6 +222,7 @@ def build_post_trade_surveillance_report(
     positions: Sequence[Mapping[str, Any]] = (),
     max_slippage_bps: float = 25.0,
     min_fill_ratio: float = 0.95,
+    min_adverse_selection_fills: int = 5,
 ) -> dict[str, Any]:
     findings: list[dict[str, Any]] = []
     for row in (*decisions, *orders):
@@ -241,7 +242,15 @@ def build_post_trade_surveillance_report(
         realized = _first_float(row, "realized_net_edge_bps", "net_edge_bps", "markout_bps")
         slippage = _first_float(row, "slippage_bps", "realized_slippage_bps", "slippage_drag_bps")
         if expected is not None and expected > 0.0 and realized is not None and realized < 0.0:
-            findings.append(_finding("adverse_selection", row, "positive expected edge realized negative markout", severity="critical"))
+            severity = "critical" if len(fills) >= int(min_adverse_selection_fills) else "warning"
+            findings.append(
+                _finding(
+                    "adverse_selection",
+                    row,
+                    "positive expected edge realized negative markout",
+                    severity=severity,
+                )
+            )
         if slippage is not None and abs(slippage) > float(max_slippage_bps):
             findings.append(_finding("slippage_breach", row, "slippage exceeded surveillance threshold", severity="critical"))
         if _is_close(row) and (remaining := _remaining_position(row)) is not None and abs(remaining) > 0.0:
@@ -264,6 +273,11 @@ def build_post_trade_surveillance_report(
 
     counts = Counter(str(item["category"]) for item in findings)
     has_critical = any(str(item.get("severity")) == "critical" for item in findings)
+    evidence_state = (
+        "insufficient_fill_samples"
+        if len(fills) < int(min_adverse_selection_fills)
+        else "sample_sufficient"
+    )
     if not findings:
         status = "clear"
         action = "continue_post_trade_sampling"
@@ -271,7 +285,11 @@ def build_post_trade_surveillance_report(
         status = "control_breach"
         action = "review_surveillance_findings_before_increasing_risk"
     else:
-        status = "watchlist"
+        only_sample_limited_adverse = (
+            evidence_state == "insufficient_fill_samples"
+            and all(str(item.get("category")) == "adverse_selection" for item in findings)
+        )
+        status = "insufficient_samples" if only_sample_limited_adverse else "watchlist"
         action = "review_rejects_and_partial_fills"
     return {
         "schema_version": "1.0.0",
@@ -283,6 +301,7 @@ def build_post_trade_surveillance_report(
         "thresholds": {
             "max_slippage_bps": float(max_slippage_bps),
             "min_fill_ratio": float(min_fill_ratio),
+            "min_adverse_selection_fills": int(min_adverse_selection_fills),
         },
         "summary": {
             "decisions": len(decisions),
@@ -292,6 +311,7 @@ def build_post_trade_surveillance_report(
             "positions": len(positions),
             "findings": len(findings),
             "category_counts": dict(sorted(counts.items())),
+            "evidence_state": evidence_state,
         },
         "findings": findings,
         "promotion_authority": False,
@@ -315,6 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--positions-json", type=Path, default=None)
     parser.add_argument("--max-slippage-bps", type=float, default=25.0)
     parser.add_argument("--min-fill-ratio", type=float, default=0.95)
+    parser.add_argument("--min-adverse-selection-fills", type=int, default=5)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -330,6 +351,7 @@ def main(argv: list[str] | None = None) -> int:
         positions=_read_positions(args.positions_json),
         max_slippage_bps=float(args.max_slippage_bps),
         min_fill_ratio=float(args.min_fill_ratio),
+        min_adverse_selection_fills=int(args.min_adverse_selection_fills),
     )
     for path in (output_json, latest_json):
         path.parent.mkdir(parents=True, exist_ok=True)

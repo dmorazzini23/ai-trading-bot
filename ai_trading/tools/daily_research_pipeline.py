@@ -577,6 +577,7 @@ def build_daily_research_report(
     }
     allowed, reasons = _trade_allowed(report)
     profile_name = str(_nested(report, "launch_profile").get("name") or "paper_observe")
+    report["status"] = "ready" if allowed else "blocked"
     report["trade_allowed"] = bool(allowed)
     report["blocked_reasons"] = reasons
     report["recommended_next_session_mode"] = (

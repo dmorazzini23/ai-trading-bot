@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from collections import Counter
@@ -34,8 +35,57 @@ def _date_match(row: Mapping[str, Any], report_date: str) -> bool:
     return _timestamp(row).startswith(report_date)
 
 
+def _nested(row: Mapping[str, Any], *keys: str) -> Mapping[str, Any]:
+    current: Any = row
+    for key in keys:
+        if not isinstance(current, Mapping):
+            return {}
+        current = current.get(key)
+    return current if isinstance(current, Mapping) else {}
+
+
+def _value(row: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        current: Any = row
+        found = True
+        for part in key.split("."):
+            if isinstance(current, Mapping) and part in current:
+                current = current.get(part)
+                continue
+            if isinstance(current, Sequence) and not isinstance(current, (str, bytes)):
+                try:
+                    index = int(part)
+                except ValueError:
+                    found = False
+                    break
+                if index < 0 or index >= len(current):
+                    found = False
+                    break
+                current = current[index]
+                continue
+            found = False
+            break
+        if found and current not in (None, ""):
+            return current
+    return None
+
+
 def _timestamp(row: Mapping[str, Any]) -> str:
-    return str(row.get("ts") or row.get("timestamp") or row.get("decision_ts") or row.get("submitted_at") or row.get("filled_at") or "")
+    return str(
+        _value(
+            row,
+            "ts",
+            "timestamp",
+            "decision_ts",
+            "submitted_at",
+            "filled_at",
+            "decision_journal.bar_ts",
+            "decision_journal.ts",
+            "decision_journal.order_intent.bar_ts",
+            "bar_ts",
+        )
+        or ""
+    )
 
 
 def _safe_float(value: Any) -> float | None:
@@ -47,26 +97,184 @@ def _safe_float(value: Any) -> float | None:
 
 def _first_float(row: Mapping[str, Any], *keys: str) -> float | None:
     for key in keys:
-        parsed = _safe_float(row.get(key))
+        parsed = _safe_float(_value(row, key))
         if parsed is not None:
             return parsed
     return None
 
 
 def _decision_id(row: Mapping[str, Any]) -> str:
-    return str(row.get("decision_id") or row.get("intent_id") or row.get("client_order_id") or "").strip()
+    return str(
+        _value(
+            row,
+            "decision_id",
+            "decision_trace_id",
+            "intent_id",
+            "client_order_id",
+            "order_id",
+            "decision_journal.decision_trace_id",
+            "decision_journal.client_order_id",
+            "decision_journal.order_intent.decision_trace_id",
+            "decision_journal.order_intent.client_order_id",
+        )
+        or ""
+    ).strip()
 
 
 def _symbol(row: Mapping[str, Any]) -> str:
-    return str(row.get("symbol") or row.get("ticker") or "UNKNOWN").strip().upper() or "UNKNOWN"
+    return str(
+        _value(
+            row,
+            "symbol",
+            "ticker",
+            "decision_journal.symbol",
+            "decision_journal.risk_decision.symbol",
+            "decision_journal.order_intent.symbol",
+            "net_target.symbol",
+        )
+        or "UNKNOWN"
+    ).strip().upper() or "UNKNOWN"
 
 
 def _status(row: Mapping[str, Any]) -> str:
-    return str(row.get("status") or row.get("action") or row.get("decision") or "").strip().lower()
+    status = str(
+        _value(row, "status", "action", "decision", "decision_journal.status")
+        or ""
+    ).strip().lower()
+    if status:
+        return status
+    journal = _nested(row, "decision_journal")
+    if journal:
+        if bool(journal.get("submitted")):
+            return "submitted"
+        if bool(journal.get("accepted")):
+            return "accepted"
+        reasons = journal.get("reasons")
+        gates = journal.get("gates")
+        if reasons or gates:
+            return "rejected"
+    if _safe_float(row.get("accepted_records")) and (_safe_float(row.get("accepted_records")) or 0.0) > 0.0:
+        return "accepted"
+    if _safe_float(row.get("rejected_records")) and (_safe_float(row.get("rejected_records")) or 0.0) > 0.0:
+        return "rejected"
+    return ""
 
 
 def _index_by_decision_id(rows: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
-    return {_decision_id(row): row for row in rows if _decision_id(row)}
+    indexed: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        for key in _link_keys(row):
+            indexed.setdefault(key, row)
+    return indexed
+
+
+def _link_keys(row: Mapping[str, Any]) -> list[str]:
+    keys: list[str] = []
+    for key in (
+        "decision_id",
+        "decision_trace_id",
+        "intent_id",
+        "client_order_id",
+        "order_id",
+        "decision_journal.decision_trace_id",
+        "decision_journal.client_order_id",
+        "decision_journal.order_intent.decision_trace_id",
+        "decision_journal.order_intent.client_order_id",
+        "decision_journal.order_intent.order_id",
+    ):
+        value = str(_value(row, key) or "").strip()
+        if value and value not in keys:
+            keys.append(value)
+    return keys
+
+
+def _first_linked(
+    indexes: Mapping[str, Mapping[str, Any]],
+    row: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    for key in _link_keys(row):
+        linked = indexes.get(key)
+        if linked:
+            return linked
+    return {}
+
+
+def _reasons(row: Mapping[str, Any], gate: Mapping[str, Any]) -> list[str]:
+    raw_values = [
+        _value(row, "reasons"),
+        _value(row, "gates"),
+        _value(row, "decision_journal.reasons"),
+        _value(row, "decision_journal.gates"),
+        _value(row, "decision_journal.risk_decision.reasons"),
+        _value(row, "decision_journal.risk_decision.gates"),
+        _value(gate, "reason"),
+        _value(gate, "gate"),
+    ]
+    out: list[str] = []
+    for raw in raw_values:
+        values = raw if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)) else [raw]
+        for value in values:
+            text = str(value or "").strip()
+            if text and text not in out:
+                out.append(text)
+    return out
+
+
+def _synthetic_decision_id(row: Mapping[str, Any], *, index: int) -> str:
+    ts = _timestamp(row)
+    symbol = _symbol(row)
+    reasons = _reasons(row, {})
+    reason = reasons[0] if reasons else "no_reason"
+    base = "|".join(
+        [
+            ts or f"row-{index}",
+            symbol,
+            reason,
+            str(index),
+        ]
+    )
+    digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
+    return f"decision-summary:{digest}"
+
+
+def _aggregate_gate_receipt(row: Mapping[str, Any], *, index: int) -> dict[str, Any] | None:
+    total = int(_safe_float(row.get("records_total")) or 0)
+    accepted = int(_safe_float(row.get("accepted_records")) or 0)
+    rejected = int(_safe_float(row.get("rejected_records")) or 0)
+    if total <= 0 and accepted <= 0 and rejected <= 0:
+        return None
+    ts = _timestamp(row)
+    gate_counts = row.get("gate_counts")
+    symbol_attribution = row.get("symbol_attribution")
+    top_gates: list[dict[str, Any]] = []
+    if isinstance(gate_counts, Mapping):
+        for gate, count in gate_counts.items():
+            top_gates.append({"gate": str(gate), "count": int(_safe_float(count) or 0)})
+        top_gates.sort(key=lambda item: (-int(_safe_float(item.get("count")) or 0), str(item.get("gate"))))
+    symbols = (
+        sorted(str(symbol).upper() for symbol in symbol_attribution)
+        if isinstance(symbol_attribution, Mapping)
+        else []
+    )
+    return {
+        "decision_id": f"gate-summary:{ts or index}",
+        "symbol": ",".join(symbols) if symbols else "MULTI",
+        "decision_ts": ts or None,
+        "decision_status": "aggregate",
+        "reason": top_gates[0]["gate"] if top_gates else "gate_effectiveness_summary",
+        "reasons": [item["gate"] for item in top_gates],
+        "expected_net_edge_bps": _first_float(row, "total_expected_net_edge_bps", "total_edge_proxy_bps"),
+        "order_present": False,
+        "fill_present": False,
+        "gate_present": True,
+        "realized_net_edge_bps": None,
+        "receipt_complete": True,
+        "receipt_granularity": "aggregate_gate_summary",
+        "records_total": total,
+        "accepted_records": accepted,
+        "rejected_records": rejected,
+        "top_gates": top_gates[:5],
+    }
 
 
 def build_decision_receipts_report(
@@ -83,15 +291,23 @@ def build_decision_receipts_report(
     gates_by_id = _index_by_decision_id(gate_rows)
     receipts: list[dict[str, Any]] = []
     completeness: Counter[str] = Counter()
-    for row in decisions[: max(1, int(max_receipts))]:
+    for index, row in enumerate(decisions[: max(1, int(max_receipts))]):
+        aggregate_receipt = _aggregate_gate_receipt(row, index=index)
+        if aggregate_receipt is not None:
+            completeness["complete"] += 1
+            receipts.append(aggregate_receipt)
+            continue
         decision_id = _decision_id(row)
-        order = orders_by_id.get(decision_id, {})
-        fill = fills_by_id.get(decision_id, {})
-        gate = gates_by_id.get(decision_id, {})
+        order = _first_linked(orders_by_id, row)
+        fill = _first_linked(fills_by_id, row)
+        gate = _first_linked(gates_by_id, row)
         status = _status(row)
         accepted = status in {"accept", "accepted", "submit", "submitted", "filled", "new"}
         rejected = status in {"reject", "rejected", "blocked", "skip", "skipped"}
-        has_terminal_evidence = bool(fill) or bool(gate) or rejected
+        reasons = _reasons(row, gate)
+        has_terminal_evidence = bool(fill) or bool(gate) or rejected or bool(reasons)
+        if not decision_id and rejected and has_terminal_evidence:
+            decision_id = _synthetic_decision_id(row, index=index)
         receipt_complete = bool(decision_id and (not accepted or order) and has_terminal_evidence)
         completeness["complete" if receipt_complete else "incomplete"] += 1
         receipts.append(
@@ -100,13 +316,22 @@ def build_decision_receipts_report(
                 "symbol": _symbol(row),
                 "decision_ts": _timestamp(row) or None,
                 "decision_status": status or "unknown",
-                "reason": str(row.get("reason") or gate.get("reason") or gate.get("gate") or "unknown"),
-                "expected_net_edge_bps": _first_float(row, "expected_net_edge_bps", "expected_edge_bps", "predicted_net_edge_bps"),
+                "reason": reasons[0] if reasons else "unknown",
+                "reasons": reasons,
+                "expected_net_edge_bps": _first_float(
+                    row,
+                    "expected_net_edge_bps",
+                    "expected_edge_bps",
+                    "predicted_net_edge_bps",
+                    "decision_journal.risk_decision.expected_net_edge_bps",
+                    "net_target.proposals.0.debug.expected_net_edge_bps",
+                ),
                 "order_present": bool(order),
                 "fill_present": bool(fill),
                 "gate_present": bool(gate),
                 "realized_net_edge_bps": _first_float(fill, "realized_net_edge_bps", "net_edge_bps", "markout_bps") if fill else None,
                 "receipt_complete": receipt_complete,
+                "receipt_granularity": "decision",
             }
         )
     status = "complete" if completeness.get("incomplete", 0) == 0 else "gaps"

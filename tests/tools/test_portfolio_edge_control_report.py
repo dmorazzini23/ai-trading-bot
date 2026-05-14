@@ -42,3 +42,20 @@ def test_portfolio_edge_control_uses_calibration_fallback() -> None:
     assert payload["status"] == "control_breach"
     assert payload["source"] == "expected_edge_calibration"
     assert payload["summary"]["portfolio_capture_ratio"] == 0.75
+
+
+def test_portfolio_edge_control_keeps_concentration_diagnostic_until_sample_sufficient() -> None:
+    payload = report_tool.build_portfolio_edge_control_report(
+        report_date="2026-05-12",
+        fills=[
+            {"symbol": "AMZN", "expected_net_edge_bps": 8.0, "realized_net_edge_bps": 5.0},
+            {"symbol": "AMZN", "expected_net_edge_bps": 7.0, "realized_net_edge_bps": 4.0},
+        ],
+        min_samples=10,
+        max_symbol_edge_share=0.60,
+    )
+
+    assert payload["status"] == "insufficient_samples"
+    assert payload["controls"]["breaches"] == ["insufficient_samples"]
+    assert "symbol_edge_concentration" in payload["controls"]["diagnostics"]
+    assert payload["controls"]["sample_sufficient"] is False

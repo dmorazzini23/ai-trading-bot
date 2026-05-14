@@ -501,6 +501,8 @@ def test_operator_summary_separates_blocked_from_failed(tmp_path: Path) -> None:
 
     assert summary["failed_steps"] == []
     assert summary["blocked_steps"] == ["runtime_gonogo_status"]
+    assert summary["required_blocked_steps"] == []
+    assert summary["optional_blocked_steps"] == ["runtime_gonogo_status"]
     assert summary["slack_openclaw_summary"]["suggested_action"] == "review_summary_and_generated_artifacts"
 
 
@@ -525,7 +527,7 @@ def test_json_stdout_artifact_keeps_final_payload(tmp_path: Path) -> None:
     assert payload == {"failed_checks": ["win_rate"], "gate_passed": False}
 
 
-def test_run_status_is_blocked_when_any_step_blocks(tmp_path: Path, monkeypatch) -> None:
+def test_run_status_is_complete_when_optional_step_blocks(tmp_path: Path, monkeypatch) -> None:
     config = research_automation.ResearchConfig(
         cadence="daily",
         workflow="daily",
@@ -547,6 +549,39 @@ def test_run_status_is_blocked_when_any_step_blocks(tmp_path: Path, monkeypatch)
         name="runtime_gonogo_status",
         command=("bash", "-lc", "exit 2"),
         purpose="blocked gate",
+        blocked_returncodes=(2,),
+    )
+    monkeypatch.setattr(research_automation, "build_research_steps", lambda _config: ([step], []))
+
+    report = research_automation.run_research_automation(config)
+
+    assert report["status"] == "complete"
+    assert report["step_results"][0]["status"] == "blocked"
+
+
+def test_run_status_is_blocked_when_required_step_blocks(tmp_path: Path, monkeypatch) -> None:
+    config = research_automation.ResearchConfig(
+        cadence="daily",
+        workflow="daily",
+        report_root=tmp_path / "reports",
+        run_dir=tmp_path / "run",
+        run_id="run",
+        symbols="AAPL",
+        data_dir=None,
+        shadow_jsonl=tmp_path / "shadow.jsonl",
+        accepted_candidates_jsonl=None,
+        model_path=None,
+        manifest_path=None,
+        current_champion_path="",
+        report_date="2026-05-05",
+        plan_only=False,
+        dry_run=False,
+    )
+    step = research_automation.ResearchStep(
+        name="live_capital_readiness",
+        command=("bash", "-lc", "exit 2"),
+        purpose="required blocked gate",
+        required=True,
         blocked_returncodes=(2,),
     )
     monkeypatch.setattr(research_automation, "build_research_steps", lambda _config: ([step], []))
@@ -825,6 +860,7 @@ def test_blocked_research_step_surfaces_operator_reason(tmp_path: Path, monkeypa
             ),
         ),
         purpose="blocked replay governance",
+        required=True,
         output_path=output,
         blocked_returncodes=(2,),
     )

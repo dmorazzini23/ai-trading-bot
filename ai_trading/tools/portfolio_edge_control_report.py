@@ -140,12 +140,16 @@ def build_portfolio_edge_control_report(
     max_share = max((edge / positive_expected for edge in symbol_edge.values()), default=0.0) if positive_expected > 0.0 else 0.0
     dominant_symbol = max(symbol_edge, key=symbol_edge.get) if symbol_edge else None
     breaches: list[str] = []
+    diagnostics: list[str] = []
+    sample_sufficient = len(rows) >= int(min_samples)
     if len(rows) < int(min_samples):
         breaches.append("insufficient_samples")
     if capture_ratio is not None and capture_ratio < float(min_capture_ratio):
-        breaches.append("portfolio_capture_ratio_low")
+        target = breaches if sample_sufficient else diagnostics
+        target.append("portfolio_capture_ratio_low")
     if max_share > float(max_symbol_edge_share):
-        breaches.append("symbol_edge_concentration")
+        target = breaches if sample_sufficient else diagnostics
+        target.append("symbol_edge_concentration")
     status = "ok" if not breaches else ("insufficient_samples" if breaches == ["insufficient_samples"] else "control_breach")
     action = "continue_sampling" if status == "ok" else "keep_tiny_sampling_and_review_edge_controls"
     return {
@@ -161,6 +165,8 @@ def build_portfolio_edge_control_report(
             "min_capture_ratio": float(min_capture_ratio),
             "max_symbol_edge_share": float(max_symbol_edge_share),
             "breaches": breaches,
+            "diagnostics": diagnostics,
+            "sample_sufficient": bool(sample_sufficient),
         },
         "summary": {
             "samples": len(rows),

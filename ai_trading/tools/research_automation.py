@@ -675,7 +675,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 "--report-date",
                 config.report_date,
                 "--decisions-jsonl",
-                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                _runtime_input_path("runtime/decision_records.jsonl"),
                 "--order-intents-jsonl",
                 _runtime_input_path("runtime/order_events.jsonl"),
                 "--fills-jsonl",
@@ -2409,6 +2409,16 @@ def _blocked_reasons_from_step_results(
     return reasons
 
 
+def _required_rows_with_status(
+    step_results: Sequence[Mapping[str, Any]], status: str
+) -> list[Mapping[str, Any]]:
+    return [
+        row
+        for row in step_results
+        if bool(row.get("required")) and row.get("status") == status
+    ]
+
+
 def _operator_summary(
     *,
     config: ResearchConfig,
@@ -2420,6 +2430,16 @@ def _operator_summary(
     failed = [row["name"] for row in step_results if row.get("status") == "failed"]
     blocked = [row["name"] for row in step_results if row.get("status") == "blocked"]
     skipped = [row["name"] for row in step_results if row.get("status") == "skipped"]
+    required_blocked = [
+        row["name"]
+        for row in step_results
+        if bool(row.get("required")) and row.get("status") == "blocked"
+    ]
+    optional_blocked = [
+        row["name"]
+        for row in step_results
+        if not bool(row.get("required")) and row.get("status") == "blocked"
+    ]
     effective_blocked_reasons = list(blocked_reasons) + _blocked_reasons_from_step_results(
         step_results
     )
@@ -2433,6 +2453,8 @@ def _operator_summary(
         "blocked_reasons": effective_blocked_reasons,
         "failed_steps": failed,
         "blocked_steps": blocked,
+        "required_blocked_steps": required_blocked,
+        "optional_blocked_steps": optional_blocked,
         "skipped_steps": skipped,
         "latest_report": str(latest_path) if latest_path is not None else None,
         "operator_action": _operator_action(status, config.cadence, config.workflow),
@@ -3214,7 +3236,7 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
                 timeout_seconds = max(1.0, remaining)
             step_results.append(_run_step(step, timeout_seconds=timeout_seconds))
         failed_steps = [row for row in step_results if row.get("status") == "failed"]
-        blocked_steps = [row for row in step_results if row.get("status") == "blocked"]
+        blocked_steps = _required_rows_with_status(step_results, "blocked")
         required_skipped = [
             row
             for row in step_results

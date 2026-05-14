@@ -475,6 +475,106 @@ def test_notify_openclaw_incident_suppresses_duplicate_without_send(
     assert result["incident_signature"] == "stable-health-degraded"
 
 
+def test_notify_openclaw_incident_records_clear_state_without_send(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "openclaw_incident_state.json"
+    state_path.write_text(
+        dispatch.json.dumps(
+            {
+                "fingerprint": "old-fingerprint",
+                "incident_signature": "old-incident",
+                "sent_at": "2026-05-04T17:47:34.706472Z",
+                "triggers": ["go_no_go_failed"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _unexpected_post(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("clear OpenClaw state must not post")
+
+    monkeypatch.setattr(dispatch, "_post_openclaw_runtime_event", _unexpected_post)
+
+    result = dispatch._notify_openclaw_incident(
+        {
+            "state_path": str(state_path),
+            "env": {
+                "AI_TRADING_OPENCLAW_RUNTIME_WEBHOOK_URL": "https://openclaw.test/runtime",
+                "AI_TRADING_OPENCLAW_HOOK_TOKEN": "token",
+            },
+            "snapshot_result": {
+                "should_alert": False,
+                "fingerprint": "clear-fingerprint",
+                "incident_signature": "clear-signature",
+                "snapshot": {
+                    "health_status": "ready",
+                    "health_ok": True,
+                    "broker_status": "connected",
+                },
+                "triggers": [],
+            },
+        }
+    )
+
+    state = dispatch.json.loads(state_path.read_text(encoding="utf-8"))
+    assert result["sent"] is False
+    assert result["reason"] == "no_incident_triggered"
+    assert result["state_path"] == str(state_path)
+    assert state["status"] == "clear"
+    assert state["sent"] is False
+    assert state["sent_at"] is None
+    assert state["fingerprint"] == "clear-fingerprint"
+    assert state["triggers"] == []
+
+
+def test_run_dispatch_records_openclaw_clear_state_below_min_severity(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "openclaw_incident_state.json"
+
+    def _unexpected_openclaw(args: dict[str, Any]) -> dict[str, Any]:
+        raise AssertionError("below-min-severity OpenClaw snapshot should not post")
+
+    def _noop_slack(args: dict[str, Any]) -> dict[str, Any]:
+        return {"sent": False, "reason": "disabled"}
+
+    def _incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "should_alert": False,
+            "fingerprint": "below-min-fingerprint",
+            "incident_signature": "below-min-signature",
+            "snapshot": {
+                "health_status": "ready",
+                "health_ok": True,
+                "broker_status": "connected",
+            },
+            "triggers": [],
+        }
+
+    payload = dispatch.run_dispatch(
+        env={
+            "AI_TRADING_CONNECTOR_SLACK_ENABLED": "0",
+            "AI_TRADING_CONNECTOR_SLACK_EOD_ENABLED": "0",
+            "AI_TRADING_CONNECTOR_OPENCLAW_ENABLED": "1",
+            "AI_TRADING_CONNECTOR_OPENCLAW_MIN_SEVERITY": "error",
+            "AI_TRADING_OPENCLAW_INCIDENT_STATE_PATH": str(state_path),
+        },
+        slack_notifier=_noop_slack,
+        slack_eod_notifier=_noop_slack,
+        openclaw_notifier=_unexpected_openclaw,
+        incident_snapshot_builder=_incident_snapshot,
+    )
+
+    state = dispatch.json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["ok"] is True
+    assert payload["openclaw"]["result"]["reason"] == "below_min_severity"
+    assert payload["openclaw"]["result"]["state_path"] == str(state_path)
+    assert state["status"] == "clear"
+    assert state["fingerprint"] == "below-min-fingerprint"
+
+
 def test_notify_openclaw_incident_min_interval_allows_severity_escalation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
