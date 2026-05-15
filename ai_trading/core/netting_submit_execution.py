@@ -38,6 +38,19 @@ def _is_short_reducing_buy(side: str, delta_shares: int, net_target: Any) -> boo
         return False
 
 
+def _is_long_reducing_sell(side: str, delta_shares: int, net_target: Any) -> bool:
+    side_token = str(side or "").strip().lower()
+    if side_token not in {"sell", "exit"} or int(delta_shares) >= 0:
+        return False
+    target_shares = getattr(net_target, "target_shares", None)
+    if target_shares is None:
+        return True
+    try:
+        return int(target_shares) >= 0
+    except (TypeError, ValueError):
+        return True
+
+
 @dataclass(frozen=True, slots=True)
 class NettingSubmitExecutionResult:
     status: str
@@ -110,8 +123,9 @@ def execute_netting_submission(
     breakers: Any,
 ) -> NettingSubmitExecutionResult:
     closing_short = _is_short_reducing_buy(side, int(delta_shares), net_target)
+    closing_long = _is_long_reducing_sell(side, int(delta_shares), net_target)
     submit_extra: dict[str, Any] = {}
-    if closing_short:
+    if closing_short or closing_long:
         submit_extra["closing_position"] = True
         submit_extra["reduce_only"] = True
     try:

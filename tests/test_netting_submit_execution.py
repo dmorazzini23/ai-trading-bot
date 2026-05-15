@@ -150,6 +150,30 @@ def test_execute_netting_submission_marks_short_cover_reduce_only() -> None:
     assert submitted["reduce_only"] is True
 
 
+def test_execute_netting_submission_marks_long_reducing_sell_reduce_only() -> None:
+    kwargs = _base_kwargs()
+    submitted: dict[str, Any] = {}
+    kwargs["side"] = "sell"
+    kwargs["delta_shares"] = -1
+    kwargs["net_target"] = SimpleNamespace(
+        bar_ts=datetime(2026, 4, 19, 15, 29, tzinfo=UTC),
+        target_shares=0,
+        proposals=[SimpleNamespace(sleeve="alpha", target_dollars=0.0)],
+    )
+
+    def _submit_order(*args: Any, **call_kwargs: Any) -> SimpleNamespace:
+        submitted.update(call_kwargs)
+        return SimpleNamespace(status="filled")
+
+    kwargs["submit_order_func"] = _submit_order
+
+    result = execute_netting_submission(**cast(Any, kwargs))
+
+    assert result.status == "submitted"
+    assert submitted["closing_position"] is True
+    assert submitted["reduce_only"] is True
+
+
 def test_execute_netting_submission_does_not_count_rejected_order_as_submitted() -> None:
     kwargs = _base_kwargs()
     recorded_success: list[dict[str, Any]] = []

@@ -8,6 +8,7 @@ import math
 from typing import Any, Callable, Collection, Mapping, Sequence
 
 from ai_trading.config.management import get_env
+from ai_trading.config.launch_profiles import resolve_launch_profile
 from ai_trading.risk.liquidity_regime import (
     LiquidityFeatures,
     LiquidityRegime,
@@ -180,6 +181,24 @@ def _gate_blocks(processor: NettingSymbolProcessor, candidate_gate: str) -> bool
     return gate_root not in processor.ineffective_gate_blocklist
 
 
+def _short_openings_allowed(cfg: Any) -> bool:
+    try:
+        allowed = bool(
+            resolve_launch_profile(
+                str(getattr(cfg, "launch_profile", "") or "") or None
+            ).shorts_allowed
+        )
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        allowed = bool(get_env("TRADING__ALLOW_SHORTS", "0", cast=bool))
+    for attr_name in ("shorts_allowed", "allow_short", "allow_shorts", "allow_short_selling"):
+        if not hasattr(cfg, attr_name):
+            continue
+        value = getattr(cfg, attr_name, None)
+        if value is not None:
+            allowed = bool(allowed and bool(value))
+    return bool(allowed)
+
+
 def process_netting_symbol(
     *,
     processor: NettingSymbolProcessor,
@@ -238,6 +257,23 @@ def process_netting_symbol(
     for proposal in net_target.proposals:
         if proposal.reason_code:
             gates.append(proposal.reason_code)
+    if (
+        int(current_shares) <= 0
+        and int(net_target.target_shares) < 0
+        and not _short_openings_allowed(processor.cfg)
+    ):
+        net_target.target_shares = 0
+        net_target.target_dollars = 0.0
+        gates.append("LONG_ONLY_SHORT_SUPPRESSED")
+        processor.record_decision_func(
+            symbol=symbol,
+            bar_ts=net_target.bar_ts,
+            sleeves=net_target.proposals,
+            net_target=net_target,
+            gates=gates,
+            config_snapshot=symbol_snapshot,
+        )
+        return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
 
     symbol_prelude = processor.prepare_symbol_prelude_func(
         state=processor.state,

@@ -59,12 +59,25 @@ def _canonical_intent_side(side: str) -> str | None:
 def _is_opening_trade(*, side: str, current_qty: int) -> bool:
     normalized = str(side or "").strip().lower()
     if normalized in {"sell_short", "short"}:
-        return int(current_qty) >= 0
+        return True
     if normalized in {"buy_to_cover", "cover"}:
         return False
     if normalized in {"sell", "exit"}:
-        return int(current_qty) == 0
-    return int(current_qty) == 0
+        return int(current_qty) <= 0
+    return int(current_qty) >= 0
+
+
+def _is_reducing_trade(*, side: str, current_qty: int, exec_kwargs: Mapping[str, Any]) -> bool:
+    if bool(exec_kwargs.get("closing_position") or exec_kwargs.get("reduce_only")):
+        return True
+    normalized = str(side or "").strip().lower()
+    if normalized in {"sell", "exit"}:
+        return int(current_qty) > 0
+    if normalized in {"buy_to_cover", "cover"}:
+        return int(current_qty) < 0
+    if normalized == "buy":
+        return int(current_qty) < 0
+    return False
 
 
 def _quote_spread_bps(
@@ -610,12 +623,26 @@ def submit_order_runtime(
         return None
     price = float(price_value)
 
+    current_qty = int(be._current_qty(ctx, symbol))
+    reducing_trade = _is_reducing_trade(
+        side=side_norm,
+        current_qty=current_qty,
+        exec_kwargs=exec_kwargs,
+    )
+    consumes_sampling_slot = not reducing_trade
+    if reducing_trade:
+        exec_kwargs.setdefault("closing_position", True)
+        exec_kwargs.setdefault("reduce_only", True)
+        annotations.setdefault("closing_position", True)
+        annotations.setdefault("reduce_only", True)
+
     sampling_decision = evaluate_paper_sampling_order(
         cfg,
         symbol=symbol,
         side=side_norm,
         qty=int(max(qty, 0)),
         price=price,
+        consumes_daily_slot=consumes_sampling_slot,
     )
     if sampling_decision.enabled:
         if not sampling_decision.allowed:
@@ -634,6 +661,7 @@ def submit_order_runtime(
             return None
         qty = int(sampling_decision.qty)
         annotations["paper_sampling"] = True
+        annotations["paper_sampling_consumes_daily_slot"] = bool(consumes_sampling_slot)
         annotations["paper_sampling_requested_qty"] = int(
             sampling_decision.details.get("requested_qty", qty)
         )
@@ -683,6 +711,7 @@ def submit_order_runtime(
         side=side_norm,
         qty=int(qty),
         price=price,
+        consumes_daily_slot=consumes_sampling_slot,
     )
     if sampling_reservation.enabled and not sampling_reservation.allowed:
         be.logger.warning(

@@ -285,6 +285,30 @@ def test_process_netting_symbol_halt_records_block() -> None:
     assert records[0]["gates"] == ["HALT_TRADING"]
 
 
+def test_process_netting_symbol_suppresses_short_opening_in_long_only(monkeypatch) -> None:
+    monkeypatch.setenv("TRADING__ALLOW_SHORTS", "0")
+    processor, records = _make_processor(
+        cfg=SimpleNamespace(seed="seed", launch_profile="paper_trade", shorts_allowed=False)
+    )
+    processor.prepare_symbol_prelude_func = lambda **kwargs: (_ for _ in ()).throw(
+        AssertionError("short opening should be suppressed before prelude")
+    )
+
+    result = process_netting_symbol(
+        processor=processor,
+        symbol="AAPL",
+        net_target=_make_net_target(bar_ts=processor.now, target_dollars=-100.0),
+        orders_submitted=0,
+    )
+
+    assert result.attempted_increment == 0
+    assert result.submitted_increment == 0
+    assert len(records) == 1
+    assert records[0]["net_target"].target_shares == 0
+    assert records[0]["net_target"].target_dollars == 0.0
+    assert "LONG_ONLY_SHORT_SUPPRESSED" in records[0]["gates"]
+
+
 def test_process_netting_symbol_submitted_order_records_and_counts() -> None:
     seen_orders_submitted: list[int] = []
 

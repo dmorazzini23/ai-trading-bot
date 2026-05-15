@@ -123,6 +123,45 @@ def test_paper_sampling_symbol_short_size_and_daily_caps(monkeypatch, tmp_path) 
     assert second.reason == "PAPER_SAMPLING_DAILY_CAP_BLOCK"
 
 
+def test_paper_sampling_reduce_orders_do_not_consume_daily_cap(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    cfg = _cfg()
+    now = datetime(2026, 5, 8, 15, 0, tzinfo=UTC)
+
+    first = reserve_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=now,
+    )
+    closing_sell = reserve_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="sell",
+        qty=1,
+        price=100.0,
+        now=now,
+        consumes_daily_slot=False,
+    )
+    next_entry = reserve_paper_sampling_order(
+        cfg,
+        symbol="AMZN",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=now,
+    )
+
+    assert first.allowed is True
+    assert closing_sell.allowed is True
+    assert closing_sell.details["consumes_daily_slot"] is False
+    assert next_entry.allowed is False
+    assert next_entry.reason == "PAPER_SAMPLING_DAILY_CAP_BLOCK"
+    assert next_entry.details["count"] == 1
+
+
 def test_paper_sampling_does_not_bypass_oms_order_size_block() -> None:
     cfg = _cfg(max_order_dollars=50.0)
     sampling = evaluate_paper_sampling_order(

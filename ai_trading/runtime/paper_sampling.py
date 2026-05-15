@@ -102,6 +102,7 @@ def evaluate_paper_sampling_order(
     side: str,
     qty: int,
     price: float,
+    consumes_daily_slot: bool = True,
 ) -> PaperSamplingDecision:
     """Apply diagnostic paper-sampling narrowing without bypassing hard gates."""
 
@@ -121,7 +122,12 @@ def evaluate_paper_sampling_order(
         "symbol": symbol_key,
         "side": side_key,
         "mode": "paper_sampling",
+        "consumes_daily_slot": bool(consumes_daily_slot),
     }
+    if not bool(consumes_daily_slot):
+        requested_qty = int(max(0, qty))
+        details.update({"requested_qty": requested_qty, "adjusted_qty": requested_qty})
+        return PaperSamplingDecision(True, True, requested_qty, "OK", details)
     if symbol_key not in _allowed_symbols(cfg):
         details["allowed_symbols"] = sorted(_allowed_symbols(cfg))
         return PaperSamplingDecision(True, False, 0, "PAPER_SAMPLING_SYMBOL_BLOCK", details)
@@ -171,6 +177,7 @@ def reserve_paper_sampling_order(
     qty: int,
     price: float,
     now: datetime | None = None,
+    consumes_daily_slot: bool = True,
 ) -> PaperSamplingDecision:
     """Reserve a diagnostic paper-sampling daily slot after upstream gates pass."""
 
@@ -180,8 +187,11 @@ def reserve_paper_sampling_order(
         side=side,
         qty=qty,
         price=price,
+        consumes_daily_slot=consumes_daily_slot,
     )
     if not decision.enabled or not decision.allowed:
+        return decision
+    if not bool(consumes_daily_slot):
         return decision
 
     max_trades = int(getattr(cfg, "paper_sampling_max_trades_per_day", 2) or 2)

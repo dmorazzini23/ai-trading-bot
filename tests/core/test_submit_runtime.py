@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from ai_trading.core import bot_engine
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.runtime.paper_sampling import reserve_paper_sampling_order
 
 
 class _DummyExecEngine:
@@ -292,6 +294,71 @@ def test_submit_order_ignores_stale_ledger_when_disabled(monkeypatch) -> None:
     assert second is not None
     assert len(engine.calls) == 2
     assert getattr(bot_engine.state, "_oms_ledger", None) is None
+
+
+def test_submit_order_paper_sampling_cap_does_not_block_reducing_sell(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    engine = _DummyExecEngine()
+    ctx = SimpleNamespace(
+        market_data=None,
+        api=SimpleNamespace(list_positions=lambda: []),
+        position_map={"AMZN": SimpleNamespace(qty="1", side="long")},
+    )
+    fresh_quote_ts = datetime.now(UTC)
+
+    cfg = _base_cfg(
+        paper_sampling_enabled=True,
+        paper_sampling_allowed_symbols=("AAPL", "AMZN"),
+        paper_sampling_max_trades_per_day=1,
+        paper_sampling_max_notional_per_order=350.0,
+        execution_mode="paper",
+        paper=True,
+        alpaca_base_url="https://paper-api.alpaca.markets",
+        launch_profile="paper_trade",
+    )
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    _reset_submit_state(monkeypatch)
+    reserve_paper_sampling_order(
+        cfg,
+        symbol="AMZN",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=datetime(2026, 5, 14, 13, 35, tzinfo=UTC),
+    )
+    monkeypatch.setattr(bot_engine, "_exec_engine", engine)
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda _cfg: (False, None))
+    monkeypatch.setattr(bot_engine, "_resolve_trading_config", lambda _ctx: cfg)
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote_basis",
+        lambda *_args, **_kwargs: (
+            "broker_nbbo",
+            267.3,
+            267.34,
+            267.32,
+            267.32,
+            fresh_quote_ts,
+        ),
+    )
+
+    order = bot_engine.submit_order(ctx, "AMZN", 1, "sell", price=267.32)
+
+    assert order is not None
+    assert engine.calls
+    assert engine.skips == []
+    kwargs = engine.calls[0]["kwargs"]
+    assert kwargs["closing_position"] is True
+    assert kwargs["reduce_only"] is True
+    assert kwargs["annotations"]["paper_sampling_consumes_daily_slot"] is False
+    state_path = resolve_runtime_artifact_path(
+        "runtime/paper_sampling_state_latest.json",
+        default_relative="runtime/paper_sampling_state_latest.json",
+    )
+    assert state_path.read_text(encoding="utf-8").count('"count":1') == 1
 
 
 def test_submit_order_defaults_opening_nbbo_requirement_when_cfg_missing(monkeypatch) -> None:
