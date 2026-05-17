@@ -18,6 +18,11 @@ def _cfg(**updates):
         "paper_sampling_enabled": True,
         "paper_sampling_allowed_symbols": ("AAPL", "AMZN"),
         "paper_sampling_max_trades_per_day": 1,
+        "paper_sampling_max_trades_per_symbol_per_day": 4,
+        "paper_sampling_max_trades_per_side_per_day": 6,
+        "paper_sampling_max_opening_trades_per_day": 3,
+        "paper_sampling_max_midday_trades_per_day": 4,
+        "paper_sampling_max_closing_trades_per_day": 3,
         "paper_sampling_max_notional_per_order": 250.0,
         "execution_mode": "paper",
         "paper": True,
@@ -160,6 +165,86 @@ def test_paper_sampling_reduce_orders_do_not_consume_daily_cap(monkeypatch, tmp_
     assert next_entry.allowed is False
     assert next_entry.reason == "PAPER_SAMPLING_DAILY_CAP_BLOCK"
     assert next_entry.details["count"] == 1
+
+
+def test_paper_sampling_symbol_side_and_session_quotas(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    cfg = _cfg(
+        paper_sampling_max_trades_per_day=8,
+        paper_sampling_max_trades_per_symbol_per_day=2,
+        paper_sampling_max_trades_per_side_per_day=3,
+        paper_sampling_max_opening_trades_per_day=2,
+        paper_sampling_max_midday_trades_per_day=4,
+        paper_sampling_max_closing_trades_per_day=3,
+    )
+    opening = datetime(2026, 5, 8, 14, 0, tzinfo=UTC)
+    midday = datetime(2026, 5, 8, 17, 0, tzinfo=UTC)
+
+    first = reserve_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=opening,
+    )
+    second = reserve_paper_sampling_order(
+        cfg,
+        symbol="AMZN",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=opening,
+    )
+    opening_block = reserve_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=opening,
+    )
+
+    assert first.allowed is True
+    assert first.details["session_bucket"] == "opening"
+    assert second.allowed is True
+    assert opening_block.allowed is False
+    assert opening_block.reason == "PAPER_SAMPLING_SESSION_DAILY_QUOTA_BLOCK"
+    assert opening_block.details["quota_key"] == "session:opening"
+
+    aapl_midday = reserve_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=midday,
+    )
+    symbol_block = reserve_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="sell",
+        qty=1,
+        price=100.0,
+        now=midday,
+    )
+
+    assert aapl_midday.allowed is True
+    assert symbol_block.allowed is False
+    assert symbol_block.reason == "PAPER_SAMPLING_SYMBOL_DAILY_QUOTA_BLOCK"
+    assert symbol_block.details["quota_key"] == "symbol:AAPL"
+
+    side_block = reserve_paper_sampling_order(
+        cfg,
+        symbol="AMZN",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=midday,
+    )
+    assert side_block.allowed is False
+    assert side_block.reason == "PAPER_SAMPLING_SIDE_DAILY_QUOTA_BLOCK"
+    assert side_block.details["quota_key"] == "side:buy"
 
 
 def test_paper_sampling_does_not_bypass_oms_order_size_block() -> None:

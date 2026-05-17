@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 from threading import RLock
 from typing import Any, Iterable, Mapping
+from zoneinfo import ZoneInfo
 
 from ai_trading.config.management import get_env
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
@@ -40,6 +41,21 @@ def _today_key(now: datetime | None = None) -> str:
     if current.tzinfo is None:
         current = current.replace(tzinfo=UTC)
     return current.astimezone(UTC).date().isoformat()
+
+
+def _session_bucket(now: datetime | None = None) -> str:
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    local = current.astimezone(ZoneInfo("America/New_York"))
+    minutes = local.hour * 60 + local.minute
+    if minutes < (9 * 60 + 30) or minutes >= (16 * 60):
+        return "offhours"
+    if minutes < (11 * 60):
+        return "opening"
+    if minutes >= (15 * 60):
+        return "closing"
+    return "midday"
 
 
 def _load_state(path: Path) -> dict[str, Any]:
@@ -93,6 +109,45 @@ def _is_paper_sampling_active(cfg: Any) -> tuple[bool, str | None]:
     if launch_profile == "live_canary" or launch_profile.startswith("live_"):
         return False, "live_launch_profile"
     return True, None
+
+
+def _cfg_int(cfg: Any, field: str, default: int) -> int:
+    try:
+        value = int(getattr(cfg, field, default) or default)
+    except (TypeError, ValueError):
+        return int(default)
+    return max(0, value)
+
+
+def _state_count(state: Mapping[str, Any], key: str, bucket: str) -> int:
+    raw = state.get(key)
+    if not isinstance(raw, Mapping):
+        return 0
+    try:
+        return int(raw.get(bucket, 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _quota_block(
+    *,
+    decision: PaperSamplingDecision,
+    reason: str,
+    today: str,
+    count: int,
+    quota: int,
+    quota_key: str,
+) -> PaperSamplingDecision:
+    details = dict(decision.details)
+    details.update(
+        {
+            "date": today,
+            "count": int(count),
+            "quota": int(quota),
+            "quota_key": str(quota_key),
+        }
+    )
+    return PaperSamplingDecision(True, False, decision.qty, reason, details)
 
 
 def evaluate_paper_sampling_order(
@@ -196,6 +251,7 @@ def reserve_paper_sampling_order(
 
     max_trades = int(getattr(cfg, "paper_sampling_max_trades_per_day", 2) or 2)
     today = _today_key(now)
+    session = _session_bucket(now)
     path = _state_path()
     with _STATE_LOCK:
         state = _load_state(path)
@@ -211,15 +267,80 @@ def reserve_paper_sampling_order(
                 "PAPER_SAMPLING_DAILY_CAP_BLOCK",
                 details,
             )
+        symbol_key = str(symbol).strip().upper()
+        side_key = str(side).strip().lower()
+        by_symbol = state.get("by_symbol") if state_date == today else {}
+        by_side = state.get("by_side") if state_date == today else {}
+        by_session = state.get("by_session") if state_date == today else {}
+        if not isinstance(by_symbol, Mapping):
+            by_symbol = {}
+        if not isinstance(by_side, Mapping):
+            by_side = {}
+        if not isinstance(by_session, Mapping):
+            by_session = {}
+
+        symbol_quota = _cfg_int(cfg, "paper_sampling_max_trades_per_symbol_per_day", 4)
+        if symbol_quota > 0 and _state_count({"by_symbol": by_symbol}, "by_symbol", symbol_key) >= symbol_quota:
+            return _quota_block(
+                decision=decision,
+                reason="PAPER_SAMPLING_SYMBOL_DAILY_QUOTA_BLOCK",
+                today=today,
+                count=_state_count({"by_symbol": by_symbol}, "by_symbol", symbol_key),
+                quota=symbol_quota,
+                quota_key=f"symbol:{symbol_key}",
+            )
+
+        side_quota = _cfg_int(cfg, "paper_sampling_max_trades_per_side_per_day", 6)
+        if side_quota > 0 and _state_count({"by_side": by_side}, "by_side", side_key) >= side_quota:
+            return _quota_block(
+                decision=decision,
+                reason="PAPER_SAMPLING_SIDE_DAILY_QUOTA_BLOCK",
+                today=today,
+                count=_state_count({"by_side": by_side}, "by_side", side_key),
+                quota=side_quota,
+                quota_key=f"side:{side_key}",
+            )
+
+        session_quota = {
+            "opening": _cfg_int(cfg, "paper_sampling_max_opening_trades_per_day", 3),
+            "midday": _cfg_int(cfg, "paper_sampling_max_midday_trades_per_day", 4),
+            "closing": _cfg_int(cfg, "paper_sampling_max_closing_trades_per_day", 3),
+        }.get(session, 0)
+        if session_quota > 0 and _state_count({"by_session": by_session}, "by_session", session) >= session_quota:
+            return _quota_block(
+                decision=decision,
+                reason="PAPER_SAMPLING_SESSION_DAILY_QUOTA_BLOCK",
+                today=today,
+                count=_state_count({"by_session": by_session}, "by_session", session),
+                quota=session_quota,
+                quota_key=f"session:{session}",
+            )
+
+        next_by_symbol = dict(by_symbol)
+        next_by_side = dict(by_side)
+        next_by_session = dict(by_session)
+        next_by_symbol[symbol_key] = _state_count({"by_symbol": by_symbol}, "by_symbol", symbol_key) + 1
+        next_by_side[side_key] = _state_count({"by_side": by_side}, "by_side", side_key) + 1
+        next_by_session[session] = _state_count({"by_session": by_session}, "by_session", session) + 1
         state = {
             "artifact_type": "paper_sampling_state",
             "date": today,
             "count": count + 1,
+            "by_symbol": next_by_symbol,
+            "by_side": next_by_side,
+            "by_session": next_by_session,
             "updated_at": datetime.now(UTC).isoformat(),
         }
         _write_state(path, state)
     details = dict(decision.details)
-    details.update({"date": today, "count": count + 1, "max_trades_per_day": max_trades})
+    details.update(
+        {
+            "date": today,
+            "count": count + 1,
+            "max_trades_per_day": max_trades,
+            "session_bucket": session,
+        }
+    )
     return PaperSamplingDecision(True, True, decision.qty, "OK", details)
 
 

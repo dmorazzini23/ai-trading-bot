@@ -215,6 +215,74 @@ def test_persist_fill_derived_trade_record_includes_edge_telemetry(monkeypatch):
     assert payload["realized_net_edge_bps"] == 1.75
 
 
+def test_persist_fill_derived_trade_record_includes_execution_attribution(monkeypatch):
+    engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        engine,
+        "_runtime_exec_event_persistence_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(live_trading, "record_trade_fill", lambda _payload: None)
+    monkeypatch.setattr(
+        engine,
+        "_record_runtime_fill_event",
+        lambda payload: captured.update({"payload": dict(payload)}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_update_symbol_loss_cooldown_from_fill",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        engine,
+        "_arm_symbol_reentry_cooldown_from_fill",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        engine,
+        "_reconcile_pending_tca_from_fill",
+        lambda **_kwargs: None,
+    )
+
+    engine._persist_fill_derived_trade_record(
+        symbol="AMZN",
+        side="buy",
+        filled_qty=1.0,
+        fill_price=262.46,
+        expected_price=262.50,
+        order_id="oid-attr",
+        client_order_id="cid-attr",
+        order_status="filled",
+        signal=None,
+        timestamp=live_trading.datetime.now(live_trading.UTC),
+        runtime_payload={
+            "source": "live",
+            "order_type": "limit",
+            "submitted_limit_price": 262.55,
+            "bid": 262.45,
+            "ask": 262.55,
+            "quote_age_ms": 425,
+            "session_regime": "opening",
+            "market_regime": "normal_volatility",
+        },
+        closing_position=False,
+        expected_net_edge_bps=8.0,
+        realized_net_edge_bps=1.5,
+    )
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["event"] == "fill_recorded"
+    assert payload["order_type"] == "limit"
+    assert payload["submitted_limit_price"] == 262.55
+    assert payload["quote_age_ms"] == 425.0
+    assert payload["session_regime"] == "opening"
+    assert payload["market_regime"] == "normal_volatility"
+    assert payload["spread_bps"] > 0.0
+
+
 def test_persist_fill_derived_trade_record_includes_lineage_fields(monkeypatch):
     engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
     captured: dict[str, object] = {}

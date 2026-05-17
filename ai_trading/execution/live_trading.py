@@ -16692,6 +16692,59 @@ class ExecutionEngine:
             "status": order_status,
             "client_order_id": client_order_id,
         }
+        if runtime_payload is not None:
+            for text_key, candidates in {
+                "order_type": ("order_type", "submitted_order_type", "type"),
+                "time_in_force": ("time_in_force", "tif"),
+                "execution_profile": ("execution_profile", "profile"),
+                "market_regime": ("market_regime", "regime"),
+                "volatility_regime": ("volatility_regime",),
+                "trend_regime": ("trend_regime",),
+            }.items():
+                if fill_record.get(text_key) not in (None, ""):
+                    continue
+                for candidate_key in candidates:
+                    candidate = runtime_payload.get(candidate_key)
+                    if candidate not in (None, ""):
+                        parsed = str(candidate).strip().lower()
+                        if parsed:
+                            fill_record[text_key] = parsed
+                            break
+            for numeric_key, candidates in {
+                "intended_price": ("intended_price", "decision_price", "arrival_price"),
+                "submitted_limit_price": ("submitted_limit_price", "limit_price", "price"),
+                "bid": ("bid", "bid_at_arrival", "decision_bid"),
+                "ask": ("ask", "ask_at_arrival", "decision_ask"),
+                "mid": ("mid", "mid_at_arrival", "decision_mid"),
+                "spread_bps": ("spread_bps", "decision_spread_bps", "quote_spread_bps"),
+                "quote_age_ms": ("quote_age_ms", "decision_quote_age_ms", "quote_fresh_ms"),
+                "submit_latency_ms": ("submit_latency_ms", "latency_ms"),
+                "fill_latency_ms": ("fill_latency_ms",),
+            }.items():
+                if fill_record.get(numeric_key) is not None:
+                    continue
+                for candidate_key in candidates:
+                    candidate = _safe_float(runtime_payload.get(candidate_key))
+                    if candidate is not None and math.isfinite(float(candidate)):
+                        fill_record[numeric_key] = float(candidate)
+                        break
+            if fill_record.get("spread_bps") is None:
+                bid_candidate = _safe_float(fill_record.get("bid"))
+                ask_candidate = _safe_float(fill_record.get("ask"))
+                if (
+                    bid_candidate is not None
+                    and ask_candidate is not None
+                    and ask_candidate > bid_candidate
+                    and bid_candidate > 0.0
+                ):
+                    mid_candidate = (float(bid_candidate) + float(ask_candidate)) / 2.0
+                    if mid_candidate > 0.0:
+                        fill_record["mid"] = float(mid_candidate)
+                        fill_record["spread_bps"] = (
+                            (float(ask_candidate) - float(bid_candidate))
+                            / float(mid_candidate)
+                            * 10000.0
+                        )
         liquidity_role_value: str | None = None
         venue_value: str | None = None
         session_regime_value: str | None = None
@@ -23419,6 +23472,39 @@ class ExecutionEngine:
             if isinstance(runtime_fill_payload, dict):
                 if runtime_fill_payload.get("source") in (None, ""):
                     runtime_fill_payload["source"] = "live"
+                runtime_fill_payload.setdefault("order_type", str(order_type_normalized))
+                runtime_fill_payload.setdefault("submitted_order_type", str(order_type_normalized))
+                if kwargs.get("time_in_force") not in (None, ""):
+                    runtime_fill_payload.setdefault("time_in_force", str(kwargs.get("time_in_force")))
+                submitted_limit = _safe_float(resolved_limit_price)
+                if submitted_limit is None:
+                    submitted_limit = _safe_float(price_for_limit)
+                if submitted_limit is None:
+                    submitted_limit = _safe_float(benchmark_price)
+                if submitted_limit is not None:
+                    runtime_fill_payload.setdefault("submitted_limit_price", float(submitted_limit))
+                if benchmark_price is not None and float(benchmark_price) > 0.0:
+                    runtime_fill_payload.setdefault("intended_price", float(benchmark_price))
+                if bid_val is not None:
+                    runtime_fill_payload.setdefault("bid", float(bid_val))
+                if ask_val is not None:
+                    runtime_fill_payload.setdefault("ask", float(ask_val))
+                if (
+                    bid_val is not None
+                    and ask_val is not None
+                    and ask_val > bid_val
+                    and bid_val > 0.0
+                ):
+                    midpoint_value = (float(bid_val) + float(ask_val)) / 2.0
+                    runtime_fill_payload.setdefault("mid", float(midpoint_value))
+                    runtime_fill_payload.setdefault(
+                        "spread_bps",
+                        ((float(ask_val) - float(bid_val)) / float(midpoint_value)) * 10000.0,
+                    )
+                elif spread_bps_hint_for_profile is not None:
+                    runtime_fill_payload.setdefault("spread_bps", float(spread_bps_hint_for_profile))
+                if quote_age_ms is not None:
+                    runtime_fill_payload.setdefault("quote_age_ms", float(quote_age_ms))
                 if venue_hint not in (None, "") and runtime_fill_payload.get("venue") in (
                     None,
                     "",
@@ -23433,6 +23519,20 @@ class ExecutionEngine:
                     runtime_fill_payload["session_regime"] = str(
                         execution_profile_context.get("session_regime")
                     ).strip().lower()
+                if (
+                    execution_profile_context.get("profile")
+                    and runtime_fill_payload.get("execution_profile") in (None, "")
+                ):
+                    runtime_fill_payload["execution_profile"] = str(
+                        execution_profile_context.get("profile")
+                    ).strip().lower()
+                for regime_key in ("market_regime", "volatility_regime", "trend_regime"):
+                    if (
+                        isinstance(metadata_raw, Mapping)
+                        and metadata_raw.get(regime_key) not in (None, "")
+                        and runtime_fill_payload.get(regime_key) in (None, "")
+                    ):
+                        runtime_fill_payload[regime_key] = str(metadata_raw.get(regime_key)).strip().lower()
                 if model_id_hint is not None and runtime_fill_payload.get("model_id") in (None, ""):
                     runtime_fill_payload["model_id"] = str(model_id_hint)
                 if (
