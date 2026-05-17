@@ -8,9 +8,9 @@ from legacy_guard import require_legacy_demo_flag
 require_legacy_demo_flag("scripts/demo_enhanced_debugging.py")
 os.environ.setdefault('ALPACA_API_KEY', 'demo_key')
 os.environ.setdefault('ALPACA_SECRET_KEY', 'demo_secret')
-os.environ.setdefault('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+os.environ.setdefault('ALPACA_TRADING_BASE_URL', 'https://paper-api.alpaca.markets')
 os.environ.setdefault('WEBHOOK_SECRET', 'demo_webhook')
-os.environ.setdefault('FLASK_PORT', '9000')
+os.environ.setdefault('API_PORT', '9001')
 
 def demonstrate_signal_to_execution_debugging():
     """Demonstrate complete signal-to-execution debugging."""

@@ -170,11 +170,6 @@ def evaluate_promotion_approval_gate(
             "promotion_events_path": str(promotion_events_path),
         }
 
-    approvals_by_id = {
-        str(row.get("approval_id")): row
-        for row in approvals
-        if _lineage_text(row.get("approval_id")) is not None
-    }
     if filters:
         approvals = [row for row in approvals if _row_matches_targets(row, filters)]
         events = [row for row in events if _row_matches_targets(row, filters)]
@@ -185,6 +180,11 @@ def evaluate_promotion_approval_gate(
                 "governance_path": str(base),
                 "target": filters,
             }
+    approvals_by_id = {
+        str(row.get("approval_id")): row
+        for row in approvals
+        if _lineage_text(row.get("approval_id")) is not None
+    }
 
     latest_approval = approvals[-1]
     approval_to_check = latest_approval

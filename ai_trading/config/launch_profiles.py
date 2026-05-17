@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any, Mapping
 
 from ai_trading.config.management import get_env
@@ -135,9 +136,10 @@ def _float_env(name: str, default: float | None) -> float | None:
     if raw in (None, ""):
         return default
     try:
-        return float(str(raw).strip())
+        parsed = float(str(raw).strip())
     except ValueError:
         return default
+    return parsed if math.isfinite(parsed) else default
 
 
 def _int_env(name: str, default: int) -> int:
@@ -167,6 +169,12 @@ def _tighten_float(default: float | None, override: float | None) -> float | Non
     if override is None:
         return default
     return min(float(default), float(override))
+
+
+def _tighten_positive_float(default: float | None, override: float | None) -> float | None:
+    if override is not None and float(override) <= 0.0:
+        return default
+    return _tighten_float(default, override)
 
 
 def _coalesce_float(value: float | None, default: float) -> float:
@@ -227,7 +235,7 @@ def resolve_launch_profile(name: str | None = None) -> LaunchProfile:
     if live_profile:
         max_gross_exposure = _tighten_float(base.max_gross_exposure, max_gross_exposure)
         max_symbol_exposure = _tighten_float(base.max_symbol_exposure, max_symbol_exposure)
-        max_daily_loss = _tighten_float(base.max_daily_loss, max_daily_loss)
+        max_daily_loss = _tighten_positive_float(base.max_daily_loss, max_daily_loss)
         max_notional_per_order = _tighten_float(
             base.max_notional_per_order,
             max_notional_per_order,

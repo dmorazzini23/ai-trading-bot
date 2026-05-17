@@ -197,6 +197,9 @@ def vwap_pegged_submit(
     from ai_trading.core import bot_engine as _bot_engine
     from ai_trading.services.execution import submit_order
 
+    quote_error_types: tuple[type[BaseException], ...] = AI_TRADING_FALLBACK_EXCEPTIONS
+    if isinstance(APIError, type) and issubclass(APIError, BaseException):
+        quote_error_types = (APIError, *quote_error_types)
     start_time = pytime.time()
     placed = 0
     while placed < total_qty and pytime.time() - start_time < duration:
@@ -218,26 +221,26 @@ def vwap_pegged_submit(
                 raise RuntimeError("StockLatestQuoteRequest unavailable")
             req = _latest_quote_request(symbol)
             quote = ctx.data_client.get_stock_latest_quote(req)
-            spread = (
-                (quote.ask_price - quote.bid_price)
-                if getattr(quote, "ask_price", None) and getattr(quote, "bid_price", None)
-                else 0.0
+            bid_price = float(getattr(quote, "bid_price", 0.0) or 0.0)
+            ask_price = float(getattr(quote, "ask_price", 0.0) or 0.0)
+            if bid_price <= 0.0 or ask_price <= 0.0 or ask_price < bid_price:
+                logger.warning(
+                    "VWAP_QUOTE_SPREAD_UNAVAILABLE",
+                    extra={
+                        "symbol": symbol,
+                        "bid_price": bid_price,
+                        "ask_price": ask_price,
+                    },
+                )
+                break
+            spread = ask_price - bid_price
+        except quote_error_types as e:
+            logger.warning(
+                "VWAP_QUOTE_SPREAD_UNAVAILABLE",
+                extra={"symbol": symbol, "error": str(e)},
+                exc_info=True,
             )
-        except APIError as e:
-            logger.warning(f"[vwap_slice] Alpaca quote failed for {symbol}: {e}")
-            spread = 0.0
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-            RuntimeError,
-        ) as _:
-            spread = 0.0
+            break
         if spread > 0.05:
             slice_qty = max(1, int((total_qty - placed) * 0.5))
         else:

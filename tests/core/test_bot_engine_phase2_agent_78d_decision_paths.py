@@ -876,7 +876,8 @@ def test_sentiment_missing_key_and_request_fallback(
     monkeypatch.setattr(settings_mod, "get_settings", lambda: missing_settings)
     monkeypatch.setattr(sentiment_mod, "get_settings", lambda: missing_settings)
     monkeypatch.setattr(bot_engine, "get_news_api_key", lambda: None)
-    assert bot_engine._fetch_sentiment_ctx(SimpleNamespace(), "AAPL") == 0.0
+    with pytest.raises(RuntimeError, match="missing_api_key"):
+        bot_engine._fetch_sentiment_ctx(SimpleNamespace(), "AAPL")
 
     settings = SimpleNamespace(
         sentiment_api_key="key",
@@ -898,6 +899,44 @@ def test_sentiment_missing_key_and_request_fallback(
     monkeypatch.setattr(bot_engine.http, "get", raise_request)
     assert bot_engine._fetch_sentiment_ctx(SimpleNamespace(), "MSFT") == 0.0
     assert bot_engine._SENTIMENT_CACHE["MSFT"][1] == 0.0
+
+
+def test_signal_sentiment_requires_authoritative_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = bot_engine.SignalManager()
+    bot_engine._SENTIMENT_CACHE.clear()
+    bot_engine._LAST_PRICE.clear()
+    monkeypatch.setattr(bot_engine, "_fetch_sentiment_ctx", lambda _ctx, _ticker: 0.6)
+    monkeypatch.setattr(bot_engine, "_sentiment_evidence_is_authoritative", lambda _ticker: False)
+
+    signal = manager.signal_sentiment(
+        SimpleNamespace(),
+        "AAPL",
+        pd.DataFrame({"close": [100.0, 101.0]}),
+    )
+
+    assert signal == (0, 0.0, "sentiment_unavailable")
+    assert bot_engine._SENTIMENT_CACHE["AAPL"][1] == 0.0
+
+
+def test_bot_engine_sentiment_wrapper_preserves_canonical_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_trading.analysis import sentiment as sentiment_mod
+
+    bot_engine._SENTIMENT_CACHE.clear()
+    monkeypatch.setattr(
+        sentiment_mod,
+        "fetch_sentiment",
+        lambda _ctx, _ticker: (_ for _ in ()).throw(
+            RuntimeError("Sentiment unavailable: missing_api_key")
+        ),
+    )
+    monkeypatch.setattr(sentiment_mod, "_sentiment_fail_closed", lambda: True)
+
+    with pytest.raises(RuntimeError, match="missing_api_key"):
+        bot_engine.fetch_sentiment(SimpleNamespace(), "AAPL")
 
 
 def test_liquidity_factor_quote_and_last_bar_fallback(

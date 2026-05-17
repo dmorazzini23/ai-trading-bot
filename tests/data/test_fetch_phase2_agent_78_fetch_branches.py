@@ -286,6 +286,45 @@ def test_normalize_ohlcv_df_rejects_range_index_without_timestamp_column() -> No
     assert list(normalized.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
 
 
+def test_normalize_ohlcv_df_rejects_reset_range_index_timestamp_column() -> None:
+    raw = pd.DataFrame(
+        {
+            "timestamp": [0, 1],
+            "open": [10.0, 10.1],
+            "high": [10.5, 10.6],
+            "low": [9.5, 9.6],
+            "close": [10.2, 10.3],
+            "volume": [100, 120],
+        }
+    )
+
+    normalized = normalize_ohlcv_df(raw, include_columns=("timestamp",))
+
+    assert isinstance(raw.index, pd.RangeIndex)
+    assert normalized.empty
+    assert list(normalized.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+
+
+def test_yahoo_get_bars_rejects_range_index_before_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = pd.DataFrame(
+        {
+            "open": [10.0],
+            "high": [10.5],
+            "low": [9.5],
+            "close": [10.2],
+            "volume": [100],
+        }
+    )
+
+    monkeypatch.setattr(fetch, "fetch_yf_batched", lambda symbols, **_kwargs: {symbols[0]: raw})
+
+    start = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
+    result = fetch._yahoo_get_bars("AAPL", start, start + timedelta(days=1), "1d")
+
+    assert result.empty
+    assert list(result.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+
+
 def test_last_minute_bar_age_ignores_future_cached_timestamp(caplog) -> None:
     fetch._MINUTE_CACHE.pop("AAPL", None)
     caplog.set_level("WARNING", logger="ai_trading.data.fetch")

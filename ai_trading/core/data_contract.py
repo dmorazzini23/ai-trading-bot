@@ -15,6 +15,7 @@ pd = load_pandas()
 
 REQUIRED_COLUMNS = ("open", "high", "low", "close", "volume")
 _NY_TZ = ZoneInfo("America/New_York")
+_MAX_FUTURE_BAR_SKEW_SECONDS = 5.0
 
 
 @dataclass
@@ -111,7 +112,17 @@ def validate_bars(
     if last_ts.tzinfo is None:
         return DataContractResult(False, "NAIVE_INDEX")
     now = datetime.now(UTC)
-    age_seconds = max(0.0, (now - last_ts.astimezone(UTC)).total_seconds())
+    age_seconds = (now - last_ts.astimezone(UTC)).total_seconds()
+    if age_seconds < -_MAX_FUTURE_BAR_SKEW_SECONDS:
+        return DataContractResult(
+            False,
+            "FUTURE_BAR",
+            {
+                "future_skew_seconds": abs(age_seconds),
+                "allowed_future_skew_seconds": _MAX_FUTURE_BAR_SKEW_SECONDS,
+            },
+        )
+    age_seconds = max(0.0, age_seconds)
     if freshness_seconds >= 0 and age_seconds > freshness_seconds:
         return DataContractResult(False, "STALE_BAR", {"age_seconds": age_seconds})
     if rth_only:

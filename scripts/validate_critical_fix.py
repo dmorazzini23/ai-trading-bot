@@ -4,7 +4,7 @@ import os
 import sys
 from legacy_guard import require_legacy_demo_flag
 require_legacy_demo_flag("scripts/validate_critical_fix.py")
-os.environ.update({'ALPACA_API_KEY': 'test_key', 'ALPACA_SECRET_KEY': 'test_secret', 'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets', 'WEBHOOK_SECRET': 'test_webhook', 'FLASK_PORT': '5000'})
+os.environ.update({'ALPACA_API_KEY': 'test_key', 'ALPACA_SECRET_KEY': 'test_secret', 'ALPACA_TRADING_BASE_URL': 'https://paper-api.alpaca.markets', 'WEBHOOK_SECRET': 'test_webhook', 'API_PORT': '9001'})
 sys.path.append('.')
 from ai_trading.execution import ExecutionEngine
 from tests.support.mocks import MockContext, MockOrder

@@ -98,10 +98,26 @@ def institutional_kelly(p: KellyParams) -> float:
     f* = cap * max(0, p_win - (1 - p_win)/R)
     Clamped to [0, min(cap, config.kelly_fraction_max)].
     """
-    raw = p.win_prob - (1.0 - p.win_prob) / max(p.win_loss_ratio, 1e-09)
+    try:
+        win_prob = float(p.win_prob)
+        win_loss_ratio = float(p.win_loss_ratio)
+        cap = float(p.cap)
+    except (TypeError, ValueError) as exc:
+        logger.warning("Invalid Kelly parameters: %s", exc)
+        return 0.0
+    if not math.isfinite(win_prob) or not 0.0 <= win_prob <= 1.0:
+        logger.warning("Invalid Kelly win probability: %s", p.win_prob)
+        return 0.0
+    if not math.isfinite(win_loss_ratio) or win_loss_ratio <= 0.0:
+        logger.warning("Invalid Kelly win/loss ratio: %s", p.win_loss_ratio)
+        return 0.0
+    if not math.isfinite(cap) or cap <= 0.0:
+        logger.warning("Invalid Kelly cap: %s", p.cap)
+        return 0.0
+    raw = win_prob - (1.0 - win_prob) / win_loss_ratio
     frac = max(0.0, raw)
-    kelly = p.cap * frac
-    return float(max(0.0, min(kelly, p.cap, get_default_config().kelly_fraction_max)))
+    kelly = cap * frac
+    return float(max(0.0, min(kelly, cap, get_default_config().kelly_fraction_max)))
 
 class InstitutionalKelly:
     """Callable wrapper around :func:`institutional_kelly`."""

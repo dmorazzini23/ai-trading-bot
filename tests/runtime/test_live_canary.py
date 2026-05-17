@@ -58,6 +58,7 @@ def test_live_canary_allows_tightly_bounded_allowlisted_order(monkeypatch, tmp_p
             "quote_age_ms": 100.0,
             "spread_bps": 5.0,
             "daily_loss_state": {"daily_loss_abs": 0.0},
+            "account_snapshot": {"equity": 10000.0},
         },
         execution_mode="live",
     )
@@ -123,6 +124,7 @@ def test_live_canary_blocks_after_daily_order_cap(monkeypatch, tmp_path: Path):
         "quote_age_ms": 100.0,
         "spread_bps": 2.0,
         "daily_loss_state": {"daily_loss_abs": 0.0},
+        "account_snapshot": {"equity": 1000.0},
     }
 
     first_allowed, _ = evaluate_canary_order(order, execution_mode="live")
@@ -206,6 +208,7 @@ def test_live_canary_writes_state_and_event_artifacts(monkeypatch, tmp_path: Pat
             "quote_age_ms": 100.0,
             "spread_bps": 2.0,
             "daily_loss_state": {"daily_loss_abs": 0.0},
+            "account_snapshot": {"equity": 1000.0},
         },
         execution_mode="live",
     )
@@ -308,6 +311,42 @@ def test_live_canary_blocks_projected_gross_and_symbol_exposure(monkeypatch, tmp
     assert "max_gross_exposure_exceeded" in context["reasons"]
     assert "max_symbol_exposure_exceeded" in context["reasons"]
     assert context["exposure"]["evaluated"] is True
+
+
+def test_live_canary_blocks_missing_quote_metadata_and_equity(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    _approve_live_capital(monkeypatch, tmp_path)
+    runtime_state.reset_quote_status()
+    runtime_state.update_data_provider_state(
+        primary="alpaca-iex",
+        active="alpaca-iex",
+        using_backup=False,
+        status="healthy",
+        data_status="ready",
+    )
+    runtime_state.update_quote_status(
+        allowed=True,
+        symbol="AAPL",
+        status="ready",
+        source="latest_quote",
+        synthetic=False,
+    )
+
+    allowed, context = evaluate_canary_order(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 1,
+            "price_hint": 10.0,
+            "daily_loss_state": {"daily_loss_abs": 0.0},
+        },
+        execution_mode="live",
+    )
+
+    assert allowed is False
+    assert "quote_age_unknown" in context["reasons"]
+    assert "spread_unknown" in context["reasons"]
+    assert "exposure_equity_missing" in context["reasons"]
 
 
 def test_live_canary_sell_to_close_is_not_short_and_reduces_exposure(monkeypatch, tmp_path: Path):

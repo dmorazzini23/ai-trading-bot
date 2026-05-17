@@ -96,23 +96,35 @@ def _freshness(
     row_observed_at = _parse_ts((row or {}).get("last_observed_at"))
 
     generated_age_seconds: float | None = None
+    generated_future_dated = False
     if generated_at is not None:
-        generated_age_seconds = max(0.0, (now - generated_at).total_seconds())
+        generated_delta_seconds = (now - generated_at).total_seconds()
+        generated_future_dated = generated_delta_seconds < 0.0
+        generated_age_seconds = max(0.0, generated_delta_seconds)
 
     row_age_seconds: float | None = None
+    row_future_dated = False
     if row_observed_at is not None:
-        row_age_seconds = max(0.0, (now - row_observed_at).total_seconds())
+        row_delta_seconds = (now - row_observed_at).total_seconds()
+        row_future_dated = row_delta_seconds < 0.0
+        row_age_seconds = max(0.0, row_delta_seconds)
 
     fresh = bool(
         generated_age_seconds is not None
+        and not generated_future_dated
         and generated_age_seconds <= max_age
+        and not row_future_dated
         and (row_age_seconds is None or row_age_seconds <= max_age)
     )
     reason = "fresh"
     if generated_age_seconds is None:
         reason = "missing_generated_at"
+    elif generated_future_dated:
+        reason = "future_model"
     elif generated_age_seconds > max_age:
         reason = "stale_model"
+    elif row_future_dated:
+        reason = "future_bucket"
     elif row_age_seconds is not None and row_age_seconds > max_age:
         reason = "stale_bucket"
 

@@ -735,6 +735,8 @@ def _refresh_broker_order(
 
     status = _normalize_broker_order_status(getattr(order, "status", None))
     get_order = getattr(api, "get_order", None)
+    if not callable(get_order):
+        get_order = getattr(api, "get_order_by_id", None)
     order_id = getattr(order, "id", None) or getattr(order, "client_order_id", None)
     if not callable(get_order) or not order_id:
         return order, status, False
@@ -789,6 +791,8 @@ def get_confirmed_pending_orders(
         orders = list(orders)
 
     get_order = getattr(api, "get_order", None)
+    if not callable(get_order):
+        get_order = getattr(api, "get_order_by_id", None)
     if require_confirmation and not callable(get_order):
         logger.debug("PENDING_ORDER_CONFIRMATION_UNAVAILABLE")
         return []
@@ -4578,6 +4582,95 @@ def _log_delayed_quote_slippage(
 logger = get_logger(__name__)
 
 
+def _parse_quote_payload_timestamp(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, (int, float)) and math.isfinite(float(value)):
+        numeric = float(value)
+        if numeric > 1_000_000_000_000_000:
+            numeric /= 1_000_000_000.0
+        elif numeric > 1_000_000_000_000:
+            numeric /= 1_000.0
+        try:
+            parsed = datetime.fromtimestamp(numeric, tz=UTC)
+        except (OSError, OverflowError, ValueError):
+            return None
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _quote_payloads_fresh(
+    payloads: Iterable[Mapping[str, Any]],
+    *,
+    symbol: str,
+    cache: dict[str, Any],
+) -> bool:
+    timestamp_keys = (
+        "timestamp",
+        "quote_timestamp",
+        "sip_timestamp",
+        "participant_timestamp",
+        "updated_at",
+        "t",
+    )
+    quote_ts: datetime | None = None
+    for payload in payloads:
+        for key in timestamp_keys:
+            quote_ts = _parse_quote_payload_timestamp(payload.get(key))
+            if quote_ts is not None:
+                break
+        if quote_ts is not None:
+            break
+    if quote_ts is None:
+        return True
+    now = datetime.now(UTC)
+    age_ms = (now - quote_ts).total_seconds() * 1000.0
+    max_future_ms = max(
+        0.0,
+        float(get_env("AI_TRADING_DIRECT_QUOTE_MAX_FUTURE_SKEW_MS", 2000, cast=float) or 0.0),
+    )
+    max_age_ms = max(
+        0.0,
+        float(get_env("AI_TRADING_DIRECT_QUOTE_MAX_AGE_MS", 60_000, cast=float) or 0.0),
+    )
+    cache["quote_timestamp"] = quote_ts.isoformat()
+    cache["quote_age_ms"] = max(0.0, age_ms)
+    if age_ms < -max_future_ms:
+        cache["quote_source"] = "alpaca_quote_future_timestamp"
+        cache["quote_price"] = None
+        logger.warning(
+            "ALPACA_QUOTE_FUTURE_TIMESTAMP",
+            extra={
+                "symbol": symbol,
+                "quote_timestamp": quote_ts.isoformat(),
+                "age_ms": round(age_ms, 3),
+            },
+        )
+        return False
+    if max_age_ms > 0.0 and age_ms > max_age_ms:
+        cache["quote_source"] = "alpaca_quote_stale"
+        cache["quote_price"] = None
+        logger.warning(
+            "ALPACA_QUOTE_STALE",
+            extra={
+                "symbol": symbol,
+                "quote_timestamp": quote_ts.isoformat(),
+                "quote_age_ms": round(age_ms, 3),
+                "max_quote_age_ms": round(max_age_ms, 3),
+            },
+        )
+        return False
+    return True
+
+
 def _attempt_alpaca_trade(
     symbol: str, feed: str | None, cache: dict[str, Any]
 ) -> tuple[float | None, str]:
@@ -4777,8 +4870,12 @@ def _attempt_alpaca_quote(
                     "last_price": getattr(quote_obj, "last_price", None),
                     "ap": getattr(quote_obj, "ap", None),
                     "bp": getattr(quote_obj, "bp", None),
+                    "timestamp": getattr(quote_obj, "timestamp", None)
+                    or getattr(quote_obj, "t", None),
                 }
             ]
+        if not _quote_payloads_fresh(payloads, symbol=symbol, cache=cache):
+            return None, str(cache.get("quote_source") or "alpaca_quote_stale")
         price_sdk, source_sdk, pending_bid_sdk, ask_unusable_sdk, last_unusable_sdk, values_sdk = _extract_quote_price(payloads, symbol)
         if price_sdk is None:
             return None
@@ -4953,6 +5050,8 @@ def _attempt_alpaca_quote(
         symbol_payload = data.get(symbol)
         if isinstance(symbol_payload, dict):
             payloads.append(symbol_payload)
+    if not _quote_payloads_fresh(payloads, symbol=symbol, cache=cache):
+        return None, str(cache.get("quote_source") or "alpaca_quote_stale")
     price, source, pending_bid, ask_unusable, last_unusable, values = _extract_quote_price(payloads, symbol)
     resolved_price = None
     resolved_source = 'alpaca_quote_invalid'
@@ -5974,6 +6073,16 @@ def fetch_sentiment(
             TypeError,
             OSError,
         ) as exc:
+            if isinstance(exc, RuntimeError) and (
+                str(exc).startswith("Sentiment unavailable:")
+                or bool(getattr(sentiment_module, "_sentiment_fail_closed", lambda: False)())
+            ):
+                logger.debug(
+                    "Legacy sentiment delegate failed closed for %s: %s",
+                    ticker,
+                    exc,
+                )
+                raise
             fallback = _legacy_sentiment_session_fallback(ticker, session=session)
             if fallback is not None:
                 return fallback
@@ -5988,6 +6097,14 @@ def fetch_sentiment(
             sentiment_module._set_sentiment_http_session_for_tests(previous_session)
     _sync_legacy_sentiment_state(ticker)
     return _cache_sentiment_score(ticker, max(-1.0, min(1.0, score)))
+
+
+def _sentiment_evidence_is_authoritative(ticker: str) -> bool:
+    try:
+        evidence = _canonical_sentiment_module().get_sentiment_evidence(ticker)
+    except (AttributeError, RuntimeError, ValueError, TypeError):
+        return False
+    return bool(isinstance(evidence, Mapping) and evidence.get("authoritative") is True)
 
 
 def _sha256_file(path: str) -> str:
@@ -6087,7 +6204,20 @@ def _required_model_cache_matches(path: str, modname: str) -> bool:
         if str(meta.get("path") or "") != path:
             return False
         resolved_path = str(meta.get("resolved_path") or path)
-        return bool(meta.get("signature") == _model_file_signature(resolved_path))
+        if not bool(meta.get("signature") == _model_file_signature(resolved_path)):
+            return False
+        if kind == "file" and _runtime_model_governance_required(
+            execution_mode=_runtime_execution_mode(),
+            require_model=bool(get_env("AI_TRADING_REQUIRE_ML_MODEL", False, cast=bool)),
+            configured_artifact=True,
+        ):
+            registry_meta = meta.get("registry_meta")
+            _enforce_runtime_model_governance(
+                model_path=resolved_path,
+                source=str(meta.get("source") or "cache"),
+                registry_meta=registry_meta if isinstance(registry_meta, Mapping) else None,
+            )
+        return True
     if modname:
         return kind == "module" and str(meta.get("module") or "") == modname
     return kind in {"placeholder", "disabled"}
@@ -6100,6 +6230,8 @@ def _set_required_model_cache(
     path: str | None = None,
     module: str | None = None,
     resolved_path: str | None = None,
+    source: str | None = None,
+    registry_meta: Mapping[str, Any] | None = None,
 ) -> Any:
     global _MODEL_CACHE, _MODEL_CACHE_META
     _MODEL_CACHE = model
@@ -6111,6 +6243,10 @@ def _set_required_model_cache(
         metadata["signature"] = _model_file_signature(effective_path)
     if module:
         metadata["module"] = module
+    if source:
+        metadata["source"] = source
+    if registry_meta:
+        metadata["registry_meta"] = dict(registry_meta)
     _MODEL_CACHE_META = metadata
     return model
 
@@ -6131,11 +6267,14 @@ def _runtime_model_governance_required(
     *,
     execution_mode: str,
     require_model: bool,
+    configured_artifact: bool = False,
 ) -> bool:
     explicit = bool(
         get_env("AI_TRADING_REQUIRE_MODEL_REGISTRY_APPROVAL", False, cast=bool)
     )
-    return explicit or (execution_mode == "live" and bool(require_model))
+    return explicit or (
+        execution_mode == "live" and (bool(require_model) or bool(configured_artifact))
+    )
 
 
 def _parse_model_governance_timestamp(value: Any) -> datetime | None:
@@ -6442,6 +6581,7 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
         require_governance = _runtime_model_governance_required(
             execution_mode=execution_mode,
             require_model=require_model,
+            configured_artifact=True,
         )
         strict_runtime = execution_mode == "live" and not (
             _is_testing_env() or is_runtime_contract_testing_mode()
@@ -6590,6 +6730,8 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
             kind="file",
             path=path,
             resolved_path=active_path,
+            source=active_source,
+            registry_meta=registry_meta,
         )
 
     if modname:
@@ -6598,6 +6740,7 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
         if _runtime_model_governance_required(
             execution_mode=execution_mode,
             require_model=require_model,
+            configured_artifact=True,
         ) and not bool(get_env("AI_TRADING_MODEL_MODULE_APPROVED", False, cast=bool)):
             logger.error(
                 "MODEL_GOVERNANCE_REJECTED",
@@ -6693,7 +6836,25 @@ def _refresh_required_model_cache_from_path(
         )
         return False
 
-    _set_required_model_cache(model, kind="file", path=str(resolved))
+    registry_meta: dict[str, Any] = {}
+    if _runtime_model_governance_required(
+        execution_mode=_runtime_execution_mode(),
+        require_model=bool(get_env("AI_TRADING_REQUIRE_ML_MODEL", False, cast=bool)),
+        configured_artifact=True,
+    ):
+        _enforce_runtime_model_governance(
+            model_path=str(resolved),
+            source=f"hot_reload:{reason}",
+            registry_meta=registry_meta,
+        )
+    _set_required_model_cache(
+        model,
+        kind="file",
+        path=str(resolved),
+        resolved_path=str(resolved),
+        source=f"hot_reload:{reason}",
+        registry_meta=registry_meta,
+    )
     runtime_ctx = _get_runtime_context_or_none()
     if runtime_ctx is not None:
         try:
@@ -17508,6 +17669,8 @@ class SignalManager:
                 cached = _SENTIMENT_CACHE.get(ticker)
                 if cached and (pytime.time() - cached[0] < SENTIMENT_TTL_SEC):
                     score = cached[1]
+                    if not _sentiment_evidence_is_authoritative(ticker):
+                        score = 0.0
                 else:
                     score = 0.0
                     _SENTIMENT_CACHE[ticker] = (pytime.time(), score)
@@ -17527,6 +17690,15 @@ class SignalManager:
             ) as e:  # AI-AGENT-REF: narrow exception
                 logger.warning(f"[signal_sentiment] {ticker} error: {e}")
                 score = 0.0
+            if not _sentiment_evidence_is_authoritative(ticker):
+                logger.info(
+                    "SENTIMENT_SIGNAL_NON_AUTHORITATIVE",
+                    extra={"symbol": ticker},
+                )
+                with sentiment_lock:
+                    _LAST_PRICE[ticker] = latest_close
+                    _SENTIMENT_CACHE[ticker] = (pytime.time(), 0.0)
+                return 0, 0.0, "sentiment_unavailable"
 
         # Update last‐seen price & cache
         with sentiment_lock:
@@ -17534,7 +17706,9 @@ class SignalManager:
             _SENTIMENT_CACHE[ticker] = (pytime.time(), score)
 
         score = max(-1.0, min(1.0, score))
-        s = 1 if score > 0 else -1 if score < 0 else -1
+        if abs(score) <= 1e-12:
+            return 0, 0.0, "sentiment_neutral"
+        s = 1 if score > 0 else -1
         weight = abs(score)
         if is_high_vol_regime():
             weight *= 1.5
@@ -17919,6 +18093,8 @@ class SignalManager:
         conf_map = {label: w for _, w, label in adjusted_signals}
         confidence = composite_signal_confidence(conf_map)
         labels = "+".join(conf_map.keys())
+        if abs(float(score)) <= 1e-12:
+            return 0, confidence, labels
         return int(math.copysign(1, score)), confidence, labels
 
 _METALEARN_FALLBACK_SYMBOL_LOGGED: set[str] = set()

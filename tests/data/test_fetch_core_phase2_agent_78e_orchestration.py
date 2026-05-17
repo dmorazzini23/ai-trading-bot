@@ -817,11 +817,11 @@ def test_should_skip_symbol_sets_coverage_metadata_for_catastrophic_gap() -> Non
 
 
 def test_get_daily_df_forced_yahoo_and_fresh_memo(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    daily = _frame(BASE_START, provider="yahoo")
+    daily = _frame(PAST_START, provider="yahoo")
     monkeypatch.setattr(fetch, "_env_source_override", lambda tf: ("yahoo", "DATA_SOURCE") if tf == "1Day" else None)
     monkeypatch.setattr(fetch, "_safe_backup_get_bars", lambda *_args, **_kwargs: daily)
     monkeypatch.setattr(fetch, "should_import_alpaca_sdk", lambda: True)
-    result = fetch.get_daily_df("AAPL", BASE_START, BASE_END)
+    result = fetch.get_daily_df("AAPL", PAST_START, PAST_END)
     assert not result.empty
     assert result.attrs["data_provider"] == "yahoo"
 
@@ -852,6 +852,35 @@ def test_get_daily_df_rejects_future_memo_frame(fetch_env: dict[str, Any], monke
 
     assert result is not future_memo
     assert result.attrs["data_provider"] == "yahoo"
+
+
+def test_get_daily_df_drops_future_provider_rows(
+    fetch_env: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    future_ts = datetime.now(tz=UTC) + timedelta(days=1)
+    provider_frame = pd.DataFrame(
+        {
+            "timestamp": [PAST_START, future_ts],
+            "open": [100.0, 200.0],
+            "high": [102.0, 202.0],
+            "low": [99.0, 199.0],
+            "close": [101.0, 201.0],
+            "volume": [1000, 2000],
+        }
+    )
+    provider_frame.attrs["data_provider"] = "finnhub"
+
+    monkeypatch.setattr(fetch, "_env_source_override", lambda tf: ("finnhub",) if tf == "1Day" else None)
+    monkeypatch.setattr(fetch, "_finnhub_get_bars", lambda *_args, **_kwargs: provider_frame)
+    caplog.set_level(logging.WARNING, logger="ai_trading.data.fetch")
+
+    result = fetch.get_daily_df("AAPL", PAST_START, PAST_END)
+
+    assert list(result["timestamp"]) == [pd.Timestamp(PAST_START)]
+    assert list(result["close"]) == [101.0]
+    assert any(record.message == "future_bar_timestamp" for record in caplog.records)
 
 
 def test_get_daily_df_rejects_malformed_memo_frame(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:

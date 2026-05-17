@@ -12,9 +12,9 @@ from legacy_guard import require_legacy_demo_flag
 require_legacy_demo_flag("scripts/validate_standalone.py")
 os.environ['ALPACA_API_KEY'] = 'dummy'
 os.environ['ALPACA_SECRET_KEY'] = 'dummy'
-os.environ['ALPACA_BASE_URL'] = 'dummy'
+os.environ['ALPACA_TRADING_BASE_URL'] = 'https://paper-api.alpaca.markets'
 os.environ['WEBHOOK_SECRET'] = 'dummy'
-os.environ['FLASK_PORT'] = '5000'
+os.environ['API_PORT'] = '9001'
 
 class OrderSide(Enum):
     BUY = 'buy'

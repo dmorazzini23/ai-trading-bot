@@ -24,12 +24,10 @@ EXPECTED = {
         'paths',
         'portfolio',
         'position_sizing',
-        'predict',
         'rebalancer',
         'settings',
         'signals',
         'strategy_allocator',
-        'trade_logic',
         'utils',
     ],
     'ai_trading.config': sorted([
@@ -128,6 +126,8 @@ def test_legacy_live_api_exports_warn_as_research_only():
     importlib.reload(ai_trading)
     vars(ai_trading).pop("predict", None)
     vars(ai_trading).pop("trade_logic", None)
+    assert "predict" not in ai_trading.__all__
+    assert "trade_logic" not in ai_trading.__all__
     with pytest.warns(DeprecationWarning, match="research utilities"):
         assert ai_trading.predict is import_module("ai_trading.predict")
     vars(ai_trading).pop("trade_logic", None)

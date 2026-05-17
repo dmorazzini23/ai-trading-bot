@@ -309,6 +309,53 @@ def test_process_netting_symbol_suppresses_short_opening_in_long_only(monkeypatc
     assert "LONG_ONLY_SHORT_SUPPRESSED" in records[0]["gates"]
 
 
+def test_process_netting_symbol_covers_existing_short_in_long_only(monkeypatch) -> None:
+    monkeypatch.setenv("TRADING__ALLOW_SHORTS", "0")
+    submissions: list[dict[str, Any]] = []
+
+    def execute_submission_func(**kwargs: Any) -> Any:
+        submissions.append(
+            {
+                "side": kwargs["side"],
+                "delta_shares": kwargs["delta_shares"],
+                "target_shares": kwargs["net_target"].target_shares,
+            }
+        )
+        return SimpleNamespace(
+            status="submitted",
+            gates_added=("OK_TRADE",),
+            attempted_increment=1,
+            submitted_increment=1,
+            metrics={},
+            tca_record=None,
+            order_payload={"client_order_id": "cid-cover"},
+            decision_trace_id="trace-cover",
+            order_intent_contract={"intent": "dummy"},
+        )
+
+    processor, records = _make_processor(
+        cfg=SimpleNamespace(seed="seed", launch_profile="paper_trade", shorts_allowed=False),
+        positions={"AAPL": -5},
+        execute_submission_func=execute_submission_func,
+    )
+
+    result = process_netting_symbol(
+        processor=processor,
+        symbol="AAPL",
+        net_target=_make_net_target(bar_ts=processor.now, target_dollars=-100.0),
+        orders_submitted=0,
+    )
+
+    assert result.attempted_increment == 1
+    assert result.submitted_increment == 1
+    assert submissions == [{"side": "buy", "delta_shares": 5, "target_shares": 0}]
+    assert len(records) == 1
+    assert records[0]["net_target"].target_shares == 0
+    assert records[0]["net_target"].target_dollars == 0.0
+    assert "LONG_ONLY_SHORT_SUPPRESSED" in records[0]["gates"]
+    assert "OK_TRADE" in records[0]["gates"]
+
+
 def test_process_netting_symbol_submitted_order_records_and_counts() -> None:
     seen_orders_submitted: list[int] = []
 

@@ -202,6 +202,17 @@ def test_confirmed_pending_orders_drops_terminal_refresh(
     assert any(record.getMessage() == "PENDING_ORDER_STATUS_CHANGED" for record in caplog.records)
 
 
+def test_confirmed_pending_orders_uses_alpaca_py_get_order_by_id() -> None:
+    order = SimpleNamespace(id="ord-3", status="new")
+    api = SimpleNamespace(
+        get_order_by_id=lambda _order_id: SimpleNamespace(id="ord-3", status="new")
+    )
+
+    pending = bot_engine.get_confirmed_pending_orders(api, [order])
+
+    assert [item.id for item in pending] == ["ord-3"]
+
+
 def test_degraded_state_and_timeframe_helpers_cover_fatal_inference() -> None:
     assert bot_engine._degrade_state((True, "provider_disabled")) == (
         True,

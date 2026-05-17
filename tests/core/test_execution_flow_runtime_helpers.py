@@ -60,6 +60,52 @@ def test_twap_submit_places_slices_and_sleeps(monkeypatch):
     assert sleeps == [2.0, 2.0, 2.0]
 
 
+@pytest.mark.parametrize(
+    "quote_result",
+    [
+        SimpleNamespace(ask_price=None, bid_price=100.0),
+        RuntimeError("quote unavailable"),
+    ],
+)
+def test_vwap_pegged_submit_blocks_when_quote_spread_unknown(monkeypatch, quote_result):
+    df = pd.DataFrame(
+        {
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.0],
+            "volume": [1000],
+        }
+    )
+    submissions: list[tuple[str, int, str]] = []
+
+    monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", lambda _symbol: df)
+    monkeypatch.setattr(bot_engine, "ta", SimpleNamespace(vwap=lambda *_args, **_kwargs: pd.Series([100.0])))
+    monkeypatch.setattr(bot_engine, "_ensure_alpaca_classes", lambda: None)
+    monkeypatch.setattr(bot_engine, "_ALPACA_IMPORT_ERROR", None, raising=False)
+    monkeypatch.setattr(bot_engine, "APIError", RuntimeError)
+    monkeypatch.setattr(
+        bot_engine,
+        "StockLatestQuoteRequest",
+        lambda **_kwargs: SimpleNamespace(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "ai_trading.services.execution.submit_order",
+        lambda _ctx, symbol, qty, side, **_kwargs: submissions.append((symbol, qty, side)),
+    )
+
+    def get_stock_latest_quote(_request):
+        if isinstance(quote_result, BaseException):
+            raise quote_result
+        return quote_result
+
+    ctx = SimpleNamespace(data_client=SimpleNamespace(get_stock_latest_quote=get_stock_latest_quote))
+
+    execution_flow.vwap_pegged_submit(ctx, "AAPL", 10, "buy", duration=1)
+
+    assert submissions == []
+
+
 def test_pov_submit_aborts_after_missing_data_retries(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
     cfg = SimpleNamespace(

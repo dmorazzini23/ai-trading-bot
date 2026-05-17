@@ -325,24 +325,31 @@ def _cmd_arm(args: argparse.Namespace) -> int:
     env_path = Path(args.env_file)
     if not env_path.exists():
         raise FileNotFoundError(f"Missing env file: {env_path}")
-    backup = _backup_env(env_path)
-    _upsert_env(env_path, "EXECUTION_MAX_NEW_ORDERS_PER_CYCLE", str(args.max_new_orders))
-    _write_stamp(
-        _arm_stamp_path(Path(args.state_dir), args.arm, "start"),
-        _now_utc(),
-    )
-    if not args.no_restart:
-        _restart_service(args.service)
+    if args.max_new_orders < 0:
+        raise ValueError("--max-new-orders must be non-negative")
+    stamp = _arm_stamp_path(Path(args.state_dir), args.arm, "start")
+    backup: Path | None = None
+    service_restarted = False
+    if args.apply:
+        backup = _backup_env(env_path)
+        _upsert_env(env_path, "EXECUTION_MAX_NEW_ORDERS_PER_CYCLE", str(args.max_new_orders))
+        _write_stamp(stamp, _now_utc())
+        if not args.no_restart:
+            _restart_service(args.service)
+            service_restarted = True
     print(
         json.dumps(
             {
-                "status": "armed",
+                "status": "armed" if args.apply else "dry_run",
                 "arm": args.arm,
                 "max_new_orders_per_cycle": args.max_new_orders,
                 "env_file": str(env_path),
-                "env_backup": str(backup),
-                "service_restarted": bool(not args.no_restart),
-                "start_stamp": str(_arm_stamp_path(Path(args.state_dir), args.arm, "start")),
+                "env_backup": str(backup) if backup is not None else None,
+                "apply": bool(args.apply),
+                "would_restart_service": bool(not args.no_restart),
+                "service_restarted": service_restarted,
+                "start_stamp": str(stamp),
+                "start_stamp_written": bool(args.apply),
             },
             indent=2,
         )
@@ -437,13 +444,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    arm = sub.add_parser("arm", help="Set pacing cap, stamp start time, and restart service.")
+    arm = sub.add_parser("arm", help="Plan or apply a pacing cap change for an arm.")
     arm.add_argument("--arm", choices=("baseline", "variant"), required=True)
     arm.add_argument("--max-new-orders", type=int, required=True)
     arm.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply the .env update, write the start stamp, and restart unless --no-restart is set.",
+    )
+    arm.add_argument(
         "--no-restart",
         action="store_true",
-        help="Do not restart service after editing .env.",
+        help="With --apply, do not restart service after editing .env.",
     )
     arm.set_defaults(func=_cmd_arm)
 

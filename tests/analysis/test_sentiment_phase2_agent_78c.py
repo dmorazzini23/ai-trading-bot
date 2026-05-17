@@ -340,6 +340,17 @@ def test_optional_dependency_loaders_cache_success_and_log_missing_once(
     assert warnings == [{"package": "bs4"}, {"package": "transformers"}]
 
 
+def test_transformer_loader_requires_pinned_revision_outside_tests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sentiment, "_transformers_bundle", None)
+    monkeypatch.setattr(sentiment, "_finbert_revision_required", lambda: True)
+    monkeypatch.delenv("AI_TRADING_FINBERT_MODEL_REVISION", raising=False)
+
+    with pytest.raises(RuntimeError, match="revision is not pinned"):
+        sentiment._load_transformers()
+
+
 def test_transformer_loader_falls_back_to_explicit_bert_classes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -12,7 +12,7 @@ import warnings
 PYTEST_DONT_REWRITE = ["ai_trading"]
 
 # AI-AGENT-REF: public surface allowlist
-_EXPORTS = {
+_PUBLIC_EXPORTS = {
     "alpaca_api": "ai_trading.alpaca_api",
     "app": "ai_trading.app",
     "audit": "ai_trading.audit",
@@ -31,18 +31,23 @@ _EXPORTS = {
     "paths": "ai_trading.paths",
     "portfolio": "ai_trading.portfolio",
     "position_sizing": "ai_trading.position_sizing",
-    "predict": "ai_trading.predict",
     "rebalancer": "ai_trading.rebalancer",
     "settings": "ai_trading.settings",
     "signals": "ai_trading.signals",
     "strategy_allocator": "ai_trading.strategy_allocator",
-    "trade_logic": "ai_trading.trade_logic",
     "utils": "ai_trading.utils",
     "ExecutionEngine": "ai_trading.execution:ExecutionEngine",
     "DataFetchError": "ai_trading.data.fetch:DataFetchError",
 }
 
-__all__ = sorted(_EXPORTS)
+_LEGACY_RESEARCH_EXPORTS = {
+    "predict": "ai_trading.predict",
+    "trade_logic": "ai_trading.trade_logic",
+}
+
+_EXPORTS = {**_PUBLIC_EXPORTS, **_LEGACY_RESEARCH_EXPORTS}
+
+__all__ = sorted(_PUBLIC_EXPORTS)
 
 _DEPRECATED_RESEARCH_EXPORTS = {
     "predict": "ai_trading.predict is deprecated as a package-level live API; use it only for research utilities.",

@@ -1,5 +1,9 @@
-"""
-Enhanced Health Check Module for the AI Trading Bot.
+"""Legacy diagnostic health check module for the AI Trading Bot.
+
+Canonical operator health surfaces are the app-registered ``/health``,
+``/healthz``, and ``/metrics`` routes on ``API_PORT`` or ``HEALTHCHECK_PORT``.
+This script remains a legacy local diagnostic and must not be treated as the
+runtime health route implementation.
 
 This module provides comprehensive health monitoring capabilities:
 - System health checks (CPU, memory, disk)
@@ -32,6 +36,10 @@ try:
 except ImportError:
     PRODUCTION_MONITORING_AVAILABLE = False
 logger = logging.getLogger(__name__)
+LEGACY_HEALTH_SCRIPT_NOTICE = (
+    "scripts/health_check.py is a legacy local diagnostic; use the canonical "
+    "/healthz route on API_PORT or HEALTHCHECK_PORT for operator checks."
+)
 
 class HealthStatus(Enum):
     """Health check status levels."""
@@ -277,6 +285,7 @@ def log_health_summary() -> None:
 def main() -> int:
     """Run the legacy health check and return a truthful process status."""
 
+    logging.warning(LEGACY_HEALTH_SCRIPT_NOTICE)
     status = get_health_status()
     logging.info(str(json.dumps(status, indent=2)))
     return 1 if str(status.get("overall_status") or "").lower() == "critical" else 0

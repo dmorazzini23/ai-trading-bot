@@ -58,7 +58,12 @@ def test_live_capital_readiness_allows_explicit_tiny_canary(monkeypatch):
         regime_champions={"generated_at": now, "status": "ready"},
         adversarial_failure={"generated_at": now, "status": "passed", "live_money_authority": False},
         drift_monitor={"generated_at": now, "status": "ok"},
-        approval_artifact={"generated_at": now, "approval_id": "approval-1", "status": "approved"},
+        approval_artifact={
+            "generated_at": now,
+            "approval_id": "approval-1",
+            "status": "approved",
+            "launch_profile": "live_canary",
+        },
     )
 
     assert report["status"] == "live_canary_allowed"
@@ -99,6 +104,38 @@ def test_live_capital_readiness_requires_approval_artifact(monkeypatch):
 
     assert report["status"] == "blocked"
     assert "live_capital_approval_artifact_missing" in report["reasons"]
+
+
+def test_live_capital_readiness_rejects_stale_or_unscoped_approval(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", "1")
+    monkeypatch.setenv("AI_TRADING_LIVE_MAX_DAILY_LOSS", "25")
+    fresh = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    stale = (datetime.now(UTC) - timedelta(hours=30)).isoformat().replace("+00:00", "Z")
+
+    report = live_capital_readiness.build_live_capital_readiness(
+        health=_healthy_payload(),
+        live_cost_model={"generated_at": fresh, "status": {"available": True, "status": "ready", "breach_count": 0}},
+        promotion_report={"generated_at": fresh, "promotion_ready": True},
+        validation={"generated_at": fresh, "full_validation_green": True},
+        canary_plan={"generated_at": fresh, "paper_vs_live_canary_plan": "ready"},
+        edge_calibration={"generated_at": fresh, "status": "calibrated"},
+        execution_capture={"generated_at": fresh, "status": "acceptable"},
+        portfolio_edge={"generated_at": fresh, "status": "ok"},
+        pretrade_risk_verifier={"generated_at": fresh, "status": "passed"},
+        post_trade_surveillance={"generated_at": fresh, "status": "clean"},
+        walk_forward_capital={"generated_at": fresh, "status": "completed", "live_enabled": False},
+        order_type_optimizer={"generated_at": fresh, "status": "ready", "live_enabled": False},
+        adversarial_failure={"generated_at": fresh, "status": "passed", "live_money_authority": False},
+        drift_monitor={"generated_at": fresh, "status": "ok"},
+        approval_artifact={"generated_at": stale, "approval_id": "approval-1", "status": "approved"},
+    )
+
+    assert report["status"] == "blocked"
+    assert "live_capital_approval_artifact_missing" in report["reasons"]
+    assert report["approval"]["ok"] is False
+    assert report["approval"]["fresh"]["fresh"] is False
+    assert report["approval"]["scope_matches"] is False
 
 
 def test_live_capital_readiness_blocks_stale_live_cost_evidence(monkeypatch):
@@ -165,6 +202,43 @@ def test_live_capital_readiness_blocks_insufficient_cost_samples(monkeypatch):
 
     assert report["status"] == "blocked"
     assert "live_cost_model_not_ready" in report["reasons"]
+
+
+def test_live_capital_readiness_blocks_insufficient_samples_evidence(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", "1")
+    monkeypatch.setenv("AI_TRADING_LIVE_MAX_DAILY_LOSS", "25")
+    fresh = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    report = live_capital_readiness.build_live_capital_readiness(
+        health=_healthy_payload(),
+        live_cost_model={"generated_at": fresh, "status": {"available": True, "status": "ready", "breach_count": 0}},
+        promotion_report={"generated_at": fresh, "promotion_ready": True},
+        validation={"generated_at": fresh, "full_validation_green": True},
+        canary_plan={"generated_at": fresh, "paper_vs_live_canary_plan": "ready"},
+        edge_calibration={
+            "generated_at": fresh,
+            "status": "insufficient_samples",
+            "sample_gate": {"sufficient": False},
+        },
+        execution_capture={"generated_at": fresh, "status": "acceptable"},
+        portfolio_edge={"generated_at": fresh, "status": "ok"},
+        pretrade_risk_verifier={"generated_at": fresh, "status": "passed"},
+        post_trade_surveillance={"generated_at": fresh, "status": "clean"},
+        walk_forward_capital={"generated_at": fresh, "status": "completed", "live_enabled": False},
+        order_type_optimizer={"generated_at": fresh, "status": "ready", "live_enabled": False},
+        adversarial_failure={"generated_at": fresh, "status": "passed", "live_money_authority": False},
+        drift_monitor={"generated_at": fresh, "status": "ok"},
+        approval_artifact={
+            "generated_at": fresh,
+            "approval_id": "approval-1",
+            "status": "approved",
+            "launch_profile": "live_canary",
+        },
+    )
+
+    assert report["status"] == "blocked"
+    assert "edge_calibration_insufficient_samples" in report["reasons"]
 
 
 def test_live_capital_readiness_cli_writes_blocked_artifact_with_success_override(

@@ -41,6 +41,15 @@ def test_validate_bars_stale():
     assert result.reason == "STALE_BAR"
 
 
+def test_validate_bars_rejects_future_bar_beyond_skew():
+    df = _sample_df(datetime.now(UTC) + timedelta(minutes=1))
+    result = validate_bars(df, "1Min", freshness_seconds=300, rth_only=False)
+
+    assert result.ok is False
+    assert result.reason == "FUTURE_BAR"
+    assert result.detail["future_skew_seconds"] > 5.0
+
+
 def test_normalize_bars_lowercase():
     df = _sample_df(datetime.now(UTC) - timedelta(minutes=2))
     df.columns = ["Open", "High", "Low", "Close", "Volume"]

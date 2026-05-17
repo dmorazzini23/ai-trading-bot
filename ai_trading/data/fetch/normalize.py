@@ -204,6 +204,11 @@ def normalize_ohlcv_df(
         attrs = dict(getattr(df, "attrs", {}) or {})
     except (AttributeError, TypeError):  # pragma: no cover - metadata optional
         attrs = {}
+    allow_synthetic = bool(
+        attrs.get("allow_research_synthetic_timestamp")
+        or attrs.get("allow_research_synthetic_timestamps")
+        or attrs.get("research_synthetic")
+    )
 
     if isinstance(df.columns, pd.MultiIndex):
         frame = df.copy()
@@ -220,12 +225,16 @@ def normalize_ohlcv_df(
     frame = frame.loc[:, ~pd.Index(frame.columns).duplicated()]
 
     if "timestamp" not in frame.columns and isinstance(frame.index, pd.RangeIndex):
-        allow_synthetic = bool(
-            attrs.get("allow_research_synthetic_timestamp")
-            or attrs.get("allow_research_synthetic_timestamps")
-            or attrs.get("research_synthetic")
-        )
         if not allow_synthetic:
+            return _empty_frame(include_timestamp=include_timestamp)
+    if "timestamp" in frame.columns and isinstance(frame.index, pd.RangeIndex):
+        try:
+            timestamp_values = pd.Index(frame["timestamp"])
+            range_values = pd.Index(frame.index)
+            range_timestamp = bool(len(timestamp_values) == len(range_values) and timestamp_values.equals(range_values))
+        except (AttributeError, TypeError, ValueError):
+            range_timestamp = False
+        if range_timestamp and not allow_synthetic:
             return _empty_frame(include_timestamp=include_timestamp)
 
     had_trade_count_column = "trade_count" in frame.columns

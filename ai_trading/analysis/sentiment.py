@@ -73,6 +73,25 @@ def _finbert_revision_kwargs() -> dict[str, str]:
     return {"revision": revision} if revision else {}
 
 
+def _finbert_revision_required() -> bool:
+    if get_env("PYTEST_RUNNING", "0", cast=bool) or get_env(
+        "AI_TRADING_HF_SENTIMENT_BENCHMARK_MODE",
+        False,
+        cast=bool,
+    ):
+        return False
+    if bool(
+        get_env(
+            "AI_TRADING_FINBERT_ALLOW_UNPINNED",
+            False,
+            cast=bool,
+            resolve_aliases=False,
+        )
+    ):
+        return False
+    return _sentiment_runtime_enabled()
+
+
 class SentimentEvidence(TypedDict, total=False):
     ticker: str
     score: float
@@ -242,6 +261,13 @@ def _load_transformers(log=logger):
     global _transformers_bundle, _SENT_DEPS_LOGGED
     if _transformers_bundle is not None:
         return _transformers_bundle
+    revision_kwargs = _finbert_revision_kwargs()
+    if not revision_kwargs and _finbert_revision_required():
+        raise RuntimeError(
+            "FinBERT runtime model revision is not pinned. Set "
+            "AI_TRADING_FINBERT_MODEL_REVISION to the reviewed local-cache revision "
+            "or AI_TRADING_FINBERT_ALLOW_UNPINNED=1 for explicit research-only use."
+        )
     try:
         import torch
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -254,7 +280,6 @@ def _load_transformers(log=logger):
             )
             or "yiyanghkust/finbert-tone"
         )
-        revision_kwargs = _finbert_revision_kwargs()
         tokenizer_cls = cast(Any, AutoTokenizer)
         model_cls = cast(Any, AutoModelForSequenceClassification)
         try:

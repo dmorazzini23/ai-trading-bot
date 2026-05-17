@@ -120,6 +120,33 @@ def test_get_latest_price_uses_configured_feed(monkeypatch):
     }
 
 
+def test_get_latest_price_rejects_future_quote_timestamp(monkeypatch):
+    symbol = "AAPL"
+    monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
+    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
+    monkeypatch.setenv("AI_TRADING_DIRECT_QUOTE_MAX_FUTURE_SKEW_MS", "1000")
+    monkeypatch.setattr(bot_engine, "_stock_quote_request_ready", lambda: False)
+    monkeypatch.setattr("ai_trading.core.bot_engine.is_alpaca_service_available", lambda: True)
+
+    future_ts = (
+        bot_engine.datetime.now(bot_engine.UTC) + bot_engine.timedelta(seconds=30)
+    ).isoformat()
+
+    def fake_alpaca_get(url, *, params=None, **_):
+        return {"ap": "123.45", "timestamp": future_ts}
+
+    monkeypatch.setattr(bot_engine, "_alpaca_symbols", lambda: (fake_alpaca_get, None))
+    monkeypatch.setattr("ai_trading.data.fetch._backup_get_bars", lambda *a, **k: object())
+    monkeypatch.setattr("ai_trading.core.bot_engine.get_latest_close", lambda df: 77.0)
+
+    price = bot_engine.get_latest_price(symbol)
+
+    assert price == pytest.approx(77.0)
+    assert bot_engine._PRICE_SOURCE[symbol] == "yahoo"
+
+
 def test_get_latest_price_http_error_falls_back(monkeypatch):
     symbol = "MSFT"
     monkeypatch.setenv("ALPACA_DATA_FEED", "iex")

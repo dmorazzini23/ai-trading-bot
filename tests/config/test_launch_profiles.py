@@ -118,3 +118,12 @@ def test_live_profile_honors_zero_exposure_overrides(monkeypatch):
 
     assert profile.max_gross_exposure == 0.0
     assert profile.max_symbol_exposure == 0.0
+
+
+def test_live_profile_invalid_daily_loss_override_preserves_gate(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_DAILY_LOSS", "-1")
+
+    profile = resolve_launch_profile()
+
+    assert profile.max_daily_loss == 25.0

@@ -136,6 +136,68 @@ def _approval_artifact_approved(payload: Mapping[str, Any]) -> bool:
     return bool(approval_id and status in {"approved", "accepted", "signed"})
 
 
+def _approval_scope(payload: Mapping[str, Any]) -> str:
+    manual = payload.get("manual_approval")
+    manual_payload = manual if isinstance(manual, Mapping) else {}
+    for key in ("launch_profile", "profile", "target_profile", "approved_profile"):
+        value = payload.get(key)
+        if value in (None, ""):
+            value = manual_payload.get(key)
+        text = str(value or "").strip().lower()
+        if text:
+            return text
+    return ""
+
+
+def _approval_artifact_gate(
+    payload: Mapping[str, Any],
+    *,
+    profile_name: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    fresh = _freshness(
+        payload,
+        max_age_hours=_freshness_limit("AI_TRADING_LIVE_APPROVAL_MAX_AGE_HOURS", 24.0),
+        now=now,
+    )
+    approved = _approval_artifact_approved(payload)
+    scope = _approval_scope(payload)
+    scope_matches = bool(scope and scope == str(profile_name or "").strip().lower())
+    ok = bool(approved and fresh["fresh"] and scope_matches)
+    reasons: list[str] = []
+    if not approved:
+        reasons.append("approval_missing")
+    if not fresh["fresh"]:
+        reasons.append("approval_stale")
+    if not scope_matches:
+        reasons.append("approval_scope_mismatch")
+    return {
+        "ok": ok,
+        "approved": approved,
+        "fresh": fresh,
+        "scope": scope or None,
+        "expected_scope": profile_name,
+        "scope_matches": scope_matches,
+        "reasons": reasons,
+    }
+
+
+def _insufficient_samples(payload: Mapping[str, Any]) -> bool:
+    status = str(payload.get("status") or "").strip().lower()
+    reason = str(payload.get("reason") or "").strip().lower()
+    if status == "insufficient_samples" or reason == "insufficient_samples":
+        return True
+    sample_gate = payload.get("sample_gate")
+    gate = sample_gate if isinstance(sample_gate, Mapping) else {}
+    gate_status = str(gate.get("status") or "").strip().lower()
+    if gate_status == "insufficient_samples" or gate.get("sufficient") is False:
+        return True
+    status_payload = payload.get("status")
+    status_map = status_payload if isinstance(status_payload, Mapping) else {}
+    status_reason = str(status_map.get("reason") or status_map.get("quality") or "").strip().lower()
+    return status_reason == "insufficient_samples"
+
+
 def build_live_capital_readiness(
     *,
     health: Mapping[str, Any],
@@ -172,6 +234,10 @@ def build_live_capital_readiness(
     approval_artifact = approval_artifact or {}
     profile = resolve_launch_profile()
     profile_payload = launch_profile_payload(profile)
+    approval_gate = _approval_artifact_gate(
+        approval_artifact,
+        profile_name=profile.name,
+    )
     reasons: list[str] = []
     actions: list[str] = []
     freshness = {
@@ -275,6 +341,8 @@ def build_live_capital_readiness(
         reasons.append("live_cost_model_stale")
     elif str(live_status.get("status") or "").lower() not in {"ready", "ok"}:
         reasons.append("live_cost_model_not_ready")
+    if _insufficient_samples(live_cost_model):
+        reasons.append("live_cost_model_insufficient_samples")
     if int(live_status.get("breach_count") or 0) > 0:
         reasons.append("live_cost_breaches_present")
     provider = _nested(health, "data_provider")
@@ -287,7 +355,7 @@ def build_live_capital_readiness(
     if not _env_bool("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", False):
         reasons.append("live_account_not_explicitly_confirmed")
         actions.append("set AI_TRADING_LIVE_ACCOUNT_CONFIRMED=1 only after account review")
-    if profile.name.startswith("live_") and not _approval_artifact_approved(approval_artifact):
+    if profile.name.startswith("live_") and not approval_gate["ok"]:
         reasons.append("live_capital_approval_artifact_missing")
         actions.append("record an approved live-capital approval artifact before live cutover")
     if not canary_plan and profile.name == "live_canary":
@@ -311,6 +379,8 @@ def build_live_capital_readiness(
             reasons.append("edge_calibration_missing")
         elif not freshness["edge_calibration"]["fresh"]:
             reasons.append("edge_calibration_stale")
+        elif _insufficient_samples(edge_calibration):
+            reasons.append("edge_calibration_insufficient_samples")
         elif edge_status in {"inverted", "overestimated"}:
             reasons.append(f"edge_calibration_{edge_status}")
         capture_status = str(execution_capture.get("status") or "").lower()
@@ -318,6 +388,8 @@ def build_live_capital_readiness(
             reasons.append("execution_capture_missing")
         elif not freshness["execution_capture"]["fresh"]:
             reasons.append("execution_capture_stale")
+        elif _insufficient_samples(execution_capture):
+            reasons.append("execution_capture_insufficient_samples")
         elif capture_status in {"needs_review", "degraded"}:
             reasons.append("execution_capture_not_acceptable")
         portfolio_status = str(portfolio_edge.get("status") or portfolio_edge.get("output") or "").lower()
@@ -325,6 +397,8 @@ def build_live_capital_readiness(
             reasons.append("portfolio_edge_missing")
         elif not freshness["portfolio_edge"]["fresh"]:
             reasons.append("portfolio_edge_stale")
+        elif _insufficient_samples(portfolio_edge):
+            reasons.append("portfolio_edge_insufficient_samples")
         elif portfolio_status in {"control_breach", "no_new_entries"}:
             reasons.append("portfolio_edge_control_breach")
         risk_status = str(pretrade_risk_verifier.get("status") or "").lower()
@@ -332,6 +406,8 @@ def build_live_capital_readiness(
             reasons.append("pretrade_risk_verifier_missing")
         elif not freshness["pretrade_risk_verifier"]["fresh"]:
             reasons.append("pretrade_risk_verifier_stale")
+        elif _insufficient_samples(pretrade_risk_verifier):
+            reasons.append("pretrade_risk_verifier_insufficient_samples")
         elif risk_status != "passed":
             reasons.append("pretrade_risk_verifier_not_passed")
         surveillance_status = str(post_trade_surveillance.get("status") or "").lower()
@@ -339,6 +415,8 @@ def build_live_capital_readiness(
             reasons.append("post_trade_surveillance_missing")
         elif not freshness["post_trade_surveillance"]["fresh"]:
             reasons.append("post_trade_surveillance_stale")
+        elif _insufficient_samples(post_trade_surveillance):
+            reasons.append("post_trade_surveillance_insufficient_samples")
         elif surveillance_status in {"critical", "blocked"}:
             reasons.append("post_trade_surveillance_not_clean")
         drift_status = str(drift_monitor.get("status") or "").lower()
@@ -346,6 +424,8 @@ def build_live_capital_readiness(
             reasons.append("drift_monitor_missing")
         elif not freshness["drift_monitor"]["fresh"]:
             reasons.append("drift_monitor_stale")
+        elif _insufficient_samples(drift_monitor):
+            reasons.append("drift_monitor_insufficient_samples")
         elif drift_status in {"blocked", "drift_detected"}:
             reasons.append("drift_monitor_not_clean")
         walk_forward_status = str(walk_forward_capital.get("status") or "").lower()
@@ -353,6 +433,8 @@ def build_live_capital_readiness(
             reasons.append("walk_forward_capital_missing")
         elif not freshness["walk_forward_capital"]["fresh"]:
             reasons.append("walk_forward_capital_stale")
+        elif _insufficient_samples(walk_forward_capital):
+            reasons.append("walk_forward_capital_insufficient_samples")
         elif walk_forward_status in {"blocked", "risk_breach"}:
             reasons.append("walk_forward_capital_not_acceptable")
         if bool(order_type_optimizer.get("live_enabled", False)):
@@ -388,9 +470,10 @@ def build_live_capital_readiness(
             "live_cost_ready": bool(live_status.get("available", bool(live_cost_model))),
             "daily_loss_configured": _daily_loss_configured() or profile.max_daily_loss is not None,
             "live_account_confirmed": _env_bool("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", False),
-            "live_capital_approval_artifact": _approval_artifact_approved(approval_artifact),
+            "live_capital_approval_artifact": bool(approval_gate["ok"]),
         },
     }
+    report["approval"] = approval_gate
     report["canary_evidence"] = {
         "daily_research_trade_allowed": canary_plan.get("trade_allowed"),
         "daily_research_mode": canary_plan.get("recommended_next_session_mode"),

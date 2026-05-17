@@ -158,6 +158,47 @@ def test_model_reloads_when_artifact_changes(monkeypatch, tmp_path):
     assert second["version"] == 2
 
 
+def test_live_configured_model_cache_revalidates_governance(monkeypatch, tmp_path):
+    be = reload_bot_engine()
+    mpath = tmp_path / "m.pkl"
+    joblib.dump({"version": 1}, mpath)
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(mpath))
+    monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
+    monkeypatch.setenv("MODEL_REGISTRY_DIR", str(tmp_path / "registry"))
+    calls: list[tuple[str, str]] = []
+
+    def fake_enforce(*, model_path, source, registry_meta=None):
+        calls.append((str(model_path), str(source)))
+
+    monkeypatch.setattr(be, "load_verified_joblib_artifact", lambda path, *, manifest_path=None: joblib.load(path))
+    monkeypatch.setattr(be, "_enforce_runtime_model_governance", fake_enforce)
+
+    first = be._load_required_model()
+    second = be._load_required_model()
+
+    assert first is second
+    assert calls == [(str(mpath), "configured"), (str(mpath), "configured")]
+
+
+def test_live_hot_reload_requires_runtime_governance(monkeypatch, tmp_path):
+    be = reload_bot_engine()
+    mpath = tmp_path / "m.pkl"
+    joblib.dump({"version": 1}, mpath)
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        be,
+        "_enforce_runtime_model_governance",
+        lambda *, model_path, source, registry_meta=None: calls.append((str(model_path), str(source))),
+    )
+    monkeypatch.setattr(be, "load_verified_joblib_artifact", lambda path, *, manifest_path=None: joblib.load(path))
+
+    assert be._refresh_required_model_cache_from_path(str(mpath), reason="cycle") is True
+
+    assert calls == [(str(mpath), "hot_reload:cycle")]
+
+
 def test_missing_model_file_creates_placeholder(monkeypatch, tmp_path, caplog):
     missing = tmp_path / "no_model.pkl"
     monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(missing))

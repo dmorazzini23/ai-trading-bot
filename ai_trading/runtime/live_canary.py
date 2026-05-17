@@ -187,6 +187,9 @@ def _exposure_gate_reasons(
         "evaluated": False,
     }
     if equity is None or equity <= 0.0:
+        if profile.name.startswith("live_") and not _order_closes_position(order, side, symbol):
+            context["reason"] = "equity_missing"
+            return ["exposure_equity_missing"], context
         return [], context
 
     gross_notional = 0.0
@@ -487,8 +490,12 @@ def evaluate_launch_profile_order(
         reasons.append("daily_order_count_cap_exceeded")
     if resolved.max_quote_age_ms is not None and quote_age_ms is not None and quote_age_ms > float(resolved.max_quote_age_ms):
         reasons.append("quote_age_cap_exceeded")
+    if resolved.max_quote_age_ms is not None and quote_age_ms is None and resolved.name.startswith("live_"):
+        reasons.append("quote_age_unknown")
     if resolved.max_spread_bps is not None and spread_bps is not None and spread_bps > float(resolved.max_spread_bps):
         reasons.append("spread_cap_exceeded")
+    if resolved.max_spread_bps is not None and spread_bps is None and resolved.name.startswith("live_"):
+        reasons.append("spread_unknown")
     exposure_reasons, exposure_context = _exposure_gate_reasons(
         order,
         profile=resolved,

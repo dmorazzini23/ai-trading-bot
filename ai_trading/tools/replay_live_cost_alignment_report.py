@@ -120,12 +120,6 @@ def build_replay_live_cost_alignment_report(
 
     replay_rows = _replay_rows_from_report(replay_report, fallback_cost_bps=fallback_cost_bps)
     source = "replay_report"
-    if not replay_rows:
-        replay_rows = _live_cost_rows_as_replay_rows(
-            live_cost_model,
-            fallback_cost_bps=fallback_cost_bps,
-        )
-        source = "live_cost_buckets"
     alignment = resolve_live_cost_alignments(
         live_cost_model,
         replay_rows,

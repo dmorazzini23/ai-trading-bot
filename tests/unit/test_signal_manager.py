@@ -214,6 +214,35 @@ def test_signal_manager_applies_meta_component_weights(monkeypatch):
     assert by_label["ml"] < 0.1
 
 
+def test_signal_manager_zero_sum_components_hold_instead_of_buy(monkeypatch):
+    manager = bot_engine.SignalManager()
+    monkeypatch.setattr(bot_engine, "load_global_signal_performance", lambda: {}, raising=False)
+    monkeypatch.setattr(bot_engine, "_trade_history_symbol_set", lambda: {"TST"}, raising=False)
+    monkeypatch.setattr(bot_engine, "composite_signal_confidence", lambda _conf: 0.5, raising=False)
+    monkeypatch.setattr(bot_engine, "_METALEARN_FALLBACK_SYMBOL_LOGGED", set(), raising=False)
+    monkeypatch.setattr(manager, "signal_momentum", _stub_signal((1, 0.5, "momentum")), raising=False)
+    monkeypatch.setattr(manager, "signal_ml", _stub_signal((-1, 0.5, "ml")), raising=False)
+    for name in (
+        "signal_mean_reversion",
+        "signal_sentiment",
+        "signal_regime",
+        "signal_stochrsi",
+        "signal_obv",
+        "signal_vsa",
+    ):
+        monkeypatch.setattr(manager, name, _stub_signal(None), raising=False)
+
+    signal, confidence, label = manager.evaluate(
+        _ns(),
+        _ns(),
+        pd.DataFrame({"close": pd.Series(range(250), dtype="float64")}),
+        "TST",
+        None,
+    )
+
+    assert (signal, confidence, label) == (0, 0.5, "momentum+ml")
+
+
 def test_signal_manager_gate_downweights_non_qualified_tags(monkeypatch):
     manager = bot_engine.SignalManager()
     monkeypatch.setattr(

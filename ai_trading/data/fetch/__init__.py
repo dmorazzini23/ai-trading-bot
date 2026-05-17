@@ -537,6 +537,73 @@ def _daily_frame_has_future_timestamp(frame: Any, *, now: datetime | None = None
 _MAX_FUTURE_BAR_SKEW_SECONDS = 5.0
 
 
+def _drop_future_daily_bars(
+    frame: Any,
+    *,
+    symbol: str | None = None,
+    source: str | None = None,
+    now: datetime | None = None,
+) -> Any:
+    """Drop daily bars beyond allowed future clock skew."""
+    pd_local = _ensure_pandas()
+    if pd_local is None or frame is None or not isinstance(frame, pd_local.DataFrame) or frame.empty:
+        return frame
+    if now is None:
+        now = datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    now_utc = now.astimezone(UTC)
+    try:
+        if "timestamp" in frame.columns:
+            parsed = pd_local.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+        elif isinstance(frame.index, pd_local.DatetimeIndex):
+            parsed = pd_local.Series(frame.index, index=frame.index)
+            parsed = pd_local.to_datetime(parsed, utc=True, errors="coerce")
+        else:
+            return frame
+    except FETCH_FALLBACK_EXCEPTIONS:
+        return frame
+    cutoff = pd_local.Timestamp(now_utc + _dt.timedelta(seconds=_MAX_FUTURE_BAR_SKEW_SECONDS))
+    try:
+        future_mask = parsed > cutoff
+    except FETCH_FALLBACK_EXCEPTIONS:
+        return frame
+    try:
+        future_count = int(future_mask.sum())
+    except FETCH_FALLBACK_EXCEPTIONS:
+        future_count = 0
+    if future_count <= 0:
+        return frame
+    try:
+        latest_future = parsed[future_mask].max()
+    except FETCH_FALLBACK_EXCEPTIONS:
+        latest_future = None
+    logger.warning(
+        "future_bar_timestamp",
+        extra={
+            "symbol": symbol,
+            "source": source,
+            "timeframe": "1Day",
+            "future_rows": future_count,
+            "max_timestamp": latest_future.isoformat() if hasattr(latest_future, "isoformat") else None,
+            "now": now_utc.isoformat(),
+            "allowed_future_skew_seconds": _MAX_FUTURE_BAR_SKEW_SECONDS,
+        },
+    )
+    try:
+        filtered = frame.loc[~future_mask.to_numpy()].copy()
+    except FETCH_FALLBACK_EXCEPTIONS:
+        try:
+            filtered = frame.loc[~future_mask].copy()
+        except FETCH_FALLBACK_EXCEPTIONS:
+            return frame
+    try:
+        filtered.attrs.update(getattr(frame, "attrs", {}) or {})
+    except FETCH_FALLBACK_EXCEPTIONS:
+        pass
+    return filtered
+
+
 def _drop_future_minute_bars(
     frame: Any,
     *,
@@ -1575,6 +1642,7 @@ def fetch_daily_backup(
         if frame is None or frame.empty:
             continue
         normalized = normalize_ohlcv_df(frame, include_columns=("timestamp",))
+        normalized = _drop_future_daily_bars(normalized, symbol=symbol, source="yahoo")
         if normalized is None or normalized.empty:  # type: ignore[truthy-bool]
             continue
         filtered[symbol] = normalized
@@ -6497,6 +6565,27 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
         cols = ["timestamp", "open", "high", "low", "close", "volume"]
         return pd_local.DataFrame(columns=cols, index=idx).reset_index(drop=True)
 
+    def _with_timestamp_column(frame: pd.DataFrame) -> pd.DataFrame | None:
+        if isinstance(frame.index, pd_local.RangeIndex):
+            logger.warning(
+                "YAHOO_RANGE_INDEX_REJECTED",
+                extra={"symbol": symbol, "interval": interval_norm, "rows": int(len(frame))},
+            )
+            return None
+        try:
+            converted_index = pd_local.to_datetime(frame.index, utc=True, errors="coerce")
+        except FETCH_FALLBACK_EXCEPTIONS:
+            return None
+        try:
+            if not pd_local.DatetimeIndex(converted_index).notna().any():
+                return None
+        except FETCH_FALLBACK_EXCEPTIONS:
+            return None
+        frame = frame.copy()
+        frame.index = converted_index
+        frame.index.name = "timestamp"
+        return frame.reset_index()
+
     chunk_span = _dt.timedelta(days=7)
     needs_chunk = interval_norm in {"1m", "1min", "1minute"} and (end_dt - start_dt) > chunk_span
     yahoo_symbol = _normalize_yahoo_symbol(symbol)
@@ -6515,9 +6604,9 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
             )
             frame = df_map.get(yahoo_symbol)
             if frame is not None and not frame.empty:
-                frame = frame.copy()
-                frame.index.name = "timestamp"
-                frames.append(frame.reset_index())
+                timestamped = _with_timestamp_column(frame)
+                if timestamped is not None:
+                    frames.append(timestamped)
             cur_start = cur_end
         if frames:
             combined = pd_local.concat(frames, ignore_index=True)
@@ -6544,9 +6633,10 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
     frame = df_map.get(yahoo_symbol)
     if frame is None or frame.empty:
         return _empty_frame()
-    frame = frame.copy()
-    frame.index.name = "timestamp"
-    return frame.reset_index()
+    timestamped = _with_timestamp_column(frame)
+    if timestamped is None:
+        return _empty_frame()
+    return timestamped
 
 
 def _finnhub_resolution(interval: str) -> str | None:
@@ -14610,6 +14700,11 @@ def get_daily_df(
             frequency="1Day",
         )
         normalized = normalize_ohlcv_df(normalized, include_columns=("timestamp",))
+        normalized = _drop_future_daily_bars(
+            normalized,
+            symbol=symbol,
+            source=resolved_source or source_hint,
+        )
         return _restore_timestamp_column(normalized)
 
     if memo_info is not None:

@@ -264,17 +264,20 @@ def process_netting_symbol(
     ):
         net_target.target_shares = 0
         net_target.target_dollars = 0.0
+        delta_shares = -current_shares
         gates.append("LONG_ONLY_SHORT_SUPPRESSED")
-        processor.record_decision_func(
-            symbol=symbol,
-            bar_ts=net_target.bar_ts,
-            sleeves=net_target.proposals,
-            net_target=net_target,
-            gates=gates,
-            config_snapshot=symbol_snapshot,
-        )
-        return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
-
+        if int(current_shares) < 0:
+            initial_requested_delta_shares = int(delta_shares)
+        else:
+            processor.record_decision_func(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                config_snapshot=symbol_snapshot,
+            )
+            return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
     symbol_prelude = processor.prepare_symbol_prelude_func(
         state=processor.state,
         symbol=symbol,

@@ -416,17 +416,17 @@ def build_promotion_report(
     manifest_gate = _manifest_payload(model_path, resolved_manifest)
     replay_gates = {
         "full": _replay_gate(full_replay or {}, label="full"),
-        "tail": _replay_gate(tail_replay or full_replay or {}, label="tail"),
-        "recent": _replay_gate(recent_replay or tail_replay or full_replay or {}, label="recent"),
+        "tail": _replay_gate(tail_replay or {}, label="tail"),
+        "recent": _replay_gate(recent_replay or {}, label="recent"),
     }
     authority_gates = {
         "full_replay": _evidence_authority_gate(full_replay or {}, label="full_replay"),
         "tail_replay": _evidence_authority_gate(
-            tail_replay or full_replay or {},
+            tail_replay or {},
             label="tail_replay",
         ),
         "recent_replay": _evidence_authority_gate(
-            recent_replay or tail_replay or full_replay or {},
+            recent_replay or {},
             label="recent_replay",
         ),
     }
@@ -438,13 +438,13 @@ def build_promotion_report(
             max_age_hours=max_age_hours,
         ),
         "tail_replay": _freshness_gate(
-            tail_replay or full_replay or {},
+            tail_replay or {},
             label="tail_replay",
             now=generated,
             max_age_hours=max_age_hours,
         ),
         "recent_replay": _freshness_gate(
-            recent_replay or tail_replay or full_replay or {},
+            recent_replay or {},
             label="recent_replay",
             now=generated,
             max_age_hours=max_age_hours,
@@ -473,8 +473,8 @@ def build_promotion_report(
     replay_cost_provenance_gate = _replay_cost_provenance_gate(
         replay_payloads={
             "full": full_replay or {},
-            "tail": tail_replay or full_replay or {},
-            "recent": recent_replay or tail_replay or full_replay or {},
+            "tail": tail_replay or {},
+            "recent": recent_replay or {},
         },
         live_cost_model=live_cost_model or {},
         alignment_artifact=replay_live_cost_alignment or {},

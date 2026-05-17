@@ -310,6 +310,33 @@ def test_promotion_pipeline_cli_writes_report_and_returns_blocked(tmp_path: Path
     assert payload["promotion_ready"] is False
 
 
+def test_promotion_report_requires_explicit_tail_and_recent_replay_evidence(
+    tmp_path: Path,
+) -> None:
+    model = tmp_path / "candidate.joblib"
+    manifest = _write_model(model)
+
+    report = promotion_pipeline.build_promotion_report(
+        model_path=model,
+        manifest_path=manifest,
+        full_replay=_replay_payload(),
+        shadow_report=_shadow_payload(),
+        live_cost_model=_live_cost_payload(),
+        runtime_decay_controls={
+            "generated_at": "2026-05-05T20:00:00Z",
+            "actions": {"entries_allowed": True, "max_action": "normal"},
+        },
+        generated_at=datetime(2026, 5, 5, 21, 0, tzinfo=UTC),
+    )
+
+    assert report["promotion_ready"] is False
+    assert report["replay"]["full"]["ok"] is True
+    assert report["replay"]["tail"]["reason"] == "replay_evidence_missing"
+    assert report["replay"]["recent"]["reason"] == "replay_evidence_missing"
+    assert report["gates"]["tail_replay_positive"] is False
+    assert report["gates"]["recent_replay_positive"] is False
+
+
 def test_promotion_report_blocks_missing_offline_replay_artifact_type(
     tmp_path: Path,
 ) -> None:
