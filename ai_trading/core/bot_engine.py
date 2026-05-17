@@ -6073,6 +6073,9 @@ def fetch_sentiment(
             TypeError,
             OSError,
         ) as exc:
+            fallback = _legacy_sentiment_session_fallback(ticker, session=session)
+            if fallback is not None:
+                return fallback
             if isinstance(exc, RuntimeError) and (
                 str(exc).startswith("Sentiment unavailable:")
                 or bool(getattr(sentiment_module, "_sentiment_fail_closed", lambda: False)())
@@ -6083,9 +6086,6 @@ def fetch_sentiment(
                     exc,
                 )
                 raise
-            fallback = _legacy_sentiment_session_fallback(ticker, session=session)
-            if fallback is not None:
-                return fallback
             logger.debug(
                 "Legacy sentiment delegate failed closed for %s: %s",
                 ticker,

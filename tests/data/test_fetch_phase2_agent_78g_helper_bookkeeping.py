@@ -83,10 +83,14 @@ def _reset_fetch_bookkeeping(monkeypatch: pytest.MonkeyPatch) -> None:
     fetch._set_fetch_state({})
 
 
-def _frame(close: float | None = 101.0) -> pd.DataFrame:
+def _frame(
+    close: float | None = 101.0,
+    *,
+    timestamp: datetime = datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
+) -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "timestamp": [BASE_START],
+            "timestamp": [timestamp],
             "open": [100.0],
             "high": [102.0],
             "low": [99.0],

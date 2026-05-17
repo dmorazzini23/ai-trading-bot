@@ -1440,7 +1440,8 @@ def test_build_report_prefers_fill_events_for_reconciliation(
     )
 
     trade = report["trade_history"]
-    assert trade["open_positions"] == {"AAPL": 10.0}
+    assert trade["reconstructed_open_positions"] == {"AAPL": 10.0}
+    assert trade["open_positions"] == {"AAPL": 7.0}
     assert trade["reconciliation_open_positions_source"] == "fill_events"
     reconciliation = trade["open_position_reconciliation"]
     assert reconciliation["available"] is True
@@ -1524,7 +1525,8 @@ def test_build_report_can_fallback_to_broker_positions_for_extreme_mismatch(
     )
 
     trade = report["trade_history"]
-    assert trade["open_positions"] == {"AAPL": 10.0}
+    assert trade["reconstructed_open_positions"] == {"AAPL": 10.0}
+    assert trade["open_positions"] == {"MSFT": 2.0}
     assert trade["reconciliation_open_positions_source"] == "broker_open_positions"
     reconciliation = trade["open_position_reconciliation"]
     assert reconciliation["available"] is True

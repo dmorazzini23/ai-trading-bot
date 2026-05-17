@@ -15,11 +15,15 @@ from ai_trading.data import fetch_yf
 from ai_trading.data.fallback import concurrency
 
 
-def _ohlcv_frame(symbol: str = "AAPL") -> pd.DataFrame:
+def _ohlcv_frame(
+    symbol: str = "AAPL",
+    *,
+    timestamp: datetime = datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
+) -> pd.DataFrame:
     del symbol
     return pd.DataFrame(
         {
-            "timestamp": [datetime(2026, 4, 24, 14, 30, tzinfo=UTC)],
+            "timestamp": [timestamp],
             "open": [100.0],
             "high": [101.0],
             "low": [99.0],

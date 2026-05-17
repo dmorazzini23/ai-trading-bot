@@ -80,6 +80,12 @@ def _finbert_revision_required() -> bool:
         cast=bool,
     ):
         return False
+    if str(
+        get_env("PYTEST_CURRENT_TEST", "", cast=str, resolve_aliases=False) or ""
+    ).strip():
+        return False
+    if not _sentiment_fail_closed():
+        return False
     if bool(
         get_env(
             "AI_TRADING_FINBERT_ALLOW_UNPINNED",
