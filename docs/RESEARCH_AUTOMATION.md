@@ -81,6 +81,7 @@ Important files:
 - `latest/daily_readiness_latest.json`
 - `latest/trading_day_latest.json`
 - `latest/trading_day_latest.md`
+- `latest/upward_trajectory_latest.json`
 - `latest/hf_discovery_latest.json`
 - `latest/hf_candidate_intake_latest.json`
 - `latest/hf_cache_materialization_latest.json`

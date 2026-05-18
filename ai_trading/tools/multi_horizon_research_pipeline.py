@@ -255,6 +255,17 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "max_replay_candidates": max_replay_candidates,
         },
+        "replay_config": {
+            "confidence_threshold": float(args.replay_confidence_threshold),
+            "entry_score_threshold": float(args.replay_entry_score_threshold),
+            "min_hold_bars": int(args.min_hold_bars),
+            "max_hold_bars": int(args.max_hold_bars),
+            "stop_loss_bps": float(args.stop_loss_bps),
+            "take_profit_bps": float(args.take_profit_bps),
+            "trailing_stop_bps": float(args.trailing_stop_bps),
+            "fee_bps": float(args.fee_bps),
+            "slippage_bps": float(args.slippage_bps),
+        },
         "candidates": candidates,
         "replay_selection": {
             "strategy": "successive_halving_top_n" if max_replay_candidates > 0 else "all_candidates",

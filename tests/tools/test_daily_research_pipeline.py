@@ -63,6 +63,18 @@ def test_daily_research_report_blocks_on_runtime_gonogo_failure(monkeypatch):
         memory_audit={"status": "ok"},
         expected_edge_calibration={"status": "overestimated", "recommended_next_action": "keep_tiny_sampling"},
         evidence_starvation={"status": "starved", "recommendation": "widen_paper_diagnostic_sampling"},
+        upward_trajectory={
+            "status": "ready",
+            "summary": {
+                "recommended_next_action": "debug_validation_replay_gap_before_promotion",
+                "candidate_count": 2,
+            },
+            "authority": {
+                "runtime_authority": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+            },
+        },
         paper_sampling_state={"date": "2026-05-05", "count": 2},
     )
 
@@ -75,6 +87,9 @@ def test_daily_research_report_blocks_on_runtime_gonogo_failure(monkeypatch):
     assert report["diagnostic_sampling"]["state"]["count"] == 2
     assert report["health_report_summary"]["runtime_gonogo_passed"] is False
     assert report["next_level_artifacts"]["expected_edge_calibration"]["status"] == "overestimated"
+    assert report["upward_trajectory"]["status"] == "ready"
+    assert report["next_level_artifacts"]["upward_trajectory"]["candidate_count"] == 2
+    assert report["next_level_artifacts"]["upward_trajectory"]["live_money_authority"] is False
     assert report["openclaw_summary"]["severity"] == "warning"
 
 

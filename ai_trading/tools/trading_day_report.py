@@ -87,6 +87,7 @@ def build_trading_day_report(
     drift_monitor: Mapping[str, Any] | None = None,
     operator_control_plane: Mapping[str, Any] | None = None,
     weekend_research: Mapping[str, Any] | None = None,
+    upward_trajectory: Mapping[str, Any] | None = None,
     huggingface_discovery: Mapping[str, Any] | None = None,
     huggingface_candidate_intake: Mapping[str, Any] | None = None,
     huggingface_cache_materialization: Mapping[str, Any] | None = None,
@@ -249,6 +250,12 @@ def build_trading_day_report(
         "model_data_drift_monitor": dict(drift_monitor or {}),
         "operator_control_plane": dict(operator_control_plane or {}),
         "weekend_research": dict(weekend_research or {}),
+        "upward_trajectory": {
+            **dict(upward_trajectory or {}),
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        },
         "huggingface_research": {
             "discovery": dict(huggingface_discovery or {}),
             "candidate_intake": dict(huggingface_candidate_intake or {}),
@@ -277,6 +284,7 @@ def build_trading_day_report(
         "adversarial_failure_status": _status(adversarial_failure or {}),
         "drift_monitor_status": _status(drift_monitor or {}),
         "operator_control_plane_status": _status(operator_control_plane or {}),
+        "upward_trajectory_status": _status(upward_trajectory or {}),
         "huggingface_research_status": _status(huggingface_discovery or {}),
         "huggingface_intake_status": _status(huggingface_candidate_intake or {}),
         "top_reject_reasons": dict(reject_reasons.most_common(5)),
@@ -374,6 +382,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--drift-monitor-json", type=Path, default=None)
     parser.add_argument("--operator-control-plane-json", type=Path, default=None)
     parser.add_argument("--weekend-research-json", type=Path, default=None)
+    parser.add_argument("--upward-trajectory-json", type=Path, default=None)
     parser.add_argument("--huggingface-discovery-json", type=Path, default=None)
     parser.add_argument("--huggingface-candidate-intake-json", type=Path, default=None)
     parser.add_argument("--huggingface-cache-json", type=Path, default=None)
@@ -410,6 +419,7 @@ def main(argv: list[str] | None = None) -> int:
         drift_monitor=_read_json(args.drift_monitor_json),
         operator_control_plane=_read_json(args.operator_control_plane_json),
         weekend_research=_read_json(args.weekend_research_json),
+        upward_trajectory=_read_json(args.upward_trajectory_json),
         huggingface_discovery=_read_json(args.huggingface_discovery_json),
         huggingface_candidate_intake=_read_json(args.huggingface_candidate_intake_json),
         huggingface_cache_materialization=_read_json(args.huggingface_cache_json),

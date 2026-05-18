@@ -286,6 +286,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     live_readiness = config.run_dir / "live_capital_readiness.json"
     memory_audit = config.run_dir / "memory_hotspot_audit.json"
     artifact_retention = config.run_dir / "runtime_artifact_retention.json"
+    upward_trajectory = config.run_dir / "upward_trajectory.json"
     multi_horizon_dir = config.run_dir / "multi_horizon_lightweight"
     training_accelerator = config.run_dir / "training_accelerator" / "training_accelerator_report.json"
     steps = [
@@ -889,6 +890,46 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             },
         ),
         ResearchStep(
+            name="upward_trajectory_report",
+            command=_python_module(
+                "ai_trading.tools.upward_trajectory_report",
+                "--report-date",
+                config.report_date,
+                "--expected-edge-calibration-json",
+                expected_edge_calibration,
+                "--execution-capture-json",
+                execution_capture,
+                "--training-accelerator-json",
+                training_accelerator,
+                "--symbol-lifecycle-json",
+                symbol_lifecycle,
+                "--symbol-scorecard-json",
+                scorecard,
+                "--paper-sampling-json",
+                _runtime_input_path("runtime/paper_sampling_state_latest.json"),
+                "--regime-champions-json",
+                regime_champions,
+                "--live-cost-model-json",
+                live_cost,
+                "--output-json",
+                upward_trajectory,
+                "--latest-json",
+                config.report_root / "latest" / "upward_trajectory_latest.json",
+                "--research-latest-json",
+                config.report_root / "latest" / "upward_trajectory_latest.json",
+            ),
+            purpose="Explain which evidence, candidate, symbol, regime, and paper-sampling actions can improve trajectory.",
+            output_path=upward_trajectory,
+            metadata={
+                "research_only": True,
+                "paper_only_diagnostics": True,
+                "runtime_authority": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+                "manual_approval_required": True,
+            },
+        ),
+        ResearchStep(
             name="operator_control_plane",
             command=_python_module(
                 "ai_trading.tools.operator_control_plane",
@@ -918,6 +959,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 _runtime_input_path("runtime/paper_sampling_state_latest.json"),
                 "--huggingface-research-json",
                 hf_discovery,
+                "--upward-trajectory-json",
+                config.report_root / "latest" / "upward_trajectory_latest.json",
                 "--output-json",
                 operator_control,
             ),
@@ -977,6 +1020,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 operator_control,
                 "--weekend-research-json",
                 config.report_root / "latest" / "weekend_research_latest.json",
+                "--upward-trajectory-json",
+                upward_trajectory,
                 "--huggingface-discovery-json",
                 hf_discovery,
                 "--huggingface-candidate-intake-json",
@@ -1045,6 +1090,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 drift_monitor,
                 "--operator-control-plane-json",
                 operator_control,
+                "--upward-trajectory-json",
+                upward_trajectory,
                 "--huggingface-discovery-json",
                 hf_discovery,
                 "--huggingface-candidate-intake-json",
@@ -1123,9 +1170,16 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             (
                 index
                 for index, step in enumerate(steps)
-                if step.name == "daily_research_pipeline"
+                if step.name == "upward_trajectory_report"
             ),
-            len(steps),
+            next(
+                (
+                    index
+                    for index, step in enumerate(steps)
+                    if step.name == "daily_research_pipeline"
+                ),
+                len(steps),
+            ),
         )
         steps.insert(
             daily_research_index,
@@ -2534,6 +2588,7 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
     hf_discovery = _read_json(latest / "hf_discovery_latest.json")
     hf_intake = _read_json(latest / "hf_candidate_intake_latest.json")
     hf_cache = _read_json(latest / "hf_cache_materialization_latest.json")
+    upward_trajectory = _read_json(latest / "upward_trajectory_latest.json")
     weekend_research = _read_json(latest / "weekend_research_latest.json")
     weekend_summary = _read_json(latest / "weekend_operator_summary.json")
     return {
@@ -2651,6 +2706,21 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
             "status": _artifact_status(operator_control),
             "summary": operator_control.get("summary"),
             "read_only": bool(operator_control.get("read_only", True)),
+        },
+        "upward_trajectory": {
+            "status": _artifact_status(upward_trajectory),
+            "summary": upward_trajectory.get("summary"),
+            "runtime_authority": False,
+            "promotion_authority": bool(
+                upward_trajectory.get("authority", {}).get("promotion_authority", False)
+                if isinstance(upward_trajectory.get("authority"), Mapping)
+                else False
+            ),
+            "live_money_authority": bool(
+                upward_trajectory.get("authority", {}).get("live_money_authority", False)
+                if isinstance(upward_trajectory.get("authority"), Mapping)
+                else False
+            ),
         },
         "huggingface_research": {
             "status": _artifact_status(hf_discovery),
@@ -3028,6 +3098,22 @@ def _copy_authority_artifacts(
                     resolve_runtime_artifact_path(
                         "runtime/operator_control_plane_latest.json",
                         default_relative="runtime/operator_control_plane_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "upward_trajectory_report":
+            targets.extend(
+                [
+                    latest_dir / "upward_trajectory_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/reports/upward_trajectory_latest.json",
+                        default_relative="runtime/reports/upward_trajectory_latest.json",
+                        for_write=True,
+                    ),
+                    resolve_runtime_artifact_path(
+                        "runtime/research_reports/latest/upward_trajectory_latest.json",
+                        default_relative="runtime/research_reports/latest/upward_trajectory_latest.json",
                         for_write=True,
                     ),
                 ]

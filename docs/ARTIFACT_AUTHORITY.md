@@ -36,6 +36,14 @@ Use these latest pointers for current operational decisions:
   `/var/lib/ai-trading-bot/runtime/training_accelerator_<cadence>_latest.json`
   for cached candidate research status. These reports have no promotion
   authority.
+- Upward trajectory diagnostics:
+  `/var/lib/ai-trading-bot/runtime/reports/upward_trajectory_latest.json` and
+  `/var/lib/ai-trading-bot/runtime/research_reports/latest/upward_trajectory_latest.json`
+  summarize evidence acceleration, validation-to-replay gaps, candidate
+  tournaments, symbol expansion/pruning, execution-aware labels, active
+  paper-learning proposals, regime escalation, and signal autopsy. These
+  diagnostics are research/paper-only and never grant runtime, promotion,
+  provider, canary, or live-capital authority.
 - Research automation summary:
   `/var/lib/ai-trading-bot/runtime/research_reports/latest/daily_operator_summary.json`
   plus

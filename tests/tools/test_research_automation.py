@@ -59,6 +59,7 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "huggingface_research_discovery" in step_names
     assert "huggingface_candidate_intake" in step_names
     assert "huggingface_cache_materialization_plan" in step_names
+    assert "upward_trajectory_report" in step_names
     assert "evidence_manifest" in payload
     summary = _read(summary_path)
     assert summary["health_report_summary"]["daily_research"]["status"] == "missing"
@@ -150,6 +151,38 @@ def test_hf_research_api_requires_second_explicit_toggle(
     hf_step = next(step for step in payload["steps"] if step["name"] == "huggingface_research_discovery")  # type: ignore[index]
     assert "--enabled" in hf_step["command"]
     assert "--use-hf-api" in hf_step["command"]
+
+
+def test_daily_plan_with_data_adds_upward_trajectory_report(tmp_path: Path) -> None:
+    data_dir = tmp_path / "bars"
+    data_dir.mkdir()
+    report_root = tmp_path / "reports"
+
+    exit_code = research_automation.main(
+        [
+            "daily",
+            "--report-root",
+            str(report_root),
+            "--run-id",
+            "upward-test",
+            "--data-dir",
+            str(data_dir),
+            "--plan-only",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = _read(report_root / "daily" / "upward-test" / "research_automation_report.json")
+    step_names = [str(step["name"]) for step in payload["steps"]]  # type: ignore[index]
+    assert "upward_trajectory_report" in step_names
+    assert step_names.index("regime_champion_models") < step_names.index("upward_trajectory_report")
+    assert step_names.index("upward_trajectory_report") < step_names.index("operator_control_plane")
+    upward = next(step for step in payload["steps"] if step["name"] == "upward_trajectory_report")  # type: ignore[index]
+    assert upward["metadata"]["research_only"] is True
+    assert upward["metadata"]["live_money_authority"] is False
+    assert "--training-accelerator-json" in upward["command"]
+    daily_research = next(step for step in payload["steps"] if step["name"] == "daily_research_pipeline")  # type: ignore[index]
+    assert "--upward-trajectory-json" in daily_research["command"]
 
 
 def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(

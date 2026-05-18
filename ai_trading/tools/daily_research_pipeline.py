@@ -259,6 +259,7 @@ def build_daily_research_report(
     drift_monitor: Mapping[str, Any] | None = None,
     operator_control_plane: Mapping[str, Any] | None = None,
     weekend_research: Mapping[str, Any] | None = None,
+    upward_trajectory: Mapping[str, Any] | None = None,
     huggingface_discovery: Mapping[str, Any] | None = None,
     huggingface_candidate_intake: Mapping[str, Any] | None = None,
     huggingface_cache_materialization: Mapping[str, Any] | None = None,
@@ -296,6 +297,7 @@ def build_daily_research_report(
     drift_monitor = drift_monitor or {}
     operator_control_plane = operator_control_plane or {}
     weekend_research = weekend_research or {}
+    upward_trajectory = upward_trajectory or {}
     huggingface_discovery = huggingface_discovery or {}
     huggingface_candidate_intake = huggingface_candidate_intake or {}
     huggingface_cache_materialization = huggingface_cache_materialization or {}
@@ -573,6 +575,35 @@ def build_daily_research_report(
             "live_money_authority": False,
             "manual_approval_required": True,
         },
+        "upward_trajectory": {
+            "available": bool(upward_trajectory),
+            "status": upward_trajectory.get("status", "missing"),
+            "summary": _nested(upward_trajectory, "summary"),
+            "authority": _nested(upward_trajectory, "authority"),
+            "evidence_acceleration_engine": _nested(
+                upward_trajectory,
+                "evidence_acceleration_engine",
+            ),
+            "validation_to_replay_gap_analyzer": _nested(
+                upward_trajectory,
+                "validation_to_replay_gap_analyzer",
+            ),
+            "candidate_tournament_system": _nested(
+                upward_trajectory,
+                "candidate_tournament_system",
+            ),
+            "active_learning_paper_trades": _nested(
+                upward_trajectory,
+                "active_learning_paper_trades",
+            ),
+            "runtime_authority": False,
+            "promotion_authority": bool(
+                _nested(upward_trajectory, "authority").get("promotion_authority", False)
+            ),
+            "live_money_authority": bool(
+                _nested(upward_trajectory, "authority").get("live_money_authority", False)
+            ),
+        },
         "huggingface_research": huggingface_research,
     }
     allowed, reasons = _trade_allowed(report)
@@ -694,6 +725,24 @@ def build_daily_research_report(
             "live_money_authority": False,
             "manual_approval_required": True,
         },
+        "upward_trajectory": {
+            "status": _summary_status(_nested(report, "upward_trajectory")),
+            "recommended_next_action": _nested(
+                report,
+                "upward_trajectory",
+                "summary",
+            ).get("recommended_next_action"),
+            "candidate_count": _nested(report, "upward_trajectory", "summary").get(
+                "candidate_count"
+            ),
+            "runtime_authority": False,
+            "promotion_authority": bool(
+                _nested(report, "upward_trajectory").get("promotion_authority", False)
+            ),
+            "live_money_authority": bool(
+                _nested(report, "upward_trajectory").get("live_money_authority", False)
+            ),
+        },
         "huggingface_research": {
             "status": _nested(report, "huggingface_research").get("status"),
             "summary": _nested(report, "huggingface_research").get("summary"),
@@ -771,6 +820,8 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Walk-forward capital: `{_nested(report, 'walk_forward_capital_simulation').get('status', 'missing')}`",
             f"- Order-type optimizer: `{_nested(report, 'order_type_optimizer').get('status', 'missing')}`",
             f"- Regime champions: `{_nested(report, 'regime_champion_models').get('status', 'missing')}`",
+            f"- Upward trajectory: `{_nested(report, 'upward_trajectory').get('status', 'missing')}` "
+            f"action=`{_nested(report, 'upward_trajectory', 'summary').get('recommended_next_action', 'missing')}`",
             f"- Adversarial simulation: `{_nested(report, 'adversarial_failure_simulation').get('status', 'missing')}`",
             f"- Drift monitor: `{_nested(report, 'model_data_drift_monitor').get('status', 'missing')}`",
             f"- Operator control plane: `{_nested(report, 'operator_control_plane').get('status', 'missing')}`",
@@ -820,6 +871,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--drift-monitor-json", type=Path, default=None)
     parser.add_argument("--operator-control-plane-json", type=Path, default=None)
     parser.add_argument("--weekend-research-json", type=Path, default=None)
+    parser.add_argument("--upward-trajectory-json", type=Path, default=None)
     parser.add_argument("--huggingface-discovery-json", type=Path, default=None)
     parser.add_argument("--huggingface-candidate-intake-json", type=Path, default=None)
     parser.add_argument("--huggingface-cache-json", type=Path, default=None)
@@ -955,6 +1007,10 @@ def main(argv: list[str] | None = None) -> int:
         weekend_research=_read_json(
             args.weekend_research_json
             or _default_path("runtime/research_reports/latest/weekend_research_latest.json")
+        ),
+        upward_trajectory=_read_json(
+            args.upward_trajectory_json
+            or _default_path("runtime/reports/upward_trajectory_latest.json")
         ),
         huggingface_discovery=_read_json(
             args.huggingface_discovery_json

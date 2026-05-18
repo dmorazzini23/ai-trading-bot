@@ -140,6 +140,7 @@ def build_operator_control_plane(
     paper_sampling: Mapping[str, Any] | None = None,
     operator_actions: Mapping[str, Any] | None = None,
     huggingface_research: Mapping[str, Any] | None = None,
+    upward_trajectory: Mapping[str, Any] | None = None,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Return an operator snapshot without invoking mutating runtime actions."""
@@ -158,6 +159,7 @@ def build_operator_control_plane(
     paper_sampling_payload = _mapping(paper_sampling)
     operator_actions_payload = _mapping(operator_actions)
     huggingface_research_payload = _mapping(huggingface_research)
+    upward_trajectory_payload = _mapping(upward_trajectory)
     generated = generated_at.astimezone(UTC) if generated_at else datetime.now(UTC)
     launch_profile = launch_profile_payload(resolve_launch_profile())
     attention_flags = [
@@ -182,6 +184,7 @@ def build_operator_control_plane(
             ("paper_sampling", paper_sampling_payload),
             ("operator_actions", operator_actions_payload),
             ("huggingface_research", huggingface_research_payload),
+            ("upward_trajectory", upward_trajectory_payload),
         )
         if not payload
     ]
@@ -239,6 +242,15 @@ def build_operator_control_plane(
             "promotion_authority": False,
             "live_money_authority": False,
         },
+        "upward_trajectory": {
+            **_section(upward_trajectory_payload, label="upward_trajectory"),
+            "research_only": True,
+            "paper_only_diagnostics": True,
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+            "manual_approval_required": True,
+        },
     }
 
 
@@ -271,6 +283,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--paper-sampling-json", type=Path, default=None)
     parser.add_argument("--operator-actions-json", type=Path, default=None)
     parser.add_argument("--huggingface-research-json", type=Path, default=None)
+    parser.add_argument("--upward-trajectory-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     args = parser.parse_args(argv)
 
@@ -320,6 +333,10 @@ def main(argv: list[str] | None = None) -> int:
         huggingface_research=_read_json_mapping(
             args.huggingface_research_json
             or _default_path("runtime/research_reports/latest/hf_discovery_latest.json")
+        ),
+        upward_trajectory=_read_json_mapping(
+            args.upward_trajectory_json
+            or _default_path("runtime/reports/upward_trajectory_latest.json")
         ),
     )
     output = args.output_json or _default_output()

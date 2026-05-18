@@ -87,6 +87,8 @@ def test_multi_horizon_pipeline_ranks_candidates_and_keeps_lead_horizon(
     assert all(call[0] in {1, 15} for call in calls)
     assert report["ranked_candidates"][0]["horizon_bars"] == 15
     assert report["config"]["training_cache"] is True
+    assert report["replay_config"]["confidence_threshold"] == 0.66
+    assert report["replay_config"]["max_hold_bars"] == 45
     assert report["lead_candidates"]
     assert (tmp_path / "out" / "multi_horizon_research_report.json").is_file()
 

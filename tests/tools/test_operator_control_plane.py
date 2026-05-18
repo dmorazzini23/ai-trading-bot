@@ -47,6 +47,7 @@ def test_operator_control_plane_aggregates_read_only_sections(monkeypatch) -> No
         operator_actions={"actions": [{"id": "review-canary"}]},
         weekend_research={"status": "complete", "monday_preparation": {"status": "complete"}},
         huggingface_research={"status": "discovered", "summary": {"candidate_count": 2}},
+        upward_trajectory={"status": "ready", "summary": {"candidate_count": 2}},
     )
 
     assert report["status"] == "complete"
@@ -65,6 +66,9 @@ def test_operator_control_plane_aggregates_read_only_sections(monkeypatch) -> No
     assert report["weekend_research"]["runtime_authority"] is False
     assert report["huggingface_research"]["artifact_status"] == "discovered"
     assert report["huggingface_research"]["runtime_authority"] is False
+    assert report["upward_trajectory"]["artifact_status"] == "ready"
+    assert report["upward_trajectory"]["paper_only_diagnostics"] is True
+    assert report["upward_trajectory"]["runtime_authority"] is False
 
 
 def test_operator_control_plane_cli_writes_partial_artifact(monkeypatch, tmp_path: Path) -> None:
@@ -105,6 +109,8 @@ def test_operator_control_plane_cli_writes_partial_artifact(monkeypatch, tmp_pat
             str(tmp_path / "missing_weekend.json"),
             "--huggingface-research-json",
             str(tmp_path / "missing_hf.json"),
+            "--upward-trajectory-json",
+            str(tmp_path / "missing_upward.json"),
             "--output-json",
             str(output),
         ]
@@ -117,4 +123,5 @@ def test_operator_control_plane_cli_writes_partial_artifact(monkeypatch, tmp_pat
     assert "runtime_gonogo" in artifact["missing_sections"]
     assert "weekend_research" in artifact["missing_sections"]
     assert "huggingface_research" in artifact["missing_sections"]
+    assert "upward_trajectory" in artifact["missing_sections"]
     assert artifact["safety_contract"]["writes"] == ["output_artifact_only"]
