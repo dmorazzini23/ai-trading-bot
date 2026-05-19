@@ -372,6 +372,66 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     assert persisted["validation"]["rows"] == persisted["dataset"]["validation_rows"]
     assert persisted["threshold_sweep"]
     assert persisted["recommendation"] == "evaluate_candidate_with_offline_replay_before_promotion"
+    assert persisted["feature_importance"]
+    assert persisted["feature_importance"][0]["feature"] in REPLAY_ALIGNED_FEATURE_COLUMNS
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest_payload["metadata"]["feature_importance"]
+
+
+def test_train_replay_aligned_model_records_requested_but_unusable_live_cost(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    output_dir = tmp_path / "out"
+    data_dir.mkdir()
+    _write_cycle_bars(data_dir / "AAPL.csv", phase=0.0)
+    _write_cycle_bars(data_dir / "MSFT.csv", phase=1.7)
+    live_cost_path = tmp_path / "live_cost_model_latest.json"
+    live_cost_path.write_text(
+        json.dumps(
+            {
+                "artifact_type": "live_cost_model",
+                "generated_at": "2026-01-02T21:00:00Z",
+                "status": {
+                    "available": True,
+                    "status": "warming_up",
+                    "reason": "insufficient_samples",
+                },
+                "by_symbol_side_session": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = argparse.Namespace(
+        data_dir=data_dir,
+        symbols="",
+        timestamp_col="timestamp",
+        output_dir=output_dir,
+        model_name="replay_aligned_cost_probe",
+        model_type="logistic",
+        horizon_bars=1,
+        label_objective="risk_adjusted",
+        fee_bps=0.0,
+        slippage_bps=2.0,
+        min_net_edge_bps=0.0,
+        train_fraction=0.65,
+        edge_global_threshold=0.66,
+        random_state=7,
+        training_cache=True,
+        training_cache_dir=tmp_path / "cache",
+        live_cost_model_json=live_cost_path,
+        use_live_cost_model=True,
+    )
+
+    report = train_replay_aligned_model(args)
+
+    live_cost = report["live_cost_model"]
+    assert live_cost["requested"] is True
+    assert live_cost["usable"] is False
+    assert live_cost["enabled"] is False
+    assert live_cost["reason"] == "status_warming_up"
+    assert report["config"]["live_cost_model_requested"] is True
+    assert report["config"]["live_cost_model_usable"] is False
 
 
 def test_build_training_dataset_rejects_non_timestamped_csv_by_default(tmp_path: Path) -> None:

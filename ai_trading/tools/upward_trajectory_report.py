@@ -369,6 +369,7 @@ def _active_learning(
 def _execution_aware_labels(
     *,
     training_accelerator: Mapping[str, Any],
+    candidates: Sequence[Mapping[str, Any]],
     live_cost_model: Mapping[str, Any],
     execution_capture: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -377,9 +378,20 @@ def _execution_aware_labels(
     objectives = [item.strip() for item in objectives if item.strip()]
     cost_status = _status(_nested(live_cost_model, "status") or live_cost_model)
     capture_status = _status(execution_capture)
+    live_cost_requested = bool(config.get("use_live_cost_model"))
+    live_cost_candidate_count = 0
+    live_cost_unusable_reasons: Counter[str] = Counter()
+    for candidate in candidates:
+        metadata = candidate.get("live_cost_model")
+        if not isinstance(metadata, Mapping):
+            continue
+        if bool(metadata.get("usable")) or bool(metadata.get("enabled")):
+            live_cost_candidate_count += 1
+        elif bool(metadata.get("requested")):
+            live_cost_unusable_reasons[str(metadata.get("reason") or "not_loaded")] += 1
     required = {
         "spread_adjusted_return": "spread_adjusted" in objectives,
-        "live_cost_adjusted_net_edge": bool(config.get("use_live_cost_model")),
+        "live_cost_adjusted_net_edge": live_cost_candidate_count > 0,
         "risk_adjusted_label": "risk_adjusted" in objectives,
         "mae_mfe_label": "mae_mfe" in objectives,
         "execution_capture_feedback": capture_status not in {"missing"},
@@ -389,6 +401,9 @@ def _execution_aware_labels(
         "status": "ready" if not missing else "partial",
         "objectives": objectives,
         "cost_model_status": cost_status,
+        "live_cost_model_requested": live_cost_requested,
+        "live_cost_model_applied_candidate_count": live_cost_candidate_count,
+        "live_cost_model_unusable_reasons": dict(sorted(live_cost_unusable_reasons.items())),
         "execution_capture_status": capture_status,
         "coverage": required,
         "missing_label_capabilities": missing,
@@ -496,6 +511,7 @@ def build_upward_trajectory_report(
         ),
         "execution_aware_model_labels": _execution_aware_labels(
             training_accelerator=training_accelerator,
+            candidates=candidates,
             live_cost_model=live_cost_model,
             execution_capture=execution_capture,
         ),

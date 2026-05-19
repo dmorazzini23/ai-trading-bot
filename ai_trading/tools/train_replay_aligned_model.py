@@ -75,6 +75,8 @@ class ReplayAlignedTrainingConfig:
     model_type: str
     edge_global_threshold: float | None
     live_cost_model_path: str | None = None
+    live_cost_model_requested: bool = False
+    live_cost_model_usable: bool = False
     training_cache_enabled: bool = True
     training_cache_dir: str | None = None
 
@@ -557,6 +559,103 @@ def _make_model(model_type: str, *, random_state: int) -> Any:
     raise ValueError(f"Unsupported model type: {model_type}")
 
 
+def _feature_importance(model: Any) -> list[dict[str, Any]]:
+    """Return lightweight feature attribution for candidate triage artifacts."""
+    estimator = model
+    if isinstance(model, Pipeline):
+        estimator = model.steps[-1][1] if model.steps else model
+    raw: Any = None
+    if hasattr(estimator, "coef_"):
+        coef = np.asarray(getattr(estimator, "coef_"), dtype=float)
+        if coef.ndim == 2 and coef.shape[0] >= 1:
+            raw = coef[0]
+    elif hasattr(estimator, "feature_importances_"):
+        raw = np.asarray(getattr(estimator, "feature_importances_"), dtype=float)
+    if raw is None:
+        return []
+    values = np.asarray(raw, dtype=float).reshape(-1)
+    if values.size != len(REPLAY_ALIGNED_FEATURE_COLUMNS):
+        return []
+    rows = [
+        {
+            "feature": feature,
+            "importance": float(abs(value)),
+            "signed_weight": float(value),
+        }
+        for feature, value in zip(REPLAY_ALIGNED_FEATURE_COLUMNS, values, strict=True)
+        if np.isfinite(value)
+    ]
+    rows.sort(key=lambda item: cast(float, item["importance"]), reverse=True)
+    return rows
+
+
+def _live_cost_request_metadata(
+    args: argparse.Namespace,
+    live_cost_model: LiveCostReplayModel | None,
+) -> dict[str, Any]:
+    explicit_path = getattr(args, "live_cost_model_json", None)
+    requested_flag = getattr(args, "use_live_cost_model", None)
+    requested = explicit_path is not None or bool(requested_flag)
+    path: Path | None = Path(explicit_path).expanduser() if explicit_path is not None else None
+    if path is None and bool(requested_flag):
+        path = resolve_runtime_artifact_path(
+            str(
+                get_env(
+                    "AI_TRADING_LIVE_COST_MODEL_PATH",
+                    "runtime/live_cost_model_latest.json",
+                    cast=str,
+                    resolve_aliases=False,
+                )
+                or "runtime/live_cost_model_latest.json"
+            ),
+            default_relative="runtime/live_cost_model_latest.json",
+        )
+    out: dict[str, Any] = {
+        "requested": bool(requested),
+        "enabled": live_cost_model is not None,
+        "usable": live_cost_model is not None,
+        "path": live_cost_model.path if live_cost_model is not None else (str(path) if path is not None else None),
+        "bucket_count": live_cost_model.bucket_count if live_cost_model is not None else 0,
+        "generated_at": live_cost_model.generated_at if live_cost_model is not None else None,
+        "status": live_cost_model.status if live_cost_model is not None else None,
+        "freshness_status": live_cost_model.freshness_status if live_cost_model is not None else None,
+        "source_sha256": live_cost_model.source_sha256 if live_cost_model is not None else None,
+        "reason": "loaded" if live_cost_model is not None else ("not_requested" if not requested else "not_loaded"),
+    }
+    if live_cost_model is not None or not requested or path is None:
+        return out
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        out["reason"] = "artifact_unavailable"
+        return out
+    if not isinstance(payload, Mapping) or payload.get("artifact_type") != "live_cost_model":
+        out["reason"] = "invalid_artifact_type"
+        return out
+    status = payload.get("status")
+    if isinstance(status, Mapping):
+        out["status"] = status.get("status")
+        out["available"] = bool(status.get("available"))
+        if not bool(status.get("available")):
+            out["reason"] = "status_unavailable"
+            return out
+        status_text = str(status.get("status") or "").strip().lower()
+        if status_text != "ready":
+            out["reason"] = f"status_{status_text or 'missing'}"
+            return out
+    else:
+        out["reason"] = "status_missing"
+        return out
+    rows = payload.get("by_symbol_side_session")
+    if not isinstance(rows, list):
+        out["reason"] = "buckets_missing"
+        return out
+    sufficient = [row for row in rows if isinstance(row, Mapping) and bool(row.get("sufficient_samples"))]
+    out["bucket_count"] = len(sufficient)
+    out["reason"] = "insufficient_bucket_samples" if not sufficient else "not_loaded"
+    return out
+
+
 def _positive_class_index(model: Any) -> int:
     classes = getattr(model, "classes_", None)
     if classes is None:
@@ -840,6 +939,8 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         edge_global_threshold=edge_global_threshold,
         edge_thresholds_by_regime=edge_thresholds_by_regime,
     )
+    feature_importance = _feature_importance(model)
+    live_cost_metadata = _live_cost_request_metadata(args, live_cost_model)
 
     model_name = str(args.model_name or f"replay_aligned_{args.model_type}").strip()
     model_path = output_dir / f"{model_name}.joblib"
@@ -858,6 +959,8 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         model_type=str(args.model_type),
         edge_global_threshold=edge_global_threshold,
         live_cost_model_path=live_cost_model.path if live_cost_model is not None else None,
+        live_cost_model_requested=bool(live_cost_metadata.get("requested")),
+        live_cost_model_usable=bool(live_cost_metadata.get("usable")),
         training_cache_enabled=bool(
             _env_bool("AI_TRADING_REPLAY_ALIGNED_TRAINING_CACHE_ENABLED", True)
             if getattr(args, "training_cache", None) is None
@@ -879,13 +982,8 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "config": asdict(config),
             "authority": _training_authority(dataset),
             "thresholds_by_regime": edge_thresholds_by_regime,
-            "live_cost_model": {
-                "enabled": live_cost_model is not None,
-                "path": live_cost_model.path if live_cost_model is not None else None,
-                "bucket_count": (
-                    live_cost_model.bucket_count if live_cost_model is not None else 0
-                ),
-            },
+            "feature_importance": feature_importance[:25],
+            "live_cost_model": live_cost_metadata,
         },
     )
     report = {
@@ -914,13 +1012,8 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "mean_label_score_bps": float(dataset["label_score_bps"].mean()),
             "split_purge": split_diagnostics,
         },
-        "live_cost_model": {
-            "enabled": live_cost_model is not None,
-            "path": live_cost_model.path if live_cost_model is not None else None,
-            "bucket_count": live_cost_model.bucket_count if live_cost_model is not None else 0,
-            "generated_at": live_cost_model.generated_at if live_cost_model is not None else None,
-            "status": live_cost_model.status if live_cost_model is not None else None,
-        },
+        "live_cost_model": live_cost_metadata,
+        "feature_importance": feature_importance[:25],
         "validation": validation_report,
         "threshold_sweep": threshold_report,
         "threshold_sweep_by_regime": threshold_report_by_regime,

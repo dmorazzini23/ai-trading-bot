@@ -23,6 +23,56 @@ def _candidate(name: str, validation_edge: float, replay_expectancy: float) -> d
     }
 
 
+def test_upward_trajectory_reports_requested_but_unapplied_live_cost_labels() -> None:
+    payload = report_tool.build_upward_trajectory_report(
+        training_accelerator={"status": "complete", "config": {"use_live_cost_model": True}},
+        multi_horizon_report={
+            "status": "complete",
+            "ranked_candidates": [
+                {
+                    **_candidate("gap-model", 40.0, -24.0),
+                    "live_cost_model": {
+                        "requested": True,
+                        "usable": False,
+                        "reason": "status_warming_up",
+                    },
+                }
+            ],
+        },
+        live_cost_model={"status": {"status": "warming_up"}},
+    )
+
+    labels = payload["execution_aware_model_labels"]
+    assert labels["live_cost_model_requested"] is True
+    assert labels["live_cost_model_applied_candidate_count"] == 0
+    assert labels["coverage"]["live_cost_adjusted_net_edge"] is False
+    assert labels["live_cost_model_unusable_reasons"] == {"status_warming_up": 1}
+
+
+def test_upward_trajectory_reports_applied_live_cost_labels() -> None:
+    payload = report_tool.build_upward_trajectory_report(
+        training_accelerator={"status": "complete", "config": {"use_live_cost_model": True}},
+        multi_horizon_report={
+            "status": "complete",
+            "ranked_candidates": [
+                {
+                    **_candidate("ok-model", 5.0, 2.0),
+                    "live_cost_model": {
+                        "requested": True,
+                        "usable": True,
+                        "reason": "loaded",
+                    },
+                }
+            ],
+        },
+        live_cost_model={"status": {"status": "ready"}},
+    )
+
+    labels = payload["execution_aware_model_labels"]
+    assert labels["live_cost_model_applied_candidate_count"] == 1
+    assert labels["coverage"]["live_cost_adjusted_net_edge"] is True
+
+
 def test_upward_trajectory_report_flags_validation_replay_gap() -> None:
     payload = report_tool.build_upward_trajectory_report(
         report_date="2026-05-18",

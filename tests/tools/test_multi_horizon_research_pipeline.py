@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +92,17 @@ def test_multi_horizon_pipeline_ranks_candidates_and_keeps_lead_horizon(
     assert report["replay_config"]["max_hold_bars"] == 45
     assert report["lead_candidates"]
     assert (tmp_path / "out" / "multi_horizon_research_report.json").is_file()
+    replay_outputs = [
+        Path(candidate["replay_output"])
+        for candidate in report["ranked_candidates"]
+        if candidate.get("replay_output")
+    ]
+    assert replay_outputs
+    assert all(path.is_file() for path in replay_outputs)
+    assert all(
+        json.loads(path.read_text(encoding="utf-8"))["artifacts"]["output_json"] == str(path)
+        for path in replay_outputs
+    )
 
 
 def test_multi_horizon_pipeline_replays_only_top_training_candidates(

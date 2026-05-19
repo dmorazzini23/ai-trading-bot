@@ -62,6 +62,17 @@ def _slim_replay_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _write_replay_payload(path: Path, payload: Mapping[str, Any]) -> None:
+    serializable = dict(payload)
+    artifacts = serializable.get("artifacts")
+    if isinstance(artifacts, dict):
+        artifacts["output_json"] = str(path)
+    else:
+        serializable["artifacts"] = {"output_json": str(path)}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(serializable, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def _candidate_rank_key(record: Mapping[str, Any]) -> tuple[float, float, int]:
     replay = record.get("replay")
     validation = record.get("validation")
@@ -153,6 +164,8 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                         "validation": training_report.get("validation"),
                         "threshold_sweep": training_report.get("threshold_sweep", [])[:10],
                         "threshold_sweep_by_regime": training_report.get("threshold_sweep_by_regime"),
+                        "feature_importance": training_report.get("feature_importance", [])[:25],
+                        "live_cost_model": training_report.get("live_cost_model"),
                         "replay_status": "pending_selection",
                     }
                 )
@@ -215,6 +228,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             replay_argv.extend(["--live-cost-model-json", str(args.live_cost_model_json)])
         try:
             replay_payload = run_replay(replay_argv)
+            _write_replay_payload(replay_path, replay_payload)
         except (OSError, ValueError, RuntimeError, TypeError) as exc:
             record["replay_status"] = "error"
             record["replay_error"] = {"type": type(exc).__name__, "message": str(exc)}
