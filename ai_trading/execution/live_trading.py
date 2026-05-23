@@ -2761,6 +2761,9 @@ class ExecutionEngine:
         self._execution_quality_pause_until_mono: float = 0.0
         self._execution_quality_recovery_streak: int = 0
         self._sample_formation_exploration_events: deque[dict[str, Any]] = deque(maxlen=512)
+        self._metrics_improvement_control_cache_until_mono: float = 0.0
+        self._metrics_improvement_control_cache: dict[str, Any] = {}
+        self._metrics_improvement_exploration_events: deque[dict[str, Any]] = deque(maxlen=512)
         self._opening_ramp_last_context: dict[str, Any] = {
             "enabled": False,
             "state": "inactive",
@@ -27322,6 +27325,282 @@ class ExecutionEngine:
             "passive_only": bool(passive_only),
         }
 
+    def _metrics_improvement_control_latest_path(self) -> Path:
+        configured = str(
+            _runtime_env(
+                "AI_TRADING_METRICS_IMPROVEMENT_CONTROL_LATEST_PATH",
+                "runtime/reports/metrics_improvement_control_latest.json",
+            )
+            or "runtime/reports/metrics_improvement_control_latest.json"
+        ).strip()
+        return resolve_runtime_artifact_path(
+            configured,
+            default_relative="runtime/reports/metrics_improvement_control_latest.json",
+            for_write=False,
+        )
+
+    def _load_metrics_improvement_control(self) -> dict[str, Any]:
+        now_mono = float(monotonic_time())
+        cached_until = _safe_float(
+            getattr(self, "_metrics_improvement_control_cache_until_mono", 0.0)
+        ) or 0.0
+        cached = getattr(self, "_metrics_improvement_control_cache", None)
+        if isinstance(cached, dict) and cached and cached_until > now_mono:
+            return dict(cached)
+        path = self._metrics_improvement_control_latest_path()
+        payload: dict[str, Any] = {}
+        if path.exists():
+            try:
+                parsed = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, ValueError):
+                parsed = {}
+            if isinstance(parsed, dict):
+                payload = parsed
+        ttl = _config_float("AI_TRADING_METRICS_IMPROVEMENT_CONTROL_CACHE_TTL_SEC", 60.0)
+        if ttl is None or not math.isfinite(float(ttl)):
+            ttl = 60.0
+        ttl = max(1.0, min(float(ttl), 900.0))
+        self._metrics_improvement_control_cache_until_mono = now_mono + float(ttl)
+        self._metrics_improvement_control_cache = dict(payload)
+        return payload
+
+    def _metrics_improvement_artifact_fresh(self, payload: Mapping[str, Any]) -> tuple[bool, dict[str, Any]]:
+        generated_raw = str(payload.get("generated_at") or "").strip()
+        max_age_s = _config_float(
+            "AI_TRADING_METRICS_IMPROVEMENT_CONTROL_MAX_AGE_SEC",
+            72.0 * 3600.0,
+        )
+        if max_age_s is None or not math.isfinite(float(max_age_s)):
+            max_age_s = 72.0 * 3600.0
+        max_age_s = max(300.0, min(float(max_age_s), 14.0 * 24.0 * 3600.0))
+        if not generated_raw:
+            return False, {"fresh": False, "reason": "generated_at_missing", "max_age_s": float(max_age_s)}
+        try:
+            generated = datetime.fromisoformat(generated_raw.replace("Z", "+00:00"))
+        except ValueError:
+            return False, {"fresh": False, "reason": "generated_at_invalid", "generated_at": generated_raw}
+        if generated.tzinfo is None:
+            generated = generated.replace(tzinfo=UTC)
+        age_s = max((datetime.now(UTC) - generated.astimezone(UTC)).total_seconds(), 0.0)
+        return age_s <= float(max_age_s), {
+            "fresh": bool(age_s <= float(max_age_s)),
+            "reason": "fresh" if age_s <= float(max_age_s) else "stale",
+            "generated_at": generated_raw,
+            "age_s": float(age_s),
+            "max_age_s": float(max_age_s),
+        }
+
+    def _metrics_improvement_exploration_budget_allows(
+        self,
+        *,
+        symbol: str,
+        budget: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        window_minutes = max(
+            1,
+            min(_safe_int(budget.get("window_minutes"), 390), 24 * 60),
+        )
+        max_orders = max(0, min(_safe_int(budget.get("max_orders_per_window"), 3), 10_000))
+        max_per_symbol = max(
+            0,
+            min(_safe_int(budget.get("max_orders_per_symbol_per_window"), 1), 10_000),
+        )
+        events_raw = getattr(self, "_metrics_improvement_exploration_events", None)
+        events = events_raw if isinstance(events_raw, deque) else deque(maxlen=512)
+        self._metrics_improvement_exploration_events = events
+        now_mono = float(monotonic_time())
+        cutoff = now_mono - (float(window_minutes) * 60.0)
+        while events and (_safe_float(events[0].get("ts_mono")) or 0.0) < cutoff:
+            events.popleft()
+        symbol_events = sum(
+            1 for item in events if str(item.get("symbol") or "").strip().upper() == symbol
+        )
+        context = {
+            "window_minutes": int(window_minutes),
+            "max_orders_per_window": int(max_orders),
+            "max_orders_per_symbol_per_window": int(max_per_symbol),
+            "events_in_window": int(len(events)),
+            "symbol_events_in_window": int(symbol_events),
+        }
+        if max_orders <= 0 or len(events) >= int(max_orders):
+            return False, context | {"reason": "exploration_budget_exhausted"}
+        if max_per_symbol <= 0 or symbol_events >= int(max_per_symbol):
+            return False, context | {"reason": "symbol_exploration_budget_exhausted"}
+        events.append({"ts_mono": float(now_mono), "symbol": symbol})
+        return True, context | {"reason": "ok", "events_in_window_after": int(len(events))}
+
+    def _metrics_improvement_control_allows_opening(
+        self,
+        *,
+        order: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        enabled = _resolve_bool_env("AI_TRADING_METRICS_IMPROVEMENT_CONTROL_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+        if not isinstance(order, dict):
+            return True, {"enabled": True, "reason": "order_not_mutable"}
+        if bool(order.get("closing_position")):
+            return True, {"enabled": True, "reason": "not_applicable_closing_position"}
+
+        symbol = str(order.get("symbol") or "").strip().upper()
+        if not symbol:
+            return True, {"enabled": True, "reason": "symbol_missing"}
+        payload = self._load_metrics_improvement_control()
+        if not payload:
+            return True, {"enabled": True, "reason": "artifact_missing", "symbol": symbol}
+        if bool(payload.get("authority_increase_allowed")):
+            return False, {
+                "enabled": True,
+                "reason": "artifact_authority_contract_invalid",
+                "symbol": symbol,
+            }
+        fresh, freshness = self._metrics_improvement_artifact_fresh(payload)
+        if not fresh:
+            return True, {
+                "enabled": True,
+                "reason": "artifact_not_fresh",
+                "symbol": symbol,
+                "freshness": freshness,
+            }
+        by_symbol_raw = payload.get("by_symbol")
+        by_symbol = by_symbol_raw if isinstance(by_symbol_raw, Mapping) else {}
+        control_raw = by_symbol.get(symbol)
+        control = dict(control_raw) if isinstance(control_raw, Mapping) else {}
+        budget_raw = payload.get("exploration_budget")
+        budget = dict(budget_raw) if isinstance(budget_raw, Mapping) else {}
+        if not control:
+            unknown_action = str(
+                _runtime_env(
+                    "AI_TRADING_METRICS_IMPROVEMENT_UNKNOWN_SYMBOL_ACTION",
+                    "explore",
+                )
+                or "explore"
+            ).strip().lower()
+            if unknown_action in {"block", "shadow"}:
+                return False, {
+                    "enabled": True,
+                    "reason": "metrics_control_unknown_symbol",
+                    "symbol": symbol,
+                    "action": unknown_action,
+                }
+            control = {
+                "action": "explore",
+                "qty_scale": _safe_float(budget.get("qty_scale")) or 0.5,
+                "required_edge_bps": _safe_float(
+                    (payload.get("control_policy") or {}).get("base_min_edge_bps")
+                    if isinstance(payload.get("control_policy"), Mapping)
+                    else None
+                )
+                or 0.0,
+                "reasons": ["unknown_symbol_exploration"],
+            }
+
+        action = str(control.get("action") or "allow").strip().lower()
+        reasons_raw = control.get("reasons")
+        reasons = (
+            [str(item) for item in reasons_raw if str(item)]
+            if isinstance(reasons_raw, Sequence) and not isinstance(reasons_raw, (str, bytes))
+            else []
+        )
+        if action in {"block", "shadow", "cooldown"}:
+            return False, {
+                "enabled": True,
+                "reason": f"metrics_control_{action}",
+                "symbol": symbol,
+                "action": action,
+                "control": control,
+                "reasons": reasons,
+            }
+
+        required_edge = _safe_float(control.get("required_edge_bps"))
+        if required_edge is None:
+            required_edge = 0.0
+        spread_value, _spread_source = self._order_numeric_value(
+            order,
+            keys=("spread_bps", "quoted_spread_bps", "bid_ask_spread_bps", "quote_spread_bps"),
+        )
+        quote_age_value, _quote_age_source = self._order_numeric_value(
+            order,
+            keys=("quote_age_ms", "quote_staleness_ms", "quote_age"),
+        )
+        unknown_metadata_add = _safe_float(control.get("unknown_quote_metadata_edge_add_bps")) or 0.0
+        if (spread_value is None or quote_age_value is None) and unknown_metadata_add > 0.0:
+            required_edge += float(unknown_metadata_add)
+        expected_edge = self._order_expected_edge_bps(order)
+        require_edge = _resolve_bool_env("AI_TRADING_METRICS_IMPROVEMENT_REQUIRE_EXPECTED_EDGE")
+        if require_edge is None:
+            require_edge = True
+        if bool(require_edge):
+            if expected_edge is None:
+                return False, {
+                    "enabled": True,
+                    "reason": "metrics_control_expected_edge_missing",
+                    "symbol": symbol,
+                    "action": action,
+                    "required_edge_bps": float(required_edge),
+                    "control": control,
+                }
+            if float(expected_edge) < float(required_edge):
+                return False, {
+                    "enabled": True,
+                    "reason": "metrics_control_expected_edge_floor",
+                    "symbol": symbol,
+                    "action": action,
+                    "expected_edge_bps": float(expected_edge),
+                    "required_edge_bps": float(required_edge),
+                    "spread_bps": float(spread_value) if spread_value is not None else None,
+                    "quote_age_ms": float(quote_age_value) if quote_age_value is not None else None,
+                    "control": control,
+                }
+
+        if action == "explore":
+            budget_allowed, budget_context = self._metrics_improvement_exploration_budget_allows(
+                symbol=symbol,
+                budget=budget,
+            )
+            if not budget_allowed:
+                return False, {
+                    "enabled": True,
+                    "reason": "metrics_control_exploration_budget",
+                    "symbol": symbol,
+                    "action": action,
+                    "budget": budget_context,
+                    "control": control,
+                }
+        quantity_raw = order.get("quantity")
+        if quantity_raw in (None, ""):
+            quantity_raw = order.get("qty")
+        quantity_before = max(1, _safe_int(quantity_raw, 1))
+        qty_scale = _safe_float(control.get("qty_scale"))
+        quantity_after = int(quantity_before)
+        if qty_scale is not None and math.isfinite(float(qty_scale)):
+            qty_scale = max(0.0, min(float(qty_scale), 1.0))
+            if qty_scale <= 0.0:
+                return False, {
+                    "enabled": True,
+                    "reason": "metrics_control_zero_qty_scale",
+                    "symbol": symbol,
+                    "action": action,
+                    "control": control,
+                }
+            quantity_after = max(1, int(math.floor(float(quantity_before) * float(qty_scale))))
+        if quantity_after < quantity_before:
+            order["quantity"] = int(quantity_after)
+            order["qty"] = int(quantity_after)
+        return True, {
+            "enabled": True,
+            "reason": "applied" if quantity_after < quantity_before or action == "explore" else "ok",
+            "symbol": symbol,
+            "action": action,
+            "quantity_before": int(quantity_before),
+            "quantity_after": int(quantity_after),
+            "expected_edge_bps": float(expected_edge) if expected_edge is not None else None,
+            "required_edge_bps": float(required_edge),
+            "control": control,
+        }
+
     def _apply_symbol_slippage_budget_derisk(
         self,
         *,
@@ -30382,6 +30661,51 @@ class ExecutionEngine:
                         "quantity_before": derisk_context.get("quantity_before"),
                         "quantity_after": derisk_context.get("quantity_after"),
                         "passive_only": bool(derisk_context.get("passive_only")),
+                    },
+                )
+            metrics_allowed, metrics_context = self._metrics_improvement_control_allows_opening(
+                order=order,
+            )
+            if not metrics_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "metrics_improvement_control",
+                    "context": metrics_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_METRICS_IMPROVEMENT", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "metrics_improvement_control",
+                    metrics_context,
+                    extra=skip_payload | {"detail": "metrics_improvement_control"},
+                )
+                _mark_precheck_failure("metrics_improvement_control", metrics_context)
+                return False
+            if (
+                isinstance(metrics_context, Mapping)
+                and str(metrics_context.get("reason") or "") in {"applied"}
+            ):
+                logger.info(
+                    "METRICS_IMPROVEMENT_CONTROL_APPLIED",
+                    extra={
+                        "symbol": order.get("symbol"),
+                        "side": order.get("side"),
+                        "action": metrics_context.get("action"),
+                        "quantity_before": metrics_context.get("quantity_before"),
+                        "quantity_after": metrics_context.get("quantity_after"),
+                        "required_edge_bps": metrics_context.get("required_edge_bps"),
                     },
                 )
             stop_bleed_allowed, stop_bleed_context = self._apply_runtime_stop_bleed_derisk(

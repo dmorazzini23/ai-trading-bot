@@ -260,6 +260,7 @@ def build_daily_research_report(
     operator_control_plane: Mapping[str, Any] | None = None,
     weekend_research: Mapping[str, Any] | None = None,
     upward_trajectory: Mapping[str, Any] | None = None,
+    metrics_improvement: Mapping[str, Any] | None = None,
     huggingface_discovery: Mapping[str, Any] | None = None,
     huggingface_candidate_intake: Mapping[str, Any] | None = None,
     huggingface_cache_materialization: Mapping[str, Any] | None = None,
@@ -298,6 +299,7 @@ def build_daily_research_report(
     operator_control_plane = operator_control_plane or {}
     weekend_research = weekend_research or {}
     upward_trajectory = upward_trajectory or {}
+    metrics_improvement = metrics_improvement or {}
     huggingface_discovery = huggingface_discovery or {}
     huggingface_candidate_intake = huggingface_candidate_intake or {}
     huggingface_cache_materialization = huggingface_cache_materialization or {}
@@ -604,6 +606,19 @@ def build_daily_research_report(
                 _nested(upward_trajectory, "authority").get("live_money_authority", False)
             ),
         },
+        "metrics_improvement_control": {
+            "available": bool(metrics_improvement),
+            "status": metrics_improvement.get("status", "missing"),
+            "summary": _nested(metrics_improvement, "summary"),
+            "runtime_safety_control": bool(
+                metrics_improvement.get("runtime_safety_control", False)
+            ),
+            "authority_increase_allowed": bool(
+                metrics_improvement.get("authority_increase_allowed", False)
+            ),
+            "promotion_authority": bool(metrics_improvement.get("promotion_authority", False)),
+            "live_money_authority": bool(metrics_improvement.get("live_money_authority", False)),
+        },
         "huggingface_research": huggingface_research,
     }
     allowed, reasons = _trade_allowed(report)
@@ -743,6 +758,22 @@ def build_daily_research_report(
                 _nested(report, "upward_trajectory").get("live_money_authority", False)
             ),
         },
+        "metrics_improvement_control": {
+            "status": _summary_status(_nested(report, "metrics_improvement_control")),
+            "summary": _nested(report, "metrics_improvement_control").get("summary"),
+            "runtime_safety_control": bool(
+                _nested(report, "metrics_improvement_control").get(
+                    "runtime_safety_control",
+                    False,
+                )
+            ),
+            "authority_increase_allowed": bool(
+                _nested(report, "metrics_improvement_control").get(
+                    "authority_increase_allowed",
+                    False,
+                )
+            ),
+        },
         "huggingface_research": {
             "status": _nested(report, "huggingface_research").get("status"),
             "summary": _nested(report, "huggingface_research").get("summary"),
@@ -822,6 +853,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Regime champions: `{_nested(report, 'regime_champion_models').get('status', 'missing')}`",
             f"- Upward trajectory: `{_nested(report, 'upward_trajectory').get('status', 'missing')}` "
             f"action=`{_nested(report, 'upward_trajectory', 'summary').get('recommended_next_action', 'missing')}`",
+            f"- Metrics improvement control: `{_nested(report, 'metrics_improvement_control').get('status', 'missing')}`",
             f"- Adversarial simulation: `{_nested(report, 'adversarial_failure_simulation').get('status', 'missing')}`",
             f"- Drift monitor: `{_nested(report, 'model_data_drift_monitor').get('status', 'missing')}`",
             f"- Operator control plane: `{_nested(report, 'operator_control_plane').get('status', 'missing')}`",
@@ -872,6 +904,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--operator-control-plane-json", type=Path, default=None)
     parser.add_argument("--weekend-research-json", type=Path, default=None)
     parser.add_argument("--upward-trajectory-json", type=Path, default=None)
+    parser.add_argument("--metrics-improvement-json", type=Path, default=None)
     parser.add_argument("--huggingface-discovery-json", type=Path, default=None)
     parser.add_argument("--huggingface-candidate-intake-json", type=Path, default=None)
     parser.add_argument("--huggingface-cache-json", type=Path, default=None)
@@ -1011,6 +1044,10 @@ def main(argv: list[str] | None = None) -> int:
         upward_trajectory=_read_json(
             args.upward_trajectory_json
             or _default_path("runtime/reports/upward_trajectory_latest.json")
+        ),
+        metrics_improvement=_read_json(
+            args.metrics_improvement_json
+            or _default_path("runtime/reports/metrics_improvement_control_latest.json")
         ),
         huggingface_discovery=_read_json(
             args.huggingface_discovery_json

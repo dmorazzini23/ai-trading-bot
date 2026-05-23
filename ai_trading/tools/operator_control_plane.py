@@ -140,6 +140,7 @@ def build_operator_control_plane(
     paper_sampling: Mapping[str, Any] | None = None,
     operator_actions: Mapping[str, Any] | None = None,
     huggingface_research: Mapping[str, Any] | None = None,
+    metrics_improvement: Mapping[str, Any] | None = None,
     upward_trajectory: Mapping[str, Any] | None = None,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
@@ -159,6 +160,7 @@ def build_operator_control_plane(
     paper_sampling_payload = _mapping(paper_sampling)
     operator_actions_payload = _mapping(operator_actions)
     huggingface_research_payload = _mapping(huggingface_research)
+    metrics_improvement_payload = _mapping(metrics_improvement)
     upward_trajectory_payload = _mapping(upward_trajectory)
     generated = generated_at.astimezone(UTC) if generated_at else datetime.now(UTC)
     launch_profile = launch_profile_payload(resolve_launch_profile())
@@ -167,25 +169,34 @@ def build_operator_control_plane(
         for flag in health_payload.get("attention_flags", [])
         if flag not in (None, "")
     ] if isinstance(health_payload.get("attention_flags"), list) else []
+    core_sections = (
+        ("health", health_payload),
+        ("readiness", readiness_payload),
+        ("runtime_gonogo", runtime_gonogo_payload),
+        ("runtime_performance", runtime_performance_payload),
+        ("oms", oms_payload),
+        ("model_registry", model_registry_payload),
+        ("latest_research", latest_research_payload),
+        ("weekend_research", weekend_research_payload),
+        ("drift", drift_payload),
+        ("surveillance", surveillance_payload),
+        ("risk_verifier", risk_verifier_payload),
+        ("paper_sampling", paper_sampling_payload),
+        ("operator_actions", operator_actions_payload),
+        ("huggingface_research", huggingface_research_payload),
+        ("upward_trajectory", upward_trajectory_payload),
+    )
+    optional_sections = (
+        ("metrics_improvement", metrics_improvement_payload),
+    )
     missing_sections = [
         name
-        for name, payload in (
-            ("health", health_payload),
-            ("readiness", readiness_payload),
-            ("runtime_gonogo", runtime_gonogo_payload),
-            ("runtime_performance", runtime_performance_payload),
-            ("oms", oms_payload),
-            ("model_registry", model_registry_payload),
-            ("latest_research", latest_research_payload),
-            ("weekend_research", weekend_research_payload),
-            ("drift", drift_payload),
-            ("surveillance", surveillance_payload),
-            ("risk_verifier", risk_verifier_payload),
-            ("paper_sampling", paper_sampling_payload),
-            ("operator_actions", operator_actions_payload),
-            ("huggingface_research", huggingface_research_payload),
-            ("upward_trajectory", upward_trajectory_payload),
-        )
+        for name, payload in core_sections
+        if not payload
+    ]
+    optional_missing_sections = [
+        name
+        for name, payload in optional_sections
         if not payload
     ]
     return {
@@ -202,6 +213,7 @@ def build_operator_control_plane(
             "writes": ["output_artifact_only"],
         },
         "missing_sections": missing_sections,
+        "optional_missing_sections": optional_missing_sections,
         "health": {
             "artifact_status": _artifact_status(health_payload),
             "ok": health_payload.get("ok"),
@@ -241,6 +253,21 @@ def build_operator_control_plane(
             "runtime_authority": False,
             "promotion_authority": False,
             "live_money_authority": False,
+        },
+        "metrics_improvement_control": {
+            **_section(metrics_improvement_payload, label="metrics_improvement_control"),
+            "runtime_safety_control": bool(
+                metrics_improvement_payload.get("runtime_safety_control", False)
+            ),
+            "authority_increase_allowed": bool(
+                metrics_improvement_payload.get("authority_increase_allowed", False)
+            ),
+            "promotion_authority": bool(
+                metrics_improvement_payload.get("promotion_authority", False)
+            ),
+            "live_money_authority": bool(
+                metrics_improvement_payload.get("live_money_authority", False)
+            ),
         },
         "upward_trajectory": {
             **_section(upward_trajectory_payload, label="upward_trajectory"),
@@ -283,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--paper-sampling-json", type=Path, default=None)
     parser.add_argument("--operator-actions-json", type=Path, default=None)
     parser.add_argument("--huggingface-research-json", type=Path, default=None)
+    parser.add_argument("--metrics-improvement-json", type=Path, default=None)
     parser.add_argument("--upward-trajectory-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -333,6 +361,10 @@ def main(argv: list[str] | None = None) -> int:
         huggingface_research=_read_json_mapping(
             args.huggingface_research_json
             or _default_path("runtime/research_reports/latest/hf_discovery_latest.json")
+        ),
+        metrics_improvement=_read_json_mapping(
+            args.metrics_improvement_json
+            or _default_path("runtime/reports/metrics_improvement_control_latest.json")
         ),
         upward_trajectory=_read_json_mapping(
             args.upward_trajectory_json

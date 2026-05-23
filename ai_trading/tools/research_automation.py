@@ -287,6 +287,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     memory_audit = config.run_dir / "memory_hotspot_audit.json"
     artifact_retention = config.run_dir / "runtime_artifact_retention.json"
     upward_trajectory = config.run_dir / "upward_trajectory.json"
+    metrics_control = config.run_dir / "metrics_improvement_control.json"
     multi_horizon_dir = config.run_dir / "multi_horizon_lightweight"
     training_accelerator = config.run_dir / "training_accelerator" / "training_accelerator_report.json"
     steps = [
@@ -890,6 +891,41 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             },
         ),
         ResearchStep(
+            name="metrics_improvement_control",
+            command=_python_module(
+                "ai_trading.tools.metrics_improvement_control",
+                "--report-date",
+                config.report_date,
+                "--daily-report-root",
+                config.report_root / "daily",
+                "--lookback-sessions",
+                _env_text("AI_TRADING_METRICS_IMPROVEMENT_LOOKBACK_SESSIONS", "5"),
+                "--trading-day-json",
+                trading_day,
+                "--expected-edge-calibration-json",
+                expected_edge_calibration,
+                "--execution-capture-json",
+                execution_capture,
+                "--post-trade-surveillance-json",
+                post_trade_surveillance,
+                "--live-cost-model-json",
+                live_cost,
+                "--output-json",
+                metrics_control,
+                "--latest-json",
+                config.report_root / "latest" / "metrics_improvement_control_latest.json",
+            ),
+            purpose="Build conservative next-session metric controls: cooldown, downscale, stricter edge, and exploration caps.",
+            output_path=metrics_control,
+            skip_if_missing=(expected_edge_calibration, execution_capture, post_trade_surveillance, live_cost),
+            metadata={
+                "runtime_safety_control": True,
+                "authority_increase_allowed": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+            },
+        ),
+        ResearchStep(
             name="upward_trajectory_report",
             command=_python_module(
                 "ai_trading.tools.upward_trajectory_report",
@@ -959,6 +995,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 _runtime_input_path("runtime/paper_sampling_state_latest.json"),
                 "--huggingface-research-json",
                 hf_discovery,
+                "--metrics-improvement-json",
+                metrics_control,
                 "--upward-trajectory-json",
                 config.report_root / "latest" / "upward_trajectory_latest.json",
                 "--output-json",
@@ -1022,6 +1060,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 config.report_root / "latest" / "weekend_research_latest.json",
                 "--upward-trajectory-json",
                 upward_trajectory,
+                "--metrics-improvement-json",
+                metrics_control,
                 "--huggingface-discovery-json",
                 hf_discovery,
                 "--huggingface-candidate-intake-json",
@@ -1092,6 +1132,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 operator_control,
                 "--upward-trajectory-json",
                 upward_trajectory,
+                "--metrics-improvement-json",
+                metrics_control,
                 "--huggingface-discovery-json",
                 hf_discovery,
                 "--huggingface-candidate-intake-json",
@@ -2589,6 +2631,7 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
     hf_intake = _read_json(latest / "hf_candidate_intake_latest.json")
     hf_cache = _read_json(latest / "hf_cache_materialization_latest.json")
     upward_trajectory = _read_json(latest / "upward_trajectory_latest.json")
+    metrics_control = _read_json(latest / "metrics_improvement_control_latest.json")
     weekend_research = _read_json(latest / "weekend_research_latest.json")
     weekend_summary = _read_json(latest / "weekend_operator_summary.json")
     return {
@@ -2721,6 +2764,16 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
                 if isinstance(upward_trajectory.get("authority"), Mapping)
                 else False
             ),
+        },
+        "metrics_improvement_control": {
+            "status": _artifact_status(metrics_control),
+            "summary": metrics_control.get("summary"),
+            "runtime_safety_control": bool(metrics_control.get("runtime_safety_control", False)),
+            "authority_increase_allowed": bool(
+                metrics_control.get("authority_increase_allowed", False)
+            ),
+            "promotion_authority": bool(metrics_control.get("promotion_authority", False)),
+            "live_money_authority": bool(metrics_control.get("live_money_authority", False)),
         },
         "huggingface_research": {
             "status": _artifact_status(hf_discovery),
@@ -2937,6 +2990,17 @@ def _copy_authority_artifacts(
                     resolve_runtime_artifact_path(
                         "runtime/reports/evidence_starvation_latest.json",
                         default_relative="runtime/reports/evidence_starvation_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "metrics_improvement_control":
+            targets.extend(
+                [
+                    latest_dir / "metrics_improvement_control_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/reports/metrics_improvement_control_latest.json",
+                        default_relative="runtime/reports/metrics_improvement_control_latest.json",
                         for_write=True,
                     ),
                 ]

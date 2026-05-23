@@ -97,6 +97,9 @@ def _engine_stub() -> Any:
     engine._execution_quality_pause_until_mono = 0.0
     engine._execution_quality_recovery_streak = 0
     engine._sample_formation_exploration_events = deque(maxlen=512)
+    engine._metrics_improvement_control_cache_until_mono = 0.0
+    engine._metrics_improvement_control_cache = {}
+    engine._metrics_improvement_exploration_events = deque(maxlen=512)
     engine._opening_ramp_last_context = {
         "enabled": False,
         "state": "inactive",
@@ -7508,6 +7511,129 @@ def test_apply_runtime_execution_capture_derisk_blocks_tca_symbol(monkeypatch) -
 
     assert allowed is False
     assert context["reason"] == "symbol_tca_guard_block"
+
+
+def test_metrics_improvement_control_blocks_weak_symbol(monkeypatch) -> None:
+    engine = _engine_stub()
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "AMZN": {
+                "action": "shadow",
+                "qty_scale": 0.0,
+                "required_edge_bps": 8.0,
+                "reasons": ["capture_ratio_hard_breach"],
+            }
+        },
+        "exploration_budget": {"window_minutes": 390, "max_orders_per_window": 2},
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+
+    allowed, context = engine._metrics_improvement_control_allows_opening(
+        order={"symbol": "AMZN", "side": "buy", "quantity": 5, "expected_edge_bps": 20.0}
+    )
+
+    assert allowed is False
+    assert context["reason"] == "metrics_control_shadow"
+    assert context["symbol"] == "AMZN"
+
+
+def test_metrics_improvement_control_downscales_and_requires_cost_edge(monkeypatch) -> None:
+    engine = _engine_stub()
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "AAPL": {
+                "action": "downscale",
+                "qty_scale": 0.4,
+                "required_edge_bps": 6.0,
+                "unknown_quote_metadata_edge_add_bps": 1.0,
+                "reasons": ["capture_ratio_below_floor"],
+            }
+        },
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+    order = {
+        "symbol": "AAPL",
+        "side": "buy",
+        "quantity": 10,
+        "expected_edge_bps": 8.0,
+        "spread_bps": 2.0,
+        "quote_age_ms": 200.0,
+    }
+
+    allowed, context = engine._metrics_improvement_control_allows_opening(order=order)
+
+    assert allowed is True
+    assert context["reason"] == "applied"
+    assert order["quantity"] == 4
+    assert order["qty"] == 4
+    assert context["required_edge_bps"] == pytest.approx(6.0)
+
+
+def test_metrics_improvement_control_blocks_when_edge_cannot_cover_unknown_quote_add(
+    monkeypatch,
+) -> None:
+    engine = _engine_stub()
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "AAPL": {
+                "action": "downscale",
+                "qty_scale": 0.5,
+                "required_edge_bps": 6.0,
+                "unknown_quote_metadata_edge_add_bps": 2.0,
+            }
+        },
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+
+    allowed, context = engine._metrics_improvement_control_allows_opening(
+        order={"symbol": "AAPL", "side": "buy", "quantity": 10, "expected_edge_bps": 7.0}
+    )
+
+    assert allowed is False
+    assert context["reason"] == "metrics_control_expected_edge_floor"
+    assert context["required_edge_bps"] == pytest.approx(8.0)
+
+
+def test_metrics_improvement_control_caps_exploration_budget(monkeypatch) -> None:
+    engine = _engine_stub()
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {},
+        "exploration_budget": {
+            "window_minutes": 390,
+            "max_orders_per_window": 1,
+            "max_orders_per_symbol_per_window": 1,
+            "qty_scale": 0.5,
+        },
+        "control_policy": {"base_min_edge_bps": 1.0},
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+    monkeypatch.setenv("AI_TRADING_METRICS_IMPROVEMENT_REQUIRE_EXPECTED_EDGE", "0")
+
+    first_order = {"symbol": "MSFT", "side": "buy", "quantity": 2}
+    first_allowed, first_context = engine._metrics_improvement_control_allows_opening(
+        order=first_order
+    )
+    second_allowed, second_context = engine._metrics_improvement_control_allows_opening(
+        order={"symbol": "MSFT", "side": "buy", "quantity": 2}
+    )
+
+    assert first_allowed is True
+    assert first_context["action"] == "explore"
+    assert first_order["quantity"] == 1
+    assert second_allowed is False
+    assert second_context["reason"] == "metrics_control_exploration_budget"
 
 
 def test_pre_execution_order_checks_blocks_when_reconciliation_freeze_active(
