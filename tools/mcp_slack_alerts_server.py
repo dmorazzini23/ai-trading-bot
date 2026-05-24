@@ -1141,6 +1141,32 @@ def _should_suppress_gonogo_incident(
     return bool(enabled and _market_closed_snapshot(snapshot))
 
 
+def _should_suppress_market_closed_health_alert(
+    snapshot: dict[str, Any], args: dict[str, Any]
+) -> bool:
+    enabled = _bool_arg(
+        args.get("suppress_market_closed_health_alerts"),
+        default=_bool_arg(
+            os.getenv("AI_TRADING_SLACK_SUPPRESS_MARKET_CLOSED_HEALTH_ALERTS"),
+            default=True,
+        ),
+    )
+    if not enabled or not _market_closed_snapshot(snapshot):
+        return False
+    health_status = str(snapshot.get("health_status") or "").strip().lower()
+    provider_status = str(snapshot.get("provider_status") or "").strip().lower()
+    provider_reason = str(snapshot.get("provider_reason") or "").strip().lower()
+    broker_status = str(snapshot.get("broker_status") or "").strip().lower()
+    using_backup = bool(snapshot.get("using_backup", False))
+    return (
+        health_status in {"healthy", "ready"}
+        and provider_status in {"warming_up", "healthy", "ready", ""}
+        and provider_reason in {"market_closed", ""}
+        and broker_status in {"connected", "reachable", "unknown", ""}
+        and not using_backup
+    )
+
+
 def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) -> list[str]:
     triggers: list[str] = []
     health_reason = str(snapshot.get("health_reason") or "").strip().lower()
@@ -1306,7 +1332,11 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
     health_ok = bool(snapshot.get("health_ok", False))
     health_status = str(snapshot.get("health_status") or "unknown").lower()
     health_degraded = not health_ok or health_status in {"degraded", "down", "unhealthy"}
-    if health_degraded and not _should_suppress_startup_warmup_health_alert(snapshot, args):
+    if (
+        health_degraded
+        and not _should_suppress_startup_warmup_health_alert(snapshot, args)
+        and not _should_suppress_market_closed_health_alert(snapshot, args)
+    ):
         triggers.append("health_degraded")
 
     if bool(snapshot.get("using_backup", False)) and not startup_grace_active:

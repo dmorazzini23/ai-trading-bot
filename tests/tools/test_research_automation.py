@@ -882,6 +882,21 @@ def test_blocked_research_step_surfaces_operator_reason(tmp_path: Path, monkeypa
         dry_run=False,
     )
     output = config.run_dir / "replay_governance_summary.json"
+    runtime_root = tmp_path / "runtime"
+    def fake_runtime_artifact_path(
+        path_value: str,
+        *,
+        default_relative: str | None = None,
+        for_write: bool = False,
+    ) -> Path:
+        del for_write
+        return runtime_root / (default_relative or path_value)
+
+    monkeypatch.setattr(
+        research_automation,
+        "resolve_runtime_artifact_path",
+        fake_runtime_artifact_path,
+    )
     step = research_automation.ResearchStep(
         name="replay_governance_refresh",
         command=(
@@ -907,6 +922,25 @@ def test_blocked_research_step_surfaces_operator_reason(tmp_path: Path, monkeypa
     )
 
     assert report["status"] == "blocked"
+    assert report["paths"]["authority_copies"]["replay_governance_refresh"] == str(
+        runtime_root / "runtime/replay_governance_refresh_latest.json"
+    )
+    assert json.loads(
+        (config.report_root / "latest" / "replay_governance_refresh_latest.json").read_text(
+            encoding="utf-8"
+        )
+    ) == {
+        "status": "blocked",
+        "reason": "REPLAY_POLICY_NON_REGRESSION_FAILED",
+    }
+    assert json.loads(
+        (runtime_root / "runtime/replay_governance_refresh_latest.json").read_text(
+            encoding="utf-8"
+        )
+    ) == {
+        "status": "blocked",
+        "reason": "REPLAY_POLICY_NON_REGRESSION_FAILED",
+    }
     assert summary["blocked_steps"] == ["replay_governance_refresh"]
     assert summary["blocked_reasons"] == [
         "replay_governance_refresh:REPLAY_POLICY_NON_REGRESSION_FAILED"

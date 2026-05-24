@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from io import BytesIO
 import json
 from pathlib import Path
+from urllib.error import HTTPError
 
 from ai_trading.tools import operator_control_plane
 
@@ -71,6 +73,64 @@ def test_operator_control_plane_aggregates_read_only_sections(monkeypatch) -> No
     assert report["upward_trajectory"]["runtime_authority"] is False
 
 
+def test_operator_control_plane_derives_runtime_gonogo_and_oms_from_health(monkeypatch) -> None:
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+    health = _health_payload()
+    health["ok"] = False
+    health["readiness_failures"] = ["replay_live_parity_gate_failed"]
+
+    report = operator_control_plane.build_operator_control_plane(
+        health=health,
+        readiness={"status": "blocked", "reasons": ["replay_live_parity_gate_failed"]},
+        runtime_performance={"available": True},
+        model_registry={"models": {}},
+        latest_research={"status": "complete"},
+        weekend_research={"status": "complete"},
+        drift={"status": "ok"},
+        surveillance={"status": "ok"},
+        risk_verifier={"status": "pass"},
+        paper_sampling={"count": 0},
+        huggingface_research={"status": "disabled"},
+        upward_trajectory={"status": "ready"},
+    )
+
+    assert report["status"] == "complete"
+    assert "runtime_gonogo" not in report["missing_sections"]
+    assert "oms" not in report["missing_sections"]
+    assert "operator_actions" in report["optional_missing_sections"]
+    assert report["go_no_go"]["runtime_gate_passed"] is False
+    assert report["go_no_go"]["runtime_failed_checks"] == ["replay_live_parity_gate_failed"]
+    assert report["orders_positions_oms"]["oms"]["artifact_status"] == "derived_from_health"
+
+
+def test_health_from_endpoint_keeps_json_http_error_body(monkeypatch) -> None:
+    body = json.dumps(
+        {
+            "ok": False,
+            "status": "healthy",
+            "reason": "market_closed",
+            "readiness_failures": ["replay_live_parity_gate_failed"],
+        }
+    ).encode("utf-8")
+
+    def raise_http_error(*_args, **_kwargs):
+        raise HTTPError(
+            url="http://127.0.0.1:9001/healthz",
+            code=503,
+            msg="Service Unavailable",
+            hdrs={},
+            fp=BytesIO(body),
+        )
+
+    monkeypatch.setattr(operator_control_plane, "urlopen", raise_http_error)
+
+    payload = operator_control_plane._health_from_endpoint("http://127.0.0.1:9001/healthz")
+
+    assert payload["status"] == "healthy"
+    assert payload["reason"] == "market_closed"
+    assert payload["readiness_failures"] == ["replay_live_parity_gate_failed"]
+
+
 def test_operator_control_plane_cli_writes_partial_artifact(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
     health = tmp_path / "health.json"
@@ -120,7 +180,9 @@ def test_operator_control_plane_cli_writes_partial_artifact(monkeypatch, tmp_pat
     artifact = json.loads(output.read_text(encoding="utf-8"))
     assert artifact["artifact_type"] == "operator_control_plane"
     assert artifact["status"] == "partial"
-    assert "runtime_gonogo" in artifact["missing_sections"]
+    assert "runtime_gonogo" not in artifact["missing_sections"]
+    assert "oms" not in artifact["missing_sections"]
+    assert "operator_actions" in artifact["optional_missing_sections"]
     assert "weekend_research" in artifact["missing_sections"]
     assert "huggingface_research" in artifact["missing_sections"]
     assert "upward_trajectory" in artifact["missing_sections"]

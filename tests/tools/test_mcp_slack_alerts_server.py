@@ -523,6 +523,62 @@ def test_evaluate_incident_triggers_allows_degraded_health_after_startup_grace()
     assert "health_degraded" in triggers
 
 
+def test_evaluate_incident_triggers_suppresses_market_closed_readiness_only_health() -> None:
+    snapshot = {
+        "go_no_go_gate_passed": False,
+        "go_no_go_failed_checks": ["replay_live_parity_gate_failed"],
+        "execution_capture_ratio": None,
+        "slippage_drag_bps": None,
+        "health_ok": False,
+        "health_status": "healthy",
+        "health_reason": "market_closed",
+        "provider_status": "warming_up",
+        "provider_active": "alpaca",
+        "provider_reason": "market_closed",
+        "using_backup": False,
+        "broker_status": "connected",
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+
+    triggers = slack_srv._evaluate_incident_triggers(
+        snapshot,
+        {
+            "min_capture_ratio": 0.08,
+            "suppress_market_closed_gonogo_alerts": True,
+            "suppress_market_closed_health_alerts": True,
+        },
+    )
+
+    assert "health_degraded" not in triggers
+    assert "go_no_go_failed" not in triggers
+
+
+def test_evaluate_incident_triggers_allows_market_closed_broker_health_incident() -> None:
+    snapshot = {
+        "go_no_go_gate_passed": None,
+        "go_no_go_failed_checks": [],
+        "execution_capture_ratio": None,
+        "slippage_drag_bps": None,
+        "health_ok": False,
+        "health_status": "degraded",
+        "health_reason": "market_closed",
+        "provider_status": "warming_up",
+        "provider_active": "alpaca",
+        "provider_reason": "market_closed",
+        "using_backup": False,
+        "broker_status": "disconnected",
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+
+    triggers = slack_srv._evaluate_incident_triggers(
+        snapshot,
+        {"min_capture_ratio": 0.08, "suppress_market_closed_health_alerts": True},
+    )
+
+    assert "health_degraded" in triggers
+    assert "broker_disconnected" in triggers
+
+
 def test_collect_execution_window_snapshot_tracks_precheck_detail_breakdown(
     monkeypatch, tmp_path: Path
 ) -> None:

@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.error import HTTPError
 from urllib.request import urlopen
 
 from ai_trading.config.launch_profiles import launch_profile_payload, resolve_launch_profile
@@ -32,12 +34,26 @@ def _health_from_endpoint(url: str | None) -> dict[str, Any]:
     target = str(url or "").strip()
     if not target:
         return {}
-    try:
-        with urlopen(target, timeout=3.0) as response:  # nosec B310 - operator read-only health endpoint
-            parsed = json.loads(response.read().decode("utf-8"))
-    except (OSError, TimeoutError, json.JSONDecodeError, ValueError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+    for attempt in range(3):
+        try:
+            with urlopen(target, timeout=5.0) as response:  # nosec B310 - operator read-only health endpoint
+                parsed = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            try:
+                parsed = json.loads(exc.read().decode("utf-8", errors="replace"))
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                return parsed
+            if attempt < 2:
+                time.sleep(0.25)
+            continue
+        except (OSError, TimeoutError, json.JSONDecodeError, ValueError):
+            if attempt < 2:
+                time.sleep(0.25)
+            continue
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _artifact_status(payload: Mapping[str, Any]) -> str:
@@ -67,6 +83,46 @@ def _go_no_go_payload(readiness: Mapping[str, Any], runtime_gonogo: Mapping[str,
         "runtime_failed_checks": runtime_failed,
         "runtime_status": _artifact_status(runtime_gonogo),
         "health_report_summary": readiness_summary,
+    }
+
+
+def _derive_runtime_gonogo_from_health(health: Mapping[str, Any]) -> dict[str, Any]:
+    if not health:
+        return {}
+    failures = health.get("readiness_failures")
+    failed_checks = [str(item) for item in failures] if isinstance(failures, list) else []
+    return {
+        "artifact_type": "runtime_gonogo_status",
+        "status": "derived_from_health",
+        "source": "healthz",
+        "gate_passed": bool(health.get("ok")) and not failed_checks,
+        "failed_checks": failed_checks,
+        "health_status": health.get("status"),
+        "health_reason": health.get("reason"),
+    }
+
+
+def _derive_oms_from_health(health: Mapping[str, Any]) -> dict[str, Any]:
+    if not health:
+        return {}
+    invariants = _mapping(health.get("oms_invariants"))
+    lifecycle = _mapping(health.get("oms_lifecycle_parity"))
+    replay_live = _mapping(health.get("replay_live_parity_gate"))
+    if not (invariants or lifecycle or replay_live):
+        return {}
+    ok_values = [
+        payload.get("ok")
+        for payload in (invariants, lifecycle, replay_live)
+        if "ok" in payload
+    ]
+    return {
+        "artifact_type": "oms_health_derived",
+        "status": "derived_from_health",
+        "source": "healthz",
+        "ok": all(bool(value) for value in ok_values) if ok_values else None,
+        "invariants": invariants,
+        "lifecycle_parity": lifecycle,
+        "replay_live_parity_gate": replay_live,
     }
 
 
@@ -162,6 +218,10 @@ def build_operator_control_plane(
     huggingface_research_payload = _mapping(huggingface_research)
     metrics_improvement_payload = _mapping(metrics_improvement)
     upward_trajectory_payload = _mapping(upward_trajectory)
+    if not runtime_gonogo_payload:
+        runtime_gonogo_payload = _derive_runtime_gonogo_from_health(health_payload)
+    if not oms_payload:
+        oms_payload = _derive_oms_from_health(health_payload)
     generated = generated_at.astimezone(UTC) if generated_at else datetime.now(UTC)
     launch_profile = launch_profile_payload(resolve_launch_profile())
     attention_flags = [
@@ -182,11 +242,11 @@ def build_operator_control_plane(
         ("surveillance", surveillance_payload),
         ("risk_verifier", risk_verifier_payload),
         ("paper_sampling", paper_sampling_payload),
-        ("operator_actions", operator_actions_payload),
         ("huggingface_research", huggingface_research_payload),
         ("upward_trajectory", upward_trajectory_payload),
     )
     optional_sections = (
+        ("operator_actions", operator_actions_payload),
         ("metrics_improvement", metrics_improvement_payload),
     )
     missing_sections = [

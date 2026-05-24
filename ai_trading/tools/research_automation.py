@@ -377,6 +377,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             ),
             purpose="Refresh replay governance evidence used by health and promotion gates.",
             output_path=replay,
+            required=True,
             blocked_returncodes=(1, 2),
         ),
         ResearchStep(
@@ -1488,6 +1489,7 @@ def _monthly_steps(config: ResearchConfig) -> list[ResearchStep]:
             ),
             purpose="Refresh replay governance before monthly architecture review.",
             output_path=config.run_dir / "replay_governance_summary.json",
+            required=True,
             blocked_returncodes=(1, 2),
         ),
         ResearchStep(
@@ -1994,6 +1996,7 @@ def _weekend_sunday_steps(config: ResearchConfig) -> tuple[list[ResearchStep], l
             ),
             purpose="Refresh replay governance for Monday-readiness synthesis.",
             output_path=replay,
+            required=True,
             blocked_returncodes=(1, 2),
         ),
         ResearchStep(
@@ -2849,9 +2852,12 @@ def _copy_authority_artifacts(
     copied: dict[str, str] = {}
     latest_dir = config.report_root / "latest"
     for row in step_results:
-        if row.get("status") != "passed":
-            continue
         name = str(row.get("name") or "")
+        status = str(row.get("status") or "")
+        if status != "passed" and not (
+            name == "replay_governance_refresh" and status == "blocked"
+        ):
+            continue
         raw_path = str(row.get("output_path") or row.get("stdout_path") or "").strip()
         if not raw_path:
             continue
