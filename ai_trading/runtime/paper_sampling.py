@@ -344,8 +344,61 @@ def reserve_paper_sampling_order(
     return PaperSamplingDecision(True, True, decision.qty, "OK", details)
 
 
+def release_paper_sampling_order(
+    cfg: Any,
+    *,
+    symbol: str,
+    side: str,
+    now: datetime | None = None,
+    consumes_daily_slot: bool = True,
+) -> None:
+    """Release a diagnostic paper-sampling slot when submit is not accepted."""
+
+    active, _ = _is_paper_sampling_active(cfg)
+    if not active or not bool(consumes_daily_slot):
+        return
+    today = _today_key(now)
+    session = _session_bucket(now)
+    symbol_key = str(symbol).strip().upper()
+    side_key = str(side).strip().lower()
+    if not symbol_key or not side_key:
+        return
+    path = _state_path()
+    with _STATE_LOCK:
+        state = _load_state(path)
+        if str(state.get("date") or "") != today:
+            return
+        count = max(0, int(state.get("count", 0) or 0) - 1)
+
+        def _decrement_map(key: str, bucket: str) -> dict[str, int]:
+            raw = state.get(key)
+            if not isinstance(raw, Mapping):
+                return {}
+            updated = {str(k): int(v or 0) for k, v in raw.items()}
+            next_count = max(0, int(updated.get(bucket, 0) or 0) - 1)
+            if next_count > 0:
+                updated[bucket] = next_count
+            else:
+                updated.pop(bucket, None)
+            return updated
+
+        _write_state(
+            path,
+            {
+                "artifact_type": "paper_sampling_state",
+                "date": today,
+                "count": count,
+                "by_symbol": _decrement_map("by_symbol", symbol_key),
+                "by_side": _decrement_map("by_side", side_key),
+                "by_session": _decrement_map("by_session", session),
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+        )
+
+
 __all__ = [
     "PaperSamplingDecision",
     "evaluate_paper_sampling_order",
+    "release_paper_sampling_order",
     "reserve_paper_sampling_order",
 ]

@@ -27395,6 +27395,7 @@ class ExecutionEngine:
         *,
         symbol: str,
         budget: Mapping[str, Any],
+        record: bool = False,
     ) -> tuple[bool, dict[str, Any]]:
         window_minutes = max(
             1,
@@ -27426,8 +27427,32 @@ class ExecutionEngine:
             return False, context | {"reason": "exploration_budget_exhausted"}
         if max_per_symbol <= 0 or symbol_events >= int(max_per_symbol):
             return False, context | {"reason": "symbol_exploration_budget_exhausted"}
-        events.append({"ts_mono": float(now_mono), "symbol": symbol})
-        return True, context | {"reason": "ok", "events_in_window_after": int(len(events))}
+        if record:
+            events.append({"ts_mono": float(now_mono), "symbol": symbol})
+            return True, context | {"reason": "recorded", "events_in_window_after": int(len(events))}
+        return True, context | {"reason": "ok", "events_in_window_after": int(len(events) + 1)}
+
+    def _record_metrics_improvement_exploration_order(
+        self,
+        *,
+        order: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        if not isinstance(order, dict):
+            return True, {"reason": "order_not_mutable"}
+        pending_raw = order.pop("_metrics_improvement_exploration_pending", None)
+        pending = pending_raw if isinstance(pending_raw, Mapping) else {}
+        if not pending:
+            return True, {"reason": "not_applicable"}
+        symbol = str(pending.get("symbol") or order.get("symbol") or "").strip().upper()
+        budget_raw = pending.get("budget")
+        budget = budget_raw if isinstance(budget_raw, Mapping) else {}
+        if not symbol:
+            return False, {"reason": "symbol_missing"}
+        return self._metrics_improvement_exploration_budget_allows(
+            symbol=symbol,
+            budget=budget,
+            record=True,
+        )
 
     def _metrics_improvement_control_allows_opening(
         self,
@@ -27530,8 +27555,20 @@ class ExecutionEngine:
             required_edge += float(unknown_metadata_add)
         expected_edge = self._order_expected_edge_bps(order)
         require_edge = _resolve_bool_env("AI_TRADING_METRICS_IMPROVEMENT_REQUIRE_EXPECTED_EDGE")
+        edge_requirement_relaxed = False
         if require_edge is None:
-            require_edge = True
+            execution_mode_raw = (
+                str(getattr(self, "execution_mode", "") or "").strip().lower()
+                or str(_runtime_env("EXECUTION_MODE", "paper") or "paper").strip().lower()
+            )
+            if action == "explore" and execution_mode_raw in {"paper", "sim", "simulation"}:
+                exploration_require_edge = _resolve_bool_env(
+                    "AI_TRADING_METRICS_IMPROVEMENT_EXPLORATION_REQUIRE_EXPECTED_EDGE"
+                )
+                require_edge = bool(exploration_require_edge) if exploration_require_edge is not None else False
+                edge_requirement_relaxed = not bool(require_edge)
+            else:
+                require_edge = True
         if bool(require_edge):
             if expected_edge is None:
                 return False, {
@@ -27569,6 +27606,11 @@ class ExecutionEngine:
                     "budget": budget_context,
                     "control": control,
                 }
+            order["_metrics_improvement_exploration_pending"] = {
+                "symbol": symbol,
+                "budget": budget,
+                "budget_context": budget_context,
+            }
         quantity_raw = order.get("quantity")
         if quantity_raw in (None, ""):
             quantity_raw = order.get("qty")
@@ -27598,6 +27640,7 @@ class ExecutionEngine:
             "quantity_after": int(quantity_after),
             "expected_edge_bps": float(expected_edge) if expected_edge is not None else None,
             "required_edge_bps": float(required_edge),
+            "edge_requirement_relaxed": bool(edge_requirement_relaxed),
             "control": control,
         }
 
@@ -31453,6 +31496,53 @@ class ExecutionEngine:
                 )
                 _mark_precheck_failure("opening_min_notional", opening_notional_context)
                 return False
+
+        exploration_recorded, exploration_record_context = (
+            self._record_metrics_improvement_exploration_order(order=order)
+        )
+        if not exploration_recorded:
+            self.stats.setdefault("capacity_skips", 0)
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["capacity_skips"] += 1
+            self.stats["skipped_orders"] += 1
+            skip_payload = {
+                "symbol": order.get("symbol"),
+                "side": order.get("side"),
+                "quantity": order.get("quantity"),
+                "client_order_id": order.get("client_order_id"),
+                "asset_class": order.get("asset_class"),
+                "price_hint": order.get("price_hint"),
+                "order_type": order.get("order_type", "unknown"),
+                "using_fallback_price": bool(order.get("using_fallback_price")),
+                "reason": "metrics_improvement_exploration_budget",
+                "context": exploration_record_context,
+            }
+            logger.warning("ENTRY_CONSTRAINED_METRICS_EXPLORATION_BUDGET", extra=skip_payload)
+            logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+            logger.warning(
+                "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                "metrics_improvement_exploration_budget",
+                exploration_record_context,
+                extra=skip_payload | {"detail": "metrics_improvement_exploration_budget"},
+            )
+            _mark_precheck_failure(
+                "metrics_improvement_exploration_budget",
+                exploration_record_context,
+            )
+            return False
+        if (
+            isinstance(exploration_record_context, Mapping)
+            and str(exploration_record_context.get("reason") or "") == "recorded"
+        ):
+            logger.info(
+                "METRICS_IMPROVEMENT_EXPLORATION_RECORDED",
+                extra={
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "budget": exploration_record_context,
+                },
+            )
 
         return True
 

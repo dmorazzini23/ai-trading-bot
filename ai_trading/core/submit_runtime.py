@@ -20,6 +20,7 @@ from ai_trading.oms.pretrade import safe_validate_pretrade
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.runtime.paper_sampling import (
     evaluate_paper_sampling_order,
+    release_paper_sampling_order,
     reserve_paper_sampling_order,
 )
 
@@ -774,6 +775,12 @@ def submit_order_runtime(
         )
 
     if order is None:
+        release_paper_sampling_order(
+            cfg,
+            symbol=symbol,
+            side=side_norm,
+            consumes_daily_slot=consumes_sampling_slot,
+        )
         submit_none_reason = be._resolve_submit_none_reason(runtime_like)
         be._record_auth_forbidden_cooldown(
             be.state,
@@ -788,6 +795,12 @@ def submit_order_runtime(
         be._extract_order_value(order, "status")
     )
     if status_token in {"rejected", "canceled", "cancelled", "expired", "done_for_day", "skipped"}:
+        release_paper_sampling_order(
+            cfg,
+            symbol=symbol,
+            side=side_norm,
+            consumes_daily_slot=consumes_sampling_slot,
+        )
         reason_code = f"BROKER_ORDER_{status_token.upper()}".replace("CANCELLED", "CANCELED")
         be._record_auth_forbidden_cooldown(
             be.state,

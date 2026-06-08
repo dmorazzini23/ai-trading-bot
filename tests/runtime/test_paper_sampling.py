@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ from ai_trading.config.runtime import TradingConfig
 from ai_trading.oms.pretrade import OrderIntent, SlidingWindowRateLimiter, safe_validate_pretrade
 from ai_trading.runtime.paper_sampling import (
     evaluate_paper_sampling_order,
+    release_paper_sampling_order,
     reserve_paper_sampling_order,
 )
 
@@ -58,6 +60,54 @@ def test_config_rejects_paper_sampling_for_live_canary_profile() -> None:
                 "MAX_DRAWDOWN_THRESHOLD": "0.2",
             }
         )
+
+
+def test_config_exposes_paper_only_relaxed_sampling_knobs() -> None:
+    cfg = TradingConfig.from_env(
+        {
+            "APP_ENV": "test",
+            "EXECUTION_MODE": "paper",
+            "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
+            "AI_TRADING_LAUNCH_PROFILE": "paper_trade",
+            "AI_TRADING_PAPER_SAMPLING_ENABLED": "1",
+            "AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS": "AAPL,AMZN,MSFT",
+            "AI_TRADING_PAPER_SAMPLING_RELAX_EDGE_GATES_ENABLED": "1",
+            "AI_TRADING_PAPER_SAMPLING_MAX_NOTIONAL_PER_ORDER": "750",
+            "AI_TRADING_PAPER_SAMPLING_MIN_EXPECTED_NET_EDGE_BPS": "1.0",
+            "AI_TRADING_PAPER_SAMPLING_EDGE_MIN_EXPECTED_BPS": "2.0",
+            "AI_TRADING_PAPER_SAMPLING_EDGE_COST_MIN_RATIO": "1.03",
+            "AI_TRADING_PAPER_SAMPLING_MAX_MANUAL_EDGE_PENALTY_BPS": "5.0",
+            "MAX_DRAWDOWN_THRESHOLD": "0.2",
+        }
+    )
+
+    assert cfg.paper_sampling_allowed_symbols == ("AAPL", "AMZN", "MSFT")
+    assert cfg.paper_sampling_max_notional_per_order == 750.0
+    assert cfg.paper_sampling_relax_edge_gates_enabled is True
+    assert cfg.paper_sampling_min_expected_net_edge_bps == 1.0
+    assert cfg.paper_sampling_edge_min_expected_bps == 2.0
+    assert cfg.paper_sampling_edge_cost_min_ratio == 1.03
+    assert cfg.paper_sampling_max_manual_edge_penalty_bps == 5.0
+
+
+def test_paper_sampling_higher_cap_allows_one_share_msft_sample() -> None:
+    cfg = _cfg(
+        paper_sampling_allowed_symbols=("AAPL", "AMZN", "MSFT"),
+        paper_sampling_max_notional_per_order=750.0,
+    )
+
+    decision = evaluate_paper_sampling_order(
+        cfg,
+        symbol="MSFT",
+        side="buy",
+        qty=1,
+        price=525.0,
+    )
+
+    assert decision.allowed is True
+    assert decision.qty == 1
+    assert decision.reason == "OK"
+    assert decision.details["max_notional_per_order"] == 750.0
 
 
 def test_paper_sampling_symbol_short_size_and_daily_caps(monkeypatch, tmp_path) -> None:
@@ -165,6 +215,47 @@ def test_paper_sampling_reduce_orders_do_not_consume_daily_cap(monkeypatch, tmp_
     assert next_entry.allowed is False
     assert next_entry.reason == "PAPER_SAMPLING_DAILY_CAP_BLOCK"
     assert next_entry.details["count"] == 1
+
+
+def test_paper_sampling_release_restores_daily_symbol_side_and_session_quota(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    cfg = _cfg(paper_sampling_max_trades_per_day=1)
+    now = datetime(2026, 5, 8, 15, 0, tzinfo=UTC)
+
+    first = reserve_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=now,
+    )
+    release_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="buy",
+        now=now,
+    )
+    second = reserve_paper_sampling_order(
+        cfg,
+        symbol="AMZN",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=now,
+    )
+
+    assert first.allowed is True
+    assert second.allowed is True
+    state_path = tmp_path / "runtime" / "paper_sampling_state_latest.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["count"] == 1
+    assert payload["by_symbol"] == {"AMZN": 1}
+    assert payload["by_side"] == {"buy": 1}
+    assert payload["by_session"] == {"midday": 1}
 
 
 def test_paper_sampling_symbol_side_and_session_quotas(monkeypatch, tmp_path) -> None:

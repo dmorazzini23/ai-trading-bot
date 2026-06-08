@@ -269,6 +269,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     portfolio_edge = config.run_dir / "portfolio_edge_control.json"
     decision_receipts = config.run_dir / "decision_receipts.json"
     model_registry = config.run_dir / "model_registry.json"
+    model_registry_source = _runtime_input_path("models/registry_index.json")
     experiment_ledger = config.run_dir / "experiment_ledger.json"
     pretrade_risk = config.run_dir / "pretrade_risk_control_verification.json"
     post_trade_surveillance = config.run_dir / "post_trade_surveillance.json"
@@ -805,7 +806,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 "ai_trading.tools.model_registry",
                 "evaluate",
                 "--registry-json",
-                config.report_root / "latest" / "model_registry_latest.json",
+                model_registry_source,
                 "--output-json",
                 model_registry,
                 "--latest-json",
@@ -813,7 +814,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             ),
             purpose="Evaluate registry champion/challenger evidence without deploying models.",
             output_path=model_registry,
-            skip_if_missing=(config.report_root / "latest" / "model_registry_latest.json",),
+            skip_if_missing=(model_registry_source,),
             blocked_returncodes=(2,),
             metadata={"promotion_authority": False, "manual_approval_required": True},
         ),
@@ -911,6 +912,26 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 post_trade_surveillance,
                 "--live-cost-model-json",
                 live_cost,
+                "--base-min-edge-bps",
+                _env_text("AI_TRADING_METRICS_IMPROVEMENT_BASE_MIN_EDGE_BPS", "0.25"),
+                "--cost-p90-multiplier",
+                _env_text("AI_TRADING_METRICS_IMPROVEMENT_COST_P90_MULTIPLIER", "0.0"),
+                "--exploration-qty-scale",
+                _env_text("AI_TRADING_METRICS_IMPROVEMENT_EXPLORATION_QTY_SCALE", "0.5"),
+                "--exploration-window-minutes",
+                _env_text("AI_TRADING_METRICS_IMPROVEMENT_EXPLORATION_WINDOW_MINUTES", "390"),
+                "--max-exploration-orders",
+                _env_text(
+                    "AI_TRADING_METRICS_IMPROVEMENT_MAX_EXPLORATION_ORDERS",
+                    _env_text("AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_DAY", "20"),
+                ),
+                "--max-exploration-orders-per-symbol",
+                _env_text(
+                    "AI_TRADING_METRICS_IMPROVEMENT_MAX_EXPLORATION_ORDERS_PER_SYMBOL",
+                    _env_text("AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_SYMBOL_PER_DAY", "5"),
+                ),
+                "--unknown-quote-metadata-edge-add-bps",
+                _env_text("AI_TRADING_METRICS_IMPROVEMENT_UNKNOWN_QUOTE_EDGE_ADD_BPS", "0.0"),
                 "--output-json",
                 metrics_control,
                 "--latest-json",
@@ -1608,6 +1629,7 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
     hf_intake = config.run_dir / "hf_candidate_intake.json"
     hf_cache = config.run_dir / "hf_cache_materialization.json"
     model_registry = config.run_dir / "model_registry.json"
+    model_registry_source = _runtime_input_path("models/registry_index.json")
     steps = [
         ResearchStep(
             name="live_cost_model",
@@ -1824,7 +1846,7 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
                 "ai_trading.tools.model_registry",
                 "evaluate",
                 "--registry-json",
-                config.report_root / "latest" / "model_registry_latest.json",
+                model_registry_source,
                 "--output-json",
                 model_registry,
                 "--latest-json",
@@ -1832,7 +1854,7 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
             ),
             purpose="Evaluate registry champion/challenger evidence without deploying models.",
             output_path=model_registry,
-            skip_if_missing=(config.report_root / "latest" / "model_registry_latest.json",),
+            skip_if_missing=(model_registry_source,),
             blocked_returncodes=(2,),
             metadata={"promotion_authority": False, "manual_approval_required": True},
         ),
@@ -3252,7 +3274,11 @@ def _copy_authority_artifacts(
             )
         for target in targets:
             try:
-                if row.get("status") == "blocked" and target.exists():
+                if (
+                    row.get("status") == "blocked"
+                    and name != "replay_governance_refresh"
+                    and target.exists()
+                ):
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")

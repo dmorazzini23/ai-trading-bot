@@ -417,6 +417,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-realized-edge-bps", type=float, default=0.0)
     parser.add_argument("--max-adverse-findings", type=int, default=3)
     parser.add_argument("--max-reject-findings", type=int, default=3)
+    parser.add_argument("--base-min-edge-bps", type=float, default=2.0)
+    parser.add_argument("--cost-p90-multiplier", type=float, default=1.0)
+    parser.add_argument("--exploration-qty-scale", type=float, default=0.5)
+    parser.add_argument("--exploration-window-minutes", type=int, default=390)
+    parser.add_argument("--max-exploration-orders", type=int, default=3)
+    parser.add_argument("--max-exploration-orders-per-symbol", type=int, default=1)
+    parser.add_argument("--unknown-quote-metadata-edge-add-bps", type=float, default=1.0)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -447,6 +454,13 @@ def main(argv: list[str] | None = None) -> int:
         min_realized_edge_bps=float(args.min_realized_edge_bps),
         max_adverse_findings=int(args.max_adverse_findings),
         max_reject_findings=int(args.max_reject_findings),
+        base_min_edge_bps=float(args.base_min_edge_bps),
+        cost_p90_multiplier=float(args.cost_p90_multiplier),
+        exploration_qty_scale=float(args.exploration_qty_scale),
+        exploration_window_minutes=int(args.exploration_window_minutes),
+        max_exploration_orders=int(args.max_exploration_orders),
+        max_exploration_orders_per_symbol=int(args.max_exploration_orders_per_symbol),
+        unknown_quote_metadata_edge_add_bps=float(args.unknown_quote_metadata_edge_add_bps),
     )
     for path in (output_json, latest_json):
         path.parent.mkdir(parents=True, exist_ok=True)

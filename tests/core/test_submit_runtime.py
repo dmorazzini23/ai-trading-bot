@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -216,6 +217,84 @@ def test_submit_order_does_not_record_rejected_broker_object(monkeypatch) -> Non
     assert order is None
     assert len(engine.calls) == 1
     assert recorded == []
+
+
+def test_submit_order_releases_paper_sampling_slot_when_broker_rejects(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    class _RejectedExecEngine(_DummyExecEngine):
+        def execute_order(
+            self,
+            symbol: str,
+            side: object,
+            qty: int,
+            *,
+            price: float | None = None,
+            **kwargs: object,
+        ) -> object:
+            self.calls.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": qty,
+                    "price": price,
+                    "kwargs": dict(kwargs),
+                }
+            )
+            return SimpleNamespace(id="broker-order-rejected", status="rejected")
+
+    cfg = _base_cfg(
+        paper_sampling_enabled=True,
+        paper_sampling_allowed_symbols=("AAPL", "AMZN"),
+        paper_sampling_max_trades_per_day=1,
+        paper_sampling_max_notional_per_order=350.0,
+        execution_mode="paper",
+        paper=True,
+        alpaca_base_url="https://paper-api.alpaca.markets",
+        launch_profile="paper_trade",
+    )
+    engine = _RejectedExecEngine()
+    ctx = SimpleNamespace(market_data=None, api=SimpleNamespace(list_positions=lambda: []))
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    _reset_submit_state(monkeypatch)
+    monkeypatch.setattr(bot_engine, "_exec_engine", engine)
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda _cfg: (False, None))
+    monkeypatch.setattr(bot_engine, "_resolve_trading_config", lambda _ctx: cfg)
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote_basis",
+        lambda *_args, **_kwargs: (
+            "broker_nbbo",
+            99.9,
+            100.1,
+            100.0,
+            100.1,
+            datetime.now(UTC),
+        ),
+    )
+
+    rejected = bot_engine.submit_order(ctx, "AAPL", 1, "buy", price=100.0)
+    accepted = reserve_paper_sampling_order(
+        cfg,
+        symbol="AMZN",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=datetime.now(UTC),
+    )
+
+    assert rejected is None
+    assert accepted.allowed is True
+    state_path = resolve_runtime_artifact_path(
+        "runtime/paper_sampling_state_latest.json",
+        default_relative="runtime/paper_sampling_state_latest.json",
+    )
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["count"] == 1
+    assert payload["by_symbol"] == {"AMZN": 1}
 
 
 def test_submit_order_propagates_generated_identity_to_execution_engine(monkeypatch) -> None:

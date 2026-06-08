@@ -96,6 +96,11 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert hf_step["metadata"]["requires_explicit_api_opt_in"] is True
     hf_cache = next(step for step in payload["steps"] if step["name"] == "huggingface_cache_materialization_plan")  # type: ignore[index]
     assert "--dry-run" in hf_cache["command"]
+    registry = next(step for step in payload["steps"] if step["name"] == "model_registry_evaluation")  # type: ignore[index]
+    registry_command = [str(token) for token in registry["command"]]
+    registry_json_arg = registry_command[registry_command.index("--registry-json") + 1]
+    assert registry_json_arg.endswith("/models/registry_index.json")
+    assert not registry_json_arg.endswith("/research_reports/latest/model_registry_latest.json")
 
 
 def test_hf_research_api_requires_second_explicit_toggle(
@@ -883,6 +888,14 @@ def test_blocked_research_step_surfaces_operator_reason(tmp_path: Path, monkeypa
     )
     output = config.run_dir / "replay_governance_summary.json"
     runtime_root = tmp_path / "runtime"
+    stale_research_latest = config.report_root / "latest" / "replay_governance_refresh_latest.json"
+    stale_runtime_latest = runtime_root / "runtime/replay_governance_refresh_latest.json"
+    stale_research_latest.parent.mkdir(parents=True, exist_ok=True)
+    stale_runtime_latest.parent.mkdir(parents=True, exist_ok=True)
+    stale_payload = {"status": "ok", "reason": None}
+    stale_research_latest.write_text(json.dumps(stale_payload), encoding="utf-8")
+    stale_runtime_latest.write_text(json.dumps(stale_payload), encoding="utf-8")
+
     def fake_runtime_artifact_path(
         path_value: str,
         *,

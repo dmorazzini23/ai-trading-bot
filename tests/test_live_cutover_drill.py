@@ -6,6 +6,10 @@ import sqlite3
 
 import pytest
 
+from ai_trading.oms.invariants import (
+    evaluate_oms_lifecycle_parity_invariants,
+    evaluate_oms_reconciliation_invariants,
+)
 from ai_trading.tools.live_cutover_drill import main
 
 pytest.importorskip("sqlalchemy")
@@ -39,8 +43,21 @@ def test_live_cutover_drill_paper_mode_writes_durable_intent(
     with sqlite3.connect(db_path) as conn:
         intent_count = int(conn.execute("SELECT COUNT(*) FROM intents").fetchone()[0])
         fill_count = int(conn.execute("SELECT COUNT(*) FROM intent_fills").fetchone()[0])
+        event_count = int(conn.execute("SELECT COUNT(*) FROM oms_events").fetchone()[0])
     assert intent_count >= 1
     assert fill_count >= 1
+    assert event_count >= 6
+
+    reconciliation = evaluate_oms_reconciliation_invariants(
+        database_url=f"sqlite:///{db_path}",
+        intent_store_path=str(db_path),
+    )
+    lifecycle = evaluate_oms_lifecycle_parity_invariants(
+        database_url=f"sqlite:///{db_path}",
+        intent_store_path=str(db_path),
+    )
+    assert reconciliation["ok"] is True
+    assert lifecycle["ok"] is True
 
 
 def test_live_cutover_drill_live_mode_requires_non_sqlite_database(

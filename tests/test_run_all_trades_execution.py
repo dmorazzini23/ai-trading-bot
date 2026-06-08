@@ -22,10 +22,21 @@ def test_execute_run_all_trades_cycle_blocks_on_required_replay_live_parity_gate
     monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
 
     updates: list[dict[str, object]] = []
+    provider_updates: list[dict[str, object]] = []
     monkeypatch.setattr(
         bot_engine.runtime_state,
         "update_service_status",
         lambda **kwargs: updates.append(kwargs),
+    )
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "observe_data_provider_state",
+        lambda: {"primary": "alpaca", "active": "alpaca", "using_backup": False},
+    )
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "update_data_provider_state",
+        lambda **kwargs: provider_updates.append(kwargs),
     )
     monkeypatch.setattr(
         bot_engine,
@@ -66,6 +77,15 @@ def test_execute_run_all_trades_cycle_blocks_on_required_replay_live_parity_gate
     assert updates == [
         {"status": "degraded", "reason": "replay_live_parity_gate_failed"}
     ]
+    assert provider_updates == [
+        {
+            "status": "blocked",
+            "data_status": "not_evaluated",
+            "reason": "replay_live_parity_gate_failed",
+            "active": "alpaca",
+            "using_backup": False,
+        }
+    ]
 
 
 def test_execute_run_all_trades_cycle_requires_replay_live_parity_by_default_outside_pytest(
@@ -73,6 +93,7 @@ def test_execute_run_all_trades_cycle_requires_replay_live_parity_by_default_out
 ) -> None:
     _clear_parity_cache()
     updates: list[dict[str, object]] = []
+    provider_updates: list[dict[str, object]] = []
 
     def _fake_get_env(key, default=None, cast=None, **_kwargs):
         if key == "PYTEST_CURRENT_TEST":
@@ -89,6 +110,16 @@ def test_execute_run_all_trades_cycle_requires_replay_live_parity_by_default_out
         bot_engine.runtime_state,
         "update_service_status",
         lambda **kwargs: updates.append(kwargs),
+    )
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "observe_data_provider_state",
+        lambda: {"primary": "alpaca", "active": "alpaca", "using_backup": False},
+    )
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "update_data_provider_state",
+        lambda **kwargs: provider_updates.append(kwargs),
     )
     monkeypatch.setattr(
         bot_engine,
@@ -128,6 +159,15 @@ def test_execute_run_all_trades_cycle_requires_replay_live_parity_by_default_out
     assert runtime.replay_live_parity_gate["reason"] == "replay_violations"
     assert updates == [
         {"status": "degraded", "reason": "replay_live_parity_gate_failed"}
+    ]
+    assert provider_updates == [
+        {
+            "status": "blocked",
+            "data_status": "not_evaluated",
+            "reason": "replay_live_parity_gate_failed",
+            "active": "alpaca",
+            "using_backup": False,
+        }
     ]
 
 

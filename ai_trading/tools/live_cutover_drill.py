@@ -116,6 +116,7 @@ def _run_oms_durability_drill(
     store = IntentStore(
         path=(intent_store_path or None),
         url=(database_url or None),
+        event_dual_write_enabled=True,
     )
 
     record, created = store.create_intent(

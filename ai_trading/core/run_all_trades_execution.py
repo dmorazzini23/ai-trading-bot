@@ -137,6 +137,30 @@ def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> d
             )
         except AI_TRADING_FALLBACK_EXCEPTIONS:
             be.logger.debug("REPLAY_PARITY_RUNTIME_STATE_UPDATE_FAILED", exc_info=True)
+        try:
+            provider_snapshot = be.runtime_state.observe_data_provider_state()
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            provider_snapshot = {}
+        try:
+            active_provider = (
+                provider_snapshot.get("active")
+                if isinstance(provider_snapshot, dict)
+                else None
+            )
+            primary_provider = (
+                provider_snapshot.get("primary")
+                if isinstance(provider_snapshot, dict)
+                else None
+            )
+            be.runtime_state.update_data_provider_state(
+                status="blocked",
+                data_status="not_evaluated",
+                reason="replay_live_parity_gate_failed",
+                active=str(active_provider or primary_provider or "alpaca"),
+                using_backup=False,
+            )
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            be.logger.debug("REPLAY_PARITY_PROVIDER_STATE_UPDATE_FAILED", exc_info=True)
     return gate
 
 

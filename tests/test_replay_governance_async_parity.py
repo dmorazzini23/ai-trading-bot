@@ -263,6 +263,43 @@ def test_replay_governance_defaults_to_canary_universe_before_tickers_file(
     assert captured["symbols"] == ("AAPL", "AMZN")
 
 
+def test_replay_governance_filters_canary_universe_to_paper_sampling_allowlist(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 2, 18, 23, 0, tzinfo=UTC)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(bot_engine, "_replay_schedule_due", lambda *_args, **_kwargs: True)
+
+    def _load_bars(**kwargs):
+        captured["symbols"] = tuple(sorted(kwargs.get("symbols", ())))
+        return [
+            {
+                "symbol": "AAPL",
+                "ts": "2026-02-18T22:00:00+00:00",
+                "close": 189.5,
+                "side": "buy",
+                "qty": 1,
+                "client_order_id": "aapl-1",
+            }
+        ]
+
+    monkeypatch.setattr(bot_engine, "_load_replay_bars", _load_bars)
+    monkeypatch.setenv("AI_TRADING_REPLAY_SYMBOLS", "")
+    monkeypatch.setenv("AI_TRADING_CANARY_SYMBOLS", "AAPL,AMZN,MSFT")
+    monkeypatch.setenv("AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS", "AAPL,AMZN")
+    monkeypatch.setenv("AI_TRADING_SYMBOLS", "SPY")
+    monkeypatch.setenv("AI_TRADING_REPLAY_OUTPUT_DIR", str(tmp_path / "outputs"))
+    monkeypatch.setenv("AI_TRADING_REPLAY_ENFORCE_OMS_GATES", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_SIMULATE_FILLS", "1")
+
+    state = _State()
+    bot_engine._run_replay_governance(state, now=now, market_open_now=False, force=True)
+
+    assert captured["symbols"] == ("AAPL", "AMZN")
+
+
 def test_replay_governance_force_bypasses_schedule_gate(
     monkeypatch,
     tmp_path: Path,

@@ -2045,6 +2045,14 @@ def _resolve_replay_symbols() -> tuple[set[str], str]:
         return explicit, "AI_TRADING_REPLAY_SYMBOLS"
     canary = _symbol_tokens_from_env("AI_TRADING_CANARY_SYMBOLS")
     if canary:
+        paper_allowed = _symbol_tokens_from_env("AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS")
+        if paper_allowed:
+            executable_canary = canary.intersection(paper_allowed)
+            if executable_canary:
+                return (
+                    executable_canary,
+                    "AI_TRADING_CANARY_SYMBOLS_INTERSECT_AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS",
+                )
         return canary, "AI_TRADING_CANARY_SYMBOLS"
     runtime_universe = _symbol_tokens_from_env("AI_TRADING_SYMBOLS")
     if runtime_universe:
@@ -40965,6 +40973,62 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         edge_min_expected_bps = 2.0
     edge_cost_min_ratio = max(0.0, min(edge_cost_min_ratio, 10.0))
     edge_min_expected_bps = max(0.0, min(edge_min_expected_bps, 500.0))
+    policy_min_expected_net_edge_bps = float(effective_policy.objective.min_expected_net_edge_bps)
+    if not math.isfinite(policy_min_expected_net_edge_bps):
+        policy_min_expected_net_edge_bps = 0.0
+    policy_min_expected_net_edge_bps = max(0.0, min(policy_min_expected_net_edge_bps, 500.0))
+    paper_sampling_edge_relaxed = False
+    paper_sampling_manual_penalty_cap_bps: float | None = None
+    if bool(getattr(cfg, "paper_sampling_relax_edge_gates_enabled", False)):
+        execution_mode_for_sampling = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
+        paper_endpoint = "paper" in str(getattr(cfg, "alpaca_base_url", "") or "").strip().lower()
+        launch_profile_for_sampling = str(
+            getattr(cfg, "launch_profile", get_env("AI_TRADING_LAUNCH_PROFILE", "", cast=str)) or ""
+        ).strip().lower()
+        paper_sampling_edge_relaxed = (
+            bool(getattr(cfg, "paper_sampling_enabled", False))
+            and execution_mode_for_sampling == "paper"
+            and bool(getattr(cfg, "paper", False))
+            and paper_endpoint
+            and launch_profile_for_sampling != "live_canary"
+            and not launch_profile_for_sampling.startswith("live_")
+        )
+    if paper_sampling_edge_relaxed:
+        try:
+            paper_edge_ratio = float(getattr(cfg, "paper_sampling_edge_cost_min_ratio", edge_cost_min_ratio))
+        except (TypeError, ValueError):
+            paper_edge_ratio = edge_cost_min_ratio
+        try:
+            paper_edge_floor = float(getattr(cfg, "paper_sampling_edge_min_expected_bps", edge_min_expected_bps))
+        except (TypeError, ValueError):
+            paper_edge_floor = edge_min_expected_bps
+        try:
+            paper_net_floor = float(
+                getattr(cfg, "paper_sampling_min_expected_net_edge_bps", policy_min_expected_net_edge_bps)
+            )
+        except (TypeError, ValueError):
+            paper_net_floor = policy_min_expected_net_edge_bps
+        try:
+            paper_sampling_manual_penalty_cap_bps = float(
+                getattr(cfg, "paper_sampling_max_manual_edge_penalty_bps", 5.0)
+            )
+        except (TypeError, ValueError):
+            paper_sampling_manual_penalty_cap_bps = 5.0
+        if math.isfinite(paper_edge_ratio):
+            edge_cost_min_ratio = min(edge_cost_min_ratio, max(0.0, min(paper_edge_ratio, 10.0)))
+        if math.isfinite(paper_edge_floor):
+            edge_min_expected_bps = min(edge_min_expected_bps, max(0.0, min(paper_edge_floor, 500.0)))
+        if math.isfinite(paper_net_floor):
+            policy_min_expected_net_edge_bps = min(
+                policy_min_expected_net_edge_bps,
+                max(0.0, min(paper_net_floor, 500.0)),
+            )
+        if paper_sampling_manual_penalty_cap_bps is not None and math.isfinite(
+            paper_sampling_manual_penalty_cap_bps
+        ):
+            paper_sampling_manual_penalty_cap_bps = max(0.0, min(paper_sampling_manual_penalty_cap_bps, 500.0))
+        else:
+            paper_sampling_manual_penalty_cap_bps = None
     manual_hour_penalties: dict[str, Any] = {}
     manual_symbol_side_hour_penalties: dict[str, Any] = {}
     if strict_edge_gate_enabled:
@@ -41139,9 +41203,10 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 side="sell_short" if float(proposal.target_dollars) < 0.0 else "buy",
             )
             proposal.debug["expected_net_edge_bps"] = net_edge_bps
+            proposal.debug["paper_sampling_edge_relaxed"] = paper_sampling_edge_relaxed
             if (
                 not proposal.blocked
-                and net_edge_bps < float(effective_policy.objective.min_expected_net_edge_bps)
+                and net_edge_bps < policy_min_expected_net_edge_bps
             ):
                 proposal.blocked = True
                 proposal.reason_code = "NET_EDGE_FLOOR_GATE"
@@ -41189,6 +41254,15 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     hour_penalties=manual_hour_penalties,
                     symbol_side_hour_penalties=manual_symbol_side_hour_penalties,
                 )
+                if paper_sampling_manual_penalty_cap_bps is not None:
+                    manual_hour_penalty_bps = min(
+                        max(0.0, manual_hour_penalty_bps),
+                        paper_sampling_manual_penalty_cap_bps,
+                    )
+                    manual_symbol_penalty_bps = min(
+                        max(0.0, manual_symbol_penalty_bps),
+                        paper_sampling_manual_penalty_cap_bps,
+                    )
                 edge_bps = max(float(proposal.expected_edge_bps), 0.0)
                 base_cost_bps = max(float(proposal.expected_cost_bps), 1e-6)
                 total_cost_penalty_bps = (
@@ -41208,10 +41282,10 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 )
                 effective_edge_floor = max(
                     edge_min_expected_bps + max(edge_floor_adjust, 0.0) + max(edge_floor_buffer_bps, 0.0),
-                    float(effective_policy.objective.min_expected_net_edge_bps),
+                    policy_min_expected_net_edge_bps,
                 )
                 effective_edge_ratio = edge_cost_min_ratio + max(edge_ratio_adjust, 0.0)
-                if strict_net_edge_bps < float(effective_policy.objective.min_expected_net_edge_bps):
+                if strict_net_edge_bps < policy_min_expected_net_edge_bps:
                     proposal.blocked = True
                     proposal.reason_code = "NET_EDGE_FLOOR_GATE"
                     proposal.target_dollars = positions.get(symbol, 0.0) * price

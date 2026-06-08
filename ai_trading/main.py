@@ -4380,6 +4380,24 @@ def main(argv: list[str] | None = None) -> None:
                                 broker_state if isinstance(broker_state, Mapping) else {}
                             ),
                         )
+                        try:
+                            service_state = runtime_state.observe_service_status()
+                        except MAIN_FALLBACK_EXC:
+                            service_state = {}
+                        service_reason = str(
+                            service_state.get("reason")
+                            if isinstance(service_state, Mapping)
+                            else ""
+                        ).strip().lower()
+                        provider_reason = str(
+                            provider_state.get("reason")
+                            if isinstance(provider_state, Mapping)
+                            else ""
+                        ).strip().lower()
+                        cycle_blocked_before_signals = (
+                            service_reason == "replay_live_parity_gate_failed"
+                            or provider_reason == "replay_live_parity_gate_failed"
+                        )
                         provider_safe_mode = bool(
                             provider_state.get("safe_mode")
                             if isinstance(provider_state, Mapping)
@@ -4395,6 +4413,7 @@ def main(argv: list[str] | None = None) -> None:
                             (not closed)
                             and bool(warmup_complete)
                             and bool(execution_gate_open)
+                            and not bool(cycle_blocked_before_signals)
                             and not provider_safe_mode
                             and not broker_execution_blocked
                         )

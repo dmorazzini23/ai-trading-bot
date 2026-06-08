@@ -101,10 +101,25 @@ def test_metrics_improvement_control_cli_writes_latest(tmp_path) -> None:
             str(output),
             "--latest-json",
             str(latest),
+            "--base-min-edge-bps",
+            "0.25",
+            "--cost-p90-multiplier",
+            "0",
+            "--max-exploration-orders",
+            "20",
+            "--max-exploration-orders-per-symbol",
+            "5",
+            "--unknown-quote-metadata-edge-add-bps",
+            "0",
         ]
     )
 
     assert rc == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["artifact_type"] == "metrics_improvement_control"
+    assert payload["control_policy"]["base_min_edge_bps"] == 0.25
+    assert payload["control_policy"]["cost_p90_multiplier"] == 0.0
+    assert payload["control_policy"]["unknown_quote_metadata_edge_add_bps"] == 0.0
+    assert payload["exploration_budget"]["max_orders_per_window"] == 20
+    assert payload["exploration_budget"]["max_orders_per_symbol_per_window"] == 5
     assert latest.exists()
