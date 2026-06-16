@@ -6,6 +6,30 @@ import subprocess
 from pathlib import Path
 
 
+def test_research_automation_script_help_does_not_notify(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[2]
+    env = {
+        **os.environ,
+        "AI_TRADING_RESEARCH_LOCK_DIR": str(tmp_path),
+        "AI_TRADING_RESEARCH_NOTIFY_SLACK": "1",
+        "AI_TRADING_RESEARCH_SLACK_WEBHOOK_URL": "https://hooks.slack.test/research",
+    }
+
+    result = subprocess.run(
+        [str(root / "scripts" / "run_research_automation.sh"), "--help"],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Orchestrate recurring trading research automation runs" in result.stdout
+    assert "completion notification" not in result.stderr
+    assert "research_completion_notify.py" not in result.stderr
+
+
 def test_research_automation_script_delegates_plan_only(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
     report_root = tmp_path / "reports"

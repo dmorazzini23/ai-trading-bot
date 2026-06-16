@@ -307,6 +307,28 @@ def _is_submit_no_result_reason(reason: Any) -> bool:
     return "submit_no_result" in token
 
 
+def _is_metrics_improvement_controlled_skip(*values: Any) -> bool:
+    """Return whether skip metadata identifies metrics-improvement control."""
+
+    tokens: list[str] = []
+    for value in values:
+        if isinstance(value, Mapping):
+            tokens.extend(
+                str(value.get(key) or "").strip().lower()
+                for key in ("reason", "detail", "gate", "last_error", "error")
+            )
+            nested = value.get("context")
+            if isinstance(nested, Mapping):
+                tokens.extend(
+                    str(nested.get(key) or "").strip().lower()
+                    for key in ("reason", "detail", "gate")
+                )
+        else:
+            tokens.append(str(value or "").strip().lower())
+    combined = " ".join(token for token in tokens if token)
+    return "metrics_improvement_control" in combined
+
+
 def _normalize_bracket_leg_payload(value: Any, *, scalar_field: str) -> Any | None:
     """Return bracket leg mapping, wrapping only scalar shorthand values."""
 
@@ -22659,17 +22681,29 @@ class ExecutionEngine:
                     durable_error = prior_reason
                     if prior_detail:
                         durable_error = f"{prior_reason}:{prior_detail}"
-                    self._record_durable_submit_error(
-                        intent_id=durable_intent_id,
-                        order_id=None,
-                        client_order_id=client_order_id,
-                        error=durable_error,
+                    controlled_metrics_skip = (
+                        prior_status == "skipped"
+                        and prior_reason == "pre_execution_order_checks_failed"
+                        and _is_metrics_improvement_controlled_skip(
+                            prior_detail,
+                            prior_outcome.get("context"),
+                            durable_error,
+                        )
                     )
+                    if controlled_metrics_skip:
+                        durable_error = "controlled_skip:metrics_improvement_control"
+                    else:
+                        self._record_durable_submit_error(
+                            intent_id=durable_intent_id,
+                            order_id=None,
+                            client_order_id=client_order_id,
+                            error=durable_error,
+                        )
                     self._sync_durable_order_state(
                         intent_id=durable_intent_id,
                         order_id=None,
                         client_order_id=client_order_id,
-                        status="rejected",
+                        status=("canceled" if controlled_metrics_skip else "rejected"),
                         filled_qty=0.0,
                         fill_price=None,
                         error=durable_error,
@@ -27554,13 +27588,14 @@ class ExecutionEngine:
         if (spread_value is None or quote_age_value is None) and unknown_metadata_add > 0.0:
             required_edge += float(unknown_metadata_add)
         expected_edge = self._order_expected_edge_bps(order)
+        execution_mode_raw = (
+            str(getattr(self, "execution_mode", "") or "").strip().lower()
+            or str(_runtime_env("EXECUTION_MODE", "paper") or "paper").strip().lower()
+        )
         require_edge = _resolve_bool_env("AI_TRADING_METRICS_IMPROVEMENT_REQUIRE_EXPECTED_EDGE")
         edge_requirement_relaxed = False
+        qty_scale_override: float | None = None
         if require_edge is None:
-            execution_mode_raw = (
-                str(getattr(self, "execution_mode", "") or "").strip().lower()
-                or str(_runtime_env("EXECUTION_MODE", "paper") or "paper").strip().lower()
-            )
             if action == "explore" and execution_mode_raw in {"paper", "sim", "simulation"}:
                 exploration_require_edge = _resolve_bool_env(
                     "AI_TRADING_METRICS_IMPROVEMENT_EXPLORATION_REQUIRE_EXPECTED_EDGE"
@@ -27580,17 +27615,74 @@ class ExecutionEngine:
                     "control": control,
                 }
             if float(expected_edge) < float(required_edge):
-                return False, {
-                    "enabled": True,
-                    "reason": "metrics_control_expected_edge_floor",
-                    "symbol": symbol,
-                    "action": action,
-                    "expected_edge_bps": float(expected_edge),
-                    "required_edge_bps": float(required_edge),
-                    "spread_bps": float(spread_value) if spread_value is not None else None,
-                    "quote_age_ms": float(quote_age_value) if quote_age_value is not None else None,
-                    "control": control,
-                }
+                paper_recovery_enabled = _resolve_bool_env(
+                    "AI_TRADING_METRICS_IMPROVEMENT_PAPER_RECOVERY_ENABLED"
+                )
+                if paper_recovery_enabled is None:
+                    paper_recovery_enabled = False
+                paper_recovery_min_edge = _config_float(
+                    "AI_TRADING_METRICS_IMPROVEMENT_PAPER_RECOVERY_MIN_EDGE_BPS",
+                    None,
+                )
+                if paper_recovery_min_edge is None:
+                    paper_recovery_min_edge = _config_float(
+                        "AI_TRADING_PAPER_SAMPLING_MIN_EXPECTED_NET_EDGE_BPS",
+                        0.10,
+                    )
+                if paper_recovery_min_edge is None or not math.isfinite(float(paper_recovery_min_edge)):
+                    paper_recovery_min_edge = 0.10
+                paper_recovery_min_edge = max(0.0, min(float(paper_recovery_min_edge), 1000.0))
+                if (
+                    bool(paper_recovery_enabled)
+                    and execution_mode_raw in {"paper", "sim", "simulation"}
+                    and action in {"downscale"}
+                    and float(expected_edge) >= float(paper_recovery_min_edge)
+                ):
+                    budget_allowed, budget_context = self._metrics_improvement_exploration_budget_allows(
+                        symbol=symbol,
+                        budget=budget,
+                    )
+                    if not budget_allowed:
+                        return False, {
+                            "enabled": True,
+                            "reason": "metrics_control_exploration_budget",
+                            "symbol": symbol,
+                            "action": "paper_recovery_explore",
+                            "expected_edge_bps": float(expected_edge),
+                            "required_edge_bps": float(required_edge),
+                            "paper_recovery_min_edge_bps": float(paper_recovery_min_edge),
+                            "budget": budget_context,
+                            "control": control,
+                        }
+                    order["_metrics_improvement_exploration_pending"] = {
+                        "symbol": symbol,
+                        "budget": budget,
+                        "budget_context": budget_context,
+                    }
+                    action = "paper_recovery_explore"
+                    edge_requirement_relaxed = True
+                    qty_scale_override = _safe_float(control.get("qty_scale"))
+                    budget_qty_scale = _safe_float(budget.get("qty_scale"))
+                    if budget_qty_scale is not None and math.isfinite(float(budget_qty_scale)):
+                        if qty_scale_override is None or not math.isfinite(float(qty_scale_override)):
+                            qty_scale_override = float(budget_qty_scale)
+                        else:
+                            qty_scale_override = min(float(qty_scale_override), float(budget_qty_scale))
+                    control = dict(control)
+                    control["paper_recovery_min_edge_bps"] = float(paper_recovery_min_edge)
+                    control["paper_recovery_original_required_edge_bps"] = float(required_edge)
+                else:
+                    return False, {
+                        "enabled": True,
+                        "reason": "metrics_control_expected_edge_floor",
+                        "symbol": symbol,
+                        "action": action,
+                        "expected_edge_bps": float(expected_edge),
+                        "required_edge_bps": float(required_edge),
+                        "spread_bps": float(spread_value) if spread_value is not None else None,
+                        "quote_age_ms": float(quote_age_value) if quote_age_value is not None else None,
+                        "control": control,
+                    }
 
         if action == "explore":
             budget_allowed, budget_context = self._metrics_improvement_exploration_budget_allows(
@@ -27615,7 +27707,9 @@ class ExecutionEngine:
         if quantity_raw in (None, ""):
             quantity_raw = order.get("qty")
         quantity_before = max(1, _safe_int(quantity_raw, 1))
-        qty_scale = _safe_float(control.get("qty_scale"))
+        qty_scale = qty_scale_override
+        if qty_scale is None:
+            qty_scale = _safe_float(control.get("qty_scale"))
         quantity_after = int(quantity_before)
         if qty_scale is not None and math.isfinite(float(qty_scale)):
             qty_scale = max(0.0, min(float(qty_scale), 1.0))

@@ -57,6 +57,7 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
             "desired_trades": {"count": 3},
             "submitted_trades": {"count": 2},
             "rejected_trades": {"count": 1},
+            "controlled_skips": {"count": 4},
             "realized_fills": {"count": 2},
         },
     )
@@ -127,6 +128,7 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
     assert "multi_horizon_lightweight" in field_text
     assert "runtime_gonogo_status" in field_text
     assert "desired=3" in field_text
+    assert "controlled_skips=4" in field_text
     assert "AMZN:consider_promotion/high" in field_text
     assert "MSFT:collect_more_evidence/low" in field_text
     assert "overestimated / keep_tiny_sampling" in field_text

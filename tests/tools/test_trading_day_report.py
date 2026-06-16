@@ -102,6 +102,80 @@ def test_trading_day_report_attributes_rejections_and_symbol_pnl():
     assert report["missed_opportunities"]["symbols"] == {"MSFT": 1}
 
 
+def test_trading_day_report_separates_metrics_control_skips_from_rejects():
+    report = trading_day_report.build_trading_day_report(
+        report_date="2026-06-11",
+        order_intents=[
+            {
+                "ts": "2026-06-11T14:00:00Z",
+                "symbol": "AAPL",
+                "status": "REJECTED",
+                "last_error": "pre_execution_order_checks_failed:metrics_improvement_control",
+            }
+        ],
+        fills=[],
+        shadow_rows=[],
+        gate_rows=[
+            {
+                "ts": "2026-06-11T14:00:00Z",
+                "symbol": "AAPL",
+                "status": "skipped",
+                "reason": "pre_execution_order_checks_failed",
+                "detail": "metrics_improvement_control",
+            },
+            {
+                "ts": "2026-06-11T14:01:00Z",
+                "symbol": "MSFT",
+                "status": "blocked",
+                "reason": "quote_age",
+            },
+        ],
+        live_cost_model={"status": {"status": "ready"}},
+        symbol_scorecard={"summary": {"allow": 2}, "symbols": []},
+    )
+
+    assert report["rejected_trades"] == {
+        "count": 1,
+        "reasons": {"quote_age": 1},
+    }
+    assert report["controlled_skips"] == {
+        "count": 2,
+        "reasons": {"metrics_improvement_control": 2},
+        "broker_rejects": False,
+    }
+    assert report["health_report_summary"]["rejected"] == 1
+    assert report["health_report_summary"]["controlled_skips"] == 2
+    assert report["openclaw_summary"]["severity"] == "warning"
+    assert "controlled_skips=2" in report["openclaw_summary"]["summary"]
+
+
+def test_trading_day_report_metrics_control_only_is_info_severity():
+    report = trading_day_report.build_trading_day_report(
+        report_date="2026-06-11",
+        order_intents=[],
+        fills=[],
+        shadow_rows=[],
+        gate_rows=[
+            {
+                "ts": "2026-06-11T14:00:00Z",
+                "symbol": "AAPL",
+                "status": "skipped",
+                "reason": "pre_execution_order_checks_failed",
+                "detail": "metrics_improvement_control",
+            }
+        ],
+        live_cost_model={"status": {"status": "ready"}},
+        symbol_scorecard={"summary": {"allow": 2}, "symbols": []},
+    )
+
+    assert report["rejected_trades"]["count"] == 0
+    assert report["controlled_skips"]["count"] == 1
+    assert report["openclaw_summary"]["severity"] == "info"
+    assert report["openclaw_summary"]["suggested_action"] == (
+        "review controlled skips and live-capital readiness before next session"
+    )
+
+
 def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
     intents = tmp_path / "intents.jsonl"
     fills = tmp_path / "fills.jsonl"

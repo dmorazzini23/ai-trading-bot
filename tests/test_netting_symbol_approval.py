@@ -4,7 +4,9 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
+from ai_trading.core.execution_guards import ExecutionApprovalContext
 from ai_trading.core.netting_symbol_approval import prepare_netting_symbol_approval
+from ai_trading.policy.compiler import ExecutionApproval
 
 
 def _base_kwargs() -> dict[str, Any]:
@@ -107,6 +109,82 @@ def test_prepare_netting_symbol_approval_applies_approval_adjustment() -> None:
     assert result.side == "buy"
     assert result.opening_trade is True
     assert result.gates_added == ("APPROVAL_SCALE",)
+
+
+def test_prepare_netting_symbol_approval_restores_one_share_paper_soft_throttle(
+    monkeypatch,
+) -> None:
+    kwargs = _base_kwargs()
+    kwargs["current_shares"] = 0
+    kwargs["delta_shares"] = 1
+    kwargs["exec_engine"] = SimpleNamespace()
+    kwargs["clip_sell_qty_to_available_position_func"] = lambda **kwargs: (
+        kwargs["requested_qty"],
+        {},
+    )
+    kwargs["evaluate_execution_approval_func"] = lambda **kwargs: ExecutionApprovalContext(
+        approval=ExecutionApproval(
+            False,
+            0,
+            1.5,
+            ("RISK_FACTOR_SOFT_THROTTLE", "ZERO_QTY"),
+        ),
+        adjusted_delta_shares=0,
+        adjusted_side="buy",
+        pacing_headroom=5,
+        stale_orders_present=False,
+        portfolio_post_gross=100.0,
+        factor_post_ratio=1.0,
+        sector_name="TECH",
+    )
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.setenv("AI_TRADING_PAPER_SAMPLING_SOFT_THROTTLE_FLOOR_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PAPER_SAMPLING_MIN_EXPECTED_NET_EDGE_BPS", "0.10")
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.blocked_reason is None
+    assert result.delta_shares == 1
+    assert result.target_shares == 1
+    assert result.side == "buy"
+    assert "PAPER_SAMPLE_SOFT_THROTTLE_FLOOR" in result.gates_added
+    assert result.approval is not None
+    assert result.approval.allowed is True
+
+
+def test_prepare_netting_symbol_approval_keeps_live_soft_throttle_blocked(
+    monkeypatch,
+) -> None:
+    kwargs = _base_kwargs()
+    kwargs["current_shares"] = 0
+    kwargs["delta_shares"] = 1
+    kwargs["exec_engine"] = SimpleNamespace()
+    kwargs["clip_sell_qty_to_available_position_func"] = lambda **kwargs: (
+        kwargs["requested_qty"],
+        {},
+    )
+    kwargs["evaluate_execution_approval_func"] = lambda **kwargs: ExecutionApprovalContext(
+        approval=ExecutionApproval(
+            False,
+            0,
+            1.5,
+            ("RISK_FACTOR_SOFT_THROTTLE", "ZERO_QTY"),
+        ),
+        adjusted_delta_shares=0,
+        adjusted_side="buy",
+        pacing_headroom=5,
+        stale_orders_present=False,
+        portfolio_post_gross=100.0,
+        factor_post_ratio=1.0,
+        sector_name="TECH",
+    )
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("AI_TRADING_PAPER_SAMPLING_SOFT_THROTTLE_FLOOR_ENABLED", "1")
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.blocked_reason == "EXECUTION_APPROVAL_BLOCK"
+    assert "PAPER_SAMPLE_SOFT_THROTTLE_FLOOR" not in result.gates_added
 
 
 def test_prepare_netting_symbol_approval_allows_opening_short_without_long_inventory() -> None:

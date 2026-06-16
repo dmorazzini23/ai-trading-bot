@@ -80,6 +80,37 @@ def test_post_trade_surveillance_cli_writes_latest(tmp_path: Path) -> None:
     assert latest.is_file()
 
 
+def test_post_trade_surveillance_treats_metrics_control_as_controlled_skip() -> None:
+    payload = surveillance.build_post_trade_surveillance_report(
+        report_date="2026-06-11",
+        decisions=[
+            {
+                "intent_id": "intent-metrics-1",
+                "symbol": "AAPL",
+                "status": "rejected",
+                "last_error": "pre_execution_order_checks_failed:metrics_improvement_control",
+            }
+        ],
+        orders=[
+            {
+                "client_order_id": "cid-metrics-1",
+                "symbol": "MSFT",
+                "status": "skipped",
+                "reason": "pre_execution_order_checks_failed",
+                "detail": "metrics_improvement_control",
+            }
+        ],
+    )
+
+    assert payload["status"] == "clear"
+    assert payload["summary"]["findings"] == 0
+    assert payload["summary"]["category_counts"] == {}
+    assert payload["summary"]["controlled_skips"] == 2
+    assert payload["summary"]["controlled_skip_counts"] == {
+        "metrics_improvement_control": 2
+    }
+
+
 def test_post_trade_surveillance_labels_single_adverse_fill_as_insufficient_sample_warning() -> None:
     payload = surveillance.build_post_trade_surveillance_report(
         report_date="2026-05-12",

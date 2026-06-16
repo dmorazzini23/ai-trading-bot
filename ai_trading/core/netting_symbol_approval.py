@@ -2,12 +2,12 @@
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from typing import Any, Callable, Mapping
 
 from ai_trading.config.management import get_env
-from ai_trading.policy.compiler import SafetyTier
+from ai_trading.policy.compiler import ExecutionApproval, SafetyTier
 
 
 def _side_for_delta(delta_shares: int, current_shares: int, target_shares: int) -> str:
@@ -18,6 +18,57 @@ def _side_for_delta(delta_shares: int, current_shares: int, target_shares: int) 
     if int(target_shares) < 0:
         return "sell_short"
     return "sell"
+
+
+def _paper_sample_soft_throttle_floor_delta(
+    *,
+    current_shares: int,
+    requested_delta_shares: int,
+    side: str,
+    expected_net_edge_bps: float,
+    reasons: tuple[str, ...],
+) -> int:
+    """Return a one-share paper sample floor when soft throttles rounded to zero."""
+
+    execution_mode = str(get_env("EXECUTION_MODE", "paper", cast=str) or "paper").strip().lower()
+    if execution_mode != "paper":
+        return 0
+    enabled = bool(
+        get_env(
+            "AI_TRADING_PAPER_SAMPLING_SOFT_THROTTLE_FLOOR_ENABLED",
+            False,
+            cast=bool,
+        )
+    )
+    if not enabled:
+        return 0
+    if str(side).strip().lower() != "buy":
+        return 0
+    if int(requested_delta_shares) <= 0:
+        return 0
+    reason_set = {str(reason or "") for reason in reasons}
+    hard_blocks = {
+        reason
+        for reason in reason_set
+        if reason.endswith("_BLOCK") and reason != "ZERO_QTY"
+    }
+    if hard_blocks:
+        return 0
+    if "ZERO_QTY" not in reason_set:
+        return 0
+    if not any(reason.endswith("_SOFT_THROTTLE") for reason in reason_set):
+        return 0
+    min_edge = float(
+        get_env(
+            "AI_TRADING_PAPER_SAMPLING_MIN_EXPECTED_NET_EDGE_BPS",
+            0.10,
+            cast=float,
+        )
+        or 0.10
+    )
+    if float(expected_net_edge_bps) < max(0.0, min_edge):
+        return 0
+    return 1 if int(current_shares) + 1 > int(current_shares) else 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -539,6 +590,33 @@ def prepare_netting_symbol_approval(
         for reason in approval.reasons:
             if reason not in gates and reason not in gates_added:
                 gates_added.append(reason)
+    if not approval.allowed:
+        paper_floor_delta = _paper_sample_soft_throttle_floor_delta(
+            current_shares=int(current_shares),
+            requested_delta_shares=int(delta_shares_value),
+            side=side,
+            expected_net_edge_bps=float(approval.expected_net_edge_bps),
+            reasons=tuple(str(reason) for reason in approval.reasons),
+        )
+        if paper_floor_delta > 0:
+            delta_shares_value = int(paper_floor_delta)
+            target_shares = int(current_shares + delta_shares_value)
+            target_dollars = float(target_shares * price)
+            side = _side_for_delta(delta_shares_value, int(current_shares), target_shares)
+            if "PAPER_SAMPLE_SOFT_THROTTLE_FLOOR" not in gates_added:
+                gates_added.append("PAPER_SAMPLE_SOFT_THROTTLE_FLOOR")
+            approval = ExecutionApproval(
+                True,
+                int(delta_shares_value),
+                float(approval.expected_net_edge_bps),
+                tuple(approval.reasons) + ("PAPER_SAMPLE_SOFT_THROTTLE_FLOOR",),
+            )
+            approval_context = replace(
+                approval_context,
+                approval=approval,
+                adjusted_delta_shares=int(delta_shares_value),
+                adjusted_side=side,
+            )
     if not approval.allowed:
         return NettingSymbolApprovalResult(
             delta_shares=delta_shares_value,

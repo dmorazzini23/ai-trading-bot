@@ -16,9 +16,6 @@ if [[ "${AI_TRADING_RESEARCH_AUTO_SOURCE_RUNTIME_ENV:-1}" == "1" \
   set +a
 fi
 
-CADENCE="${1:-daily}"
-WORKFLOW="${2:-}"
-
 PYTHON_BIN="${AI_TRADING_PYTHON:-}"
 if [[ -z "${PYTHON_BIN}" ]]; then
   if [[ -x "${ROOT_DIR}/venv/bin/python" ]]; then
@@ -41,6 +38,13 @@ if [[ "${PY_VERSION}" != "3.12" ]]; then
   echo "unsupported python version ${PY_VERSION}; expected 3.12" >&2
   exit 1
 fi
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  exec "${PYTHON_BIN}" -m ai_trading.tools.research_automation --help
+fi
+
+CADENCE="${1:-daily}"
+WORKFLOW="${2:-}"
 
 RUNTIME_DIR="${AI_TRADING_RESEARCH_LOCK_DIR:-/var/lib/ai-trading-bot/runtime}"
 mkdir -p "${RUNTIME_DIR}"

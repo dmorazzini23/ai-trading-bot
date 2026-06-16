@@ -61,6 +61,32 @@ def _status(payload: Mapping[str, Any], default: str = "missing") -> str:
     return str(raw or default)
 
 
+def _controlled_skip_category(row: Mapping[str, Any]) -> str | None:
+    fields = [
+        str(row.get(key) or "").strip().lower()
+        for key in (
+            "controlled_skip",
+            "skip_category",
+            "detail",
+            "reason",
+            "gate",
+            "last_error",
+            "error",
+            "block_reason",
+        )
+    ]
+    context = row.get("context")
+    if isinstance(context, Mapping):
+        fields.extend(
+            str(context.get(key) or "").strip().lower()
+            for key in ("reason", "detail", "gate", "action")
+        )
+    combined = " ".join(field for field in fields if field)
+    if "metrics_improvement_control" in combined:
+        return "metrics_improvement_control"
+    return None
+
+
 def build_trading_day_report(
     *,
     report_date: str,
@@ -97,7 +123,22 @@ def build_trading_day_report(
     fill_rows = [row for row in fills if _date_match(row, report_date)]
     shadows = [row for row in shadow_rows if _date_match(row, report_date)]
     gates = [row for row in gate_rows if _date_match(row, report_date)]
-    rejected = [row for row in gates if str(row.get("action") or row.get("status") or "").lower() in {"reject", "rejected", "blocked"}]
+    controlled_skip_rows = [
+        row
+        for row in [*gates, *intents]
+        if _controlled_skip_category(row) is not None
+    ]
+    controlled_skip_reasons = Counter(
+        _controlled_skip_category(row) or "controlled_skip"
+        for row in controlled_skip_rows
+    )
+    rejected = [
+        row
+        for row in gates
+        if _controlled_skip_category(row) is None
+        and str(row.get("action") or row.get("status") or "").lower()
+        in {"reject", "rejected", "blocked"}
+    ]
     reject_reasons = Counter(str(row.get("reason") or row.get("gate") or "unknown") for row in rejected)
     symbol_trade_flow: dict[str, Counter[str]] = defaultdict(Counter)
     for row in intents:
@@ -187,6 +228,11 @@ def build_trading_day_report(
         "rejected_trades": {
             "count": rejected_count,
             "reasons": dict(reject_reasons),
+        },
+        "controlled_skips": {
+            "count": len(controlled_skip_rows),
+            "reasons": dict(controlled_skip_reasons),
+            "broker_rejects": False,
         },
         "realized_fills": {"count": fill_count},
         "slippage_spread_cost": {
@@ -298,6 +344,8 @@ def build_trading_day_report(
         "huggingface_research_status": _status(huggingface_discovery or {}),
         "huggingface_intake_status": _status(huggingface_candidate_intake or {}),
         "top_reject_reasons": dict(reject_reasons.most_common(5)),
+        "controlled_skips": len(controlled_skip_rows),
+        "top_controlled_skip_reasons": dict(controlled_skip_reasons.most_common(5)),
         "symbols_with_activity": sorted(report["symbol_trade_flow"]),
     }
     report["openclaw_summary"] = {
@@ -305,9 +353,14 @@ def build_trading_day_report(
         "severity": "info" if rejected_count == 0 else "warning",
         "summary": (
             f"trading_day desired={desired_count} submitted={submitted_count} "
-            f"rejected={rejected_count} fills={fill_count}"
+            f"rejected={rejected_count} controlled_skips={len(controlled_skip_rows)} "
+            f"fills={fill_count}"
         ),
-        "suggested_action": "review rejects and live-capital readiness before next session",
+        "suggested_action": (
+            "review controlled skips and live-capital readiness before next session"
+            if rejected_count == 0 and controlled_skip_rows
+            else "review rejects and live-capital readiness before next session"
+        ),
         "details": report["health_report_summary"],
     }
     return report
@@ -340,6 +393,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Desired trades: `{report.get('desired_trades', {}).get('count', 0)}`",
             f"- Submitted trades: `{report.get('submitted_trades', {}).get('count', 0)}`",
             f"- Rejected trades: `{report.get('rejected_trades', {}).get('count', 0)}`",
+            f"- Controlled skips: `{report.get('controlled_skips', {}).get('count', 0)}`",
             f"- Realized fills: `{report.get('realized_fills', {}).get('count', 0)}`",
             f"- Regime entry throttle: `{throttle_actions or {}}`",
             f"- Expected-edge calibration: `{report.get('expected_edge_calibration', {}).get('status', 'missing')}`",

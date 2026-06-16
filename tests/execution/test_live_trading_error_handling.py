@@ -844,6 +844,52 @@ def test_execute_order_propagates_precheck_failure_detail(engine_factory):
     )
 
 
+def test_execute_order_records_metrics_control_precheck_as_controlled_skip(engine_factory):
+    engine = engine_factory()
+    submit_errors: list[dict[str, Any]] = []
+    synced_states: list[dict[str, Any]] = []
+
+    class DurableManager:
+        def begin_external_order_lifecycle(self, **kwargs):
+            return str(kwargs["intent_id"])
+
+        def record_external_submit_error(self, **kwargs):
+            submit_errors.append(dict(kwargs))
+            return str(kwargs["intent_id"])
+
+        def sync_external_order_state(self, **kwargs):
+            synced_states.append(dict(kwargs))
+            return str(kwargs["intent_id"])
+
+    engine.order_manager = DurableManager()
+
+    precheck_calls = 0
+
+    def _reject_with_metrics_control(_order):
+        nonlocal precheck_calls
+        precheck_calls += 1
+        if precheck_calls == 1:
+            return True
+        engine._last_pre_execution_order_check_failure = {
+            "reason": "metrics_improvement_control",
+            "context": {"action": "cooldown", "reason": "metrics_control_cooldown"},
+        }
+        return False
+
+    engine._pre_execution_order_checks = _reject_with_metrics_control
+
+    result = engine.execute_order("AAPL", "buy", 1, order_type="market")
+
+    assert result is None
+    assert engine._last_submit_outcome.get("status") == "skipped"
+    assert engine._last_submit_outcome.get("reason") == "pre_execution_order_checks_failed"
+    assert engine._last_submit_outcome.get("detail") == "metrics_improvement_control"
+    assert submit_errors == []
+    assert synced_states
+    assert synced_states[-1]["status"] == "canceled"
+    assert synced_states[-1]["error"] == "controlled_skip:metrics_improvement_control"
+
+
 def test_execute_order_fails_closed_when_durable_lifecycle_creation_fails(engine_factory):
     engine = engine_factory()
     engine.execution_mode = "live"

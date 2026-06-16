@@ -17,6 +17,7 @@ from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 REJECT_STATUSES = {"reject", "rejected", "blocked", "skip", "skipped", "canceled", "cancelled"}
 SELL_SHORT_TOKENS = {"sell_short", "sellshort", "short", "short_sell"}
 PARTIAL_STATUSES = {"partial", "partially_filled", "partially-filled", "partial_fill"}
+CONTROLLED_SKIP_CATEGORIES = {"metrics_improvement_control"}
 
 
 def _read_json(path: Path | None) -> Any:
@@ -101,6 +102,39 @@ def _token(row: Mapping[str, Any], *keys: str) -> str:
     return ""
 
 
+def _controlled_skip_category(row: Mapping[str, Any]) -> str | None:
+    fields = [
+        str(row.get(key) or "").strip().lower()
+        for key in (
+            "controlled_skip",
+            "skip_category",
+            "detail",
+            "reason",
+            "gate",
+            "last_error",
+            "error",
+            "rejection_reason",
+            "reject_reason",
+        )
+    ]
+    context = row.get("context")
+    if isinstance(context, Mapping):
+        fields.extend(
+            str(context.get(key) or "").strip().lower()
+            for key in ("reason", "detail", "gate", "action")
+        )
+    payload = _parse_payload(row)
+    if payload:
+        fields.extend(
+            str(payload.get(key) or "").strip().lower()
+            for key in ("reason", "detail", "gate", "last_error", "error")
+        )
+    combined = " ".join(field for field in fields if field)
+    if "metrics_improvement_control" in combined:
+        return "metrics_improvement_control"
+    return None
+
+
 def _symbol(row: Mapping[str, Any]) -> str:
     return str(row.get("symbol") or row.get("ticker") or "UNKNOWN").strip().upper() or "UNKNOWN"
 
@@ -182,6 +216,8 @@ def _oms_identifiers(oms_events: Sequence[Mapping[str, Any]]) -> set[str]:
 
 
 def _is_reject(row: Mapping[str, Any]) -> bool:
+    if _controlled_skip_category(row) in CONTROLLED_SKIP_CATEGORIES:
+        return False
     status = _token(row, "status", "state", "decision", "action")
     return status in REJECT_STATUSES or bool(row.get("reject_reason") or row.get("rejection_reason"))
 
@@ -225,7 +261,11 @@ def build_post_trade_surveillance_report(
     min_adverse_selection_fills: int = 5,
 ) -> dict[str, Any]:
     findings: list[dict[str, Any]] = []
+    controlled_skip_counts: Counter[str] = Counter()
     for row in (*decisions, *orders):
+        controlled_skip = _controlled_skip_category(row)
+        if controlled_skip:
+            controlled_skip_counts[controlled_skip] += 1
         if _is_reject(row):
             findings.append(_finding("reject", row, "order or intent was rejected"))
         if _is_sell_short(row):
@@ -311,6 +351,8 @@ def build_post_trade_surveillance_report(
             "positions": len(positions),
             "findings": len(findings),
             "category_counts": dict(sorted(counts.items())),
+            "controlled_skips": int(sum(controlled_skip_counts.values())),
+            "controlled_skip_counts": dict(sorted(controlled_skip_counts.items())),
             "evidence_state": evidence_state,
         },
         "findings": findings,

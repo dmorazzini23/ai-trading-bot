@@ -180,6 +180,7 @@ def build_research_completion_payload(
         f"desired={trading_day.get('desired_trades', {}).get('count', 'n/a')}, "
         f"submitted={trading_day.get('submitted_trades', {}).get('count', 'n/a')}, "
         f"rejected={trading_day.get('rejected_trades', {}).get('count', 'n/a')}, "
+        f"controlled_skips={trading_day.get('controlled_skips', {}).get('count', 'n/a')}, "
         f"fills={trading_day.get('realized_fills', {}).get('count', 'n/a')}"
     )
     symbol_promotion_text = symbol_promotion_digest(symbol_promotion)
