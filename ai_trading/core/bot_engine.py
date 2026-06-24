@@ -13072,6 +13072,95 @@ MAX_TRADES_PER_DAY = (
 )  # daily limit to prevent excessive trading
 TRADE_FREQUENCY_WINDOW_HOURS = 1  # rolling window for hourly limits
 
+
+def _paper_sampling_runtime_active() -> bool:
+    """Return True only for explicit paper-mode diagnostic sampling."""
+
+    try:
+        sampling_enabled = bool(
+            get_env("AI_TRADING_PAPER_SAMPLING_ENABLED", False, cast=bool)
+        )
+        execution_mode = str(get_env("EXECUTION_MODE", "", cast=str) or "").strip().lower()
+        launch_profile = str(
+            get_env("AI_TRADING_LAUNCH_PROFILE", "", cast=str) or ""
+        ).strip().lower()
+    except BOT_ENGINE_FALLBACK_EXC:
+        return False
+    return bool(sampling_enabled and execution_mode == "paper" and not launch_profile.startswith("live"))
+
+
+def _effective_trade_cooldown_min() -> float:
+    """Return runtime cooldown, allowing only paper-sampling reductions."""
+
+    base_cooldown = float(get_trade_cooldown_min())
+    if not _paper_sampling_runtime_active():
+        return base_cooldown
+    try:
+        configured = float(
+            get_env(
+                "AI_TRADING_PAPER_SAMPLING_TRADE_COOLDOWN_MIN",
+                base_cooldown,
+                cast=float,
+            )
+        )
+    except (TypeError, ValueError):
+        return base_cooldown
+    if not math.isfinite(configured):
+        return base_cooldown
+    return max(0.0, min(float(configured), base_cooldown))
+
+
+def _effective_trade_frequency_limits() -> tuple[int, int, int, bool]:
+    """Return hourly, daily, and per-symbol hourly limits for this runtime mode."""
+
+    hourly_limit = int(MAX_TRADES_PER_HOUR)
+    daily_limit = int(MAX_TRADES_PER_DAY)
+    symbol_hourly_limit = max(1, hourly_limit // 10)
+    paper_override = _paper_sampling_runtime_active()
+    if paper_override:
+        try:
+            hourly_limit = max(
+                hourly_limit,
+                int(
+                    get_env(
+                        "AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_HOUR",
+                        hourly_limit,
+                        cast=int,
+                    )
+                ),
+            )
+            daily_limit = max(
+                daily_limit,
+                int(
+                    get_env(
+                        "AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_DAY",
+                        daily_limit,
+                        cast=int,
+                    )
+                ),
+            )
+            symbol_hourly_limit = max(
+                symbol_hourly_limit,
+                int(
+                    get_env(
+                        "AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_SYMBOL_PER_HOUR",
+                        symbol_hourly_limit,
+                        cast=int,
+                    )
+                ),
+            )
+        except (TypeError, ValueError):
+            hourly_limit = int(MAX_TRADES_PER_HOUR)
+            daily_limit = int(MAX_TRADES_PER_DAY)
+            symbol_hourly_limit = max(1, hourly_limit // 10)
+            paper_override = False
+    return (
+        max(1, int(hourly_limit)),
+        max(1, int(daily_limit)),
+        max(1, int(symbol_hourly_limit)),
+        bool(paper_override),
+    )
+
 # Loss streak kill-switch (managed via BotState)
 
 # Volatility stats (for SPY ATR mean/std)
@@ -42205,7 +42294,10 @@ def _trade_limit_reached(state: BotState, current_time: datetime) -> bool:
 
     hour_ago = current_time - timedelta(hours=TRADE_FREQUENCY_WINDOW_HOURS)
     total_trades_hour = sum(1 for _, ts in state.trade_history if ts > hour_ago)
-    return total_trades_hour >= MAX_TRADES_PER_HOUR
+    max_trades_hour, _max_trades_day, _symbol_hourly_limit, _paper_override = (
+        _effective_trade_frequency_limits()
+    )
+    return total_trades_hour >= max_trades_hour
 
 
 def _alpha_decay_entry_guard(
@@ -42312,37 +42404,39 @@ def _check_trade_frequency_limits(
 
     # Count total trades in last day
     total_trades_day = len(state.trade_history)
+    max_trades_hour, max_trades_day, symbol_hourly_limit, paper_override = (
+        _effective_trade_frequency_limits()
+    )
 
     # Check hourly limits
-    if total_trades_hour >= MAX_TRADES_PER_HOUR:
+    if total_trades_hour >= max_trades_hour:
         logger.warning(
             "FREQUENCY_LIMIT_HOURLY_EXCEEDED",
             extra={
                 "symbol": symbol,
                 "trades_last_hour": total_trades_hour,
-                "max_per_hour": MAX_TRADES_PER_HOUR,
+                "max_per_hour": max_trades_hour,
+                "paper_sampling_frequency_override": bool(paper_override),
                 "recommendation": "Reduce trading frequency to prevent overtrading",
             },
         )
         return True
 
     # Check daily limits
-    if total_trades_day >= MAX_TRADES_PER_DAY:
+    if total_trades_day >= max_trades_day:
         logger.warning(
             "FREQUENCY_LIMIT_DAILY_EXCEEDED",
             extra={
                 "symbol": symbol,
                 "trades_today": total_trades_day,
-                "max_per_day": MAX_TRADES_PER_DAY,
+                "max_per_day": max_trades_day,
+                "paper_sampling_frequency_override": bool(paper_override),
                 "recommendation": "Daily trade limit reached - consider reviewing strategy",
             },
         )
         return True
 
     # Check symbol-specific hourly limit (prevent rapid ping-pong on same symbol)
-    symbol_hourly_limit = max(
-        1, MAX_TRADES_PER_HOUR // 10
-    )  # 10% of hourly limit per symbol
     if symbol_trades_hour >= symbol_hourly_limit:
         logger.info(
             "FREQUENCY_LIMIT_SYMBOL_HOURLY",
@@ -42350,6 +42444,7 @@ def _check_trade_frequency_limits(
                 "symbol": symbol,
                 "symbol_trades_hour": symbol_trades_hour,
                 "symbol_hourly_limit": symbol_hourly_limit,
+                "paper_sampling_frequency_override": bool(paper_override),
                 "note": "Preventing rapid trading on single symbol",
             },
         )

@@ -366,6 +366,34 @@ def _universe_diagnostics(
     return diagnostics
 
 
+def _synthetic_exploration_row(symbol: str) -> dict[str, Any]:
+    return {
+        "symbol": symbol,
+        "sample_count": 0,
+        "live_cost_sample_count": 0,
+        "shadow_markout_samples": 0,
+        "replay_samples": 0,
+        "execution_quality_events": 0,
+        "mean_net_markout_bps": None,
+        "positive_rate": None,
+        "profit_factor": None,
+        "mean_total_cost_bps": None,
+        "p90_total_cost_bps": None,
+        "mean_spread_bps": None,
+        "p90_spread_bps": None,
+        "mean_quote_age_ms": None,
+        "p90_quote_age_ms": None,
+        "quality_score": None,
+        "recommended_mode": "allow",
+        "effective_mode": "allow",
+        "persistence_count": 1,
+        "reasons": ["configured_without_evidence", "paper_only_exploration_candidate"],
+        "runtime_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
+
+
 def build_symbol_universe_scorecard(
     *,
     live_cost_model: Mapping[str, Any] | None = None,
@@ -478,10 +506,6 @@ def build_symbol_universe_scorecard(
             str(row.get("symbol") or ""),
         )
     )
-    disabled = [str(row["symbol"]) for row in rows if row.get("effective_mode") == "disabled"]
-    shadow_only = [
-        str(row["symbol"]) for row in rows if row.get("effective_mode") == "shadow_only"
-    ]
     executable_set = {
         str(symbol).strip().upper()
         for symbol in (executable_symbols or [])
@@ -492,12 +516,57 @@ def build_symbol_universe_scorecard(
         for symbol in (shadow_symbols or [])
         if str(symbol).strip()
     }
+    existing_symbols = {
+        str(row.get("symbol") or "").strip().upper()
+        for row in rows
+        if str(row.get("symbol") or "").strip()
+    }
+    paper_sampling_symbols = _symbol_set(
+        get_env(
+            "AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS",
+            "",
+            cast=str,
+            resolve_aliases=False,
+        )
+    )
+    include_zero_evidence = bool(
+        get_env(
+            "AI_TRADING_SYMBOL_UNIVERSE_INCLUDE_CONFIGURED_WITHOUT_EVIDENCE",
+            True,
+            cast=bool,
+        )
+    )
+    zero_evidence_exploration_symbols: list[str] = []
+    if include_zero_evidence and paper_sampling_symbols:
+        configured_for_exploration = sorted((executable_set | shadow_set) & paper_sampling_symbols)
+        for symbol in configured_for_exploration:
+            if symbol not in existing_symbols:
+                rows.append(_synthetic_exploration_row(symbol))
+                existing_symbols.add(symbol)
+                zero_evidence_exploration_symbols.append(symbol)
+        rows.sort(
+            key=lambda row: (
+                str(row.get("effective_mode")) != "disabled",
+                str(row.get("effective_mode")) != "shadow_only",
+                -(row.get("sample_count") or 0),
+                str(row.get("symbol") or ""),
+            )
+        )
+    disabled = [str(row["symbol"]) for row in rows if row.get("effective_mode") == "disabled"]
+    shadow_only = [
+        str(row["symbol"]) for row in rows if row.get("effective_mode") == "shadow_only"
+    ]
     status = "ready" if rows else "unavailable"
     return {
         "schema_version": "1.0.0",
         "artifact_type": "symbol_universe_scorecard",
         "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
         "source": "runtime_symbol_quality_artifacts",
+        "authority": {
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        },
         "status": {
             "available": bool(rows),
             "status": status,
@@ -541,7 +610,12 @@ def build_symbol_universe_scorecard(
             executable_symbols=executable_set,
             shadow_symbols=shadow_set,
             starvation_threshold=float(starvation_threshold),
-        ),
+        )
+        | {
+            "zero_evidence_exploration_enabled": bool(include_zero_evidence),
+            "zero_evidence_exploration_symbols": zero_evidence_exploration_symbols,
+            "paper_sampling_symbols": sorted(paper_sampling_symbols),
+        },
         "symbols": rows,
     }
 

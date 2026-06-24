@@ -165,6 +165,23 @@ def evaluate_oms_lifecycle_parity_invariants(
         except ValueError:
             return None
 
+    def _terminal_cancel_without_submit_ack_allowed(
+        *,
+        normalized_status: str,
+        broker_order_id: str,
+        event_set: set[str],
+    ) -> bool:
+        if normalized_status not in {"CANCELED", "CANCELLED", "EXPIRED", "DONE_FOR_DAY"}:
+            return False
+        if str(broker_order_id or "").strip():
+            return False
+        expected_terminal_event = terminal_event_type(normalized_status)
+        return bool(
+            expected_terminal_event in event_set
+            and "INTENT_CLOSED" in event_set
+            and "SUBMIT_ACK" not in event_set
+        )
+
     try:
         intents = intent_store.list_intents(limit=max(1, int(limit)))
         for intent in intents:
@@ -200,7 +217,12 @@ def evaluate_oms_lifecycle_parity_invariants(
                     event_types=event_types,
                 )
             if requires_submit_path and "SUBMIT_ACK" not in event_set:
-                if normalized_status not in {"FAILED", "REJECTED"}:
+                cancel_without_ack_allowed = _terminal_cancel_without_submit_ack_allowed(
+                    normalized_status=normalized_status,
+                    broker_order_id=str(intent.broker_order_id or ""),
+                    event_set=event_set,
+                )
+                if normalized_status not in {"FAILED", "REJECTED"} and not cancel_without_ack_allowed:
                     _record(
                         "missing_submit_ack",
                         intent_id=intent.intent_id,

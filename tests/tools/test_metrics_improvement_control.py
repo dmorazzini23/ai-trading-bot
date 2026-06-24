@@ -80,6 +80,21 @@ def test_metrics_improvement_control_marks_low_sample_symbols_as_exploration() -
     assert report["exploration_budget"]["max_orders_per_symbol_per_window"] == 1
 
 
+def test_metrics_improvement_control_includes_configured_zero_sample_symbols() -> None:
+    report = build_metrics_improvement_control(
+        report_date="2026-05-22",
+        reports=[_trading_day_report()],
+        configured_symbols=["AAPL", "MSFT", "NVDA"],
+        min_symbol_samples=5,
+    )
+
+    assert report["by_symbol"]["MSFT"]["samples"] == 0
+    assert report["by_symbol"]["MSFT"]["action"] == "explore"
+    assert report["by_symbol"]["NVDA"]["samples"] == 0
+    assert report["summary"]["configured_without_samples"] == ["MSFT", "NVDA"]
+    assert report["control_policy"]["configured_symbols"] == ["AAPL", "MSFT", "NVDA"]
+
+
 def test_metrics_improvement_control_cli_writes_latest(tmp_path) -> None:
     daily_root = tmp_path / "daily"
     run_dir = daily_root / "20260522T210000Z_daily"
@@ -109,6 +124,8 @@ def test_metrics_improvement_control_cli_writes_latest(tmp_path) -> None:
             "20",
             "--max-exploration-orders-per-symbol",
             "5",
+            "--configured-symbols",
+            "AAPL,MSFT,NVDA",
             "--unknown-quote-metadata-edge-add-bps",
             "0",
         ]
@@ -122,4 +139,5 @@ def test_metrics_improvement_control_cli_writes_latest(tmp_path) -> None:
     assert payload["control_policy"]["unknown_quote_metadata_edge_add_bps"] == 0.0
     assert payload["exploration_budget"]["max_orders_per_window"] == 20
     assert payload["exploration_budget"]["max_orders_per_symbol_per_window"] == 5
+    assert payload["by_symbol"]["NVDA"]["action"] == "explore"
     assert latest.exists()

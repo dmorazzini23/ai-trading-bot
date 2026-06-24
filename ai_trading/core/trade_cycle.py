@@ -320,7 +320,12 @@ def execute_trade_logic(
 
     with be.trade_cooldowns_lock:
         cd_ts = state.trade_cooldowns.get(symbol)
-    if cd_ts and (now - cd_ts).total_seconds() < be.get_trade_cooldown_min() * 60:
+    cooldown_min_fn = getattr(
+        be,
+        "_effective_trade_cooldown_min",
+        be.get_trade_cooldown_min,
+    )
+    if cd_ts and (now - cd_ts).total_seconds() < cooldown_min_fn() * 60:
         prev = state.last_trade_direction.get(symbol)
         if prev and (
             (prev == "buy" and signal == "sell") or (prev == "sell" and signal == "buy")

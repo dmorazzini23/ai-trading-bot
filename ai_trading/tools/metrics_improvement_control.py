@@ -47,6 +47,14 @@ def _safe_int(value: Any, default: int = 0) -> int:
     return parsed
 
 
+def _symbol_set(raw_value: Any) -> set[str]:
+    return {
+        token.strip().upper()
+        for token in str(raw_value or "").replace(";", ",").split(",")
+        if token and token.strip()
+    }
+
+
 def _status(payload: Mapping[str, Any]) -> str:
     raw = payload.get("status")
     if isinstance(raw, Mapping):
@@ -167,6 +175,7 @@ def build_metrics_improvement_control(
     max_exploration_orders: int = 3,
     max_exploration_orders_per_symbol: int = 1,
     cooldown_seconds: int = 1800,
+    configured_symbols: Sequence[str] | str | None = None,
 ) -> dict[str, Any]:
     stats: dict[str, dict[str, float]] = defaultdict(
         lambda: {
@@ -196,6 +205,17 @@ def build_metrics_improvement_control(
     if not has_current_report:
         _accumulate_from_execution_capture(stats, execution_capture or {})
         _accumulate_from_surveillance(stats, post_trade_surveillance or {})
+    configured_symbol_set = (
+        _symbol_set(configured_symbols)
+        if isinstance(configured_symbols, str)
+        else {
+            str(symbol).strip().upper()
+            for symbol in (configured_symbols or [])
+            if str(symbol).strip()
+        }
+    )
+    for symbol in configured_symbol_set:
+        stats[symbol]
 
     live_status = (
         live_cost_model.get("status")
@@ -353,6 +373,13 @@ def build_metrics_improvement_control(
             "shadowed_or_blocked_symbols": int(totals["shadowed_or_blocked_symbols"]),
             "downscaled_symbols": int(totals["downscaled_symbols"]),
             "exploration_symbols": int(totals["exploration_symbols"]),
+            "configured_symbols": sorted(configured_symbol_set),
+            "configured_symbol_count": int(len(configured_symbol_set)),
+            "configured_without_samples": [
+                symbol
+                for symbol in sorted(configured_symbol_set)
+                if int(by_symbol.get(symbol, {}).get("samples") or 0) <= 0
+            ],
         },
         "control_policy": {
             "min_symbol_samples": int(min_symbol_samples),
@@ -368,6 +395,7 @@ def build_metrics_improvement_control(
             "weak_bucket_edge_add_bps": float(weak_bucket_edge_add_bps),
             "unknown_quote_metadata_edge_add_bps": float(unknown_quote_metadata_edge_add_bps),
             "authority_increase_allowed": False,
+            "configured_symbols": sorted(configured_symbol_set),
         },
         "exploration_budget": {
             "window_minutes": int(max(1, exploration_window_minutes)),
@@ -424,6 +452,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-exploration-orders", type=int, default=3)
     parser.add_argument("--max-exploration-orders-per-symbol", type=int, default=1)
     parser.add_argument("--unknown-quote-metadata-edge-add-bps", type=float, default=1.0)
+    parser.add_argument("--configured-symbols", default="")
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -461,6 +490,7 @@ def main(argv: list[str] | None = None) -> int:
         max_exploration_orders=int(args.max_exploration_orders),
         max_exploration_orders_per_symbol=int(args.max_exploration_orders_per_symbol),
         unknown_quote_metadata_edge_add_bps=float(args.unknown_quote_metadata_edge_add_bps),
+        configured_symbols=str(args.configured_symbols),
     )
     for path in (output_json, latest_json):
         path.parent.mkdir(parents=True, exist_ok=True)

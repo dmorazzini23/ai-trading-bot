@@ -843,7 +843,11 @@ def process_symbols_cycle(
     _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR = be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR
     _PENDING_ORDER_SAMPLE_LIMIT = be._PENDING_ORDER_SAMPLE_LIMIT
     MAX_TRADES_PER_HOUR = be.MAX_TRADES_PER_HOUR
-    get_trade_cooldown_min = be.get_trade_cooldown_min
+    get_trade_cooldown_min = getattr(
+        be,
+        "_effective_trade_cooldown_min",
+        be.get_trade_cooldown_min,
+    )
     _warmup_data_only_mode_active = be._warmup_data_only_mode_active
     _warmup_symbol_limit = be._warmup_symbol_limit
     APIError = be.APIError

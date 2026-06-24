@@ -932,6 +932,11 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 ),
                 "--unknown-quote-metadata-edge-add-bps",
                 _env_text("AI_TRADING_METRICS_IMPROVEMENT_UNKNOWN_QUOTE_EDGE_ADD_BPS", "0.0"),
+                "--configured-symbols",
+                _env_text(
+                    "AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS",
+                    _env_text("AI_TRADING_CANARY_SYMBOLS", ""),
+                ),
                 "--output-json",
                 metrics_control,
                 "--latest-json",

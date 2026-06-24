@@ -285,6 +285,71 @@ def test_oms_lifecycle_parity_accepts_failed_submit_without_ack(
     assert "INTENT_CLOSED" in event_types
 
 
+def test_oms_lifecycle_parity_accepts_terminal_cancel_without_submit_ack(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_DUAL_WRITE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
+    db_path = tmp_path / "cancel_without_submit_ack.db"
+    store = IntentStore(path=str(db_path))
+    event_store = EventStore(path=str(db_path))
+
+    intent, created = store.create_intent(
+        intent_id="intent-cancel-without-ack",
+        idempotency_key="cancel-without-ack-key",
+        symbol="META",
+        side="buy",
+        quantity=1.0,
+        status="CANCELED",
+    )
+    assert created is True
+
+    event_store.append_oms_event_payload(
+        event_type="SUBMIT_CLAIMED",
+        event_source="test",
+        idempotency_key="cancel-without-ack-submit-claimed",
+        intent_id=intent.intent_id,
+        payload={"submit_attempts": 1},
+    )
+    event_store.append_oms_event_payload(
+        event_type="SUBMIT_ATTEMPTED",
+        event_source="test",
+        idempotency_key="cancel-without-ack-submit-attempted",
+        intent_id=intent.intent_id,
+        payload={"submit_attempts": 1},
+    )
+    event_store.append_oms_event_payload(
+        event_type="ORDER_CANCELED",
+        event_source="test",
+        idempotency_key="cancel-without-ack-order-canceled",
+        intent_id=intent.intent_id,
+        payload={"final_status": "CANCELED", "reason": "pre_submit_controlled_cancel"},
+    )
+    event_store.append_oms_event_payload(
+        event_type="INTENT_CLOSED",
+        event_source="test",
+        idempotency_key="cancel-without-ack-intent-closed",
+        intent_id=intent.intent_id,
+        payload={"final_status": "CANCELED", "reason": "pre_submit_controlled_cancel"},
+    )
+
+    parity = evaluate_oms_lifecycle_parity_invariants(intent_store_path=str(db_path))
+    assert parity["ok"] is True
+    assert int(parity["total_violations"]) == 0
+    assert int(parity["violations"]["missing_submit_ack"]) == 0
+    assert int(parity["violations"]["terminal_event_mismatch"]) == 0
+    assert int(parity["violations"]["terminal_missing_close"]) == 0
+
+    rows = event_store.list_oms_events(intent_id=intent.intent_id, limit=5000)
+    event_store.close()
+    store.close()
+    event_types = [str(row.get("event_type") or "").strip().upper() for row in rows]
+    assert "SUBMIT_ACK" not in event_types
+    assert "ORDER_CANCELED" in event_types
+    assert "INTENT_CLOSED" in event_types
+
+
 def test_oms_lifecycle_parity_accepts_legacy_filled_intent_without_partial_fill(
     monkeypatch,
     tmp_path,

@@ -4,6 +4,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from ai_trading.tools import symbol_universe_scorecard
 
 
@@ -175,7 +177,10 @@ def test_symbol_universe_scorecard_suggests_shadow_promotion() -> None:
     )
 
 
-def test_symbol_universe_scorecard_flags_universe_mismatch_and_starvation() -> None:
+def test_symbol_universe_scorecard_flags_universe_mismatch_and_starvation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS", "AAPL,AMZN,MSFT")
     report = symbol_universe_scorecard.build_symbol_universe_scorecard(
         replay_report={
             "replay_symbol_summary": {
@@ -194,10 +199,16 @@ def test_symbol_universe_scorecard_flags_universe_mismatch_and_starvation() -> N
     )
 
     diagnostics = report["diagnostics"]
-    assert diagnostics["universe_mismatch"] is True
-    assert diagnostics["configured_without_evidence"] == ["AMZN", "MSFT"]
+    assert diagnostics["universe_mismatch"] is False
+    assert diagnostics["configured_without_evidence"] == []
+    assert diagnostics["zero_evidence_exploration_symbols"] == ["AMZN", "MSFT"]
     assert diagnostics["symbol_starvation"] is True
     assert diagnostics["dominant_symbol"] == "AAPL"
+    by_symbol = {row["symbol"]: row for row in report["symbols"]}
+    assert by_symbol["AMZN"]["effective_mode"] == "allow"
+    assert by_symbol["AMZN"]["sample_count"] == 0
+    assert "paper_only_exploration_candidate" in by_symbol["AMZN"]["reasons"]
+    assert report["policy"]["allowed_symbols"] == ["AAPL", "AMZN", "MSFT"]
 
 
 def test_symbol_universe_scorecard_cli_writes_artifact(tmp_path: Path) -> None:

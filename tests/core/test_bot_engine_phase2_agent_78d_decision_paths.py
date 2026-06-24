@@ -676,6 +676,7 @@ def test_frequency_and_alpha_decay_state_branches(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(bot_engine, "MAX_TRADES_PER_HOUR", 3)
     monkeypatch.setattr(bot_engine, "MAX_TRADES_PER_DAY", 10)
+    monkeypatch.setattr(bot_engine, "_paper_sampling_runtime_active", lambda: False)
     freq_state = SimpleNamespace(
         trade_history=[
             ("AAPL", now - timedelta(minutes=1)),
@@ -688,6 +689,36 @@ def test_frequency_and_alpha_decay_state_branches(monkeypatch: pytest.MonkeyPatc
     record_state = SimpleNamespace()
     bot_engine._record_trade_in_frequency_tracker(record_state, "AAPL", now)
     assert record_state.trade_history == [("AAPL", now)]
+
+
+def test_paper_sampling_frequency_override_is_paper_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 4, 27, 15, tzinfo=UTC)
+    monkeypatch.setattr(bot_engine, "MAX_TRADES_PER_HOUR", 4)
+    monkeypatch.setattr(bot_engine, "MAX_TRADES_PER_DAY", 20)
+    monkeypatch.setattr(bot_engine, "_paper_sampling_runtime_active", lambda: True)
+    _patch_get_env(
+        monkeypatch,
+        {
+            "AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_HOUR": 8,
+            "AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_DAY": 80,
+            "AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_SYMBOL_PER_HOUR": 3,
+        },
+    )
+    state = SimpleNamespace(
+        trade_history=[
+            ("AAPL", now - timedelta(minutes=1)),
+            ("MSFT", now - timedelta(minutes=2)),
+            ("NVDA", now - timedelta(minutes=3)),
+            ("TSLA", now - timedelta(minutes=4)),
+        ]
+    )
+
+    assert bot_engine._check_trade_frequency_limits(state, "AMZN", now) is False
+
+    monkeypatch.setattr(bot_engine, "_paper_sampling_runtime_active", lambda: False)
+    assert bot_engine._check_trade_frequency_limits(state, "AMZN", now) is True
 
 
 def test_pre_rank_execution_candidates_quality_filter_and_exploration(
