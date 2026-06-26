@@ -130,6 +130,18 @@ def _engine_stub() -> Any:
     return engine
 
 
+def test_order_expected_edge_extracts_raw_metadata_key() -> None:
+    engine = _engine_stub()
+
+    assert engine._order_expected_edge_bps_raw(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "metadata": {"expected_net_edge_bps_raw": "6.25"},
+        }
+    ) == pytest.approx(6.25)
+
+
 @pytest.fixture(autouse=True)
 def _disable_new_global_controls(monkeypatch):
     monkeypatch.setenv("AI_TRADING_EXECUTION_QUALITY_GOVERNOR_ENABLED", "0")
@@ -7540,6 +7552,98 @@ def test_metrics_improvement_control_blocks_weak_symbol(monkeypatch) -> None:
     assert context["symbol"] == "AMZN"
 
 
+def test_metrics_improvement_control_blocks_inverted_side_without_blocking_closes(
+    monkeypatch,
+) -> None:
+    engine = _engine_stub()
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "MSFT": {
+                "action": "allow",
+                "qty_scale": 1.0,
+                "required_edge_bps": 0.25,
+                "reasons": ["metrics_ok"],
+            }
+        },
+        "by_side": {
+            "sell": {
+                "action": "shadow",
+                "qty_scale": 0.0,
+                "required_edge_bps": 1.75,
+                "reasons": ["side_capture_ratio_hard_breach"],
+            }
+        },
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+
+    allowed, context = engine._metrics_improvement_control_allows_opening(
+        order={"symbol": "MSFT", "side": "sell", "quantity": 3, "expected_edge_bps": 10.0}
+    )
+    closing_allowed, closing_context = engine._metrics_improvement_control_allows_opening(
+        order={
+            "symbol": "MSFT",
+            "side": "sell",
+            "quantity": 3,
+            "expected_edge_bps": -10.0,
+            "closing_position": True,
+        }
+    )
+
+    assert allowed is False
+    assert context["reason"] == "metrics_control_side_shadow"
+    assert context["side"] == "sell"
+    assert closing_allowed is True
+    assert closing_context["reason"] == "not_applicable_closing_position"
+
+
+def test_metrics_improvement_control_side_downscale_is_conservative(monkeypatch) -> None:
+    engine = _engine_stub()
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "AAPL": {
+                "action": "allow",
+                "qty_scale": 1.0,
+                "required_edge_bps": 0.25,
+                "unknown_quote_metadata_edge_add_bps": 0.0,
+                "reasons": ["metrics_ok"],
+            }
+        },
+        "by_side": {
+            "buy": {
+                "action": "downscale",
+                "qty_scale": 0.5,
+                "required_edge_bps": 2.0,
+                "unknown_quote_metadata_edge_add_bps": 0.0,
+                "reasons": ["side_capture_ratio_below_floor"],
+            }
+        },
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+    order = {
+        "symbol": "AAPL",
+        "side": "buy",
+        "quantity": 6,
+        "expected_edge_bps": 3.0,
+        "spread_bps": 1.0,
+        "quote_age_ms": 100.0,
+    }
+
+    allowed, context = engine._metrics_improvement_control_allows_opening(order=order)
+
+    assert allowed is True
+    assert context["reason"] == "applied"
+    assert context["action"] == "downscale"
+    assert context["required_edge_bps"] == pytest.approx(2.0)
+    assert order["quantity"] == 3
+    assert context["control"]["side_control"]["action"] == "downscale"
+
+
 def test_metrics_improvement_control_downscales_and_requires_cost_edge(monkeypatch) -> None:
     engine = _engine_stub()
     payload = {
@@ -7573,6 +7677,52 @@ def test_metrics_improvement_control_downscales_and_requires_cost_edge(monkeypat
     assert order["quantity"] == 4
     assert order["qty"] == 4
     assert context["required_edge_bps"] == pytest.approx(6.0)
+
+
+def test_metrics_improvement_control_uses_nested_net_target_expected_edge(
+    monkeypatch,
+) -> None:
+    engine = _engine_stub()
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "QQQ": {
+                "action": "downscale",
+                "qty_scale": 0.5,
+                "required_edge_bps": 6.0,
+                "reasons": ["adverse_selection_pressure"],
+            }
+        },
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+    order = {
+        "symbol": "QQQ",
+        "side": "buy",
+        "quantity": 2,
+        "spread_bps": 2.0,
+        "quote_age_ms": 200.0,
+        "metadata": {
+            "net_target": {
+                "proposals": [
+                    {
+                        "debug": {
+                            "expected_net_edge_bps": 8.0,
+                            "strict_expected_net_edge_bps": 8.0,
+                        }
+                    }
+                ]
+            }
+        },
+    }
+
+    allowed, context = engine._metrics_improvement_control_allows_opening(order=order)
+
+    assert allowed is True
+    assert context["reason"] == "applied"
+    assert context["expected_edge_bps"] == pytest.approx(8.0)
+    assert order["quantity"] == 1
 
 
 def test_metrics_improvement_control_blocks_when_edge_cannot_cover_unknown_quote_add(

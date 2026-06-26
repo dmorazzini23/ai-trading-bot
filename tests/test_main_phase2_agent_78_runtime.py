@@ -23,7 +23,7 @@ def test_assert_singleton_api_detects_existing_health(monkeypatch) -> None:
     monkeypatch.setattr(main, "_managed_env", lambda name, default=None: "")
     monkeypatch.setattr(main, "sys", types.SimpleNamespace(modules={}))
     monkeypatch.setattr(main, "get_pid_on_port", lambda port: None)
-    monkeypatch.setattr(main, "_probe_local_api_health", lambda port: True)
+    monkeypatch.setattr(main, "_probe_local_api_health", lambda port, **kwargs: True)
 
     with pytest.raises(main.ExistingApiDetected):
         main._assert_singleton_api(types.SimpleNamespace(env="prod", api_port=9001))
@@ -42,6 +42,43 @@ def test_start_api_with_signal_records_exception(monkeypatch) -> None:
     assert not ready.is_set()
     assert error.is_set()
     assert getattr(error, "exception") is exc
+
+
+def test_wait_for_api_startup_catches_late_thread_error(monkeypatch) -> None:
+    class _Ready:
+        def wait(self, timeout: float | None = None) -> bool:
+            _ = timeout
+            return False
+
+        def is_set(self) -> bool:
+            return False
+
+    class _LateError:
+        def __init__(self, exc: BaseException) -> None:
+            self.exception = exc
+            self._calls = 0
+
+        def wait(self, timeout: float | None = None) -> bool:
+            _ = timeout
+            self._calls += 1
+            return self._calls >= 2
+
+    class _AliveThread:
+        def is_alive(self) -> bool:
+            return True
+
+    exc = OSError(errno.EADDRINUSE, "busy")
+    monkeypatch.setenv("AI_TRADING_API_STARTUP_WAIT_SECONDS", "6")
+
+    with pytest.raises(OSError) as raised:
+        main._wait_for_api_startup(
+            _Ready(),
+            _LateError(exc),
+            _AliveThread(),
+            initial_wait_seconds=5.0,
+        )
+
+    assert raised.value is exc
 
 
 def test_interruptible_sleep_non_test_stops_after_first_slice(monkeypatch) -> None:

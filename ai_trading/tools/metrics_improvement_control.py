@@ -126,6 +126,80 @@ def _accumulate_from_surveillance(
             row["reject_findings"] += 1.0
 
 
+def _side_control_rows(
+    *,
+    expected_edge_calibration: Mapping[str, Any] | None,
+    min_side_samples: int,
+    min_capture_ratio: float,
+    hard_capture_ratio: float,
+    min_realized_edge_bps: float,
+    downscale_qty_scale: float,
+    weak_bucket_qty_scale: float,
+    base_required_edge: float,
+    weak_bucket_edge_add_bps: float,
+    unknown_quote_metadata_edge_add_bps: float,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(expected_edge_calibration, Mapping):
+        return {}
+    bucketed_raw = expected_edge_calibration.get("bucketed_by_side")
+    if not isinstance(bucketed_raw, Mapping):
+        return {}
+    by_side: dict[str, dict[str, Any]] = {}
+    min_side_samples = max(1, int(min_side_samples))
+    for side_raw, row_raw in bucketed_raw.items():
+        if not isinstance(row_raw, Mapping):
+            continue
+        side = str(side_raw or "").strip().lower()
+        if side not in {"buy", "sell"}:
+            continue
+        samples = max(0, _safe_int(row_raw.get("count"), 0))
+        mean_expected = _safe_float(row_raw.get("mean_expected_net_edge_bps"))
+        mean_realized = _safe_float(row_raw.get("mean_realized_net_edge_bps"))
+        capture_ratio = _safe_float(row_raw.get("capture_ratio"))
+        profit_factor = _safe_float(row_raw.get("profit_factor"))
+        win_rate = _safe_float(row_raw.get("win_rate"))
+        action = "allow"
+        qty_scale = 1.0
+        required_edge = float(base_required_edge)
+        reasons: list[str] = []
+        if samples < min_side_samples:
+            action = "observe"
+            reasons.append("insufficient_side_samples")
+        else:
+            weak_realized = mean_realized is not None and float(mean_realized) < float(min_realized_edge_bps)
+            hard_capture = capture_ratio is not None and float(capture_ratio) <= float(hard_capture_ratio)
+            weak_capture = capture_ratio is not None and float(capture_ratio) < float(min_capture_ratio)
+            if hard_capture:
+                action = "shadow"
+                qty_scale = 0.0
+                reasons.append("side_capture_ratio_hard_breach")
+            elif weak_realized:
+                action = "downscale"
+                qty_scale = float(weak_bucket_qty_scale)
+                required_edge += float(weak_bucket_edge_add_bps)
+                reasons.append("side_realized_edge_below_floor")
+            elif weak_capture:
+                action = "downscale"
+                qty_scale = float(downscale_qty_scale)
+                required_edge += float(weak_bucket_edge_add_bps)
+                reasons.append("side_capture_ratio_below_floor")
+        by_side[side] = {
+            "side": side,
+            "samples": int(samples),
+            "mean_expected_edge_bps": mean_expected,
+            "mean_realized_edge_bps": mean_realized,
+            "capture_ratio": capture_ratio,
+            "profit_factor": profit_factor,
+            "win_rate": win_rate,
+            "action": action,
+            "qty_scale": float(qty_scale),
+            "required_edge_bps": float(required_edge),
+            "unknown_quote_metadata_edge_add_bps": float(unknown_quote_metadata_edge_add_bps),
+            "reasons": reasons or ["side_metrics_ok"],
+        }
+    return by_side
+
+
 def _reports_from_inputs(
     *,
     report_date: str,
@@ -171,6 +245,7 @@ def build_metrics_improvement_control(
     cost_p90_multiplier: float = 1.0,
     weak_bucket_edge_add_bps: float = 1.5,
     unknown_quote_metadata_edge_add_bps: float = 1.0,
+    min_side_samples: int = 8,
     exploration_window_minutes: int = 390,
     max_exploration_orders: int = 3,
     max_exploration_orders_per_symbol: int = 1,
@@ -237,6 +312,18 @@ def build_metrics_improvement_control(
     base_required_edge = max(0.0, float(base_min_edge_bps)) + (
         max(0.0, float(live_p90)) * max(0.0, float(cost_p90_multiplier))
     )
+    by_side = _side_control_rows(
+        expected_edge_calibration=expected_edge_calibration,
+        min_side_samples=int(min_side_samples),
+        min_capture_ratio=float(min_capture_ratio),
+        hard_capture_ratio=float(hard_capture_ratio),
+        min_realized_edge_bps=float(min_realized_edge_bps),
+        downscale_qty_scale=float(downscale_qty_scale),
+        weak_bucket_qty_scale=float(weak_bucket_qty_scale),
+        base_required_edge=float(base_required_edge),
+        weak_bucket_edge_add_bps=float(weak_bucket_edge_add_bps),
+        unknown_quote_metadata_edge_add_bps=float(unknown_quote_metadata_edge_add_bps),
+    )
 
     by_symbol: dict[str, dict[str, Any]] = {}
     totals = {
@@ -248,7 +335,15 @@ def build_metrics_improvement_control(
         "shadowed_or_blocked_symbols": 0,
         "downscaled_symbols": 0,
         "exploration_symbols": 0,
+        "side_shadowed_or_blocked": 0,
+        "side_downscaled": 0,
     }
+    for row in by_side.values():
+        action = str(row.get("action") or "").strip().lower()
+        if action in {"shadow", "cooldown", "block"}:
+            totals["side_shadowed_or_blocked"] += 1
+        elif action == "downscale":
+            totals["side_downscaled"] += 1
     for symbol in sorted(stats):
         row = stats[symbol]
         samples = int(max(0.0, row["samples"]))
@@ -336,10 +431,15 @@ def build_metrics_improvement_control(
         if float(totals["expected_sum_bps"]) > 0.0
         else None
     )
-    if not by_symbol:
+    if not by_symbol and not by_side:
         status = "insufficient_samples"
         recommended = "collect_more_diagnostic_paper_samples"
-    elif totals["shadowed_or_blocked_symbols"] or totals["downscaled_symbols"]:
+    elif (
+        totals["shadowed_or_blocked_symbols"]
+        or totals["downscaled_symbols"]
+        or totals["side_shadowed_or_blocked"]
+        or totals["side_downscaled"]
+    ):
         status = "active"
         recommended = "apply_conservative_next_session_metric_controls"
     else:
@@ -373,6 +473,9 @@ def build_metrics_improvement_control(
             "shadowed_or_blocked_symbols": int(totals["shadowed_or_blocked_symbols"]),
             "downscaled_symbols": int(totals["downscaled_symbols"]),
             "exploration_symbols": int(totals["exploration_symbols"]),
+            "side_count": len(by_side),
+            "side_shadowed_or_blocked": int(totals["side_shadowed_or_blocked"]),
+            "side_downscaled": int(totals["side_downscaled"]),
             "configured_symbols": sorted(configured_symbol_set),
             "configured_symbol_count": int(len(configured_symbol_set)),
             "configured_without_samples": [
@@ -383,6 +486,7 @@ def build_metrics_improvement_control(
         },
         "control_policy": {
             "min_symbol_samples": int(min_symbol_samples),
+            "min_side_samples": int(max(1, int(min_side_samples))),
             "min_capture_ratio": float(min_capture_ratio),
             "hard_capture_ratio": float(hard_capture_ratio),
             "min_realized_edge_bps": float(min_realized_edge_bps),
@@ -404,6 +508,7 @@ def build_metrics_improvement_control(
             "qty_scale": float(exploration_qty_scale),
         },
         "by_symbol": by_symbol,
+        "by_side": by_side,
         "inputs": {
             "expected_edge_calibration_status": _status(expected_edge_calibration or {}),
             "execution_capture_status": _status(execution_capture or {}),
@@ -447,6 +552,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-reject-findings", type=int, default=3)
     parser.add_argument("--base-min-edge-bps", type=float, default=2.0)
     parser.add_argument("--cost-p90-multiplier", type=float, default=1.0)
+    parser.add_argument("--min-side-samples", type=int, default=8)
     parser.add_argument("--exploration-qty-scale", type=float, default=0.5)
     parser.add_argument("--exploration-window-minutes", type=int, default=390)
     parser.add_argument("--max-exploration-orders", type=int, default=3)
@@ -485,6 +591,7 @@ def main(argv: list[str] | None = None) -> int:
         max_reject_findings=int(args.max_reject_findings),
         base_min_edge_bps=float(args.base_min_edge_bps),
         cost_p90_multiplier=float(args.cost_p90_multiplier),
+        min_side_samples=int(args.min_side_samples),
         exploration_qty_scale=float(args.exploration_qty_scale),
         exploration_window_minutes=int(args.exploration_window_minutes),
         max_exploration_orders=int(args.max_exploration_orders),

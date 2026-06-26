@@ -65,6 +65,35 @@ def test_probe_local_api_health_rejects_bad_json(monkeypatch) -> None:
     assert main._probe_local_api_health(9001) is False
 
 
+def test_probe_local_api_health_accepts_startup_warming_service(monkeypatch) -> None:
+    class _Response:
+        status = 503
+
+        def read(self) -> bytes:
+            return b'{"service": "ai-trading", "ok": false, "status": "warming_up"}'
+
+        def close(self) -> None:
+            return None
+
+    class _Connection:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        def request(self, *args, **kwargs) -> None:
+            return None
+
+        def getresponse(self) -> _Response:
+            return _Response()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(http.client, "HTTPConnection", _Connection)
+
+    assert main._probe_local_api_health(9001) is False
+    assert main._probe_local_api_health(9001, require_healthy=False) is True
+
+
 def test_init_http_session_retries_and_applies_host_profile(monkeypatch) -> None:
     attempts: list[dict[str, float]] = []
     mounted: list[dict[str, object]] = []

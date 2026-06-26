@@ -95,6 +95,47 @@ def test_metrics_improvement_control_includes_configured_zero_sample_symbols() -
     assert report["control_policy"]["configured_symbols"] == ["AAPL", "MSFT", "NVDA"]
 
 
+def test_metrics_improvement_control_builds_side_controls_from_calibration() -> None:
+    report = build_metrics_improvement_control(
+        report_date="2026-05-22",
+        reports=[],
+        expected_edge_calibration={
+            "status": "inverted",
+            "bucketed_by_side": {
+                "buy": {
+                    "count": 18,
+                    "mean_expected_net_edge_bps": 3.8,
+                    "mean_realized_net_edge_bps": 1.1,
+                    "capture_ratio": 0.29,
+                    "profit_factor": 1.3,
+                    "win_rate": 0.56,
+                },
+                "sell": {
+                    "count": 14,
+                    "mean_expected_net_edge_bps": 0.7,
+                    "mean_realized_net_edge_bps": -5.2,
+                    "capture_ratio": -7.1,
+                    "profit_factor": 0.24,
+                    "win_rate": 0.29,
+                },
+            },
+        },
+        min_side_samples=8,
+        min_symbol_samples=5,
+        base_min_edge_bps=0.25,
+        cost_p90_multiplier=0.0,
+    )
+
+    assert report["status"] == "active"
+    assert report["by_side"]["sell"]["action"] == "shadow"
+    assert report["by_side"]["sell"]["qty_scale"] == 0.0
+    assert report["by_side"]["sell"]["reasons"] == ["side_capture_ratio_hard_breach"]
+    assert report["by_side"]["buy"]["action"] == "allow"
+    assert report["summary"]["side_shadowed_or_blocked"] == 1
+    assert report["authority_increase_allowed"] is False
+    assert report["live_money_authority"] is False
+
+
 def test_metrics_improvement_control_cli_writes_latest(tmp_path) -> None:
     daily_root = tmp_path / "daily"
     run_dir = daily_root / "20260522T210000Z_daily"
@@ -124,6 +165,8 @@ def test_metrics_improvement_control_cli_writes_latest(tmp_path) -> None:
             "20",
             "--max-exploration-orders-per-symbol",
             "5",
+            "--min-side-samples",
+            "8",
             "--configured-symbols",
             "AAPL,MSFT,NVDA",
             "--unknown-quote-metadata-edge-add-bps",
@@ -136,6 +179,7 @@ def test_metrics_improvement_control_cli_writes_latest(tmp_path) -> None:
     assert payload["artifact_type"] == "metrics_improvement_control"
     assert payload["control_policy"]["base_min_edge_bps"] == 0.25
     assert payload["control_policy"]["cost_p90_multiplier"] == 0.0
+    assert payload["control_policy"]["min_side_samples"] == 8
     assert payload["control_policy"]["unknown_quote_metadata_edge_add_bps"] == 0.0
     assert payload["exploration_budget"]["max_orders_per_window"] == 20
     assert payload["exploration_budget"]["max_orders_per_symbol_per_window"] == 5

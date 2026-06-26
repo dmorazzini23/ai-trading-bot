@@ -471,6 +471,10 @@ def submit_order_runtime(
             if parsed is not None:
                 exec_kwargs["expected_net_edge_bps"] = float(parsed)
                 break
+    expected_net_edge_for_submit = _safe_float(exec_kwargs.get("expected_net_edge_bps"))
+    if expected_net_edge_for_submit is not None:
+        annotations.setdefault("expected_net_edge_bps", float(expected_net_edge_for_submit))
+        metadata.setdefault("expected_net_edge_bps", float(expected_net_edge_for_submit))
 
     if exec_kwargs.get("price_hint") is None and price is not None:
         exec_kwargs["price_hint"] = price

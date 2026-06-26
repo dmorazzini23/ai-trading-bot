@@ -3269,7 +3269,7 @@ def run_flask_app(
             for _ in range(100):
                 if stop_probe.is_set() or ready_signal.is_set():
                     return
-                if _probe_local_api_health(serving_port):
+                if _probe_local_api_health(serving_port, require_healthy=False):
                     ready_signal.set()
                     logger.info(
                         "API_READY_CONFIRMED",
@@ -3314,7 +3314,7 @@ def run_flask_app(
             probe_thread.join(timeout=1.0)
 
 
-def _probe_local_api_health(port: int) -> bool:
+def _probe_local_api_health(port: int, *, require_healthy: bool = True) -> bool:
     """Return ``True`` when the ai-trading API responds on ``port``."""
 
     try:
@@ -3346,14 +3346,20 @@ def _probe_local_api_health(port: int) -> bool:
         except OSError:
             logger.debug("LOCAL_API_PROBE_CONN_CLOSE_FAILED", exc_info=True)
 
-    if resp is None or resp.status != 200:
+    if resp is None:
+        return False
+    if require_healthy and resp.status != 200:
         return False
     try:
         data = _json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, _json.JSONDecodeError):
         logger.debug("LOCAL_API_HEALTH_PROBE_DECODE_FAILED", extra={"port": port}, exc_info=True)
         return False
-    return bool(data) and data.get("service") == "ai-trading"
+    if not (bool(data) and data.get("service") == "ai-trading"):
+        return False
+    if require_healthy:
+        return bool(data.get("ok", True))
+    return True
 
 
 def _preflight_bind_server_port(host: str, port: int) -> None:
@@ -3489,7 +3495,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                     extra={"port": port, "reason": "port_in_use", "pid": pid},
                 )
                 raise PortInUseError(port, pid) from exc
-            elif _probe_local_api_health(port):
+            elif _probe_local_api_health(port, require_healthy=False):
                 logger.warning("HEALTHCHECK_PORT_CONFLICT", extra=conflict_extra)
                 logger.info(
                     "API_STARTUP_ABORTED",
@@ -3557,7 +3563,7 @@ def _assert_singleton_api(settings) -> None:
             extra={"port": port, "pid": pid},
         )
         raise PortInUseError(port, pid)
-    if _probe_local_api_health(port):
+    if _probe_local_api_health(port, require_healthy=False):
         logger.critical(
             "API_PORT_HEALTHY_ELSEWHERE",
             extra={"port": port},
@@ -3579,6 +3585,56 @@ def start_api_with_signal(api_ready: threading.Event, api_error: threading.Event
         except MAIN_FALLBACK_EXC:
             logger.debug("API_ERROR_EXCEPTION_ATTR_SET_FAILED", exc_info=True)
         api_error.set()
+
+
+def _wait_for_api_startup(
+    api_ready: threading.Event,
+    api_error: threading.Event,
+    api_thread: Thread,
+    *,
+    initial_wait_seconds: float = 5.0,
+    minimum_wait_seconds: float | None = None,
+) -> None:
+    """Wait for API readiness or failure before entering runtime cycles."""
+
+    if api_error.wait(timeout=2):
+        raise getattr(api_error, "exception", RuntimeError("API failed to start"))
+    initial_wait = max(float(initial_wait_seconds), 0.0)
+    if api_ready.wait(timeout=initial_wait):
+        return
+    if not api_thread.is_alive():
+        raise RuntimeError("API thread terminated unexpectedly during startup")
+    logger.warning(
+        "API_STARTUP_LAGGING",
+        extra={"note": "health endpoints may remain warming_up during warm-up"},
+    )
+    wait_seconds_raw = get_env("AI_TRADING_API_STARTUP_WAIT_SECONDS", 120.0, cast=float)
+    try:
+        wait_seconds = float(wait_seconds_raw)
+    except (TypeError, ValueError):
+        wait_seconds = 120.0
+    if wait_seconds != wait_seconds or wait_seconds < 0.0:
+        wait_seconds = 120.0
+    if minimum_wait_seconds is not None:
+        try:
+            minimum_wait = float(minimum_wait_seconds)
+        except (TypeError, ValueError):
+            minimum_wait = 0.0
+        if minimum_wait == minimum_wait and minimum_wait > 0.0:
+            wait_seconds = max(wait_seconds, minimum_wait)
+    remaining = max(wait_seconds - initial_wait, 0.0)
+    deadline = time.monotonic() + remaining
+    while remaining > 0.0:
+        if api_error.wait(timeout=min(0.25, remaining)):
+            raise getattr(api_error, "exception", RuntimeError("API failed to start"))
+        if api_ready.is_set():
+            return
+        if not api_thread.is_alive():
+            raise RuntimeError("API thread terminated unexpectedly during startup")
+        remaining = deadline - time.monotonic()
+    if api_ready.is_set():
+        return
+    raise TimeoutError("API did not become ready before startup timeout")
 
 
 def _timeout_seconds(value: float | tuple[float, float]) -> float:
@@ -3914,15 +3970,12 @@ def main(argv: list[str] | None = None) -> None:
     api_thread = Thread(target=start_api_with_signal, args=(api_ready, api_error), daemon=True)
     api_thread.start()
     try:
-        if api_error.wait(timeout=2):
-            raise getattr(api_error, "exception", RuntimeError("API failed to start"))
-        if not api_ready.wait(timeout=5):
-            if not api_thread.is_alive():
-                raise RuntimeError("API thread terminated unexpectedly during startup")
-            logger.warning(
-                "API_STARTUP_LAGGING",
-                extra={"note": "health endpoints may remain warming_up during warm-up"},
-            )
+        _wait_for_api_startup(
+            api_ready,
+            api_error,
+            api_thread,
+            minimum_wait_seconds=max(_get_wait_window(S) + 15.0, 0.0),
+        )
     except PortInUseError as exc:
         logger.critical(
             "API_PORT_CONFLICT_FATAL",

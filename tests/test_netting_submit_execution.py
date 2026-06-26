@@ -123,7 +123,26 @@ def test_execute_netting_submission_returns_success_payload() -> None:
     assert result.order_payload["client_order_id"] == "cid-1"
     assert result.metrics == {"pnl": 1.0}
     assert result.tca_record == {"tca": True}
-    assert tca_kwargs["order_lineage_metadata"] == {"decision_trace_id": "trace-1"}
+    assert tca_kwargs["order_lineage_metadata"]["decision_trace_id"] == "trace-1"
+    assert tca_kwargs["order_lineage_metadata"]["expected_net_edge_bps"] == pytest.approx(12.5)
+
+
+def test_execute_netting_submission_mirrors_expected_edge_evidence() -> None:
+    kwargs = _base_kwargs()
+    submitted: dict[str, Any] = {}
+
+    def _submit_order(*args: Any, **call_kwargs: Any) -> SimpleNamespace:
+        submitted.update(call_kwargs)
+        return SimpleNamespace(status="filled")
+
+    kwargs["submit_order_func"] = _submit_order
+
+    result = execute_netting_submission(**cast(Any, kwargs))
+
+    assert result.status == "submitted"
+    assert submitted["expected_net_edge_bps"] == pytest.approx(12.5)
+    assert submitted["annotations"]["expected_net_edge_bps"] == pytest.approx(12.5)
+    assert submitted["metadata"]["expected_net_edge_bps"] == pytest.approx(12.5)
 
 
 def test_execute_netting_submission_marks_short_cover_reduce_only() -> None:
@@ -201,7 +220,8 @@ def test_execute_netting_submission_does_not_count_rejected_order_as_submitted()
     assert result.tca_record == {"status": "rejected"}
     assert recorded_success == []
     assert tca_calls
-    assert tca_calls[0]["order_lineage_metadata"] == {"decision_trace_id": "trace-1"}
+    assert tca_calls[0]["order_lineage_metadata"]["decision_trace_id"] == "trace-1"
+    assert tca_calls[0]["order_lineage_metadata"]["expected_net_edge_bps"] == pytest.approx(12.5)
 
 
 @pytest.mark.parametrize(

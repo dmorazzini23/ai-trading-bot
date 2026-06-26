@@ -128,6 +128,11 @@ def execute_netting_submission(
     if closing_short or closing_long:
         submit_extra["closing_position"] = True
         submit_extra["reduce_only"] = True
+    expected_net_edge_bps = float(approval.expected_net_edge_bps)
+    submit_annotations = dict(order_annotations)
+    submit_annotations.setdefault("expected_net_edge_bps", expected_net_edge_bps)
+    submit_metadata = dict(order_lineage_metadata)
+    submit_metadata.setdefault("expected_net_edge_bps", expected_net_edge_bps)
     try:
         order = submit_order_func(
             runtime,
@@ -136,7 +141,7 @@ def execute_netting_submission(
             side,
             price=price,
             client_order_id=client_order_id,
-            expected_net_edge_bps=float(approval.expected_net_edge_bps),
+            expected_net_edge_bps=expected_net_edge_bps,
             model_id=model_id_for_order or None,
             model_version=model_version_for_order or None,
             config_snapshot_hash=config_snapshot_hash_for_order or None,
@@ -145,9 +150,9 @@ def execute_netting_submission(
             model_artifact_hash=model_artifact_hash_for_order or None,
             policy_hash=policy_hash_for_order or None,
             decision_trace_id=decision_trace_id_for_order or None,
-            annotations=(dict(order_annotations) or None),
+            annotations=(submit_annotations or None),
             price_hint=float(submit_arrival_price) if submit_arrival_price is not None else float(price),
-            metadata=(dict(order_lineage_metadata) or None),
+            metadata=(submit_metadata or None),
             **submit_extra,
         )
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
@@ -292,7 +297,7 @@ def execute_netting_submission(
             compute_attribution_metrics_func=compute_attribution_metrics_func,
             safe_float=safe_float,
             logger=logger,
-            order_lineage_metadata=order_lineage_metadata,
+            order_lineage_metadata=submit_metadata,
         )
         return NettingSubmitExecutionResult(
             status=status_token,
@@ -350,7 +355,7 @@ def execute_netting_submission(
         compute_attribution_metrics_func=compute_attribution_metrics_func,
         safe_float=safe_float,
         logger=logger,
-        order_lineage_metadata=order_lineage_metadata,
+        order_lineage_metadata=submit_metadata,
     )
     return NettingSubmitExecutionResult(
         status="submitted",

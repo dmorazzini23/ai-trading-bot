@@ -117,7 +117,7 @@ def test_start_api_aborts_when_existing_api_healthy(monkeypatch):
     monkeypatch.setattr(main, "get_settings", lambda: DummySettings(test_port))
     monkeypatch.setattr(main, "ensure_dotenv_loaded", lambda: None)
     monkeypatch.setattr(main, "get_pid_on_port", lambda _port: None)
-    monkeypatch.setattr(main, "_probe_local_api_health", lambda _port: True)
+    monkeypatch.setattr(main, "_probe_local_api_health", lambda _port, **_kwargs: True)
 
     try:
         with pytest.raises(main.ExistingApiDetected) as excinfo:

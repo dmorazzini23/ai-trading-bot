@@ -133,7 +133,7 @@ def test_run_flask_app_signals_ready_only_after_probe(monkeypatch):
     monkeypatch.setattr(
         main,
         "_probe_local_api_health",
-        lambda _port: bool(state["serving"]),
+        lambda _port, **_kwargs: bool(state["serving"]),
     )
     monkeypatch.setattr(main, "get_pid_on_port", lambda _port: None)
 

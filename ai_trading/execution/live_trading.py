@@ -7178,35 +7178,75 @@ class ExecutionEngine:
     def _order_expected_edge_bps_raw(self, order: Mapping[str, Any]) -> float | None:
         """Extract raw expected-edge estimate from order payload when available."""
 
-        for key in (
+        edge_keys = (
             "expected_net_edge_bps",
+            "expected_net_edge_bps_raw",
             "expected_edge_bps",
+            "expected_edge_bps_raw",
             "edge_bps",
             "alpha_edge_bps",
-        ):
-            parsed = self._coerce_finite_float(order.get(key))
-            if parsed is not None:
-                return float(parsed)
-        annotations = order.get("annotations")
-        if isinstance(annotations, Mapping):
-            for key in (
-                "expected_net_edge_bps",
-                "expected_edge_bps",
-                "edge_bps",
-                "alpha_edge_bps",
-            ):
-                parsed = self._coerce_finite_float(annotations.get(key))
+        )
+
+        def _extract_flat(payload: Mapping[str, Any]) -> float | None:
+            for key in edge_keys:
+                parsed = self._coerce_finite_float(payload.get(key))
                 if parsed is not None:
                     return float(parsed)
+            return None
+
+        def _extract_nested(value: Any, *, depth: int = 0) -> float | None:
+            if depth > 5:
+                return None
+            if isinstance(value, Mapping):
+                parsed = _extract_flat(value)
+                if parsed is not None:
+                    return float(parsed)
+                for nested_key in (
+                    "debug",
+                    "metadata",
+                    "annotations",
+                    "risk_decision",
+                    "signal",
+                    "net_target",
+                    "proposal",
+                    "candidate",
+                    "order_intent",
+                ):
+                    nested = value.get(nested_key)
+                    parsed = _extract_nested(nested, depth=depth + 1)
+                    if parsed is not None:
+                        return float(parsed)
+                proposals = value.get("proposals")
+                if isinstance(proposals, Sequence) and not isinstance(proposals, (str, bytes)):
+                    for item in proposals:
+                        parsed = _extract_nested(item, depth=depth + 1)
+                        if parsed is not None:
+                            return float(parsed)
+                return None
+            if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+                for item in value:
+                    parsed = _extract_nested(item, depth=depth + 1)
+                    if parsed is not None:
+                        return float(parsed)
+            return None
+
+        parsed = _extract_flat(order)
+        if parsed is not None:
+            return float(parsed)
+        annotations = order.get("annotations")
+        if isinstance(annotations, Mapping):
+            parsed = _extract_nested(annotations)
+            if parsed is not None:
+                return float(parsed)
         metadata = order.get("metadata")
         if isinstance(metadata, Mapping):
-            for key in (
-                "expected_net_edge_bps",
-                "expected_edge_bps",
-                "edge_bps",
-                "alpha_edge_bps",
-            ):
-                parsed = self._coerce_finite_float(metadata.get(key))
+            parsed = _extract_nested(metadata)
+            if parsed is not None:
+                return float(parsed)
+        for nested_key in ("risk_decision", "signal", "net_target", "order_intent"):
+            nested = order.get(nested_key)
+            if isinstance(nested, Mapping):
+                parsed = _extract_nested(nested)
                 if parsed is not None:
                     return float(parsed)
         return None
@@ -18531,8 +18571,11 @@ class ExecutionEngine:
         if expected_edge_hint is None:
             expected_edge_hint = self._coerce_finite_float(kwargs.get("expected_edge_bps"))
         metadata_raw = kwargs.get("metadata")
+        annotations_raw = kwargs.get("annotations")
         if isinstance(metadata_raw, Mapping):
             precheck_order["metadata"] = dict(metadata_raw)
+        if isinstance(annotations_raw, Mapping):
+            precheck_order["annotations"] = dict(annotations_raw)
         if expected_edge_hint is not None:
             precheck_order["expected_net_edge_bps_raw"] = float(expected_edge_hint)
             precheck_order["expected_net_edge_bps"] = float(
@@ -19340,8 +19383,11 @@ class ExecutionEngine:
         if expected_edge_hint is None:
             expected_edge_hint = self._coerce_finite_float(kwargs.get("expected_edge_bps"))
         metadata_raw = kwargs.get("metadata")
+        annotations_raw = kwargs.get("annotations")
         if isinstance(metadata_raw, Mapping):
             precheck_order["metadata"] = dict(metadata_raw)
+        if isinstance(annotations_raw, Mapping):
+            precheck_order["annotations"] = dict(annotations_raw)
         if expected_edge_hint is not None:
             precheck_order["expected_net_edge_bps_raw"] = float(expected_edge_hint)
             precheck_order["expected_net_edge_bps"] = float(
@@ -27555,6 +27601,74 @@ class ExecutionEngine:
                 or 0.0,
                 "reasons": ["unknown_symbol_exploration"],
             }
+
+        side_token = _semantic_order_side(order.get("side")) or str(order.get("side") or "").strip().lower()
+        side_bucket = (
+            "sell"
+            if side_token in {"sell", "sell_short"}
+            else "buy"
+            if side_token in {"buy", "cover"}
+            else side_token
+        )
+        by_side_raw = payload.get("by_side")
+        by_side = by_side_raw if isinstance(by_side_raw, Mapping) else {}
+        side_control_raw = by_side.get(side_bucket)
+        side_control = dict(side_control_raw) if isinstance(side_control_raw, Mapping) else {}
+        side_action = str(side_control.get("action") or "").strip().lower()
+        if side_action in {"block", "shadow", "cooldown"}:
+            return False, {
+                "enabled": True,
+                "reason": f"metrics_control_side_{side_action}",
+                "symbol": symbol,
+                "side": side_bucket,
+                "action": side_action,
+                "control": control,
+                "side_control": side_control,
+                "reasons": side_control.get("reasons") if isinstance(side_control.get("reasons"), list) else [],
+            }
+        if side_action == "downscale":
+            original_control = dict(control)
+            merged = dict(control)
+            symbol_action = str(merged.get("action") or "allow").strip().lower()
+            if symbol_action != "explore":
+                merged["action"] = "downscale"
+            symbol_qty_scale = _safe_float(merged.get("qty_scale"))
+            side_qty_scale = _safe_float(side_control.get("qty_scale"))
+            if side_qty_scale is not None and math.isfinite(float(side_qty_scale)):
+                if symbol_qty_scale is None or not math.isfinite(float(symbol_qty_scale)):
+                    merged["qty_scale"] = float(side_qty_scale)
+                else:
+                    merged["qty_scale"] = min(float(symbol_qty_scale), float(side_qty_scale))
+            symbol_required_edge = _safe_float(merged.get("required_edge_bps"))
+            side_required_edge = _safe_float(side_control.get("required_edge_bps"))
+            if side_required_edge is not None and math.isfinite(float(side_required_edge)):
+                merged["required_edge_bps"] = max(
+                    float(symbol_required_edge) if symbol_required_edge is not None else 0.0,
+                    float(side_required_edge),
+                )
+            symbol_unknown_add = _safe_float(merged.get("unknown_quote_metadata_edge_add_bps"))
+            side_unknown_add = _safe_float(side_control.get("unknown_quote_metadata_edge_add_bps"))
+            if side_unknown_add is not None and math.isfinite(float(side_unknown_add)):
+                merged["unknown_quote_metadata_edge_add_bps"] = max(
+                    float(symbol_unknown_add) if symbol_unknown_add is not None else 0.0,
+                    float(side_unknown_add),
+                )
+            symbol_reasons_raw = merged.get("reasons")
+            side_reasons_raw = side_control.get("reasons")
+            symbol_reasons = (
+                [str(item) for item in symbol_reasons_raw if str(item)]
+                if isinstance(symbol_reasons_raw, Sequence) and not isinstance(symbol_reasons_raw, (str, bytes))
+                else []
+            )
+            side_reasons = (
+                [str(item) for item in side_reasons_raw if str(item)]
+                if isinstance(side_reasons_raw, Sequence) and not isinstance(side_reasons_raw, (str, bytes))
+                else []
+            )
+            merged["reasons"] = [*symbol_reasons, *side_reasons]
+            merged["side_control"] = side_control
+            merged["symbol_control"] = original_control
+            control = merged
 
         action = str(control.get("action") or "allow").strip().lower()
         reasons_raw = control.get("reasons")
