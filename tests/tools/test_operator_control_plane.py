@@ -103,6 +103,42 @@ def test_operator_control_plane_derives_runtime_gonogo_and_oms_from_health(monke
     assert report["orders_positions_oms"]["oms"]["artifact_status"] == "derived_from_health"
 
 
+def test_operator_control_plane_prefers_fresh_health_summary(monkeypatch) -> None:
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+    report = operator_control_plane.build_operator_control_plane(
+        health=_health_payload(),
+        readiness={
+            "status": "blocked",
+            "reasons": ["full_validation_green_artifact_missing"],
+            "health_report_summary": {
+                "health_ok": False,
+                "health_status": "missing",
+                "broker_connected": False,
+                "database_ok": False,
+                "provider_status": "missing",
+            },
+        },
+        runtime_performance={"available": True},
+        model_registry={"models": {}},
+        latest_research={"status": "complete"},
+        weekend_research={"status": "complete"},
+        drift={"status": "ok"},
+        surveillance={"status": "ok"},
+        risk_verifier={"status": "pass"},
+        paper_sampling={"count": 0},
+        huggingface_research={"status": "disabled"},
+        upward_trajectory={"status": "ready"},
+    )
+
+    summary = report["go_no_go"]["health_report_summary"]
+    assert summary["status"] == "derived_from_healthz"
+    assert summary["health_ok"] is True
+    assert summary["health_status"] == "ready"
+    assert summary["broker_connected"] is True
+    assert summary["database_ok"] is True
+    assert summary["provider_status"] == "healthy"
+
+
 def test_health_from_endpoint_keeps_json_http_error_body(monkeypatch) -> None:
     body = json.dumps(
         {

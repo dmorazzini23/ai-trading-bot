@@ -61,6 +61,34 @@ def test_expected_edge_calibration_classifies_inverted_edge() -> None:
 
     assert payload["status"] == "inverted"
     assert payload["recommended_next_action"] == "pause_scaling_and_retrain_expected_edge_labels"
+    assert payload["calibration_correction"]["expected_edge_multiplier"] == 0.0
+    assert payload["calibration_correction"]["production_scaling_allowed"] is False
+
+
+def test_expected_edge_calibration_reports_sell_exit_quality() -> None:
+    buy_rows = _rows(8, expected=4.0, realized=2.0)
+    sell_rows = [
+        {
+            **row,
+            "side": "sell",
+            "expected_net_edge_bps": 1.0,
+            "realized_net_edge_bps": -3.0,
+        }
+        for row in _rows(8, expected=1.0, realized=-3.0, symbol="MSFT")
+    ]
+
+    payload = report_tool.build_expected_edge_calibration_report(
+        report_date="2026-05-05",
+        fills=[*buy_rows, *sell_rows],
+        min_samples=10,
+    )
+
+    assert payload["exit_quality_diagnostics"]["status"] == "inverted"
+    assert (
+        payload["exit_quality_diagnostics"]["recommended_action"]
+        == "review_exit_timing_and_order_type_before_scaling"
+    )
+    assert payload["calibration_correction"]["side_multipliers"]["sell"]["expected_edge_multiplier"] == 0.0
 
 
 def test_expected_edge_calibration_cli_writes_latest(tmp_path: Path) -> None:

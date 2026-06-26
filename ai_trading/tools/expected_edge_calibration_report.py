@@ -260,6 +260,120 @@ def _diagnostic_status(rows: Sequence[Mapping[str, Any]], min_samples: int) -> t
     return "calibrated", "keep_sampling_with_current_limits"
 
 
+def _calibration_correction(
+    *,
+    expected_values: Sequence[float],
+    realized_values: Sequence[float],
+    rows: Sequence[Mapping[str, Any]],
+    min_samples: int,
+) -> dict[str, Any]:
+    sample_count = min(len(expected_values), len(realized_values))
+    capture = _capture_ratio(expected_values, realized_values)
+    multiplier: float | None
+    if sample_count < int(min_samples) or capture is None:
+        multiplier = None
+        action = "collect_more_samples"
+        production_scaling_allowed = False
+        reasons = ["insufficient_calibration_samples"]
+    elif capture <= 0.0:
+        multiplier = 0.0
+        action = "shadow_or_retrain_expected_edge"
+        production_scaling_allowed = False
+        reasons = ["negative_or_zero_capture_ratio"]
+    elif capture < 0.25:
+        multiplier = max(0.0, min(float(capture), 1.0))
+        action = "keep_tiny_sampling_and_recalibrate"
+        production_scaling_allowed = False
+        reasons = ["weak_capture_ratio"]
+    else:
+        multiplier = max(0.0, min(float(capture), 1.0))
+        action = "apply_calibrated_edge_multiplier"
+        production_scaling_allowed = capture >= 0.75
+        reasons = ["calibration_multiplier_available"]
+    side_multipliers: dict[str, dict[str, Any]] = {}
+    for side, summary in _bucket_summary(rows, "side").items():
+        side_capture = _safe_float(summary.get("capture_ratio"))
+        side_count = int(summary.get("count") or 0)
+        if side_count < max(1, int(min_samples // 2)):
+            side_action = "observe"
+            side_multiplier = None
+            side_reasons = ["insufficient_side_samples"]
+        elif side_capture is None:
+            side_action = "observe"
+            side_multiplier = None
+            side_reasons = ["missing_side_capture_ratio"]
+        elif side_capture <= 0.0:
+            side_action = "shadow_or_retrain_side"
+            side_multiplier = 0.0
+            side_reasons = ["negative_or_zero_side_capture_ratio"]
+        elif side_capture < 0.25:
+            side_action = "downscale_side"
+            side_multiplier = max(0.0, min(float(side_capture), 1.0))
+            side_reasons = ["weak_side_capture_ratio"]
+        else:
+            side_action = "allow_with_multiplier"
+            side_multiplier = max(0.0, min(float(side_capture), 1.0))
+            side_reasons = ["side_calibration_multiplier_available"]
+        side_multipliers[side] = {
+            "samples": side_count,
+            "capture_ratio": side_capture,
+            "expected_edge_multiplier": side_multiplier,
+            "recommended_action": side_action,
+            "reasons": side_reasons,
+        }
+    return {
+        "sample_count": sample_count,
+        "global_capture_ratio": capture,
+        "expected_edge_multiplier": multiplier,
+        "recommended_action": action,
+        "production_scaling_allowed": bool(production_scaling_allowed),
+        "side_multipliers": side_multipliers,
+        "runtime_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+        "reasons": reasons,
+    }
+
+
+def _exit_quality_diagnostics(rows: Sequence[Mapping[str, Any]], min_samples: int) -> dict[str, Any]:
+    exit_rows = [row for row in rows if str(row.get("side") or "").lower() == "sell"]
+    if not exit_rows:
+        return {
+            "samples": 0,
+            "status": "missing",
+            "recommended_action": "collect_sell_exit_samples",
+            "runtime_authority": False,
+        }
+    summary = _bucket_summary(exit_rows, "side").get("sell", {})
+    count = int(summary.get("count") or 0)
+    capture = _safe_float(summary.get("capture_ratio"))
+    mean_realized = _safe_float(summary.get("mean_realized_net_edge_bps"))
+    if count < max(1, int(min_samples // 2)):
+        status = "insufficient_samples"
+        action = "collect_more_sell_exit_samples"
+    elif capture is not None and capture <= 0.0:
+        status = "inverted"
+        action = "review_exit_timing_and_order_type_before_scaling"
+    elif mean_realized is not None and mean_realized < 0.0:
+        status = "negative_realized_edge"
+        action = "tighten_exit_execution_quality_controls"
+    else:
+        status = "acceptable"
+        action = "continue_exit_sampling"
+    return {
+        "samples": count,
+        "status": status,
+        "mean_realized_net_edge_bps": mean_realized,
+        "capture_ratio": capture,
+        "profit_factor": summary.get("profit_factor"),
+        "win_rate": summary.get("win_rate"),
+        "recommended_action": action,
+        "runtime_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
+
+
 def build_expected_edge_calibration_report(
     *,
     report_date: str,
@@ -371,6 +485,16 @@ def build_expected_edge_calibration_report(
             "attribution_counts": dict(sorted(attribution_counts.items())),
             "worst_buckets": worst_buckets,
         },
+        "calibration_correction": _calibration_correction(
+            expected_values=expected_values,
+            realized_values=realized_values,
+            rows=realized_rows,
+            min_samples=int(min_samples),
+        ),
+        "exit_quality_diagnostics": _exit_quality_diagnostics(
+            realized_rows,
+            int(min_samples),
+        ),
         "rejected_decisions": {
             "count": len(rejected_rows),
             "by_expected_edge_bucket": dict(sorted(rejected_by_bucket.items())),

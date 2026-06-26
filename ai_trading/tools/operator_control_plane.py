@@ -86,6 +86,43 @@ def _go_no_go_payload(readiness: Mapping[str, Any], runtime_gonogo: Mapping[str,
     }
 
 
+def _health_report_summary_from_health(health: Mapping[str, Any]) -> dict[str, Any]:
+    if not health:
+        return {}
+    broker = _mapping(health.get("broker"))
+    database = _mapping(health.get("database"))
+    provider = _mapping(health.get("provider_state") or health.get("data_provider"))
+    provider_authority = _mapping(health.get("provider_authority"))
+    replay_live = _mapping(health.get("replay_live_parity_gate"))
+    return {
+        "status": "derived_from_healthz",
+        "health_ok": bool(health.get("ok")),
+        "health_status": health.get("status"),
+        "provider_status": provider.get("status"),
+        "provider_authority_ok": provider_authority.get("ok"),
+        "broker_connected": broker.get("connected"),
+        "database_ok": database.get("ok"),
+        "live_cost_status": health.get("live_cost_status"),
+        "replay_live_parity_ok": replay_live.get("ok"),
+        "reasons": list(health.get("readiness_failures") or [])
+        if isinstance(health.get("readiness_failures"), list)
+        else [],
+    }
+
+
+def _go_no_go_payload_from_health(
+    readiness: Mapping[str, Any],
+    runtime_gonogo: Mapping[str, Any],
+    health: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = _go_no_go_payload(readiness, runtime_gonogo)
+    health_summary = _health_report_summary_from_health(health)
+    if health_summary:
+        stale_summary = _mapping(payload.get("health_report_summary"))
+        payload["health_report_summary"] = {**stale_summary, **health_summary}
+    return payload
+
+
 def _derive_runtime_gonogo_from_health(health: Mapping[str, Any]) -> dict[str, Any]:
     if not health:
         return {}
@@ -286,7 +323,11 @@ def build_operator_control_plane(
         },
         "launch_profile": launch_profile,
         "readiness": _section(readiness_payload, label="live_capital_readiness"),
-        "go_no_go": _go_no_go_payload(readiness_payload, runtime_gonogo_payload),
+        "go_no_go": _go_no_go_payload_from_health(
+            readiness_payload,
+            runtime_gonogo_payload,
+            health_payload,
+        ),
         "orders_positions_oms": _orders_positions_oms(
             health_payload,
             runtime_performance_payload,

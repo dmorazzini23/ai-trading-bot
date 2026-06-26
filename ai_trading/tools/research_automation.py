@@ -918,6 +918,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 _env_text("AI_TRADING_METRICS_IMPROVEMENT_COST_P90_MULTIPLIER", "0.0"),
                 "--exploration-qty-scale",
                 _env_text("AI_TRADING_METRICS_IMPROVEMENT_EXPLORATION_QTY_SCALE", "0.5"),
+                "--min-side-samples",
+                _env_text("AI_TRADING_METRICS_IMPROVEMENT_MIN_SIDE_SAMPLES", "8"),
                 "--exploration-window-minutes",
                 _env_text("AI_TRADING_METRICS_IMPROVEMENT_EXPLORATION_WINDOW_MINUTES", "390"),
                 "--max-exploration-orders",

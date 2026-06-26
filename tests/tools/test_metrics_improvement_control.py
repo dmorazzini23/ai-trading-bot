@@ -130,6 +130,8 @@ def test_metrics_improvement_control_builds_side_controls_from_calibration() -> 
     assert report["by_side"]["sell"]["action"] == "shadow"
     assert report["by_side"]["sell"]["qty_scale"] == 0.0
     assert report["by_side"]["sell"]["reasons"] == ["side_capture_ratio_hard_breach"]
+    assert report["by_side"]["sell"]["closing_position_authority_action"] == "allow_reduce_only"
+    assert report["exit_quality_control"]["recommended_action"] == "review_exit_timing_and_order_type"
     assert report["by_side"]["buy"]["action"] == "allow"
     assert report["summary"]["side_shadowed_or_blocked"] == 1
     assert report["authority_increase_allowed"] is False
@@ -184,4 +186,5 @@ def test_metrics_improvement_control_cli_writes_latest(tmp_path) -> None:
     assert payload["exploration_budget"]["max_orders_per_window"] == 20
     assert payload["exploration_budget"]["max_orders_per_symbol_per_window"] == 5
     assert payload["by_symbol"]["NVDA"]["action"] == "explore"
+    assert payload["routing"]["sample_collection_priority"]
     assert latest.exists()

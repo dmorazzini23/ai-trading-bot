@@ -195,6 +195,13 @@ def _side_control_rows(
             "qty_scale": float(qty_scale),
             "required_edge_bps": float(required_edge),
             "unknown_quote_metadata_edge_add_bps": float(unknown_quote_metadata_edge_add_bps),
+            "opening_authority_action": action,
+            "closing_position_authority_action": "allow_reduce_only",
+            "exit_quality_recommendation": (
+                "review_exit_timing_and_order_type"
+                if side == "sell" and action in {"shadow", "cooldown", "block", "downscale"}
+                else "continue_sampling"
+            ),
             "reasons": reasons or ["side_metrics_ok"],
         }
     return by_side
@@ -426,6 +433,38 @@ def build_metrics_improvement_control(
         }
 
     total_samples = int(totals["samples"])
+    routing_groups = {
+        "allowed_symbols": [
+            symbol
+            for symbol, row in sorted(by_symbol.items())
+            if str(row.get("action") or "").lower() == "allow"
+        ],
+        "downscaled_symbols": [
+            symbol
+            for symbol, row in sorted(by_symbol.items())
+            if str(row.get("action") or "").lower() == "downscale"
+        ],
+        "shadowed_symbols": [
+            symbol
+            for symbol, row in sorted(by_symbol.items())
+            if str(row.get("action") or "").lower() == "shadow"
+        ],
+        "cooldown_symbols": [
+            symbol
+            for symbol, row in sorted(by_symbol.items())
+            if str(row.get("action") or "").lower() == "cooldown"
+        ],
+        "exploration_symbols": [
+            symbol
+            for symbol, row in sorted(by_symbol.items())
+            if str(row.get("action") or "").lower() == "explore"
+        ],
+    }
+    sample_collection_priority = [
+        symbol
+        for symbol in [*routing_groups["allowed_symbols"], *routing_groups["downscaled_symbols"], *routing_groups["exploration_symbols"]]
+        if symbol not in set(routing_groups["shadowed_symbols"]) | set(routing_groups["cooldown_symbols"])
+    ]
     global_capture = (
         float(totals["realized_sum_bps"]) / float(totals["expected_sum_bps"])
         if float(totals["expected_sum_bps"]) > 0.0
@@ -483,6 +522,7 @@ def build_metrics_improvement_control(
                 for symbol in sorted(configured_symbol_set)
                 if int(by_symbol.get(symbol, {}).get("samples") or 0) <= 0
             ],
+            "sample_collection_priority": sample_collection_priority,
         },
         "control_policy": {
             "min_symbol_samples": int(min_symbol_samples),
@@ -509,6 +549,24 @@ def build_metrics_improvement_control(
         },
         "by_symbol": by_symbol,
         "by_side": by_side,
+        "routing": {
+            **routing_groups,
+            "sample_collection_priority": sample_collection_priority,
+            "authority_increase_allowed": False,
+            "manual_review_required_before_symbol_expansion": True,
+        },
+        "exit_quality_control": {
+            "sell_side": by_side.get("sell", {}),
+            "closing_positions_blocked": False,
+            "recommended_action": (
+                by_side.get("sell", {}).get("exit_quality_recommendation")
+                if isinstance(by_side.get("sell"), Mapping)
+                else "collect_sell_exit_samples"
+            ),
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        },
         "inputs": {
             "expected_edge_calibration_status": _status(expected_edge_calibration or {}),
             "execution_capture_status": _status(execution_capture or {}),
