@@ -7599,6 +7599,149 @@ def test_metrics_improvement_control_blocks_inverted_side_without_blocking_close
     assert closing_context["reason"] == "not_applicable_closing_position"
 
 
+def test_metrics_improvement_control_allows_budgeted_paper_side_recovery_sample(
+    monkeypatch,
+) -> None:
+    engine = _engine_stub()
+    engine.execution_mode = "paper"
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "QQQ": {
+                "action": "allow",
+                "qty_scale": 1.0,
+                "required_edge_bps": 0.25,
+                "reasons": ["metrics_ok"],
+            }
+        },
+        "by_side": {
+            "buy": {
+                "action": "shadow",
+                "qty_scale": 0.0,
+                "samples": 10,
+                "required_edge_bps": 1.75,
+                "reasons": ["side_capture_ratio_hard_breach"],
+            }
+        },
+        "exploration_budget": {
+            "window_minutes": 390,
+            "max_orders_per_window": 2,
+            "max_orders_per_symbol_per_window": 1,
+            "qty_scale": 0.5,
+        },
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+
+    order = {"symbol": "QQQ", "side": "buy", "quantity": 2, "expected_edge_bps": 5.0}
+    allowed, context = engine._metrics_improvement_control_allows_opening(order=order)
+
+    assert allowed is True
+    assert context["action"] == "paper_side_recovery_explore"
+    assert context["reason"] == "applied"
+    assert context["edge_requirement_relaxed"] is False
+    assert order["quantity"] == 1
+    assert order["_metrics_improvement_exploration_pending"]["symbol"] == "QQQ"
+    assert context["control"]["side_recovery_original_action"] == "shadow"
+    assert "paper_side_recovery_sample" in context["control"]["reasons"]
+
+
+def test_metrics_improvement_control_keeps_live_side_shadow_strict(monkeypatch) -> None:
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "QQQ": {
+                "action": "allow",
+                "qty_scale": 1.0,
+                "required_edge_bps": 0.25,
+                "reasons": ["metrics_ok"],
+            }
+        },
+        "by_side": {
+            "buy": {
+                "action": "shadow",
+                "qty_scale": 0.0,
+                "samples": 10,
+                "required_edge_bps": 1.75,
+                "reasons": ["side_capture_ratio_hard_breach"],
+            }
+        },
+        "exploration_budget": {
+            "window_minutes": 390,
+            "max_orders_per_window": 2,
+            "max_orders_per_symbol_per_window": 1,
+            "qty_scale": 0.5,
+        },
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+
+    allowed, context = engine._metrics_improvement_control_allows_opening(
+        order={"symbol": "QQQ", "side": "buy", "quantity": 2, "expected_edge_bps": 5.0}
+    )
+
+    assert allowed is False
+    assert context["reason"] == "metrics_control_side_shadow"
+    assert context["side"] == "buy"
+
+
+def test_metrics_improvement_control_caps_paper_side_recovery_budget(monkeypatch) -> None:
+    engine = _engine_stub()
+    engine.execution_mode = "paper"
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "QQQ": {
+                "action": "allow",
+                "qty_scale": 1.0,
+                "required_edge_bps": 0.25,
+                "reasons": ["metrics_ok"],
+            }
+        },
+        "by_side": {
+            "buy": {
+                "action": "shadow",
+                "qty_scale": 0.0,
+                "samples": 10,
+                "required_edge_bps": 1.75,
+                "reasons": ["side_capture_ratio_hard_breach"],
+            }
+        },
+        "exploration_budget": {
+            "window_minutes": 390,
+            "max_orders_per_window": 1,
+            "max_orders_per_symbol_per_window": 1,
+            "qty_scale": 0.5,
+        },
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+
+    first_order = {"symbol": "QQQ", "side": "buy", "quantity": 2, "expected_edge_bps": 5.0}
+    first_allowed, first_context = engine._metrics_improvement_control_allows_opening(
+        order=first_order
+    )
+    recorded, record_context = engine._record_metrics_improvement_exploration_order(
+        order=first_order
+    )
+    second_allowed, second_context = engine._metrics_improvement_control_allows_opening(
+        order={"symbol": "QQQ", "side": "buy", "quantity": 2, "expected_edge_bps": 5.0}
+    )
+
+    assert first_allowed is True
+    assert first_context["action"] == "paper_side_recovery_explore"
+    assert recorded is True
+    assert record_context["reason"] == "recorded"
+    assert second_allowed is False
+    assert second_context["reason"] == "metrics_control_exploration_budget"
+    assert second_context["action"] == "paper_side_recovery_explore"
+
+
 def test_metrics_improvement_control_side_downscale_is_conservative(monkeypatch) -> None:
     engine = _engine_stub()
     payload = {

@@ -1058,6 +1058,21 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="Allow paper-only sampling to use bounded relaxed edge/cost research thresholds without changing live authority.",
     ),
     ConfigSpec(
+        field="metrics_improvement_paper_side_recovery_enabled",
+        env=("AI_TRADING_METRICS_IMPROVEMENT_PAPER_SIDE_RECOVERY_ENABLED",),
+        cast="bool",
+        default=True,
+        description="Allow budgeted paper-only recovery samples when buy-side metrics are shadowed but symbol evidence remains acceptable; never grants live authority.",
+    ),
+    ConfigSpec(
+        field="metrics_improvement_paper_side_recovery_max_side_samples",
+        env=("AI_TRADING_METRICS_IMPROVEMENT_PAPER_SIDE_RECOVERY_MAX_SIDE_SAMPLES",),
+        cast="float",
+        default=32.0,
+        description="Maximum side-level sample count where metrics-improvement paper-only side recovery remains eligible.",
+        min_value=1.0,
+    ),
+    ConfigSpec(
         field="paper_sampling_min_expected_net_edge_bps",
         env=("AI_TRADING_PAPER_SAMPLING_MIN_EXPECTED_NET_EDGE_BPS",),
         cast="float",

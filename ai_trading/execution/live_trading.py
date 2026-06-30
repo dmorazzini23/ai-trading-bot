@@ -27616,16 +27616,121 @@ class ExecutionEngine:
         side_control = dict(side_control_raw) if isinstance(side_control_raw, Mapping) else {}
         side_action = str(side_control.get("action") or "").strip().lower()
         if side_action in {"block", "shadow", "cooldown"}:
-            return False, {
-                "enabled": True,
-                "reason": f"metrics_control_side_{side_action}",
-                "symbol": symbol,
-                "side": side_bucket,
-                "action": side_action,
-                "control": control,
-                "side_control": side_control,
-                "reasons": side_control.get("reasons") if isinstance(side_control.get("reasons"), list) else [],
-            }
+            execution_mode_raw = (
+                str(getattr(self, "execution_mode", "") or "").strip().lower()
+                or str(_runtime_env("EXECUTION_MODE", "paper") or "paper").strip().lower()
+            )
+            side_reasons_raw = side_control.get("reasons")
+            side_reasons = (
+                [str(item) for item in side_reasons_raw if str(item)]
+                if isinstance(side_reasons_raw, Sequence) and not isinstance(side_reasons_raw, (str, bytes))
+                else []
+            )
+            symbol_action = str(control.get("action") or "allow").strip().lower()
+            side_recovery_enabled = _resolve_bool_env(
+                "AI_TRADING_METRICS_IMPROVEMENT_PAPER_SIDE_RECOVERY_ENABLED"
+            )
+            if side_recovery_enabled is None:
+                side_recovery_enabled = True
+            side_samples = _safe_int(side_control.get("samples"), 0)
+            max_side_samples = _config_float(
+                "AI_TRADING_METRICS_IMPROVEMENT_PAPER_SIDE_RECOVERY_MAX_SIDE_SAMPLES",
+                32.0,
+            )
+            if max_side_samples is None or not math.isfinite(float(max_side_samples)):
+                max_side_samples = 32.0
+            max_side_samples = max(1.0, min(float(max_side_samples), 10_000.0))
+            side_recovery_min_edge = _config_float(
+                "AI_TRADING_METRICS_IMPROVEMENT_PAPER_RECOVERY_MIN_EDGE_BPS",
+                None,
+            )
+            if side_recovery_min_edge is None:
+                side_recovery_min_edge = _config_float(
+                    "AI_TRADING_PAPER_SAMPLING_MIN_EXPECTED_NET_EDGE_BPS",
+                    0.10,
+                )
+            if side_recovery_min_edge is None or not math.isfinite(float(side_recovery_min_edge)):
+                side_recovery_min_edge = 0.10
+            side_recovery_min_edge = max(0.0, min(float(side_recovery_min_edge), 1000.0))
+            expected_edge_for_side_recovery = self._order_expected_edge_bps(order)
+            side_recovery_reason_allowed = any(
+                reason in {"side_capture_ratio_hard_breach", "insufficient_side_samples"}
+                for reason in side_reasons
+            )
+            if (
+                bool(side_recovery_enabled)
+                and side_action == "shadow"
+                and execution_mode_raw in {"paper", "sim", "simulation"}
+                and side_bucket == "buy"
+                and symbol_action in {"allow", "downscale", "explore"}
+                and side_recovery_reason_allowed
+                and int(side_samples) <= int(max_side_samples)
+                and expected_edge_for_side_recovery is not None
+                and float(expected_edge_for_side_recovery) >= float(side_recovery_min_edge)
+            ):
+                budget_allowed, budget_context = self._metrics_improvement_exploration_budget_allows(
+                    symbol=symbol,
+                    budget=budget,
+                )
+                if not budget_allowed:
+                    return False, {
+                        "enabled": True,
+                        "reason": "metrics_control_exploration_budget",
+                        "symbol": symbol,
+                        "side": side_bucket,
+                        "action": "paper_side_recovery_explore",
+                        "expected_edge_bps": float(expected_edge_for_side_recovery),
+                        "paper_recovery_min_edge_bps": float(side_recovery_min_edge),
+                        "side_samples": int(side_samples),
+                        "max_side_samples": int(max_side_samples),
+                        "budget": budget_context,
+                        "control": control,
+                        "side_control": side_control,
+                    }
+                order["_metrics_improvement_exploration_pending"] = {
+                    "symbol": symbol,
+                    "budget": budget,
+                    "budget_context": budget_context,
+                }
+                merged = dict(control)
+                merged["action"] = "paper_side_recovery_explore"
+                merged["side_control"] = side_control
+                merged["side_recovery_original_action"] = side_action
+                merged["paper_recovery_min_edge_bps"] = float(side_recovery_min_edge)
+                merged["side_samples"] = int(side_samples)
+                merged["max_side_samples"] = int(max_side_samples)
+                budget_qty_scale = _safe_float(budget.get("qty_scale"))
+                symbol_qty_scale = _safe_float(merged.get("qty_scale"))
+                if budget_qty_scale is not None and math.isfinite(float(budget_qty_scale)):
+                    if symbol_qty_scale is None or not math.isfinite(float(symbol_qty_scale)):
+                        merged["qty_scale"] = float(budget_qty_scale)
+                    else:
+                        merged["qty_scale"] = min(float(symbol_qty_scale), float(budget_qty_scale))
+                symbol_reasons_raw = control.get("reasons")
+                symbol_reasons = (
+                    [str(item) for item in symbol_reasons_raw if str(item)]
+                    if isinstance(symbol_reasons_raw, Sequence)
+                    and not isinstance(symbol_reasons_raw, (str, bytes))
+                    else []
+                )
+                merged["reasons"] = [
+                    *symbol_reasons,
+                    *side_reasons,
+                    "paper_side_recovery_sample",
+                ]
+                control = merged
+                side_action = ""
+            else:
+                return False, {
+                    "enabled": True,
+                    "reason": f"metrics_control_side_{side_action}",
+                    "symbol": symbol,
+                    "side": side_bucket,
+                    "action": side_action,
+                    "control": control,
+                    "side_control": side_control,
+                    "reasons": side_reasons,
+                }
         if side_action == "downscale":
             original_control = dict(control)
             merged = dict(control)
