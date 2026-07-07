@@ -99,6 +99,7 @@ def build_trading_day_report(
     regime_entry_throttle: Mapping[str, Any] | None = None,
     expected_edge_calibration: Mapping[str, Any] | None = None,
     execution_capture: Mapping[str, Any] | None = None,
+    execution_capture_improvement: Mapping[str, Any] | None = None,
     counterfactual_execution: Mapping[str, Any] | None = None,
     portfolio_edge: Mapping[str, Any] | None = None,
     decision_receipts: Mapping[str, Any] | None = None,
@@ -283,6 +284,12 @@ def build_trading_day_report(
         },
         "regime_entry_throttle": dict(regime_entry_throttle or {}),
         "execution_capture": dict(execution_capture or {}),
+        "execution_capture_improvement": {
+            **dict(execution_capture_improvement or {}),
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        },
         "counterfactual_execution": dict(counterfactual_execution or {}),
         "portfolio_edge_control": dict(portfolio_edge or {}),
         "decision_receipts": dict(decision_receipts or {}),
@@ -329,6 +336,7 @@ def build_trading_day_report(
         "fills": fill_count,
         "live_cost_status": live_status,
         "expected_edge_calibration_status": calibration_status,
+        "execution_capture_improvement_status": _status(execution_capture_improvement or {}),
         "model_registry_status": _status(model_registry or {}),
         "pretrade_risk_status": _status(pretrade_risk_verifier or {}),
         "post_trade_surveillance_status": _status(post_trade_surveillance or {}),
@@ -398,6 +406,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Regime entry throttle: `{throttle_actions or {}}`",
             f"- Expected-edge calibration: `{report.get('expected_edge_calibration', {}).get('status', 'missing')}`",
             f"- Execution capture: `{report.get('execution_capture', {}).get('status', 'missing')}`",
+            f"- Execution capture improvement: `{report.get('execution_capture_improvement', {}).get('status', 'missing')}`",
             f"- Counterfactual execution: `{report.get('counterfactual_execution', {}).get('status', 'missing')}`",
             f"- Portfolio edge: `{report.get('portfolio_edge_control', {}).get('output', 'missing')}`",
             f"- Decision receipts: `{report.get('decision_receipts', {}).get('status', 'missing')}`",
@@ -433,6 +442,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--regime-entry-throttle-json", type=Path, default=None)
     parser.add_argument("--expected-edge-calibration-json", type=Path, default=None)
     parser.add_argument("--execution-capture-json", type=Path, default=None)
+    parser.add_argument("--execution-capture-improvement-json", type=Path, default=None)
     parser.add_argument("--counterfactual-execution-json", type=Path, default=None)
     parser.add_argument("--portfolio-edge-json", type=Path, default=None)
     parser.add_argument("--decision-receipts-json", type=Path, default=None)
@@ -471,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
         regime_entry_throttle=_read_json(args.regime_entry_throttle_json),
         expected_edge_calibration=_read_json(args.expected_edge_calibration_json),
         execution_capture=_read_json(args.execution_capture_json),
+        execution_capture_improvement=_read_json(args.execution_capture_improvement_json),
         counterfactual_execution=_read_json(args.counterfactual_execution_json),
         portfolio_edge=_read_json(args.portfolio_edge_json),
         decision_receipts=_read_json(args.decision_receipts_json),

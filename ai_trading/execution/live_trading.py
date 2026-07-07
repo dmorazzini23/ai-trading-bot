@@ -27552,8 +27552,26 @@ class ExecutionEngine:
         symbol = str(order.get("symbol") or "").strip().upper()
         if not symbol:
             return True, {"enabled": True, "reason": "symbol_missing"}
+        execution_mode_raw = (
+            str(getattr(self, "execution_mode", "") or "").strip().lower()
+            or str(_runtime_env("EXECUTION_MODE", "paper") or "paper").strip().lower()
+        )
+        authority_mode = execution_mode_raw in {"live", "live_canary", "canary"}
+        require_fresh_artifact = _resolve_bool_env(
+            "AI_TRADING_METRICS_IMPROVEMENT_REQUIRE_FRESH_ARTIFACT"
+        )
+        if require_fresh_artifact is None:
+            require_fresh_artifact = bool(authority_mode)
         payload = self._load_metrics_improvement_control()
         if not payload:
+            if bool(require_fresh_artifact):
+                return False, {
+                    "enabled": True,
+                    "reason": "artifact_missing",
+                    "symbol": symbol,
+                    "execution_mode": execution_mode_raw,
+                    "require_fresh_artifact": True,
+                }
             return True, {"enabled": True, "reason": "artifact_missing", "symbol": symbol}
         if bool(payload.get("authority_increase_allowed")):
             return False, {
@@ -27563,6 +27581,15 @@ class ExecutionEngine:
             }
         fresh, freshness = self._metrics_improvement_artifact_fresh(payload)
         if not fresh:
+            if bool(require_fresh_artifact):
+                return False, {
+                    "enabled": True,
+                    "reason": "artifact_not_fresh",
+                    "symbol": symbol,
+                    "execution_mode": execution_mode_raw,
+                    "require_fresh_artifact": True,
+                    "freshness": freshness,
+                }
             return True, {
                 "enabled": True,
                 "reason": "artifact_not_fresh",
@@ -27616,10 +27643,6 @@ class ExecutionEngine:
         side_control = dict(side_control_raw) if isinstance(side_control_raw, Mapping) else {}
         side_action = str(side_control.get("action") or "").strip().lower()
         if side_action in {"block", "shadow", "cooldown"}:
-            execution_mode_raw = (
-                str(getattr(self, "execution_mode", "") or "").strip().lower()
-                or str(_runtime_env("EXECUTION_MODE", "paper") or "paper").strip().lower()
-            )
             side_reasons_raw = side_control.get("reasons")
             side_reasons = (
                 [str(item) for item in side_reasons_raw if str(item)]
@@ -27807,10 +27830,6 @@ class ExecutionEngine:
         if (spread_value is None or quote_age_value is None) and unknown_metadata_add > 0.0:
             required_edge += float(unknown_metadata_add)
         expected_edge = self._order_expected_edge_bps(order)
-        execution_mode_raw = (
-            str(getattr(self, "execution_mode", "") or "").strip().lower()
-            or str(_runtime_env("EXECUTION_MODE", "paper") or "paper").strip().lower()
-        )
         require_edge = _resolve_bool_env("AI_TRADING_METRICS_IMPROVEMENT_REQUIRE_EXPECTED_EDGE")
         edge_requirement_relaxed = False
         qty_scale_override: float | None = None

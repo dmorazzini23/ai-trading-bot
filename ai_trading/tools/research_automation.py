@@ -261,6 +261,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     regime_throttle = config.run_dir / "regime_entry_throttle.json"
     expected_edge_calibration = config.run_dir / "expected_edge_calibration.json"
     execution_capture = config.run_dir / "execution_capture.json"
+    execution_capture_improvement = config.run_dir / "execution_capture_improvement.json"
     evidence_starvation = config.run_dir / "evidence_starvation.json"
     trading_day = config.run_dir / "trading_day_report.json"
     symbol_promotion = config.run_dir / "symbol_promotion_comparison.json"
@@ -478,6 +479,33 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             metadata={"promotion_authority": False, "live_money_authority": False},
         ),
         ResearchStep(
+            name="execution_capture_improvement_report",
+            command=_python_module(
+                "ai_trading.tools.execution_capture_improvement_report",
+                "--report-date",
+                config.report_date,
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--tca-jsonl",
+                _runtime_input_path("runtime/tca_records.jsonl"),
+                "--min-bucket-samples",
+                _env_text("AI_TRADING_EXECUTION_CAPTURE_IMPROVEMENT_MIN_BUCKET_SAMPLES", "3"),
+                "--min-capture-ratio",
+                _env_text("AI_TRADING_EXECUTION_CAPTURE_IMPROVEMENT_MIN_CAPTURE_RATIO", "0.35"),
+                "--output-json",
+                execution_capture_improvement,
+                "--latest-json",
+                config.report_root / "latest" / "execution_capture_improvement_latest.json",
+            ),
+            purpose="Convert execution capture evidence into bad-bucket diagnostics, edge haircuts, and execution-aware training priorities.",
+            output_path=execution_capture_improvement,
+            metadata={
+                "runtime_authority": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+            },
+        ),
+        ResearchStep(
             name="evidence_starvation_report",
             command=_python_module(
                 "ai_trading.tools.evidence_starvation_report",
@@ -530,6 +558,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 expected_edge_calibration,
                 "--execution-capture-json",
                 execution_capture,
+                "--execution-capture-improvement-json",
+                execution_capture_improvement,
                 "--counterfactual-execution-json",
                 counterfactual_execution,
                 "--portfolio-edge-json",
@@ -908,6 +938,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 expected_edge_calibration,
                 "--execution-capture-json",
                 execution_capture,
+                "--execution-capture-improvement-json",
+                execution_capture_improvement,
                 "--post-trade-surveillance-json",
                 post_trade_surveillance,
                 "--live-cost-model-json",
@@ -946,7 +978,13 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             ),
             purpose="Build conservative next-session metric controls: cooldown, downscale, stricter edge, and exploration caps.",
             output_path=metrics_control,
-            skip_if_missing=(expected_edge_calibration, execution_capture, post_trade_surveillance, live_cost),
+            skip_if_missing=(
+                expected_edge_calibration,
+                execution_capture,
+                execution_capture_improvement,
+                post_trade_surveillance,
+                live_cost,
+            ),
             metadata={
                 "runtime_safety_control": True,
                 "authority_increase_allowed": False,
@@ -1059,6 +1097,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 expected_edge_calibration,
                 "--execution-capture-json",
                 execution_capture,
+                "--execution-capture-improvement-json",
+                execution_capture_improvement,
                 "--counterfactual-execution-json",
                 counterfactual_execution,
                 "--portfolio-edge-json",
@@ -1133,6 +1173,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 regime_throttle,
                 "--execution-capture-json",
                 execution_capture,
+                "--execution-capture-improvement-json",
+                execution_capture_improvement,
                 "--counterfactual-execution-json",
                 counterfactual_execution,
                 "--portfolio-edge-json",
@@ -2663,6 +2705,7 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
     hf_intake = _read_json(latest / "hf_candidate_intake_latest.json")
     hf_cache = _read_json(latest / "hf_cache_materialization_latest.json")
     upward_trajectory = _read_json(latest / "upward_trajectory_latest.json")
+    execution_capture_improvement = _read_json(latest / "execution_capture_improvement_latest.json")
     metrics_control = _read_json(latest / "metrics_improvement_control_latest.json")
     weekend_research = _read_json(latest / "weekend_research_latest.json")
     weekend_summary = _read_json(latest / "weekend_operator_summary.json")
@@ -2705,6 +2748,15 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
         "execution_capture": {
             "status": _artifact_status(execution_capture),
             "summary": execution_capture.get("summary"),
+        },
+        "execution_capture_improvement": {
+            "status": _artifact_status(execution_capture_improvement),
+            "summary": execution_capture_improvement.get("summary"),
+            "recommended_next_action": execution_capture_improvement.get("recommended_next_action"),
+            "edge_haircuts": execution_capture_improvement.get("edge_haircuts"),
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
         },
         "evidence_starvation": {
             "status": _artifact_status(starvation),
@@ -3014,6 +3066,17 @@ def _copy_authority_artifacts(
                     resolve_runtime_artifact_path(
                         "runtime/reports/execution_capture_latest.json",
                         default_relative="runtime/reports/execution_capture_latest.json",
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "execution_capture_improvement_report":
+            targets.extend(
+                [
+                    latest_dir / "execution_capture_improvement_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/reports/execution_capture_improvement_latest.json",
+                        default_relative="runtime/reports/execution_capture_improvement_latest.json",
                         for_write=True,
                     ),
                 ]

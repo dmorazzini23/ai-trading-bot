@@ -238,6 +238,7 @@ def build_daily_research_report(
     replay_live_cost_alignment: Mapping[str, Any] | None = None,
     regime_entry_throttle: Mapping[str, Any] | None = None,
     execution_capture: Mapping[str, Any] | None = None,
+    execution_capture_improvement: Mapping[str, Any] | None = None,
     counterfactual_execution: Mapping[str, Any] | None = None,
     portfolio_edge: Mapping[str, Any] | None = None,
     decision_receipts: Mapping[str, Any] | None = None,
@@ -276,6 +277,7 @@ def build_daily_research_report(
     replay_live_cost_alignment = replay_live_cost_alignment or {}
     regime_entry_throttle = regime_entry_throttle or {}
     execution_capture = execution_capture or {}
+    execution_capture_improvement = execution_capture_improvement or {}
     counterfactual_execution = counterfactual_execution or {}
     portfolio_edge = portfolio_edge or {}
     decision_receipts = decision_receipts or {}
@@ -412,6 +414,18 @@ def build_daily_research_report(
             "summary": _nested(execution_capture, "summary"),
             "by_symbol": _nested(execution_capture, "by_symbol"),
             "promotion_authority": bool(execution_capture.get("promotion_authority", False)),
+        },
+        "execution_capture_improvement": {
+            "available": bool(execution_capture_improvement),
+            "status": execution_capture_improvement.get("status", "missing"),
+            "recommended_next_action": execution_capture_improvement.get("recommended_next_action"),
+            "summary": _nested(execution_capture_improvement, "summary"),
+            "bad_buckets": _nested(execution_capture_improvement, "bad_buckets"),
+            "edge_haircuts": _nested(execution_capture_improvement, "edge_haircuts"),
+            "training_labels": _nested(execution_capture_improvement, "training_labels"),
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
         },
         "counterfactual_execution": {
             "available": bool(counterfactual_execution),
@@ -838,6 +852,8 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Replay/live cost realism: `{_nested(report, 'replay_live_cost_alignment', 'cost_realism').get('status', 'missing')}`",
             f"- Regime throttle: `{_nested(report, 'regime_entry_throttle').get('actions', {})}`",
             f"- Execution capture: `{_nested(report, 'execution_capture').get('status', 'missing')}`",
+            f"- Execution capture improvement: `{_nested(report, 'execution_capture_improvement').get('status', 'missing')}` "
+            f"action=`{_nested(report, 'execution_capture_improvement').get('recommended_next_action', 'missing')}`",
             f"- Counterfactual execution: `{_nested(report, 'counterfactual_execution').get('status', 'missing')}`",
             f"- Portfolio edge: `{_nested(report, 'portfolio_edge_control').get('output', 'missing')}`",
             f"- Decision receipts: `{_nested(report, 'decision_receipts').get('status', 'missing')}`",
@@ -882,6 +898,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--replay-live-cost-alignment-json", type=Path, default=None)
     parser.add_argument("--regime-entry-throttle-json", type=Path, default=None)
     parser.add_argument("--execution-capture-json", type=Path, default=None)
+    parser.add_argument("--execution-capture-improvement-json", type=Path, default=None)
     parser.add_argument("--counterfactual-execution-json", type=Path, default=None)
     parser.add_argument("--portfolio-edge-json", type=Path, default=None)
     parser.add_argument("--decision-receipts-json", type=Path, default=None)
@@ -960,6 +977,10 @@ def main(argv: list[str] | None = None) -> int:
         execution_capture=_read_json(
             args.execution_capture_json
             or _default_path("runtime/reports/execution_capture_latest.json")
+        ),
+        execution_capture_improvement=_read_json(
+            args.execution_capture_improvement_json
+            or _default_path("runtime/reports/execution_capture_improvement_latest.json")
         ),
         counterfactual_execution=_read_json(
             args.counterfactual_execution_json

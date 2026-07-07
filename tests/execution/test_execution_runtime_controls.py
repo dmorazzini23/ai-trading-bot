@@ -7689,6 +7689,78 @@ def test_metrics_improvement_control_keeps_live_side_shadow_strict(monkeypatch) 
     assert context["side"] == "buy"
 
 
+def test_metrics_improvement_control_blocks_live_when_artifact_missing(monkeypatch) -> None:
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: {})
+
+    allowed, context = engine._metrics_improvement_control_allows_opening(
+        order={"symbol": "AAPL", "side": "buy", "quantity": 2, "expected_edge_bps": 5.0}
+    )
+
+    assert allowed is False
+    assert context["reason"] == "artifact_missing"
+    assert context["execution_mode"] == "live"
+    assert context["require_fresh_artifact"] is True
+
+
+def test_metrics_improvement_control_blocks_canary_when_artifact_stale(monkeypatch) -> None:
+    engine = _engine_stub()
+    engine.execution_mode = "live_canary"
+    payload = {
+        "generated_at": (
+            datetime.now(UTC) - timedelta(days=10)
+        ).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "AAPL": {
+                "action": "downscale",
+                "qty_scale": 0.5,
+                "required_edge_bps": 1.0,
+            }
+        },
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+
+    allowed, context = engine._metrics_improvement_control_allows_opening(
+        order={"symbol": "AAPL", "side": "buy", "quantity": 2, "expected_edge_bps": 5.0}
+    )
+
+    assert allowed is False
+    assert context["reason"] == "artifact_not_fresh"
+    assert context["execution_mode"] == "live_canary"
+    assert context["freshness"]["reason"] == "stale"
+
+
+def test_metrics_improvement_control_allows_paper_when_artifact_stale(monkeypatch) -> None:
+    engine = _engine_stub()
+    engine.execution_mode = "paper"
+    payload = {
+        "generated_at": (
+            datetime.now(UTC) - timedelta(days=10)
+        ).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "AAPL": {
+                "action": "downscale",
+                "qty_scale": 0.5,
+                "required_edge_bps": 1.0,
+            }
+        },
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+
+    allowed, context = engine._metrics_improvement_control_allows_opening(
+        order={"symbol": "AAPL", "side": "buy", "quantity": 2, "expected_edge_bps": 5.0}
+    )
+
+    assert allowed is True
+    assert context["reason"] == "artifact_not_fresh"
+    assert context["freshness"]["reason"] == "stale"
+
+
 def test_metrics_improvement_control_caps_paper_side_recovery_budget(monkeypatch) -> None:
     engine = _engine_stub()
     engine.execution_mode = "paper"

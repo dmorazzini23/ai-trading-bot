@@ -237,6 +237,7 @@ def build_metrics_improvement_control(
     reports: Sequence[Mapping[str, Any]],
     expected_edge_calibration: Mapping[str, Any] | None = None,
     execution_capture: Mapping[str, Any] | None = None,
+    execution_capture_improvement: Mapping[str, Any] | None = None,
     post_trade_surveillance: Mapping[str, Any] | None = None,
     live_cost_model: Mapping[str, Any] | None = None,
     min_symbol_samples: int = 5,
@@ -333,6 +334,19 @@ def build_metrics_improvement_control(
     )
 
     by_symbol: dict[str, dict[str, Any]] = {}
+    improvement_haircuts_raw = (
+        execution_capture_improvement.get("edge_haircuts")
+        if isinstance(execution_capture_improvement, Mapping)
+        else {}
+    )
+    improvement_by_symbol_raw = (
+        improvement_haircuts_raw.get("by_symbol")
+        if isinstance(improvement_haircuts_raw, Mapping)
+        else {}
+    )
+    improvement_by_symbol = (
+        improvement_by_symbol_raw if isinstance(improvement_by_symbol_raw, Mapping) else {}
+    )
     totals = {
         "samples": 0,
         "expected_sum_bps": 0.0,
@@ -405,6 +419,25 @@ def build_metrics_improvement_control(
                 qty_scale = min(float(qty_scale), float(downscale_qty_scale))
                 required_edge += float(weak_bucket_edge_add_bps)
                 reasons.append("reject_pressure")
+        improvement_raw = improvement_by_symbol.get(symbol)
+        improvement = improvement_raw if isinstance(improvement_raw, Mapping) else {}
+        improvement_action = str(improvement.get("action") or "").strip().lower()
+        improvement_edge_add = _safe_float(improvement.get("required_edge_add_bps"))
+        improvement_qty_scale = _safe_float(improvement.get("qty_scale"))
+        if improvement_edge_add is not None and improvement_edge_add > 0.0:
+            required_edge += float(improvement_edge_add)
+            reasons.append("execution_capture_edge_haircut")
+        if improvement_qty_scale is not None and 0.0 < improvement_qty_scale < float(qty_scale):
+            qty_scale = max(0.0, min(float(qty_scale), float(improvement_qty_scale)))
+            reasons.append("execution_capture_qty_haircut")
+        if improvement_action in {"shadow", "cooldown"}:
+            action = improvement_action
+            qty_scale = 0.0
+            reasons.append("execution_capture_improvement_shadow")
+        elif improvement_action == "downscale" and action == "allow":
+            action = "downscale"
+            qty_scale = min(float(qty_scale), float(downscale_qty_scale))
+            reasons.append("execution_capture_improvement_downscale")
         if action in {"shadow", "cooldown"}:
             totals["shadowed_or_blocked_symbols"] += 1
         elif action == "downscale":
@@ -430,6 +463,7 @@ def build_metrics_improvement_control(
             "unknown_quote_metadata_edge_add_bps": float(unknown_quote_metadata_edge_add_bps),
             "cooldown_seconds": int(cooldown_seconds) if action == "cooldown" else 0,
             "reasons": reasons or ["metrics_ok"],
+            "execution_capture_improvement": dict(improvement) if improvement else {},
         }
 
     total_samples = int(totals["samples"])
@@ -570,6 +604,7 @@ def build_metrics_improvement_control(
         "inputs": {
             "expected_edge_calibration_status": _status(expected_edge_calibration or {}),
             "execution_capture_status": _status(execution_capture or {}),
+            "execution_capture_improvement_status": _status(execution_capture_improvement or {}),
             "post_trade_surveillance_status": _status(post_trade_surveillance or {}),
             "live_cost_model_status": _status(live_status if isinstance(live_status, Mapping) else {}),
             "trading_day_reports": len(reports),
@@ -600,6 +635,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--trading-day-json", type=Path, default=None)
     parser.add_argument("--expected-edge-calibration-json", type=Path, default=None)
     parser.add_argument("--execution-capture-json", type=Path, default=None)
+    parser.add_argument("--execution-capture-improvement-json", type=Path, default=None)
     parser.add_argument("--post-trade-surveillance-json", type=Path, default=None)
     parser.add_argument("--live-cost-model-json", type=Path, default=None)
     parser.add_argument("--min-symbol-samples", type=int, default=5)
@@ -639,6 +675,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
         expected_edge_calibration=_read_json(args.expected_edge_calibration_json),
         execution_capture=_read_json(args.execution_capture_json),
+        execution_capture_improvement=_read_json(args.execution_capture_improvement_json),
         post_trade_surveillance=_read_json(args.post_trade_surveillance_json),
         live_cost_model=_read_json(args.live_cost_model_json),
         min_symbol_samples=int(args.min_symbol_samples),
