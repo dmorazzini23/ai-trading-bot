@@ -1438,6 +1438,21 @@ class ModelPromotion:
                     cast=float,
                 )
             )
+            configured_net_floors = (
+                float(self.criteria.min_net_expectancy_bps),
+                policy_min_oos_net_bps,
+            )
+            net_expectancy_floor_valid = all(
+                math.isfinite(value) for value in configured_net_floors
+            )
+            absolute_min_net_expectancy_bps = (
+                max(0.0, *configured_net_floors)
+                if net_expectancy_floor_valid
+                else math.inf
+            )
+            candidate_net_expectancy_finite = math.isfinite(
+                float(metrics.net_expectancy_bps)
+            )
             checks = {
                 'shadow_metrics_freshness': metrics_fresh,
                 'min_sessions': metrics.sessions_completed >= self.criteria.min_shadow_sessions,
@@ -1463,6 +1478,10 @@ class ModelPromotion:
                 ),
                 'net_expectancy_check': (
                     metrics.net_expectancy_bps >= self.criteria.min_net_expectancy_bps
+                ),
+                'absolute_positive_net_expectancy_check': (
+                    candidate_net_expectancy_finite
+                    and metrics.net_expectancy_bps > absolute_min_net_expectancy_bps
                 ),
                 'calibration_ece_check': (
                     metrics.calibration_samples >= self.criteria.min_calibration_samples
@@ -1521,6 +1540,8 @@ class ModelPromotion:
                     'challenger_sequential_passes': metrics.challenger_sequential_passes,
                     'policy_min_oos_samples': policy_min_oos_samples,
                     'policy_min_oos_net_bps': policy_min_oos_net_bps,
+                    'absolute_min_net_expectancy_bps': absolute_min_net_expectancy_bps,
+                    'net_expectancy_bps_finite': candidate_net_expectancy_finite,
                     'last_updated': metrics_freshness.get('last_updated'),
                     'freshness': metrics_freshness,
                 },
@@ -1551,6 +1572,7 @@ class ModelPromotion:
                     'challenger_sequential_required_passes': self.criteria.challenger_sequential_required_passes,
                     'policy_min_oos_samples': policy_min_oos_samples,
                     'policy_min_oos_net_bps': policy_min_oos_net_bps,
+                    'absolute_min_net_expectancy_bps': absolute_min_net_expectancy_bps,
                 },
             }
             return (eligible, evaluation)

@@ -25,7 +25,7 @@ import numpy as np
 from ai_trading import paths
 from ai_trading.config.management import get_env, reload_env
 from ai_trading.data.feed_roles import get_execution_feed, get_reference_feed, normalize_feed_role
-from ai_trading.data.fetch import get_daily_df, refresh_default_feed
+from ai_trading.data.fetch import get_bars, refresh_default_feed
 from ai_trading.data.splits import PurgedGroupTimeSeriesSplit
 from ai_trading.features.indicators import (
     compute_atr,
@@ -38,9 +38,9 @@ from ai_trading.indicators import rsi as rsi_indicator
 from ai_trading.logging import get_logger
 from ai_trading.model_registry import ModelRegistry
 from ai_trading.models.contracts import (
-    AFTER_HOURS_ML_BAR_TIMEFRAME,
-    AFTER_HOURS_ML_FEATURE_COLUMNS,
-    MODEL_FEATURE_CONTRACT_VERSION,
+    DAY_SLEEVE_ML_BAR_TIMEFRAME,
+    DAY_SLEEVE_ML_FEATURE_COLUMNS,
+    DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
     model_feature_contract_hash,
 )
 from ai_trading.models.artifacts import load_verified_joblib_artifact, write_artifact_manifest
@@ -51,7 +51,7 @@ from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 logger = get_logger(__name__)
 
-_BASE_FEATURE_COLUMNS: tuple[str, ...] = AFTER_HOURS_ML_FEATURE_COLUMNS[:7]
+_BASE_FEATURE_COLUMNS: tuple[str, ...] = DAY_SLEEVE_ML_FEATURE_COLUMNS[:7]
 _DERIVED_FEATURE_COLUMNS: tuple[str, ...] = (
     "atr_pct",
     "vwap_distance",
@@ -59,7 +59,7 @@ _DERIVED_FEATURE_COLUMNS: tuple[str, ...] = (
     "macd_signal_gap",
     "rsi_centered",
 )
-FEATURE_COLUMNS: tuple[str, ...] = AFTER_HOURS_ML_FEATURE_COLUMNS
+FEATURE_COLUMNS: tuple[str, ...] = DAY_SLEEVE_ML_FEATURE_COLUMNS
 _THRESHOLD_GRID: tuple[float, ...] = (0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7)
 _TCA_TIMESTAMP_KEYS: tuple[str, ...] = (
     "ts",
@@ -341,7 +341,7 @@ class _FallbackProbabilityModel:
         return cast(np.ndarray, (probs >= 0.5).astype(int))
 
 
-def _fetch_daily_bars(symbol: str, start_dt: datetime, end_dt: datetime):
+def _fetch_day_sleeve_bars(symbol: str, start_dt: datetime, end_dt: datetime):
     role = str(
         get_env(
             "AI_TRADING_MODEL_DATA_FEED_ROLE",
@@ -352,7 +352,13 @@ def _fetch_daily_bars(symbol: str, start_dt: datetime, end_dt: datetime):
         or "reference"
     ).strip().lower()
     feed_role = "reference" if role == "reference" else "execution"
-    return get_daily_df(symbol, start_dt, end_dt, feed_role=feed_role)
+    return get_bars(
+        symbol,
+        DAY_SLEEVE_ML_BAR_TIMEFRAME,
+        start_dt,
+        end_dt,
+        feed_role=feed_role,
+    )
 
 
 def _load_symbols() -> list[str]:
@@ -668,11 +674,11 @@ def _build_symbol_dataset(
     end_dt: datetime,
     *,
     cost_floor_bps: float,
-    horizon_days: int = 1,
+    horizon_bars: int = 1,
 ):
     import pandas as pd
 
-    bars = _fetch_daily_bars(symbol, start_dt, end_dt)
+    bars = _fetch_day_sleeve_bars(symbol, start_dt, end_dt)
     if bars is None or bars.empty:
         return pd.DataFrame()
     frame = bars.copy()
@@ -681,6 +687,16 @@ def _build_symbol_dataset(
     for required in ("open", "high", "low", "close", "volume"):
         if required not in frame.columns:
             return pd.DataFrame()
+    timestamps = pd.to_datetime(frame.index, utc=True, errors="coerce")
+    end_ts = pd.Timestamp(end_dt)
+    if end_ts.tzinfo is None:
+        end_ts = end_ts.tz_localize("UTC")
+    else:
+        end_ts = end_ts.tz_convert("UTC")
+    finalized_cutoff = end_ts.floor("5min")
+    frame = frame.loc[timestamps < finalized_cutoff].copy()
+    if frame.empty:
+        return pd.DataFrame()
     frame = frame.sort_index()
     frame = compute_macd(frame)
     frame = compute_macds(frame)
@@ -690,7 +706,7 @@ def _build_symbol_dataset(
     close_arr = frame["close"].astype(float).to_numpy()
     frame["rsi"] = _safe_rsi(close_arr)
     frame = _augment_training_features(frame)
-    label_horizon = max(1, int(horizon_days))
+    label_horizon = max(1, int(horizon_bars))
     future_close = frame["close"].astype(float).shift(-label_horizon)
     future_ret_bps = (future_close / frame["close"].astype(float) - 1.0) * 10_000.0
     frame["realized_edge_bps"] = future_ret_bps - float(cost_floor_bps)
@@ -716,8 +732,12 @@ def _build_training_dataset(
 ):
     import pandas as pd
 
-    start_dt = now_utc - timedelta(days=int(max(180, lookback_days)))
-    horizon_days = int(get_env("AI_TRADING_AFTER_HOURS_HORIZON_DAYS", 1, cast=int))
+    bounded_lookback_days = max(5, min(int(lookback_days), 365))
+    start_dt = now_utc - timedelta(days=bounded_lookback_days)
+    horizon_bars = max(
+        1,
+        int(get_env("AI_TRADING_DAY_SLEEVE_HORIZON_BARS", 1, cast=int)),
+    )
     rows: list[pd.DataFrame] = []
     for symbol in symbols:
         frame = _build_symbol_dataset(
@@ -725,7 +745,7 @@ def _build_training_dataset(
             start_dt,
             now_utc,
             cost_floor_bps=cost_floor_bps,
-            horizon_days=horizon_days,
+            horizon_bars=horizon_bars,
         )
         if frame is not None and not frame.empty:
             rows.append(frame)
@@ -1321,7 +1341,11 @@ def _evaluate_candidate(
     timestamps = pd.to_datetime(dataset["timestamp"], utc=True)
     label_ts = pd.to_datetime(dataset["label_ts"], utc=True)
     regimes = dataset["regime"].astype(str).to_numpy()
-    horizon_days = int(get_env("AI_TRADING_AFTER_HOURS_HORIZON_DAYS", 1, cast=int))
+    horizon_bars = max(
+        1,
+        int(get_env("AI_TRADING_DAY_SLEEVE_HORIZON_BARS", 1, cast=int)),
+    )
+    horizon_guard_days = max(1, math.ceil(horizon_bars * 5 / (24 * 60)))
     embargo_days = int(get_env("AI_TRADING_AFTER_HOURS_EMBARGO_DAYS", 1, cast=int))
     fold_gap_days = max(0, embargo_days)
     split_count = int(get_env("AI_TRADING_AFTER_HOURS_CV_SPLITS", 5, cast=int))
@@ -1371,7 +1395,7 @@ def _evaluate_candidate(
                 label_timestamps=label_ts.iloc[test_idx],
                 train_label_times=label_ts.iloc[train_idx_safe],
                 test_label_times=label_ts.iloc[test_idx],
-                horizon_days=horizon_days,
+                horizon_days=horizon_guard_days,
                 embargo_days=embargo_days,
             )
         except AssertionError as exc:
@@ -3726,6 +3750,19 @@ def _promotion_gate_bundle(
     additional_gates: Mapping[str, bool] | None = None,
 ) -> dict[str, Any]:
     policy = _promotion_policy_name()
+    policy_min_oos_net_bps = float(
+        get_env(
+            "AI_TRADING_POLICY_PROMOTION_MIN_OOS_NET_BPS",
+            0.0,
+            cast=float,
+        )
+    )
+    absolute_min_oos_net_bps = max(0.0, policy_min_oos_net_bps)
+    absolute_positive_net_expectancy = bool(
+        math.isfinite(float(best.mean_expectancy_bps))
+        and math.isfinite(absolute_min_oos_net_bps)
+        and float(best.mean_expectancy_bps) > absolute_min_oos_net_bps
+    )
     strict_gates: dict[str, bool] = {}
     prior_model_comparison: dict[str, Any] = {
         "required": False,
@@ -3782,13 +3819,6 @@ def _promotion_gate_bundle(
                 )
             ),
         )
-        policy_min_oos_net_bps = float(
-            get_env(
-                "AI_TRADING_POLICY_PROMOTION_MIN_OOS_NET_BPS",
-                0.0,
-                cast=float,
-            )
-        )
         candidate_score = _promotion_score(
             expectancy_bps=best.mean_expectancy_bps,
             max_drawdown_bps=best.max_drawdown_bps,
@@ -3838,10 +3868,11 @@ def _promotion_gate_bundle(
                 float(best.profitable_fold_ratio) >= min_profitable_fold_ratio
             ),
             "policy_oos_samples": int(best.support) >= policy_min_oos_samples,
-            "policy_oos_net": float(best.mean_expectancy_bps) >= policy_min_oos_net_bps,
+            "policy_oos_net": absolute_positive_net_expectancy,
             "prior_model_improvement": bool(prior_gate),
         }
     combined_gates: dict[str, bool] = {str(k): bool(v) for k, v in dict(edge_gates).items()}
+    combined_gates["absolute_positive_net_expectancy"] = absolute_positive_net_expectancy
     combined_gates.update(strict_gates)
     normalized_additional_gates: dict[str, bool] = {}
     if additional_gates:
@@ -3865,6 +3896,7 @@ def _promotion_gate_bundle(
         "strict_gates": strict_gates,
         "additional_gates": normalized_additional_gates,
         "prior_model_comparison": prior_model_comparison,
+        "absolute_min_oos_net_bps": absolute_min_oos_net_bps,
         "combined_gates": combined_gates,
         "gate_passed": gate_passed,
         "status": status,
@@ -5417,6 +5449,11 @@ def _dataset_fingerprint(dataset: Any, *, symbols: list[str], cost_floor_bps: fl
         "start": start_ts,
         "end": end_ts,
         "cost_floor_bps": float(cost_floor_bps),
+        "bar_timeframe": DAY_SLEEVE_ML_BAR_TIMEFRAME,
+        "horizon_bars": max(
+            1,
+            int(get_env("AI_TRADING_DAY_SLEEVE_HORIZON_BARS", 1, cast=int)),
+        ),
     }
     raw = json.dumps(payload, sort_keys=True).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
@@ -5439,21 +5476,26 @@ def _build_manifest_metadata(
     ).hexdigest()
     contract_hash = model_feature_contract_hash(
         FEATURE_COLUMNS,
-        bar_timeframe=AFTER_HOURS_ML_BAR_TIMEFRAME,
+        bar_timeframe=DAY_SLEEVE_ML_BAR_TIMEFRAME,
+        contract_version=DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
+    )
+    horizon_bars = max(
+        1,
+        int(get_env("AI_TRADING_DAY_SLEEVE_HORIZON_BARS", 1, cast=int)),
     )
     manifest_metadata = {
         "strategy": "after_hours_ml_edge",
         "symbols": list(symbols),
         "rows": int(rows),
         "lookback_days": int(lookback_days),
-        "horizon_days": int(get_env("AI_TRADING_AFTER_HOURS_HORIZON_DAYS", 1, cast=int)),
+        "horizon_days": max(1, math.ceil(horizon_bars * 5 / (24 * 60))),
         "embargo_days": int(get_env("AI_TRADING_AFTER_HOURS_EMBARGO_DAYS", 1, cast=int)),
         "feature_columns": list(FEATURE_COLUMNS),
         "feature_hash": feature_hash,
-        "feature_contract_version": MODEL_FEATURE_CONTRACT_VERSION,
+        "feature_contract_version": DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
         "feature_contract_hash": contract_hash,
-        "training_bar_timeframe": AFTER_HOURS_ML_BAR_TIMEFRAME,
-        "required_bar_timeframe": AFTER_HOURS_ML_BAR_TIMEFRAME,
+        "training_bar_timeframe": DAY_SLEEVE_ML_BAR_TIMEFRAME,
+        "required_bar_timeframe": DAY_SLEEVE_ML_BAR_TIMEFRAME,
         "default_threshold": float(default_threshold),
         "selected_threshold": (
             float(selected_threshold) if selected_threshold is not None else float(default_threshold)
@@ -5489,7 +5531,11 @@ def _build_manifest_metadata(
             "summary": sensitivity_sweep.get("summary", {}),
         },
     }
-    return cast(dict[str, Any], validate_manifest_metadata(manifest_metadata))
+    validated = cast(dict[str, Any], validate_manifest_metadata(manifest_metadata))
+    validated["intraday_lookback_days"] = int(lookback_days)
+    validated["horizon_bars"] = int(horizon_bars)
+    validated["horizon_unit"] = "bars"
+    return validated
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
@@ -6203,7 +6249,13 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     fill_quality = _build_fill_quality_metrics(tca_records)
     cost_floor_bps = _estimate_cost_floor_bps(tca_records)
     live_cost_buckets = _live_cost_bucket_diagnostics(tca_records)
-    lookback_days = int(get_env("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", 540, cast=int))
+    lookback_days = max(
+        5,
+        min(
+            int(get_env("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", 60, cast=int)),
+            365,
+        ),
+    )
     dataset = _build_training_dataset(
         symbols,
         lookback_days=lookback_days,
@@ -6268,7 +6320,11 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "timestamp": now_utc.isoformat(),
         }
     split_idx = max(20, int(len(dataset) * 0.7))
-    horizon_days = int(get_env("AI_TRADING_AFTER_HOURS_HORIZON_DAYS", 1, cast=int))
+    horizon_bars = max(
+        1,
+        int(get_env("AI_TRADING_DAY_SLEEVE_HORIZON_BARS", 1, cast=int)),
+    )
+    horizon_guard_days = max(1, math.ceil(horizon_bars * 5 / (24 * 60)))
     embargo_days = int(get_env("AI_TRADING_AFTER_HOURS_EMBARGO_DAYS", 1, cast=int))
     label_ts_series = pd.to_datetime(dataset["label_ts"], utc=True)
     timestamp_series = pd.to_datetime(dataset["timestamp"], utc=True)
@@ -6294,7 +6350,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                         label_timestamps=label_ts_series,
                         train_label_times=train_label_times,
                         test_label_times=test_label_times,
-                        horizon_days=horizon_days,
+                        horizon_days=horizon_guard_days,
                         embargo_days=embargo_days,
                     )
                 except AssertionError as exc:
@@ -6567,9 +6623,13 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     setattr(final_model, "edge_score_orientation_report_", dict(best.score_orientation_report))
     setattr(final_model, "edge_label_quality_", dict(label_quality))
     setattr(final_model, "edge_negative_symbol_penalties_", dict(negative_symbol_penalties))
-    setattr(final_model, "required_bar_timeframe_", AFTER_HOURS_ML_BAR_TIMEFRAME)
-    setattr(final_model, "training_bar_timeframe_", AFTER_HOURS_ML_BAR_TIMEFRAME)
-    setattr(final_model, "feature_contract_version_", MODEL_FEATURE_CONTRACT_VERSION)
+    setattr(final_model, "required_bar_timeframe_", DAY_SLEEVE_ML_BAR_TIMEFRAME)
+    setattr(final_model, "training_bar_timeframe_", DAY_SLEEVE_ML_BAR_TIMEFRAME)
+    setattr(
+        final_model,
+        "feature_contract_version_",
+        DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
+    )
     setattr(
         final_model,
         "feature_contract_hash_",

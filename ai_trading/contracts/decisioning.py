@@ -650,6 +650,15 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
             if value:
                 metadata[target_key] = value
                 break
+
+    def _model_lineage_value(key: str) -> str | None:
+        return (
+            _safe_text(metrics_map.get(key))
+            or _safe_text(order_map.get(key))
+            or _safe_text(config_map.get(key))
+            or _safe_text(tca_map.get(key))
+        )
+
     return DecisionJournalEntry(
         event=_derive_event(record),
         symbol=signal.symbol,
@@ -675,21 +684,11 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
         decision_trace_id=_safe_text(decision_trace_id),
         config_snapshot_hash=_safe_text(config_map.get("config_snapshot_hash")),
         policy_hash=_safe_text(config_map.get("effective_policy_hash")),
-        model_id=(
-            _safe_text(metrics_map.get("model_id"))
-            or _safe_text(order_map.get("model_id"))
-            or _safe_text(config_map.get("model_id"))
-            or _safe_text(tca_map.get("model_id"))
-        ),
-        model_version=(
-            _safe_text(metrics_map.get("model_version"))
-            or _safe_text(order_map.get("model_version"))
-            or _safe_text(config_map.get("model_version"))
-            or _safe_text(tca_map.get("model_version"))
-        ),
-        dataset_hash=_safe_text(config_map.get("dataset_hash")),
-        feature_version=_safe_text(config_map.get("feature_version")),
-        model_artifact_hash=_safe_text(config_map.get("model_artifact_hash")),
+        model_id=_model_lineage_value("model_id"),
+        model_version=_model_lineage_value("model_version"),
+        dataset_hash=_model_lineage_value("dataset_hash"),
+        feature_version=_model_lineage_value("feature_version"),
+        model_artifact_hash=_model_lineage_value("model_artifact_hash"),
         accepted=risk_decision.accepted,
         submitted=(
             broker_result.submitted

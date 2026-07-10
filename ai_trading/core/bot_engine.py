@@ -162,10 +162,14 @@ from ai_trading.models.artifacts import (
     write_artifact_manifest,
 )
 from ai_trading.models.contracts import (
+    DAY_SLEEVE_ML_BAR_TIMEFRAME,
+    DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
     LIVE_ML_BAR_TIMEFRAME,
     LIVE_ML_FEATURE_COLUMNS,
     normalize_bar_timeframe,
 )
+from ai_trading.features.day_sleeve import build_day_sleeve_features
+from ai_trading.model_loader import load_day_sleeve_production_model
 from ai_trading.policy.compiler import (
     EffectivePolicy,
     ExecutionCandidate,
@@ -7222,6 +7226,203 @@ def _ml_shadow_cost_snapshot(
         "slippage_bps": None,
         "slippage_source": "pending_fill",
     }
+
+
+def _is_day_sleeve_ml_timeframe(sleeve_name: Any, timeframe: Any) -> bool:
+    return (
+        str(sleeve_name or "").strip().lower() == "day"
+        and normalize_bar_timeframe(timeframe) == DAY_SLEEVE_ML_BAR_TIMEFRAME
+    )
+
+
+def _netting_sleeve_fetch_start(
+    *,
+    sleeve_name: Any,
+    timeframe: Any,
+    now: datetime,
+) -> datetime:
+    """Return enough history for the sleeve's longest required feature window."""
+
+    if _is_day_sleeve_ml_timeframe(sleeve_name, timeframe):
+        lookback_days = max(
+            7,
+            min(
+                int(
+                    get_env(
+                        "AI_TRADING_DAY_SLEEVE_ML_LOOKBACK_DAYS",
+                        10,
+                        cast=int,
+                    )
+                ),
+                60,
+            ),
+        )
+        return now - timedelta(days=lookback_days)
+    return now - timedelta(
+        seconds=_freshness_seconds_for_timeframe(str(timeframe)) * 50
+    )
+
+
+def _finalized_day_sleeve_bars(
+    frame: pd.DataFrame,
+    *,
+    now: datetime,
+    grace_seconds: float,
+) -> pd.DataFrame:
+    """Remove any five-minute bar whose close boundary has not passed."""
+
+    if frame is None or frame.empty:
+        return frame
+    if not isinstance(frame.index, pd.DatetimeIndex) or frame.index.tz is None:
+        return frame.iloc[0:0].copy()
+    bounded_grace = max(0.0, min(float(grace_seconds), 60.0))
+    cutoff = pd.Timestamp(now.astimezone(UTC) - timedelta(seconds=bounded_grace))
+    bar_close = frame.index.tz_convert(UTC) + pd.Timedelta(minutes=5)
+    return frame.loc[bar_close <= cutoff].copy()
+
+
+def _day_sleeve_positive_probability(model: Any, features: pd.DataFrame) -> float:
+    probabilities = np.asarray(model.predict_proba(features), dtype=float)
+    if probabilities.ndim != 2 or probabilities.shape[0] != 1 or probabilities.shape[1] < 1:
+        raise ValueError("Day-sleeve model returned an invalid probability shape")
+    positive_index = 1 if probabilities.shape[1] > 1 else 0
+    classes = getattr(model, "classes_", None)
+    if classes is not None:
+        class_values = list(classes)
+        if len(class_values) == probabilities.shape[1]:
+            for index, label in enumerate(class_values):
+                try:
+                    if int(label) == 1:
+                        positive_index = index
+                        break
+                except (TypeError, ValueError):
+                    continue
+    probability = float(probabilities[0, positive_index])
+    if not math.isfinite(probability):
+        raise ValueError("Day-sleeve model returned a non-finite probability")
+    probability = max(0.0, min(probability, 1.0))
+    orientation = str(
+        getattr(model, "edge_score_orientation_", "direct") or "direct"
+    ).strip().lower()
+    if orientation in {"inverse", "inverted", "flip"}:
+        probability = 1.0 - probability
+    return float(max(0.0, min(probability, 1.0)))
+
+
+def _score_day_sleeve_with_ml(
+    *,
+    symbol: str,
+    frame: pd.DataFrame,
+    bundle: Any,
+    heuristic_score: float,
+    heuristic_confidence: float,
+    blend_weight: float,
+    now: datetime,
+) -> tuple[float, float, dict[str, Any] | None, str | None]:
+    """Return a bounded hybrid score, preserving heuristic values on ML failure."""
+
+    bounded_weight = max(0.0, min(float(blend_weight), 1.0))
+    if bounded_weight <= 0.0:
+        return heuristic_score, heuristic_confidence, None, None
+    try:
+        features = build_day_sleeve_features(frame)
+        probability = _day_sleeve_positive_probability(bundle.model, features)
+        model_score = float(np.clip((2.0 * probability) - 1.0, -1.0, 1.0))
+        serving_score = float(
+            np.clip(
+                ((1.0 - bounded_weight) * float(heuristic_score))
+                + (bounded_weight * model_score),
+                -1.0,
+                1.0,
+            )
+        )
+        serving_confidence = float(
+            np.clip(
+                ((1.0 - bounded_weight) * float(heuristic_confidence))
+                + (bounded_weight * abs(model_score)),
+                0.0,
+                1.0,
+            )
+        )
+        lineage = {
+            str(key): str(value)
+            for key, value in dict(bundle.lineage).items()
+            if str(key).strip() and str(value).strip()
+        }
+        bar_timestamp = pd.Timestamp(features.index[-1]).tz_convert(UTC).isoformat()
+        identity_seed = "|".join(
+            (
+                str(symbol).strip().upper(),
+                "day",
+                bar_timestamp,
+                lineage.get("model_id", ""),
+                lineage.get("model_version", ""),
+                lineage.get("feature_version", ""),
+            )
+        )
+        prediction_id = hashlib.sha256(identity_seed.encode("utf-8")).hexdigest()[:24]
+        decision_id = hashlib.sha256(
+            f"decision|{identity_seed}".encode("utf-8")
+        ).hexdigest()[:24]
+        direction_sign = 1 if model_score > 0.0 else -1 if model_score < 0.0 else 0
+        side = "buy" if direction_sign > 0 else "sell_short" if direction_sign < 0 else "hold"
+        quote_snapshot = _ml_shadow_quote_snapshot(symbol=symbol)
+        market_snapshot = _ml_shadow_market_snapshot(frame, quote=quote_snapshot)
+        horizon_bars = max(
+            1,
+            int(get_env("AI_TRADING_DAY_SLEEVE_HORIZON_BARS", 1, cast=int)),
+        )
+        debug = {
+            "ml_influenced": True,
+            "model_lineage": lineage,
+            "ml_raw_heuristic_score": float(heuristic_score),
+            "ml_raw_score": model_score,
+            "ml_serving_score": serving_score,
+            "ml_positive_probability": probability,
+            "ml_blend_weight": bounded_weight,
+            "ml_serving_timeframe": DAY_SLEEVE_ML_BAR_TIMEFRAME,
+            "ml_serving_bar_timestamp": bar_timestamp,
+            "ml_feature_contract_version": DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
+            "prediction_id": prediction_id,
+            "decision_id": decision_id,
+        }
+        shadow_payload = {
+            "ts": now.astimezone(UTC).isoformat(),
+            "mode": "day_sleeve_ml_advisory",
+            "advisory": True,
+            "executed": False,
+            "symbol": str(symbol).strip().upper(),
+            "prediction_id": prediction_id,
+            "decision_id": decision_id,
+            "champion_prediction": direction_sign,
+            "champion_side": side,
+            "champion_probability": probability,
+            "champion_score": model_score,
+            "champion_would_trade": direction_sign != 0,
+            "champion_executed": False,
+            "model_lineage": lineage,
+            **lineage,
+            "required_bar_timeframe": DAY_SLEEVE_ML_BAR_TIMEFRAME,
+            "timeframe": DAY_SLEEVE_ML_BAR_TIMEFRAME,
+            "horizon_bars": horizon_bars,
+            "horizon_unit": "bars",
+            "feature_contract_version": DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
+            "blend_weight": bounded_weight,
+            "heuristic_score": float(heuristic_score),
+            "serving_score": serving_score,
+            "market": market_snapshot,
+            "quote_status": quote_snapshot,
+            "provider": _ml_shadow_provider_snapshot(),
+            "cost": _ml_shadow_cost_snapshot(market_snapshot, quote_snapshot),
+        }
+        _record_shadow_prediction(shadow_payload)
+        return serving_score, serving_confidence, debug, None
+    except BOT_ENGINE_FALLBACK_EXC as exc:
+        logger.warning(
+            "DAY_SLEEVE_ML_INFERENCE_FAILED",
+            extra={"symbol": symbol, "error": str(exc)},
+        )
+        return heuristic_score, heuristic_confidence, None, str(exc)
 
 
 def _ml_shadow_feature_snapshot(
@@ -39468,6 +39669,9 @@ def _run_replay_governance(
     baseline_summary = _load_latest_replay_summary(output_dir, before_path=out_path)
     governance = getattr(getattr(state, "_effective_policy", None), "governance", None)
     min_samples = int(get_env("AI_TRADING_POLICY_REPLAY_MIN_SAMPLES", 100, cast=int))
+    min_net_edge_bps = float(
+        get_env("AI_TRADING_POLICY_REPLAY_MIN_NET_EDGE_BPS", 0.0, cast=float)
+    )
     net_tolerance_bps = float(
         get_env("AI_TRADING_POLICY_REPLAY_NET_TOLERANCE_BPS", 2.0, cast=float)
     )
@@ -39477,6 +39681,9 @@ def _run_replay_governance(
     if governance is not None:
         try:
             min_samples = int(getattr(governance, "replay_min_samples"))
+            min_net_edge_bps = float(
+                getattr(governance, "replay_min_net_edge_bps", min_net_edge_bps)
+            )
             net_tolerance_bps = float(getattr(governance, "replay_net_tolerance_bps"))
             drawdown_tolerance_pct = float(
                 getattr(governance, "replay_drawdown_tolerance_pct")
@@ -39492,6 +39699,7 @@ def _run_replay_governance(
             baseline=baseline_summary,
             candidate=replay_summary,
             min_samples=min_samples,
+            min_net_edge_bps=min_net_edge_bps,
             net_tolerance_bps=net_tolerance_bps,
             drawdown_tolerance_pct=drawdown_tolerance_pct,
         )
@@ -41128,6 +41336,44 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         manual_symbol_side_hour_penalties = _strict_edge_manual_penalty_payload(
             "AI_TRADING_EDGE_COST_MANUAL_PENALTY_BPS_BY_SYMBOL_SIDE_NY_HOUR"
         )
+    day_sleeve_ml_enabled = bool(
+        get_env("AI_TRADING_DAY_SLEEVE_ML_ENABLED", True, cast=bool)
+    )
+    day_sleeve_ml_required = bool(
+        get_env("AI_TRADING_REQUIRE_ML_MODEL", False, cast=bool)
+    )
+    day_sleeve_ml_blend_weight = float(
+        get_env("AI_TRADING_DAY_SLEEVE_ML_BLEND_WEIGHT", 0.5, cast=float)
+    )
+    if not math.isfinite(day_sleeve_ml_blend_weight):
+        day_sleeve_ml_blend_weight = 0.5
+    day_sleeve_ml_blend_weight = max(0.0, min(day_sleeve_ml_blend_weight, 1.0))
+    day_sleeve_bar_finality_grace_seconds = float(
+        get_env(
+            "AI_TRADING_DAY_SLEEVE_BAR_FINALITY_GRACE_SECONDS",
+            2.0,
+            cast=float,
+        )
+    )
+    if not math.isfinite(day_sleeve_bar_finality_grace_seconds):
+        day_sleeve_bar_finality_grace_seconds = 2.0
+    day_sleeve_model_bundle: Any | None = None
+    day_sleeve_model_error: str | None = None
+    day_sleeve_configured = any(
+        _is_day_sleeve_ml_timeframe(sleeve.name, sleeve.timeframe)
+        for sleeve in sleeves
+    )
+    if day_sleeve_ml_enabled and day_sleeve_configured:
+        try:
+            day_sleeve_model_bundle = load_day_sleeve_production_model()
+        except BOT_ENGINE_FALLBACK_EXC as exc:
+            day_sleeve_model_error = str(exc)
+            logger.warning(
+                "DAY_SLEEVE_ML_MODEL_UNAVAILABLE",
+                extra={"error": day_sleeve_model_error},
+            )
+    elif day_sleeve_configured and day_sleeve_ml_required:
+        day_sleeve_model_error = "day_sleeve_ml_disabled_while_model_required"
     proposals_total = 0
     proposals_blocked = 0
     orders_attempted = 0
@@ -41135,7 +41381,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
 
     for sleeve in sleeves:
         end = now
-        start = end - timedelta(seconds=_freshness_seconds_for_timeframe(sleeve.timeframe) * 50)
+        start = _netting_sleeve_fetch_start(
+            sleeve_name=sleeve.name,
+            timeframe=sleeve.timeframe,
+            now=end,
+        )
         try:
             bars_map = retry_idempotent(
                 lambda: get_bars_batch(symbols, sleeve.timeframe, start, end),
@@ -41178,6 +41428,16 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             continue
         for symbol, df in bars_map.items():
             df = normalize_bars(df, sleeve.timeframe, tz=ZoneInfo("UTC"), rth_only=rth_only)
+            is_day_sleeve_model_path = _is_day_sleeve_ml_timeframe(
+                sleeve.name,
+                sleeve.timeframe,
+            )
+            if is_day_sleeve_model_path:
+                df = _finalized_day_sleeve_bars(
+                    df,
+                    now=now,
+                    grace_seconds=day_sleeve_bar_finality_grace_seconds,
+                )
             if bool(getattr(cfg, "data_contract_enabled", True)):
                 contract_result = validate_bars(
                     df,
@@ -41222,6 +41482,24 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 continue
             state.last_eval_bar_ts[last_key] = bar_ts
             score, confidence = _score_from_bars(df)
+            day_sleeve_ml_debug: dict[str, Any] | None = None
+            day_sleeve_inference_error = day_sleeve_model_error
+            if (
+                is_day_sleeve_model_path
+                and day_sleeve_ml_enabled
+                and day_sleeve_model_bundle is not None
+            ):
+                score, confidence, day_sleeve_ml_debug, day_sleeve_inference_error = (
+                    _score_day_sleeve_with_ml(
+                        symbol=symbol,
+                        frame=df,
+                        bundle=day_sleeve_model_bundle,
+                        heuristic_score=score,
+                        heuristic_confidence=confidence,
+                        blend_weight=day_sleeve_ml_blend_weight,
+                        now=now,
+                    )
+                )
             try:
                 price = float(df["close"].iloc[-1])
             except BOT_ENGINE_FALLBACK_EXC:
@@ -41249,6 +41527,17 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 vol,
                 volume=float(df["volume"].iloc[-1]) if "volume" in df.columns else None,
             )
+            if day_sleeve_ml_debug is not None:
+                proposal.debug.update(day_sleeve_ml_debug)
+            elif is_day_sleeve_model_path and (
+                day_sleeve_ml_enabled or day_sleeve_ml_required
+            ):
+                if day_sleeve_inference_error:
+                    proposal.debug["ml_fallback_reason"] = day_sleeve_inference_error
+                if day_sleeve_ml_required and day_sleeve_inference_error:
+                    proposal.blocked = True
+                    proposal.reason_code = "DAY_SLEEVE_ML_REQUIRED_UNAVAILABLE"
+                    proposal.target_dollars = positions.get(symbol, 0.0) * price
             proposals_total += 1
             rolling_volume = _rolling_volume_from_bars(df, liq_lookback_bars)
             latest_liquidity[symbol] = _liquidity_features(

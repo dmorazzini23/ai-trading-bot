@@ -11,17 +11,28 @@ from ai_trading.logging import get_logger
 from ai_trading.paths import MODELS_DIR
 from ai_trading.config.management import get_env
 from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 import json
 
 import joblib
 from ai_trading.utils.lazy_imports import load_pandas
-from ai_trading.models.artifacts import load_verified_joblib_artifact, write_artifact_manifest
+from ai_trading.models.artifacts import (
+    load_artifact_manifest,
+    load_verified_joblib_artifact,
+    verify_artifact,
+    write_artifact_manifest,
+)
 from ai_trading.models.contracts import (
     AFTER_HOURS_ML_BAR_TIMEFRAME,
+    DAY_SLEEVE_ML_BAR_TIMEFRAME,
+    DAY_SLEEVE_ML_FEATURE_COLUMNS,
+    DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
     LIVE_ML_FEATURE_COLUMNS,
     MODEL_FEATURE_CONTRACT_VERSION,
+    normalize_bar_timeframe,
     model_feature_contract_hash,
 )
 
@@ -30,6 +41,150 @@ ML_MODELS: dict[str, object | None] = {}
 ML_MODEL_CACHE_META: dict[str, dict[str, str | None]] = {}
 
 DEFAULT_MODEL_MAX_AGE_DAYS = 14
+
+
+@dataclass(frozen=True, slots=True)
+class DaySleeveProductionModel:
+    """Verified production day model and immutable canonical lineage."""
+
+    model: object
+    lineage: Mapping[str, str]
+
+
+_DAY_SLEEVE_MODEL_CACHE: DaySleeveProductionModel | None = None
+_DAY_SLEEVE_MODEL_CACHE_KEY: tuple[Any, ...] | None = None
+
+
+def _path_signature(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return int(stat.st_mtime_ns), int(stat.st_size)
+
+
+def _clear_day_sleeve_model_cache() -> None:
+    global _DAY_SLEEVE_MODEL_CACHE, _DAY_SLEEVE_MODEL_CACHE_KEY
+    _DAY_SLEEVE_MODEL_CACHE = None
+    _DAY_SLEEVE_MODEL_CACHE_KEY = None
+
+
+def load_day_sleeve_production_model() -> DaySleeveProductionModel:
+    """Load the governed rich-registry production model for the five-minute sleeve.
+
+    This path is intentionally independent of the legacy per-symbol registry.
+    Missing, stale, unverifiable, or contract-incompatible production entries
+    fail closed.
+    """
+
+    global _DAY_SLEEVE_MODEL_CACHE, _DAY_SLEEVE_MODEL_CACHE_KEY
+
+    from ai_trading.model_registry import ModelRegistry
+
+    registry = ModelRegistry()
+    production = registry.get_viable_production_model("ml_edge")
+    if production is None:
+        _clear_day_sleeve_model_cache()
+        raise RuntimeError("Governed production day-sleeve model is unavailable")
+    model_id, registry_meta = production
+    governance = registry_meta.get("governance")
+    if not isinstance(governance, Mapping) or governance.get("status") != "production":
+        _clear_day_sleeve_model_cache()
+        raise RuntimeError("Day-sleeve model is not governed as production")
+    _validate_active_model_freshness("day_sleeve", registry_meta)
+
+    artifact_path = Path(str(registry_meta.get("production_path") or "")).expanduser()
+    manifest_raw = str(
+        registry_meta.get("production_manifest_path")
+        or registry_meta.get("manifest_path")
+        or ""
+    ).strip()
+    if not artifact_path.is_file() or not manifest_raw:
+        _clear_day_sleeve_model_cache()
+        raise RuntimeError("Day-sleeve production artifact or manifest is missing")
+    manifest_path = Path(manifest_raw).expanduser()
+    if not manifest_path.is_file():
+        _clear_day_sleeve_model_cache()
+        raise RuntimeError("Day-sleeve production manifest is missing")
+
+    cache_key = (
+        str(model_id),
+        str(artifact_path.resolve()),
+        str(manifest_path.resolve()),
+        _path_signature(artifact_path),
+        _path_signature(manifest_path),
+    )
+    if _DAY_SLEEVE_MODEL_CACHE is not None and _DAY_SLEEVE_MODEL_CACHE_KEY == cache_key:
+        return _DAY_SLEEVE_MODEL_CACHE
+
+    verified, reason = verify_artifact(
+        model_path=artifact_path,
+        manifest_path=manifest_path,
+    )
+    if not verified:
+        _clear_day_sleeve_model_cache()
+        raise RuntimeError(f"Day-sleeve artifact verification failed: {reason}")
+    manifest = load_artifact_manifest(manifest_path)
+    metadata = dict(manifest.metadata or {})
+    expected_columns = tuple(DAY_SLEEVE_ML_FEATURE_COLUMNS)
+    declared_columns = tuple(str(value) for value in metadata.get("feature_columns", ()))
+    expected_hash = model_feature_contract_hash(
+        expected_columns,
+        bar_timeframe=DAY_SLEEVE_ML_BAR_TIMEFRAME,
+        contract_version=DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
+    )
+    compatibility_errors: list[str] = []
+    if normalize_bar_timeframe(metadata.get("required_bar_timeframe")) != DAY_SLEEVE_ML_BAR_TIMEFRAME:
+        compatibility_errors.append("required_bar_timeframe")
+    if declared_columns != expected_columns:
+        compatibility_errors.append("feature_columns")
+    if str(metadata.get("feature_contract_version") or "") != DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION:
+        compatibility_errors.append("feature_contract_version")
+    if str(metadata.get("feature_contract_hash") or "") != expected_hash:
+        compatibility_errors.append("feature_contract_hash")
+    if compatibility_errors:
+        _clear_day_sleeve_model_cache()
+        raise RuntimeError(
+            "Day-sleeve model contract is incompatible: "
+            + ",".join(compatibility_errors)
+        )
+
+    model = load_verified_joblib_artifact(
+        artifact_path,
+        manifest_path=manifest_path,
+    )
+    if not (hasattr(model, "predict") and hasattr(model, "predict_proba")):
+        _clear_day_sleeve_model_cache()
+        raise RuntimeError("Day-sleeve model prediction interface is incomplete")
+    model_columns_raw = getattr(model, "feature_names_in_", None)
+    if model_columns_raw is not None:
+        model_columns = tuple(str(value) for value in model_columns_raw)
+        if model_columns != expected_columns:
+            _clear_day_sleeve_model_cache()
+            raise RuntimeError("Day-sleeve model feature order is incompatible")
+
+    dataset_hash = str(
+        registry_meta.get("dataset_fingerprint")
+        or metadata.get("dataset_fingerprint")
+        or ""
+    ).strip()
+    lineage_values = {
+        "model_id": str(model_id).strip(),
+        "model_version": str(manifest.model_version or "").strip(),
+        "dataset_hash": dataset_hash,
+        "feature_version": DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
+        "model_artifact_hash": str(manifest.checksum_sha256 or "").strip(),
+    }
+    missing_lineage = [key for key, value in lineage_values.items() if not value]
+    if missing_lineage:
+        _clear_day_sleeve_model_cache()
+        raise RuntimeError(
+            "Day-sleeve model lineage is incomplete: " + ",".join(missing_lineage)
+        )
+    loaded = DaySleeveProductionModel(
+        model=model,
+        lineage=MappingProxyType(lineage_values),
+    )
+    _DAY_SLEEVE_MODEL_CACHE = loaded
+    _DAY_SLEEVE_MODEL_CACHE_KEY = cache_key
+    return loaded
 
 
 def _build_training_frame(df: Any) -> Any:

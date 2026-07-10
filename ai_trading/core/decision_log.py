@@ -16,6 +16,37 @@ from ai_trading.core.netting import (
 )
 
 
+_MODEL_LINEAGE_KEYS: tuple[str, ...] = (
+    "model_id",
+    "model_version",
+    "dataset_hash",
+    "feature_version",
+    "model_artifact_hash",
+)
+
+
+def _derive_ml_model_lineage(
+    sleeves: Sequence[SleeveProposal],
+) -> dict[str, str]:
+    """Return lineage declared by ML-influenced sleeve proposals only."""
+
+    lineage: dict[str, str] = {}
+    for sleeve in sleeves:
+        debug = getattr(sleeve, "debug", None)
+        if not isinstance(debug, Mapping) or debug.get("ml_influenced") is not True:
+            continue
+        proposal_lineage = debug.get("model_lineage")
+        if not isinstance(proposal_lineage, Mapping):
+            continue
+        for key in _MODEL_LINEAGE_KEYS:
+            if key in lineage:
+                continue
+            value = str(proposal_lineage.get(key) or "").strip()
+            if value:
+                lineage[key] = value
+    return lineage
+
+
 @dataclass(slots=True)
 class DecisionRecorder:
     runtime: Any
@@ -45,15 +76,23 @@ class DecisionRecorder:
         order_intent: Any | None = None,
         schema_version: str = DECISION_RECORD_SCHEMA_VERSION,
     ) -> DecisionRecord:
+        resolved_sleeves = (
+            list(sleeves) if sleeves is not None else list(net_target.proposals)
+        )
+        metrics_payload = dict(metrics) if isinstance(metrics, Mapping) else {}
+        model_lineage = _derive_ml_model_lineage(resolved_sleeves)
+        for key, value in model_lineage.items():
+            if not str(metrics_payload.get(key) or "").strip():
+                metrics_payload[key] = value
         return build_decision_record(
             symbol=symbol,
             bar_ts=bar_ts,
             net_target=net_target,
-            sleeves=list(sleeves) if sleeves is not None else list(net_target.proposals),
+            sleeves=resolved_sleeves,
             gates=list(gates),
             order=dict(order) if isinstance(order, Mapping) else None,
             fills=[dict(fill) for fill in fills] if fills is not None else None,
-            metrics=dict(metrics) if isinstance(metrics, Mapping) else None,
+            metrics=(metrics_payload if metrics_payload else None),
             config_snapshot=(
                 dict(config_snapshot) if isinstance(config_snapshot, Mapping) else None
             ),

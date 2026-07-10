@@ -203,14 +203,117 @@ def _entry_close(row: Mapping[str, Any]) -> float | None:
     return None
 
 
-def _net_markout_bps(
+def _mapping_value(row: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = row.get(key)
+    return value if isinstance(value, Mapping) else {}
+
+
+def _role_value(row: Mapping[str, Any], role: str, *names: str) -> Any:
+    role_payload = _mapping_value(row, role)
+    for name in names:
+        for source, key in (
+            (row, f"{role}_{name}"),
+            (role_payload, name),
+            (row, name),
+        ):
+            value = source.get(key)
+            if value not in (None, ""):
+                return value
+    return None
+
+
+def _prediction_side(row: Mapping[str, Any], role: str) -> tuple[str, int] | None:
+    raw_side = _role_value(row, role, "side", "direction", "signal_side", "order_side")
+    token = str(raw_side or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if token in {"buy", "long", "1", "+1"}:
+        return "long", 1
+    if token in {"sell", "short", "sell_short", "-1"}:
+        return "short", -1
+
+    prediction = _role_value(row, role, "prediction")
+    prediction_token = str(prediction or "").strip().lower().replace("-", "_")
+    if prediction_token in {"1", "+1", "buy", "long"}:
+        return "long", 1
+    if prediction_token in {"-1", "sell", "short", "sell_short"}:
+        return "short", -1
+    if _bool_value(row, f"{role}_would_trade"):
+        return "long", 1
+    return None
+
+
+def _round_trip_cost(
+    row: Mapping[str, Any],
+    *,
+    fee_bps: float,
+    slippage_bps: float,
+) -> dict[str, Any]:
+    """Resolve one conservative round-trip cost without double deduction."""
+
+    fee = max(0.0, float(fee_bps))
+    slippage = max(0.0, float(slippage_bps))
+    fallback = (2.0 * fee) + (2.0 * slippage)
+    cost = _mapping_value(row, "cost")
+    explicit_round_trip = next(
+        (
+            value
+            for key in (
+                "round_trip_cost_bps",
+                "expected_round_trip_cost_bps",
+                "modeled_round_trip_cost_bps",
+            )
+            if (value := _finite_float(cost.get(key))) is not None and value >= 0.0
+        ),
+        None,
+    )
+    spread, _quote_age = _cost_fields(row)
+    observed_spread = max(0.0, float(spread)) if spread is not None else None
+    fallback_with_spread = fallback + (observed_spread or 0.0)
+    if explicit_round_trip is not None:
+        total = max(float(explicit_round_trip), fallback_with_spread)
+        source = "explicit_round_trip_conservative_max"
+    elif observed_spread is not None:
+        total = fallback_with_spread
+        source = "observed_spread_plus_configured_fallback"
+    else:
+        total = fallback
+        source = "configured_round_trip_fallback"
+    return {
+        "round_trip_cost_bps": float(total),
+        "cost_source": source,
+        "spread_bps": observed_spread,
+        "fee_bps_per_leg": fee,
+        "slippage_bps_per_leg": slippage,
+        "explicit_round_trip_cost_bps": explicit_round_trip,
+    }
+
+
+def _lineage(row: Mapping[str, Any], role: str) -> dict[str, Any]:
+    return {
+        "model_id": _role_value(row, role, "model_id"),
+        "model_version": _role_value(row, role, "model_version"),
+        "model_artifact_hash": _role_value(
+            row, role, "model_artifact_hash", "artifact_hash"
+        ),
+        "feature_version": _role_value(row, role, "feature_version"),
+        "required_bar_timeframe": _role_value(
+            row,
+            role,
+            "required_bar_timeframe",
+            "bar_timeframe",
+            "timeframe",
+        ),
+    }
+
+
+def _resolved_shadow_outcome(
     row: Mapping[str, Any],
     bars_by_symbol: Mapping[str, pd.DataFrame],
     *,
+    role: str,
     horizon_bars: int,
     fee_bps: float,
     slippage_bps: float,
-) -> float | None:
+) -> dict[str, Any] | None:
     symbol = str(row.get("symbol") or "").strip().upper()
     frame = bars_by_symbol.get(symbol)
     if frame is None or frame.empty:
@@ -233,9 +336,73 @@ def _net_markout_bps(
     future = _finite_float(frame["close"].iloc[future_position])
     if entry is None or future is None or entry <= 0.0:
         return None
-    gross = ((future / entry) - 1.0) * 10000.0
-    costs = (2.0 * max(0.0, float(fee_bps))) + (2.0 * max(0.0, float(slippage_bps)))
-    return float(gross - costs)
+    side = _prediction_side(row, role)
+    if side is None:
+        return None
+    side_name, direction = side
+    gross = float(direction) * ((future / entry) - 1.0) * 10000.0
+    cost = _round_trip_cost(row, fee_bps=fee_bps, slippage_bps=slippage_bps)
+    net = gross - float(cost["round_trip_cost_bps"])
+    prediction_id = str(
+        row.get("prediction_id") or row.get("decision_id") or ""
+    ).strip()
+    lineage = _lineage(row, role)
+    executed = bool(_role_value(row, role, "executed"))
+    return {
+        "outcome_id": (
+            f"{prediction_id}:{role}:{int(horizon_bars)}" if prediction_id else None
+        ),
+        "prediction_id": prediction_id or None,
+        "decision_id": str(row.get("decision_id") or "").strip() or None,
+        "model_role": role,
+        "symbol": symbol,
+        "prediction_ts": row.get("ts"),
+        "bar_timestamp": timestamp.isoformat(),
+        "horizon_bars": int(horizon_bars),
+        "side": side_name,
+        "direction_sign": int(direction),
+        "would_trade": _bool_value(row, f"{role}_would_trade"),
+        "executed": executed,
+        "evidence_type": "executed" if executed else "hypothetical",
+        "entry_price": float(entry),
+        "exit_price": float(future),
+        "gross_markout_bps": float(gross),
+        **cost,
+        "counterfactual_net_edge_bps": float(net),
+        "net_markout_bps": float(net),
+        "model_id": lineage["model_id"],
+        "model_version": lineage["model_version"],
+        "model_artifact_hash": lineage["model_artifact_hash"],
+        "feature_version": lineage["feature_version"],
+        "required_bar_timeframe": lineage["required_bar_timeframe"],
+        "lineage": lineage,
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
+
+
+def _resolved_outcomes(
+    rows: list[dict[str, Any]],
+    bars_by_symbol: Mapping[str, pd.DataFrame],
+    *,
+    horizon_bars: int,
+    fee_bps: float,
+    slippage_bps: float,
+) -> list[dict[str, Any]]:
+    outcomes: list[dict[str, Any]] = []
+    for row in rows:
+        for role in ("champion", "challenger"):
+            outcome = _resolved_shadow_outcome(
+                row,
+                bars_by_symbol,
+                role=role,
+                horizon_bars=horizon_bars,
+                fee_bps=fee_bps,
+                slippage_bps=slippage_bps,
+            )
+            if outcome is not None:
+                outcomes.append(outcome)
+    return outcomes
 
 
 def _decision_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -322,27 +489,44 @@ def _markout_summary(
     shadow_only_markouts: list[float] = []
     by_symbol: dict[str, list[float]] = {}
     by_hour: dict[str, list[float]] = {}
-    for row in rows:
-        markout = _net_markout_bps(
-            row,
-            bars_by_symbol,
-            horizon_bars=horizon_bars,
-            fee_bps=fee_bps,
-            slippage_bps=slippage_bps,
-        )
-        if markout is None:
+    outcomes = _resolved_outcomes(
+        rows,
+        bars_by_symbol,
+        horizon_bars=horizon_bars,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+    )
+    for outcome in outcomes:
+        if not bool(outcome["would_trade"]):
             continue
-        champion_would_trade = _bool_value(row, "champion_would_trade")
-        challenger_would_trade = _bool_value(row, "challenger_would_trade")
-        if champion_would_trade:
+        markout = float(outcome["net_markout_bps"])
+        role = str(outcome["model_role"])
+        if role == "champion":
             champion_markouts.append(markout)
-        if challenger_would_trade:
-            challenger_markouts.append(markout)
-            symbol = str(row.get("symbol") or "").strip().upper() or "UNKNOWN"
-            by_symbol.setdefault(symbol, []).append(markout)
-            if (hour_bucket := _hour_bucket(row)) is not None:
-                by_hour.setdefault(hour_bucket, []).append(markout)
-        if challenger_would_trade and not champion_would_trade:
+            continue
+        challenger_markouts.append(markout)
+        symbol = str(outcome["symbol"])
+        by_symbol.setdefault(symbol, []).append(markout)
+        matching_row = next(
+            (
+                candidate
+                for candidate in rows
+                if (
+                    outcome.get("prediction_id")
+                    and candidate.get("prediction_id") == outcome.get("prediction_id")
+                )
+                or (
+                    str(candidate.get("symbol") or "").strip().upper() == symbol
+                    and candidate.get("ts") == outcome.get("prediction_ts")
+                )
+            ),
+            None,
+        )
+        if matching_row is not None and (hour_bucket := _hour_bucket(matching_row)) is not None:
+            by_hour.setdefault(hour_bucket, []).append(markout)
+        if matching_row is not None and not _bool_value(
+            matching_row, "champion_would_trade"
+        ):
             shadow_only_markouts.append(markout)
     symbol_rows = [
         {
@@ -372,6 +556,7 @@ def _markout_summary(
         "horizon_bars": int(horizon_bars),
         "fee_bps": float(fee_bps),
         "slippage_bps": float(slippage_bps),
+        "cost_semantics": "round_trip_once",
         "champion_samples": len(champion_markouts),
         "champion_mean_net_markout_bps": _mean(champion_markouts),
         "champion_positive_rate": _rate(
@@ -794,8 +979,20 @@ def build_shadow_report(args: argparse.Namespace) -> dict[str, Any]:
         for horizon in horizons
     } if bars_by_symbol else None
     primary_horizon = int(getattr(args, "horizon_bars", horizons[0]))
+    resolved_outcomes: list[dict[str, Any]] = []
+    if bars_by_symbol:
+        for horizon in horizons:
+            for outcome in _resolved_outcomes(
+                rows,
+                bars_by_symbol,
+                horizon_bars=horizon,
+                fee_bps=float(args.fee_bps),
+                slippage_bps=float(args.slippage_bps),
+            ):
+                outcome["primary_horizon"] = bool(horizon == primary_horizon)
+                resolved_outcomes.append(outcome)
     report = {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "artifact_type": "ml_shadow_report",
         "generated_at": datetime.now(UTC).isoformat(),
         "input_jsonl": str(input_path),
@@ -835,6 +1032,28 @@ def build_shadow_report(args: argparse.Namespace) -> dict[str, Any]:
             else None
         ),
         "markout_summaries": markout_summaries,
+        "resolved_outcomes": resolved_outcomes,
+        "resolved_outcome_summary": {
+            "rows": int(len(resolved_outcomes)),
+            "hypothetical_rows": int(
+                sum(
+                    1
+                    for outcome in resolved_outcomes
+                    if outcome.get("evidence_type") == "hypothetical"
+                )
+            ),
+            "executed_rows": int(
+                sum(
+                    1
+                    for outcome in resolved_outcomes
+                    if outcome.get("evidence_type") == "executed"
+                )
+            ),
+            "with_prediction_id": int(
+                sum(1 for outcome in resolved_outcomes if outcome.get("prediction_id"))
+            ),
+            "cost_semantics": "round_trip_once",
+        },
         "top_symbols_by_rows": [
             {"symbol": symbol, "rows": int(count)}
             for symbol, count in symbols.most_common(20)

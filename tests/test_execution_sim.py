@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import numpy as np
+import pytest
 
 from ai_trading.evaluation.execution_sim import simulate_executed_trades
 from ai_trading.evaluation.execution_sim import ExecutionSimConfig
@@ -106,3 +109,98 @@ def test_execution_sim_direct_config_rejects_non_finite_params() -> None:
     assert cfg.transaction_cost_bps == 1.0
     assert cfg.slippage_bps == 5.0
     assert cfg.max_abs_position == 1.0
+
+
+def test_contextual_live_cost_can_only_raise_fixed_cost_and_reports_source() -> None:
+    now = datetime.now(UTC)
+    live_cost_model = {
+        "generated_at": now.isoformat(),
+        "by_symbol_side_session_order_type_volatility": [
+            {
+                "symbol": "AAPL",
+                "side": "buy",
+                "session_regime": "midday",
+                "order_type": "limit",
+                "volatility_bucket": "normal",
+                "sample_count": 10,
+                "sufficient_samples": True,
+                "p90_total_cost_bps": 20.0,
+                "last_observed_at": now.isoformat(),
+            }
+        ],
+    }
+    context = [
+        {
+            "symbol": "AAPL",
+            "session_regime": "midday",
+            "order_type": "limit",
+            "volatility_bucket": "normal",
+        },
+        {
+            "symbol": "AAPL",
+            "session_regime": "midday",
+            "order_type": "limit",
+            "volatility_bucket": "normal",
+        },
+    ]
+    params = {
+        "transaction_cost_bps": 4.0,
+        "slippage_bps": 2.0,
+        "allow_short": True,
+    }
+
+    fixed = simulate_executed_trades(
+        y_true=[0.01, 0.01],
+        y_pred=[1.0, 1.0],
+        params=params,
+    )
+    contextual = simulate_executed_trades(
+        y_true=[0.01, 0.01],
+        y_pred=[1.0, 1.0],
+        params=params,
+        execution_context=context,
+        live_cost_model=live_cost_model,
+    )
+    repeated = simulate_executed_trades(
+        y_true=[0.01, 0.01],
+        y_pred=[1.0, 1.0],
+        params=params,
+        execution_context=context,
+        live_cost_model=live_cost_model,
+    )
+
+    assert repeated == contextual
+    assert contextual["cost_return"] == pytest.approx(0.002)
+    assert contextual["cost_return"] > fixed["cost_return"]
+    assert contextual["mean_applied_cost_bps"] == pytest.approx(20.0)
+    assert contextual["cost_source_live_count"] == 1.0
+    assert contextual["cost_source_fallback_count"] == 0.0
+
+
+def test_contextual_missing_cost_uses_positive_fallback_on_turnover_only() -> None:
+    contextual = simulate_executed_trades(
+        y_true=[0.01, 0.01],
+        y_pred=[1.0, 1.0],
+        params={
+            "transaction_cost_bps": 0.0,
+            "slippage_bps": 0.0,
+            "allow_short": True,
+        },
+        execution_context=[{}, {}],
+    )
+    neutral = simulate_executed_trades(
+        y_true=[0.01, 0.01],
+        y_pred=[0.0, 0.0],
+        params={
+            "transaction_cost_bps": 0.0,
+            "slippage_bps": 0.0,
+            "allow_short": True,
+        },
+        execution_context=[{}, {}],
+    )
+
+    assert contextual["cost_return"] == pytest.approx(0.0001)
+    assert contextual["mean_applied_cost_bps"] == pytest.approx(1.0)
+    assert contextual["cost_source_fallback_count"] == 1.0
+    assert neutral["cost_return"] == 0.0
+    assert neutral["cost_source_fallback_count"] == 0.0

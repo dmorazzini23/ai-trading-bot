@@ -6,6 +6,10 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from ai_trading.replay.live_cost_alignment import resolve_live_cost_alignment
+
+_MIN_CONTEXT_FALLBACK_COST_BPS = 1.0
+
 
 def _finite_float(value: Any, default: float) -> float:
     try:
@@ -82,7 +86,93 @@ def _empty_metrics() -> dict[str, float]:
         "signal_count": 0.0,
         "max_drawdown": 0.0,
         "hit_rate": 0.0,
+        "mean_applied_cost_bps": 0.0,
+        "max_applied_cost_bps": 0.0,
+        "cost_source_fixed_count": 0.0,
+        "cost_source_live_count": 0.0,
+        "cost_source_fallback_count": 0.0,
+        "cost_alignment_stale_count": 0.0,
+        "cost_alignment_insufficient_count": 0.0,
     }
+
+
+def _execution_context_at(
+    execution_context: Sequence[Mapping[str, Any]] | None,
+    index: int,
+) -> Mapping[str, Any] | None:
+    if execution_context is None or index >= len(execution_context):
+        return None
+    row = execution_context[index]
+    return row if isinstance(row, Mapping) else None
+
+
+def _context_text(context: Mapping[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = context.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
+def _resolve_step_cost_bps(
+    *,
+    fixed_cost_bps: float,
+    context: Mapping[str, Any] | None,
+    live_cost_model: Mapping[str, Any] | None,
+    side: str,
+    cost_alignment_params: Mapping[str, Any] | None,
+) -> tuple[float, str, str]:
+    if context is None:
+        return float(fixed_cost_bps), "fixed", "fixed"
+    requested_fallback = _finite_float(
+        context.get("fallback_cost_bps"),
+        fixed_cost_bps,
+    )
+    fallback = max(
+        float(fixed_cost_bps),
+        float(requested_fallback),
+        _MIN_CONTEXT_FALLBACK_COST_BPS,
+    )
+    alignment_params = cost_alignment_params or {}
+    resolution = resolve_live_cost_alignment(
+        live_cost_model,
+        symbol=_context_text(context, "symbol", "ticker"),
+        side=_context_text(context, "side", "order_side") or side,
+        session_bucket=_context_text(
+            context,
+            "session_bucket",
+            "session_regime",
+            "session",
+        ),
+        order_type=_context_text(context, "order_type", "type"),
+        volatility_bucket=_context_text(
+            context,
+            "volatility_bucket",
+            "vol_bucket",
+            "liquidity_bucket",
+        ),
+        fallback_cost_bps=fallback,
+        max_age_seconds=max(
+            0.0,
+            _finite_float(alignment_params.get("max_age_seconds"), 86_400.0),
+        ),
+        min_samples=max(
+            1,
+            int(_finite_float(alignment_params.get("min_samples"), 5.0)),
+        ),
+        cost_metric=str(
+            alignment_params.get("cost_metric") or "p90_total_cost_bps"
+        ),
+    )
+    resolved = max(
+        fallback,
+        _finite_float(resolution.get("resolved_cost_bps"), fallback),
+    )
+    return (
+        float(resolved),
+        str(resolution.get("source") or "fallback"),
+        str(resolution.get("alignment") or "unknown"),
+    )
 
 
 def simulate_executed_trades(
@@ -90,6 +180,9 @@ def simulate_executed_trades(
     y_true: Sequence[float],
     y_pred: Sequence[float],
     params: Mapping[str, Any] | ExecutionSimConfig | None = None,
+    execution_context: Sequence[Mapping[str, Any]] | None = None,
+    live_cost_model: Mapping[str, Any] | None = None,
+    cost_alignment_params: Mapping[str, Any] | None = None,
 ) -> dict[str, float]:
     """Simulate realized fold-level PnL from predictions and returns."""
 
@@ -109,7 +202,7 @@ def simulate_executed_trades(
     if steps <= 0:
         return _empty_metrics()
 
-    total_cost_rate = (cfg.transaction_cost_bps + cfg.slippage_bps) / 10_000.0
+    fixed_cost_bps = cfg.transaction_cost_bps + cfg.slippage_bps
     prev_position = 0.0
     equity = 1.0
     running_peak = equity
@@ -120,12 +213,32 @@ def simulate_executed_trades(
     trade_count = 0
     active_signals = 0
     profitable_steps = 0
+    applied_cost_bps: list[float] = []
+    source_counts = {"fixed": 0, "live": 0, "fallback": 0}
+    stale_count = 0
+    insufficient_count = 0
 
-    for pred, actual in zip(pred_arr[:steps], true_arr[:steps], strict=False):
+    for step_index, (pred, actual) in enumerate(
+        zip(pred_arr[:steps], true_arr[:steps], strict=False)
+    ):
         if not np.isfinite(actual):
             target_position = 0.0
             turnover = abs(target_position - prev_position)
-            step_cost = float(turnover * total_cost_rate)
+            step_cost = 0.0
+            if turnover > 0.0:
+                side = "buy" if target_position > prev_position else "sell"
+                cost_bps, source, alignment = _resolve_step_cost_bps(
+                    fixed_cost_bps=fixed_cost_bps,
+                    context=_execution_context_at(execution_context, step_index),
+                    live_cost_model=live_cost_model,
+                    side=side,
+                    cost_alignment_params=cost_alignment_params,
+                )
+                step_cost = float(turnover * (cost_bps / 10_000.0))
+                applied_cost_bps.append(cost_bps)
+                source_counts[source if source in source_counts else "fallback"] += 1
+                stale_count += int(alignment == "stale")
+                insufficient_count += int(alignment == "insufficient_samples")
             if turnover > 0.0:
                 trade_count += 1
             cost_return += step_cost
@@ -152,7 +265,21 @@ def simulate_executed_trades(
             active_signals += 1
 
         step_gross = float(target_position * float(actual))
-        step_cost = float(turnover * total_cost_rate)
+        step_cost = 0.0
+        if turnover > 0.0:
+            side = "buy" if target_position > prev_position else "sell"
+            cost_bps, source, alignment = _resolve_step_cost_bps(
+                fixed_cost_bps=fixed_cost_bps,
+                context=_execution_context_at(execution_context, step_index),
+                live_cost_model=live_cost_model,
+                side=side,
+                cost_alignment_params=cost_alignment_params,
+            )
+            step_cost = float(turnover * (cost_bps / 10_000.0))
+            applied_cost_bps.append(cost_bps)
+            source_counts[source if source in source_counts else "fallback"] += 1
+            stale_count += int(alignment == "stale")
+            insufficient_count += int(alignment == "insufficient_samples")
         step_net = max(step_gross - step_cost, -0.99)
 
         gross_return += step_gross
@@ -177,6 +304,17 @@ def simulate_executed_trades(
         "signal_count": float(active_signals),
         "max_drawdown": float(max_drawdown),
         "hit_rate": float(profitable_steps / max(1, active_signals)),
+        "mean_applied_cost_bps": float(np.mean(applied_cost_bps))
+        if applied_cost_bps
+        else 0.0,
+        "max_applied_cost_bps": float(max(applied_cost_bps))
+        if applied_cost_bps
+        else 0.0,
+        "cost_source_fixed_count": float(source_counts["fixed"]),
+        "cost_source_live_count": float(source_counts["live"]),
+        "cost_source_fallback_count": float(source_counts["fallback"]),
+        "cost_alignment_stale_count": float(stale_count),
+        "cost_alignment_insufficient_count": float(insufficient_count),
     }
 
 

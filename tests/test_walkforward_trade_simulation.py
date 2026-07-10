@@ -105,3 +105,65 @@ def test_walkforward_fold_sim_wrapper_matches_execution_sim(tmp_path) -> None:
     )
 
     assert wrapped == direct
+
+
+def test_walkforward_fold_sim_threads_contextual_costs(tmp_path) -> None:
+    evaluator = WalkForwardEvaluator(output_dir=str(tmp_path))
+    evaluator.trade_simulation_params = {
+        "signal_threshold": 0.0,
+        "transaction_cost_bps": 3.0,
+        "slippage_bps": 2.0,
+        "allow_short": True,
+        "max_abs_position": 1.0,
+    }
+    now = datetime.now(UTC)
+    context = [
+        {
+            "symbol": "AAPL",
+            "session_regime": "midday",
+            "order_type": "limit",
+            "volatility_bucket": "normal",
+        },
+        {
+            "symbol": "AAPL",
+            "session_regime": "midday",
+            "order_type": "limit",
+            "volatility_bucket": "normal",
+        },
+    ]
+    live_cost_model = {
+        "generated_at": now.isoformat(),
+        "by_symbol_side_session_order_type_volatility": [
+            {
+                "symbol": "AAPL",
+                "side": "buy",
+                "session_regime": "midday",
+                "order_type": "limit",
+                "volatility_bucket": "normal",
+                "sample_count": 8,
+                "sufficient_samples": True,
+                "p90_total_cost_bps": 15.0,
+                "last_observed_at": now.isoformat(),
+            }
+        ],
+    }
+    y_true = pd.Series([0.01, 0.02], dtype=float)
+    y_pred = np.array([0.5, 0.5], dtype=float)
+
+    wrapped = evaluator._simulate_fold_trades(
+        y_true=y_true,
+        y_pred=y_pred,
+        execution_context=context,
+        live_cost_model=live_cost_model,
+    )
+    direct = simulate_executed_trades(
+        y_true=y_true.values,
+        y_pred=y_pred.tolist(),
+        params=evaluator.trade_simulation_params,
+        execution_context=context,
+        live_cost_model=live_cost_model,
+    )
+
+    assert wrapped == direct
+    assert wrapped["mean_applied_cost_bps"] == 15.0
+    assert wrapped["cost_source_live_count"] == 1.0

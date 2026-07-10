@@ -9,6 +9,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ai_trading.models.contracts import (
+    DAY_SLEEVE_ML_BAR_TIMEFRAME,
+    DAY_SLEEVE_ML_FEATURE_COLUMNS,
+    DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
+    model_feature_contract_hash,
+    normalize_bar_timeframe,
+)
 from ai_trading.training import after_hours
 
 
@@ -63,6 +70,43 @@ def _synthetic_daily(symbol: str):
     )
 
 
+def _synthetic_intraday(symbol: str) -> pd.DataFrame:
+    frame = _synthetic_daily(symbol)
+    frame.index = pd.date_range(
+        "2026-01-05T14:30:00Z",
+        periods=len(frame),
+        freq="5min",
+    )
+    return frame
+
+
+def _positive_candidate_metrics(name: str, dataset: pd.DataFrame, **_kwargs):
+    return after_hours.CandidateMetrics(
+        name=name,
+        fold_count=3,
+        profitable_fold_count=3,
+        profitable_fold_ratio=1.0,
+        support=120,
+        mean_expectancy_bps=2.5,
+        max_drawdown_bps=20.0,
+        turnover_ratio=0.1,
+        mean_hit_rate=0.6,
+        hit_rate_stability=0.8,
+        regime_metrics={},
+        oof_probabilities=np.full(len(dataset), 0.8, dtype=float),
+        fold_expectancy_bps=(2.0, 2.5, 3.0),
+        brier_score=0.1,
+        selected_threshold=0.5,
+        score_orientation="direct",
+        score_orientation_report={
+            "orientation": "direct",
+            "inverse_applied": False,
+            "valid_samples": len(dataset),
+            "expectancy_delta_bps": 1.0,
+        },
+    )
+
+
 def _write_after_hours_report(
     path: Path,
     *,
@@ -102,7 +146,7 @@ def test_build_symbol_dataset_adds_derived_feature_columns(
 ) -> None:
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
     dataset = after_hours._build_symbol_dataset(
@@ -124,6 +168,65 @@ def test_build_symbol_dataset_adds_derived_feature_columns(
         assert np.isfinite(dataset[column].to_numpy()).all()
 
 
+def test_day_sleeve_contract_is_canonical_five_minute() -> None:
+    assert normalize_bar_timeframe("5m") == DAY_SLEEVE_ML_BAR_TIMEFRAME
+    assert normalize_bar_timeframe("5-minute") == DAY_SLEEVE_ML_BAR_TIMEFRAME
+    assert tuple(after_hours.FEATURE_COLUMNS) == DAY_SLEEVE_ML_FEATURE_COLUMNS
+    contract_hash = model_feature_contract_hash(
+        DAY_SLEEVE_ML_FEATURE_COLUMNS,
+        bar_timeframe=DAY_SLEEVE_ML_BAR_TIMEFRAME,
+        contract_version=DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
+    )
+    assert len(contract_hash) == 64
+
+
+def test_fetch_day_sleeve_bars_requests_five_minute_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+    expected = _synthetic_intraday("AAPL")
+
+    def _get_bars(symbol, timeframe, start, end, *, feed_role):
+        calls.append((symbol, timeframe, start, end, feed_role))
+        return expected
+
+    monkeypatch.setenv("AI_TRADING_MODEL_DATA_FEED_ROLE", "reference")
+    monkeypatch.setattr(after_hours, "get_bars", _get_bars)
+    start = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    end = datetime(2026, 1, 6, 21, 0, tzinfo=UTC)
+
+    result = after_hours._fetch_day_sleeve_bars("AAPL", start, end)
+
+    assert result is expected
+    assert calls == [("AAPL", "5Min", start, end, "reference")]
+
+
+def test_build_symbol_dataset_excludes_forming_bar_and_uses_bar_horizon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bars = _synthetic_intraday("AAPL")
+    forming_bar_ts = bars.index[-1]
+    last_finalized_ts = bars.index[-2]
+    monkeypatch.setattr(
+        after_hours,
+        "_fetch_day_sleeve_bars",
+        lambda symbol, _start, _end: bars,
+    )
+
+    dataset = after_hours._build_symbol_dataset(
+        "AAPL",
+        bars.index[0].to_pydatetime(),
+        (forming_bar_ts + pd.Timedelta(minutes=2)).to_pydatetime(),
+        cost_floor_bps=0.0,
+        horizon_bars=2,
+    )
+
+    assert forming_bar_ts not in set(dataset["timestamp"])
+    row = dataset.iloc[-1]
+    assert row["label_ts"] == last_finalized_ts
+    assert row["timestamp"] == bars.index[-4]
+
+
 def test_build_symbol_dataset_label_ts_uses_next_valid_bar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -134,7 +237,7 @@ def test_build_symbol_dataset_label_ts_uses_next_valid_bar(
     expected_next_ts = bars.index[251]
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: irregular,
     )
 
@@ -156,7 +259,7 @@ def test_build_symbol_dataset_uses_configured_label_horizon(
     bars = _synthetic_daily("AAPL")
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: bars,
     )
 
@@ -165,7 +268,7 @@ def test_build_symbol_dataset_uses_configured_label_horizon(
         datetime(2024, 1, 1, tzinfo=UTC),
         datetime(2026, 1, 1, tzinfo=UTC),
         cost_floor_bps=0.0,
-        horizon_days=3,
+        horizon_bars=3,
     )
 
     first_ts = dataset.iloc[0]["timestamp"]
@@ -958,13 +1061,13 @@ def test_after_hours_training_trains_and_writes_outputs(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTE_MODEL_PATH", "1")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
-    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", "365")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
 
@@ -1023,15 +1126,19 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert hasattr(trained_model, "hard_negative_weighted_fit_")
     assert hasattr(trained_model, "edge_model_v2_bundle_")
     assert hasattr(trained_model, "edge_label_quality_")
-    assert getattr(trained_model, "required_bar_timeframe_") == "1Day"
+    assert getattr(trained_model, "required_bar_timeframe_") == "5Min"
     assert isinstance(getattr(trained_model, "edge_model_v2_bundle_"), dict)
 
     manifest_payload = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
     assert "metadata" in manifest_payload
     assert manifest_payload["metadata"]["strategy"] == "after_hours_ml_edge"
-    assert manifest_payload["metadata"]["required_bar_timeframe"] == "1Day"
-    assert manifest_payload["metadata"]["training_bar_timeframe"] == "1Day"
-    assert manifest_payload["metadata"]["feature_contract_version"] == "ml_feature_contract_v1"
+    assert manifest_payload["metadata"]["required_bar_timeframe"] == "5Min"
+    assert manifest_payload["metadata"]["training_bar_timeframe"] == "5Min"
+    assert (
+        manifest_payload["metadata"]["feature_contract_version"]
+        == "day_sleeve_ml_feature_contract_v1"
+    )
+    assert manifest_payload["metadata"]["horizon_bars"] == 1
     assert "segment_reweighting" in manifest_payload["metadata"]
     assert "sample_weighting" in manifest_payload["metadata"]
     assert "negative_symbol_penalties" in manifest_payload["metadata"]
@@ -1057,7 +1164,7 @@ def test_after_hours_training_skips_when_no_new_signal_data(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTE_MODEL_PATH", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
-    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", "365")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
@@ -1065,7 +1172,7 @@ def test_after_hours_training_skips_when_no_new_signal_data(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_NEW_ROWS_FOR_RETRAIN", "25")
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
 
@@ -1303,13 +1410,13 @@ def test_after_hours_training_falls_back_when_model_dir_read_only(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTE_MODEL_PATH", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
-    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", "365")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
     caplog.set_level("WARNING")
@@ -1346,7 +1453,7 @@ def test_after_hours_sensitivity_gate_can_block_promotion(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
-    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", "365")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
@@ -1354,7 +1461,7 @@ def test_after_hours_sensitivity_gate_can_block_promotion(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SWEEP_MIN_SCENARIO_EXPECTANCY_BPS", "9999")
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
 
@@ -1386,12 +1493,12 @@ def test_after_hours_runtime_promotion_skips_shadow_governance(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
-    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", "365")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
 
@@ -1420,7 +1527,7 @@ def test_after_hours_strict_promotion_policy_blocks_when_min_rows_not_met(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
-    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", "365")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
@@ -1449,7 +1556,7 @@ def test_after_hours_strict_promotion_policy_blocks_when_min_rows_not_met(
     )
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
 
@@ -1478,7 +1585,7 @@ def test_after_hours_strict_promotion_policy_can_promote_when_all_gates_pass(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
-    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", "365")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
@@ -1513,9 +1620,10 @@ def test_after_hours_strict_promotion_policy_can_promote_when_all_gates_pass(
     )
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
+    monkeypatch.setattr(after_hours, "_evaluate_candidate", _positive_candidate_metrics)
 
     result = after_hours.run_after_hours_training(
         now=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),
@@ -1549,7 +1657,7 @@ def test_after_hours_runtime_promotion_records_registry_metadata(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTE_MODEL_PATH", "1")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
-    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", "365")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
@@ -1584,9 +1692,10 @@ def test_after_hours_runtime_promotion_records_registry_metadata(
     )
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
+    monkeypatch.setattr(after_hours, "_evaluate_candidate", _positive_candidate_metrics)
 
     result = after_hours.run_after_hours_training(
         now=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),
@@ -1689,7 +1798,7 @@ def test_after_hours_required_phase1_gate_blocks_promotion(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
-    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", "365")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
@@ -1721,7 +1830,7 @@ def test_after_hours_required_phase1_gate_blocks_promotion(
     monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_PROFITABLE_FOLD_RATIO", "0.0")
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
 
@@ -1783,6 +1892,53 @@ def test_promotion_gate_bundle_can_ignore_sensitivity_gate(
     assert promotion["combined_gates"]["sensitivity"] is True
     assert promotion["gate_passed"] is True
     assert promotion["status"] == "production"
+
+
+@pytest.mark.parametrize(
+    ("expectancy_bps", "expected_gate"),
+    [
+        (-1.0, False),
+        (0.0, False),
+        (float("nan"), False),
+        (0.01, True),
+    ],
+)
+def test_promotion_gate_bundle_requires_absolute_positive_net_expectancy(
+    monkeypatch: pytest.MonkeyPatch,
+    expectancy_bps: float,
+    expected_gate: bool,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="logreg",
+        fold_count=2,
+        profitable_fold_count=2,
+        profitable_fold_ratio=1.0,
+        support=100,
+        mean_expectancy_bps=expectancy_bps,
+        max_drawdown_bps=10.0,
+        turnover_ratio=0.1,
+        mean_hit_rate=0.6,
+        hit_rate_stability=0.8,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.5, 0.6], dtype=float),
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_POLICY", "legacy")
+    monkeypatch.setenv("AI_TRADING_POLICY_PROMOTION_MIN_OOS_NET_BPS", "-9999")
+
+    promotion = after_hours._promotion_gate_bundle(
+        best=best,
+        rows=400,
+        edge_gates={"configured_expectancy": True},
+    )
+
+    assert promotion["absolute_min_oos_net_bps"] == 0.0
+    assert (
+        promotion["combined_gates"]["absolute_positive_net_expectancy"]
+        is expected_gate
+    )
+    assert promotion["gate_passed"] is expected_gate
+    assert promotion["status"] == ("production" if expected_gate else "shadow")
 
 
 def test_advanced_candidate_production_requires_explicit_approval(monkeypatch):
@@ -3002,11 +3158,11 @@ def test_after_hours_training_handles_leakage_assertions(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
-    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", "365")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
     monkeypatch.setattr(
@@ -3038,12 +3194,12 @@ def test_after_hours_training_no_global_leakage_warning(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
-    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", "365")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
     caplog.set_level("WARNING")
@@ -3076,13 +3232,13 @@ def test_after_hours_uses_dedicated_ticker_csv(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
-    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", "365")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LIGHTGBM_VERBOSITY", "-1")
     monkeypatch.setattr(
         after_hours,
-        "_fetch_daily_bars",
+        "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_daily(symbol),
     )
 

@@ -9,6 +9,8 @@ from collections.abc import Sequence
 MODEL_FEATURE_CONTRACT_VERSION = "ml_feature_contract_v1"
 LIVE_ML_BAR_TIMEFRAME = "1Min"
 AFTER_HOURS_ML_BAR_TIMEFRAME = "1Day"
+DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION = "day_sleeve_ml_feature_contract_v1"
+DAY_SLEEVE_ML_BAR_TIMEFRAME = "5Min"
 
 LIVE_ML_FEATURE_COLUMNS: tuple[str, ...] = (
     "rsi",
@@ -19,7 +21,7 @@ LIVE_ML_FEATURE_COLUMNS: tuple[str, ...] = (
     "sma_200",
 )
 
-AFTER_HOURS_ML_FEATURE_COLUMNS: tuple[str, ...] = LIVE_ML_FEATURE_COLUMNS + (
+DAY_SLEEVE_ML_FEATURE_COLUMNS: tuple[str, ...] = LIVE_ML_FEATURE_COLUMNS + (
     "signal",
     "atr_pct",
     "vwap_distance",
@@ -39,6 +41,9 @@ def normalize_bar_timeframe(value: object) -> str:
         "1min": LIVE_ML_BAR_TIMEFRAME,
         "1minute": LIVE_ML_BAR_TIMEFRAME,
         "minute": LIVE_ML_BAR_TIMEFRAME,
+        "5m": DAY_SLEEVE_ML_BAR_TIMEFRAME,
+        "5min": DAY_SLEEVE_ML_BAR_TIMEFRAME,
+        "5minute": DAY_SLEEVE_ML_BAR_TIMEFRAME,
         "1d": AFTER_HOURS_ML_BAR_TIMEFRAME,
         "1day": AFTER_HOURS_ML_BAR_TIMEFRAME,
         "day": AFTER_HOURS_ML_BAR_TIMEFRAME,
@@ -51,10 +56,11 @@ def model_feature_contract_hash(
     feature_columns: Sequence[str],
     *,
     bar_timeframe: str,
+    contract_version: str = MODEL_FEATURE_CONTRACT_VERSION,
 ) -> str:
     payload = {
         "bar_timeframe": normalize_bar_timeframe(bar_timeframe),
         "feature_columns": [str(column) for column in feature_columns],
-        "version": MODEL_FEATURE_CONTRACT_VERSION,
+        "version": str(contract_version),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()

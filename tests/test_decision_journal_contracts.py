@@ -157,6 +157,50 @@ def test_decision_record_includes_canonical_decision_journal() -> None:
     assert journal["broker_result"]["accepted"] is True
 
 
+def test_decision_journal_uses_consistent_lineage_source_precedence() -> None:
+    bar_ts = datetime.now(UTC)
+    record = build_decision_record(
+        symbol="AAPL",
+        bar_ts=bar_ts,
+        net_target=NettedTarget(
+            symbol="AAPL",
+            bar_ts=bar_ts,
+            target_dollars=1000.0,
+            target_shares=8.0,
+        ),
+        gates=["OK_TRADE"],
+        metrics={
+            "model_id": "metrics-model-id",
+            "model_version": "",
+        },
+        order={
+            "side": "buy",
+            "qty": 8,
+            "status": "accepted",
+            "model_id": "order-model-id",
+            "model_version": "order-model-version",
+            "dataset_hash": "",
+        },
+        config_snapshot={
+            "model_version": "config-model-version",
+            "dataset_hash": "config-dataset-hash",
+            "feature_version": "",
+        },
+        tca={
+            "dataset_hash": "tca-dataset-hash",
+            "feature_version": "tca-feature-version",
+            "model_artifact_hash": "tca-artifact-hash",
+        },
+    )
+
+    journal = record.to_dict()["decision_journal"]
+    assert journal["model_id"] == "metrics-model-id"
+    assert journal["model_version"] == "order-model-version"
+    assert journal["dataset_hash"] == "config-dataset-hash"
+    assert journal["feature_version"] == "tca-feature-version"
+    assert journal["model_artifact_hash"] == "tca-artifact-hash"
+
+
 def test_build_decision_record_populates_explicit_canonical_contracts() -> None:
     bar_ts = datetime.now(UTC)
     proposal = SleeveProposal(

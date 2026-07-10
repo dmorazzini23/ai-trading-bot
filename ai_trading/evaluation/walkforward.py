@@ -8,7 +8,7 @@ import json
 import os
 from datetime import UTC, datetime, timedelta
 from numbers import Real
-from typing import Any, TYPE_CHECKING, cast
+from typing import Any, Mapping, Sequence, TYPE_CHECKING, cast
 import numpy as np
 from ai_trading.config.management import get_env
 from ai_trading.logging import logger
@@ -135,7 +135,19 @@ class WalkForwardEvaluator:
         }
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def run_walkforward(self, data: 'pd.DataFrame', target_col: str, feature_cols: list[str] | None=None, model_type: str='lightgbm', feature_pipeline_params: dict[str, Any] | None=None, save_results: bool=True, label_end_col: str | None=None) -> dict[str, Any]:
+    def run_walkforward(
+        self,
+        data: 'pd.DataFrame',
+        target_col: str,
+        feature_cols: list[str] | None = None,
+        model_type: str = 'lightgbm',
+        feature_pipeline_params: dict[str, Any] | None = None,
+        save_results: bool = True,
+        label_end_col: str | None = None,
+        execution_context: Sequence[Mapping[str, Any]] | None = None,
+        live_cost_model: Mapping[str, Any] | None = None,
+        cost_alignment_params: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Run walk-forward analysis.
 
@@ -163,6 +175,17 @@ class WalkForwardEvaluator:
             X = data[feature_cols]
             y = data[target_col]
             label_end = data[label_end_col] if label_end_col else None
+            execution_context_series: pd.Series | None = None
+            if execution_context is not None:
+                if len(execution_context) != len(data):
+                    raise ValueError(
+                        "execution_context must contain one mapping per data row"
+                    )
+                execution_context_series = pd.Series(
+                    list(execution_context),
+                    index=data.index,
+                    dtype=object,
+                )
             splits = walkforward_splits(dates=data.index, mode=self.mode, train_span=self.train_span, test_span=self.test_span, embargo_pct=self.embargo_pct)
             logger.info(f'Generated {len(splits)} walk-forward periods')
             self.fold_results = []
@@ -172,7 +195,18 @@ class WalkForwardEvaluator:
             equity_values = [100.0]
             for fold_idx, split_info in enumerate(splits):
                 logger.debug(f'Processing fold {fold_idx + 1}/{len(splits)}')
-                fold_result = self._run_single_fold(X, y, split_info, model_type, feature_pipeline_params, fold_idx, label_end=label_end)
+                fold_result = self._run_single_fold(
+                    X,
+                    y,
+                    split_info,
+                    model_type,
+                    feature_pipeline_params,
+                    fold_idx,
+                    label_end=label_end,
+                    execution_context=execution_context_series,
+                    live_cost_model=live_cost_model,
+                    cost_alignment_params=cost_alignment_params,
+                )
                 self.fold_results.append(fold_result)
                 if 'predictions' in fold_result and 'actual' in fold_result:
                     predictions_all.extend(fold_result['predictions'])
@@ -220,7 +254,20 @@ class WalkForwardEvaluator:
             raise ValueError("label-end metadata required for purged walk-forward")
         return None
 
-    def _run_single_fold(self, X: 'pd.DataFrame', y: 'pd.Series', split_info: dict[str, Any], model_type: str, feature_pipeline_params: dict[str, Any] | None, fold_idx: int, *, label_end: 'pd.Series | None'=None) -> dict[str, Any]:
+    def _run_single_fold(
+        self,
+        X: 'pd.DataFrame',
+        y: 'pd.Series',
+        split_info: dict[str, Any],
+        model_type: str,
+        feature_pipeline_params: dict[str, Any] | None,
+        fold_idx: int,
+        *,
+        label_end: 'pd.Series | None' = None,
+        execution_context: 'pd.Series | None' = None,
+        live_cost_model: Mapping[str, Any] | None = None,
+        cost_alignment_params: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Run single fold of walk-forward analysis."""
         try:
             train_start = split_info['train_start']
@@ -265,6 +312,13 @@ class WalkForwardEvaluator:
             trade_metrics = self._simulate_fold_trades(
                 y_true=y_test,
                 y_pred=predictions,
+                execution_context=(
+                    list(execution_context[test_mask])
+                    if execution_context is not None
+                    else None
+                ),
+                live_cost_model=live_cost_model,
+                cost_alignment_params=cost_alignment_params,
             )
             fold_result = {'fold': fold_idx, 'train_start': train_start.isoformat(), 'train_end': train_end.isoformat(), 'test_start': test_start.isoformat(), 'test_end': test_end.isoformat(), 'train_samples': len(X_train), 'test_samples': len(X_test), 'purged_train_samples': int(purged_train_samples), 'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else list(predictions), 'actual': y_test.values.tolist(), 'metrics': fold_metrics, 'trade_metrics': trade_metrics, 'model_params': trainer.best_params}
             return fold_result
@@ -301,6 +355,9 @@ class WalkForwardEvaluator:
         *,
         y_true: 'pd.Series',
         y_pred: np.ndarray,
+        execution_context: Sequence[Mapping[str, Any]] | None = None,
+        live_cost_model: Mapping[str, Any] | None = None,
+        cost_alignment_params: Mapping[str, Any] | None = None,
     ) -> dict[str, float]:
         """Simulate fold-level executed trades from predictions and realized returns."""
         try:
@@ -308,6 +365,9 @@ class WalkForwardEvaluator:
                 y_true=y_true.values,
                 y_pred=y_pred.tolist() if hasattr(y_pred, "tolist") else list(y_pred),
                 params=self.trade_simulation_params,
+                execution_context=execution_context,
+                live_cost_model=live_cost_model,
+                cost_alignment_params=cost_alignment_params,
             )
             return cast(dict[str, float], trade_summary)
         except (TypeError, ValueError) as e:
@@ -383,6 +443,29 @@ class WalkForwardEvaluator:
             executed_cost_return = sum(
                 (float(item.get('cost_return', 0.0)) for item in fold_trade_metrics if isinstance(item, dict))
             )
+            cost_source_fixed_count = sum(
+                float(item.get("cost_source_fixed_count", 0.0))
+                for item in fold_trade_metrics
+                if isinstance(item, dict)
+            )
+            cost_source_live_count = sum(
+                float(item.get("cost_source_live_count", 0.0))
+                for item in fold_trade_metrics
+                if isinstance(item, dict)
+            )
+            cost_source_fallback_count = sum(
+                float(item.get("cost_source_fallback_count", 0.0))
+                for item in fold_trade_metrics
+                if isinstance(item, dict)
+            )
+            max_applied_cost_bps = max(
+                (
+                    float(item.get("max_applied_cost_bps", 0.0))
+                    for item in fold_trade_metrics
+                    if isinstance(item, dict)
+                ),
+                default=0.0,
+            )
             total_days = sum(
                 (
                     int(result.get("metrics", {}).get("period_days", 0) or 0)
@@ -413,6 +496,10 @@ class WalkForwardEvaluator:
                 'executed_trade_count': int(executed_trade_count),
                 'executed_turnover_units': float(executed_turnover_units),
                 'executed_cost_return': float(executed_cost_return),
+                'cost_source_fixed_count': int(cost_source_fixed_count),
+                'cost_source_live_count': int(cost_source_live_count),
+                'cost_source_fallback_count': int(cost_source_fallback_count),
+                'max_applied_cost_bps': float(max_applied_cost_bps),
                 'raw_prediction_diagnostics': raw_prediction_diagnostics,
             }
             return aggregate_metrics

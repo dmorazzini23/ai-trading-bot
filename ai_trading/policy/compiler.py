@@ -106,6 +106,7 @@ KNOWN_POLICY_KEYS: frozenset[str] = frozenset(
         "AI_TRADING_POLICY_TOGGLE_SPRT_BETA",
         "AI_TRADING_POLICY_TOGGLE_SPRT_EFFECT_BPS",
         "AI_TRADING_POLICY_REPLAY_MIN_SAMPLES",
+        "AI_TRADING_POLICY_REPLAY_MIN_NET_EDGE_BPS",
         "AI_TRADING_POLICY_REPLAY_NET_TOLERANCE_BPS",
         "AI_TRADING_POLICY_REPLAY_DRAWDOWN_TOLERANCE_PCT",
         "AI_TRADING_POLICY_SAFE_PENDING_AGE_SEC",
@@ -207,6 +208,7 @@ class GovernancePolicy:
     promotion_min_oos_samples: int
     promotion_min_oos_net_bps: float
     replay_min_samples: int
+    replay_min_net_edge_bps: float
     replay_net_tolerance_bps: float
     replay_drawdown_tolerance_pct: float
 
@@ -690,6 +692,12 @@ def compile_effective_policy(cfg: Any, env: Mapping[str, str] | None = None) -> 
             min_value=1,
             max_value=1_000_000,
         ),
+        replay_min_net_edge_bps=_as_float(
+            env_values.get("AI_TRADING_POLICY_REPLAY_MIN_NET_EDGE_BPS"),
+            0.0,
+            min_value=0.0,
+            max_value=1_000.0,
+        ),
         replay_net_tolerance_bps=_as_float(
             env_values.get("AI_TRADING_POLICY_REPLAY_NET_TOLERANCE_BPS"),
             2.0,
@@ -1147,18 +1155,34 @@ def evaluate_counterfactual_non_regression(
     min_samples: int,
     net_tolerance_bps: float,
     drawdown_tolerance_pct: float,
+    min_net_edge_bps: float = 0.0,
 ) -> tuple[bool, dict[str, Any]]:
     """Evaluate non-regression constraint for policy replay promotion."""
 
     base_samples = _as_int(baseline.get("sample_count"), 0, min_value=0)
     cand_samples = _as_int(candidate.get("sample_count"), 0, min_value=0)
     base_net = _as_float(baseline.get("net_edge_bps"), 0.0)
-    cand_net = _as_float(candidate.get("net_edge_bps"), 0.0)
+    try:
+        raw_cand_net = float(candidate.get("net_edge_bps"))
+    except (TypeError, ValueError):
+        raw_cand_net = 0.0
+        cand_net_finite = False
+    else:
+        cand_net_finite = math.isfinite(raw_cand_net)
+    cand_net = raw_cand_net if cand_net_finite else 0.0
+    absolute_net_floor_bps = _as_float(
+        min_net_edge_bps,
+        0.0,
+        min_value=0.0,
+    )
     base_dd = _as_float(baseline.get("max_drawdown_pct"), 0.0, min_value=0.0)
     cand_dd = _as_float(candidate.get("max_drawdown_pct"), 0.0, min_value=0.0)
 
     checks = {
         "sample_size": cand_samples >= min_samples,
+        "candidate_net_edge_positive": (
+            cand_net_finite and cand_net > absolute_net_floor_bps
+        ),
         "net_edge_non_regression": cand_net + net_tolerance_bps >= base_net,
         "drawdown_non_regression": cand_dd <= (base_dd + drawdown_tolerance_pct),
     }
@@ -1174,10 +1198,12 @@ def evaluate_counterfactual_non_regression(
             "candidate": {
                 "sample_count": cand_samples,
                 "net_edge_bps": cand_net,
+                "net_edge_bps_finite": cand_net_finite,
                 "max_drawdown_pct": cand_dd,
             },
             "required": {
                 "min_samples": int(min_samples),
+                "min_net_edge_bps": float(absolute_net_floor_bps),
                 "net_tolerance_bps": float(net_tolerance_bps),
                 "drawdown_tolerance_pct": float(drawdown_tolerance_pct),
             },

@@ -245,3 +245,92 @@ def test_build_shadow_report_filters_by_since_and_provider(tmp_path: Path) -> No
     decisions = report["decision_summary"]
     assert decisions["rows"] == 1
     assert decisions["both_trade_count"] == 1
+
+
+def test_shadow_outcomes_are_signed_cost_aware_and_preserve_lineage(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "bars"
+    data_dir.mkdir()
+    idx = pd.date_range("2026-01-02T14:30:00Z", periods=3, freq="min")
+    pd.DataFrame(
+        {
+            "timestamp": idx,
+            "open": [100.0, 99.0, 98.0],
+            "high": [101.0, 100.0, 99.0],
+            "low": [99.0, 98.0, 97.0],
+            "close": [100.0, 99.0, 98.0],
+            "volume": [1000.0] * 3,
+        }
+    ).to_csv(data_dir / "AAPL.csv", index=False)
+    input_jsonl = tmp_path / "shadow.jsonl"
+    input_jsonl.write_text(
+        json.dumps(
+            {
+                "ts": "2026-01-02T14:30:00+00:00",
+                "mode": "ml_signal_shadow",
+                "prediction_id": "prediction-1",
+                "decision_id": "decision-1",
+                "symbol": "AAPL",
+                "champion_would_trade": False,
+                "challenger_would_trade": True,
+                "challenger_prediction": "-1",
+                "challenger_side": "short",
+                "challenger_model_id": "challenger-a",
+                "challenger_model_version": "v7",
+                "challenger_model_artifact_hash": "sha256:abc",
+                "challenger_feature_version": "features-v3",
+                "challenger_required_bar_timeframe": "5Min",
+                "market": {
+                    "bar_timestamp": "2026-01-02T14:30:00+00:00",
+                    "entry_close": 100.0,
+                    "spread_bps": 4.0,
+                },
+                "cost": {
+                    "spread_bps": 4.0,
+                    "round_trip_cost_bps": 3.0,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_shadow_report(
+        argparse.Namespace(
+            input_jsonl=input_jsonl,
+            output_json=tmp_path / "report.json",
+            data_dir=data_dir,
+            timestamp_col="timestamp",
+            horizon_bars=1,
+            horizon_bars_list="",
+            fee_bps=1.0,
+            slippage_bps=2.0,
+            frame_filter="all",
+            provider_filter="all",
+            since="",
+            min_informational_rows=1,
+            min_review_rows=2,
+        )
+    )
+
+    outcomes = report["resolved_outcomes"]
+    assert len(outcomes) == 1
+    outcome = outcomes[0]
+    assert outcome["outcome_id"] == "prediction-1:challenger:1"
+    assert outcome["side"] == "short"
+    assert outcome["gross_markout_bps"] == pytest.approx(100.0)
+    assert outcome["round_trip_cost_bps"] == pytest.approx(10.0)
+    assert outcome["counterfactual_net_edge_bps"] == pytest.approx(90.0)
+    assert outcome["cost_source"] == "explicit_round_trip_conservative_max"
+    assert outcome["evidence_type"] == "hypothetical"
+    assert outcome["model_id"] == "challenger-a"
+    assert outcome["model_version"] == "v7"
+    assert outcome["model_artifact_hash"] == "sha256:abc"
+    assert outcome["feature_version"] == "features-v3"
+    assert outcome["required_bar_timeframe"] == "5Min"
+    assert outcome["promotion_authority"] is False
+    assert outcome["live_money_authority"] is False
+    assert report["markout_summary"]["challenger_mean_net_markout_bps"] == pytest.approx(
+        90.0
+    )
