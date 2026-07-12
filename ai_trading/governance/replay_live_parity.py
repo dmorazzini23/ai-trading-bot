@@ -9,6 +9,9 @@ from ai_trading.config.management import get_env
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 
+REPLAY_GOVERNANCE_SCHEMA_VERSION = "2.0.0"
+
+
 def _as_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return bool(default)
@@ -79,10 +82,10 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
             _as_float(
                 get_env(
                     "AI_TRADING_REPLAY_LIVE_PARITY_MAX_REPLAY_AGE_HOURS",
-                    96.0,
+                    24.0,
                     cast=float,
                 ),
-                96.0,
+                24.0,
             ),
             24.0 * 14.0,
         ),
@@ -186,6 +189,8 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         else {}
     )
     counterfactual_passed = counterfactual.get("passed") is True
+    schema_version = str(payload.get("schema_version") or "").strip()
+    policy_hash = str(payload.get("policy_hash") or "").strip()
 
     return {
         "enabled": True,
@@ -211,6 +216,8 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         "violations_by_code": violations_by_code,
         "cap_adjustments_count": int(max(0, cap_adjustments_count)),
         "counterfactual_passed": bool(counterfactual_passed),
+        "schema_version": schema_version,
+        "policy_hash": policy_hash,
         "counterfactual_available": "passed" in counterfactual,
         "counterfactual": counterfactual,
     }
@@ -220,6 +227,7 @@ def summarize_replay_live_parity_gate(
     *,
     replay_governance: Mapping[str, Any] | None = None,
     oms_lifecycle_parity: Mapping[str, Any] | None = None,
+    expected_policy_hash: str | None = None,
 ) -> dict[str, Any]:
     enabled = bool(
         get_env("AI_TRADING_REPLAY_LIVE_PARITY_GATE_ENABLED", True, cast=bool)
@@ -247,7 +255,7 @@ def summarize_replay_live_parity_gate(
     require_counterfactual_passed = bool(
         get_env(
             "AI_TRADING_REPLAY_LIVE_PARITY_REQUIRE_COUNTERFACTUAL_PASSED",
-            False,
+            True,
             cast=bool,
         )
     )
@@ -297,6 +305,22 @@ def summarize_replay_live_parity_gate(
     replay_counterfactual_passed = counterfactual_raw is True
     replay_counterfactual_available = bool(replay_counterfactual_available)
 
+    replay_schema_version = str(replay_snapshot.get("schema_version") or "").strip()
+    replay_policy_hash = str(replay_snapshot.get("policy_hash") or "").strip()
+    resolved_expected_policy_hash = str(
+        expected_policy_hash
+        or get_env("AI_TRADING_EFFECTIVE_POLICY_HASH", "", cast=str)
+        or ""
+    ).strip()
+    replay_contract_ok = bool(
+        replay_schema_version == REPLAY_GOVERNANCE_SCHEMA_VERSION
+        and replay_policy_hash
+        and (
+            not resolved_expected_policy_hash
+            or replay_policy_hash == resolved_expected_policy_hash
+        )
+    )
+
     lifecycle_enabled = bool(
         lifecycle_snapshot.get("enabled", bool(lifecycle_snapshot))
     )
@@ -341,6 +365,7 @@ def summarize_replay_live_parity_gate(
 
     checks = {
         "replay_available": replay_available_ok,
+        "replay_contract": replay_contract_ok,
         "replay_fresh": replay_fresh_ok,
         "replay_violations": replay_violations_ok,
         "replay_counterfactual": replay_counterfactual_ok,
@@ -362,12 +387,14 @@ def summarize_replay_live_parity_gate(
         "checks": checks,
         "thresholds": {
             "require_fresh_replay": bool(require_fresh_replay),
+            "required_schema_version": REPLAY_GOVERNANCE_SCHEMA_VERSION,
+            "expected_policy_hash": resolved_expected_policy_hash or None,
             "max_replay_age_hours": float(
                 replay_snapshot.get(
                     "max_age_hours",
                     get_env(
                         "AI_TRADING_REPLAY_LIVE_PARITY_MAX_REPLAY_AGE_HOURS",
-                        96.0,
+                        24.0,
                         cast=float,
                     ),
                 )
@@ -391,6 +418,10 @@ def summarize_replay_live_parity_gate(
         },
         "observed": {
             "replay_available": bool(replay_available),
+            "replay_schema_version": replay_schema_version or None,
+            "replay_policy_hash": replay_policy_hash or None,
+            "replay_schema_valid": replay_schema_version == REPLAY_GOVERNANCE_SCHEMA_VERSION,
+            "replay_policy_hash_matches": replay_contract_ok,
             "replay_fresh": bool(replay_fresh),
             "replay_age_hours": replay_snapshot.get("age_hours"),
             "replay_future_dated": bool(replay_future_dated),

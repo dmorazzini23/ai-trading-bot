@@ -41,6 +41,13 @@ def _bundle(model: Any) -> SimpleNamespace:
             "feature_version": DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
             "model_artifact_hash": "artifact-1",
         },
+        selected_threshold=0.5,
+        thresholds_by_regime={
+            "sideways": 0.5,
+            "uptrend": 0.5,
+            "downtrend": 0.5,
+            "volatile": 0.5,
+        },
     )
 
 
@@ -166,6 +173,44 @@ def test_day_sleeve_ml_blends_score_and_emits_advisory_provenance(
     assert shadow["required_bar_timeframe"] == DAY_SLEEVE_ML_BAR_TIMEFRAME
     assert shadow["horizon_bars"] == 1
     assert shadow["market"]["entry_close"] == pytest.approx(101.5)
+
+
+def test_day_sleeve_low_long_probability_abstains_instead_of_shorting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = _frame().iloc[:2]
+    monkeypatch.setattr(
+        bot_engine,
+        "build_day_sleeve_features",
+        lambda _frame: _feature_row(frame.index),
+    )
+    shadow_rows: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        bot_engine,
+        "_record_shadow_prediction",
+        lambda payload: shadow_rows.append(dict(payload)),
+    )
+    monkeypatch.setattr(bot_engine, "_ml_shadow_quote_snapshot", lambda symbol=None: {})
+    monkeypatch.setattr(bot_engine, "_ml_shadow_provider_snapshot", lambda: {})
+
+    score, confidence, debug, error = bot_engine._score_day_sleeve_with_ml(
+        symbol="AAPL",
+        frame=frame,
+        bundle=_bundle(_ProbabilityModel(0.2)),
+        heuristic_score=0.0,
+        heuristic_confidence=0.0,
+        blend_weight=1.0,
+        now=datetime(2026, 7, 10, 14, 12, tzinfo=UTC),
+    )
+
+    assert error is None
+    assert score == 0.0
+    assert confidence == 0.0
+    assert debug is not None
+    assert debug["ml_abstained"] is True
+    assert debug["ml_raw_score"] == 0.0
+    assert shadow_rows[0]["champion_side"] == "hold"
+    assert shadow_rows[0]["champion_would_trade"] is False
 
 
 def test_day_sleeve_prediction_failure_preserves_heuristic_fallback(

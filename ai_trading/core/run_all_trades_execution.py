@@ -107,6 +107,7 @@ def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> d
             oms_lifecycle_parity = summarize_oms_lifecycle_parity()
             gate = summarize_replay_live_parity_gate(
                 oms_lifecycle_parity=oms_lifecycle_parity,
+                expected_policy_hash=str(getattr(state, "effective_policy_hash", "") or ""),
             )
         except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             gate = {

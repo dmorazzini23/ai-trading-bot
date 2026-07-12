@@ -13,6 +13,7 @@ from ai_trading.execution import guards
 @pytest.fixture
 def engine_factory(monkeypatch):
     """Provide a minimally wired execution engine for limit order tests."""
+    monkeypatch.setenv("AI_TRADING_METRICS_IMPROVEMENT_CONTROL_ENABLED", "0")
 
     monkeypatch.setitem(
         sys.modules,

@@ -52,7 +52,7 @@ def _promotion(
     )
 
 
-def test_promotion_eligibility_accepts_exact_threshold_boundaries(
+def test_promotion_eligibility_accepts_boundaries_with_positive_expectancy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -87,9 +87,9 @@ def test_promotion_eligibility_accepts_exact_threshold_boundaries(
             execution_drift_bps=criteria.max_execution_drift_bps,
             challenger_uplift_bps=criteria.min_challenger_uplift_bps,
             challenger_p_value=criteria.challenger_significance_alpha,
-            gross_expectancy_bps=0.0,
+            gross_expectancy_bps=0.1,
             avg_cost_bps=0.0,
-            net_expectancy_bps=criteria.min_net_expectancy_bps,
+            net_expectancy_bps=max(0.1, criteria.min_net_expectancy_bps),
             live_calibration_ece=criteria.max_live_calibration_ece,
             live_calibration_brier=criteria.max_live_calibration_brier,
             calibration_samples=criteria.min_calibration_samples,

@@ -72,10 +72,13 @@ def _synthetic_daily(symbol: str):
 
 def _synthetic_intraday(symbol: str) -> pd.DataFrame:
     frame = _synthetic_daily(symbol)
-    frame.index = pd.date_range(
-        "2026-01-05T14:30:00Z",
-        periods=len(frame),
-        freq="5min",
+    sessions = pd.date_range("2025-10-27T14:30:00Z", periods=48, freq="B")
+    frame.index = pd.DatetimeIndex(
+        [
+            session + pd.Timedelta(minutes=5 * offset)
+            for session in sessions
+            for offset in range(10)
+        ][: len(frame)]
     )
     return frame
 
@@ -147,7 +150,7 @@ def test_build_symbol_dataset_adds_derived_feature_columns(
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
-        lambda symbol, _start, _end: _synthetic_daily(symbol),
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
     dataset = after_hours._build_symbol_dataset(
         "AAPL",
@@ -230,7 +233,7 @@ def test_build_symbol_dataset_excludes_forming_bar_and_uses_bar_horizon(
 def test_build_symbol_dataset_label_ts_uses_next_valid_bar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    bars = _synthetic_daily("AAPL")
+    bars = _synthetic_intraday("AAPL")
     removed_ts = bars.index[250]
     irregular = bars.drop(index=removed_ts)
     expected_previous_ts = bars.index[249]
@@ -243,8 +246,8 @@ def test_build_symbol_dataset_label_ts_uses_next_valid_bar(
 
     dataset = after_hours._build_symbol_dataset(
         "AAPL",
-        datetime(2024, 1, 1, tzinfo=UTC),
-        datetime(2026, 1, 1, tzinfo=UTC),
+        bars.index[0].to_pydatetime(),
+        (bars.index[-1] + pd.Timedelta(minutes=5)).to_pydatetime(),
         cost_floor_bps=8.0,
     )
 
@@ -256,7 +259,7 @@ def test_build_symbol_dataset_label_ts_uses_next_valid_bar(
 def test_build_symbol_dataset_uses_configured_label_horizon(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    bars = _synthetic_daily("AAPL")
+    bars = _synthetic_intraday("AAPL")
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
@@ -265,8 +268,8 @@ def test_build_symbol_dataset_uses_configured_label_horizon(
 
     dataset = after_hours._build_symbol_dataset(
         "AAPL",
-        datetime(2024, 1, 1, tzinfo=UTC),
-        datetime(2026, 1, 1, tzinfo=UTC),
+        bars.index[0].to_pydatetime(),
+        (bars.index[-1] + pd.Timedelta(minutes=5)).to_pydatetime(),
         cost_floor_bps=0.0,
         horizon_bars=3,
     )
@@ -274,6 +277,26 @@ def test_build_symbol_dataset_uses_configured_label_horizon(
     first_ts = dataset.iloc[0]["timestamp"]
     expected_label_ts = bars.index[bars.index.get_loc(first_ts) + 3]
     assert dataset.iloc[0]["label_ts"] == expected_label_ts
+
+
+def test_build_symbol_dataset_rejects_one_minute_bars_for_five_minute_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bars = _synthetic_intraday("AAPL")
+    bars.index = pd.date_range(bars.index[0], periods=len(bars), freq="1min")
+    monkeypatch.setattr(
+        after_hours,
+        "_fetch_day_sleeve_bars",
+        lambda symbol, _start, _end: bars,
+    )
+
+    with pytest.raises(RuntimeError, match="DAY_SLEEVE_BAR_CADENCE_MISMATCH"):
+        after_hours._build_symbol_dataset(
+            "AAPL",
+            bars.index[0].to_pydatetime(),
+            (bars.index[-1] + pd.Timedelta(minutes=5)).to_pydatetime(),
+            cost_floor_bps=0.0,
+        )
 
 
 def test_infer_regime_thresholds_are_past_only() -> None:
@@ -1068,7 +1091,7 @@ def test_after_hours_training_trains_and_writes_outputs(
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
-        lambda symbol, _start, _end: _synthetic_daily(symbol),
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
 
     result = after_hours.run_after_hours_training(
@@ -1173,7 +1196,7 @@ def test_after_hours_training_skips_when_no_new_signal_data(
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
-        lambda symbol, _start, _end: _synthetic_daily(symbol),
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
 
     first = after_hours.run_after_hours_training(
@@ -1417,7 +1440,7 @@ def test_after_hours_training_falls_back_when_model_dir_read_only(
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
-        lambda symbol, _start, _end: _synthetic_daily(symbol),
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
     caplog.set_level("WARNING")
 
@@ -1462,7 +1485,7 @@ def test_after_hours_sensitivity_gate_can_block_promotion(
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
-        lambda symbol, _start, _end: _synthetic_daily(symbol),
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
 
     result = after_hours.run_after_hours_training(
@@ -1499,7 +1522,7 @@ def test_after_hours_runtime_promotion_skips_shadow_governance(
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
-        lambda symbol, _start, _end: _synthetic_daily(symbol),
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
 
     result = after_hours.run_after_hours_training(
@@ -1557,7 +1580,7 @@ def test_after_hours_strict_promotion_policy_blocks_when_min_rows_not_met(
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
-        lambda symbol, _start, _end: _synthetic_daily(symbol),
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
 
     result = after_hours.run_after_hours_training(
@@ -1621,7 +1644,7 @@ def test_after_hours_strict_promotion_policy_can_promote_when_all_gates_pass(
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
-        lambda symbol, _start, _end: _synthetic_daily(symbol),
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
     monkeypatch.setattr(after_hours, "_evaluate_candidate", _positive_candidate_metrics)
 
@@ -1693,7 +1716,7 @@ def test_after_hours_runtime_promotion_records_registry_metadata(
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
-        lambda symbol, _start, _end: _synthetic_daily(symbol),
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
     monkeypatch.setattr(after_hours, "_evaluate_candidate", _positive_candidate_metrics)
 
@@ -1831,7 +1854,7 @@ def test_after_hours_required_phase1_gate_blocks_promotion(
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
-        lambda symbol, _start, _end: _synthetic_daily(symbol),
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
 
     result = after_hours.run_after_hours_training(
@@ -3163,7 +3186,7 @@ def test_after_hours_training_handles_leakage_assertions(
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
-        lambda symbol, _start, _end: _synthetic_daily(symbol),
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
     monkeypatch.setattr(
         after_hours,
@@ -3200,7 +3223,7 @@ def test_after_hours_training_no_global_leakage_warning(
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
-        lambda symbol, _start, _end: _synthetic_daily(symbol),
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
     caplog.set_level("WARNING")
 
@@ -3239,7 +3262,7 @@ def test_after_hours_uses_dedicated_ticker_csv(
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
-        lambda symbol, _start, _end: _synthetic_daily(symbol),
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
 
     result = after_hours.run_after_hours_training(

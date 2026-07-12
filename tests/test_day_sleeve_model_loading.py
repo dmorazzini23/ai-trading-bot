@@ -44,6 +44,13 @@ def _manifest_metadata(**overrides: Any) -> dict[str, Any]:
             contract_version=DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
         ),
         "dataset_fingerprint": "dataset-hash-1",
+        "selected_threshold": 0.55,
+        "thresholds_by_regime": {
+            "sideways": 0.55,
+            "uptrend": 0.6,
+            "downtrend": 0.65,
+            "volatile": 0.7,
+        },
     }
     metadata.update(overrides)
     return metadata
@@ -146,6 +153,8 @@ def test_production_loader_returns_verified_model_and_immutable_lineage(
         "model_artifact_hash": loaded.lineage["model_artifact_hash"],
     }
     assert len(loaded.lineage["model_artifact_hash"]) == 64
+    assert loaded.selected_threshold == pytest.approx(0.55)
+    assert loaded.thresholds_by_regime["volatile"] == pytest.approx(0.7)
     with pytest.raises(TypeError):
         loaded.lineage["model_id"] = "changed"  # type: ignore[index]
 

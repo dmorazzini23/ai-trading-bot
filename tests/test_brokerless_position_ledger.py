@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from ai_trading.execution.engine import ExecutionEngine, OrderSide
 from ai_trading.core.bot_engine import compute_current_positions
 
@@ -22,4 +24,15 @@ def test_simulated_fills_update_position_ledger():
 
     positions = compute_current_positions(ctx)
     assert positions == {"AAPL": 6}
+
+
+def test_broker_position_failure_is_not_treated_as_empty_portfolio():
+    class FailingApi:
+        def get_all_positions(self):
+            raise ConnectionError("broker unavailable")
+
+    ctx = SimpleNamespace(api=FailingApi(), execution_engine=None)
+
+    with pytest.raises(RuntimeError, match="broker_positions_unavailable"):
+        compute_current_positions(ctx)
 

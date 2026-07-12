@@ -214,6 +214,7 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
         before_mtime_ns = _artifact_mtime_ns(replay_path)
         started_mono = time.monotonic()
         state = bot_engine.BotState()
+        bot_engine._active_effective_policy(state, bot_engine.get_trading_config())
         try:
             bot_engine._run_replay_governance(
                 state,
@@ -223,6 +224,12 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
             )
         except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
             replay_snapshot = _collect_replay_snapshot(replay_path)
+            after_mtime_ns = _artifact_mtime_ns(replay_path)
+            fresh_artifact = bool(
+                replay_snapshot.get("exists")
+                and after_mtime_ns is not None
+                and (before_mtime_ns is None or after_mtime_ns > before_mtime_ns)
+            )
             error_text = str(exc)
             status = (
                 "blocked"
@@ -235,7 +242,7 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
                 "now": now.isoformat(),
                 "force": bool(args.force),
                 "market_open_now": bool(args.market_open_now),
-                "fresh_artifact": False,
+                "fresh_artifact": fresh_artifact,
                 "elapsed_sec": max(0.0, time.monotonic() - started_mono),
                 "last_replay_run_date": (
                     state.last_replay_run_date.isoformat()

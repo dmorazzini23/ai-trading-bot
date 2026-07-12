@@ -82,10 +82,13 @@ def test_replay_governance_uses_async_parity_path(
     monkeypatch.setenv("AI_TRADING_REPLAY_ENFORCE_OMS_GATES", "1")
 
     state = _State()
+    state.effective_policy_hash = "policy-test"
     bot_engine._run_replay_governance(state, now=now, market_open_now=False)
 
     out_path = tmp_path / "replay_hash_20260218.json"
     payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "2.0.0"
+    assert payload["policy_hash"] == "policy-test"
     assert payload["simulate_fills"] is True
     assert payload["seed"] == 123
     assert payload["orders_submitted"] >= 1
@@ -95,6 +98,64 @@ def test_replay_governance_uses_async_parity_path(
     assert isinstance(payload.get("replay_bucket_summary"), dict)
     assert isinstance(getattr(state, "replay_bucket_summary", None), dict)
     assert state.last_replay_run_date == now.date()
+
+
+def test_replay_non_regression_failure_writes_current_failed_artifact(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 2, 18, 23, 0, tzinfo=UTC)
+    baseline_path = tmp_path / "replay_hash_20260217.json"
+    baseline_path.write_text(
+        json.dumps(
+            {
+                "replay_summary": {
+                    "sample_count": 10,
+                    "net_edge_bps": 5.0,
+                    "max_drawdown_pct": 0.01,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bot_engine, "_replay_schedule_due", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        bot_engine,
+        "_load_replay_bars",
+        lambda **_kwargs: [
+            {
+                "symbol": "AAPL",
+                "ts": "2026-02-18T22:00:00+00:00",
+                "close": 189.5,
+                "side": "buy",
+                "qty": 1,
+                "client_order_id": "aapl-1",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "evaluate_counterfactual_non_regression",
+        lambda **_kwargs: (False, {"reason": "regression"}),
+    )
+    monkeypatch.setenv("AI_TRADING_REPLAY_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_REPLAY_REQUIRE_NON_REGRESSION", "1")
+    monkeypatch.setenv("AI_TRADING_REPLAY_ENFORCE_OMS_GATES", "0")
+
+    state = _State()
+    state.effective_policy_hash = "policy-test"
+    try:
+        bot_engine._run_replay_governance(state, now=now, market_open_now=False)
+    except RuntimeError as exc:
+        assert str(exc) == "REPLAY_POLICY_NON_REGRESSION_FAILED"
+    else:
+        raise AssertionError("Expected replay non-regression failure")
+
+    current_path = tmp_path / "replay_hash_20260218.json"
+    payload = json.loads(current_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "2.0.0"
+    assert payload["policy_hash"] == "policy-test"
+    assert payload["counterfactual"]["passed"] is False
 
 
 def test_replay_governance_enforced_invariants_raise(

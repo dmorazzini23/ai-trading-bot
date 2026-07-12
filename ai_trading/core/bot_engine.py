@@ -166,6 +166,7 @@ from ai_trading.models.contracts import (
     DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
     LIVE_ML_BAR_TIMEFRAME,
     LIVE_ML_FEATURE_COLUMNS,
+    infer_day_sleeve_regimes,
     normalize_bar_timeframe,
 )
 from ai_trading.features.day_sleeve import build_day_sleeve_features
@@ -184,6 +185,7 @@ from ai_trading.policy.compiler import (
     resolve_operational_safety_tier,
     startup_policy_diff,
 )
+from ai_trading.governance.replay_live_parity import REPLAY_GOVERNANCE_SCHEMA_VERSION
 from ai_trading.governance.rollout import (
     apply_rollout_policies,
     build_burn_in_policy,
@@ -7327,7 +7329,24 @@ def _score_day_sleeve_with_ml(
     try:
         features = build_day_sleeve_features(frame)
         probability = _day_sleeve_positive_probability(bundle.model, features)
-        model_score = float(np.clip((2.0 * probability) - 1.0, -1.0, 1.0))
+        regimes = infer_day_sleeve_regimes(frame["close"].astype(float).to_numpy())
+        regime = regimes[-1] if regimes else "sideways"
+        selected_threshold = float(bundle.selected_threshold)
+        regime_thresholds = dict(bundle.thresholds_by_regime)
+        serving_threshold = float(regime_thresholds.get(regime, selected_threshold))
+        if not 0.0 <= serving_threshold <= 1.0:
+            raise ValueError("Day-sleeve serving threshold is outside [0, 1]")
+        abstained = probability < serving_threshold
+        if abstained or serving_threshold >= 1.0:
+            model_score = 0.0
+        else:
+            model_score = float(
+                np.clip(
+                    (probability - serving_threshold) / (1.0 - serving_threshold),
+                    0.0,
+                    1.0,
+                )
+            )
         serving_score = float(
             np.clip(
                 ((1.0 - bounded_weight) * float(heuristic_score))
@@ -7379,6 +7398,10 @@ def _score_day_sleeve_with_ml(
             "ml_raw_score": model_score,
             "ml_serving_score": serving_score,
             "ml_positive_probability": probability,
+            "ml_selected_threshold": selected_threshold,
+            "ml_serving_threshold": serving_threshold,
+            "ml_serving_regime": regime,
+            "ml_abstained": abstained,
             "ml_blend_weight": bounded_weight,
             "ml_serving_timeframe": DAY_SLEEVE_ML_BAR_TIMEFRAME,
             "ml_serving_bar_timestamp": bar_timestamp,
@@ -9523,7 +9546,7 @@ def compute_current_positions(ctx: Any) -> dict[str, int]:
         return {}
     except (AttributeError, ValueError, ConnectionError, TimeoutError) as e:
         logger.warning("compute_current_positions failed: %s", e, exc_info=True)
-        return {}
+        raise RuntimeError("broker_positions_unavailable") from e
 
 
 def maybe_rebalance(ctx):
@@ -39704,17 +39727,19 @@ def _run_replay_governance(
             drawdown_tolerance_pct=drawdown_tolerance_pct,
         )
         counterfactual = {"passed": bool(passed), **details}
-        if require_non_regression and not passed:
-            raise RuntimeError("REPLAY_POLICY_NON_REGRESSION_FAILED")
+        counterfactual_failure = bool(require_non_regression and not passed)
     else:
         counterfactual = {
             "passed": True,
             "reason": "no_baseline_summary",
             "candidate": replay_summary,
         }
+        counterfactual_failure = False
     out_path.write_text(
         json.dumps(
             {
+                "schema_version": REPLAY_GOVERNANCE_SCHEMA_VERSION,
+                "policy_hash": str(getattr(state, "effective_policy_hash", "") or ""),
                 "ts": now.isoformat(),
                 "hash": first_hash,
                 "symbols": list(active_symbols),
@@ -39756,6 +39781,8 @@ def _run_replay_governance(
         ),
         encoding="utf-8",
     )
+    if counterfactual_failure:
+        raise RuntimeError("REPLAY_POLICY_NON_REGRESSION_FAILED")
     if enforce_oms_gates and replay_violations:
         raise RuntimeError("REPLAY_GOVERNANCE_INVARIANTS_FAILED")
     logger.info(

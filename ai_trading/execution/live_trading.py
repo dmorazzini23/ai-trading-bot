@@ -23969,11 +23969,11 @@ class ExecutionEngine:
         try:
             orders = list_alpaca_orders(client, status="open", symbols=[symbol])
         except LIVE_TRADING_FALLBACK_EXC as exc:
-            logger.debug(
+            logger.warning(
                 "OPPOSITE_GUARD_LIST_FAILED",
                 extra={"symbol": symbol, "error": str(exc)},
             )
-            return []
+            raise RuntimeError("broker_open_orders_unavailable") from exc
         if orders is None:
             return []
         filtered: list[Any] = []
@@ -24549,7 +24549,22 @@ class ExecutionEngine:
         normalized_side = self._normalized_order_side(desired_side)
         if normalized_side is None:
             return True, None
-        orders = self._list_open_orders_for_symbol(symbol)
+        try:
+            orders = self._list_open_orders_for_symbol(symbol)
+        except LIVE_TRADING_FALLBACK_EXC as exc:
+            logger.warning(
+                "OPPOSITE_GUARD_BLOCKED_OPEN_ORDER_STATE_UNAVAILABLE",
+                extra={
+                    "symbol": symbol,
+                    "desired_side": normalized_side,
+                    "error": str(exc),
+                },
+            )
+            return False, {
+                "status": "skipped",
+                "reason": "broker_open_orders_unavailable",
+                "symbol": symbol,
+            }
         opposite_orders: list[Any] = []
         for order in orders:
             side_val = self._normalized_order_side(_extract_value(order, "side"))

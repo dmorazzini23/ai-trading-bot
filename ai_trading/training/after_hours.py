@@ -41,6 +41,7 @@ from ai_trading.models.contracts import (
     DAY_SLEEVE_ML_BAR_TIMEFRAME,
     DAY_SLEEVE_ML_FEATURE_COLUMNS,
     DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
+    infer_day_sleeve_regimes,
     model_feature_contract_hash,
 )
 from ai_trading.models.artifacts import load_verified_joblib_artifact, write_artifact_manifest
@@ -581,38 +582,7 @@ def _live_cost_bucket_diagnostics(tca_records: list[dict[str, Any]]) -> dict[str
 
 
 def _infer_regime(close: np.ndarray) -> np.ndarray:
-    if close.size == 0:
-        return cast(np.ndarray, np.array([], dtype=object))
-    returns = np.zeros_like(close, dtype=float)
-    returns[1:] = np.diff(close) / np.maximum(close[:-1], 1e-9)
-    vol = np.full_like(returns, np.nan, dtype=float)
-    trend = np.full_like(returns, np.nan, dtype=float)
-    window = 20
-    for idx in range(window, len(returns)):
-        seg = returns[idx - window : idx]
-        vol[idx] = float(np.std(seg))
-        trend[idx] = float((close[idx] / close[idx - window]) - 1.0)
-    labels: list[str] = []
-    threshold_window = max(window * 3, window)
-    for idx in range(len(close)):
-        vol_val = vol[idx]
-        trend_val = trend[idx]
-        threshold_slice = vol[max(0, idx - threshold_window + 1) : idx + 1]
-        finite_thresholds = threshold_slice[np.isfinite(threshold_slice)]
-        vol_threshold = (
-            float(np.nanpercentile(finite_thresholds, 70))
-            if finite_thresholds.size
-            else 0.02
-        )
-        if np.isfinite(vol_val) and vol_val >= vol_threshold:
-            labels.append("volatile")
-        elif np.isfinite(trend_val) and trend_val >= 0.02:
-            labels.append("uptrend")
-        elif np.isfinite(trend_val) and trend_val <= -0.02:
-            labels.append("downtrend")
-        else:
-            labels.append("sideways")
-    return cast(np.ndarray, np.array(labels, dtype=object))
+    return cast(np.ndarray, np.asarray(infer_day_sleeve_regimes(close), dtype=object))
 
 
 def _safe_rsi(close_values: np.ndarray) -> np.ndarray:
@@ -668,6 +638,41 @@ def _augment_training_features(frame: Any) -> Any:
     return frame
 
 
+def _validate_day_sleeve_bar_cadence(frame: Any, *, symbol: str) -> None:
+    """Reject fetched bars whose observed cadence violates the 5-minute contract."""
+
+    import pandas as pd
+
+    timestamps = pd.DatetimeIndex(pd.to_datetime(frame.index, utc=True, errors="coerce"))
+    timestamps = timestamps[~timestamps.isna()].sort_values()
+    if len(timestamps) < 3:
+        return
+    deltas = np.diff(timestamps.asi8.astype(np.int64)) / 1_000_000_000.0
+    positive = deltas[np.isfinite(deltas) & (deltas > 0.0)]
+    if positive.size < 2:
+        return
+    expected_seconds = 5.0 * 60.0
+    intraday = positive[positive <= expected_seconds * 6.0]
+    median_seconds = float(np.median(intraday)) if intraday.size else float("inf")
+    cadence_remainders = np.mod(intraday, expected_seconds)
+    aligned_ratio = (
+        float(
+            np.mean(
+                np.isclose(cadence_remainders, 0.0, atol=1.0)
+                | np.isclose(cadence_remainders, expected_seconds, atol=1.0)
+            )
+        )
+        if intraday.size
+        else 0.0
+    )
+    if median_seconds < expected_seconds - 1.0 or aligned_ratio < 0.98:
+        raise RuntimeError(
+            "DAY_SLEEVE_BAR_CADENCE_MISMATCH "
+            f"symbol={symbol} expected_seconds={expected_seconds:.0f} "
+            f"median_seconds={median_seconds:.3f} aligned_ratio={aligned_ratio:.3f}"
+        )
+
+
 def _build_symbol_dataset(
     symbol: str,
     start_dt: datetime,
@@ -698,6 +703,7 @@ def _build_symbol_dataset(
     if frame.empty:
         return pd.DataFrame()
     frame = frame.sort_index()
+    _validate_day_sleeve_bar_cadence(frame, symbol=symbol)
     frame = compute_macd(frame)
     frame = compute_macds(frame)
     frame = compute_atr(frame)

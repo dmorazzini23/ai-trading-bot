@@ -49,6 +49,8 @@ class DaySleeveProductionModel:
 
     model: object
     lineage: Mapping[str, str]
+    selected_threshold: float
+    thresholds_by_regime: Mapping[str, float]
 
 
 _DAY_SLEEVE_MODEL_CACHE: DaySleeveProductionModel | None = None
@@ -146,6 +148,34 @@ def load_day_sleeve_production_model() -> DaySleeveProductionModel:
             + ",".join(compatibility_errors)
         )
 
+    try:
+        selected_threshold = float(metadata["selected_threshold"])
+    except (KeyError, TypeError, ValueError) as exc:
+        _clear_day_sleeve_model_cache()
+        raise RuntimeError(
+            "Day-sleeve model selected threshold is missing or invalid"
+        ) from exc
+    if not 0.0 <= selected_threshold <= 1.0:
+        _clear_day_sleeve_model_cache()
+        raise RuntimeError("Day-sleeve model selected threshold is outside [0, 1]")
+    regime_thresholds_raw = metadata.get("thresholds_by_regime")
+    if not isinstance(regime_thresholds_raw, Mapping):
+        _clear_day_sleeve_model_cache()
+        raise RuntimeError("Day-sleeve regime thresholds are missing")
+    thresholds_by_regime: dict[str, float] = {}
+    try:
+        for regime, raw_threshold in regime_thresholds_raw.items():
+            normalized_regime = str(regime).strip().lower()
+            threshold = float(raw_threshold)
+            if normalized_regime and 0.0 <= threshold <= 1.0:
+                thresholds_by_regime[normalized_regime] = threshold
+    except (TypeError, ValueError) as exc:
+        _clear_day_sleeve_model_cache()
+        raise RuntimeError("Day-sleeve regime thresholds are invalid") from exc
+    if not thresholds_by_regime:
+        _clear_day_sleeve_model_cache()
+        raise RuntimeError("Day-sleeve regime thresholds are empty")
+
     model = load_verified_joblib_artifact(
         artifact_path,
         manifest_path=manifest_path,
@@ -181,6 +211,8 @@ def load_day_sleeve_production_model() -> DaySleeveProductionModel:
     loaded = DaySleeveProductionModel(
         model=model,
         lineage=MappingProxyType(lineage_values),
+        selected_threshold=selected_threshold,
+        thresholds_by_regime=MappingProxyType(thresholds_by_regime),
     )
     _DAY_SLEEVE_MODEL_CACHE = loaded
     _DAY_SLEEVE_MODEL_CACHE_KEY = cache_key

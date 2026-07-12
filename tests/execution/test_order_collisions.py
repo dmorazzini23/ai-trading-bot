@@ -84,6 +84,31 @@ def test_enforce_opposite_policy_cancels_orders(monkeypatch):
     assert client.cancelled == ["order-1"]
 
 
+def test_enforce_opposite_policy_blocks_when_open_order_state_is_unavailable():
+    engine = ExecutionEngine(execution_mode="paper", shadow_mode=False)
+
+    class FailingClient:
+        def list_orders(self, **_kwargs):
+            raise ConnectionError("broker unavailable")
+
+    engine.trading_client = FailingClient()
+
+    allowed, payload = engine._enforce_opposite_side_policy(
+        "AAPL",
+        "buy",
+        10,
+        closing_position=False,
+        client_order_id="test",
+    )
+
+    assert allowed is False
+    assert payload == {
+        "status": "skipped",
+        "reason": "broker_open_orders_unavailable",
+        "symbol": "AAPL",
+    }
+
+
 def test_precheck_skips_when_policy_skip(monkeypatch):
     monkeypatch.setenv("ORDER_FLIP_MODE", "skip")
     cast(Any, get_trading_config).cache_clear()
