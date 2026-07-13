@@ -284,19 +284,31 @@ def test_build_symbol_dataset_rejects_one_minute_bars_for_five_minute_contract(
 ) -> None:
     bars = _synthetic_intraday("AAPL")
     bars.index = pd.date_range(bars.index[0], periods=len(bars), freq="1min")
+    bars.attrs.update(
+        {
+            "requested_timeframe": "5Min",
+            "raw_payload_timeframe": "1Min",
+            "data_provider": "alpaca_reference",
+            "reference_feed_effective": "delayed_sip",
+        }
+    )
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: bars,
     )
 
-    with pytest.raises(RuntimeError, match="DAY_SLEEVE_BAR_CADENCE_MISMATCH"):
+    with pytest.raises(RuntimeError, match="requested_timeframe=5Min") as exc_info:
         after_hours._build_symbol_dataset(
             "AAPL",
             bars.index[0].to_pydatetime(),
             (bars.index[-1] + pd.Timedelta(minutes=5)).to_pydatetime(),
             cost_floor_bps=0.0,
         )
+    message = str(exc_info.value)
+    assert "raw_payload_timeframe=1Min" in message
+    assert "provider=alpaca_reference" in message
+    assert "feed=delayed_sip" in message
 
 
 def test_infer_regime_thresholds_are_past_only() -> None:

@@ -17,14 +17,18 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 
 RUNTIME_DIR = Path(os.environ.get("AI_TRADING_RECAP_RUNTIME_DIR", "/var/lib/ai-trading-bot/runtime"))
 HEALTH_URL = os.environ.get("AI_TRADING_RECAP_HEALTH_URL", "http://127.0.0.1:9001/healthz")
-JOURNAL_PATTERN = re.compile(
-    r"ORDER_SUBMITTED|ORDER_FILLED|fill_recorded|ERROR|Exception|Traceback|BUDGET_OVER|CRITICAL",
+JOURNAL_EVENT_PATTERN = re.compile(
+    r"\b(?:ORDER_SUBMITTED|ORDER_FILLED|fill_recorded|BUDGET_OVER)\b",
+    re.IGNORECASE,
+)
+JOURNAL_FAILURE_PATTERN = re.compile(
+    r"\b(?:ERROR|Exception|Traceback|CRITICAL)\b",
     re.IGNORECASE,
 )
 
@@ -93,6 +97,8 @@ def _health_summary() -> tuple[str, dict[str, Any] | None]:
     try:
         with urlopen(HEALTH_URL, timeout=8) as resp:  # nosec B310 - local operator endpoint
             body = resp.read().decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
     except (OSError, URLError, TimeoutError) as exc:
         return f"health unavailable: {exc}", None
     try:
@@ -103,13 +109,36 @@ def _health_summary() -> tuple[str, dict[str, Any] | None]:
         return "health returned non-object payload", None
     broker = payload.get("broker") if isinstance(payload.get("broker"), dict) else {}
     provider = payload.get("provider_state") if isinstance(payload.get("provider_state"), dict) else {}
+    readiness_failures = payload.get("readiness_failures")
+    if not isinstance(readiness_failures, list):
+        readiness_failures = []
+    readiness_text = ",".join(str(item) for item in readiness_failures) or "none"
     return (
         "health "
         f"ok={payload.get('ok')} status={payload.get('status')} reason={payload.get('reason')} "
         f"broker_connected={broker.get('connected')} "
         f"open_orders={broker.get('open_orders_count')} positions={broker.get('positions_count')} "
-        f"provider={provider.get('active')} provider_status={provider.get('status')}",
+        f"provider={provider.get('active')} provider_status={provider.get('status')} "
+        f"readiness_failures={readiness_text}",
         payload,
+    )
+
+
+def _journal_line_relevant(line: str) -> bool:
+    json_start = line.find("{")
+    if json_start >= 0:
+        try:
+            payload = json.loads(line[json_start:])
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            level = str(payload.get("level") or "").strip().upper()
+            message = str(payload.get("msg") or payload.get("message") or "")
+            return level in {"ERROR", "CRITICAL"} or bool(
+                JOURNAL_EVENT_PATTERN.search(message)
+            )
+    return bool(
+        JOURNAL_EVENT_PATTERN.search(line) or JOURNAL_FAILURE_PATTERN.search(line)
     )
 
 
@@ -126,7 +155,7 @@ def _journal_summary(day: str) -> str:
     )
     if code != 0:
         return f"journal unavailable exit={code}: {output[:240] or 'no output'}"
-    matches = [line for line in output.splitlines() if JOURNAL_PATTERN.search(line)]
+    matches = [line for line in output.splitlines() if _journal_line_relevant(line)]
     if not matches:
         return "no matching journal lines for order/fill/error patterns"
     tail = matches[-5:]
@@ -180,7 +209,11 @@ def _trading_day_summary(day: str) -> tuple[str, list[str]]:
     generated_at = report.get("generated_at")
     report_date = str(report.get("report_date") or "")
     if report_date != day:
-        warnings.append(f"trading-day report stale: report_date={report_date or 'unknown'} generated_at={generated_at}")
+        warnings.append(
+            f"trading-day report stale: report_date={report_date or 'unknown'} "
+            f"generated_at={generated_at}"
+        )
+        return f"trading-day report pending for {day}", warnings
     summary = report.get("openclaw_summary") if isinstance(report.get("openclaw_summary"), dict) else {}
     details = summary.get("details") if isinstance(summary.get("details"), dict) else {}
     text = str(summary.get("summary") or "no trading-day summary")
@@ -228,7 +261,14 @@ def build_recap() -> str:
     if isinstance(health, dict) and health.get("ok") is True and broker_flat:
         verdict = "Healthy close: service is up, broker is connected, and exposure is flat."
     elif isinstance(health, dict):
-        verdict = f"Close needs review: health ok={health.get('ok')} status={health.get('status')}."
+        readiness_failures = health.get("readiness_failures")
+        if not isinstance(readiness_failures, list):
+            readiness_failures = []
+        readiness_text = ", ".join(str(item) for item in readiness_failures) or "none"
+        verdict = (
+            f"Close needs review: health ok={health.get('ok')} "
+            f"status={health.get('status')}; readiness failures: {readiness_text}."
+        )
     else:
         verdict = f"Close needs review: {health_text}."
 

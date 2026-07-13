@@ -1,11 +1,74 @@
 from __future__ import annotations
 import datetime
+import re
 from datetime import date, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 NY = ZoneInfo('America/New_York')
 UTC = datetime.timezone.utc
+
+
+def canonicalize_data_timeframe(value: Any) -> str:
+    """Return a data-request timeframe without discarding its amount."""
+
+    amount = getattr(value, "amount", None)
+    unit = getattr(value, "unit", None)
+    if amount is not None and unit is not None:
+        try:
+            amount_int = max(1, int(amount))
+        except (TypeError, ValueError):
+            amount_int = 1
+        unit_value = getattr(unit, "name", getattr(unit, "value", unit))
+        unit_text = str(unit_value).strip().lower()
+        if "min" in unit_text:
+            return f"{amount_int}Min"
+        if "hour" in unit_text or unit_text == "h":
+            return f"{amount_int}Hour"
+        if "day" in unit_text or unit_text == "d":
+            return f"{amount_int}Day"
+        if "week" in unit_text or unit_text == "w":
+            return f"{amount_int}Week"
+        if "month" in unit_text or unit_text in {"mo", "mon"}:
+            return f"{amount_int}Month"
+
+    raw = str(value or "").strip()
+    compact = raw.lower().replace("_", "").replace("-", "").replace(" ", "")
+    aliases = {
+        "minute": "1Min",
+        "minutes": "1Min",
+        "hour": "1Hour",
+        "hours": "1Hour",
+        "day": "1Day",
+        "daily": "1Day",
+        "days": "1Day",
+        "week": "1Week",
+        "weekly": "1Week",
+        "month": "1Month",
+        "monthly": "1Month",
+    }
+    if compact in aliases:
+        return aliases[compact]
+    match = re.fullmatch(
+        r"(\d+)(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|week|weeks|mo|mon|month|months)",
+        compact,
+    )
+    if match:
+        amount_int = max(1, int(match.group(1)))
+        unit_token = match.group(2)
+        if unit_token in {"m", "min", "mins", "minute", "minutes"}:
+            suffix = "Min"
+        elif unit_token in {"h", "hr", "hrs", "hour", "hours"}:
+            suffix = "Hour"
+        elif unit_token in {"d", "day", "days"}:
+            suffix = "Day"
+        elif unit_token in {"w", "wk", "week", "weeks"}:
+            suffix = "Week"
+        else:
+            suffix = "Month"
+        return f"{amount_int}{suffix}"
+    return raw or "1Day"
+
 
 def ensure_utc_datetime(
     value: Any,
@@ -67,4 +130,12 @@ def previous_business_day(d: date) -> date:
 
 def expected_regular_minutes() -> int:
     return 390
-__all__ = ['ensure_utc_datetime', 'nyse_session_utc', 'previous_business_day', 'expected_regular_minutes', 'NY', 'UTC']
+__all__ = [
+    'canonicalize_data_timeframe',
+    'ensure_utc_datetime',
+    'nyse_session_utc',
+    'previous_business_day',
+    'expected_regular_minutes',
+    'NY',
+    'UTC',
+]

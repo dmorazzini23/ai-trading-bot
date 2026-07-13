@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import importlib.util
+from io import BytesIO
+from urllib.error import HTTPError
 from pathlib import Path
 from types import ModuleType
 
@@ -113,3 +115,80 @@ def test_build_recap_marks_stale_trading_day_report(
 
     assert "trading-day report stale" in text
     assert "report_date=2026-06-28" in text
+    assert "trading-day report pending for 2026-06-29" in text
+    assert "old report" not in text
+
+
+def test_health_summary_parses_degraded_http_error_payload(monkeypatch) -> None:
+    payload = {
+        "ok": False,
+        "status": "healthy",
+        "reason": "market_closed",
+        "broker": {
+            "connected": True,
+            "open_orders_count": 0,
+            "positions_count": 0,
+        },
+        "provider_state": {"active": "alpaca", "status": "warming_up"},
+        "readiness_failures": ["replay_live_parity_gate_failed"],
+    }
+
+    def _urlopen(*_args, **_kwargs):
+        raise HTTPError(
+            recap.HEALTH_URL,
+            503,
+            "SERVICE UNAVAILABLE",
+            hdrs=None,
+            fp=BytesIO(json.dumps(payload).encode("utf-8")),
+        )
+
+    monkeypatch.delenv("AI_TRADING_RECAP_SKIP_SYSTEM", raising=False)
+    monkeypatch.setattr(recap, "urlopen", _urlopen)
+
+    summary, observed = recap._health_summary()
+
+    assert observed == payload
+    assert "health ok=False status=healthy reason=market_closed" in summary
+    assert "readiness_failures=replay_live_parity_gate_failed" in summary
+    assert "health unavailable" not in summary
+    monkeypatch.setattr(recap, "_health_summary", lambda: (summary, payload))
+    monkeypatch.setattr(recap, "_service_summary", lambda: "service active")
+    monkeypatch.setattr(recap, "_fill_summary", lambda _day: {"available": False})
+    monkeypatch.setattr(
+        recap,
+        "_trading_day_summary",
+        lambda _day: ("trading-day report pending", []),
+    )
+    monkeypatch.setattr(recap, "_journal_summary", lambda _day: "journal clean")
+    monkeypatch.setattr(recap, "_operator_issues", lambda: [])
+
+    text = recap.build_recap()
+    assert "readiness failures: replay_live_parity_gate_failed" in text
+
+
+def test_journal_summary_ignores_broker_last_error_field(monkeypatch) -> None:
+    normal = json.dumps(
+        {
+            "level": "INFO",
+            "msg": "CYCLE_MARKET_SNAPSHOT",
+            "broker_last_error": None,
+        }
+    )
+    failure = json.dumps(
+        {
+            "level": "ERROR",
+            "msg": "after-hours training failed",
+        }
+    )
+    monkeypatch.delenv("AI_TRADING_RECAP_SKIP_SYSTEM", raising=False)
+    monkeypatch.setattr(
+        recap,
+        "_run_command",
+        lambda *_args, **_kwargs: (0, f"{normal}\n{failure}"),
+    )
+
+    summary = recap._journal_summary("2026-07-13")
+
+    assert summary.startswith("1 matching journal lines")
+    assert "after-hours training failed" in summary
+    assert "broker_last_error" not in summary

@@ -79,7 +79,10 @@ from ai_trading.config.management import (
     set_runtime_env_override,
 )
 from ai_trading.utils.market_calendar import is_trading_day, rth_session_utc
-from ai_trading.data.timeutils import ensure_utc_datetime
+from ai_trading.data.timeutils import (
+    canonicalize_data_timeframe as _canon_tf,
+    ensure_utc_datetime,
+)
 from ai_trading.logging import (
     get_logger,
     log_backup_provider_used,
@@ -97,7 +100,6 @@ from ai_trading.logging.empty_policy import classify as _empty_classify
 from ai_trading.logging.empty_policy import record as _empty_record
 from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
 from ai_trading.logging.normalize import canon_symbol as _canon_symbol
-from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.settings import get_backup_data_provider
 from ai_trading.telemetry import runtime_state
@@ -8549,6 +8551,7 @@ def _fetch_reference_bars(
     try:
         normalized.attrs["reference_feed_requested"] = str(resolved_feed)
         normalized.attrs["reference_feed_effective"] = str(effective_feed)
+        normalized.attrs["requested_timeframe"] = _canon_tf(timeframe)
     except FETCH_FALLBACK_EXCEPTIONS:
         pass
     return _annotate_df_source(

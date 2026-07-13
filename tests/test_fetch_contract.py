@@ -11,10 +11,50 @@ os.environ.setdefault("ALPACA_API_KEY", "dummy")
 os.environ.setdefault("ALPACA_SECRET_KEY", "dummy")
 
 from ai_trading.data import fetch as data_fetcher
+from ai_trading.data.timeutils import canonicalize_data_timeframe
 
 
 class DummyClient:
     pass
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("1Min", "1Min"),
+        ("5Min", "5Min"),
+        ("15Min", "15Min"),
+        ("1Hour", "1Hour"),
+        ("1Day", "1Day"),
+    ],
+)
+def test_data_timeframe_canonicalizer_preserves_amount(
+    raw: str,
+    expected: str,
+) -> None:
+    assert canonicalize_data_timeframe(raw) == expected
+
+
+def test_get_bars_reference_role_preserves_five_minute_request(monkeypatch) -> None:
+    now = pd.Timestamp("2026-07-13T20:00:00Z")
+    captured: dict[str, str] = {}
+
+    def _reference(symbol, start, end, timeframe, **kwargs):
+        del symbol, start, end, kwargs
+        captured["timeframe"] = timeframe
+        return pd.DataFrame()
+
+    monkeypatch.setattr(data_fetcher, "_fetch_reference_bars", _reference)
+
+    data_fetcher.get_bars(
+        "AAPL",
+        "5Min",
+        now - pd.Timedelta(days=1),
+        now,
+        feed_role="reference",
+    )
+
+    assert captured["timeframe"] == "5Min"
 
 
 def test_get_bars_never_none(monkeypatch):

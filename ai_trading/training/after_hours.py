@@ -666,10 +666,28 @@ def _validate_day_sleeve_bar_cadence(frame: Any, *, symbol: str) -> None:
         else 0.0
     )
     if median_seconds < expected_seconds - 1.0 or aligned_ratio < 0.98:
+        attrs = getattr(frame, "attrs", {})
+        requested_timeframe = str(
+            attrs.get("requested_timeframe") or DAY_SLEEVE_ML_BAR_TIMEFRAME
+        )
+        raw_payload_timeframe = str(
+            attrs.get("raw_payload_timeframe") or "unknown"
+        )
+        provider = str(
+            attrs.get("data_provider") or attrs.get("provider") or "unknown"
+        )
+        feed = str(
+            attrs.get("reference_feed_effective") or attrs.get("feed") or "unknown"
+        )
         raise RuntimeError(
             "DAY_SLEEVE_BAR_CADENCE_MISMATCH "
             f"symbol={symbol} expected_seconds={expected_seconds:.0f} "
-            f"median_seconds={median_seconds:.3f} aligned_ratio={aligned_ratio:.3f}"
+            f"median_seconds={median_seconds:.3f} aligned_ratio={aligned_ratio:.3f} "
+            f"requested_timeframe={requested_timeframe} "
+            f"raw_payload_timeframe={raw_payload_timeframe} "
+            f"provider={provider} feed={feed} rows={len(timestamps)} "
+            f"first_ts={timestamps[0].isoformat()} "
+            f"last_ts={timestamps[-1].isoformat()}"
         )
 
 
