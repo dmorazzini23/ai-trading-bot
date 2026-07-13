@@ -78,6 +78,14 @@ def _build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
     )
+    parser.add_argument(
+        "--refresh-from-tca",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument("--replay-tca-lookback-days", type=int, default=None)
+    parser.add_argument("--replay-max-source-age-hours", type=float, default=None)
+    parser.add_argument("--replay-markout-max-hours", type=float, default=None)
     parser.add_argument("--replay-max-symbol-notional", type=float, default=None)
     parser.add_argument("--replay-max-gross-notional", type=float, default=None)
     return parser
@@ -122,6 +130,8 @@ def _collect_replay_snapshot(path: Path) -> dict[str, Any]:
     counterfactual = payload.get("counterfactual")
     counterfactual_mapping = counterfactual if isinstance(counterfactual, dict) else {}
     counterfactual_passed = counterfactual_mapping.get("passed")
+    source_data_raw = payload.get("source_data")
+    source_data = source_data_raw if isinstance(source_data_raw, dict) else {}
     snapshot.update(
         {
             "ts": payload.get("ts"),
@@ -134,6 +144,11 @@ def _collect_replay_snapshot(path: Path) -> dict[str, Any]:
             "counterfactual_passed": counterfactual_passed is True,
             "counterfactual_available": "passed" in counterfactual_mapping,
             "counterfactual_reason": counterfactual_mapping.get("reason"),
+            "source_data_available": bool(source_data),
+            "source_data_fresh": source_data.get("fresh") is True,
+            "source_data_age_hours": source_data.get("age_hours"),
+            "source_data_max_ts": source_data.get("max_ts"),
+            "source_data": dict(source_data),
         }
     )
     live_cost_alignment = payload.get("live_cost_alignment")
@@ -166,6 +181,7 @@ def _apply_runtime_overrides(args: argparse.Namespace) -> list[str]:
 
     int_overrides = {
         "AI_TRADING_REPLAY_SEED": args.replay_seed,
+        "AI_TRADING_REPLAY_TCA_LOOKBACK_DAYS": getattr(args, "replay_tca_lookback_days", None),
     }
     for key, value in int_overrides.items():
         if value is not None:
@@ -174,6 +190,8 @@ def _apply_runtime_overrides(args: argparse.Namespace) -> list[str]:
     float_overrides = {
         "AI_TRADING_REPLAY_MAX_SYMBOL_NOTIONAL": args.replay_max_symbol_notional,
         "AI_TRADING_REPLAY_MAX_GROSS_NOTIONAL": args.replay_max_gross_notional,
+        "AI_TRADING_REPLAY_MAX_SOURCE_AGE_HOURS": getattr(args, "replay_max_source_age_hours", None),
+        "AI_TRADING_REPLAY_MARKOUT_MAX_HOURS": getattr(args, "replay_markout_max_hours", None),
     }
     for key, value in float_overrides.items():
         if value is not None:
@@ -184,6 +202,7 @@ def _apply_runtime_overrides(args: argparse.Namespace) -> list[str]:
         "AI_TRADING_REPLAY_ENFORCE_OMS_GATES": args.enforce_oms_gates,
         "AI_TRADING_REPLAY_REQUIRE_NON_REGRESSION": args.require_non_regression,
         "AI_TRADING_REPLAY_CLIP_INTENTS_TO_CAPS": args.clip_intents_to_caps,
+        "AI_TRADING_REPLAY_REFRESH_FROM_TCA": getattr(args, "refresh_from_tca", None),
     }
     for key, value in bool_overrides.items():
         if value is not None:
@@ -233,7 +252,11 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
             error_text = str(exc)
             status = (
                 "blocked"
-                if error_text == "REPLAY_POLICY_NON_REGRESSION_FAILED"
+                if error_text
+                in {
+                    "REPLAY_POLICY_NON_REGRESSION_FAILED",
+                    "REPLAY_SOURCE_DATA_STALE",
+                }
                 else "failed"
             )
             blocked_payload: dict[str, Any] = {
@@ -278,6 +301,8 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
             and after_mtime_ns is not None
             and (before_mtime_ns is None or after_mtime_ns > before_mtime_ns)
         )
+        source_data_fresh = bool(replay_snapshot.get("source_data_fresh"))
+        blocked_source_data = bool(fresh_artifact and not source_data_fresh)
         counterfactual_passed = bool(replay_snapshot.get("counterfactual_passed"))
         counterfactual_available = bool(replay_snapshot.get("counterfactual_available"))
         no_baseline_counterfactual = (
@@ -288,7 +313,11 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
             and (not counterfactual_passed or not counterfactual_available or no_baseline_counterfactual)
         )
         payload: dict[str, Any] = {
-            "status": "blocked" if blocked_counterfactual else ("ok" if fresh_artifact else "failed"),
+            "status": (
+                "blocked"
+                if (blocked_source_data or blocked_counterfactual)
+                else ("ok" if fresh_artifact else "failed")
+            ),
             "now": now.isoformat(),
             "force": bool(args.force),
             "market_open_now": bool(args.market_open_now),
@@ -302,6 +331,9 @@ def run_replay_governance(argv: list[str] | None = None) -> dict[str, Any]:
         }
         if not fresh_artifact:
             payload["reason"] = "missing_fresh_replay_artifact"
+            payload["elapsed_sec"] = max(0.0, time.monotonic() - started_mono)
+        elif blocked_source_data:
+            payload["reason"] = "replay_source_data_stale"
             payload["elapsed_sec"] = max(0.0, time.monotonic() - started_mono)
         elif blocked_counterfactual:
             payload["reason"] = (

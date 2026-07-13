@@ -76,6 +76,7 @@ def test_replay_governance_tool_writes_summary_payload(
             "cap_adjustments_count": 3,
             "violations": [],
             "violations_by_code": {},
+            "source_data": {"fresh": True},
             "counterfactual": {"passed": True},
         }
         out_path = output_dir / f"replay_hash_{now.strftime('%Y%m%d')}.json"
@@ -232,6 +233,7 @@ def test_replay_governance_blocks_no_baseline_counterfactual(
                     "orders_submitted": 8,
                     "fill_events": 7,
                     "violations": [],
+                    "source_data": {"fresh": True},
                     "counterfactual": {"passed": True, "reason": "no_baseline_summary"},
                 },
                 sort_keys=True,

@@ -15,6 +15,7 @@ import os
 import stat
 import tempfile
 import sys
+from bisect import bisect_right
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING, TypedDict, cast
 from types import SimpleNamespace
 from collections import Counter, OrderedDict, deque
@@ -39012,7 +39013,8 @@ def _load_replay_bars(
     src = Path(path)
     if not src.exists():
         return rows
-    for file_path in sorted(src.glob("*.jsonl")):
+    source_files = [src] if src.is_file() else sorted(src.glob("*.jsonl"))
+    for file_path in source_files:
         rows.extend(_read_jsonl_records(str(file_path), max_records=1_000_000))
     filtered: list[dict[str, Any]] = []
     for row in rows:
@@ -39035,6 +39037,143 @@ def _load_replay_bars(
             row["ts"] = ts.isoformat()
         filtered.append(row)
     return filtered
+
+
+def _refresh_replay_dataset_from_tca(
+    *,
+    data_dir: Path,
+    now: datetime,
+) -> tuple[Path | None, dict[str, Any]]:
+    """Build a bounded, deduplicated replay decision stream from recent TCA records."""
+
+    if not bool(get_env("AI_TRADING_REPLAY_REFRESH_FROM_TCA", True, cast=bool)):
+        return None, {"enabled": False, "reason": "disabled"}
+    tca_raw = str(
+        get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl", cast=str)
+        or "runtime/tca_records.jsonl"
+    ).strip()
+    tca_path = resolve_runtime_artifact_path(
+        tca_raw,
+        default_relative="runtime/tca_records.jsonl",
+    )
+    if not tca_path.exists():
+        return None, {
+            "enabled": True,
+            "reason": "tca_source_missing",
+            "source_path": str(tca_path),
+        }
+
+    lookback_days = max(
+        1,
+        int(get_env("AI_TRADING_REPLAY_TCA_LOOKBACK_DAYS", 30, cast=int)),
+    )
+    max_records = max(
+        100,
+        int(get_env("AI_TRADING_REPLAY_TCA_MAX_RECORDS", 20000, cast=int)),
+    )
+    cutoff = now - timedelta(days=lookback_days)
+    deduplicated: dict[str, dict[str, Any]] = {}
+    scanned = 0
+    rejected = 0
+    for record in _read_jsonl_records(str(tca_path), max_records=max_records):
+        scanned += 1
+        benchmark_raw = record.get("benchmark")
+        benchmark = benchmark_raw if isinstance(benchmark_raw, Mapping) else {}
+        submit_ts = _parse_iso_timestamp(
+            benchmark.get("submit_ts")
+            or benchmark.get("decision_ts")
+            or record.get("ts")
+        )
+        if submit_ts is None or submit_ts < cutoff or submit_ts > now + timedelta(minutes=5):
+            rejected += 1
+            continue
+        symbol = str(record.get("symbol") or "").strip().upper()
+        side = str(record.get("order_side") or record.get("side") or "").strip().lower()
+        if not symbol or side not in {"buy", "sell"}:
+            rejected += 1
+            continue
+        try:
+            qty = float(
+                record.get("requested_qty")
+                or record.get("resolved_fill_qty")
+                or record.get("qty")
+                or 0.0
+            )
+        except (TypeError, ValueError):
+            qty = 0.0
+        try:
+            price = float(
+                record.get("submit_price_reference")
+                or record.get("decision_price")
+                or record.get("arrival_price")
+                or benchmark.get("mid_at_arrival")
+                or benchmark.get("bar_close_price")
+                or 0.0
+            )
+        except (TypeError, ValueError):
+            price = 0.0
+        if qty <= 0.0 or price <= 0.0 or not math.isfinite(qty) or not math.isfinite(price):
+            rejected += 1
+            continue
+
+        raw_client_order_id = str(record.get("client_order_id") or "").strip()
+        identity_seed = "|".join(
+            (
+                symbol,
+                side,
+                submit_ts.isoformat(),
+                f"{qty:.8f}",
+                f"{price:.8f}",
+            )
+        )
+        client_order_id = raw_client_order_id or hashlib.sha256(
+            identity_seed.encode("utf-8")
+        ).hexdigest()[:24]
+        dedupe_key = raw_client_order_id or identity_seed
+        deduplicated[dedupe_key] = {
+            "symbol": symbol,
+            "ts": submit_ts.isoformat(),
+            "close": float(price),
+            "side": side,
+            "qty": float(qty),
+            "order_type": str(record.get("order_type") or "limit").strip().lower(),
+            "client_order_id": client_order_id,
+            "timeframe": "5Min",
+            "source_kind": "tca_decision",
+            "regime_profile": str(
+                record.get("regime_profile")
+                or record.get("market_regime")
+                or "unknown"
+            ).strip().lower(),
+        }
+
+    rows = sorted(
+        deduplicated.values(),
+        key=lambda row: (str(row["ts"]), str(row["symbol"])),
+    )
+    if not rows:
+        return None, {
+            "enabled": True,
+            "reason": "no_recent_valid_tca_decisions",
+            "source_path": str(tca_path),
+            "scanned_records": int(scanned),
+            "rejected_records": int(rejected),
+        }
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / "governance_tca_recent.jsonl"
+    target.write_text(
+        "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    return target, {
+        "enabled": True,
+        "source_path": str(tca_path),
+        "output_path": str(target),
+        "scanned_records": int(scanned),
+        "rejected_records": int(rejected),
+        "decision_rows": int(len(rows)),
+        "lookback_days": int(lookback_days),
+    }
 
 
 def _parse_replay_initial_positions_payload(payload: Any) -> dict[str, float]:
@@ -39143,8 +39282,13 @@ def _replay_non_flat_start_symbols(
     return non_flat_symbols
 
 
-def _replay_summary_metrics(result: Mapping[str, Any]) -> dict[str, Any]:
-    """Build replay quality metrics for counterfactual non-regression checks."""
+def _replay_summary_metrics(
+    result: Mapping[str, Any],
+    *,
+    market_rows: Sequence[Mapping[str, Any]] = (),
+    max_markout_hours: float = 24.0,
+) -> dict[str, Any]:
+    """Measure next-observation directional markout after simulated execution cost."""
 
     orders = result.get("orders", [])
     events = result.get("events", [])
@@ -39156,7 +39300,28 @@ def _replay_summary_metrics(result: Mapping[str, Any]) -> dict[str, Any]:
             order_id = str(order.get("id", "")).strip()
             if order_id:
                 order_map[order_id] = order
-    fill_bps: list[float] = []
+
+    price_points: dict[str, list[tuple[datetime, float]]] = {}
+    for row in market_rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        ts = _parse_iso_timestamp(row.get("ts") or row.get("timestamp"))
+        try:
+            close = float(row.get("close", row.get("price", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            close = 0.0
+        if not symbol or ts is None or close <= 0.0 or not math.isfinite(close):
+            continue
+        price_points.setdefault(symbol, []).append((ts, close))
+    for points in price_points.values():
+        points.sort(key=lambda item: item[0])
+    timestamps = {
+        symbol: [item[0] for item in points]
+        for symbol, points in price_points.items()
+    }
+
+    edge_bps: list[float] = []
+    execution_cost_bps: list[float] = []
+    max_horizon_seconds = max(0.0, float(max_markout_hours)) * 3600.0
     if isinstance(events, list):
         for event in events:
             if not isinstance(event, Mapping):
@@ -39165,39 +39330,85 @@ def _replay_summary_metrics(result: Mapping[str, Any]) -> dict[str, Any]:
                 continue
             order_id = str(event.get("order_id", "")).strip()
             order = order_map.get(order_id, {})
-            side = str(event.get("side", order.get("side", "buy"))).strip().lower()
+            symbol = str(event.get("symbol") or order.get("symbol") or "").strip().upper()
+            side = str(event.get("side", order.get("side", ""))).strip().lower()
+            fill_ts = _parse_iso_timestamp(event.get("ts"))
             try:
                 fill_price = float(event.get("fill_price"))
             except (TypeError, ValueError):
                 continue
-            if fill_price <= 0:
+            if (
+                not symbol
+                or side not in {"buy", "sell"}
+                or fill_ts is None
+                or fill_price <= 0.0
+                or not math.isfinite(fill_price)
+            ):
                 continue
-            try:
-                ref_price = float(order.get("limit_price", order.get("price", fill_price)))
-            except (TypeError, ValueError):
-                ref_price = fill_price
-            if ref_price <= 0:
+            symbol_points = price_points.get(symbol, [])
+            symbol_timestamps = timestamps.get(symbol, [])
+            next_index = bisect_right(symbol_timestamps, fill_ts)
+            if next_index >= len(symbol_points):
                 continue
-            if side == "sell":
-                bps = ((fill_price - ref_price) / ref_price) * 10_000.0
+            markout_ts, markout_price = symbol_points[next_index]
+            horizon_seconds = (markout_ts - fill_ts).total_seconds()
+            if horizon_seconds < 0.0 or (
+                max_horizon_seconds > 0.0 and horizon_seconds > max_horizon_seconds
+            ):
+                continue
+            if side == "buy":
+                edge = ((markout_price - fill_price) / fill_price) * 10_000.0
             else:
-                bps = ((ref_price - fill_price) / ref_price) * 10_000.0
-            if math.isfinite(bps):
-                fill_bps.append(float(bps))
-    if not fill_bps:
-        return {"sample_count": 0, "net_edge_bps": 0.0, "max_drawdown_pct": 0.0}
+                edge = ((fill_price - markout_price) / fill_price) * 10_000.0
+            if math.isfinite(edge):
+                edge_bps.append(float(edge))
+
+            try:
+                reference_price = float(
+                    order.get("limit_price", order.get("price", fill_price))
+                )
+            except (TypeError, ValueError):
+                reference_price = fill_price
+            if reference_price > 0.0:
+                if side == "buy":
+                    cost = ((fill_price - reference_price) / reference_price) * 10_000.0
+                else:
+                    cost = ((reference_price - fill_price) / reference_price) * 10_000.0
+                if math.isfinite(cost):
+                    execution_cost_bps.append(float(cost))
+
+    if not edge_bps:
+        return {
+            "sample_count": 0,
+            "net_edge_bps": 0.0,
+            "max_drawdown_pct": 0.0,
+            "execution_cost_bps": (
+                float(sum(execution_cost_bps) / len(execution_cost_bps))
+                if execution_cost_bps
+                else 0.0
+            ),
+            "metric": "next_observation_markout_after_simulated_cost",
+            "markout_horizon_hours": float(max_markout_hours),
+        }
 
     cumulative = 0.0
     peak = 0.0
     max_drawdown = 0.0
-    for value in fill_bps:
+    for value in edge_bps:
         cumulative += value / 10_000.0
         peak = max(peak, cumulative)
         max_drawdown = max(max_drawdown, peak - cumulative)
     return {
-        "sample_count": len(fill_bps),
-        "net_edge_bps": float(sum(fill_bps) / len(fill_bps)),
+        "sample_count": len(edge_bps),
+        "net_edge_bps": float(sum(edge_bps) / len(edge_bps)),
         "max_drawdown_pct": float(max_drawdown),
+        "execution_cost_bps": (
+            float(sum(execution_cost_bps) / len(execution_cost_bps))
+            if execution_cost_bps
+            else 0.0
+        ),
+        "metric": "next_observation_markout_after_simulated_cost",
+        "markout_horizon_hours": float(max_markout_hours),
     }
 
 
@@ -39514,9 +39725,14 @@ def _run_replay_governance(
         data_dir_raw,
         default_relative="runtime/replay_data",
     )
+    refreshed_path, refresh_context = _refresh_replay_dataset_from_tca(
+        data_dir=data_dir_path,
+        now=now,
+    )
+    replay_input_path = refreshed_path or data_dir_path
     data_dir = str(data_dir_path)
     bars = _load_replay_bars(
-        path=data_dir,
+        path=str(replay_input_path),
         symbols=symbols,
         timeframes=timeframes,
         start_date=start_date,
@@ -39573,11 +39789,12 @@ def _run_replay_governance(
                 "ts": ts,
                 "close": close_price,
                 "side": str(row.get("side", "buy")).lower(),
-                "qty": float(row.get("qty", 1.0) or 1.0),
+                "qty": float(row.get("qty", 0.0) or 0.0),
                 "order_type": str(row.get("order_type", "limit")),
                 "client_order_id": str(row.get("client_order_id", "")),
                 "session_token": session_token,
                 "regime_token": regime_token,
+                "source_kind": str(row.get("source_kind") or "market_observation"),
             }
         )
     if not normalized_bars:
@@ -39587,6 +39804,44 @@ def _run_replay_governance(
         )
         state.last_replay_run_date = now.date()
         return
+
+    source_timestamps = [
+        parsed
+        for parsed in (
+            _parse_iso_timestamp(row.get("ts") or row.get("timestamp"))
+            for row in normalized_bars
+        )
+        if parsed is not None
+    ]
+    source_min_ts = min(source_timestamps)
+    source_max_ts = max(source_timestamps)
+    source_delta_seconds = (now - source_max_ts).total_seconds()
+    source_future_skew_seconds = max(-source_delta_seconds, 0.0)
+    source_age_hours = max(source_delta_seconds, 0.0) / 3600.0
+    max_source_age_hours = max(
+        1.0,
+        float(get_env("AI_TRADING_REPLAY_MAX_SOURCE_AGE_HOURS", 96.0, cast=float)),
+    )
+    source_future_dated = source_future_skew_seconds > 300.0
+    source_fresh = bool(
+        source_age_hours <= max_source_age_hours and not source_future_dated
+    )
+    source_hash = hashlib.sha256(
+        json.dumps(normalized_bars, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    source_data = {
+        "path": str(replay_input_path),
+        "hash": source_hash,
+        "rows": int(len(normalized_bars)),
+        "min_ts": source_min_ts.isoformat(),
+        "max_ts": source_max_ts.isoformat(),
+        "age_hours": float(source_age_hours),
+        "max_age_hours": float(max_source_age_hours),
+        "fresh": bool(source_fresh),
+        "future_dated": bool(source_future_dated),
+        "future_skew_seconds": float(source_future_skew_seconds),
+        "refresh": dict(refresh_context),
+    }
 
     initial_positions = _replay_initial_positions_from_env()
     if not initial_positions:
@@ -39643,6 +39898,13 @@ def _run_replay_governance(
             "client_order_id": intent_key,
         }
 
+    baseline = ReplayEventLoop(
+        strategy=_strategy,
+        seed=replay_seed,
+        max_symbol_notional=math.inf,
+        max_gross_notional=math.inf,
+        initial_positions=initial_positions,
+    ).run(normalized_bars)
     first = ReplayEventLoop(
         strategy=_strategy,
         seed=replay_seed,
@@ -39676,7 +39938,20 @@ def _run_replay_governance(
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"replay_hash_{now.strftime('%Y%m%d')}.json"
-    replay_summary = _replay_summary_metrics(first)
+    markout_horizon_hours = max(
+        0.1,
+        float(get_env("AI_TRADING_REPLAY_MARKOUT_MAX_HOURS", 24.0, cast=float)),
+    )
+    baseline_summary = _replay_summary_metrics(
+        baseline,
+        market_rows=normalized_bars,
+        max_markout_hours=markout_horizon_hours,
+    )
+    replay_summary = _replay_summary_metrics(
+        first,
+        market_rows=normalized_bars,
+        max_markout_hours=markout_horizon_hours,
+    )
     replay_symbol_summary = _replay_symbol_summary_metrics(first)
     replay_bucket_summary = _replay_bucket_summary_metrics(
         first,
@@ -39689,7 +39964,16 @@ def _run_replay_governance(
         for item in replay_violations
         if isinstance(item, Mapping)
     )
-    baseline_summary = _load_latest_replay_summary(output_dir, before_path=out_path)
+    comparison = {
+        "baseline_policy": "recorded_decisions_uncapped",
+        "candidate_policy": "effective_execution_caps",
+        "same_source_data": True,
+        "source_hash": source_hash,
+        "candidate_max_symbol_notional": float(max_symbol_notional),
+        "candidate_max_gross_notional": float(max_gross_notional),
+        "baseline_orders_submitted": int(len(baseline.get("orders", []))),
+        "candidate_orders_submitted": int(len(first.get("orders", []))),
+    }
     governance = getattr(getattr(state, "_effective_policy", None), "governance", None)
     min_samples = int(get_env("AI_TRADING_POLICY_REPLAY_MIN_SAMPLES", 100, cast=int))
     min_net_edge_bps = float(
@@ -39713,28 +39997,23 @@ def _run_replay_governance(
             )
         except (TypeError, ValueError):
             pass
-    counterfactual: dict[str, Any] | None = None
     require_non_regression = bool(
         get_env("AI_TRADING_REPLAY_REQUIRE_NON_REGRESSION", True, cast=bool)
     )
-    if baseline_summary is not None:
-        passed, details = evaluate_counterfactual_non_regression(
-            baseline=baseline_summary,
-            candidate=replay_summary,
-            min_samples=min_samples,
-            min_net_edge_bps=min_net_edge_bps,
-            net_tolerance_bps=net_tolerance_bps,
-            drawdown_tolerance_pct=drawdown_tolerance_pct,
-        )
-        counterfactual = {"passed": bool(passed), **details}
-        counterfactual_failure = bool(require_non_regression and not passed)
-    else:
-        counterfactual = {
-            "passed": True,
-            "reason": "no_baseline_summary",
-            "candidate": replay_summary,
-        }
-        counterfactual_failure = False
+    passed, details = evaluate_counterfactual_non_regression(
+        baseline=baseline_summary,
+        candidate=replay_summary,
+        min_samples=min_samples,
+        min_net_edge_bps=min_net_edge_bps,
+        net_tolerance_bps=net_tolerance_bps,
+        drawdown_tolerance_pct=drawdown_tolerance_pct,
+    )
+    counterfactual: dict[str, Any] = {
+        "passed": bool(passed),
+        "comparison": dict(comparison),
+        **details,
+    }
+    counterfactual_failure = bool(require_non_regression and not passed)
     out_path.write_text(
         json.dumps(
             {
@@ -39743,7 +40022,9 @@ def _run_replay_governance(
                 "ts": now.isoformat(),
                 "hash": first_hash,
                 "symbols": list(active_symbols),
-                "source_path": data_dir,
+                "source_path": str(replay_input_path),
+                "source_data": source_data,
+                "comparison": comparison,
                 "rows": len(normalized_bars),
                 "seed": replay_seed,
                 "simulate_fills": simulate_fills,
@@ -39772,6 +40053,7 @@ def _run_replay_governance(
                         key=lambda item: item[0],
                     )
                 ),
+                "baseline_summary": baseline_summary,
                 "replay_summary": replay_summary,
                 "replay_symbol_summary": replay_symbol_summary,
                 "replay_bucket_summary": replay_bucket_summary,
@@ -39781,6 +40063,8 @@ def _run_replay_governance(
         ),
         encoding="utf-8",
     )
+    if not source_fresh:
+        raise RuntimeError("REPLAY_SOURCE_DATA_STALE")
     if counterfactual_failure:
         raise RuntimeError("REPLAY_POLICY_NON_REGRESSION_FAILED")
     if enforce_oms_gates and replay_violations:
@@ -39791,7 +40075,8 @@ def _run_replay_governance(
             "hash": first_hash,
             "rows": len(normalized_bars),
             "path": str(out_path),
-            "source_path": data_dir,
+            "source_path": str(replay_input_path),
+            "source_age_hours": float(source_age_hours),
             "violations": len(replay_violations),
             "cap_adjustments_count": int(len(replay_cap_adjustments)),
             "violations_by_code": dict(violation_counts),

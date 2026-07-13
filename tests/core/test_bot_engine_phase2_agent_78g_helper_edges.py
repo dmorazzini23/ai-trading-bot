@@ -435,15 +435,21 @@ def test_jsonl_timestamp_and_replay_metric_helpers(tmp_path) -> None:
         ],
     }
 
-    summary = bot_engine._replay_summary_metrics(result)
+    market_rows = [
+        {"symbol": "AAPL", "ts": "2026-04-27T14:00:00Z", "close": 101.0},
+        {"symbol": "MSFT", "ts": "2026-04-27T20:05:00Z", "close": 50.0},
+    ]
+    summary = bot_engine._replay_summary_metrics(result, market_rows=market_rows)
     assert summary["sample_count"] == 2
-    assert summary["net_edge_bps"] == pytest.approx(150.0)
+    assert summary["net_edge_bps"] == pytest.approx(
+        ((((101.0 - 99.0) / 99.0) + ((51.0 - 50.0) / 51.0)) / 2.0) * 10_000.0
+    )
     assert summary["max_drawdown_pct"] == 0.0
-    assert bot_engine._replay_summary_metrics({"orders": [], "events": []}) == {
-        "sample_count": 0,
-        "net_edge_bps": 0.0,
-        "max_drawdown_pct": 0.0,
-    }
+    assert summary["metric"] == "next_observation_markout_after_simulated_cost"
+    empty_summary = bot_engine._replay_summary_metrics({"orders": [], "events": []})
+    assert empty_summary["sample_count"] == 0
+    assert empty_summary["net_edge_bps"] == 0.0
+    assert empty_summary["max_drawdown_pct"] == 0.0
 
     metric_summary = bot_engine._replay_metric_summary(
         {"wins": [1.0, 2.0], "mixed": [4.0, -2.0], "empty": [float("nan")]}

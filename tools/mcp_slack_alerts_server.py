@@ -37,6 +37,7 @@ _DEFAULT_INCIDENT_STATE = _DEFAULT_RUNTIME_ROOT / "slack_incident_state.json"
 _DEFAULT_EOD_STATE = _DEFAULT_RUNTIME_ROOT / "slack_eod_state.json"
 _DEFAULT_INCIDENT_REPEAT_COOLDOWN_MINUTES = 45
 _DEFAULT_HEALTH_PORT = 9001
+_DEFAULT_HEALTH_TIMEOUT_SECONDS = 5.0
 _STARTUP_WARMUP_HEALTH_REASONS = frozenset(
     {
         "startup",
@@ -539,7 +540,9 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         args.get("health_port")
         or os.getenv("HEALTHCHECK_PORT", str(_DEFAULT_HEALTH_PORT))
     )
-    timeout_s = float(args.get("health_timeout_s") or 2.0)
+    timeout_s = float(
+        args.get("health_timeout_s") or _DEFAULT_HEALTH_TIMEOUT_SECONDS
+    )
     health = _safe_health_payload(port=port, timeout_s=timeout_s)
     data_provider = health.get("data_provider") or {}
     broker = health.get("broker") or {}
@@ -903,7 +906,9 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         args.get("health_port")
         or os.getenv("HEALTHCHECK_PORT", str(_DEFAULT_HEALTH_PORT))
     )
-    timeout_s = float(args.get("health_timeout_s") or 2.0)
+    timeout_s = float(
+        args.get("health_timeout_s") or _DEFAULT_HEALTH_TIMEOUT_SECONDS
+    )
     health = _safe_health_payload(port=port, timeout_s=timeout_s)
     data_provider = health.get("data_provider")
     data_provider_obj = data_provider if isinstance(data_provider, dict) else {}

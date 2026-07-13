@@ -3,12 +3,21 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+import pytest
+
 
 from ai_trading.core import bot_engine
 
 
 class _State:
     last_replay_run_date = None
+
+
+@pytest.fixture(autouse=True)
+def _isolate_replay_governance_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_TRADING_REPLAY_REFRESH_FROM_TCA", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_REQUIRE_NON_REGRESSION", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_MAX_SOURCE_AGE_HOURS", "96")
 
 
 def test_load_replay_bars_requires_timeframe_when_filter_configured(tmp_path: Path) -> None:
@@ -87,7 +96,7 @@ def test_replay_governance_uses_async_parity_path(
 
     out_path = tmp_path / "replay_hash_20260218.json"
     payload = json.loads(out_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "2.0.0"
+    assert payload["schema_version"] == "3.0.0"
     assert payload["policy_hash"] == "policy-test"
     assert payload["simulate_fills"] is True
     assert payload["seed"] == 123
@@ -153,7 +162,7 @@ def test_replay_non_regression_failure_writes_current_failed_artifact(
 
     current_path = tmp_path / "replay_hash_20260218.json"
     payload = json.loads(current_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "2.0.0"
+    assert payload["schema_version"] == "3.0.0"
     assert payload["policy_hash"] == "policy-test"
     assert payload["counterfactual"]["passed"] is False
 
@@ -553,3 +562,130 @@ def test_load_latest_replay_quality_summaries_reads_bucket_payload(
     assert "AAPL:opening" in session_summary
     assert "AAPL:opening:risk_on" in session_regime_summary
     assert context.get("path") == str(path)
+
+
+def test_refresh_replay_dataset_from_tca_deduplicates_recent_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 2, 18, 23, 0, tzinfo=UTC)
+    tca_path = tmp_path / "tca_records.jsonl"
+    recent = {
+        "symbol": "AAPL",
+        "side": "buy",
+        "requested_qty": 2,
+        "submit_price_reference": 190.0,
+        "order_type": "limit",
+        "benchmark": {"submit_ts": "2026-02-18T20:00:00+00:00"},
+    }
+    stale = {
+        **recent,
+        "benchmark": {"submit_ts": "2025-12-01T20:00:00+00:00"},
+    }
+    tca_path.write_text(
+        "\n".join((json.dumps(recent), json.dumps(recent), json.dumps(stale))) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_REPLAY_REFRESH_FROM_TCA", "1")
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
+    monkeypatch.setenv("AI_TRADING_REPLAY_TCA_LOOKBACK_DAYS", "30")
+
+    output_path, context = bot_engine._refresh_replay_dataset_from_tca(
+        data_dir=tmp_path / "replay_data",
+        now=now,
+    )
+
+    assert output_path is not None
+    rows = [
+        json.loads(line)
+        for line in output_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["qty"] == 2.0
+    assert rows[0]["source_kind"] == "tca_decision"
+    assert rows[0]["client_order_id"]
+    assert context["decision_rows"] == 1
+
+
+def test_replay_governance_preserves_zero_quantity_observations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 2, 18, 23, 0, tzinfo=UTC)
+    monkeypatch.setattr(bot_engine, "_replay_schedule_due", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        bot_engine,
+        "_load_replay_bars",
+        lambda **_kwargs: [
+            {
+                "symbol": "AAPL",
+                "ts": "2026-02-18T22:00:00+00:00",
+                "close": 189.5,
+                "side": "buy",
+                "qty": 0,
+            },
+            {
+                "symbol": "AAPL",
+                "ts": "2026-02-18T22:05:00+00:00",
+                "close": 190.0,
+                "side": "buy",
+                "qty": 1,
+                "client_order_id": "real-decision",
+            },
+        ],
+    )
+    monkeypatch.setenv("AI_TRADING_REPLAY_OUTPUT_DIR", str(tmp_path))
+
+    state = _State()
+    state.effective_policy_hash = "policy-test"
+    bot_engine._run_replay_governance(state, now=now, market_open_now=False)
+
+    payload = json.loads(
+        (tmp_path / "replay_hash_20260218.json").read_text(encoding="utf-8")
+    )
+    assert payload["rows"] == 2
+    assert payload["orders_submitted"] == 1
+    assert payload["comparison"]["baseline_orders_submitted"] == 1
+
+
+def test_replay_governance_writes_artifact_then_blocks_stale_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 2, 18, 23, 0, tzinfo=UTC)
+    monkeypatch.setattr(bot_engine, "_replay_schedule_due", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        bot_engine,
+        "_load_replay_bars",
+        lambda **_kwargs: [
+            {
+                "symbol": "AAPL",
+                "ts": "2026-02-01T22:00:00+00:00",
+                "close": 189.5,
+                "side": "buy",
+                "qty": 1,
+                "client_order_id": "stale-1",
+            },
+            {
+                "symbol": "AAPL",
+                "ts": "2026-02-01T22:05:00+00:00",
+                "close": 190.0,
+                "side": "sell",
+                "qty": 1,
+                "client_order_id": "stale-2",
+            },
+        ],
+    )
+    monkeypatch.setenv("AI_TRADING_REPLAY_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_REPLAY_MAX_SOURCE_AGE_HOURS", "96")
+
+    state = _State()
+    state.effective_policy_hash = "policy-test"
+    with pytest.raises(RuntimeError, match="REPLAY_SOURCE_DATA_STALE"):
+        bot_engine._run_replay_governance(state, now=now, market_open_now=False)
+
+    payload = json.loads(
+        (tmp_path / "replay_hash_20260218.json").read_text(encoding="utf-8")
+    )
+    assert payload["source_data"]["fresh"] is False
+    assert payload["source_data"]["age_hours"] > 96.0

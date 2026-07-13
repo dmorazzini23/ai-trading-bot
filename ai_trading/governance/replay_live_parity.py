@@ -9,7 +9,7 @@ from ai_trading.config.management import get_env
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 
-REPLAY_GOVERNANCE_SCHEMA_VERSION = "2.0.0"
+REPLAY_GOVERNANCE_SCHEMA_VERSION = "3.0.0"
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -192,6 +192,12 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
     schema_version = str(payload.get("schema_version") or "").strip()
     policy_hash = str(payload.get("policy_hash") or "").strip()
 
+    source_data_raw = payload.get("source_data")
+    source_data = (
+        dict(source_data_raw)
+        if isinstance(source_data_raw, Mapping)
+        else {}
+    )
     return {
         "enabled": True,
         "available": True,
@@ -220,6 +226,9 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         "policy_hash": policy_hash,
         "counterfactual_available": "passed" in counterfactual,
         "counterfactual": counterfactual,
+        "source_data_fresh": source_data.get("fresh") is True,
+        "source_data_available": bool(source_data),
+        "source_data": source_data,
     }
 
 
@@ -248,6 +257,13 @@ def summarize_replay_live_parity_gate(
     require_fresh_replay = bool(
         get_env(
             "AI_TRADING_REPLAY_LIVE_PARITY_REQUIRE_FRESH_REPLAY",
+            True,
+            cast=bool,
+        )
+    )
+    require_fresh_source = bool(
+        get_env(
+            "AI_TRADING_REPLAY_LIVE_PARITY_REQUIRE_FRESH_SOURCE",
             True,
             cast=bool,
         )
@@ -292,6 +308,18 @@ def summarize_replay_live_parity_gate(
     replay_available = bool(replay_snapshot.get("available"))
     replay_fresh = bool(replay_snapshot.get("fresh"))
     replay_future_dated = bool(replay_snapshot.get("future_dated", False))
+    source_data_raw = replay_snapshot.get("source_data")
+    source_data = (
+        dict(source_data_raw)
+        if isinstance(source_data_raw, Mapping)
+        else {}
+    )
+    source_data_available = bool(
+        replay_snapshot.get("source_data_available", bool(source_data))
+    )
+    source_data_fresh = (
+        replay_snapshot.get("source_data_fresh", source_data.get("fresh")) is True
+    )
     replay_violations_count = max(
         0,
         _as_int(replay_snapshot.get("violations_count"), 0),
@@ -345,6 +373,10 @@ def summarize_replay_live_parity_gate(
     replay_fresh_ok = bool(
         (replay_fresh or (not require_fresh_replay)) and not replay_future_dated
     )
+    replay_source_fresh_ok = bool(
+        (source_data_available and source_data_fresh)
+        or (not require_fresh_source)
+    )
     replay_violations_ok = bool(
         replay_violations_count <= int(max_replay_violations)
     )
@@ -367,6 +399,7 @@ def summarize_replay_live_parity_gate(
         "replay_available": replay_available_ok,
         "replay_contract": replay_contract_ok,
         "replay_fresh": replay_fresh_ok,
+        "replay_source_fresh": replay_source_fresh_ok,
         "replay_violations": replay_violations_ok,
         "replay_counterfactual": replay_counterfactual_ok,
         "oms_lifecycle_parity_available": lifecycle_available_ok,
@@ -387,6 +420,7 @@ def summarize_replay_live_parity_gate(
         "checks": checks,
         "thresholds": {
             "require_fresh_replay": bool(require_fresh_replay),
+            "require_fresh_source": bool(require_fresh_source),
             "required_schema_version": REPLAY_GOVERNANCE_SCHEMA_VERSION,
             "expected_policy_hash": resolved_expected_policy_hash or None,
             "max_replay_age_hours": float(
@@ -427,6 +461,11 @@ def summarize_replay_live_parity_gate(
             "replay_future_dated": bool(replay_future_dated),
             "replay_future_skew_seconds": replay_snapshot.get("future_skew_seconds"),
             "replay_violations_count": int(replay_violations_count),
+            "replay_source_data_available": bool(source_data_available),
+            "replay_source_data_fresh": bool(source_data_fresh),
+            "replay_source_age_hours": source_data.get("age_hours"),
+            "replay_source_max_age_hours": source_data.get("max_age_hours"),
+            "replay_source_max_ts": source_data.get("max_ts"),
             "replay_cap_adjustments_count": int(
                 max(0, _as_int(replay_snapshot.get("cap_adjustments_count"), 0))
             ),

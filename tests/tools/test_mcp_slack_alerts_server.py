@@ -1666,7 +1666,7 @@ def test_collect_eod_summary_uses_runtime_file_fallback(monkeypatch) -> None:
 
     def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
         assert port == 9001
-        assert timeout_s == 2.0
+        assert timeout_s == 5.0
         return {
             "status": "healthy",
             "reason": "market_closed",
@@ -1723,7 +1723,7 @@ def test_collect_eod_summary_does_not_reuse_stale_trade_row_for_fresh_report_dat
 
     def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
         assert port == 9001
-        assert timeout_s == 2.0
+        assert timeout_s == 5.0
         return {
             "status": "healthy",
             "reason": "market_closed",
@@ -1778,7 +1778,7 @@ def test_collect_eod_summary_prefers_daily_trade_stats_for_daily_kpis(monkeypatc
 
     def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
         assert port == 9001
-        assert timeout_s == 2.0
+        assert timeout_s == 5.0
         return {
             "status": "healthy",
             "reason": "market_closed",
@@ -1838,7 +1838,7 @@ def test_collect_eod_summary_uses_nested_report_daily_trade_stats(monkeypatch) -
 
     def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
         assert port == 9001
-        assert timeout_s == 2.0
+        assert timeout_s == 5.0
         return {
             "status": "healthy",
             "reason": "market_closed",
@@ -1921,7 +1921,7 @@ def test_collect_eod_summary_flags_same_day_fill_pnl_mismatch(
 
     def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
         assert port == 9001
-        assert timeout_s == 2.0
+        assert timeout_s == 5.0
         return {
             "status": "healthy",
             "reason": "market_closed",

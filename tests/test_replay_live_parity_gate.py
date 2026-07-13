@@ -16,6 +16,7 @@ def _write_replay_artifact(
     ts: datetime,
     violations_count: int = 0,
     cap_adjustments_count: int = 0,
+    source_fresh: bool = True,
     counterfactual_passed: bool | None = True,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -29,6 +30,11 @@ def _write_replay_artifact(
         "violations": [{} for _ in range(int(violations_count))],
         "violations_by_code": {"TEST": int(violations_count)} if violations_count else {},
         "cap_adjustments": [{} for _ in range(int(cap_adjustments_count))],
+        "source_data": {
+            "fresh": bool(source_fresh),
+            "age_hours": 1.0 if source_fresh else 200.0,
+            "max_age_hours": 96.0,
+        },
     }
     if counterfactual_passed is not None:
         payload["counterfactual"] = {"passed": bool(counterfactual_passed)}
@@ -347,3 +353,34 @@ def test_replay_live_parity_gate_requires_lifecycle_parity_by_default_outside_py
 
     assert payload["ok"] is False
     assert "oms_lifecycle_parity_consistent" in payload["failed_checks"]
+
+
+def test_replay_live_parity_gate_fails_on_stale_source_data(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data-root"
+    now = datetime.now(UTC)
+    artifact = data_root / "runtime" / "replay_outputs" / "replay_hash_stale_source.json"
+    _write_replay_artifact(
+        artifact,
+        ts=now,
+        violations_count=0,
+        counterfactual_passed=True,
+        source_fresh=False,
+    )
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_root))
+
+    payload = summarize_replay_live_parity_gate(
+        oms_lifecycle_parity={
+            "enabled": True,
+            "available": True,
+            "ok": True,
+            "total_violations": 0,
+        }
+    )
+
+    assert payload["ok"] is False
+    assert "replay_source_fresh" in payload["failed_checks"]
+    assert payload["observed"]["replay_source_data_fresh"] is False
+    assert payload["observed"]["replay_source_age_hours"] == 200.0
