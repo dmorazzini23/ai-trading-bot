@@ -245,6 +245,143 @@ def test_capital_ramp_does_not_advance_when_live_telemetry_missing() -> None:
     assert summary["capital_ramp"]["transition"] == "telemetry_missing"
 
 
+def test_capital_ramp_resets_holds_and_resumes_after_replay_eligibility() -> None:
+    state = RolloutState(
+        ramp_phase_index=2,
+        ramp_phase_cycles=7,
+        ramp_multiplier=1.0,
+    )
+    burn_in = BurnInPolicy(
+        enabled=False,
+        min_paper_cycles=1,
+        min_paper_days=1,
+        require_policy_hash_stable=False,
+        require_config_hash_stable=False,
+    )
+    ramp = CapitalRampPolicy(
+        enabled=True,
+        phases=(0.25, 0.50, 1.00),
+        min_cycles_per_phase=2,
+        max_pacing_hit_rate_pct=30.0,
+        max_pending_oldest_age_sec=240.0,
+        max_calibration_ece=0.15,
+        max_calibration_brier=0.35,
+        downgrade_on_breach=True,
+    )
+    healthy = {
+        "order_pacing_cap_hit_rate_pct": 5.0,
+        "pending_oldest_age_sec": 0.0,
+        "live_calibration_ece": 0.01,
+        "live_calibration_brier": 0.10,
+    }
+
+    state, summary = apply_rollout_policies(
+        state=state,
+        burn_in=burn_in,
+        ramp=ramp,
+        execution_mode="live",
+        policy_hash="hash_a",
+        config_hash="cfg_a",
+        today=date(2026, 3, 1),
+        telemetry=healthy,
+        advance_eligible=False,
+        ineligible_reason="replay_live_parity_gate_failed",
+    )
+    assert state.ramp_phase_index == 0
+    assert state.ramp_phase_cycles == 0
+    assert state.ramp_multiplier == 0.25
+    assert summary["capital_ramp"]["transition"] == "reset_ineligible"
+    assert summary["capital_ramp"]["advance_eligible"] is False
+    assert (
+        summary["capital_ramp"]["ineligible_reason"]
+        == "replay_live_parity_gate_failed"
+    )
+
+    state, summary = apply_rollout_policies(
+        state=state,
+        burn_in=burn_in,
+        ramp=ramp,
+        execution_mode="live",
+        policy_hash="hash_a",
+        config_hash="cfg_a",
+        today=date(2026, 3, 1),
+        telemetry=healthy,
+        advance_eligible=False,
+        ineligible_reason="replay_live_parity_gate_failed",
+    )
+    assert state.ramp_phase_index == 0
+    assert state.ramp_phase_cycles == 0
+    assert summary["capital_ramp"]["transition"] == "hold_ineligible"
+
+    state, summary = apply_rollout_policies(
+        state=state,
+        burn_in=burn_in,
+        ramp=ramp,
+        execution_mode="live",
+        policy_hash="hash_a",
+        config_hash="cfg_a",
+        today=date(2026, 3, 1),
+        telemetry=healthy,
+        advance_eligible=True,
+    )
+    assert state.ramp_phase_index == 0
+    assert state.ramp_phase_cycles == 1
+    assert summary["capital_ramp"]["transition"] == ""
+
+    state, summary = apply_rollout_policies(
+        state=state,
+        burn_in=burn_in,
+        ramp=ramp,
+        execution_mode="live",
+        policy_hash="hash_a",
+        config_hash="cfg_a",
+        today=date(2026, 3, 1),
+        telemetry=healthy,
+        advance_eligible=True,
+    )
+    assert state.ramp_phase_index == 1
+    assert state.ramp_phase_cycles == 0
+    assert summary["capital_ramp"]["transition"] == "upgrade"
+
+
+def test_replay_advance_ineligibility_does_not_change_paper_burn_in() -> None:
+    burn_in = BurnInPolicy(
+        enabled=True,
+        min_paper_cycles=1,
+        min_paper_days=1,
+        require_policy_hash_stable=True,
+        require_config_hash_stable=True,
+    )
+    ramp = CapitalRampPolicy(
+        enabled=True,
+        phases=(0.25, 0.50, 1.00),
+        min_cycles_per_phase=2,
+        max_pacing_hit_rate_pct=30.0,
+        max_pending_oldest_age_sec=240.0,
+        max_calibration_ece=0.15,
+        max_calibration_brier=0.35,
+        downgrade_on_breach=True,
+    )
+
+    state, summary = apply_rollout_policies(
+        state=RolloutState(),
+        burn_in=burn_in,
+        ramp=ramp,
+        execution_mode="paper",
+        policy_hash="hash_a",
+        config_hash="cfg_a",
+        today=date(2026, 3, 1),
+        telemetry={},
+        advance_eligible=False,
+        ineligible_reason="replay_live_parity_gate_failed",
+    )
+
+    assert state.burn_in_paper_cycles == 1
+    assert summary["burn_in_ready"] is True
+    assert summary["capital_ramp"]["transition"] == ""
+    assert summary["capital_ramp"]["advance_eligible"] is True
+
+
 def test_rollout_state_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "rollout_state.json"
     state = RolloutState(

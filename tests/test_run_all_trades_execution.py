@@ -15,7 +15,7 @@ def _clear_parity_cache() -> None:
     execution_module._REPLAY_LIVE_PARITY_GATE_CACHE["gate"] = None
 
 
-def test_execute_run_all_trades_cycle_blocks_on_required_replay_live_parity_gate(
+def test_execute_run_all_trades_cycle_reaches_pending_boundary_on_required_replay_failure(
     monkeypatch,
 ) -> None:
     _clear_parity_cache()
@@ -38,11 +38,14 @@ def test_execute_run_all_trades_cycle_blocks_on_required_replay_live_parity_gate
         "update_data_provider_state",
         lambda **kwargs: provider_updates.append(kwargs),
     )
+    listed: list[object] = []
     monkeypatch.setattr(
         bot_engine,
         "list_open_orders",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should not list orders")),
+        lambda api: listed.append(api) or [],
     )
+    monkeypatch.setattr(bot_engine, "_handle_pending_orders", lambda *_a: True)
+    monkeypatch.setattr(bot_engine, "_pending_orders_block_scope", lambda: "global")
     monkeypatch.setattr(
         "ai_trading.tools.runtime_performance_report.summarize_oms_lifecycle_parity",
         lambda: {"enabled": True, "available": True, "ok": True, "total_violations": 0},
@@ -59,8 +62,14 @@ def test_execute_run_all_trades_cycle_blocks_on_required_replay_live_parity_gate
         },
     )
 
+    class NativeOrdersOnly:
+        def get_orders(self, **_kwargs):
+            return []
+
+    api = NativeOrdersOnly()
+    engine = SimpleNamespace(execution_mode="live")
     state = SimpleNamespace()
-    runtime = SimpleNamespace()
+    runtime = SimpleNamespace(execution_engine=engine)
 
     execute_run_all_trades_cycle(
         state=state,
@@ -68,24 +77,20 @@ def test_execute_run_all_trades_cycle_blocks_on_required_replay_live_parity_gate
         cfg_runtime=SimpleNamespace(post_submit_broker_sync=False),
         loop_id="loop-1",
         loop_start=0.0,
-        api=object(),
+        api=api,
         restore_last_run_timestamp=lambda: None,
     )
 
     assert state.replay_live_parity_gate["ok"] is False
     assert runtime.replay_live_parity_gate["reason"] == "replay_violations"
+    assert state.replay_live_entry_control["status"] == "blocked"
+    assert runtime.replay_live_entry_control["block_exposure_increasing"] is True
+    assert engine.replay_live_entry_control["reason"] == "REPLAY_LIVE_PARITY_GATE_FAILED"
+    assert listed == [api]
     assert updates == [
         {"status": "degraded", "reason": "replay_live_parity_gate_failed"}
     ]
-    assert provider_updates == [
-        {
-            "status": "blocked",
-            "data_status": "not_evaluated",
-            "reason": "replay_live_parity_gate_failed",
-            "active": "alpaca",
-            "using_backup": False,
-        }
-    ]
+    assert provider_updates == []
 
 
 def test_execute_run_all_trades_cycle_requires_replay_live_parity_by_default_outside_pytest(
@@ -121,11 +126,14 @@ def test_execute_run_all_trades_cycle_requires_replay_live_parity_by_default_out
         "update_data_provider_state",
         lambda **kwargs: provider_updates.append(kwargs),
     )
+    listed: list[object] = []
     monkeypatch.setattr(
         bot_engine,
         "list_open_orders",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should not list orders")),
+        lambda api: listed.append(api) or [],
     )
+    monkeypatch.setattr(bot_engine, "_handle_pending_orders", lambda *_a: True)
+    monkeypatch.setattr(bot_engine, "_pending_orders_block_scope", lambda: "global")
     monkeypatch.setattr(
         "ai_trading.tools.runtime_performance_report.summarize_oms_lifecycle_parity",
         lambda: {"enabled": True, "available": True, "ok": True, "total_violations": 0},
@@ -142,8 +150,14 @@ def test_execute_run_all_trades_cycle_requires_replay_live_parity_by_default_out
         },
     )
 
+    class NativeOrdersOnly:
+        def get_orders(self, **_kwargs):
+            return []
+
+    api = NativeOrdersOnly()
+    engine = SimpleNamespace(execution_mode="live")
     state = SimpleNamespace()
-    runtime = SimpleNamespace()
+    runtime = SimpleNamespace(execution_engine=engine)
 
     execute_run_all_trades_cycle(
         state=state,
@@ -151,24 +165,18 @@ def test_execute_run_all_trades_cycle_requires_replay_live_parity_by_default_out
         cfg_runtime=SimpleNamespace(post_submit_broker_sync=False),
         loop_id="loop-2",
         loop_start=0.0,
-        api=object(),
+        api=api,
         restore_last_run_timestamp=lambda: None,
     )
 
     assert state.replay_live_parity_gate["ok"] is False
     assert runtime.replay_live_parity_gate["reason"] == "replay_violations"
+    assert runtime.replay_live_entry_control["status"] == "blocked"
+    assert listed == [api]
     assert updates == [
         {"status": "degraded", "reason": "replay_live_parity_gate_failed"}
     ]
-    assert provider_updates == [
-        {
-            "status": "blocked",
-            "data_status": "not_evaluated",
-            "reason": "replay_live_parity_gate_failed",
-            "active": "alpaca",
-            "using_backup": False,
-        }
-    ]
+    assert provider_updates == []
 
 
 def test_replay_live_parity_gate_degrades_when_oms_summary_unavailable(monkeypatch) -> None:

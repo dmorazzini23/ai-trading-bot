@@ -137,11 +137,23 @@ def _build_runtime_attention_flags(
         or (
             isinstance(replay_live_parity_gate, Mapping)
             and (
-                include_optional_contract_failures
-                or require_replay_live_parity_gate
+                (
+                    require_replay_live_parity_gate
+                    and (
+                        not bool(replay_live_parity_gate.get("enabled", False))
+                        or not bool(replay_live_parity_gate.get("available", False))
+                        or not bool(replay_live_parity_gate.get("ok"))
+                    )
+                )
+                or (
+                    include_optional_contract_failures
+                    and bool(replay_live_parity_gate.get("enabled", False))
+                    and (
+                        not bool(replay_live_parity_gate.get("available", False))
+                        or not bool(replay_live_parity_gate.get("ok"))
+                    )
+                )
             )
-            and replay_live_parity_gate.get("enabled", False)
-            and not bool(replay_live_parity_gate.get("ok"))
         )
     ):
         flags.append("replay_live_parity_gate_failed")
@@ -1115,6 +1127,59 @@ def build_runtime_health_payload(
         if launch_profile is not None
         else (False, {"reasons": ["launch_profile_unavailable"]})
     )
+    execution_mode = _normalized_token(
+        get_env("EXECUTION_MODE", "paper", cast=str)
+    ) or "paper"
+    launch_profile_name = _normalized_token(launch_profile_status.get("name"))
+    live_execution_mode = bool(
+        execution_mode == "live" or launch_profile_name.startswith("live_")
+    )
+    paper_evidence_mode = bool(
+        execution_mode in {"paper", "sim", "simulation"}
+        and not live_execution_mode
+    )
+    require_replay_live_parity_gate = _env_bool(
+        "AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE",
+        _default_fail_closed_outside_tests(),
+    )
+    enforce_replay_gate_in_paper = _env_bool(
+        "AI_TRADING_HEALTH_REPLAY_GATE_ENFORCE_IN_PAPER",
+        False,
+    )
+    replay_gate_enabled = bool(replay_live_parity_gate.get("enabled", False))
+    replay_gate_available = bool(replay_live_parity_gate.get("available", False))
+    replay_gate_ok = bool(replay_live_parity_gate.get("ok"))
+    replay_gate_required_failure = bool(
+        require_replay_live_parity_gate
+        and (
+            not replay_gate_enabled
+            or not replay_gate_available
+            or not replay_gate_ok
+        )
+    )
+    replay_gate_failure = bool(
+        replay_gate_required_failure
+        or (
+            replay_gate_enabled
+            and (not replay_gate_available or not replay_gate_ok)
+        )
+    )
+    replay_gate_enforced_for_mode = bool(
+        require_replay_live_parity_gate
+        and (
+            not paper_evidence_mode
+            or enforce_replay_gate_in_paper
+        )
+    )
+    replay_gate_monitor_only = bool(
+        replay_gate_failure
+        and paper_evidence_mode
+        and not enforce_replay_gate_in_paper
+    )
+    replay_gate_readiness_failure = bool(
+        replay_gate_enforced_for_mode
+        and replay_gate_required_failure
+    )
 
     raw_provider_status = provider_state.get("status")
     provider_status = raw_provider_status or (
@@ -1207,6 +1272,13 @@ def build_runtime_health_payload(
         "halted",
         "stopped",
     }
+    replay_only_service_degradation = bool(
+        replay_gate_monitor_only
+        and service_reason_normalized == "replay_live_parity_gate_failed"
+    )
+    service_degraded_for_health = bool(
+        service_degraded and not replay_only_service_degradation
+    )
 
     degraded = provider_disabled or provider_payload.get("using_backup") or (
         provider_status_normalized not in {"healthy", "ready"}
@@ -1217,7 +1289,7 @@ def build_runtime_health_payload(
         degraded = True
     if data_degraded:
         degraded = True
-    if service_degraded:
+    if service_degraded_for_health:
         degraded = True
 
     provider_healthy = provider_status_normalized in {"healthy", "ready"} and not data_degraded
@@ -1236,7 +1308,7 @@ def build_runtime_health_payload(
         and not provider_unknown
         and not broker_down
         and not broker_degraded
-        and not service_degraded
+        and not service_degraded_for_health
         and not data_degraded
         and not provider_disabled
         and not bool(provider_payload.get("using_backup"))
@@ -1266,7 +1338,7 @@ def build_runtime_health_payload(
         and not bool(provider_payload.get("using_backup"))
         and not broker_down
         and not broker_degraded
-        and not service_degraded
+        and not service_degraded_for_health
         and broker_healthy
         and (
             service_phase_age_s is None
@@ -1312,18 +1384,10 @@ def build_runtime_health_payload(
     if require_oms_lifecycle_parity and oms_lifecycle_parity_failure:
         overall_ok = False
         degraded = True
-    require_replay_live_parity_gate = _env_bool(
-        "AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE",
-        _default_fail_closed_outside_tests(),
-    )
-    if (
-        require_replay_live_parity_gate
-        and replay_live_parity_gate.get("enabled", False)
-        and not bool(replay_live_parity_gate.get("ok"))
-    ):
+    if replay_gate_readiness_failure:
         overall_ok = False
         degraded = True
-    if service_degraded:
+    if service_degraded_for_health:
         overall_ok = False
     if not overall_ok:
         degraded = True
@@ -1334,11 +1398,7 @@ def build_runtime_health_payload(
         readiness_failures.append("oms_invariants_failed")
     if require_oms_lifecycle_parity and oms_lifecycle_parity_failure:
         readiness_failures.append("oms_lifecycle_parity_failed")
-    if (
-        require_replay_live_parity_gate
-        and replay_live_parity_gate.get("enabled", False)
-        and not bool(replay_live_parity_gate.get("ok"))
-    ):
+    if replay_gate_readiness_failure:
         readiness_failures.append("replay_live_parity_gate_failed")
     readiness_gates = {
         "oms_invariants": _build_contract_gate_status(
@@ -1379,6 +1439,48 @@ def build_runtime_health_payload(
         observe_oms_lifecycle_parity=oms_lifecycle_parity_failure,
     )
 
+    failed_checks_raw = replay_live_parity_gate.get("failed_checks")
+    failed_checks = (
+        [str(item) for item in failed_checks_raw if str(item).strip()]
+        if isinstance(failed_checks_raw, (list, tuple, set))
+        else []
+    )
+    if replay_gate_failure:
+        entry_stage = "shadow"
+    elif paper_evidence_mode:
+        entry_stage = "paper"
+    elif launch_profile_name == "live_canary":
+        entry_stage = "canary"
+    elif live_execution_mode:
+        entry_stage = "full"
+    else:
+        entry_stage = execution_mode or "unknown"
+    entry_reason = str(replay_live_parity_gate.get("reason") or "").strip()
+    if not entry_reason:
+        if replay_gate_failure:
+            entry_reason = "replay_live_parity_gate_failed"
+        elif not replay_gate_enabled:
+            entry_reason = "replay_live_parity_gate_disabled"
+        else:
+            entry_reason = "replay_live_parity_gate_passed"
+    entry_control = {
+        "execution_mode": execution_mode,
+        "stage": entry_stage,
+        "replay_gate_ok": replay_gate_ok,
+        "replay_gate_required": bool(require_replay_live_parity_gate),
+        "replay_gate_enforced": replay_gate_enforced_for_mode,
+        "paper_evidence_allowed": bool(paper_evidence_mode and overall_ok),
+        "live_new_exposure_allowed": bool(
+            live_execution_mode
+            and not replay_gate_failure
+            and overall_ok
+            and provider_authority_ok
+        ),
+        "risk_reducing_orders_allowed": True,
+        "reason": entry_reason,
+        "failed_checks": failed_checks,
+    }
+
     if offhours_market_closed_ready:
         resolved_status = "healthy"
     elif warmup_market_closed_ready:
@@ -1418,6 +1520,7 @@ def build_runtime_health_payload(
         "readiness_gates": readiness_gates,
         "readiness_failures": readiness_failures,
         "attention_flags": attention_flags,
+        "entry_control": entry_control,
         "launch_profile": launch_profile_status,
         "provider_authority": provider_authority | {"ok": provider_authority_ok},
     }
@@ -1431,7 +1534,7 @@ def build_runtime_health_payload(
         payload["reason"] = "broker_status_unknown"
     elif provider_unknown:
         payload["reason"] = "provider_status_unknown"
-    elif service_reason and not (
+    elif service_reason and not replay_only_service_degradation and not (
         broker_unknown and service_reason_normalized == "warmup_cycle"
     ):
         payload.setdefault("reason", service_reason)
@@ -1446,7 +1549,7 @@ def build_runtime_health_payload(
         payload["reason"] = broker_state.get("last_error") or "broker_unreachable"
     if broker_unknown and not payload.get("reason"):
         payload["reason"] = "broker_status_unknown"
-    if service_degraded and not payload.get("reason"):
+    if service_degraded_for_health and not payload.get("reason"):
         payload["reason"] = "service_degraded"
     if require_database_ready and not database_ok and not payload.get("reason"):
         payload["reason"] = "database_unhealthy"
@@ -1464,12 +1567,7 @@ def build_runtime_health_payload(
         and not payload.get("reason")
     ):
         payload["reason"] = "oms_lifecycle_parity_failed"
-    if (
-        require_replay_live_parity_gate
-        and replay_live_parity_gate.get("enabled", False)
-        and not bool(replay_live_parity_gate.get("ok"))
-        and not payload.get("reason")
-    ):
+    if replay_gate_readiness_failure and not payload.get("reason"):
         payload["reason"] = "replay_live_parity_gate_failed"
     if force_ok_for_pytest:
         payload["ok"] = True

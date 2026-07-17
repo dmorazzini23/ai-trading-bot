@@ -195,6 +195,26 @@ Runtime policy is explicit through `AI_TRADING_LAUNCH_PROFILE`:
 - `live_normal`: normal live profile, still gated by promotion, provider, cost,
   decay, and daily-loss controls.
 
+Paper remains the default runtime mode. The normal progression is manual:
+
+```text
+paper_trade -> live_canary -> live_restricted -> live_normal
+```
+
+A failed replay/live parity gate does not stop paper or simulation evidence
+collection. Market data, model inference, decision journaling, and paper
+evaluation continue, and the replay-blocked decision source is retained as
+shadow evidence. In live mode, the same failure blocks only orders that would
+increase exposure. Position reductions, exits, broker reconciliation, and
+order-state synchronization continue so the safety gate cannot trap existing
+exposure.
+
+The live capital ramp is applied only after all live-readiness gates pass. Its
+default phases are `0.25,0.50,0.75,1.00`; each phase multiplies otherwise
+eligible live sizing while the capital cap and launch-profile limits continue
+to apply. `AI_TRADING_CANARY_PERCENT` controls deterministic symbol sampling,
+not the percentage of capital allocated to canary trading.
+
 The active profile and provider-authority decision are exposed in `/healthz` as
 `launch_profile` and `provider_authority`. The daily research timer also writes
 `live_capital_readiness.json`; live money must remain disabled unless that
@@ -214,6 +234,39 @@ Useful manual checks:
 For live profiles, execution quote authority defaults to Alpaca-only and backup
 providers are research-only. Yahoo/backfill data may support research reports,
 but it must not silently justify live execution entries.
+
+#### Manual cutover and verification
+
+Do not change `EXECUTION_MODE=paper` or `AI_TRADING_LAUNCH_PROFILE=paper_trade`
+until the current live-capital readiness artifact allows the next profile and
+the required operator approval has been recorded. Profile changes are never
+automatic. After an approved edit to `.env`, restart the packaged service so
+systemd refreshes its runtime environment, then verify the service, health,
+broker state, and recent decisions:
+
+```bash
+sudo systemctl restart ai-trading.service
+systemctl status ai-trading.service --no-pager
+curl -sS http://127.0.0.1:9001/healthz
+journalctl -u ai-trading.service --since '-10 minutes' --no-pager
+```
+
+For the first approved live step, use `EXECUTION_MODE=live` with
+`AI_TRADING_LAUNCH_PROFILE=live_canary`. Advance to `live_restricted` and then
+`live_normal` only after a fresh readiness review for each step. A passing
+replay gate alone is not live-capital authority; promotion, provider, cost,
+decay, daily-loss, account-confirmation, and manual-approval controls still
+apply.
+
+#### Rollback
+
+To remove live authority, restore `EXECUTION_MODE=paper` and
+`AI_TRADING_LAUNCH_PROFILE=paper_trade` in `.env`, restart the service, and run
+the verification commands above. If an active incident requires an immediate
+halt, use the existing kill switch or halt flag first; do not depend on a
+configuration restart to manage open exposure. Confirm that broker
+reconciliation completes and review open orders and positions before clearing
+the incident.
 
 ### Health and Control-Plane Signals
 

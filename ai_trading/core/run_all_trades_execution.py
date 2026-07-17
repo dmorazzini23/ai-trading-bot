@@ -8,6 +8,11 @@ from typing import Any
 
 from ai_trading.config.management import get_env
 from ai_trading.core.decision_journal import DecisionJournalRecorder
+from ai_trading.governance.entry_control import (
+    REPLAY_LIVE_ENTRY_CONTROL_ATTR,
+    REPLAY_LIVE_PARITY_GATE_ATTR,
+    build_replay_live_entry_control,
+)
 
 _REPLAY_LIVE_PARITY_GATE_CACHE: dict[str, Any] = {
     "updated_mono": 0.0,
@@ -68,6 +73,46 @@ def _cacheable_replay_live_parity_gate(gate: Any) -> bool:
         and bool(gate.get("enabled", False))
         and bool(gate.get("available", True))
     )
+
+
+def _replay_entry_control_execution_mode(*, runtime: Any, cfg_runtime: Any) -> str:
+    engine = getattr(runtime, "execution_engine", None) or getattr(
+        runtime, "exec_engine", None
+    )
+    for candidate in (
+        getattr(engine, "execution_mode", None),
+        getattr(runtime, "execution_mode", None),
+        getattr(cfg_runtime, "execution_mode", None),
+        get_env("EXECUTION_MODE", "paper", cast=str),
+    ):
+        token = str(candidate or "").strip().lower()
+        if token:
+            return token
+    return "paper"
+
+
+def _propagate_replay_entry_control(
+    *,
+    state: Any,
+    runtime: Any,
+    be: Any,
+    gate: dict[str, Any],
+    control: dict[str, Any],
+) -> None:
+    targets = (
+        state,
+        runtime,
+        getattr(runtime, "execution_engine", None),
+        getattr(runtime, "exec_engine", None),
+        getattr(be, "_exec_engine", None),
+    )
+    seen: set[int] = set()
+    for target in targets:
+        if target is None or id(target) in seen:
+            continue
+        seen.add(id(target))
+        setattr(target, REPLAY_LIVE_PARITY_GATE_ATTR, dict(gate))
+        setattr(target, REPLAY_LIVE_ENTRY_CONTROL_ATTR, dict(control))
 
 
 def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> dict[str, Any]:
@@ -138,30 +183,6 @@ def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> d
             )
         except AI_TRADING_FALLBACK_EXCEPTIONS:
             be.logger.debug("REPLAY_PARITY_RUNTIME_STATE_UPDATE_FAILED", exc_info=True)
-        try:
-            provider_snapshot = be.runtime_state.observe_data_provider_state()
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
-            provider_snapshot = {}
-        try:
-            active_provider = (
-                provider_snapshot.get("active")
-                if isinstance(provider_snapshot, dict)
-                else None
-            )
-            primary_provider = (
-                provider_snapshot.get("primary")
-                if isinstance(provider_snapshot, dict)
-                else None
-            )
-            be.runtime_state.update_data_provider_state(
-                status="blocked",
-                data_status="not_evaluated",
-                reason="replay_live_parity_gate_failed",
-                active=str(active_provider or primary_provider or "alpaca"),
-                using_backup=False,
-            )
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
-            be.logger.debug("REPLAY_PARITY_PROVIDER_STATE_UPDATE_FAILED", exc_info=True)
     return gate
 
 
@@ -189,10 +210,21 @@ def execute_run_all_trades_cycle(
             cast=bool,
         )
     )
-    if require_replay_live_parity_gate and parity_gate.get("enabled", False) and not bool(
-        parity_gate.get("ok")
-    ):
-        return
+    entry_control = build_replay_live_entry_control(
+        gate=parity_gate,
+        required=require_replay_live_parity_gate,
+        execution_mode=_replay_entry_control_execution_mode(
+            runtime=runtime,
+            cfg_runtime=cfg_runtime,
+        ),
+    )
+    _propagate_replay_entry_control(
+        state=state,
+        runtime=runtime,
+        be=be,
+        gate=parity_gate,
+        control=entry_control,
+    )
 
     decision_recorder = DecisionJournalRecorder(
         path=str(be._decision_log_runtime_path()),
@@ -288,6 +320,13 @@ def execute_run_all_trades_cycle(
                         )
             try:
                 be._run_netting_cycle(state, runtime, loop_id, loop_start)
+                _propagate_replay_entry_control(
+                    state=state,
+                    runtime=runtime,
+                    be=be,
+                    gate=parity_gate,
+                    control=entry_control,
+                )
                 provider_status_after = ""
                 provider_using_backup = False
                 try:
@@ -730,6 +769,13 @@ def execute_run_all_trades_cycle(
                 },
             )
 
+        _propagate_replay_entry_control(
+            state=state,
+            runtime=runtime,
+            be=be,
+            gate=parity_gate,
+            control=entry_control,
+        )
         be.run_multi_strategy(runtime)
         broker_snapshot = _sync_broker_snapshot_if_enabled()
         if broker_snapshot is not None:

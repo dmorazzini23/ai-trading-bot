@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
@@ -11,6 +12,19 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+
+
+_REPLAY_LIVE_PARITY_GATE_FAILED = "REPLAY_LIVE_PARITY_GATE_FAILED"
+_REPLAY_LIVE_PARITY_CONTROLLED_SKIP = "replay_live_parity_controlled_skip"
+_REPLAY_LIVE_PARITY_CATEGORY = "replay_live_parity_gate"
+_SUPPORTED_SHADOW_SIDES = {
+    "buy": "buy",
+    "buy_to_cover": "buy_to_cover",
+    "cover": "buy_to_cover",
+    "sell": "sell",
+    "sell_short": "sell_short",
+    "short": "sell_short",
+    }
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
@@ -50,8 +64,206 @@ def _read_jsonl(
 
 
 def _date_match(row: Mapping[str, Any], report_date: str) -> bool:
-    ts = str(row.get("ts") or row.get("timestamp") or row.get("decision_ts") or "")
-    return ts.startswith(report_date)
+    timestamps = [
+        row.get("ts"),
+        row.get("timestamp"),
+        row.get("decision_ts"),
+        row.get("bar_ts"),
+    ]
+    decision_journal = row.get("decision_journal")
+    if isinstance(decision_journal, Mapping):
+        timestamps.append(decision_journal.get("bar_ts"))
+    return any(str(timestamp or "").startswith(report_date) for timestamp in timestamps)
+
+
+def _matches_replay_live_parity_marker(value: Any) -> bool:
+    if isinstance(value, str):
+        token = value.strip().lower()
+        return bool(
+            _REPLAY_LIVE_PARITY_GATE_FAILED.lower() in token
+            or _REPLAY_LIVE_PARITY_CONTROLLED_SKIP in token
+            or token == _REPLAY_LIVE_PARITY_CATEGORY
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return any(_matches_replay_live_parity_marker(item) for item in value)
+    return False
+
+
+def _mapping_has_replay_live_parity_marker(payload: Mapping[str, Any]) -> bool:
+    for key in (
+        "event",
+        "reason",
+        "gate",
+        "gates",
+        "reasons",
+        "controlled_skip",
+        "skip_category",
+        "block_reason",
+        "detail",
+        "veto_gate",
+    ):
+        if _matches_replay_live_parity_marker(payload.get(key)):
+            return True
+    gate_snapshot = payload.get(_REPLAY_LIVE_PARITY_CATEGORY)
+    if isinstance(gate_snapshot, Mapping):
+        status = str(gate_snapshot.get("status") or "").strip().lower()
+        if gate_snapshot.get("ok") is False or status in {
+            "blocked",
+            "fail",
+            "failed",
+            "not_ready",
+        }:
+            return True
+    return False
+
+
+def _is_replay_live_parity_controlled_skip(row: Mapping[str, Any]) -> bool:
+    if _mapping_has_replay_live_parity_marker(row):
+        return True
+    for key in ("metrics", "context"):
+        nested = row.get(key)
+        if isinstance(nested, Mapping) and _mapping_has_replay_live_parity_marker(nested):
+            return True
+    decision_journal = row.get("decision_journal")
+    if not isinstance(decision_journal, Mapping):
+        return False
+    if _mapping_has_replay_live_parity_marker(decision_journal):
+        return True
+    risk_decision = decision_journal.get("risk_decision")
+    return bool(
+        isinstance(risk_decision, Mapping)
+        and _mapping_has_replay_live_parity_marker(risk_decision)
+    )
+
+
+def _parity_shadow_candidate(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    decision_journal = row.get("decision_journal")
+    if not isinstance(decision_journal, Mapping):
+        return None
+    if decision_journal.get("submitted") is not False:
+        return None
+    if not _is_replay_live_parity_controlled_skip(row):
+        return None
+    order_intent = decision_journal.get("order_intent")
+    if not isinstance(order_intent, Mapping):
+        return None
+    if "limit_price" not in order_intent:
+        return None
+    symbol = str(order_intent.get("symbol") or "").strip().upper()
+    side = _SUPPORTED_SHADOW_SIDES.get(
+        str(order_intent.get("side") or "").strip().lower()
+    )
+    try:
+        quantity = float(order_intent.get("qty"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not symbol or side is None or not math.isfinite(quantity) or quantity <= 0.0:
+        return None
+    try:
+        limit_price_raw = order_intent.get("limit_price")
+        limit_price = (
+            float(limit_price_raw)
+            if limit_price_raw not in (None, "")
+            else None
+        )
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if limit_price is not None and not math.isfinite(limit_price):
+        return None
+    return {
+        "bar_ts": str(
+            order_intent.get("bar_ts")
+            or decision_journal.get("bar_ts")
+            or row.get("bar_ts")
+            or row.get("decision_ts")
+            or row.get("ts")
+            or row.get("timestamp")
+            or ""
+        ),
+        "symbol": symbol,
+        "side": side,
+        "qty": quantity,
+        "limit_price": limit_price,
+        "client_order_id": str(order_intent.get("client_order_id") or "").strip(),
+        "decision_trace_id": str(
+            order_intent.get("decision_trace_id")
+            or decision_journal.get("decision_trace_id")
+            or ""
+        ).strip(),
+        "reason": _REPLAY_LIVE_PARITY_CATEGORY,
+}
+
+
+def _intent_identities(intent: Mapping[str, Any]) -> set[tuple[Any, ...]]:
+    identities: set[tuple[Any, ...]] = set()
+    for key in ("client_order_id", "decision_trace_id"):
+        identifier = str(intent.get(key) or "").strip()
+        if identifier:
+            identities.add((key, identifier))
+    symbol = str(intent.get("symbol") or "").strip().upper()
+    side = _SUPPORTED_SHADOW_SIDES.get(
+        str(intent.get("side") or intent.get("order_side") or "").strip().lower()
+    )
+    timestamp = str(
+        intent.get("bar_ts")
+        or intent.get("decision_ts")
+        or intent.get("ts")
+        or intent.get("timestamp")
+        or ""
+    )
+    quantity_raw = intent.get("qty")
+    if quantity_raw is None:
+        quantity_raw = intent.get("quantity")
+    try:
+        quantity = float(quantity_raw)
+    except (TypeError, ValueError, OverflowError):
+        return identities
+    limit_price_raw = intent.get("limit_price")
+    if limit_price_raw is None:
+        limit_price_raw = intent.get("price")
+    try:
+        limit_price = (
+            float(limit_price_raw)
+            if limit_price_raw not in (None, "")
+            else None
+        )
+    except (TypeError, ValueError, OverflowError):
+        return identities
+    if (
+        timestamp
+        and symbol
+        and side is not None
+        and math.isfinite(quantity)
+        and quantity > 0.0
+        and (limit_price is None or math.isfinite(limit_price))
+    ):
+        identities.add(
+            ("intent", timestamp, symbol, side, quantity, limit_price)
+        )
+    return identities
+
+
+def _deduplicated_parity_shadow_candidates(
+    decisions: Sequence[Mapping[str, Any]],
+    *,
+    existing_intents: Sequence[Mapping[str, Any]] = (),
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen = {
+        identity
+        for intent in existing_intents
+        for identity in _intent_identities(intent)
+    }
+    for row in decisions:
+        candidate = _parity_shadow_candidate(row)
+        if candidate is None:
+            continue
+        identities = _intent_identities(candidate)
+        if identities & seen:
+            continue
+        seen.update(identities)
+        candidates.append(candidate)
+    return candidates
 
 
 def _status(payload: Mapping[str, Any], default: str = "missing") -> str:
@@ -62,6 +274,8 @@ def _status(payload: Mapping[str, Any], default: str = "missing") -> str:
 
 
 def _controlled_skip_category(row: Mapping[str, Any]) -> str | None:
+    if _is_replay_live_parity_controlled_skip(row):
+        return _REPLAY_LIVE_PARITY_CATEGORY
     fields = [
         str(row.get(key) or "").strip().lower()
         for key in (
@@ -119,11 +333,17 @@ def build_trading_day_report(
     huggingface_discovery: Mapping[str, Any] | None = None,
     huggingface_candidate_intake: Mapping[str, Any] | None = None,
     huggingface_cache_materialization: Mapping[str, Any] | None = None,
+    decisions: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     intents = [row for row in order_intents if _date_match(row, report_date)]
     fill_rows = [row for row in fills if _date_match(row, report_date)]
     shadows = [row for row in shadow_rows if _date_match(row, report_date)]
     gates = [row for row in gate_rows if _date_match(row, report_date)]
+    decision_rows = [row for row in decisions if _date_match(row, report_date)]
+    shadow_candidates = _deduplicated_parity_shadow_candidates(
+        decision_rows,
+        existing_intents=intents,
+    )
     controlled_skip_rows = [
         row
         for row in [*gates, *intents]
@@ -133,6 +353,11 @@ def build_trading_day_report(
         _controlled_skip_category(row) or "controlled_skip"
         for row in controlled_skip_rows
     )
+    controlled_skip_reasons.update(
+        str(row.get("reason") or _REPLAY_LIVE_PARITY_CATEGORY)
+        for row in shadow_candidates
+    )
+    controlled_skip_count = len(controlled_skip_rows) + len(shadow_candidates)
     rejected = [
         row
         for row in gates
@@ -147,6 +372,9 @@ def build_trading_day_report(
         symbol_trade_flow[symbol]["desired"] += 1
         if str(row.get("status") or "").upper() in {"SUBMITTED", "FILLED"}:
             symbol_trade_flow[symbol]["submitted"] += 1
+    for row in shadow_candidates:
+        symbol = str(row.get("symbol") or "").upper() or "UNKNOWN"
+        symbol_trade_flow[symbol]["desired"] += 1
     for row in rejected:
         symbol = str(row.get("symbol") or "").upper() or "UNKNOWN"
         symbol_trade_flow[symbol]["rejected"] += 1
@@ -172,7 +400,7 @@ def build_trading_day_report(
             except (TypeError, ValueError):
                 pass
     side_semantics: Counter[str] = Counter()
-    for row in list(intents) + list(gates) + list(fill_rows):
+    for row in list(intents) + list(shadow_candidates) + list(gates) + list(fill_rows):
         side = str(row.get("side") or row.get("order_side") or row.get("intended_side") or "").lower()
         reason = str(row.get("reason") or row.get("block_reason") or row.get("detail") or "").lower()
         position_intent = str(row.get("position_intent") or row.get("intent") or "").lower()
@@ -208,7 +436,7 @@ def build_trading_day_report(
         rows = [item for symbol_rows in values.values() for item in symbol_rows]
         return float(sum(rows) / len(rows)) if rows else None
 
-    desired_count = len(intents)
+    desired_count = len(intents) + len(shadow_candidates)
     submitted_count = len(
         [row for row in intents if str(row.get("status") or "").upper() in {"SUBMITTED", "FILLED"}]
     )
@@ -231,9 +459,18 @@ def build_trading_day_report(
             "reasons": dict(reject_reasons),
         },
         "controlled_skips": {
-            "count": len(controlled_skip_rows),
+            "count": controlled_skip_count,
             "reasons": dict(controlled_skip_reasons),
             "broker_rejects": False,
+        },
+        "shadow_candidates": {
+            "count": len(shadow_candidates),
+            "reasons": dict(
+                Counter(str(row["reason"]) for row in shadow_candidates)
+            ),
+            "symbols": dict(
+                sorted(Counter(str(row["symbol"]) for row in shadow_candidates).items())
+            ),
         },
         "realized_fills": {"count": fill_count},
         "slippage_spread_cost": {
@@ -352,8 +589,9 @@ def build_trading_day_report(
         "huggingface_research_status": _status(huggingface_discovery or {}),
         "huggingface_intake_status": _status(huggingface_candidate_intake or {}),
         "top_reject_reasons": dict(reject_reasons.most_common(5)),
-        "controlled_skips": len(controlled_skip_rows),
+        "controlled_skips": controlled_skip_count,
         "top_controlled_skip_reasons": dict(controlled_skip_reasons.most_common(5)),
+        "shadow_candidates": len(shadow_candidates),
         "symbols_with_activity": sorted(report["symbol_trade_flow"]),
     }
     report["openclaw_summary"] = {
@@ -361,12 +599,13 @@ def build_trading_day_report(
         "severity": "info" if rejected_count == 0 else "warning",
         "summary": (
             f"trading_day desired={desired_count} submitted={submitted_count} "
-            f"rejected={rejected_count} controlled_skips={len(controlled_skip_rows)} "
+            f"rejected={rejected_count} controlled_skips={controlled_skip_count} "
+            f"shadow_candidates={len(shadow_candidates)} "
             f"fills={fill_count}"
         ),
         "suggested_action": (
             "review controlled skips and live-capital readiness before next session"
-            if rejected_count == 0 and controlled_skip_rows
+            if rejected_count == 0 and controlled_skip_count
             else "review rejects and live-capital readiness before next session"
         ),
         "details": report["health_report_summary"],
@@ -402,6 +641,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Submitted trades: `{report.get('submitted_trades', {}).get('count', 0)}`",
             f"- Rejected trades: `{report.get('rejected_trades', {}).get('count', 0)}`",
             f"- Controlled skips: `{report.get('controlled_skips', {}).get('count', 0)}`",
+            f"- Parity shadow candidates: `{report.get('shadow_candidates', {}).get('count', 0)}`",
             f"- Realized fills: `{report.get('realized_fills', {}).get('count', 0)}`",
             f"- Regime entry throttle: `{throttle_actions or {}}`",
             f"- Expected-edge calibration: `{report.get('expected_edge_calibration', {}).get('status', 'missing')}`",
@@ -436,6 +676,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--order-intents-jsonl", type=Path, default=None)
     parser.add_argument("--fills-jsonl", type=Path, default=None)
     parser.add_argument("--shadow-jsonl", type=Path, default=None)
+    parser.add_argument("--decisions-jsonl", type=Path, default=None)
     parser.add_argument("--gate-jsonl", type=Path, default=None)
     parser.add_argument("--live-cost-model-json", type=Path, default=None)
     parser.add_argument("--symbol-scorecard-json", type=Path, default=None)
@@ -475,6 +716,7 @@ def main(argv: list[str] | None = None) -> int:
         order_intents=_read_jsonl(args.order_intents_jsonl, report_date=str(args.report_date)),
         fills=_read_jsonl(args.fills_jsonl, report_date=str(args.report_date)),
         shadow_rows=_read_jsonl(args.shadow_jsonl, report_date=str(args.report_date)),
+        decisions=_read_jsonl(args.decisions_jsonl, report_date=str(args.report_date)),
         gate_rows=_read_jsonl(args.gate_jsonl, report_date=str(args.report_date)),
         live_cost_model=_read_json(args.live_cost_model_json),
         symbol_scorecard=_read_json(args.symbol_scorecard_json),

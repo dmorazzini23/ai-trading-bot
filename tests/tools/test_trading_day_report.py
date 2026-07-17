@@ -10,6 +10,34 @@ def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
 
 
+def _parity_shadow_decision(
+    *,
+    bar_ts: str = "2026-07-17T14:30:00Z",
+    symbol: str = "AAPL",
+    side: str = "buy",
+    qty: object = 5,
+    submitted: bool = False,
+    client_order_id: str = "shadow-aapl-1",
+) -> dict[str, object]:
+    return {
+        "gates": ["REPLAY_LIVE_PARITY_GATE_FAILED"],
+        "metrics": {"event": "replay_live_parity_controlled_skip"},
+        "decision_journal": {
+            "event": "replay_live_parity_controlled_skip",
+            "bar_ts": bar_ts,
+            "submitted": submitted,
+            "reasons": ["REPLAY_LIVE_PARITY_GATE_FAILED"],
+            "order_intent": {
+                "symbol": symbol,
+                "side": side,
+                "qty": qty,
+                "limit_price": 212.5,
+                "client_order_id": client_order_id,
+            },
+        },
+    }
+
+
 def test_trading_day_report_attributes_rejections_and_symbol_pnl():
     report = trading_day_report.build_trading_day_report(
         report_date="2026-05-05",
@@ -176,10 +204,120 @@ def test_trading_day_report_metrics_control_only_is_info_severity():
     )
 
 
+def test_trading_day_report_counts_only_canonical_parity_shadow_candidates():
+    valid = _parity_shadow_decision()
+    ordinary = _parity_shadow_decision(client_order_id="ordinary")
+    ordinary["gates"] = ["OK_TRADE"]
+    ordinary["metrics"] = {"event": "decision_record"}
+    ordinary_journal = ordinary["decision_journal"]
+    assert isinstance(ordinary_journal, dict)
+    ordinary_journal["event"] = "decision_record"
+    ordinary_journal["reasons"] = ["OK_TRADE"]
+    hold = _parity_shadow_decision(client_order_id="hold")
+    hold_journal = hold["decision_journal"]
+    assert isinstance(hold_journal, dict)
+    hold_journal["order_intent"] = None
+
+    report = trading_day_report.build_trading_day_report(
+        report_date="2026-07-17",
+        order_intents=[],
+        fills=[],
+        shadow_rows=[],
+        gate_rows=[],
+        live_cost_model={"status": {"status": "ready"}},
+        symbol_scorecard={"summary": {}, "symbols": []},
+        decisions=[
+            valid,
+            _parity_shadow_decision(),
+            ordinary,
+            hold,
+            _parity_shadow_decision(submitted=True, client_order_id="submitted"),
+            _parity_shadow_decision(qty=0, client_order_id="zero"),
+            _parity_shadow_decision(qty=-2, client_order_id="negative"),
+            _parity_shadow_decision(side="hold", client_order_id="unsupported"),
+            _parity_shadow_decision(
+                bar_ts="2026-07-16T14:30:00Z",
+                client_order_id="prior-day",
+            ),
+        ],
+    )
+
+    assert report["desired_trades"]["count"] == 1
+    assert report["submitted_trades"]["count"] == 0
+    assert report["rejected_trades"]["count"] == 0
+    assert report["controlled_skips"] == {
+        "count": 1,
+        "reasons": {"replay_live_parity_gate": 1},
+        "broker_rejects": False,
+    }
+    assert report["shadow_candidates"] == {
+        "count": 1,
+        "reasons": {"replay_live_parity_gate": 1},
+        "symbols": {"AAPL": 1},
+    }
+    assert report["realized_fills"]["count"] == 0
+    assert report["symbol_contribution"] == {}
+    assert report["symbol_trade_flow"]["AAPL"] == {
+        "desired": 1,
+        "submitted": 0,
+        "rejected": 0,
+        "fills": 0,
+    }
+    assert report["health_report_summary"]["shadow_candidates"] == 1
+    assert report["health_report_summary"]["controlled_skips"] == 1
+    assert report["openclaw_summary"]["severity"] == "info"
+    assert "controlled_skips=1" in report["openclaw_summary"]["summary"]
+    assert "shadow_candidates=1" in report["openclaw_summary"]["summary"]
+    assert "rejected=0" in report["openclaw_summary"]["summary"]
+
+
+def test_parity_shadow_candidate_deduplicates_against_existing_intent():
+    report = trading_day_report.build_trading_day_report(
+        report_date="2026-07-17",
+        order_intents=[
+            {
+                "ts": "2026-07-17T14:30:00Z",
+                "client_order_id": "shadow-aapl-1",
+                "symbol": "AAPL",
+                "side": "buy",
+                "qty": 5,
+                "limit_price": 212.5,
+                "status": "PENDING",
+            }
+        ],
+        fills=[],
+        shadow_rows=[],
+        gate_rows=[],
+        live_cost_model={"status": {"status": "ready"}},
+        symbol_scorecard={"summary": {}, "symbols": []},
+        decisions=[_parity_shadow_decision()],
+    )
+
+    assert report["desired_trades"]["count"] == 1
+    assert report["shadow_candidates"]["count"] == 0
+    assert report["symbol_trade_flow"]["AAPL"]["desired"] == 1
+
+
+def test_date_match_supports_top_level_and_nested_bar_timestamps_safely():
+    assert trading_day_report._date_match(
+        {"bar_ts": "2026-07-17T14:30:00Z"},
+        "2026-07-17",
+    )
+    assert trading_day_report._date_match(
+        {"decision_journal": {"bar_ts": "2026-07-17T14:30:00Z"}},
+        "2026-07-17",
+    )
+    assert not trading_day_report._date_match(
+        {"decision_journal": "not-a-mapping"},
+        "2026-07-17",
+    )
+
+
 def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
     intents = tmp_path / "intents.jsonl"
     fills = tmp_path / "fills.jsonl"
     gates = tmp_path / "gates.jsonl"
+    decisions = tmp_path / "decisions.jsonl"
     throttle = tmp_path / "throttle.json"
     calibration = tmp_path / "calibration.json"
     hf_discovery = tmp_path / "hf_discovery.json"
@@ -190,6 +328,11 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
     _write_jsonl(intents, [{"ts": "2026-05-05T14:00:00Z", "status": "FILLED"}])
     _write_jsonl(fills, [{"ts": "2026-05-05T14:00:02Z", "symbol": "AAPL", "pnl": 2.0}])
     _write_jsonl(gates, [{"ts": "2026-05-05T14:00:01Z", "status": "blocked", "reason": "spread_cap"}])
+    decision = _parity_shadow_decision(
+        bar_ts="2026-05-05T14:00:03Z",
+        client_order_id="shadow-cli-1",
+    )
+    _write_jsonl(decisions, [decision])
     throttle.write_text(
         json.dumps({"actions": {"block_new_entries": 1}, "evaluations": 1}),
         encoding="utf-8",
@@ -208,6 +351,8 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
             str(fills),
             "--gate-jsonl",
             str(gates),
+            "--decisions-jsonl",
+            str(decisions),
             "--regime-entry-throttle-json",
             str(throttle),
             "--expected-edge-calibration-json",
@@ -228,6 +373,7 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
     assert rc == 0
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["realized_fills"]["count"] == 1
+    assert payload["shadow_candidates"]["count"] == 1
     assert payload["regime_entry_throttle"]["actions"] == {"block_new_entries": 1}
     assert payload["expected_edge_calibration"]["status"] == "calibrated"
     assert payload["huggingface_research"]["discovery"]["status"] == "discovered"

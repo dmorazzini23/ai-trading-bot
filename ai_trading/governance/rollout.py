@@ -284,6 +284,8 @@ def _evaluate_ramp(
     policy: CapitalRampPolicy,
     mode: str,
     telemetry: Mapping[str, Any],
+    advance_eligible: bool,
+    ineligible_reason: str,
 ) -> tuple[RolloutState, dict[str, Any]]:
     next_state = RolloutState.from_mapping(asdict(state))
     phases = policy.phases or (1.0,)
@@ -305,9 +307,35 @@ def _evaluate_ramp(
             "multiplier": 1.0,
             "breached": False,
             "transition": "",
+            "advance_eligible": bool(advance_eligible),
+            "ineligible_reason": str(ineligible_reason or ""),
         }
 
     if mode == "live":
+        if not bool(advance_eligible):
+            was_advanced = bool(phase_index > 0 or phase_cycles > 0)
+            phase_index = 0
+            phase_cycles = 0
+            transition = "reset_ineligible" if was_advanced else "hold_ineligible"
+            multiplier = float(phases[phase_index])
+            next_state.ramp_phase_index = int(phase_index)
+            next_state.ramp_phase_cycles = int(phase_cycles)
+            next_state.ramp_multiplier = float(max(0.05, min(multiplier, 1.0)))
+            next_state.ramp_last_transition = transition
+            return next_state, {
+                "enabled": True,
+                "phase_index": int(phase_index),
+                "phase_value": float(phases[phase_index]),
+                "phase_cycles": int(phase_cycles),
+                "multiplier": float(next_state.ramp_multiplier),
+                "breached": False,
+                "transition": transition,
+                "telemetry_complete": False,
+                "advance_eligible": False,
+                "ineligible_reason": str(
+                    ineligible_reason or "rollout_advance_ineligible"
+                ),
+            }
         pacing_hit_rate, pacing_present = _required_metric_float(
             telemetry,
             "order_pacing_cap_hit_rate_pct",
@@ -373,6 +401,8 @@ def _evaluate_ramp(
         "breached": bool(breached),
         "transition": str(transition),
         "telemetry_complete": bool(mode != "live" or telemetry_complete),
+        "advance_eligible": bool(mode != "live" or advance_eligible),
+        "ineligible_reason": str(ineligible_reason or "") if mode == "live" else "",
     }
 
 
@@ -386,6 +416,8 @@ def apply_rollout_policies(
     config_hash: str,
     today: date,
     telemetry: Mapping[str, Any] | None = None,
+    advance_eligible: bool = True,
+    ineligible_reason: str = "",
 ) -> tuple[RolloutState, dict[str, Any]]:
     mode = _normalize_mode(execution_mode)
     telemetry_payload = telemetry if isinstance(telemetry, Mapping) else {}
@@ -403,6 +435,8 @@ def apply_rollout_policies(
         policy=ramp,
         mode=mode,
         telemetry=telemetry_payload,
+        advance_eligible=bool(advance_eligible),
+        ineligible_reason=str(ineligible_reason or ""),
     )
     ramp_state.updated_at = datetime.now(UTC).isoformat()
 

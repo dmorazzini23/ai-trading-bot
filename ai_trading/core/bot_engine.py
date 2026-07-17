@@ -39039,6 +39039,119 @@ def _load_replay_bars(
     return filtered
 
 
+def _replay_parity_shadow_row(
+    record: Mapping[str, Any],
+    *,
+    cutoff: datetime,
+    now: datetime,
+) -> tuple[str, dict[str, Any]] | None:
+    journal_raw = record.get("decision_journal")
+    if not isinstance(journal_raw, Mapping):
+        return None
+    intent_raw = journal_raw.get("order_intent")
+    if not isinstance(intent_raw, Mapping):
+        return None
+    if journal_raw.get("submitted") is not False:
+        return None
+    broker_result = journal_raw.get("broker_result")
+    if isinstance(broker_result, Mapping) and broker_result.get("submitted") is not False:
+        return None
+
+    gates: list[Any] = []
+    for container in (record, journal_raw, journal_raw.get("risk_decision")):
+        if not isinstance(container, Mapping):
+            continue
+        for key in ("gates", "reasons"):
+            values = container.get(key)
+            if isinstance(values, (list, tuple, set, frozenset)):
+                gates.extend(values)
+    gate_tokens = {
+        str(value or "").strip().upper().replace("-", "_") for value in gates
+    }
+    parity_marked = "REPLAY_LIVE_PARITY_GATE_FAILED" in gate_tokens
+    if not parity_marked:
+        for metadata in (
+            record.get("metrics"),
+            intent_raw.get("metadata"),
+            journal_raw.get("metadata"),
+        ):
+            if not isinstance(metadata, Mapping) or metadata.get("replay_shadow_evidence") is not True:
+                continue
+            control = metadata.get("replay_live_entry_control")
+            if isinstance(control, Mapping) and (
+                str(control.get("status") or "").strip().lower()
+                in {"blocked", "monitor_only"}
+                or bool(control.get("gate_reason"))
+            ):
+                parity_marked = True
+                break
+    if not parity_marked:
+        return None
+
+    status = str(intent_raw.get("status") or "").strip().lower()
+    if status in {
+        "accepted",
+        "new",
+        "open",
+        "pending",
+        "submitted",
+        "partially_filled",
+        "filled",
+    }:
+        return None
+    ts = _parse_iso_timestamp(
+        intent_raw.get("bar_ts")
+        or journal_raw.get("bar_ts")
+        or record.get("bar_ts")
+        or record.get("ts")
+    )
+    if ts is None or ts < cutoff or ts > now + timedelta(minutes=5):
+        return None
+    symbol = str(intent_raw.get("symbol") or "").strip().upper()
+    side = str(intent_raw.get("side") or "").strip().lower()
+    if not symbol or side not in {"buy", "sell"}:
+        return None
+    try:
+        qty = float(intent_raw.get("qty"))
+        price = float(intent_raw.get("limit_price") or intent_raw.get("price"))
+    except (TypeError, ValueError):
+        return None
+    if qty <= 0.0 or price <= 0.0 or not math.isfinite(qty) or not math.isfinite(price):
+        return None
+
+    raw_client_order_id = str(intent_raw.get("client_order_id") or "").strip()
+    identity_seed = "|".join(
+        (
+            symbol,
+            side,
+            ts.isoformat(),
+            f"{qty:.8f}",
+            f"{price:.8f}",
+        )
+    )
+    client_order_id = raw_client_order_id or hashlib.sha256(
+        identity_seed.encode("utf-8")
+    ).hexdigest()[:24]
+    metadata_raw = record.get("metrics")
+    metadata = metadata_raw if isinstance(metadata_raw, Mapping) else {}
+    return raw_client_order_id or identity_seed, {
+        "symbol": symbol,
+        "ts": ts.isoformat(),
+        "close": float(price),
+        "side": side,
+        "qty": float(qty),
+        "order_type": str(intent_raw.get("order_type") or "limit").strip().lower(),
+        "client_order_id": client_order_id,
+        "timeframe": str(intent_raw.get("timeframe") or "5Min").strip() or "5Min",
+        "source_kind": "decision_journal_parity_shadow",
+        "regime_profile": str(
+            metadata.get("regime_profile")
+            or metadata.get("market_regime")
+            or "unknown"
+        ).strip().lower(),
+    }
+
+
 def _refresh_replay_dataset_from_tca(
     *,
     data_dir: Path,
@@ -39056,11 +39169,36 @@ def _refresh_replay_dataset_from_tca(
         tca_raw,
         default_relative="runtime/tca_records.jsonl",
     )
-    if not tca_path.exists():
+    shadow_enabled = bool(
+        get_env(
+            "AI_TRADING_REPLAY_DECISION_SHADOW_SOURCE_ENABLED",
+            False,
+            cast=bool,
+        )
+    )
+    decision_raw = str(
+        get_env(
+            "AI_TRADING_DECISION_LOG_PATH",
+            "runtime/decision_records.jsonl",
+            cast=str,
+        )
+        or "runtime/decision_records.jsonl"
+    ).strip()
+    decision_path = resolve_runtime_artifact_path(
+        decision_raw,
+        default_relative="runtime/decision_records.jsonl",
+    )
+    if not tca_path.exists() and not (shadow_enabled and decision_path.exists()):
         return None, {
             "enabled": True,
-            "reason": "tca_source_missing",
+            "reason": (
+                "replay_sources_missing" if shadow_enabled else "tca_source_missing"
+            ),
             "source_path": str(tca_path),
+            "shadow_source_enabled": bool(shadow_enabled),
+            "shadow_source_path": str(decision_path),
+            "shadow_source_available": bool(decision_path.exists()),
+            "source_paths": [],
         }
 
     lookback_days = max(
@@ -39075,7 +39213,26 @@ def _refresh_replay_dataset_from_tca(
     deduplicated: dict[str, dict[str, Any]] = {}
     scanned = 0
     rejected = 0
-    for record in _read_jsonl_records(str(tca_path), max_records=max_records):
+    shadow_scanned = 0
+    shadow_rejected = 0
+    shadow_accepted = 0
+    if shadow_enabled and decision_path.exists():
+        for record in _read_jsonl_records(str(decision_path), max_records=max_records):
+            shadow_scanned += 1
+            parsed = _replay_parity_shadow_row(record, cutoff=cutoff, now=now)
+            if parsed is None:
+                shadow_rejected += 1
+                continue
+            dedupe_key, row = parsed
+            deduplicated[dedupe_key] = row
+            shadow_accepted += 1
+
+    tca_records = (
+        _read_jsonl_records(str(tca_path), max_records=max_records)
+        if tca_path.exists()
+        else ()
+    )
+    for record in tca_records:
         scanned += 1
         benchmark_raw = record.get("benchmark")
         benchmark = benchmark_raw if isinstance(benchmark_raw, Mapping) else {}
@@ -39154,10 +39311,26 @@ def _refresh_replay_dataset_from_tca(
     if not rows:
         return None, {
             "enabled": True,
-            "reason": "no_recent_valid_tca_decisions",
+            "reason": (
+                "no_recent_valid_replay_decisions"
+                if shadow_enabled
+                else "no_recent_valid_tca_decisions"
+            ),
             "source_path": str(tca_path),
             "scanned_records": int(scanned),
             "rejected_records": int(rejected),
+            "shadow_source_enabled": bool(shadow_enabled),
+            "shadow_source_path": str(decision_path),
+            "shadow_source_available": bool(decision_path.exists()),
+            "shadow_scanned_records": int(shadow_scanned),
+            "shadow_rejected_records": int(shadow_rejected),
+            "shadow_accepted_records": int(shadow_accepted),
+            "shadow_decision_rows": 0,
+            "source_paths": [
+                str(path)
+                for path in (tca_path, decision_path if shadow_enabled else None)
+                if path is not None and path.exists()
+            ],
         }
     data_dir.mkdir(parents=True, exist_ok=True)
     target = data_dir / "governance_tca_recent.jsonl"
@@ -39165,6 +39338,12 @@ def _refresh_replay_dataset_from_tca(
         "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
         encoding="utf-8",
     )
+    shadow_rows = sum(
+        1
+        for row in rows
+        if row.get("source_kind") == "decision_journal_parity_shadow"
+    )
+    tca_rows = sum(1 for row in rows if row.get("source_kind") == "tca_decision")
     return target, {
         "enabled": True,
         "source_path": str(tca_path),
@@ -39172,6 +39351,19 @@ def _refresh_replay_dataset_from_tca(
         "scanned_records": int(scanned),
         "rejected_records": int(rejected),
         "decision_rows": int(len(rows)),
+        "tca_decision_rows": int(tca_rows),
+        "shadow_source_enabled": bool(shadow_enabled),
+        "shadow_source_path": str(decision_path),
+        "shadow_source_available": bool(decision_path.exists()),
+        "shadow_scanned_records": int(shadow_scanned),
+        "shadow_rejected_records": int(shadow_rejected),
+        "shadow_accepted_records": int(shadow_accepted),
+        "shadow_decision_rows": int(shadow_rows),
+        "source_paths": [
+            str(path)
+            for path in (tca_path, decision_path if shadow_enabled else None)
+            if path is not None and path.exists()
+        ],
         "lookback_days": int(lookback_days),
     }
 
@@ -40836,6 +41028,41 @@ def _rollout_env_snapshot() -> dict[str, Any]:
     return snapshot
 
 
+def _rollout_replay_advance_eligibility(
+    *,
+    state: BotState,
+    execution_mode: str,
+) -> tuple[bool, str]:
+    if str(execution_mode or "").strip().lower() != "live":
+        return True, ""
+    default_required = not bool(
+        str(get_env("PYTEST_CURRENT_TEST", "", cast=str) or "").strip()
+        or bool(get_env("PYTEST_RUNNING", False, cast=bool))
+    )
+    required = bool(
+        get_env(
+            "AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE",
+            default_required,
+            cast=bool,
+        )
+    )
+    if not required:
+        return True, ""
+
+    gate_raw = getattr(state, "replay_live_parity_gate", None)
+    if not isinstance(gate_raw, Mapping):
+        return False, "replay_live_parity_gate_absent"
+    if not bool(gate_raw.get("enabled", False)):
+        return False, "replay_live_parity_gate_disabled"
+    if not bool(gate_raw.get("available", False)):
+        return False, "replay_live_parity_gate_unavailable"
+    if not bool(gate_raw.get("ok", False)):
+        return False, str(
+            gate_raw.get("reason") or "replay_live_parity_gate_failed"
+        )
+    return True, ""
+
+
 def _update_rollout_governance_state(
     *,
     state: BotState,
@@ -40855,6 +41082,8 @@ def _update_rollout_governance_state(
             "multiplier": 1.0,
             "breached": False,
             "transition": "",
+            "advance_eligible": True,
+            "ineligible_reason": "",
         },
     }
     try:
@@ -40878,6 +41107,10 @@ def _update_rollout_governance_state(
                 slo_derisk_details.get("calibration_brier", 0.0) or 0.0
             ),
         }
+        advance_eligible, ineligible_reason = _rollout_replay_advance_eligibility(
+            state=state,
+            execution_mode=execution_mode,
+        )
         updated_state, summary = apply_rollout_policies(
             state=current_rollout_state,
             burn_in=burn_in_policy,
@@ -40887,6 +41120,8 @@ def _update_rollout_governance_state(
             config_hash=str(config_snapshot_hash(cfg)),
             today=now.date(),
             telemetry=telemetry,
+            advance_eligible=advance_eligible,
+            ineligible_reason=ineligible_reason,
         )
         save_rollout_state(path, updated_state)
         state.rollout_state_path = str(path)
@@ -40923,6 +41158,16 @@ def _update_rollout_governance_state(
                 "phase_index": ramp_summary.get("phase_index") if isinstance(ramp_summary, Mapping) else None,
                 "phase_cycles": ramp_summary.get("phase_cycles") if isinstance(ramp_summary, Mapping) else None,
                 "breached": ramp_summary.get("breached") if isinstance(ramp_summary, Mapping) else None,
+                "advance_eligible": (
+                    ramp_summary.get("advance_eligible")
+                    if isinstance(ramp_summary, Mapping)
+                    else None
+                ),
+                "ineligible_reason": (
+                    ramp_summary.get("ineligible_reason")
+                    if isinstance(ramp_summary, Mapping)
+                    else None
+                ),
             },
         )
     if (

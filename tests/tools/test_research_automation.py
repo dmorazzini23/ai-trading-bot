@@ -73,12 +73,24 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "--order-intents-jsonl" in trading_day["command"]
     assert "--fills-jsonl" in trading_day["command"]
     assert "--gate-jsonl" in trading_day["command"]
+    assert "--decisions-jsonl" in trading_day["command"]
+    decisions_index = trading_day["command"].index("--decisions-jsonl")
+    assert trading_day["command"][decisions_index + 1].endswith(
+        "/runtime/decision_records.jsonl"
+    )
     assert "--regime-entry-throttle-json" in trading_day["command"]
     assert "--expected-edge-calibration-json" in trading_day["command"]
     enriched_trading_day = next(
         step for step in payload["steps"] if step["name"] == "trading_day_report_enriched"
     )  # type: ignore[index]
     assert "--weekend-research-json" in enriched_trading_day["command"]
+    assert "--decisions-jsonl" in enriched_trading_day["command"]
+    enriched_decisions_index = enriched_trading_day["command"].index(
+        "--decisions-jsonl"
+    )
+    assert enriched_trading_day["command"][enriched_decisions_index + 1].endswith(
+        "/runtime/decision_records.jsonl"
+    )
     daily_research = next(step for step in payload["steps"] if step["name"] == "daily_research_pipeline")  # type: ignore[index]
     assert "--symbol-promotion-json" in daily_research["command"]
     assert "--replay-live-cost-alignment-json" in daily_research["command"]

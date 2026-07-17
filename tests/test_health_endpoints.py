@@ -944,6 +944,10 @@ def test_runtime_health_payload_requires_oms_lifecycle_parity_by_default_outside
 
 
 def test_runtime_health_payload_includes_replay_live_parity_gate(monkeypatch):
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
+    monkeypatch.setenv("AI_TRADING_HEALTH_REPLAY_GATE_ENFORCE_IN_PAPER", "0")
     monkeypatch.setattr(
         health_payload_module,
         "_replay_live_parity_gate_snapshot",
@@ -959,6 +963,9 @@ def test_runtime_health_payload_includes_replay_live_parity_gate(monkeypatch):
     assert "replay_live_parity_gate" in payload
     assert payload["replay_live_parity_gate"]["ok"] is True
     assert payload["replay_live_parity_gate"]["status"] == "pass"
+    assert payload["entry_control"]["stage"] == "paper"
+    assert payload["entry_control"]["replay_gate_enforced"] is False
+    assert payload["entry_control"]["paper_evidence_allowed"] is True
 
 
 def test_cached_background_snapshot_returns_placeholder_then_cached(monkeypatch):
@@ -1093,6 +1100,8 @@ def test_replay_live_parity_gate_does_not_cache_warming_oms_snapshot(monkeypatch
 def test_runtime_health_payload_replay_live_parity_requirement_marks_degraded(
     monkeypatch,
 ) -> None:
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
     monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
     monkeypatch.setattr(
         health_payload_module,
@@ -1113,6 +1122,161 @@ def test_runtime_health_payload_replay_live_parity_requirement_marks_degraded(
     assert payload["ok"] is False
     assert payload["status"] == "degraded"
     assert payload.get("reason") == "replay_live_parity_gate_failed"
+    assert payload["entry_control"]["stage"] == "shadow"
+    assert payload["entry_control"]["live_new_exposure_allowed"] is False
+    assert payload["entry_control"]["risk_reducing_orders_allowed"] is True
+
+
+@pytest.mark.parametrize(
+    "gate_snapshot",
+    [
+        {
+            "enabled": False,
+            "available": False,
+            "ok": True,
+            "status": "disabled",
+            "reason": "disabled",
+        },
+        {
+            "enabled": True,
+            "available": False,
+            "ok": True,
+            "status": "unavailable",
+            "reason": "artifact_unavailable",
+        },
+    ],
+)
+def test_runtime_health_required_replay_gate_fails_closed_when_not_available(
+    monkeypatch,
+    gate_snapshot,
+) -> None:
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
+    monkeypatch.setattr(
+        health_payload_module,
+        "_replay_live_parity_gate_snapshot",
+        lambda **_kwargs: gate_snapshot,
+    )
+
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["reason"] == "replay_live_parity_gate_failed"
+    assert payload["readiness_failures"] == ["replay_live_parity_gate_failed"]
+    assert "replay_live_parity_gate_failed" in payload["attention_flags"]
+    assert payload["entry_control"]["stage"] == "shadow"
+    assert payload["entry_control"]["live_new_exposure_allowed"] is False
+    assert payload["entry_control"]["risk_reducing_orders_allowed"] is True
+
+
+def test_runtime_health_replay_failure_is_monitor_only_for_paper_by_default(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
+    monkeypatch.setenv("AI_TRADING_HEALTH_REPLAY_GATE_ENFORCE_IN_PAPER", "0")
+    monkeypatch.setattr(
+        runtime_state,
+        "observe_service_status",
+        lambda: {
+            "status": "degraded",
+            "reason": "replay_live_parity_gate_failed",
+        },
+    )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_replay_live_parity_gate_snapshot",
+        lambda **_kwargs: {
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "status": "fail",
+            "reason": "replay_counterfactual",
+            "failed_checks": ["candidate_positive_net_edge"],
+        },
+    )
+
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+
+    assert payload["ok"] is True
+    assert payload["status"] == "healthy"
+    assert "replay_live_parity_gate_failed" in payload["attention_flags"]
+    assert "replay_live_parity_gate_failed" not in payload["readiness_failures"]
+    assert payload["entry_control"] == {
+        "execution_mode": "paper",
+        "stage": "shadow",
+        "replay_gate_ok": False,
+        "replay_gate_required": True,
+        "replay_gate_enforced": False,
+        "paper_evidence_allowed": True,
+        "live_new_exposure_allowed": False,
+        "risk_reducing_orders_allowed": True,
+        "reason": "replay_counterfactual",
+        "failed_checks": ["candidate_positive_net_edge"],
+    }
+
+    app = _RouteCaptureApp()
+    register_health_routes(
+        app,
+        payload_builder=lambda: payload,
+        response_builder=lambda response_payload, status: (response_payload, status),
+    )
+    _response_payload, status = _call_healthz(app)
+    assert status == 200
+
+
+def test_runtime_health_replay_failure_can_be_enforced_in_paper(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
+    monkeypatch.setenv("AI_TRADING_HEALTH_REPLAY_GATE_ENFORCE_IN_PAPER", "1")
+    monkeypatch.setattr(
+        health_payload_module,
+        "_replay_live_parity_gate_snapshot",
+        lambda **_kwargs: {
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "status": "fail",
+            "reason": "replay_counterfactual",
+            "failed_checks": ["candidate_positive_net_edge"],
+        },
+    )
+
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["readiness_failures"] == ["replay_live_parity_gate_failed"]
+    assert payload["entry_control"]["stage"] == "shadow"
+    assert payload["entry_control"]["replay_gate_enforced"] is True
+    assert payload["entry_control"]["paper_evidence_allowed"] is False
+
+    app = _RouteCaptureApp()
+    register_health_routes(
+        app,
+        payload_builder=lambda: payload,
+        response_builder=lambda response_payload, status: (response_payload, status),
+    )
+    _response_payload, status = _call_healthz(app)
+    assert status == 503
 
 
 def test_runtime_health_payload_requires_replay_live_parity_by_default_outside_pytest(
@@ -1123,6 +1287,8 @@ def test_runtime_health_payload_requires_replay_live_parity_by_default_outside_p
             return ""
         if key == "PYTEST_RUNNING":
             return False
+        if key == "EXECUTION_MODE":
+            return "live"
         return default
 
     monkeypatch.setattr(health_payload_module, "get_env", _fake_get_env)

@@ -16,6 +16,7 @@ class _State:
 @pytest.fixture(autouse=True)
 def _isolate_replay_governance_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AI_TRADING_REPLAY_REFRESH_FROM_TCA", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_DECISION_SHADOW_SOURCE_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_REPLAY_REQUIRE_NON_REGRESSION", "0")
     monkeypatch.setenv("AI_TRADING_REPLAY_MAX_SOURCE_AGE_HOURS", "96")
 
@@ -605,6 +606,215 @@ def test_refresh_replay_dataset_from_tca_deduplicates_recent_decisions(
     assert rows[0]["source_kind"] == "tca_decision"
     assert rows[0]["client_order_id"]
     assert context["decision_rows"] == 1
+
+
+def test_refresh_replay_dataset_accepts_only_valid_parity_shadow_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 2, 18, 23, 0, tzinfo=UTC)
+    tca_path = tmp_path / "tca_records.jsonl"
+    decision_path = tmp_path / "decision_records.jsonl"
+    tca_path.write_text("", encoding="utf-8")
+    valid = {
+        "gates": ["REPLAY_LIVE_PARITY_GATE_FAILED"],
+        "decision_journal": {
+            "submitted": False,
+            "bar_ts": "2026-02-18T20:00:00+00:00",
+            "reasons": ["REPLAY_LIVE_PARITY_GATE_FAILED"],
+            "order_intent": {
+                "symbol": "MSFT",
+                "side": "sell",
+                "qty": 3,
+                "limit_price": 405.25,
+                "client_order_id": "shadow-msft-1",
+            },
+        },
+    }
+    submitted = json.loads(json.dumps(valid))
+    submitted["decision_journal"]["submitted"] = True
+    invalid_side = json.loads(json.dumps(valid))
+    invalid_side["decision_journal"]["order_intent"]["side"] = "sell_short"
+    invalid_qty = json.loads(json.dumps(valid))
+    invalid_qty["decision_journal"]["order_intent"]["qty"] = 0
+    unmarked = json.loads(json.dumps(valid))
+    unmarked["gates"] = []
+    unmarked["decision_journal"]["reasons"] = []
+    decision_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in (valid, submitted, invalid_side, invalid_qty, unmarked)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_REPLAY_REFRESH_FROM_TCA", "1")
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
+    monkeypatch.setenv("AI_TRADING_REPLAY_DECISION_SHADOW_SOURCE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DECISION_LOG_PATH", str(decision_path))
+
+    output_path, context = bot_engine._refresh_replay_dataset_from_tca(
+        data_dir=tmp_path / "replay_data",
+        now=now,
+    )
+
+    assert output_path is not None
+    rows = [
+        json.loads(line)
+        for line in output_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows == [
+        {
+            "client_order_id": "shadow-msft-1",
+            "close": 405.25,
+            "order_type": "limit",
+            "qty": 3.0,
+            "regime_profile": "unknown",
+            "side": "sell",
+            "source_kind": "decision_journal_parity_shadow",
+            "symbol": "MSFT",
+            "timeframe": "5Min",
+            "ts": "2026-02-18T20:00:00+00:00",
+        }
+    ]
+    assert context["shadow_scanned_records"] == 5
+    assert context["shadow_rejected_records"] == 4
+    assert context["shadow_accepted_records"] == 1
+    assert context["shadow_decision_rows"] == 1
+    assert context["shadow_source_path"] == str(decision_path)
+    assert set(context["source_paths"]) == {str(tca_path), str(decision_path)}
+
+
+def test_refresh_replay_dataset_prefers_tca_on_shadow_identity_collision(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 2, 18, 23, 0, tzinfo=UTC)
+    tca_path = tmp_path / "tca_records.jsonl"
+    decision_path = tmp_path / "decision_records.jsonl"
+    tca_path.write_text(
+        json.dumps(
+            {
+                "symbol": "AAPL",
+                "side": "buy",
+                "requested_qty": 2,
+                "submit_price_reference": 190.0,
+                "client_order_id": "shared-order-id",
+                "benchmark": {"submit_ts": "2026-02-18T20:00:00+00:00"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    decision_path.write_text(
+        json.dumps(
+            {
+                "gates": ["REPLAY_LIVE_PARITY_GATE_FAILED"],
+                "decision_journal": {
+                    "submitted": False,
+                    "bar_ts": "2026-02-18T20:00:00+00:00",
+                    "order_intent": {
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "qty": 7,
+                        "limit_price": 195.0,
+                        "client_order_id": "shared-order-id",
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_REPLAY_REFRESH_FROM_TCA", "1")
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
+    monkeypatch.setenv("AI_TRADING_REPLAY_DECISION_SHADOW_SOURCE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DECISION_LOG_PATH", str(decision_path))
+
+    output_path, context = bot_engine._refresh_replay_dataset_from_tca(
+        data_dir=tmp_path / "replay_data",
+        now=now,
+    )
+
+    assert output_path is not None
+    rows = [
+        json.loads(line)
+        for line in output_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["source_kind"] == "tca_decision"
+    assert rows[0]["qty"] == 2.0
+    assert rows[0]["close"] == 190.0
+    assert context["shadow_accepted_records"] == 1
+    assert context["shadow_decision_rows"] == 0
+    assert context["tca_decision_rows"] == 1
+
+
+def test_rollout_replay_eligibility_fails_closed_for_required_live_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE",
+        "1",
+    )
+    state = _State()
+
+    assert bot_engine._rollout_replay_advance_eligibility(
+        state=state,
+        execution_mode="live",
+    ) == (False, "replay_live_parity_gate_absent")
+
+    for gate, reason in (
+        ({"enabled": False, "available": True, "ok": True}, "replay_live_parity_gate_disabled"),
+        ({"enabled": True, "available": False, "ok": True}, "replay_live_parity_gate_unavailable"),
+        (
+            {
+                "enabled": True,
+                "available": True,
+                "ok": False,
+                "reason": "counterfactual_failed",
+            },
+            "counterfactual_failed",
+        ),
+    ):
+        state.replay_live_parity_gate = gate
+        assert bot_engine._rollout_replay_advance_eligibility(
+            state=state,
+            execution_mode="live",
+        ) == (False, reason)
+
+    state.replay_live_parity_gate = {
+        "enabled": True,
+        "available": True,
+        "ok": True,
+    }
+    assert bot_engine._rollout_replay_advance_eligibility(
+        state=state,
+        execution_mode="live",
+    ) == (True, "")
+
+
+def test_rollout_replay_eligibility_does_not_block_paper_or_optional_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _State()
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE",
+        "1",
+    )
+    assert bot_engine._rollout_replay_advance_eligibility(
+        state=state,
+        execution_mode="paper",
+    ) == (True, "")
+
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE",
+        "0",
+    )
+    assert bot_engine._rollout_replay_advance_eligibility(
+        state=state,
+        execution_mode="live",
+    ) == (True, "")
 
 
 def test_replay_governance_preserves_zero_quantity_observations(

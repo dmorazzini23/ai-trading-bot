@@ -45,6 +45,12 @@ from ai_trading.execution.guards import (
     quote_fresh_enough,
     shadow_active as guard_shadow_active,
 )
+from ai_trading.governance.entry_control import (
+    REPLAY_LIVE_ENTRY_CONTROL_ATTR,
+    REPLAY_LIVE_PARITY_GATE_FAILED,
+    build_replay_live_entry_control,
+    evaluate_replay_live_order,
+)
 from ai_trading.utils.env import (
     alpaca_credential_status,
     get_alpaca_base_url,
@@ -20081,6 +20087,113 @@ class ExecutionEngine:
         client_order_id: str | None = None
         order_data: dict[str, Any] = {}
         submit_started_at = time.monotonic()
+
+        replay_control_raw = getattr(self, REPLAY_LIVE_ENTRY_CONTROL_ATTR, None)
+        replay_control = (
+            dict(replay_control_raw)
+            if isinstance(replay_control_raw, Mapping)
+            else {}
+        )
+        if not replay_control:
+            require_replay_control = _resolve_bool_env(
+                "AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE"
+            )
+            if require_replay_control is None:
+                require_replay_control = not pytest_mode
+            execution_mode_for_replay = str(
+                getattr(self, "execution_mode", "paper") or "paper"
+            ).strip().lower()
+            if bool(require_replay_control) and execution_mode_for_replay in {
+                "live",
+                "live_canary",
+                "canary",
+            }:
+                replay_control = build_replay_live_entry_control(
+                    gate={
+                        "enabled": True,
+                        "available": False,
+                        "ok": False,
+                        "status": "fail",
+                        "reason": "replay_live_entry_control_snapshot_unavailable",
+                        "failed_checks": ["replay_live_entry_control_snapshot"],
+                    },
+                    required=True,
+                    execution_mode=execution_mode_for_replay,
+                )
+        if bool(getattr(self, "shadow_mode", False)) and bool(
+            replay_control.get("block_exposure_increasing", False)
+        ):
+            replay_control["status"] = "monitor_only"
+            replay_control["enforcement"] = "monitor_only"
+            replay_control["monitor_only"] = True
+            replay_control["block_exposure_increasing"] = False
+            replay_control["exposure_increasing_allowed"] = True
+        current_position_quantity: float | None = None
+        if bool(replay_control.get("block_exposure_increasing", False)):
+            try:
+                current_position_quantity = float(self._position_quantity(symbol))
+            except LIVE_TRADING_FALLBACK_EXC:
+                logger.warning(
+                    "REPLAY_ENTRY_POSITION_LOOKUP_FAILED",
+                    extra={"symbol": symbol, "side": mapped_side},
+                    exc_info=True,
+                )
+        replay_order_decision = evaluate_replay_live_order(
+            control=replay_control,
+            side=mapped_side,
+            requested_quantity=quantity,
+            current_position_quantity=current_position_quantity,
+            closing_position=closing_position,
+        )
+        self._last_replay_entry_control_decision = dict(replay_order_decision)
+        if bool(replay_order_decision.get("monitor_only", False)):
+            annotations["replay_shadow_evidence"] = True
+            annotations["replay_live_entry_control"] = {
+                "status": replay_order_decision.get("control_status"),
+                "enforcement": "monitor_only",
+                "gate_reason": replay_order_decision.get("gate_reason"),
+                "failed_checks": list(
+                    replay_order_decision.get("failed_checks") or ()
+                ),
+            }
+        if not bool(replay_order_decision.get("allowed", True)):
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            logger.warning(
+                REPLAY_LIVE_PARITY_GATE_FAILED,
+                extra={
+                    "symbol": symbol,
+                    "side": mapped_side,
+                    "quantity": quantity,
+                    "block_detail": replay_order_decision.get("block_detail"),
+                    "closing_position": closing_position,
+                },
+            )
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason=REPLAY_LIVE_PARITY_GATE_FAILED,
+                order_type=order_type_initial,
+                detail=str(
+                    replay_order_decision.get("block_detail")
+                    or "exposure_increasing_order"
+                ),
+                context=replay_order_decision,
+                submit_started_at=submit_started_at,
+            )
+            return None
+        effective_replay_quantity = int(
+            replay_order_decision.get("effective_quantity", quantity)
+        )
+        if effective_replay_quantity != quantity:
+            qty = effective_replay_quantity
+            quantity = effective_replay_quantity
+            closing_position = True
+            annotations["replay_reduction_clamped"] = True
+            annotations["replay_requested_quantity"] = int(
+                replay_order_decision.get("requested_quantity", quantity)
+            )
+            annotations["replay_effective_quantity"] = effective_replay_quantity
 
         time_in_force_alias = kwargs.pop("tif", None)
         extended_hours = kwargs.get("extended_hours")
