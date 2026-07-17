@@ -20,6 +20,7 @@ def _valid_payload() -> dict[str, object]:
         "training_bar_timeframe": "1Day",
         "required_bar_timeframe": "1Day",
         "default_threshold": 0.52,
+        "selected_threshold": 0.57,
         "thresholds_by_regime": {"uptrend": 0.4, "downtrend": 0.45},
         "cost_floor_bps": 8.5,
         "cost_model_version": "tca_floor_v1",
@@ -40,6 +41,7 @@ def test_validate_manifest_metadata_accepts_valid_payload() -> None:
     assert validated["strategy"] == "after_hours_ml_edge"
     assert validated["rows"] == 1000
     assert validated["required_bar_timeframe"] == "1Day"
+    assert validated["selected_threshold"] == pytest.approx(0.57)
     assert validated["sensitivity_sweep"]["enabled"] is True
 
 
@@ -64,6 +66,8 @@ def test_validate_manifest_metadata_rejects_missing_symbols() -> None:
         ("default_threshold", float("inf")),
         ("default_threshold", 1.01),
         ("default_threshold", -0.01),
+        ("selected_threshold", float("nan")),
+        ("selected_threshold", 1.01),
         ("cost_floor_bps", float("-inf")),
         ("cost_floor_bps", -0.01),
         ("cost_floor_bps", 10_000.01),

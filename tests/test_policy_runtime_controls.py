@@ -264,7 +264,10 @@ def test_record_netting_model_liveness_emits_ml_and_rl_when_enabled(monkeypatch)
     monkeypatch.setattr(bot_engine, "RL_AGENT", object())
     monkeypatch.setenv("USE_RL_AGENT", "1")
 
-    bot_engine._record_netting_model_liveness(proposals_total=3)
+    bot_engine._record_netting_model_liveness(
+        proposals_total=3,
+        ml_inference_observed=True,
+    )
 
     assert calls["ml"] == 1
     assert calls["rl"] == 1
@@ -286,7 +289,34 @@ def test_record_netting_model_liveness_skips_when_no_proposals(monkeypatch) -> N
     monkeypatch.setattr(bot_engine, "RL_AGENT", object())
     monkeypatch.setenv("USE_RL_AGENT", "1")
 
-    bot_engine._record_netting_model_liveness(proposals_total=0)
+    bot_engine._record_netting_model_liveness(
+        proposals_total=0,
+        ml_inference_observed=False,
+    )
 
     assert calls["ml"] == 0
     assert calls["rl"] == 0
+
+
+def test_record_netting_model_liveness_does_not_fake_ml_inference(monkeypatch) -> None:
+    calls: dict[str, int] = {"ml": 0, "rl": 0}
+
+    monkeypatch.setattr(
+        bot_engine,
+        "note_ml_signal",
+        lambda **_kwargs: calls.__setitem__("ml", calls["ml"] + 1),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "note_rl_signals_emitted",
+        lambda **_kwargs: calls.__setitem__("rl", calls["rl"] + 1),
+    )
+    monkeypatch.setattr(bot_engine, "RL_AGENT", object())
+    monkeypatch.setenv("USE_RL_AGENT", "1")
+
+    bot_engine._record_netting_model_liveness(
+        proposals_total=3,
+        ml_inference_observed=False,
+    )
+
+    assert calls == {"ml": 0, "rl": 1}

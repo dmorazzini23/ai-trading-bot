@@ -371,18 +371,46 @@ class ModelRegistry:
         return candidates
 
     def _production_candidates(self, strategy: str) -> list[tuple[str, dict[str, Any]]]:
+        return self._governance_candidates(strategy, status="production")
+
+    def _governance_candidates(
+        self,
+        strategy: str,
+        *,
+        status: str,
+    ) -> list[tuple[str, dict[str, Any]]]:
         candidates: list[tuple[str, dict[str, Any]]] = []
         for model_id, info in self.model_index.items():
             if info.get("strategy") != strategy:
                 continue
             governance = info.get("governance", {}) or {}
-            if governance.get("status") == "production":
+            if governance.get("status") == status:
                 candidates.append((model_id, dict(info)))
         candidates.sort(
             key=lambda item: self._registered_sort_key(item[1]),
             reverse=True,
         )
         return candidates
+
+    def _viable_governance_model(
+        self,
+        candidates: Iterable[tuple[str, dict[str, Any]]],
+    ) -> tuple[str, dict[str, Any]] | None:
+        for model_id, info in candidates:
+            for source, candidate_path, manifest_path in self._candidate_production_paths(info):
+                try:
+                    resolved_path = candidate_path.expanduser()
+                except OSError:
+                    continue
+                if not resolved_path.is_file():
+                    continue
+                info_with_path = dict(info)
+                info_with_path["production_path"] = str(resolved_path)
+                info_with_path["production_path_source"] = source
+                if manifest_path is not None:
+                    info_with_path["production_manifest_path"] = str(manifest_path.expanduser())
+                return model_id, info_with_path
+        return None
 
     # -- Public API ----------------------------------------------------------
 
@@ -593,21 +621,18 @@ class ModelRegistry:
         return candidates[0] if candidates else None
 
     def get_viable_production_model(self, strategy: str) -> tuple[str, dict[str, Any]] | None:
-        for model_id, info in self._production_candidates(strategy):
-            for source, candidate_path, manifest_path in self._candidate_production_paths(info):
-                try:
-                    resolved_path = candidate_path.expanduser()
-                except OSError:
-                    continue
-                if not resolved_path.is_file():
-                    continue
-                info_with_path = dict(info)
-                info_with_path["production_path"] = str(resolved_path)
-                info_with_path["production_path_source"] = source
-                if manifest_path is not None:
-                    info_with_path["production_manifest_path"] = str(manifest_path.expanduser())
-                return model_id, info_with_path
-        return None
+        return self._viable_governance_model(self._production_candidates(strategy))
+
+    def get_viable_shadow_model(self, strategy: str) -> tuple[str, dict[str, Any]] | None:
+        """Return the newest shadow model with a surviving artifact.
+
+        Callers remain responsible for restricting shadow authority to
+        non-capital paper evidence collection.
+        """
+
+        return self._viable_governance_model(
+            self._governance_candidates(strategy, status="shadow")
+        )
 
     def update_governance_status(
         self,

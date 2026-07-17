@@ -201,6 +201,14 @@ Paper remains the default runtime mode. The normal progression is manual:
 paper_trade -> live_canary -> live_restricted -> live_normal
 ```
 
+When `AI_TRADING_REQUIRE_ML_MODEL=1`, the `paper_trade` profile may use the
+newest contract-compatible, verified governed shadow model only when
+`AI_TRADING_PAPER_ALLOW_SHADOW_MODEL=1`. This authority is paper-only and
+exists to collect the execution evidence needed for promotion. Live profiles
+never accept shadow governance and continue to require a verified production
+artifact. Do not promote a shadow candidate merely to restore trading; it must
+pass the normal offline, replay, and runtime evidence gates.
+
 A failed replay/live parity gate does not stop paper or simulation evidence
 collection. Market data, model inference, decision journaling, and paper
 evaluation continue, and the replay-blocked decision source is retained as
@@ -208,6 +216,13 @@ shadow evidence. In live mode, the same failure blocks only orders that would
 increase exposure. Position reductions, exits, broker reconciliation, and
 order-state synchronization continue so the safety gate cannot trap existing
 exposure.
+
+When runtime go/no-go enforcement is enabled in paper mode, promotion-quality
+failures (including replay/live parity) are soft-enforced: orders remain
+passive-only and are quantity-scaled so the service can collect new execution
+evidence. Integrity failures such as broker-position reconciliation still fail
+closed. Live mode never applies this paper softening and remains blocked until
+all required promotion gates pass.
 
 The live capital ramp is applied only after all live-readiness gates pass. Its
 default phases are `0.25,0.50,0.75,1.00`; each phase multiplies otherwise

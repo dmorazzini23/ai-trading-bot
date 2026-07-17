@@ -44,6 +44,36 @@ def test_start_api_with_signal_records_exception(monkeypatch) -> None:
     assert getattr(error, "exception") is exc
 
 
+def test_probe_local_api_socket_reports_accepting_listener(monkeypatch) -> None:
+    calls: list[tuple[tuple[str, int], float]] = []
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    def _connect(address: tuple[str, int], *, timeout: float):
+        calls.append((address, timeout))
+        return _Connection()
+
+    monkeypatch.setattr(main.socket, "create_connection", _connect)
+
+    assert main._probe_local_api_socket(9001, timeout=0.25) is True
+    assert calls == [(('127.0.0.1', 9001), 0.25)]
+
+
+def test_probe_local_api_socket_reports_connection_failure(monkeypatch) -> None:
+    def _connect(_address: tuple[str, int], *, timeout: float):
+        _ = timeout
+        raise ConnectionRefusedError
+
+    monkeypatch.setattr(main.socket, "create_connection", _connect)
+
+    assert main._probe_local_api_socket(9001) is False
+
+
 def test_wait_for_api_startup_catches_late_thread_error(monkeypatch) -> None:
     class _Ready:
         def wait(self, timeout: float | None = None) -> bool:

@@ -2315,6 +2315,7 @@ def test_runtime_gonogo_soft_derisks_paper_live_sample_shortfall(
                 "win_rate",
                 "acceptance_rate",
                 "live_samples_sufficient",
+                "replay_live_parity_gate_consistent",
             ],
             "thresholds": {
                 "min_win_rate": 0.46,
@@ -2342,6 +2343,7 @@ def test_runtime_gonogo_soft_derisks_paper_live_sample_shortfall(
         "win_rate",
         "acceptance_rate",
         "live_samples_sufficient",
+        "replay_live_parity_gate_consistent",
     ]
     assert context["execution_capture_guard"]["order_qty_scale"] == pytest.approx(0.25)
     assert context["execution_capture_guard"]["passive_only"] is True

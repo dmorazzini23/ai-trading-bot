@@ -221,6 +221,23 @@ class TestModelRegistry:
             assert info["production_path_source"] == "artifact"
             assert Path(info["production_path"]).is_file()
 
+    def test_viable_shadow_lookup_returns_newest_surviving_artifact(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = ModelRegistry(temp_dir)
+            viable = registry.register_model({"a": 1}, "ml_edge", "dict")
+            missing = registry.register_model({"a": 2}, "ml_edge", "dict")
+            registry.update_governance_status(viable, "shadow")
+            registry.update_governance_status(missing, "shadow")
+            Path(registry.model_index[missing]["artifact_path"]).unlink()
+
+            shadow = registry.get_viable_shadow_model("ml_edge")
+
+            assert shadow is not None
+            shadow_id, info = shadow
+            assert shadow_id == viable
+            assert info["governance"]["status"] == "shadow"
+            assert Path(info["production_path"]).is_file()
+
     def test_record_runtime_promotion_persists_runtime_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)

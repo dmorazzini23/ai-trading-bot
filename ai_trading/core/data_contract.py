@@ -3,7 +3,7 @@ from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -16,6 +16,23 @@ pd = load_pandas()
 REQUIRED_COLUMNS = ("open", "high", "low", "close", "volume")
 _NY_TZ = ZoneInfo("America/New_York")
 _MAX_FUTURE_BAR_SKEW_SECONDS = 5.0
+
+
+def _timeframe_duration_seconds(timeframe: str) -> int:
+    normalized = str(timeframe or "").strip().lower().replace(" ", "")
+    return {
+        "1m": 60,
+        "1min": 60,
+        "5m": 300,
+        "5min": 300,
+        "15m": 900,
+        "15min": 900,
+        "1h": 3600,
+        "1hour": 3600,
+        "1d": 86400,
+        "day": 86400,
+        "1day": 86400,
+    }.get(normalized, 0)
 
 
 @dataclass
@@ -84,8 +101,10 @@ def validate_bars(
     timeframe: str,
     freshness_seconds: int,
     rth_only: bool = True,
+    *,
+    now: datetime | None = None,
 ) -> DataContractResult:
-    """Validate bar data for completeness and freshness."""
+    """Validate start-labelled bar data for completeness and freshness."""
     if str(timeframe).lower() in {"1day", "day", "1d"}:
         rth_only = False
     if df is None or getattr(df, "empty", True):
@@ -111,20 +130,35 @@ def validate_bars(
     last_ts = df.index[-1]
     if last_ts.tzinfo is None:
         return DataContractResult(False, "NAIVE_INDEX")
-    now = datetime.now(UTC)
-    age_seconds = (now - last_ts.astimezone(UTC)).total_seconds()
-    if age_seconds < -_MAX_FUTURE_BAR_SKEW_SECONDS:
+    reference_now = now or datetime.now(UTC)
+    if reference_now.tzinfo is None:
+        reference_now = reference_now.replace(tzinfo=UTC)
+    reference_now = reference_now.astimezone(UTC)
+    bar_start_utc = last_ts.astimezone(UTC)
+    start_age_seconds = (reference_now - bar_start_utc).total_seconds()
+    if start_age_seconds < -_MAX_FUTURE_BAR_SKEW_SECONDS:
         return DataContractResult(
             False,
             "FUTURE_BAR",
             {
-                "future_skew_seconds": abs(age_seconds),
+                "future_skew_seconds": abs(start_age_seconds),
                 "allowed_future_skew_seconds": _MAX_FUTURE_BAR_SKEW_SECONDS,
             },
         )
+    bar_close_utc = bar_start_utc + timedelta(
+        seconds=_timeframe_duration_seconds(timeframe)
+    )
+    age_seconds = (reference_now - bar_close_utc).total_seconds()
     age_seconds = max(0.0, age_seconds)
     if freshness_seconds >= 0 and age_seconds > freshness_seconds:
-        return DataContractResult(False, "STALE_BAR", {"age_seconds": age_seconds})
+        return DataContractResult(
+            False,
+            "STALE_BAR",
+            {
+                "age_seconds": age_seconds,
+                "age_reference": "bar_close",
+            },
+        )
     if rth_only:
         eastern = last_ts.astimezone(_NY_TZ)
         if eastern.weekday() >= 5:

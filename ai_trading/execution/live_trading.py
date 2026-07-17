@@ -30704,6 +30704,7 @@ class ExecutionEngine:
                     "execution_capture_ratio",
                     "closed_trades",
                     "live_samples_sufficient",
+                    "replay_live_parity_gate_consistent",
                     "gate_used_days",
                     "trade_used_days",
                 }

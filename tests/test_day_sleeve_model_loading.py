@@ -44,6 +44,7 @@ def _manifest_metadata(**overrides: Any) -> dict[str, Any]:
             contract_version=DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
         ),
         "dataset_fingerprint": "dataset-hash-1",
+        "default_threshold": 0.5,
         "selected_threshold": 0.55,
         "thresholds_by_regime": {
             "sideways": 0.55,
@@ -155,6 +156,8 @@ def test_production_loader_returns_verified_model_and_immutable_lineage(
     assert len(loaded.lineage["model_artifact_hash"]) == 64
     assert loaded.selected_threshold == pytest.approx(0.55)
     assert loaded.thresholds_by_regime["volatile"] == pytest.approx(0.7)
+    assert loaded.governance_status == "production"
+    assert loaded.serving_authority == "production"
     with pytest.raises(TypeError):
         loaded.lineage["model_id"] = "changed"  # type: ignore[index]
 
@@ -167,6 +170,25 @@ def test_production_loader_rejects_shadow_model(
 
     with pytest.raises(RuntimeError, match="unavailable"):
         load_day_sleeve_production_model()
+
+
+def test_paper_authority_loads_verified_shadow_with_manifest_default_threshold(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _registry, model_id, _artifact, _manifest = _register_model(
+        tmp_path,
+        monkeypatch,
+        status="shadow",
+        metadata_overrides={"selected_threshold": None},
+    )
+
+    loaded = load_day_sleeve_production_model(allow_shadow=True)
+
+    assert loaded.lineage["model_id"] == model_id
+    assert loaded.selected_threshold == pytest.approx(0.5)
+    assert loaded.governance_status == "shadow"
+    assert loaded.serving_authority == "paper_only"
 
 
 @pytest.mark.parametrize(

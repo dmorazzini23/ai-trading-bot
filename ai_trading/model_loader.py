@@ -51,6 +51,8 @@ class DaySleeveProductionModel:
     lineage: Mapping[str, str]
     selected_threshold: float
     thresholds_by_regime: Mapping[str, float]
+    governance_status: str
+    serving_authority: str
 
 
 _DAY_SLEEVE_MODEL_CACHE: DaySleeveProductionModel | None = None
@@ -68,12 +70,16 @@ def _clear_day_sleeve_model_cache() -> None:
     _DAY_SLEEVE_MODEL_CACHE_KEY = None
 
 
-def load_day_sleeve_production_model() -> DaySleeveProductionModel:
+def load_day_sleeve_production_model(
+    *,
+    allow_shadow: bool = False,
+) -> DaySleeveProductionModel:
     """Load the governed rich-registry production model for the five-minute sleeve.
 
     This path is intentionally independent of the legacy per-symbol registry.
     Missing, stale, unverifiable, or contract-incompatible production entries
-    fail closed.
+    fail closed. Verified shadow models are eligible only when the caller
+    explicitly grants paper-only shadow authority.
     """
 
     global _DAY_SLEEVE_MODEL_CACHE, _DAY_SLEEVE_MODEL_CACHE_KEY
@@ -82,14 +88,26 @@ def load_day_sleeve_production_model() -> DaySleeveProductionModel:
 
     registry = ModelRegistry()
     production = registry.get_viable_production_model("ml_edge")
+    if production is None and allow_shadow:
+        production = registry.get_viable_shadow_model("ml_edge")
     if production is None:
         _clear_day_sleeve_model_cache()
         raise RuntimeError("Governed production day-sleeve model is unavailable")
     model_id, registry_meta = production
     governance = registry_meta.get("governance")
-    if not isinstance(governance, Mapping) or governance.get("status") != "production":
+    governance_status = (
+        str(governance.get("status") or "").strip().lower()
+        if isinstance(governance, Mapping)
+        else ""
+    )
+    if governance_status != "production" and not (
+        allow_shadow and governance_status == "shadow"
+    ):
         _clear_day_sleeve_model_cache()
-        raise RuntimeError("Day-sleeve model is not governed as production")
+        raise RuntimeError("Day-sleeve model governance authority is invalid")
+    serving_authority = (
+        "production" if governance_status == "production" else "paper_only"
+    )
     _validate_active_model_freshness("day_sleeve", registry_meta)
 
     artifact_path = Path(str(registry_meta.get("production_path") or "")).expanduser()
@@ -108,6 +126,8 @@ def load_day_sleeve_production_model() -> DaySleeveProductionModel:
 
     cache_key = (
         str(model_id),
+        governance_status,
+        serving_authority,
         str(artifact_path.resolve()),
         str(manifest_path.resolve()),
         _path_signature(artifact_path),
@@ -148,8 +168,11 @@ def load_day_sleeve_production_model() -> DaySleeveProductionModel:
             + ",".join(compatibility_errors)
         )
 
+    selected_threshold_raw = metadata.get("selected_threshold")
+    if selected_threshold_raw is None:
+        selected_threshold_raw = metadata.get("default_threshold")
     try:
-        selected_threshold = float(metadata["selected_threshold"])
+        selected_threshold = float(selected_threshold_raw)
     except (KeyError, TypeError, ValueError) as exc:
         _clear_day_sleeve_model_cache()
         raise RuntimeError(
@@ -213,9 +236,20 @@ def load_day_sleeve_production_model() -> DaySleeveProductionModel:
         lineage=MappingProxyType(lineage_values),
         selected_threshold=selected_threshold,
         thresholds_by_regime=MappingProxyType(thresholds_by_regime),
+        governance_status=governance_status,
+        serving_authority=serving_authority,
     )
     _DAY_SLEEVE_MODEL_CACHE = loaded
     _DAY_SLEEVE_MODEL_CACHE_KEY = cache_key
+    logger.info(
+        "DAY_SLEEVE_ML_MODEL_SELECTED",
+        extra={
+            "model_id": str(model_id),
+            "governance_status": governance_status,
+            "serving_authority": serving_authority,
+            "selected_threshold": selected_threshold,
+        },
+    )
     return loaded
 
 

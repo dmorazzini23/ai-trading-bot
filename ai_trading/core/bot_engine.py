@@ -6274,6 +6274,34 @@ def _runtime_execution_mode() -> str:
     return str(raw or "sim").strip().lower() or "sim"
 
 
+def _paper_shadow_model_allowed(cfg: Any) -> bool:
+    """Grant shadow-model serving only to an explicit Alpaca paper profile."""
+
+    if not bool(
+        get_env("AI_TRADING_PAPER_ALLOW_SHADOW_MODEL", False, cast=bool)
+    ):
+        return False
+    execution_mode = str(
+        getattr(cfg, "execution_mode", _runtime_execution_mode()) or "sim"
+    ).strip().lower()
+    launch_profile = str(
+        getattr(
+            cfg,
+            "launch_profile",
+            get_env("AI_TRADING_LAUNCH_PROFILE", "", cast=str),
+        )
+        or ""
+    ).strip().lower()
+    paper_endpoint = "paper" in str(
+        getattr(cfg, "alpaca_base_url", "") or ""
+    ).strip().lower()
+    return bool(
+        execution_mode == "paper"
+        and not launch_profile.startswith("live")
+        and (bool(getattr(cfg, "paper", False)) or paper_endpoint)
+    )
+
+
 def _live_execution_blocks_yahoo_fallback() -> bool:
     return _runtime_execution_mode() == "live"
 
@@ -7395,6 +7423,12 @@ def _score_day_sleeve_with_ml(
         debug = {
             "ml_influenced": True,
             "model_lineage": lineage,
+            "ml_governance_status": str(
+                getattr(bundle, "governance_status", "production")
+            ),
+            "ml_serving_authority": str(
+                getattr(bundle, "serving_authority", "production")
+            ),
             "ml_raw_heuristic_score": float(heuristic_score),
             "ml_raw_score": model_score,
             "ml_serving_score": serving_score,
@@ -35306,15 +35340,20 @@ def _score_from_bars(df) -> tuple[float, float]:
         return 0.0, 0.0
 
 
-def _record_netting_model_liveness(*, proposals_total: int) -> None:
+def _record_netting_model_liveness(
+    *,
+    proposals_total: int,
+    ml_inference_observed: bool,
+) -> None:
     """Emit model heartbeat signals from the active netting decision path."""
 
     if int(max(0, proposals_total)) <= 0:
         return
-    try:
-        note_ml_signal()
-    except BOT_ENGINE_FALLBACK_EXC:
-        logger.debug("NETTING_MODEL_LIVENESS_ML_NOTE_FAILED", exc_info=True)
+    if ml_inference_observed:
+        try:
+            note_ml_signal()
+        except BOT_ENGINE_FALLBACK_EXC:
+            logger.debug("NETTING_MODEL_LIVENESS_ML_NOTE_FAILED", exc_info=True)
     try:
         rl_enabled = bool(get_env("USE_RL_AGENT", False, cast=bool))
     except BOT_ENGINE_FALLBACK_EXC:
@@ -41916,13 +41955,16 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         day_sleeve_bar_finality_grace_seconds = 2.0
     day_sleeve_model_bundle: Any | None = None
     day_sleeve_model_error: str | None = None
+    day_sleeve_ml_inference_observed = False
     day_sleeve_configured = any(
         _is_day_sleeve_ml_timeframe(sleeve.name, sleeve.timeframe)
         for sleeve in sleeves
     )
     if day_sleeve_ml_enabled and day_sleeve_configured:
         try:
-            day_sleeve_model_bundle = load_day_sleeve_production_model()
+            day_sleeve_model_bundle = load_day_sleeve_production_model(
+                allow_shadow=_paper_shadow_model_allowed(cfg)
+            )
         except BOT_ENGINE_FALLBACK_EXC as exc:
             day_sleeve_model_error = str(exc)
             logger.warning(
@@ -42001,6 +42043,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     sleeve.timeframe,
                     _freshness_seconds_for_timeframe(sleeve.timeframe),
                     rth_only=rth_only,
+                    now=now,
                 )
                 if not contract_result.ok:
                     proposals_by_symbol[symbol].append(
@@ -42057,6 +42100,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         now=now,
                     )
                 )
+                if day_sleeve_ml_debug is not None:
+                    day_sleeve_ml_inference_observed = True
             try:
                 price = float(df["close"].iloc[-1])
             except BOT_ENGINE_FALLBACK_EXC:
@@ -42284,7 +42329,10 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             if price > 0:
                 latest_price[symbol] = price
 
-    _record_netting_model_liveness(proposals_total=proposals_total)
+    _record_netting_model_liveness(
+        proposals_total=proposals_total,
+        ml_inference_observed=day_sleeve_ml_inference_observed,
+    )
 
     if bool(get_env("AI_TRADING_EVENT_DRIVEN_NEW_BAR_ONLY", True, cast=bool)) and symbols:
         sleeve_count = max(len(sleeves), 1)

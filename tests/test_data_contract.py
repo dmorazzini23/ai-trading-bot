@@ -41,6 +41,39 @@ def test_validate_bars_stale():
     assert result.reason == "STALE_BAR"
 
 
+def test_validate_five_minute_freshness_uses_bar_close_timestamp():
+    now = datetime(2026, 7, 17, 14, 55, 6, tzinfo=UTC)
+    df = _sample_df(datetime(2026, 7, 17, 14, 35, tzinfo=UTC))
+    df.index = pd.date_range(
+        start=datetime(2026, 7, 17, 14, 35, tzinfo=UTC),
+        periods=3,
+        freq="5min",
+    )
+
+    fresh = validate_bars(
+        df,
+        "5Min",
+        freshness_seconds=600,
+        rth_only=False,
+        now=now,
+    )
+    stale = validate_bars(
+        df,
+        "5Min",
+        freshness_seconds=600,
+        rth_only=False,
+        now=datetime(2026, 7, 17, 15, 0, 1, tzinfo=UTC),
+    )
+
+    assert fresh.ok is True
+    assert stale.ok is False
+    assert stale.reason == "STALE_BAR"
+    assert stale.detail == {
+        "age_seconds": 601.0,
+        "age_reference": "bar_close",
+    }
+
+
 def test_validate_bars_rejects_future_bar_beyond_skew():
     df = _sample_df(datetime.now(UTC) + timedelta(minutes=1))
     result = validate_bars(df, "1Min", freshness_seconds=300, rth_only=False)

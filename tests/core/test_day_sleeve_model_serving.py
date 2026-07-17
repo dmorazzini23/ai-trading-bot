@@ -48,6 +48,8 @@ def _bundle(model: Any) -> SimpleNamespace:
             "downtrend": 0.5,
             "volatile": 0.5,
         },
+        governance_status="shadow",
+        serving_authority="paper_only",
     )
 
 
@@ -162,6 +164,8 @@ def test_day_sleeve_ml_blends_score_and_emits_advisory_provenance(
     assert debug["ml_blend_weight"] == pytest.approx(0.5)
     assert debug["ml_serving_timeframe"] == DAY_SLEEVE_ML_BAR_TIMEFRAME
     assert debug["model_lineage"]["model_id"] == "day-model-1"
+    assert debug["ml_governance_status"] == "shadow"
+    assert debug["ml_serving_authority"] == "paper_only"
     assert len(shadow_rows) == 1
     shadow = shadow_rows[0]
     assert shadow["advisory"] is True
@@ -261,3 +265,45 @@ def test_day_sleeve_model_path_is_narrowly_scoped(
     expected: bool,
 ) -> None:
     assert bot_engine._is_day_sleeve_ml_timeframe(sleeve_name, timeframe) is expected
+
+
+@pytest.mark.parametrize(
+    ("execution_mode", "launch_profile", "paper", "base_url", "expected"),
+    [
+        ("paper", "paper_trade", True, "https://paper-api.alpaca.markets", True),
+        ("live", "live_canary", False, "https://api.alpaca.markets", False),
+        ("paper", "live_canary", True, "https://paper-api.alpaca.markets", False),
+        ("sim", "paper_trade", True, "https://paper-api.alpaca.markets", False),
+    ],
+)
+def test_shadow_model_authority_is_restricted_to_explicit_paper_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    execution_mode: str,
+    launch_profile: str,
+    paper: bool,
+    base_url: str,
+    expected: bool,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PAPER_ALLOW_SHADOW_MODEL", "1")
+    cfg = SimpleNamespace(
+        execution_mode=execution_mode,
+        launch_profile=launch_profile,
+        paper=paper,
+        alpaca_base_url=base_url,
+    )
+
+    assert bot_engine._paper_shadow_model_allowed(cfg) is expected
+
+
+def test_shadow_model_authority_requires_explicit_enable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PAPER_ALLOW_SHADOW_MODEL", "0")
+    cfg = SimpleNamespace(
+        execution_mode="paper",
+        launch_profile="paper_trade",
+        paper=True,
+        alpaca_base_url="https://paper-api.alpaca.markets",
+    )
+
+    assert bot_engine._paper_shadow_model_allowed(cfg) is False

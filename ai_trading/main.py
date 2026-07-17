@@ -3269,11 +3269,11 @@ def run_flask_app(
             for _ in range(100):
                 if stop_probe.is_set() or ready_signal.is_set():
                     return
-                if _probe_local_api_health(serving_port, require_healthy=False):
+                if _probe_local_api_socket(serving_port):
                     ready_signal.set()
                     logger.info(
                         "API_READY_CONFIRMED",
-                        extra={"port": serving_port, "check": "local_healthz"},
+                        extra={"port": serving_port, "check": "tcp_accept"},
                     )
                     return
                 time.sleep(0.1)
@@ -3362,12 +3362,28 @@ def _probe_local_api_health(port: int, *, require_healthy: bool = True) -> bool:
     return True
 
 
+def _probe_local_api_socket(port: int, *, timeout: float = 0.5) -> bool:
+    """Return ``True`` once the local API socket accepts connections.
+
+    Startup readiness is a server-lifecycle signal, not a health verdict.  The
+    canonical health payload can legitimately take longer to construct while
+    runtime state is warming up, so using it here can deadlock main startup.
+    """
+
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except (OSError, TimeoutError):
+        return False
+
+
 def _preflight_bind_server_port(host: str, port: int) -> None:
     """Raise when a startup server port cannot be bound."""
 
     probe: socket.socket | None = None
     try:
         probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         probe.bind((host, port))
     finally:
         if probe is not None:
@@ -3477,6 +3493,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
         probe: socket.socket | None = None
         try:
             probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("0.0.0.0", port))
         except OSError as exc:
             if exc.errno != errno.EADDRINUSE:

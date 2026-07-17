@@ -110,6 +110,28 @@ def _positive_candidate_metrics(name: str, dataset: pd.DataFrame, **_kwargs):
     )
 
 
+def test_manifest_metadata_preserves_selected_threshold(monkeypatch) -> None:
+    monkeypatch.setenv("DAILY_SOURCE", "yahoo")
+    monkeypatch.setenv("MINUTE_SOURCE", "alpaca")
+    monkeypatch.setenv("DATA_PROVENANCE", "iex")
+    monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
+
+    metadata = after_hours._build_manifest_metadata(
+        symbols=["AAPL", "MSFT"],
+        rows=500,
+        lookback_days=30,
+        default_threshold=0.5,
+        selected_threshold=0.57,
+        thresholds_by_regime={"sideways": 0.55, "uptrend": 0.6},
+        cost_floor_bps=8.0,
+        dataset_fingerprint="a" * 64,
+        sensitivity_sweep={"enabled": True, "gate": True, "summary": {}},
+    )
+
+    assert metadata["default_threshold"] == pytest.approx(0.5)
+    assert metadata["selected_threshold"] == pytest.approx(0.57)
+
+
 def _write_after_hours_report(
     path: Path,
     *,

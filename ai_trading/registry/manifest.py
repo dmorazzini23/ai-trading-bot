@@ -95,6 +95,12 @@ def validate_manifest_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
         minimum=0.0,
         maximum=1.0,
     )
+    selected_threshold = _require_float_range(
+        source.get("selected_threshold", default_threshold),
+        field="selected_threshold",
+        minimum=0.0,
+        maximum=1.0,
+    )
     cost_floor_bps = _require_float_range(
         source.get("cost_floor_bps"),
         field="cost_floor_bps",
@@ -189,6 +195,7 @@ def validate_manifest_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
         "training_bar_timeframe": training_bar_timeframe,
         "required_bar_timeframe": required_bar_timeframe,
         "default_threshold": default_threshold,
+        "selected_threshold": selected_threshold,
         "thresholds_by_regime": normalized_thresholds,
         "cost_floor_bps": cost_floor_bps,
         "cost_model_version": cost_model_version,
